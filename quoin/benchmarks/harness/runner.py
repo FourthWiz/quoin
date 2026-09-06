@@ -21,6 +21,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -42,6 +44,42 @@ from .result_writer import (
 # knows the outcome and the judge would be scoring evidence that was never
 # produced (D-03).
 _CELL_TERMINAL_VERDICTS = frozenset({"error", "timeout", "budget_stopped"})
+
+_ENV_BENCHMARK_GATE = "QUOIN_BENCHMARK_GATE"
+
+
+def _assert_no_remote_in_gate_mode(worktree_path: Path) -> None:
+    """Re-assert the fixture repo's remote is stripped, on the actual
+    per-task worktree, in gate mode only.
+
+    `git worktree add` shares its parent repo's `.git/config` (remotes
+    included), so this should always agree with whatever the fixture repo
+    itself reports — but that agreement is exactly what a re-clone or an
+    operator skipping the manual `git remote remove origin` step (T-08a)
+    would break, silently. The quoin arms run `/run --autonomous`, the one
+    mode allowed to invoke `/end_of_task` and push a branch, so a leftover
+    `origin` here is not a theoretical containment gap. Outside gate mode
+    this is a no-op — a fixture repo legitimately keeping its remote for
+    ordinary (non-gate) benchmark runs is not this check's business.
+    """
+    if os.environ.get(_ENV_BENCHMARK_GATE) != "1":
+        return
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree_path), "remote"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"GATE-STOP: could not check fixture worktree {worktree_path} for a "
+            f"configured remote: {exc}"
+        ) from exc
+    if result.returncode == 0 and result.stdout.strip():
+        raise RuntimeError(
+            f"GATE-STOP: fixture worktree {worktree_path} still has a remote "
+            f"configured ({result.stdout.strip()!r}); the fixture repo's own "
+            "`origin` must be removed before it is used in gate mode"
+        )
 
 # Spend-critical config fields that, if silently dropped by inspect.signature
 # threading, would leave a guardrail unarmed with no error (T-01, D-08).
@@ -222,6 +260,7 @@ def run_one_task(
             worktree_path = create_task_worktree(
                 fixture_repo, run_id, cell, task_id
             )
+            _assert_no_remote_in_gate_mode(worktree_path)
         else:
             _tmpdir_obj = tempfile.TemporaryDirectory(prefix=f"qbench_{task_id}_")
             worktree_path = Path(_tmpdir_obj.name)

@@ -7,7 +7,9 @@ driver itself (T-07).
 import argparse
 import json
 import os
+import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -373,31 +375,65 @@ class TestHookStanzaWipe:
         assert before == [] and after == []
 
 
+def _worktree_at_commit(commit: str, dest: Path) -> bool:
+    """Create a real, disposable `git worktree` of THIS repo at `commit`
+    under `dest`. Returns False (does not raise) if the commit cannot be
+    resolved in this checkout (e.g. a shallow clone) — callers skip rather
+    than fail in that case; a repo where the commit legitimately can't be
+    reached isn't a real regression."""
+    if subprocess.run(
+        ["git", "cat-file", "-e", commit], cwd=_REPO_ROOT, capture_output=True,
+    ).returncode != 0:
+        return False
+    result = subprocess.run(
+        ["git", "worktree", "add", "--detach", "--force", str(dest), commit],
+        cwd=_REPO_ROOT, capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
+def _remove_worktree(path: Path) -> None:
+    subprocess.run(
+        ["git", "worktree", "remove", "--force", str(path)],
+        cwd=_REPO_ROOT, capture_output=True,
+    )
+
+
 class TestArmRegisteredStanzas:
-    def test_main_arm_worktree_registers_seven_stanzas_no_compact(self):
-        """Requires the real T-08a worktree at $TMPDIR/quoin-gate/main to
-        exist (created earlier in this implementation session). Skips
-        gracefully if a fresh test environment hasn't created it."""
-        import os as _os
+    def test_main_arm_worktree_registers_seven_stanzas_no_compact(self, tmp_path):
+        """Pins the pre-IVG-258 baseline commit's installer.py, building
+        the worktree on the fly rather than depending on one some earlier
+        session happened to leave at a fixed $TMPDIR path. Skips only if
+        this checkout cannot reach that commit at all."""
         from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
 
-        main_root = Path(_os.environ.get("TMPDIR", "/tmp")) / "quoin-gate" / "main"
-        if not main_root.exists():
-            pytest.skip("T-08a worktree not present in this environment")
-        stanzas = arm_registered_stanzas(main_root)
-        assert len(stanzas) == 7
-        assert ("SessionStart", "compact", "sessionstart.sh") not in stanzas
+        main_root = tmp_path / "main"
+        if not _worktree_at_commit("dd188d87ed2512b80d46a3ee80d333b842bd23b5", main_root):
+            pytest.skip("baseline commit not reachable in this checkout")
+        try:
+            stanzas = arm_registered_stanzas(main_root)
+            assert len(stanzas) == 7
+            assert ("SessionStart", "compact", "sessionstart.sh") not in stanzas
+        finally:
+            _remove_worktree(main_root)
 
-    def test_candidate_arm_worktree_registers_eight_stanzas_with_compact(self):
-        import os as _os
+    def test_candidate_arm_worktree_registers_eight_stanzas_with_compact(self, tmp_path):
+        """Pins this branch's own HEAD, which registers the
+        `SessionStart`/`compact` stanza the baseline above does not."""
         from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
 
-        candidate_root = Path(_os.environ.get("TMPDIR", "/tmp")) / "quoin-gate" / "candidate"
-        if not candidate_root.exists():
-            pytest.skip("T-08a worktree not present in this environment")
-        stanzas = arm_registered_stanzas(candidate_root)
-        assert len(stanzas) == 8
-        assert ("SessionStart", "compact", "sessionstart.sh") in stanzas
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        candidate_root = tmp_path / "candidate"
+        if not _worktree_at_commit(head, candidate_root):
+            pytest.skip("HEAD not reachable as a worktree in this checkout")
+        try:
+            stanzas = arm_registered_stanzas(candidate_root)
+            assert len(stanzas) == 8
+            assert ("SessionStart", "compact", "sessionstart.sh") in stanzas
+        finally:
+            _remove_worktree(candidate_root)
 
     def test_missing_installer_file_returns_empty_set(self, tmp_path):
         from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
@@ -558,13 +594,35 @@ class TestDriverPlanOnly:
         ns = argparse.Namespace(
             gate_id="g1", suite=tmp_path / "suite.json", fixture_repo=tmp_path / "fixture",
             main_worktree=tmp_path / "main", candidate_worktree=tmp_path / "candidate",
+            main_commit="main-sha", candidate_commit="candidate-sha",
             max_budget_usd_raw=6.0, max_budget_usd_main=16.0, max_budget_usd_candidate=16.0,
-            spend_ledger=tmp_path / "ledger.jsonl", wall_clock_seconds=600,
+            spend_ledger=tmp_path / "ledger.jsonl", new_spend_ledger=True, authorised_usd=None,
+            project_root=None, expected_suite_sha256=None, wall_clock_seconds=600,
             run_dir=tmp_path / "runs", rehearsal=False, plan_only=True,
         )
         for k, v in overrides.items():
             setattr(ns, k, v)
         return ns
+
+    def _patch_identity_checks(self, monkeypatch, tmp_path, ns):
+        """Shared by tests that drive real preflight()/run() calls: stubs
+        the arm-identity assertions (arm-HEAD, __about__ version, the
+        interpreter probe) the same way existing tests already stub
+        `verify_arm_installer_isolable` and
+        `cross_arm_manifest` — these are real subprocess/filesystem probes
+        that a synthetic tmp_path worktree cannot satisfy."""
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        def fake_worktree_head(root):
+            if root == ns.main_worktree:
+                return ns.main_commit
+            if root == ns.candidate_worktree:
+                return ns.candidate_commit
+            return None
+
+        monkeypatch.setattr(gate_mod, "worktree_head", fake_worktree_head)
+        monkeypatch.setattr(gate_mod, "candidate_about_version_matches", lambda root, py: True)
+        monkeypatch.setattr(gate_mod, "_install_py", lambda: "/usr/bin/python3")
 
     def test_plan_only_never_invokes_run_arm(self, tmp_path):
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
@@ -623,6 +681,7 @@ class TestDriverPlanOnly:
             "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
             lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
         )
+        self._patch_identity_checks(monkeypatch, tmp_path, args)
         code = driver.run()
         assert code == 0  # all preflight checks pass, plan-only, never spawns
 
@@ -658,6 +717,7 @@ class TestDriverPlanOnly:
             "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
             lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
         )
+        self._patch_identity_checks(monkeypatch, tmp_path, args)
         driver.preflight()
         assert len(calls) == 1
         assert calls[0] == args.spend_ledger
@@ -1008,6 +1068,7 @@ class TestRehearsalRecord:
         ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=False, plan_only=False)
         driver = ThreeArmGateDriver(ns)
         driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
         # No rehearsal.md at all yet.
         problems = driver.preflight()
         assert any("no green rehearsal record found" in p for p in problems)
@@ -1022,3 +1083,481 @@ class TestRehearsalRecord:
         (ns.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n")
         problems = driver.preflight()
         assert not any("no green rehearsal record found" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# A failed arm install must never let the arm spawn
+# ---------------------------------------------------------------------------
+
+
+class TestArmInstallFailureBlocksSpawn:
+    def test_failing_install_raises_gatestop_before_spawn_or_reservation(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(
+            ns, run_arm_fn=lambda argv, env: (_ for _ in ()).throw(
+                AssertionError("must not spawn after a failed install")),
+        )
+        candidate_root = tmp_path / "candidate"
+        candidate_root.mkdir()
+        driver.arm_roots = {"candidate": candidate_root}
+
+        failing_install = subprocess.CompletedProcess(args=[], returncode=1, stdout="", stderr="boom")
+        monkeypatch.setattr(gate_mod, "install_arm", lambda root, py: failing_install)
+
+        with pytest.raises(GateStop, match="install failed"):
+            driver.run_arm("candidate")
+
+        assert "candidate" not in driver.spawned_arms
+        assert "candidate" not in driver.reservations
+        assert recorded_total(ns.spend_ledger) == 0.0
+
+    def test_successful_install_but_failed_deploy_verification_also_blocks_spawn(self, tmp_path, monkeypatch):
+        """D-02: a zero returncode alone is not sufficient — the
+        byte-level deploy/hook verification must also pass."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(
+            ns, run_arm_fn=lambda argv, env: (_ for _ in ()).throw(
+                AssertionError("must not spawn if deploy verification failed")),
+        )
+        candidate_root = tmp_path / "candidate"
+        candidate_root.mkdir()
+        driver.arm_roots = {"candidate": candidate_root}
+
+        ok_install = subprocess.CompletedProcess(args=[], returncode=0, stdout="", stderr="")
+        monkeypatch.setattr(gate_mod, "install_arm", lambda root, py: ok_install)
+        monkeypatch.setattr(gate_mod, "verify_arm_deployed", lambda root, project_root: False)
+        monkeypatch.setattr(gate_mod, "verify_hooks_deployed", lambda root, home: True)
+
+        with pytest.raises(GateStop, match="deploy-drift verification failed"):
+            driver.run_arm("candidate")
+
+        assert "candidate" not in driver.spawned_arms
+
+
+# ---------------------------------------------------------------------------
+# The spend ledger fails closed on malformed or missing data
+# ---------------------------------------------------------------------------
+
+
+class TestSpendLedgerFailsClosed:
+    def test_malformed_json_line_raises_instead_of_silently_skipping(self, tmp_path):
+        from quoin.benchmarks.scripts.spend_ledger import append, recorded_total
+
+        path = tmp_path / "ledger.jsonl"
+        append(path, _reservation("a1", "candidate", 16.0, run_id="g1-candidate"))
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write('{"not": "valid json"\n')
+
+        with pytest.raises(ValueError):
+            recorded_total(path)
+
+    def test_row_missing_attempt_id_raises(self, tmp_path):
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        path = tmp_path / "ledger.jsonl"
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"kind": "reservation", "cap_usd": 16.0}) + "\n")
+
+        with pytest.raises(ValueError):
+            recorded_total(path)
+
+
+class TestDriverLedgerExistenceAndAuthorisedUsd:
+    def test_missing_ledger_without_new_flag_gate_stops(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, new_spend_ledger=False)
+        driver = ThreeArmGateDriver(ns)
+        problems = driver.preflight()
+        assert any("spend ledger not found" in p for p in problems)
+
+    def test_new_spend_ledger_flag_permits_a_missing_file(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, new_spend_ledger=True)
+        driver = ThreeArmGateDriver(ns)
+        problems = driver.preflight()
+        assert not any("spend ledger not found" in p for p in problems)
+
+    def test_explicit_authorised_usd_overrides_ledger_derived_default_ceiling(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path, max_budget_usd_raw=1.0, max_budget_usd_main=1.0,
+            max_budget_usd_candidate=1.0, authorised_usd=2.0,
+        )
+        driver = ThreeArmGateDriver(ns)
+        # 1+1+1 = 3 planned > the operator-supplied 2.0 ceiling — must fail
+        # even though it is well under the $50 ledger-derived default.
+        problems = driver.preflight()
+        assert any("exceed" in p for p in problems)
+
+    def test_ledger_path_and_recorded_total_printed_in_preflight_banner(self, tmp_path, capsys):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver.preflight()
+        out = capsys.readouterr().out
+        assert str(ns.spend_ledger) in out
+        assert "recorded_total=" in out
+
+
+# ---------------------------------------------------------------------------
+# Arm identity is an input, not a derivation
+# ---------------------------------------------------------------------------
+
+
+class TestArmIdentityAssertion:
+    def test_mismatched_commit_is_gate_stop(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        monkeypatch.setattr(gate_mod, "worktree_head", lambda root: "some-other-sha")
+        monkeypatch.setattr(gate_mod, "candidate_about_version_matches", lambda root, py: True)
+        monkeypatch.setattr(gate_mod, "_install_py", lambda: "/usr/bin/python3")
+
+        problems = driver.preflight()
+        assert any("does not match expected commit" in p for p in problems)
+
+    def test_missing_commit_arg_is_gate_stop(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, main_commit=None)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+
+        problems = driver.preflight()
+        assert any("--main-commit was not supplied" in p for p in problems)
+
+    def test_matching_commit_clears_the_identity_check(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+
+        problems = driver.preflight()
+        assert not any("does not match expected commit" in p for p in problems)
+        assert not any("was not supplied" in p for p in problems)
+
+
+class TestWorktreeOutsideProjectRoot:
+    def test_worktree_inside_project_root_is_gate_stop(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, project_root=tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+
+        problems = driver.preflight()
+        assert any("is inside the project root" in p for p in problems)
+
+
+# ---------------------------------------------------------------------------
+# An aborted arm kills its whole process group rather than
+# orphaning the paid `claude` grandchild
+# ---------------------------------------------------------------------------
+
+
+class TestDefaultRunArmAbortSafety:
+    def test_timeout_passed_to_wait_is_derived_from_argv_plus_margin(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import default_run_arm
+
+        captured = {}
+
+        class FakeProc:
+            pid = 4242
+
+            def wait(self, timeout=None):
+                captured["timeout"] = timeout
+                return 0
+
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.subprocess.Popen",
+            lambda argv, env, start_new_session: FakeProc(),
+        )
+        code = default_run_arm(["prog", "--wall-clock-seconds", "600"], {})
+        assert code == 0
+        assert captured["timeout"] == 720.0  # 600 + 120s margin
+
+    def test_wait_timeout_kills_process_group_and_returns_124(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import default_run_arm
+
+        killed = []
+
+        class FakeProc:
+            pid = 4243
+
+            def wait(self, timeout=None):
+                raise subprocess.TimeoutExpired(cmd="x", timeout=timeout or 0)
+
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.subprocess.Popen",
+            lambda argv, env, start_new_session: FakeProc(),
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate._kill_process_group",
+            lambda pid: killed.append(pid),
+        )
+        code = default_run_arm(["prog"], {})
+        assert code == 124
+        assert killed == [4243]
+
+    def test_abort_exception_kills_process_group_before_propagating(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import default_run_arm
+
+        killed = []
+
+        class FakeProc:
+            pid = 4244
+
+            def wait(self, timeout=None):
+                raise KeyboardInterrupt()
+
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.subprocess.Popen",
+            lambda argv, env, start_new_session: FakeProc(),
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate._kill_process_group",
+            lambda pid: killed.append(pid),
+        )
+        with pytest.raises(KeyboardInterrupt):
+            default_run_arm(["prog"], {})
+        assert killed == [4244]
+
+    def test_kill_process_group_terminates_a_real_child(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _kill_process_group
+
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)"], start_new_session=True,
+        )
+        time.sleep(0.2)
+        _kill_process_group(proc.pid)
+        proc.wait(timeout=5)
+        assert proc.returncode is not None and proc.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# Teardown is idempotent
+# ---------------------------------------------------------------------------
+
+
+class TestTeardownIdempotent:
+    def test_second_teardown_call_does_not_double_charge_ledger(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.spawned_arms = {"candidate"}
+
+        first = driver.teardown()
+        second = driver.teardown()
+
+        assert first is True and second is True
+        assert recorded_total(ns.spend_ledger) == 16.0
+
+
+# ---------------------------------------------------------------------------
+# The ledger append happens before the in-memory reservation is set
+# ---------------------------------------------------------------------------
+
+
+class TestReservationOrdering:
+    def test_failed_ledger_append_prevents_spawn_and_reservation(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(
+            ns, run_arm_fn=lambda argv, env: (_ for _ in ()).throw(
+                AssertionError("must not spawn if the reservation append failed")),
+        )
+        driver.arm_roots = {}
+
+        def failing_append(path, row):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(gate_mod.spend_ledger, "append", failing_append)
+
+        with pytest.raises(OSError):
+            driver.run_arm("raw")
+
+        assert "raw" not in driver.spawned_arms
+        assert "raw" not in driver.reservations
+
+
+# ---------------------------------------------------------------------------
+# Fixture-remote containment is a real, enforced check
+# ---------------------------------------------------------------------------
+
+
+class TestFixtureRemoteContainment:
+    def test_fixture_repo_with_remote_gate_stops_preflight(self, tmp_path, monkeypatch):
+        fixture = tmp_path / "fixture"
+        fixture.mkdir()
+        subprocess.run(["git", "init"], cwd=fixture, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.com/x.git"],
+            cwd=fixture, check=True, capture_output=True,
+        )
+
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, fixture_repo=fixture)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+
+        problems = driver.preflight()
+        assert any("still has a remote configured" in p for p in problems)
+
+    def test_fixture_repo_without_remote_passes(self, tmp_path, monkeypatch):
+        fixture = tmp_path / "fixture"
+        fixture.mkdir()
+        subprocess.run(["git", "init"], cwd=fixture, check=True, capture_output=True)
+
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, fixture_repo=fixture)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+
+        problems = driver.preflight()
+        assert not any("still has a remote configured" in p for p in problems)
+
+
+class TestRunnerFixtureRemoteReassertion:
+    def test_worktree_remote_gate_stops_in_gate_mode(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.harness import runner
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.com/x.git"],
+            cwd=repo, check=True, capture_output=True,
+        )
+        monkeypatch.setenv("QUOIN_BENCHMARK_GATE", "1")
+
+        with pytest.raises(RuntimeError, match="still has a remote"):
+            runner._assert_no_remote_in_gate_mode(repo)
+
+    def test_is_a_noop_outside_gate_mode(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.harness import runner
+
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "remote", "add", "origin", "https://example.com/x.git"],
+            cwd=repo, check=True, capture_output=True,
+        )
+        monkeypatch.delenv("QUOIN_BENCHMARK_GATE", raising=False)
+
+        runner._assert_no_remote_in_gate_mode(repo)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# The driver populates every compare_arms evidence column it can,
+# end to end against synthetic result dirs
+# ---------------------------------------------------------------------------
+
+
+class TestDriverPopulatesCompareArmsColumnsEndToEnd:
+    def test_turn_count_and_compaction_event_count_flow_from_metrics_json(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import _COLUMNS
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        def fake_run_arm(argv, env):
+            run_id = argv[argv.index("--run-id") + 1]
+            cell = argv[argv.index("--cells") + 1]
+            task_dir = tmp_path / "runs" / run_id / cell / "scenario_x"
+            task_dir.mkdir(parents=True, exist_ok=True)
+            (task_dir / "metrics.json").write_text(json.dumps({
+                "turn_count": 7, "compaction_event_count": 2,
+            }))
+            run_root = tmp_path / "runs" / run_id
+            run_root.mkdir(parents=True, exist_ok=True)
+            (run_root / "summary.json").write_text(json.dumps({
+                "cells": {cell: {"total_cost_usd_or_null": 1.0, "n_tasks": 1, "n_pass": 1}}
+            }))
+            return 0
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=fake_run_arm)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+        assert code == 0
+
+        out_path = tmp_path / "runs" / "g1-comparison" / "three-arm-comparison.md"
+        text = out_path.read_text(encoding="utf-8")
+        turn_idx = _COLUMNS.index("turn_count")
+        compaction_idx = _COLUMNS.index("compaction_event_count")
+        seen_arms = set()
+        for line in text.splitlines():
+            for arm in ("raw", "main", "candidate"):
+                if line.startswith(f"| {arm} |"):
+                    cells = [c.strip() for c in line.strip("|").split("|")]
+                    assert cells[turn_idx] == "7", line
+                    assert cells[compaction_idx] == "2", line
+                    seen_arms.add(arm)
+        assert seen_arms == {"raw", "main", "candidate"}
+
+
+# ---------------------------------------------------------------------------
+# Candidate provenance is rendered from the recorded commit, not
+# hardcoded as "this stage's branch HEAD"
+# ---------------------------------------------------------------------------
+
+
+class TestComparisonProvenanceLine:
+    def test_candidate_provenance_renders_recorded_commit_not_a_hardcoded_claim(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms
+
+        _write_summary(tmp_path, "g1-main", "quoin-claude", total_cost=10.0)
+        _write_summary(tmp_path, "g1-candidate", "quoin-claude", total_cost=8.0)
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"main": "g1-main", "candidate": "g1-candidate"},
+            arm_cells={"main": "quoin-claude", "candidate": "quoin-claude"},
+            arm_evidence={"candidate": {"installed_quoin_commit": "caae5aa4"}},
+        )
+        text = out_path.read_text(encoding="utf-8")
+        assert "caae5aa4" in text
+        assert "`candidate` is this stage's branch HEAD" not in text

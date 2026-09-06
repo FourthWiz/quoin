@@ -41,19 +41,25 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
 from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
 from .simple_claude import (
+    _MAX_RETAINED_EVENTS,
+    _POLL_INTERVAL_SECONDS,
     _build_claude_argv,
     _build_prompt,
     _detect_budget_halt,
+    _drain_stream,
     _extract_cost_usd,
     _gate_mode,
     _get_model,
+    _wait_readable,
 )
 
 # ---------------------------------------------------------------------------
@@ -401,85 +407,110 @@ def invoke(
             env=env,
         )
 
-        events = []
+        # Ring buffer, not an unbounded list — see simple_claude.invoke
+        # for the full rationale; both cells share the same streaming
+        # shape.
+        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
         turn_count = 0
         gate_intervention_count = 0
         retry_delay = 1.0
+        budget_halted = False
 
-        while True:
-            elapsed = time.monotonic() - wall_start - backoff_total
-            if elapsed > budget_seconds:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                result["verdict"] = "timeout"
-                break
+        # Drain stderr on a daemon thread started at spawn — see
+        # simple_claude.invoke for the full rationale.
+        stderr_buffer: list = []
+        stderr_thread = threading.Thread(
+            target=_drain_stream, args=(proc.stderr, stderr_buffer), daemon=True,
+        )
+        stderr_thread.start()
 
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
-                break
+        try:
+            while True:
+                # Timer-driven, not event-driven — see simple_claude.invoke.
+                elapsed = time.monotonic() - wall_start - backoff_total
+                remaining = budget_seconds - elapsed
+                if remaining <= 0:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    result["verdict"] = "timeout"
+                    break
 
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            event_type = event.get("type", "")
-
-            # Handle rate-limit / overloaded events (same as simple_claude)
-            if event_type in ("error", "api_error"):
-                error_msg = str(event.get("error", ""))
-                if "429" in error_msg or "overloaded" in error_msg.lower():
-                    backoff_start = time.monotonic()
-                    time.sleep(retry_delay)
-                    backoff_total += time.monotonic() - backoff_start
-                    retry_delay = min(retry_delay * 2, 60.0)
+                if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
                     continue
 
-            events.append(event)
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
 
-            # Track gate auto-approve events
-            # /gate in auto-approve mode emits an event with auto_approved: true
-            if event.get("auto_approved"):
-                gate_intervention_count += 1
+                line = line.strip()
+                if not line:
+                    continue
 
-            if event_type == "result":
-                cost_val = _extract_cost_usd(event)
-                if cost_val is not None:
-                    total_cost_usd = cost_val
-                usage = event.get("usage", {})
-                tokens_in = usage.get("input_tokens", tokens_in)
-                tokens_out = usage.get("output_tokens", tokens_out)
-                tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
-                tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-            if event_type == "assistant":
-                turn_count += 1
+                event_type = event.get("type", "")
 
-        proc.wait(timeout=10)
-        stderr_output = ""
-        if proc.stderr is not None:
-            try:
-                stderr_output = proc.stderr.read() or ""
-            except Exception:
-                stderr_output = ""
+                # Handle rate-limit / overloaded events (same as simple_claude)
+                if event_type in ("error", "api_error"):
+                    error_msg = str(event.get("error", ""))
+                    if "429" in error_msg or "overloaded" in error_msg.lower():
+                        backoff_start = time.monotonic()
+                        time.sleep(retry_delay)
+                        backoff_total += time.monotonic() - backoff_start
+                        retry_delay = min(retry_delay * 2, 60.0)
+                        continue
+
+                events.append(event)
+                if not budget_halted and _detect_budget_halt(
+                    str(event.get("result", "")) + str(event.get("error", ""))
+                ):
+                    budget_halted = True
+
+                # Track gate auto-approve events
+                # /gate in auto-approve mode emits an event with auto_approved: true
+                if event.get("auto_approved"):
+                    gate_intervention_count += 1
+
+                if event_type == "result":
+                    cost_val = _extract_cost_usd(event)
+                    if cost_val is not None:
+                        total_cost_usd = cost_val
+                    usage = event.get("usage", {})
+                    tokens_in = usage.get("input_tokens", tokens_in)
+                    tokens_out = usage.get("output_tokens", tokens_out)
+                    tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
+                    tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+
+                if event_type == "assistant":
+                    turn_count += 1
+
+            proc.wait(timeout=10)
+        finally:
+            # Guaranteed regardless of how the block above exits — see
+            # simple_claude.invoke.
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+            stderr_thread.join(timeout=5)
+
+        stderr_output = "".join(stderr_buffer)
 
         # A CLI-enforced budget halt (D-08) is reported as capped, not
         # silently short — this cell's own refusal above only catches an
         # UNARMED cap; this catches the cap actually firing mid-session.
         if result["verdict"] is None:
-            halt_text = stderr_output + "".join(
-                str(evt.get("result", "")) + str(evt.get("error", "")) for evt in events
-            )
-            if _detect_budget_halt(halt_text):
+            if budget_halted or _detect_budget_halt(stderr_output):
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
@@ -526,7 +557,7 @@ def invoke(
         result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
         result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
 
-        result["transcript_events"] = events
+        result["transcript_events"] = list(events)
         result["turn_count"] = turn_count
         result["gate_intervention_count"] = gate_intervention_count
         result["tokens_in"] = tokens_in if tokens_in else None

@@ -227,6 +227,55 @@ def verify_arm_installer_isolable(arm_root: Path, venv_python: str) -> bool:
         return False
 
 
+def worktree_head(root: Path) -> Optional[str]:
+    """`git -C {root} rev-parse HEAD`, or `None` on any failure. Used to
+    assert a worktree's actual identity against an operator-supplied
+    expectation (D-14) — never to derive the expectation itself."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def candidate_about_version_matches(arm_root: Path, venv_python: str) -> bool:
+    """Step-0 sanity check: the version the candidate worktree's OWN
+    `src/quoin/__about__.py` declares matches what the arm-pinned install
+    (`PYTHONPATH={arm}/src`) actually reports at import time. A mismatch
+    means the installed bytes are not what the worktree's own source
+    claims — a stale bytecode cache or a wrong `--source-dir` are both
+    caught here rather than surfacing later as an unexplained result."""
+    about_path = arm_root / "src" / "quoin" / "__about__.py"
+    if not about_path.exists():
+        return False
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', about_path.read_text(encoding="utf-8"))
+    if not match:
+        return False
+    expected_version = match.group(1)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(arm_root / "src")
+    try:
+        result = subprocess.run(
+            [venv_python, "-c", "import quoin; print(quoin.__version__)"],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+    except Exception:
+        return False
+    return result.returncode == 0 and result.stdout.strip() == expected_version
+
+
+def suite_sha256(suite_path: Path) -> str:
+    """sha256 of the suite file's bytes, for the "frozen suite" preflight
+    check — recorded and (optionally) asserted against an operator-frozen
+    value, rather than trusted implicitly."""
+    return hashlib.sha256(suite_path.read_bytes()).hexdigest()
+
+
 def verify_arm_deployed(arm_root: Path, project_root: Path) -> bool:
     """D-02's two-part verification: deploy_drift_check.py exits 0 with an
     empty drift list. The hooks byte-compare and the cross-arm digest
@@ -327,24 +376,122 @@ def raw_arm_note(raw_isolated: bool) -> str:
     return "stock Claude prompt on a quoin-installed machine — NOT a quoin-free floor"
 
 
+def _kill_process_group(pid: int) -> None:
+    """SIGKILL the whole process group `pid` leads, not just `pid` itself.
+
+    The arm's grandchild `claude` process inherits this group (it is
+    spawned by run_benchmark.py, itself started with `start_new_session`
+    below, so both live in the SAME new group) — killing only `pid` would
+    leave the paid `claude` process running and spending after an abort.
+    """
+    try:
+        pgid = os.getpgid(pid)
+    except ProcessLookupError:
+        return
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
 def default_run_arm(argv: list[str], env: dict) -> int:
     """Shell run_benchmark.py as a subprocess (round-5 fix, MIN-7 — never
-    an in-process call, which would silently ignore `env`)."""
-    result = subprocess.run(argv, env=env)
-    return result.returncode
+    an in-process call, which would silently ignore `env`).
+
+    Spawned in its own process group (`start_new_session=True`) with a
+    timeout derived from the arm's own `--wall-clock-seconds` argument
+    (read back out of `argv`, plus margin for the harness's own teardown
+    work) — a driver-level backstop, independent of the cell's own
+    wall-clock check, that guarantees this call cannot block the driver
+    forever. On either the timeout or any other exception unwinding
+    through this call (a trapped SIGINT/SIGTERM raised as
+    KeyboardInterrupt, in particular), the whole process group is killed
+    before the exception (or the timeout's own return) reaches the
+    caller — so a driver abort cannot leave the paid `claude` grandchild
+    running while teardown starts rewriting ~/.claude underneath it.
+    """
+    timeout: Optional[float] = None
+    if "--wall-clock-seconds" in argv:
+        try:
+            raw = argv[argv.index("--wall-clock-seconds") + 1]
+            timeout = float(raw) + 120.0
+        except (ValueError, IndexError):
+            timeout = None
+
+    proc = subprocess.Popen(argv, env=env, start_new_session=True)
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_process_group(proc.pid)
+        try:
+            proc.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+        return 124
+    except BaseException:
+        _kill_process_group(proc.pid)
+        raise
+
+
+def _resolved_path(raw: str) -> Path:
+    """argparse `type=` for any path arg that becomes a spend-relevant or
+    identity-relevant lookup key. Resolving at parse time (rather than
+    leaving a relative path to drift with whatever the cwd happens to be
+    across the process boundary) is what stops a mistyped or cwd-relative
+    `--spend-ledger` from silently resolving to a fresh, empty ledger."""
+    return Path(raw).resolve()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Three-arm benchmark gate driver (T-07)")
     parser.add_argument("--gate-id", required=True)
-    parser.add_argument("--suite", type=Path, required=True)
-    parser.add_argument("--fixture-repo", type=Path, required=True)
-    parser.add_argument("--main-worktree", type=Path, required=True)
-    parser.add_argument("--candidate-worktree", type=Path, required=True)
+    parser.add_argument("--suite", type=_resolved_path, required=True)
+    parser.add_argument("--fixture-repo", type=_resolved_path, required=True)
+    parser.add_argument("--main-worktree", type=_resolved_path, required=True)
+    parser.add_argument("--candidate-worktree", type=_resolved_path, required=True)
+    parser.add_argument(
+        "--main-commit", required=True,
+        help="Commit the main worktree's HEAD must equal (asserted in "
+             "preflight, not derived from the worktree itself — see "
+             "arm-identity note on --candidate-commit).",
+    )
+    parser.add_argument(
+        "--candidate-commit", required=True,
+        help="Commit the candidate worktree's HEAD must equal, asserted in "
+             "preflight before either worktree's own `git rev-parse HEAD` "
+             "is trusted for anything downstream. An operator-supplied "
+             "value, not a value the driver derives from the same "
+             "worktree it is meant to check — a self-derived expectation "
+             "can never disagree with what it is checking.",
+    )
     parser.add_argument("--max-budget-usd-raw", type=float, required=True)
     parser.add_argument("--max-budget-usd-main", type=float, required=True)
     parser.add_argument("--max-budget-usd-candidate", type=float, required=True)
-    parser.add_argument("--spend-ledger", type=Path, required=True)
+    parser.add_argument("--spend-ledger", type=_resolved_path, required=True)
+    parser.add_argument(
+        "--new-spend-ledger", action="store_true",
+        help="Acknowledge that --spend-ledger does not exist yet and a "
+             "fresh $0 ledger should be started there. Without this flag "
+             "a missing ledger file is a GATE-STOP, not a silent fresh "
+             "start — a mistyped path must not read as zero recorded "
+             "spend.",
+    )
+    parser.add_argument(
+        "--authorised-usd", type=float, default=None,
+        help="Operator-supplied spend ceiling for this invocation's "
+             "preflight precheck. When omitted, the ceiling is derived "
+             "from the ledger's own latest reauth-note (or the $50 "
+             "default) — the same file the recorded spend is read from, "
+             "which is convenient but not independently authoritative. "
+             "Prefer passing this explicitly.",
+    )
+    parser.add_argument("--project-root", type=_resolved_path, default=None)
+    parser.add_argument(
+        "--expected-suite-sha256", default=None,
+        help="If set, preflight GATE-STOPs unless the suite file's sha256 "
+             "matches this value — freezes the suite an operator has "
+             "already reviewed against silent edits.",
+    )
     parser.add_argument("--wall-clock-seconds", type=int, default=600)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--rehearsal", action="store_true")
@@ -388,6 +535,18 @@ class ThreeArmGateDriver:
         self.pre_provenance: dict = {}
         self.evidence: dict[str, dict] = {}
         self._aborted = False
+        self._torn_down = False
+        self._teardown_result: Optional[bool] = None
+        self.new_spend_ledger = bool(getattr(args, "new_spend_ledger", False))
+        self.authorised_usd = getattr(args, "authorised_usd", None)
+        self.expected_worktree_commits = {
+            "main": getattr(args, "main_commit", None),
+            "candidate": getattr(args, "candidate_commit", None),
+        }
+        self.expected_suite_sha256 = getattr(args, "expected_suite_sha256", None)
+        arg_project_root = getattr(args, "project_root", None)
+        if arg_project_root is not None:
+            self.project_root = arg_project_root
 
     # -- Step 0: preflight -------------------------------------------------
 
@@ -396,9 +555,25 @@ class ThreeArmGateDriver:
         (empty means all passed). Never spawns `claude`."""
         problems: list[str] = []
 
-        # FIRST — before anything that can spend (round-5 fix, MIN-4).
+        # FIRST — before anything that can spend (round-5 fix, MIN-4). The
+        # ledger's own existence is checked BEFORE recorded_total is even
+        # read from it: a missing file reading as $0 recorded spend is
+        # only safe when the operator has said, explicitly, that this is
+        # meant to be a fresh ledger.
+        ledger_path = self.args.spend_ledger
+        if not ledger_path.exists() and not self.new_spend_ledger:
+            problems.append(
+                f"GATE-STOP: spend ledger not found at {ledger_path} — pass "
+                "--new-spend-ledger to start a fresh one there, or fix the path"
+            )
+            return problems
+        recorded_so_far = spend_ledger.recorded_total(ledger_path) if ledger_path.exists() else 0.0
+        print(f"Spend ledger: {ledger_path} (recorded_total={recorded_so_far:.2f})")
+
         planned = [self.caps["raw"], self.caps["main"], self.caps["candidate"]]
-        ok, message = spend_ledger.precheck(self.args.spend_ledger, planned_caps=planned)
+        ok, message = spend_ledger.precheck(
+            ledger_path, planned_caps=planned, authorised=self.authorised_usd,
+        )
         if not ok:
             problems.append(message)
             return problems  # nothing below may run until this passes
@@ -407,9 +582,68 @@ class ThreeArmGateDriver:
             problems.append("GATE-STOP: both arm worktrees must exist outside the project root")
             return problems
 
+        for name, root in (("main", self.args.main_worktree), ("candidate", self.args.candidate_worktree)):
+            try:
+                root.resolve().relative_to(self.project_root.resolve())
+                problems.append(
+                    f"GATE-STOP: {name} worktree {root} is inside the project root "
+                    f"{self.project_root}; arm worktrees must live outside it"
+                )
+            except ValueError:
+                pass  # not inside project_root — the required condition
+
+        for arm in ("main", "candidate"):
+            root = self.arm_roots[arm]
+            expected = self.expected_worktree_commits.get(arm)
+            if not expected:
+                problems.append(f"GATE-STOP: --{arm}-commit was not supplied")
+                continue
+            actual = worktree_head(root)
+            if actual is None:
+                problems.append(f"GATE-STOP: could not resolve {arm} worktree HEAD ({root})")
+            elif actual != expected:
+                problems.append(
+                    f"GATE-STOP: {arm} worktree HEAD {actual!r} does not match "
+                    f"expected commit {expected!r} ({root})"
+                )
+
+        if not candidate_about_version_matches(self.args.candidate_worktree, self.venv_python):
+            problems.append(
+                "GATE-STOP: candidate worktree's own __about__.py version does not "
+                "match what the arm-pinned install reports for it"
+            )
+
+        if self.args.suite.exists() and self.expected_suite_sha256:
+            actual_sha = suite_sha256(self.args.suite)
+            if actual_sha != self.expected_suite_sha256:
+                problems.append(
+                    f"GATE-STOP: suite sha256 {actual_sha} does not match the frozen "
+                    f"expected value {self.expected_suite_sha256}"
+                )
+
+        remote = subprocess.run(
+            ["git", "-C", str(self.args.fixture_repo), "remote"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if remote.returncode == 0 and remote.stdout.strip():
+            problems.append(
+                f"GATE-STOP: fixture repo {self.args.fixture_repo} still has a remote "
+                f"configured ({remote.stdout.strip()!r}); run "
+                "`git remote remove origin` before using it as a quoin-arm fixture — "
+                "the quoin arms run /run --autonomous, which can push a branch"
+            )
+
         for arm, root in self.arm_roots.items():
             if not verify_arm_installer_isolable(root, self.venv_python):
                 problems.append(f"GATE-STOP: arm installer not isolable ({arm})")
+
+        if _install_py() is None:
+            problems.append(
+                "GATE-STOP: cannot resolve the interpreter install.sh would select "
+                f"(tried {', '.join(INSTALL_PY_CANDIDATES)})"
+            )
+        else:
+            self.pre_provenance["install_py"] = _install_py()
 
         main_manifest = cross_arm_manifest(self.args.main_worktree)
         candidate_manifest = cross_arm_manifest(self.args.candidate_worktree)
@@ -509,24 +743,57 @@ class ThreeArmGateDriver:
             install_result = install_arm(arm_root, self.venv_python)
             self.evidence.setdefault(arm, {})["stanzas_before"] = before
             self.evidence[arm]["install_returncode"] = install_result.returncode
+            if install_result.returncode != 0:
+                # In gate mode the driver's own install is the ONLY
+                # install (the cell is invoked with --quoin-install-mode
+                # skip) — a failed one must never let the arm spawn, or it
+                # silently measures whatever the PREVIOUS arm deployed.
+                raise GateStop(
+                    f"GATE-STOP: arm {arm} install failed (rc={install_result.returncode}): "
+                    f"{install_result.stderr.strip()[-2000:]}"
+                )
             expected_commit = subprocess.run(
                 ["git", "-C", str(arm_root), "rev-parse", "HEAD"],
                 capture_output=True, text=True, timeout=30,
             ).stdout.strip()
             self.evidence[arm]["installed_quoin_commit"] = expected_commit
+
+            # D-02: verify the install actually landed, byte-for-byte,
+            # before spending anything against it — not just that the
+            # installer process exited 0.
+            deployed_ok = verify_arm_deployed(arm_root, self.project_root)
+            hooks_ok = verify_hooks_deployed(arm_root, self.home)
+            self.evidence[arm]["deployed_verified"] = deployed_ok
+            self.evidence[arm]["hooks_verified"] = hooks_ok
+            if not deployed_ok:
+                raise GateStop(
+                    f"GATE-STOP: arm {arm} deploy-drift verification failed after install "
+                    f"(deploy_drift_check reported drift or errored)"
+                )
+            if not hooks_ok:
+                raise GateStop(
+                    f"GATE-STOP: arm {arm} hook-script byte-compare failed after install"
+                )
         else:
             expected_commit = None
 
-        self.spawned_arms.add(arm)
-        attempt_id = str(uuid.uuid4())
-        self.reservations[arm] = attempt_id
         ts = datetime.datetime.utcnow().isoformat() + "Z"
+        attempt_id = str(uuid.uuid4())
+        # Append the durable ledger row BEFORE the in-memory reservation is
+        # set: if the append itself fails, the arm must not be considered
+        # reserved at all, and the exception propagates as a GATE-STOP
+        # before anything spawns. Setting the reservation first would let
+        # a failed append still leave the arm spawned with no ledger row,
+        # because teardown's own flush skips any arm already present in
+        # `self.reservations`.
         spend_ledger.append(self.args.spend_ledger, {
             "ts": ts, "attempt_id": attempt_id, "kind": "reservation",
             "invocation": "rehearsal" if self.args.rehearsal else "full",
             "gate_id": self.args.gate_id, "arm": arm, "cap_usd": self.caps[arm],
             "actual_usd": None, "run_id": run_id, "new_ceiling_usd": None, "note": "",
         })
+        self.reservations[arm] = attempt_id
+        self.spawned_arms.add(arm)
 
         run_output_dir = self.args.run_dir / run_id
         argv = [
@@ -546,6 +813,11 @@ class ThreeArmGateDriver:
         returncode = self.run_arm_fn(argv, arm_env)
 
         actual_usd = self._read_arm_actual_cost(run_id, self.arm_cells[arm])
+        arm_metrics = self._read_arm_metrics(run_id, self.arm_cells[arm])
+        if "turn_count" in arm_metrics:
+            self.evidence.setdefault(arm, {})["turn_count"] = arm_metrics["turn_count"]
+        if "compaction_event_count" in arm_metrics:
+            self.evidence.setdefault(arm, {})["compaction_event_count"] = arm_metrics["compaction_event_count"]
         spend_ledger.append(self.args.spend_ledger, {
             "ts": ts, "attempt_id": attempt_id, "kind": "settlement",
             "invocation": "rehearsal" if self.args.rehearsal else "full",
@@ -574,20 +846,58 @@ class ThreeArmGateDriver:
         except Exception:
             return None
 
+    def _read_arm_metrics(self, run_id: str, cell: str) -> dict:
+        """Read this arm's single task's metrics.json (the gate's suite is
+        exactly one task — T-06). `turn_count` is a base key result_writer
+        always writes; any telemetry-count field a cell records (e.g. a
+        future `compaction_event_count`) rides along the same file rather
+        than needing its own reader. Returns {} on anything missing or
+        unreadable — the caller degrades to not_available, never fabricates."""
+        try:
+            suite = json.loads(self.args.suite.read_text(encoding="utf-8"))
+            task_id = suite["tasks"][0]["id"]
+        except Exception:
+            return {}
+        metrics_path = self.args.run_dir / run_id / cell / task_id / "metrics.json"
+        if not metrics_path.exists():
+            return {}
+        try:
+            return json.loads(metrics_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
     # -- Step 2: teardown ----------------------------------------------------
 
     def teardown(self) -> bool:
         """Always runs (finally block): flush the ledger for any spawned
         arm with neither a reservation nor a settlement recorded, restore
         settings.json from the verbatim PRE_PROVENANCE copy, then reinstall
-        and re-verify the candidate. Returns True iff verified clean."""
+        and re-verify the candidate. Returns True iff verified clean.
+
+        Idempotent: `run()`'s own `finally` always calls this once, and
+        its `except GateStop`/`except KeyboardInterrupt` handlers call it
+        again on the way out — a genuine double-teardown was demonstrated
+        to double-charge the ledger (16.0 -> 32.0 against a cap) because
+        each pass minted and flushed a FRESH uuid4 for the same
+        still-unsettled arm. The second call now short-circuits to the
+        first call's cached result instead of repeating the
+        restore-and-reinstall sequence.
+        """
+        if self._torn_down:
+            return bool(self._teardown_result)
+        self._torn_down = True
+
         ts = datetime.datetime.utcnow().isoformat() + "Z"
         for arm in self.spawned_arms:
             attempt_id = self.reservations.get(arm)
             if attempt_id is None:
                 # An arm marked spawned before its own reservation was
-                # appended (died between the two) — flush one now at cap.
+                # appended (died between the two) — flush one now at cap,
+                # and record it into `self.reservations` immediately so
+                # nothing downstream can mint or flush a second row for
+                # the same arm.
                 attempt_id = str(uuid.uuid4())
+                self.reservations[arm] = attempt_id
                 spend_ledger.append(self.args.spend_ledger, {
                     "ts": ts, "attempt_id": attempt_id, "kind": "reservation",
                     "invocation": "rehearsal" if self.args.rehearsal else "full",
@@ -603,12 +913,14 @@ class ThreeArmGateDriver:
 
         candidate_root = self.arm_roots.get("candidate")
         if candidate_root is None:
+            self._teardown_result = True
             return True
         install_result = install_arm(candidate_root, self.venv_python)
         verified = (
             install_result.returncode == 0
             and verify_arm_installer_isolable(candidate_root, self.venv_python)
         )
+        self._teardown_result = verified
         return verified
 
     # -- Rehearsal record (T-16) -----------------------------------------
@@ -733,12 +1045,21 @@ class ThreeArmGateDriver:
             try:
                 from quoin.benchmarks.harness.compare_arms import compare_arms
                 arm_run_ids = {arm: f"{self.args.gate_id}-{arm}" for arm in ARMS}
-                comparison_evidence = {
-                    arm: {"installed_quoin_commit": self.evidence.get(arm, {}).get("installed_quoin_commit"),
-                          "max_budget_usd_applied": self.caps[arm],
-                          "config_root": self.evidence.get(arm, {}).get("config_root")}
-                    for arm in ARMS
-                }
+                comparison_evidence = {}
+                for arm in ARMS:
+                    row = {
+                        "installed_quoin_commit": self.evidence.get(arm, {}).get("installed_quoin_commit"),
+                        "max_budget_usd_applied": self.caps[arm],
+                        "config_root": self.evidence.get(arm, {}).get("config_root"),
+                    }
+                    # Only set when actually read from metrics.json — an
+                    # absent key degrades to compare_arms' own
+                    # not_available default; a present key with value None
+                    # would instead render the literal string "None".
+                    for key in ("turn_count", "compaction_event_count"):
+                        if key in self.evidence.get(arm, {}):
+                            row[key] = self.evidence[arm][key]
+                    comparison_evidence[arm] = row
                 out_path = compare_arms(
                     run_dir=self.args.run_dir, gate_id=self.args.gate_id,
                     arm_run_ids=arm_run_ids, arm_cells=self.arm_cells,

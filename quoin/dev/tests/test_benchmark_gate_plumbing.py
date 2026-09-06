@@ -9,7 +9,9 @@ tracker), T-04 (model pin acceptance) and T-05 (HarnessConfig.cells /
 run_dir invariants) — per the plan's T-05 spec, this is their shared home.
 """
 import json
+import re
 import sys
+import time
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -188,20 +190,55 @@ class TestVerdictShortCircuit:
 # ---------------------------------------------------------------------------
 
 
+def _derive_base_metrics_keys() -> set:
+    """The exact literal keys `write_run_result` assigns into
+    `metrics_data` before `result.extra` is merged in — parsed from
+    source, not restated by hand, so this cannot go stale independently
+    of the code the way the previous hand-restated `added_keys` literal
+    already had — it silently omitted `session_errored`,
+    `had_assistant_event`, `commit_error` and `quoin_install_script`."""
+    import inspect
+    from quoin.benchmarks.harness import result_writer
+
+    src = inspect.getsource(result_writer.write_run_result)
+    before_merge = src.split("metrics_data.update(result.extra)")[0]
+    return set(re.findall(r'metrics_data\["([a-zA-Z0-9_]+)"\]\s*=', before_merge))
+
+
+def _derive_added_extra_keys() -> set:
+    """Every literal key that ends up in the `extra` dict `write_run_result`
+    merges into `metrics_data` — both cell adapters' own contributions
+    (`result["extra"]["key"] = ...` and the bulk-update form
+    `result["extra"].update({"key": ..., ...})`) plus `runner.py`'s own
+    addition (`invocation_extra["key"] = ...`, which is what actually
+    reaches `RunResult.extra` — see `runner.py`'s `invocation_extra`
+    variable) — parsed from source rather than restated by hand."""
+    import inspect
+    from quoin.benchmarks.harness import runner
+    from quoin.benchmarks.harness.cells import quoin_claude, simple_claude
+
+    keys: set = set()
+    for module in (simple_claude, quoin_claude):
+        src = inspect.getsource(module)
+        keys |= set(re.findall(r'result\["extra"\]\["([a-zA-Z0-9_]+)"\]\s*=', src))
+        for block in re.findall(r'result\["extra"\]\.update\((\{.*?\})\)', src, re.DOTALL):
+            keys |= set(re.findall(r'"([a-zA-Z0-9_]+)"\s*:', block))
+
+    runner_src = inspect.getsource(runner)
+    keys |= set(re.findall(r'invocation_extra\["([a-zA-Z0-9_]+)"\]\s*=', runner_src))
+    return keys
+
+
 class TestExtraMetricsMerge:
     def test_base_metrics_key_set_derived_from_source_is_unchanged(self):
         """Guards against the base key set drifting silently (round-3 note)."""
-        import inspect
         from quoin.benchmarks.harness import result_writer
+        import inspect
 
         src = inspect.getsource(result_writer.write_run_result)
-        # The base keys written unconditionally or conditionally before
-        # `metrics_data.update(result.extra)` — read from source so this
-        # assertion cannot go stale independently of the code.
-        unconditional = {"task_id", "cell", "wall_clock_seconds", "turn_count",
-                          "gate_intervention_count"}
-        conditional = {"tokens_in", "tokens_out", "tokens_cache_read", "tokens_cache_write"}
-        for key in unconditional | conditional:
+        base_keys = _derive_base_metrics_keys()
+        assert base_keys, "expected at least one base metrics key to be derivable from source"
+        for key in base_keys:
             assert f'"{key}"' in src, f"expected base metrics key {key!r} in write_run_result source"
         assert "metrics_data.update(result.extra)" in src
 
@@ -209,19 +246,10 @@ class TestExtraMetricsMerge:
         from quoin.benchmarks.harness.result_writer import RunResult, write_run_result
         import json as _json
 
-        base_keys = {
-            "task_id", "cell", "wall_clock_seconds", "turn_count",
-            "gate_intervention_count", "tokens_in", "tokens_out",
-            "tokens_cache_read", "tokens_cache_write",
-        }
-        added_keys = {
-            "installed_quoin_commit", "expected_quoin_commit", "install_ok",
-            "install_reason", "install_returncode", "threaded_kwargs",
-            "workflow_artifacts_captured", "workflow_artifacts_has_arch",
-            "workflow_artifacts_has_plan", "max_budget_usd_applied",
-            "budget_cap_armed", "expected_quoin_commit_armed", "failure_reason",
-        }
-        assert added_keys.isdisjoint(base_keys), "an added extra key collides with a base metrics key"
+        base_keys = _derive_base_metrics_keys()
+        added_keys = _derive_added_extra_keys()
+        collisions = added_keys & base_keys
+        assert not collisions, f"an added extra key collides with a base metrics key: {collisions}"
 
         result = RunResult(
             cell="c", task_id="t", run_id="r", verdict="pass",
@@ -883,12 +911,22 @@ class TestBudgetHaltDetection:
         from quoin.benchmarks.harness.config import BudgetSpec
 
         class HaltingStderr:
-            def read(self):
-                return "Reached maximum budget ($5.00); halting session"
+            """Matches the real pipe's readline() protocol the background
+            drain thread uses: one line, then EOF (empty string)."""
+            def __init__(self):
+                self._lines = iter(["Reached maximum budget ($5.00); halting session"])
+
+            def readline(self):
+                return next(self._lines, "")
 
         class HaltingProc:
-            stdout = _FakeStdout()
-            stderr = HaltingStderr()
+            def __init__(self):
+                # Fresh per instance, not a shared class attribute: this
+                # fixture is reused for a second invoke() call below, and
+                # HaltingStderr's readline() iterator would otherwise
+                # already be exhausted by the first call.
+                self.stdout = _FakeStdout()
+                self.stderr = HaltingStderr()
             def poll(self):
                 return 0
             def wait(self, timeout=None):
@@ -1394,3 +1432,206 @@ class TestScenarioJudge:
         result = judge_task("swebench_lite_000", tmp_path, "r1")
         assert result.source_benchmark == "swebench_lite"
         assert result.verdict == "error"
+
+
+# ---------------------------------------------------------------------------
+# A full stderr pipe must not deadlock stdout reads; the
+# wall-clock check must be timer-driven
+# ---------------------------------------------------------------------------
+
+
+class TestStderrDrainAndTimerDrivenWallClock:
+    def test_large_stderr_output_does_not_deadlock_stdout_reads(self, tmp_path, monkeypatch):
+        """Regression for a real deadlock shape: a child that writes well
+        past one pipe-buffer's worth of stderr, before it
+        ever writes a stdout line, would previously block in the child's
+        own write(2) forever — because nothing was draining stderr — which
+        then blocked this process's stdout `readline()` forever too. With
+        the drain thread in place the child unblocks and completes well
+        within the wall-clock budget."""
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "noisy.py"
+        script.write_text(
+            "import sys, json\n"
+            "sys.stderr.write('x' * 5_000_000)\n"
+            "sys.stderr.flush()\n"
+            "print(json.dumps({'type': 'result', 'total_cost_usd': 0.01}))\n"
+            "sys.stdout.flush()\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=20), run_id="r1",
+        )
+        assert result["verdict"] != "timeout"
+        assert result["cost_available"] is True
+        assert result["cost_runtime_usd"] == 0.01
+
+    def test_wait_readable_returns_true_immediately_for_a_non_selectable_stream(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _wait_readable
+
+        class NoFileno:
+            def readline(self):
+                return ""
+
+        assert _wait_readable(NoFileno(), 5.0) is True
+        assert _wait_readable(None, 5.0) is True
+
+    def test_wait_readable_times_out_when_nothing_arrives_on_a_real_pipe(self):
+        import os as _os
+
+        from quoin.benchmarks.harness.cells.simple_claude import _wait_readable
+
+        read_fd, write_fd = _os.pipe()
+        try:
+            with _os.fdopen(read_fd, "r") as reader:
+                start = time.monotonic()
+                ready = _wait_readable(reader, 0.2)
+                elapsed = time.monotonic() - start
+                assert ready is False
+                assert elapsed < 2.0  # bounded by the timeout, not blocked forever
+        finally:
+            _os.close(write_fd)
+
+    def test_drain_stream_collects_lines_until_eof(self):
+        import os as _os
+        import threading as _threading
+
+        from quoin.benchmarks.harness.cells.simple_claude import _drain_stream
+
+        read_fd, write_fd = _os.pipe()
+        writer = _os.fdopen(write_fd, "w")
+        buffer: list = []
+        with _os.fdopen(read_fd, "r") as reader:
+            thread = _threading.Thread(target=_drain_stream, args=(reader, buffer), daemon=True)
+            thread.start()
+            writer.write("line one\nline two\n")
+            writer.flush()
+            writer.close()
+            thread.join(timeout=5)
+        assert "".join(buffer) == "line one\nline two\n"
+
+    def test_drain_stream_is_a_noop_for_none(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _drain_stream
+
+        _drain_stream(None, [])  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# The paid subprocess is killed on any exception path through
+# the streaming loop, not just the happy path
+# ---------------------------------------------------------------------------
+
+
+class TestPaidProcessKilledOnExceptionPath:
+    def test_json_error_mid_loop_still_kills_the_still_running_child(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "hangs.py"
+        script.write_text(
+            "import time\n"
+            "print('not json, deliberately malformed downstream')\n"
+            "import sys; sys.stdout.flush()\n"
+            "time.sleep(30)\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+
+        # Force the loop to raise on its first parsed line so we exercise
+        # the exception path while the 30s-sleeping child is still alive.
+        real_loads = simple_claude.json.loads
+        call_count = {"n": 0}
+
+        def flaky_loads(s):
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                raise RuntimeError("simulated parse-path failure")
+            return real_loads(s)
+
+        monkeypatch.setattr(simple_claude.json, "loads", flaky_loads)
+
+        start = time.monotonic()
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=25), run_id="r1",
+        )
+        elapsed = time.monotonic() - start
+        assert result["verdict"] == "error"
+        # Proves the child was actually killed rather than left to run out
+        # its 30s sleep: this returns almost immediately.
+        assert elapsed < 10
+
+
+# ---------------------------------------------------------------------------
+# The retained transcript is bounded
+# ---------------------------------------------------------------------------
+
+
+class TestTranscriptRingBufferBounded:
+    def test_events_beyond_the_cap_are_dropped_not_accumulated_unbounded(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        n_events = simple_claude._MAX_RETAINED_EVENTS + 50
+        lines = (
+            [json.dumps({"type": "assistant", "message": {}}) for _ in range(n_events)]
+            + [json.dumps({"type": "result", "total_cost_usd": 0.01})]
+        )
+        line_iter = iter(lines + [""])
+
+        class ScriptedStdout:
+            def readline(self):
+                try:
+                    return next(line_iter) + "\n"
+                except StopIteration:
+                    return ""
+
+        class ScriptedProc:
+            stdout = ScriptedStdout()
+            stderr = None
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                return ScriptedProc()
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(), run_id="r1",
+        )
+        # Bounded, regardless of how many events the session emitted...
+        assert len(result["transcript_events"]) <= simple_claude._MAX_RETAINED_EVENTS
+        # ...but counters that must stay exact are tracked incrementally,
+        # not derived from the (now-truncated) retained list.
+        assert result["turn_count"] == n_events

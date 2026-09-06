@@ -159,11 +159,22 @@ def append(path: Path, row: dict) -> None:
 
 
 def _read_rows(path: Path):
-    for line in Path(path).read_text(encoding="utf-8").splitlines():
+    """Yield every row in the ledger, raising on anything malformed.
+
+    A truncated final line (e.g. a process killed mid-write) or a row
+    missing its fold key must not be silently skipped — either would
+    under-report `recorded_total` and let real spend past the
+    authorisation ceiling. Callers that legitimately want a partial read
+    should not use this path.
+    """
+    for lineno, line in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1):
         line = line.strip()
         if not line:
             continue
         try:
-            yield json.loads(line)
-        except json.JSONDecodeError:
-            continue
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path}:{lineno}: unparseable ledger row: {exc}") from exc
+        if not row.get("attempt_id"):
+            raise ValueError(f"{path}:{lineno}: ledger row is missing attempt_id")
+        yield row

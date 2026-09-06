@@ -26,10 +26,14 @@ Rate-limit handling:
 
 from __future__ import annotations
 
+import io
 import json
 import os
+import select
 import subprocess
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
@@ -90,6 +94,62 @@ _BUDGET_HALT_MARKERS = (
 
 def _detect_budget_halt(text: str) -> bool:
     return any(marker in text for marker in _BUDGET_HALT_MARKERS)
+
+
+# How often the wall-clock check re-evaluates while stdout is silent
+# (below), and how many stream-json events a session retains in memory.
+_POLL_INTERVAL_SECONDS = 1.0
+_MAX_RETAINED_EVENTS = 2000
+
+
+def _wait_readable(stream, timeout: float) -> bool:
+    """True once `stream` has a line ready, `timeout` elapses, or `stream`
+    cannot be used with `select()` at all (no real fd — a test double, for
+    instance) — in the last case this returns True immediately so the
+    caller falls back to a plain blocking `readline()`, matching pre-fix
+    behaviour for anything that isn't a real OS pipe.
+
+    Makes the wall-clock check in `invoke()` below timer-driven rather
+    than event-driven: without this, `readline()` on a silent stdout
+    blocks indefinitely, so the budget check above it in the loop is only
+    re-evaluated when a stdout line actually arrives — and none ever will
+    if the child is itself blocked writing a full stderr pipe (the
+    deadlock this fix, together with `_drain_stream`, closes).
+    """
+    if stream is None:
+        return True
+    try:
+        fd = stream.fileno()
+    except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+        return True
+    try:
+        ready, _, _ = select.select([fd], [], [], max(timeout, 0.0))
+    except (OSError, ValueError):
+        return True
+    return bool(ready)
+
+
+def _drain_stream(stream, buffer: list) -> None:
+    """Continuously read `stream` into `buffer` on a background thread.
+
+    Started right after `Popen` so the OS pipe buffer backing `stderr`
+    never fills: an unread stderr pipe blocks the child's own `write(2)`
+    call once its buffer (commonly 64 KB) is full, which then blocks this
+    process's `stdout` reads forever too — both pipes lead to the same
+    child. Runs until EOF or the stream closes out from under it (the
+    main thread killing/reaping the process).
+    """
+    if stream is None:
+        return
+    try:
+        for line in iter(stream.readline, ""):
+            buffer.append(line)
+    except Exception:
+        # A background thread — nothing upstream is positioned to handle
+        # an exception here, and a stream that misbehaves (closed out
+        # from under us, or a test double with an unexpected shape) must
+        # never crash it. Whatever was drained before the failure is kept.
+        pass
 
 
 def _build_claude_argv(prompt: str, model: str, max_budget_usd: Optional[float]) -> list[str]:
@@ -246,91 +306,131 @@ def invoke(
             text=True,
         )
 
-        events = []
+        # Ring buffer, not an unbounded list: peak retained memory is
+        # bounded regardless of session length. A `--verbose` stream-json
+        # session running the full wall clock can emit far more than this
+        # many events, and nothing downstream needs the full history —
+        # `turn_count` and the budget-halt check are both maintained
+        # incrementally below, not recomputed from a full concatenation
+        # at the end.
+        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
         turn_count = 0
         session_errored = False
         retry_delay = 1.0
+        budget_halted = False
 
-        while True:
-            # Check wall-clock budget (excluding backoff time)
-            elapsed = time.monotonic() - wall_start - backoff_total
-            if elapsed > budget_seconds:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                result["verdict"] = "timeout"
-                break
+        # Drain stderr on a daemon thread started at spawn: a session
+        # that writes past one pipe buffer's worth of stderr over a long
+        # run would otherwise block in the child's own write(2), which
+        # stops it emitting stdout too — and the wall-clock check below
+        # never gets a chance to fire because it sits above a blocking
+        # `readline()` that then never returns.
+        stderr_buffer: list = []
+        stderr_thread = threading.Thread(
+            target=_drain_stream, args=(proc.stderr, stderr_buffer), daemon=True,
+        )
+        stderr_thread.start()
 
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
-                break
+        try:
+            while True:
+                # Timer-driven, not event-driven: re-evaluated at least
+                # every _POLL_INTERVAL_SECONDS even when stdout is
+                # silent, via the bounded select() below — not only when
+                # a stdout line happens to arrive.
+                elapsed = time.monotonic() - wall_start - backoff_total
+                remaining = budget_seconds - elapsed
+                if remaining <= 0:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    result["verdict"] = "timeout"
+                    break
 
-            line = line.strip()
-            if not line:
-                continue
-
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-
-            # Handle rate-limit / overloaded events
-            event_type = event.get("type", "")
-            if event_type in ("error", "api_error"):
-                error_msg = str(event.get("error", ""))
-                if "429" in error_msg or "overloaded" in error_msg.lower():
-                    # Exponential backoff; pause does not count against budget
-                    backoff_start = time.monotonic()
-                    time.sleep(retry_delay)
-                    backoff_total += time.monotonic() - backoff_start
-                    retry_delay = min(retry_delay * 2, 60.0)
+                if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
                     continue
 
-            events.append(event)
+                line = proc.stdout.readline()
+                if not line and proc.poll() is not None:
+                    break
 
-            # Extract cost and token data from stream-json events
-            if event_type == "result":
-                cost_val = _extract_cost_usd(event)
-                if cost_val is not None:
-                    total_cost_usd = cost_val
-                usage = event.get("usage", {})
-                tokens_in = usage.get("input_tokens", tokens_in)
-                tokens_out = usage.get("output_tokens", tokens_out)
-                tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
-                tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
-                # The terminal result event is authoritative on whether the
-                # session actually completed (verified 2026-09-06: an
-                # authentication failure still emits a `type: "assistant"`
-                # event carrying the error text, e.g. "Not logged in ·
-                # Please run /login" — turn_count alone cannot distinguish
-                # that from a real completion, per the D-15 rehearsal
-                # finding that isolated CLAUDE_CONFIG_DIR loses auth).
-                if event.get("is_error"):
-                    session_errored = True
+                line = line.strip()
+                if not line:
+                    continue
 
-            if event_type == "assistant":
-                turn_count += 1
+                try:
+                    event = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
 
-        proc.wait(timeout=10)
-        stderr_output = ""
-        if proc.stderr is not None:
-            try:
-                stderr_output = proc.stderr.read() or ""
-            except Exception:
-                stderr_output = ""
+                # Handle rate-limit / overloaded events
+                event_type = event.get("type", "")
+                if event_type in ("error", "api_error"):
+                    error_msg = str(event.get("error", ""))
+                    if "429" in error_msg or "overloaded" in error_msg.lower():
+                        # Exponential backoff; pause does not count against budget
+                        backoff_start = time.monotonic()
+                        time.sleep(retry_delay)
+                        backoff_total += time.monotonic() - backoff_start
+                        retry_delay = min(retry_delay * 2, 60.0)
+                        continue
+
+                events.append(event)
+                if not budget_halted and _detect_budget_halt(
+                    str(event.get("result", "")) + str(event.get("error", ""))
+                ):
+                    budget_halted = True
+
+                # Extract cost and token data from stream-json events
+                if event_type == "result":
+                    cost_val = _extract_cost_usd(event)
+                    if cost_val is not None:
+                        total_cost_usd = cost_val
+                    usage = event.get("usage", {})
+                    tokens_in = usage.get("input_tokens", tokens_in)
+                    tokens_out = usage.get("output_tokens", tokens_out)
+                    tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
+                    tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+                    # The terminal result event is authoritative on whether the
+                    # session actually completed (verified 2026-09-06: an
+                    # authentication failure still emits a `type: "assistant"`
+                    # event carrying the error text, e.g. "Not logged in ·
+                    # Please run /login" — turn_count alone cannot distinguish
+                    # that from a real completion, per the D-15 rehearsal
+                    # finding that isolated CLAUDE_CONFIG_DIR loses auth).
+                    if event.get("is_error"):
+                        session_errored = True
+
+                if event_type == "assistant":
+                    turn_count += 1
+
+            proc.wait(timeout=10)
+        finally:
+            # Guaranteed regardless of how the block above exits — a
+            # raised TimeoutExpired, a JSON error, or any other escape
+            # must not leave a paid `claude` process (or its stderr
+            # drain thread) orphaned.
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    pass
+            stderr_thread.join(timeout=5)
+
+        stderr_output = "".join(stderr_buffer)
 
         # A CLI-enforced budget halt (D-08) is reported as capped, not
         # silently short — this cell's own refusal above only catches an
         # UNARMED cap; this catches the cap actually firing mid-session.
+        # Checked incrementally as events arrived (above) plus the final
+        # stderr buffer here, rather than rebuilding one giant
+        # concatenation of every retained event after the fact.
         if result["verdict"] is None:
-            halt_text = stderr_output + "".join(
-                str(evt.get("result", "")) + str(evt.get("error", "")) for evt in events
-            )
-            if _detect_budget_halt(halt_text):
+            if budget_halted or _detect_budget_halt(stderr_output):
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
@@ -347,7 +447,7 @@ def invoke(
         except Exception:
             result["diff_patch"] = ""
 
-        result["transcript_events"] = events
+        result["transcript_events"] = list(events)
         result["turn_count"] = turn_count
         result["tokens_in"] = tokens_in if tokens_in else None
         result["tokens_out"] = tokens_out if tokens_out else None

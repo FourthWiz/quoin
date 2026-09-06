@@ -129,10 +129,12 @@ def _run_live_model_probe(max_budget_usd: float) -> dict:
     This is the ONE live, spend-generating call behind `--verify-model`
     (T-04c) — never confused with `--dry-run`, which stays spend-free.
     """
+    from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
+
     result = subprocess.run(
         [
             "claude", "--print", "--output-format", "json",
-            "--model", "claude-opus-4-7",
+            "--model", PINNED_MODEL,
             "--max-budget-usd", str(max_budget_usd),
             "reply with the single word ok",
         ],
@@ -631,14 +633,24 @@ def main() -> None:
     )
     parser.add_argument(
         "--spend-ledger",
-        type=Path,
+        type=lambda p: Path(p).resolve(),
         default=None,
         help="Path to T-17's persisted spend ledger (used by --verify-model "
-             "and by the three-arm gate driver)",
+             "and by the three-arm gate driver). Resolved at parse time so "
+             "a mistyped or cwd-relative path cannot silently start a "
+             "fresh, unledgered spend trail.",
     )
     args = parser.parse_args()
 
     if args.verify_model:
+        if args.spend_ledger is None:
+            print(
+                "GATE-STOP: --verify-model requires --spend-ledger — this "
+                "call is spend-generating and must be ledgered like any "
+                "other paid call",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         sys.exit(verify_model(ledger_path=args.spend_ledger))
 
     cells = [c.strip() for c in args.cells.split(",") if c.strip()]

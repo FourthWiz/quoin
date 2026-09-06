@@ -153,6 +153,7 @@ def compare_arms(
 
     cost_verdict = _cost_verdict(rows_by_arm)
     quality_verdict = _quality_verdict(rows_by_arm)
+    candidate_commit = rows_by_arm["candidate"]["installed_quoin_commit"]
 
     lines = [
         f"# Three-arm comparison — {gate_id}",
@@ -184,7 +185,9 @@ def compare_arms(
         "comparison above in either case — only main and candidate are "
         "compared.",
         "- **baseline identity:** `main` is `dd188d87ed2512b80d46a3ee80d333b842bd23b5` "
-        "(pre-IVG-258); `candidate` is this stage's branch HEAD (D-13).",
+        "(pre-IVG-258); `candidate` is the commit recorded in this run's own "
+        f"`installed_quoin_commit` — `{candidate_commit}` — not asserted here to be "
+        "any particular branch HEAD (D-13).",
         "- **spend caps applied per arm:** "
         + ", ".join(
             f"{arm}={rows_by_arm[arm]['_max_budget_usd_applied']}" for arm in ARMS
