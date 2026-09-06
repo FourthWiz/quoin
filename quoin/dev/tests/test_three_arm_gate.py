@@ -4,7 +4,9 @@ its supporting modules: the persisted spend ledger (T-17), the three-arm
 comparison emitter (T-11), the dry-run gate (T-09), and the sequential
 driver itself (T-07).
 """
+import argparse
 import json
+import os
 import sys
 import uuid
 from pathlib import Path
@@ -301,3 +303,320 @@ class TestCompareArms:
         )
         text = out_path.read_text(encoding="utf-8")
         assert "cost: candidate <= main** — PASS" in text
+
+
+# ---------------------------------------------------------------------------
+# T-07: the sequential three-arm driver and its supporting mechanisms
+# ---------------------------------------------------------------------------
+
+
+def _make_settings(tmp_path, stanzas: dict) -> Path:
+    """stanzas: {(event, matcher, basename): command_path}."""
+    hooks: dict = {}
+    for (event, matcher, basename), command in stanzas.items():
+        hooks.setdefault(event, []).append({
+            "matcher": matcher,
+            "hooks": [{"type": "command", "command": command, "timeout": 5}],
+        })
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"hooks": hooks}), encoding="utf-8")
+    return settings_path
+
+
+class TestHookStanzaWipe:
+    def test_wipes_only_owned_stanzas_under_hooks_dir(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import wipe_arm_stanzas
+
+        settings_path = _make_settings(tmp_path, {
+            ("UserPromptSubmit", "*", "userpromptsubmit.sh"): "/home/u/.claude/hooks/userpromptsubmit.sh",
+            ("PreCompact", "auto", "precompact.sh"): "/home/u/.claude/hooks/precompact.sh",
+        })
+        owned = {("UserPromptSubmit", "*", "userpromptsubmit.sh")}
+        before, after = wipe_arm_stanzas(settings_path, owned)
+        assert len(before["UserPromptSubmit"]) == 1
+        assert after["UserPromptSubmit"] == []
+        assert len(after["PreCompact"]) == 1  # not owned, untouched
+
+    def test_conjunctive_predicate_spares_non_quoin_script_with_same_basename_shape(self, tmp_path):
+        """The round-5 fix (MAJ-2): round 4's path-only predicate matched
+        four live non-quoin echo_stdin_smoke.sh stanzas that happen to sit
+        under ~/.claude/hooks/. Here the SAME basename+matcher pair is
+        registered by a script whose command path does NOT live under
+        .claude/hooks/, which must survive the wipe (path half of the
+        conjunction fails)."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import wipe_arm_stanzas
+
+        settings_path = _make_settings(tmp_path, {
+            ("UserPromptSubmit", "*", "userpromptsubmit.sh"): "/some/other/place/userpromptsubmit.sh",
+        })
+        owned = {("UserPromptSubmit", "*", "userpromptsubmit.sh")}
+        before, after = wipe_arm_stanzas(settings_path, owned)
+        assert len(after["UserPromptSubmit"]) == 1, "path half of the conjunction must gate the wipe"
+
+    def test_non_owned_basename_under_hooks_dir_survives(self, tmp_path):
+        """A script that happens to live under .claude/hooks/ but is NOT
+        one of this arm's own registered (event, matcher, basename)
+        triples must survive — e.g. a genuinely unrelated script."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import wipe_arm_stanzas
+
+        settings_path = _make_settings(tmp_path, {
+            ("UserPromptSubmit", "*", "echo_stdin_smoke.sh"): "/home/u/.claude/hooks/echo_stdin_smoke.sh",
+        })
+        owned = {("UserPromptSubmit", "*", "userpromptsubmit.sh")}
+        before, after = wipe_arm_stanzas(settings_path, owned)
+        assert len(after["UserPromptSubmit"]) == 1
+
+    def test_missing_settings_file_returns_empty_without_raising(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import wipe_arm_stanzas
+
+        before, after = wipe_arm_stanzas(tmp_path / "nope.json", set())
+        assert before == [] and after == []
+
+
+class TestArmRegisteredStanzas:
+    def test_main_arm_worktree_registers_seven_stanzas_no_compact(self):
+        """Requires the real T-08a worktree at $TMPDIR/quoin-gate/main to
+        exist (created earlier in this implementation session). Skips
+        gracefully if a fresh test environment hasn't created it."""
+        import os as _os
+        from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
+
+        main_root = Path(_os.environ.get("TMPDIR", "/tmp")) / "quoin-gate" / "main"
+        if not main_root.exists():
+            pytest.skip("T-08a worktree not present in this environment")
+        stanzas = arm_registered_stanzas(main_root)
+        assert len(stanzas) == 7
+        assert ("SessionStart", "compact", "sessionstart.sh") not in stanzas
+
+    def test_candidate_arm_worktree_registers_eight_stanzas_with_compact(self):
+        import os as _os
+        from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
+
+        candidate_root = Path(_os.environ.get("TMPDIR", "/tmp")) / "quoin-gate" / "candidate"
+        if not candidate_root.exists():
+            pytest.skip("T-08a worktree not present in this environment")
+        stanzas = arm_registered_stanzas(candidate_root)
+        assert len(stanzas) == 8
+        assert ("SessionStart", "compact", "sessionstart.sh") in stanzas
+
+    def test_missing_installer_file_returns_empty_set(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
+
+        assert arm_registered_stanzas(tmp_path) == set()
+
+
+class TestCrossArmManifest:
+    def test_different_trees_produce_different_manifests(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import cross_arm_manifest
+
+        arm_a = tmp_path / "a"
+        arm_b = tmp_path / "b"
+        (arm_a / "quoin" / "scripts").mkdir(parents=True)
+        (arm_b / "quoin" / "scripts").mkdir(parents=True)
+        (arm_a / "quoin" / "scripts" / "x.py").write_text("print(1)")
+        (arm_b / "quoin" / "scripts" / "x.py").write_text("print(2)")
+        assert cross_arm_manifest(arm_a) != cross_arm_manifest(arm_b)
+
+    def test_identical_trees_produce_identical_manifests(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import cross_arm_manifest
+
+        arm_a = tmp_path / "a"
+        arm_b = tmp_path / "b"
+        (arm_a / "quoin" / "scripts").mkdir(parents=True)
+        (arm_b / "quoin" / "scripts").mkdir(parents=True)
+        (arm_a / "quoin" / "scripts" / "x.py").write_text("same")
+        (arm_b / "quoin" / "scripts" / "x.py").write_text("same")
+        assert cross_arm_manifest(arm_a) == cross_arm_manifest(arm_b)
+
+
+class TestConfigRootAssertion:
+    def test_raw_arm_correctly_isolated_passes(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import assert_config_root, build_arm_env
+
+        raw_config = tmp_path / "raw-config"
+        env = build_arm_env("raw", raw_config)
+        assert_config_root("raw", env, tmp_path / "home", raw_config)  # must not raise
+
+    def test_raw_arm_env_never_mutates_process_environ(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import build_arm_env
+
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        build_arm_env("raw", tmp_path / "raw-config")
+        assert "CLAUDE_CONFIG_DIR" not in os.environ
+
+    def test_leaked_config_dir_on_main_raises_gate_stop(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import assert_config_root, GateStop
+
+        leaked_env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "raw-config")}
+        with pytest.raises(GateStop):
+            assert_config_root("main", leaked_env, tmp_path / "home", tmp_path / "raw-config")
+
+    def test_main_with_no_config_dir_set_passes(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import assert_config_root
+
+        assert_config_root("main", {}, tmp_path / "home", tmp_path / "raw-config")  # must not raise
+
+    def test_build_arm_env_pops_config_dir_for_main_and_candidate(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import build_arm_env
+
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/leaked/from/somewhere")
+        for arm in ("main", "candidate"):
+            env = build_arm_env(arm, tmp_path / "raw-config")
+            assert "CLAUDE_CONFIG_DIR" not in env
+
+
+class TestDriverPlanOnly:
+    def _make_args(self, tmp_path, **overrides):
+        ns = argparse.Namespace(
+            gate_id="g1", suite=tmp_path / "suite.json", fixture_repo=tmp_path / "fixture",
+            main_worktree=tmp_path / "main", candidate_worktree=tmp_path / "candidate",
+            max_budget_usd_raw=6.0, max_budget_usd_main=16.0, max_budget_usd_candidate=16.0,
+            spend_ledger=tmp_path / "ledger.jsonl", wall_clock_seconds=600,
+            run_dir=tmp_path / "runs", rehearsal=False, plan_only=True,
+        )
+        for k, v in overrides.items():
+            setattr(ns, k, v)
+        return ns
+
+    def test_plan_only_never_invokes_run_arm(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        def raising_run_arm(argv, env):
+            raise AssertionError("--plan-only must never invoke an arm")
+
+        args = self._make_args(tmp_path)
+        driver = ThreeArmGateDriver(args, run_arm_fn=raising_run_arm)
+        code = driver.run()
+        assert code == 2  # worktrees don't exist in this synthetic test -> preflight fails
+        # the assertion is really that raising_run_arm was never called, which
+        # not raising here already proves.
+
+    def test_plan_only_prints_arm_sequence(self, tmp_path, capsys):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        args = self._make_args(tmp_path)
+
+        driver = ThreeArmGateDriver(args, run_arm_fn=lambda argv, env: (_ for _ in ()).throw(
+            AssertionError("must not spawn")))
+        driver.preflight = lambda: []  # bypass real install/git checks for this print-only assertion
+        driver.run()
+        out = capsys.readouterr().out
+        assert "raw, main, candidate" in out
+
+
+class TestDriverLedgerFlow:
+    def test_reservation_then_settlement_recorded_per_arm(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 0)
+        driver.arm_roots = {}  # skip install/stanza machinery for this ledger-only test
+        driver.run_arm("raw")
+        assert recorded_total(ns.spend_ledger) == 6.0  # charged at cap: no summary.json => actual None
+
+    def test_teardown_flushes_unreserved_spawned_arm_at_cap(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.spawned_arms = {"candidate"}  # simulate: marked spawned, died before its reservation
+        monkeypatch.setattr(driver, "install_arm" if hasattr(driver, "install_arm") else "arm_roots", driver.arm_roots)
+        recorded = driver.teardown()  # candidate_root is None here -> returns True without reinstalling
+        assert recorded is True
+        assert recorded_total(ns.spend_ledger) == 16.0  # flushed at candidate's cap
+
+    def test_teardown_restores_verbatim_settings_json(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.home = tmp_path / "home"
+        (driver.home / ".claude").mkdir(parents=True)
+        settings_path = driver.home / ".claude" / "settings.json"
+        original = json.dumps({"hooks": {"UserPromptSubmit": [{"matcher": "*", "hooks": []}]}})
+        settings_path.write_text(original, encoding="utf-8")
+        driver.pre_provenance["settings_json_bytes"] = original.encode("utf-8")
+
+        # Simulate a wipe having mutated the file mid-run.
+        settings_path.write_text(json.dumps({"hooks": {}}), encoding="utf-8")
+        driver.teardown()
+        assert settings_path.read_bytes() == original.encode("utf-8")
+
+
+class TestDriverExceptionSafety:
+    def test_gatestop_mid_loop_still_runs_teardown_and_returns_2(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver, GateStop
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+        teardown_calls = []
+
+        def raising_run_arm(arm):
+            raise GateStop("GATE-STOP: injected mid-arm failure")
+
+        driver.run_arm = raising_run_arm
+        real_teardown = driver.teardown
+
+        def spy_teardown():
+            teardown_calls.append(True)
+            return real_teardown()
+
+        driver.teardown = spy_teardown
+        code = driver.run()
+        assert code == 2
+        assert teardown_calls, "teardown must run even when a GateStop interrupts the arm loop"
+
+    def test_keyboard_interrupt_mid_loop_still_runs_teardown(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+        teardown_calls = []
+
+        def raising_run_arm(arm):
+            raise KeyboardInterrupt()
+
+        driver.run_arm = raising_run_arm
+        real_teardown = driver.teardown
+
+        def spy_teardown():
+            teardown_calls.append(True)
+            return real_teardown()
+
+        driver.teardown = spy_teardown
+        code = driver.run()
+        assert teardown_calls
+        assert code in (1, 130)
+
+    def test_compare_arms_import_error_degrades_to_warn_not_failure(self, tmp_path, capsys, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 0)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        import builtins
+        real_import = builtins.__import__
+
+        def blocking_import(name, *a, **kw):
+            if name == "quoin.benchmarks.harness.compare_arms":
+                raise ImportError("simulated unavailable")
+            return real_import(name, *a, **kw)
+
+        monkeypatch.setattr(builtins, "__import__", blocking_import)
+        code = driver.run()
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "WARN: compare_arms unavailable; comparison skipped" in out
