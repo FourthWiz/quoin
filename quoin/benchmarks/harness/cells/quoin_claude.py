@@ -32,13 +32,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Optional
 
 from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
-from .simple_claude import _build_prompt, _get_model
+from .simple_claude import _build_claude_argv, _build_prompt, _gate_mode, _get_model
 
 # ---------------------------------------------------------------------------
 # Invariant: same dated model snapshot as simple-claude (invariant 1).
@@ -50,35 +51,107 @@ ENV_GATE_AUTO_APPROVE = "QUOIN_GATE_AUTO_APPROVE"
 ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 
 
-def _initialize_workflow_artifacts(workdir: Path, quoin_install_script: Path) -> bool:
+_INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
+
+
+def _tail(text: Optional[str], limit: int = 4000) -> str:
+    """Bound a captured stdout/stderr string to its last `limit` characters."""
+    if not text:
+        return ""
+    return text[-limit:]
+
+
+def _initialize_workflow_artifacts(
+    workdir: Path,
+    quoin_install_script: Path,
+    quoin_install_mode: str = "script",
+    arm_root: Optional[Path] = None,
+) -> dict:
     """
     Bootstrap a fresh .workflow_artifacts/ inside the worktree.
 
     Steps:
     1. Remove any existing .workflow_artifacts/ (guarantee fresh start).
-    2. Run quoin/install.sh to deploy skills to ~/.claude/ (idempotent).
-    3. Create empty .workflow_artifacts/ structure.
+    2. Install quoin per `quoin_install_mode` (see below).
+    3. Create empty .workflow_artifacts/ structure (step 1 above).
 
-    Returns True on success, False on failure.
+    `quoin_install_mode` (D-16), one of:
+      "script" (DEFAULT — today's behaviour, byte-unchanged): shell
+        `bash {quoin_install_script}`.
+      "skip" (what the gate uses): install nothing. The driver has already
+        installed and verified the arm; a per-task reinstall buys nothing
+        and, for the main arm, would fire `install.sh`'s pip tier-3 path
+        and downgrade the machine's quoin (D-12, R-14).
+      "module": `PYTHONPATH={arm_root}/src {sys.executable} -m quoin
+        install --source-dir {arm_root}/quoin --scope user` (D-12's
+        arm-pinned form, derived from the worktree ROOT). When `arm_root`
+        is `None`, it is derived as `quoin_install_script.resolve().parent.parent`.
+
+    Returns {"ok": bool, "reason": str, "returncode": int | None,
+             "stdout_tail": str, "stderr_tail": str}. A failed, skipped or
+    timed-out install is surfaced here rather than swallowed — the caller
+    treats a non-ok result as fatal before any paid spend (D-03).
     """
     artifacts_dir = workdir / ".workflow_artifacts"
     if artifacts_dir.exists():
         shutil.rmtree(artifacts_dir)
     artifacts_dir.mkdir(parents=True)
 
-    # Run install.sh to ensure skills are deployed (idempotent; fast if already done)
-    if quoin_install_script.exists():
-        try:
-            subprocess.run(
-                ["bash", str(quoin_install_script)],
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
-        except Exception:
-            pass  # install failures are non-fatal; skills may already be deployed
+    if quoin_install_mode == "skip":
+        return {
+            "ok": True, "reason": "skip-driver-installed",
+            "returncode": None, "stdout_tail": "", "stderr_tail": "",
+        }
 
-    return True
+    if quoin_install_mode == "module":
+        root = arm_root or quoin_install_script.resolve().parent.parent
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(root / "src")
+        argv = [
+            sys.executable, "-m", "quoin", "install",
+            "--source-dir", str(root / "quoin"), "--scope", "user",
+        ]
+        return _run_install_subprocess(argv, env=env)
+
+    # "script" mode — today's behaviour, byte-unchanged except that a
+    # failure, timeout or missing script is now reported, not swallowed.
+    if not quoin_install_script.exists():
+        return {
+            "ok": False, "reason": "script-missing",
+            "returncode": None, "stdout_tail": "", "stderr_tail": "",
+        }
+    return _run_install_subprocess(["bash", str(quoin_install_script)])
+
+
+def _run_install_subprocess(argv: list[str], env: Optional[dict] = None) -> dict:
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_INSTALL_TIMEOUT_SECONDS,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False, "reason": "install-timeout", "returncode": None,
+            "stdout_tail": _tail(exc.stdout), "stderr_tail": _tail(exc.stderr),
+        }
+    except Exception as exc:
+        return {
+            "ok": False, "reason": "install-error", "returncode": None,
+            "stdout_tail": "", "stderr_tail": str(exc),
+        }
+    if proc.returncode != 0:
+        return {
+            "ok": False, "reason": "install-failed", "returncode": proc.returncode,
+            "stdout_tail": _tail(proc.stdout), "stderr_tail": _tail(proc.stderr),
+        }
+    return {
+        "ok": True, "reason": "ok", "returncode": proc.returncode,
+        "stdout_tail": _tail(proc.stdout), "stderr_tail": _tail(proc.stderr),
+    }
 
 
 def _capture_workflow_artifacts(
@@ -136,6 +209,10 @@ def invoke(
     run_id: str,
     quoin_install_script: Optional[Path] = None,
     quoin_repo_root: Optional[Path] = None,
+    quoin_install_mode: str = "script",
+    arm_root: Optional[Path] = None,
+    expected_quoin_commit: Optional[str] = None,
+    max_budget_usd: Optional[float] = None,
 ) -> dict:
     """
     Invoke Claude Code with the full Quoin workflow.
@@ -154,6 +231,20 @@ def invoke(
         Path to quoin/install.sh. Defaults to quoin/install.sh relative to cwd.
     quoin_repo_root:
         Path to the quoin repo root. Used to locate install.sh if not given.
+    quoin_install_mode:
+        "script" (default), "skip" or "module" — see
+        `_initialize_workflow_artifacts` (D-16).
+    arm_root:
+        The arm worktree root, used by "module" mode and by the commit
+        assertion below. Derived from `quoin_install_script` when omitted.
+    expected_quoin_commit:
+        The commit this arm intends to have installed (D-14). In gate mode
+        (`QUOIN_BENCHMARK_GATE=1`) a `None` value refuses to spawn; whenever
+        set, a mismatch against the arm's actual worktree HEAD refuses too.
+    max_budget_usd:
+        Optional CLI-enforced spend cap (D-08), passed through to `claude
+        --max-budget-usd`. In gate mode, a `None` value or an assembled
+        argv missing the flag refuses to spawn.
 
     Returns
     -------
@@ -179,6 +270,7 @@ def invoke(
         "turn_count": 0,
         "gate_intervention_count": 0,
         "verdict": None,
+        "extra": {},
     }
 
     # Resolve quoin install script path
@@ -188,23 +280,84 @@ def invoke(
         else:
             quoin_install_script = Path("quoin/install.sh")
 
-    # Bootstrap fresh .workflow_artifacts/ per-task
-    _initialize_workflow_artifacts(workdir, quoin_install_script)
+    gate_mode = _gate_mode()
+    resolved_arm_root = arm_root or quoin_install_script.resolve().parent.parent
+
+    # Read the commit this arm's OWN worktree is actually at, BEFORE
+    # installing anything (D-14's required assertion) — the worktree's HEAD
+    # is what `--source-dir` pins the install to (D-12), so this is the
+    # truthful answer to "which commit does this arm intend to install".
+    installed_quoin_commit: Optional[str] = None
+    commit_error: Optional[str] = None
+    try:
+        commit_proc = subprocess.run(
+            ["git", "-C", str(resolved_arm_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if commit_proc.returncode == 0:
+            installed_quoin_commit = commit_proc.stdout.strip()
+        else:
+            commit_error = _tail(commit_proc.stderr) or "git rev-parse failed"
+    except Exception as exc:
+        commit_error = str(exc)
+
+    # Bootstrap fresh .workflow_artifacts/ per-task, installing per the
+    # arm-pinned mechanism (D-12/D-16) rather than always shelling install.sh.
+    install_result = _initialize_workflow_artifacts(
+        workdir, quoin_install_script,
+        quoin_install_mode=quoin_install_mode, arm_root=resolved_arm_root,
+    )
+
+    result["extra"].update({
+        "quoin_install_script": str(quoin_install_script),
+        "installed_quoin_commit": installed_quoin_commit,
+        "expected_quoin_commit": expected_quoin_commit,
+        "install_ok": install_result["ok"],
+        "install_reason": install_result["reason"],
+        "install_returncode": install_result["returncode"],
+    })
+
+    # Hard-fail paths: each returns BEFORE subprocess.Popen so no tokens are
+    # spent (D-03). A failed/skipped install, an unresolvable commit, or a
+    # commit mismatch are all fatal — a silently-wrong install would make
+    # the candidate arm secretly measure whatever was installed last.
+    if not install_result["ok"]:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "install-failed"
+        return result
+    if commit_error is not None:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "commit-unresolvable"
+        result["extra"]["commit_error"] = commit_error
+        return result
+    if expected_quoin_commit is not None and installed_quoin_commit != expected_quoin_commit:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "commit-mismatch"
+        return result
+
+    # Fail-closed guards, evaluated in gate mode only (D-08's CRIT-2 fix).
+    # Outside gate mode both remain advisory records so nothing outside the
+    # gate changes behaviour.
+    expected_commit_armed = expected_quoin_commit is not None
+    result["extra"]["expected_quoin_commit_armed"] = expected_commit_armed
+    if gate_mode and not expected_commit_armed:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "expected-commit-unarmed"
+        return result
+
+    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+    budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
+    result["extra"]["budget_cap_armed"] = budget_cap_armed
+    result["extra"]["max_budget_usd_applied"] = max_budget_usd
+    if gate_mode and not budget_cap_armed:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "budget-cap-unarmed"
+        return result
 
     # Build subprocess environment with gate auto-approve
     env = os.environ.copy()
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
-
-    cmd = [
-        "claude",
-        "--print",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--permission-mode", "acceptEdits",
-        "--model", model,
-        prompt,
-    ]
 
     budget_seconds = budget.wall_clock_seconds
     wall_start = time.monotonic()
@@ -305,9 +458,15 @@ def invoke(
             run_output_dir=workdir.parent / "artifacts_evidence",
             task_id=task_spec["id"],
         )
+        # Kept at both the top level (nothing that reads them today breaks)
+        # and in `extra` (where `RunResult.extra` and the judge can see
+        # them — T-01/T-02 fix; they were top-level-only before).
         result["workflow_artifacts_captured"] = artifacts_evidence.get("captured", False)
         result["workflow_artifacts_has_arch"] = artifacts_evidence.get("has_architecture_md", False)
         result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
+        result["extra"]["workflow_artifacts_captured"] = result["workflow_artifacts_captured"]
+        result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
+        result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
 
         result["transcript_events"] = events
         result["turn_count"] = turn_count

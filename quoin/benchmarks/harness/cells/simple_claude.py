@@ -47,6 +47,39 @@ def _get_model() -> str:
     return os.environ.get(_MODEL_ENV_VAR, PINNED_MODEL)
 
 
+# Environment variable that flags a gate invocation (D-08). Read from the
+# environment, deliberately NOT from a threaded kwarg — a kwarg would carry
+# the same silent-omission failure mode this flag exists to guard against.
+ENV_BENCHMARK_GATE = "QUOIN_BENCHMARK_GATE"
+
+
+def _gate_mode() -> bool:
+    return os.environ.get(ENV_BENCHMARK_GATE) == "1"
+
+
+def _build_claude_argv(prompt: str, model: str, max_budget_usd: Optional[float]) -> list[str]:
+    """Assemble the `claude` argv shared by both Claude cells.
+
+    A separate, importable function so the "the assembled argv actually
+    contains --max-budget-usd" refusal (D-08's CRIT-2 fix) can be tested
+    against a stubbed builder that silently drops the flag — the
+    anti-silent-omission proof. Both cells already spawn with `--print`,
+    which `--max-budget-usd` requires.
+    """
+    argv = [
+        "claude",
+        "--print",
+        "--output-format", "stream-json",
+        "--verbose",
+        "--permission-mode", "acceptEdits",
+        "--model", model,
+    ]
+    if max_budget_usd is not None:
+        argv += ["--max-budget-usd", str(max_budget_usd)]
+    argv.append(prompt)
+    return argv
+
+
 def _build_prompt(task_spec: dict) -> str:
     """Build the prompt to send to Claude Code for a given task."""
     source = task_spec.get("source", "")
@@ -78,6 +111,7 @@ def invoke(
     workdir: Path,
     budget: BudgetSpec,
     run_id: str,
+    max_budget_usd: Optional[float] = None,
 ) -> dict:
     """
     Invoke Claude Code CLI in simple (no-quoin) mode.
@@ -92,6 +126,10 @@ def invoke(
         Wall-clock and USD budget constraints.
     run_id:
         The benchmark run ID (used for logging).
+    max_budget_usd:
+        Optional CLI-enforced spend cap (D-08), passed through to `claude
+        --max-budget-usd`. In gate mode (`QUOIN_BENCHMARK_GATE=1`), a `None`
+        value or an assembled argv missing the flag refuses to spawn.
 
     Returns
     -------
@@ -116,17 +154,23 @@ def invoke(
         "turn_count": 0,
         "gate_intervention_count": 0,
         "verdict": None,
+        "extra": {},
     }
 
-    cmd = [
-        "claude",
-        "--print",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--permission-mode", "acceptEdits",
-        "--model", model,
-        prompt,
-    ]
+    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+
+    # Fail closed at the point of spend (D-08's CRIT-2 fix). A cap that is
+    # merely threaded is not a bound: this refusal is evaluated on the
+    # ASSEMBLED argv, not the raw parameter, so a silently-dropped flag is
+    # caught too. Outside gate mode the record is advisory only.
+    gate_mode = _gate_mode()
+    budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
+    result["extra"]["budget_cap_armed"] = budget_cap_armed
+    result["extra"]["max_budget_usd_applied"] = max_budget_usd
+    if gate_mode and not budget_cap_armed:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "budget-cap-unarmed"
+        return result
 
     budget_seconds = budget.wall_clock_seconds
     wall_start = time.monotonic()

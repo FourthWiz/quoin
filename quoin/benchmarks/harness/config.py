@@ -43,6 +43,11 @@ class HarnessConfig:
     quoin_install_script: Path = Path("quoin/install.sh")
     """Path to the quoin install.sh script (used by quoin-claude cell)."""
 
+    expected_quoin_commit: Optional[str] = None
+    """Commit SHA the arm intends to have installed. The quoin-claude cell
+    asserts the worktree it actually installed from against this value and
+    refuses to spawn on a mismatch (D-14)."""
+
     cells: list[str] = field(
         default_factory=lambda: [
             "simple-claude",

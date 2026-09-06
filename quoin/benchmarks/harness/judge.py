@@ -366,6 +366,7 @@ def judge_task(
     task_dir: Path,
     run_id: str,
     evidence_dir: Optional[Path] = None,
+    invocation_extra: Optional[dict] = None,
 ) -> JudgeResult:
     """
     Dispatch to the appropriate judge based on task source.
@@ -373,6 +374,11 @@ def judge_task(
     Looks for:
       - task_dir/solution.py for HumanEval+ tasks
       - task_dir/diff.patch for SWE-bench Lite tasks
+
+    `invocation_extra` carries the cell's `extra` dict from `RunResult`
+    (T-01) — the channel a scenario-source judge (T-06) reads to see the
+    flags the cell recorded (e.g. workflow-artifact evidence). Every
+    pre-existing branch here ignores it.
     """
     source = _infer_source(task_id)
 
