@@ -137,6 +137,32 @@ def _build_prompt(task_spec: dict) -> str:
             f"Implement the fix in the repository. When done, your changes will be "
             f"evaluated by the SWE-bench harness."
         )
+    elif source == "quoin_scenario":
+        # The suite entry's `description` is the scenario's Prompt verbatim
+        # plus the fixture's concretely-named target subsystem (T-06, D-05).
+        # `scenario_file` is a FALLBACK only, read relative to
+        # quoin/benchmarks/ — the scenario doc itself names no subsystem
+        # (round-4 fix, MAJ-1: the file must not win when both are present,
+        # or every arm would plan a refactor of whatever subsystem it
+        # picked, confounding the quality comparison).
+        target_subsystem = task_spec.get("target_subsystem", "")
+        if description:
+            prompt = description
+        else:
+            scenario_file = task_spec.get("scenario_file", "")
+            scenario_path = Path("quoin/benchmarks") / scenario_file if scenario_file else None
+            prompt = (
+                scenario_path.read_text(encoding="utf-8")
+                if scenario_path and scenario_path.exists()
+                else ""
+            )
+        if target_subsystem and target_subsystem not in prompt:
+            raise ValueError(
+                f"assembled prompt for task {task_spec.get('id')!r} does not "
+                f"contain its target_subsystem {target_subsystem!r} — the "
+                "quality comparison would be across different subsystems"
+            )
+        return prompt
     else:
         return f"Solve task: {description} (source_id={source_id})"
 
@@ -317,6 +343,11 @@ def invoke(
         result["tokens_out"] = tokens_out if tokens_out else None
         result["tokens_cache_read"] = tokens_cache_read if tokens_cache_read else None
         result["tokens_cache_write"] = tokens_cache_write if tokens_cache_write else None
+        # For the scenario judge (T-06): whether the run produced at least
+        # one assistant turn. Named distinctly from the top-level
+        # `turn_count` metrics key so merging `extra` into metrics.json
+        # never collides with a base key (T-01).
+        result["extra"]["had_assistant_event"] = turn_count > 0
 
         # Cost handling
         if total_cost_usd is not None:

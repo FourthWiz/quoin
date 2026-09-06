@@ -357,6 +357,69 @@ def _parse_swebench_output(
 
 
 # ---------------------------------------------------------------------------
+# quoin_scenario judge (T-06)
+# ---------------------------------------------------------------------------
+
+
+def judge_scenario(
+    task_id: str,
+    task_dir: Path,
+    run_id: str,
+    invocation_extra: Optional[dict] = None,
+) -> JudgeResult:
+    """
+    Judge a `quoin_scenario` task (e.g. the gate's medium-refactor-plan run).
+
+    This is a MECHANICAL COMPLETION CHECK ONLY — it is NOT AC-4's task-
+    quality measure (D-07). AC-4's quality half is `task_completion_quality`,
+    scored by hand against `templates/scoring-rubric.md`; a scenario like
+    "plan a medium refactor" has no deterministic pass/fail on its content.
+
+    By the time this is called, the runner has already short-circuited any
+    cell-reported terminal verdict (T-01, D-03) — a cell-side error or
+    timeout never reaches here. This judge only distinguishes a normal
+    completion from a plumbing failure to produce evidence at all:
+      - quoin arms (an `invocation_extra` carrying either workflow-artifact
+        flag): `pass` iff BOTH `workflow_artifacts_has_arch` and
+        `workflow_artifacts_has_plan` are true; `fail` otherwise.
+      - `simple-claude` (an `invocation_extra` with neither flag):
+        `pass` iff the run produced at least one assistant turn
+        (`had_assistant_event`); `fail` otherwise.
+      - a missing or empty `invocation_extra` is `error`, not `fail` — a
+        missing evidence channel is a plumbing fault, never a toolkit
+        result.
+    """
+    start = time.monotonic()
+    if not invocation_extra:
+        return JudgeResult(
+            task_id=task_id,
+            source_benchmark="quoin_scenario",
+            verdict="error",
+            evidence_path="invocation_extra missing or empty; cannot judge a scenario task",
+            judge_runtime_seconds=time.monotonic() - start,
+        )
+
+    is_quoin_arm = (
+        "workflow_artifacts_has_arch" in invocation_extra
+        or "workflow_artifacts_has_plan" in invocation_extra
+    )
+    if is_quoin_arm:
+        has_arch = bool(invocation_extra.get("workflow_artifacts_has_arch"))
+        has_plan = bool(invocation_extra.get("workflow_artifacts_has_plan"))
+        verdict = "pass" if (has_arch and has_plan) else "fail"
+    else:
+        verdict = "pass" if invocation_extra.get("had_assistant_event") else "fail"
+
+    return JudgeResult(
+        task_id=task_id,
+        source_benchmark="quoin_scenario",
+        verdict=verdict,
+        evidence_path=None,
+        judge_runtime_seconds=time.monotonic() - start,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -389,6 +452,9 @@ def judge_task(
     if source == "swebench_lite":
         patch_path = task_dir / "diff.patch"
         return judge_swebench_lite(task_id, patch_path, run_id, evidence_dir)
+
+    if source == "quoin_scenario":
+        return judge_scenario(task_id, task_dir, run_id, invocation_extra)
 
     return JudgeResult(
         task_id=task_id,
@@ -426,4 +492,6 @@ def _infer_source(task_id: str) -> str:
         return "evalplus_humaneval_plus"
     if task_id.startswith("swebench"):
         return "swebench_lite"
+    if task_id.startswith("scenario_"):
+        return "quoin_scenario"
     return "unknown"

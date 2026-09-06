@@ -184,4 +184,6 @@ def _infer_source(task_id: str) -> str:
         return "evalplus_humaneval_plus"
     if task_id.startswith("swebench"):
         return "swebench_lite"
+    if task_id.startswith("scenario_"):
+        return "quoin_scenario"
     return "unknown"

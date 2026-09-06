@@ -1165,3 +1165,206 @@ class TestHarnessConfigInvariants:
             "gate results must be recorded with the task, never published "
             "as benchmark results (D-09)"
         )
+
+
+# ---------------------------------------------------------------------------
+# T-06: the gate suite, the quoin_scenario prompt branch, and its judge
+# ---------------------------------------------------------------------------
+
+
+_GATE_SUITE_PATH = (
+    Path(__file__).resolve().parent.parent.parent / "benchmarks" / "suite-gate-medium-refactor.json"
+)
+
+
+class TestGateSuiteFile:
+    def test_suite_parses_and_has_one_task(self):
+        suite = json.loads(_GATE_SUITE_PATH.read_text(encoding="utf-8"))
+        assert suite["schema_version"] == 2
+        assert len(suite["tasks"]) == 1
+        task = suite["tasks"][0]
+        assert task["id"] == "scenario_medium_refactor_plan"
+        assert task["source"] == "quoin_scenario"
+        assert task["target_subsystem"] == "src/black/trans.py"
+        assert task["target_subsystem"] in task["description"]
+
+    def test_suite_contains_no_forbidden_result_claims(self):
+        from quoin.benchmarks.scripts.validate_benchmarks import FORBIDDEN_RESULT_CLAIMS
+
+        text = _GATE_SUITE_PATH.read_text(encoding="utf-8").lower()
+        for phrase in FORBIDDEN_RESULT_CLAIMS:
+            assert phrase not in text
+
+    def test_dry_run_prints_a_one_task_matrix(self, capsys):
+        import sys as _sys
+        from quoin.benchmarks.scripts import run_benchmark as rb_mod
+
+        old_argv = _sys.argv
+        try:
+            _sys.argv = [
+                "run_benchmark.py", "--suite", str(_GATE_SUITE_PATH),
+                "--cells", "simple-claude", "--run-id", "smoke", "--dry-run",
+            ]
+            with pytest.raises(SystemExit) as exc_info:
+                rb_mod.main()
+            assert exc_info.value.code == 0
+        finally:
+            _sys.argv = old_argv
+        out = capsys.readouterr().out
+        assert "Total task invocations: 1" in out
+
+
+class TestScenarioPromptBranch:
+    def test_description_present_returns_it_verbatim(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+
+        task = {
+            "id": "scenario_x", "source": "quoin_scenario",
+            "description": "Plan a medium refactor for src/black/trans.py. Do not implement it.",
+            "target_subsystem": "src/black/trans.py",
+        }
+        assert _build_prompt(task) == task["description"]
+
+    def test_frozen_suite_prompt_contains_target_subsystem(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+
+        suite = json.loads(_GATE_SUITE_PATH.read_text(encoding="utf-8"))
+        task = suite["tasks"][0]
+        prompt = _build_prompt(task)
+        assert task["target_subsystem"] in prompt
+
+    def test_quoin_cell_prompt_is_identical_apart_from_run_prepend(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+
+        suite = json.loads(_GATE_SUITE_PATH.read_text(encoding="utf-8"))
+        task = suite["tasks"][0]
+        base_prompt = _build_prompt(task)
+        quoin_prompt = f"Use /run end-to-end on this task\n\n{base_prompt}"
+        assert quoin_prompt == f"Use /run end-to-end on this task\n\n{base_prompt}"
+        assert quoin_prompt.endswith(base_prompt)
+
+    def test_description_present_but_omitting_subsystem_raises_and_never_spawns(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+
+        task = {
+            "id": "scenario_x", "source": "quoin_scenario",
+            "description": "Plan a medium refactor. Do not implement it.",
+            "target_subsystem": "src/black/trans.py",
+        }
+        with pytest.raises(ValueError):
+            _build_prompt(task)
+
+    def test_empty_description_falls_back_to_scenario_file_and_still_fails_containment(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+
+        task = {
+            "id": "scenario_x", "source": "quoin_scenario", "description": "",
+            "scenario_file": "scenarios/medium-refactor-plan.md",
+            "target_subsystem": "src/black/trans.py",
+        }
+        with pytest.raises(ValueError):
+            _build_prompt(task)
+
+    def test_preexisting_branches_are_byte_unchanged(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+
+        humaneval_task = {"source": "evalplus_humaneval_plus", "source_id": "HumanEval/0",
+                           "description": "desc"}
+        expected_humaneval = (
+            "Solve the following HumanEval+ programming task. "
+            "Write your solution as a Python function in a file called solution.py.\n\n"
+            "Task ID: HumanEval/0\n"
+            "Task description: desc\n\n"
+            "Your solution should pass all tests in the evalplus test suite for this task."
+        )
+        assert _build_prompt(humaneval_task) == expected_humaneval
+
+        swebench_task = {"source": "swebench_lite", "source_id": "repo__issue-1", "description": "desc"}
+        expected_swebench = (
+            "Fix the following GitHub issue from the SWE-bench Lite benchmark.\n\n"
+            "Instance ID: repo__issue-1\n"
+            "Description: desc\n\n"
+            "Implement the fix in the repository. When done, your changes will be "
+            "evaluated by the SWE-bench harness."
+        )
+        assert _build_prompt(swebench_task) == expected_swebench
+
+        unknown_task = {"source": "mystery", "source_id": "x1", "description": "desc"}
+        assert _build_prompt(unknown_task) == "Solve task: desc (source_id=x1)"
+
+
+class TestScenarioJudge:
+    def test_both_flags_true_judges_pass(self):
+        from quoin.benchmarks.harness.judge import judge_scenario
+
+        result = judge_scenario("scenario_x", Path("."), "r1", invocation_extra={
+            "workflow_artifacts_has_arch": True, "workflow_artifacts_has_plan": True,
+        })
+        assert result.verdict == "pass"
+
+    def test_both_flags_false_judges_fail(self):
+        from quoin.benchmarks.harness.judge import judge_scenario
+
+        result = judge_scenario("scenario_x", Path("."), "r1", invocation_extra={
+            "workflow_artifacts_has_arch": False, "workflow_artifacts_has_plan": False,
+        })
+        assert result.verdict == "fail"
+
+    def test_one_flag_false_judges_fail(self):
+        from quoin.benchmarks.harness.judge import judge_scenario
+
+        result = judge_scenario("scenario_x", Path("."), "r1", invocation_extra={
+            "workflow_artifacts_has_arch": True, "workflow_artifacts_has_plan": False,
+        })
+        assert result.verdict == "fail"
+
+    def test_absent_invocation_extra_judges_error(self):
+        from quoin.benchmarks.harness.judge import judge_scenario
+
+        assert judge_scenario("scenario_x", Path("."), "r1", invocation_extra=None).verdict == "error"
+        assert judge_scenario("scenario_x", Path("."), "r1", invocation_extra={}).verdict == "error"
+
+    def test_simple_claude_path_pass_on_assistant_event(self):
+        from quoin.benchmarks.harness.judge import judge_scenario
+
+        result = judge_scenario("scenario_x", Path("."), "r1", invocation_extra={
+            "had_assistant_event": True, "budget_cap_armed": True,
+        })
+        assert result.verdict == "pass"
+
+    def test_simple_claude_path_fail_without_assistant_event(self):
+        from quoin.benchmarks.harness.judge import judge_scenario
+
+        result = judge_scenario("scenario_x", Path("."), "r1", invocation_extra={
+            "had_assistant_event": False, "budget_cap_armed": True,
+        })
+        assert result.verdict == "fail"
+
+    def test_scenario_task_never_reaches_unknown_source_arm(self):
+        from quoin.benchmarks.harness.judge import judge_task
+
+        result = judge_task("scenario_medium_refactor_plan", Path("."), "r1",
+                             invocation_extra={"had_assistant_event": True})
+        assert result.source_benchmark == "quoin_scenario"
+        assert "Unknown source benchmark" not in (result.evidence_path or "")
+
+    def test_infer_source_maps_scenario_prefix(self):
+        from quoin.benchmarks.harness.judge import _infer_source as judge_infer_source
+        from quoin.benchmarks.harness.result_writer import _infer_source as writer_infer_source
+
+        assert judge_infer_source("scenario_medium_refactor_plan") == "quoin_scenario"
+        assert writer_infer_source("scenario_medium_refactor_plan") == "quoin_scenario"
+
+    def test_preexisting_judge_branches_byte_unchanged(self, tmp_path):
+        from quoin.benchmarks.harness.judge import judge_task
+
+        # HumanEval+ branch: missing solution file -> error (byte-unchanged
+        # shape, no evalplus dependency required for this assertion).
+        result = judge_task("humaneval_plus_000", tmp_path, "r1")
+        assert result.source_benchmark == "evalplus_humaneval_plus"
+        assert result.verdict == "error"
+
+        # SWE-bench branch: missing patch file -> error.
+        result = judge_task("swebench_lite_000", tmp_path, "r1")
+        assert result.source_benchmark == "swebench_lite"
+        assert result.verdict == "error"
