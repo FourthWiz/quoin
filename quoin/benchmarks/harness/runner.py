@@ -52,6 +52,27 @@ _CELL_TERMINAL_VERDICTS = frozenset({"error", "timeout", "budget_stopped"})
 _SPEND_CRITICAL_FIELDS = ("max_budget_usd", "expected_quoin_commit")
 
 
+class SpendTracker:
+    """A between-task cumulative-spend cap for a single `run_cell` call.
+
+    This is a SECONDARY bound (D-08): it is only evaluated after a task
+    returns, so it cannot stop anything within a one-task suite — the
+    intra-task bound is the CLI's own `--max-budget-usd` (T-14). For a
+    multi-task suite this stops a cell once its running total exceeds
+    `cap_usd`, so a lengthy run does not silently run away between the
+    per-task caps.
+    """
+
+    def __init__(self, cap_usd: Optional[float] = None) -> None:
+        self.cap_usd = cap_usd
+        self.total_usd: float = 0.0
+
+    def add(self, amount: float) -> bool:
+        """Record `amount` spent; return True if the cap is now exceeded."""
+        self.total_usd += amount
+        return self.cap_usd is not None and self.total_usd > self.cap_usd
+
+
 class ConfigThreadError(RuntimeError):
     """Raised when a spend-critical config field cannot reach any adapter.
 
@@ -315,6 +336,7 @@ def run_cell(
     config: Optional[HarnessConfig] = None,
     fixture_repo: Optional[Path] = None,
     resume: bool = False,
+    tracker: Optional[SpendTracker] = None,
 ) -> CellResult:
     """
     Run all tasks in the suite for a given cell.
@@ -333,6 +355,12 @@ def run_cell(
         Path to fixture repo (required for SWE-bench Lite).
     resume:
         If True, skip tasks whose result dir is already well-formed.
+    tracker:
+        Optional `SpendTracker` enforcing a BETWEEN-task cumulative USD cap
+        (T-03, D-08's secondary bound — the intra-task bound is the CLI's
+        own `--max-budget-usd`, T-14). With `tracker is None` or a `None`
+        `cap_usd`, this loop is byte-equivalent to today: every suite task
+        runs regardless of cost.
 
     Returns
     -------
@@ -372,5 +400,11 @@ def run_cell(
             fixture_repo=fixture_repo,
         )
         cell_result.task_results.append(result)
+
+        if tracker is not None:
+            cap_exceeded = tracker.add(result.cost_runtime_usd or 0.0)
+            if cap_exceeded:
+                cell_result.budget_stopped = True
+                break
 
     return cell_result

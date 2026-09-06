@@ -8,6 +8,7 @@ invocation_extra channel, spend-critical thread-omission guard), T-02
 tracker), T-04 (model pin acceptance) and T-05 (HarnessConfig.cells /
 run_dir invariants) — per the plan's T-05 spec, this is their shared home.
 """
+import json
 import sys
 from pathlib import Path
 
@@ -661,3 +662,164 @@ class TestSimpleClaudeBudgetGuard:
         )
         assert result["extra"]["budget_cap_armed"] is False
         assert result["verdict"] != "error"
+
+
+# ---------------------------------------------------------------------------
+# T-03: CLI wiring, the between-task SpendTracker, and manifest real values
+# ---------------------------------------------------------------------------
+
+
+class TestSpendTracker:
+    def test_stops_after_cap_exceeded_and_sets_budget_stopped(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness import runner
+        from quoin.benchmarks.harness.config import HarnessConfig
+        from quoin.benchmarks.harness.judge import JudgeResult
+
+        monkeypatch.setattr(
+            runner, "judge_task",
+            lambda *a, **kw: JudgeResult(task_id="t", source_benchmark="unknown", verdict="pass",
+                                          evidence_path=None, judge_runtime_seconds=0.0),
+        )
+
+        class StubAdapter:
+            @staticmethod
+            def invoke(task_spec, workdir, budget, run_id):
+                return {"verdict": "pass", "extra": {}, "cost_available": True,
+                        "cost_runtime_usd": 4.0}
+
+        monkeypatch.setattr(runner, "_load_cell_adapter", lambda cell: StubAdapter)
+        config = HarnessConfig(run_dir=tmp_path)
+        suite = [{"id": f"t{i}"} for i in range(5)]
+        tracker = runner.SpendTracker(cap_usd=10.0)
+        result = runner.run_cell(cell="stub-cell", suite=suite, run_id="r1", config=config, tracker=tracker)
+        # $4, $8 (still <= 10), $12 (> 10) — stops after the THIRD task.
+        assert len(result.task_results) == 3
+        assert result.budget_stopped is True
+        assert tracker.total_usd == 12.0
+
+    def test_no_cap_runs_to_completion_byte_identical_task_count(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness import runner
+        from quoin.benchmarks.harness.config import HarnessConfig
+        from quoin.benchmarks.harness.judge import JudgeResult
+
+        monkeypatch.setattr(
+            runner, "judge_task",
+            lambda *a, **kw: JudgeResult(task_id="t", source_benchmark="unknown", verdict="pass",
+                                          evidence_path=None, judge_runtime_seconds=0.0),
+        )
+
+        class StubAdapter:
+            @staticmethod
+            def invoke(task_spec, workdir, budget, run_id):
+                return {"verdict": "pass", "extra": {}, "cost_available": True,
+                        "cost_runtime_usd": 100.0}
+
+        monkeypatch.setattr(runner, "_load_cell_adapter", lambda cell: StubAdapter)
+        config = HarnessConfig(run_dir=tmp_path)
+        suite = [{"id": f"t{i}"} for i in range(5)]
+        result = runner.run_cell(cell="stub-cell", suite=suite, run_id="r1", config=config, tracker=None)
+        assert len(result.task_results) == 5
+        assert result.budget_stopped is False
+
+    def test_tracker_none_cap_never_stops(self):
+        from quoin.benchmarks.harness.runner import SpendTracker
+
+        tracker = SpendTracker(cap_usd=None)
+        for _ in range(10):
+            assert tracker.add(1000.0) is False
+
+
+class TestManifestRealValues:
+    def test_none_cap_renders_as_yaml_null_not_python_none(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import _write_manifest
+
+        manifest_path = _write_manifest(
+            run_dir=tmp_path, run_id="r1", suite_path=tmp_path / "suite.json",
+            cells=["simple-claude"], max_parallel=1, resume=False, repo_root=tmp_path,
+            usd_cap=None,
+        )
+        text = manifest_path.read_text()
+        assert "usd_kill_switch_per_cell_pair: null" in text
+        assert "usd_kill_switch_per_cell_pair: None" not in text
+        import yaml
+        parsed = yaml.safe_load(text)
+        assert parsed["usd_kill_switch_per_cell_pair"] is None
+
+    def test_configured_values_round_trip_into_manifest(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import _write_manifest
+        import subprocess
+
+        fixture = tmp_path / "fixture"
+        fixture.mkdir()
+        subprocess.run(["git", "init", "-q"], cwd=fixture, check=True)
+        subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=fixture, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=fixture, check=True)
+        (fixture / "f.txt").write_text("x")
+        subprocess.run(["git", "add", "."], cwd=fixture, check=True)
+        subprocess.run(["git", "commit", "-q", "-m", "x"], cwd=fixture, check=True)
+        fixture_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=fixture, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        manifest_path = _write_manifest(
+            run_dir=tmp_path, run_id="r1", suite_path=tmp_path / "suite.json",
+            cells=["simple-claude"], max_parallel=1, resume=False, repo_root=tmp_path,
+            wall_clock_seconds=5400, usd_cap=38.0, fixture_repo=fixture,
+        )
+        import yaml
+        parsed = yaml.safe_load(manifest_path.read_text())
+        assert parsed["wall_clock_budget_seconds"] == 5400
+        assert parsed["usd_kill_switch_per_cell_pair"] == 38.0
+        assert parsed["fixture_repo_sha"] == fixture_sha
+
+    def test_non_git_fixture_repo_writes_not_a_git_repo_marker(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import _write_manifest
+
+        not_a_repo = tmp_path / "plain"
+        not_a_repo.mkdir()
+        manifest_path = _write_manifest(
+            run_dir=tmp_path, run_id="r1", suite_path=tmp_path / "suite.json",
+            cells=["simple-claude"], max_parallel=1, resume=False, repo_root=tmp_path,
+            fixture_repo=not_a_repo,
+        )
+        import yaml
+        parsed = yaml.safe_load(manifest_path.read_text())
+        assert parsed["fixture_repo_sha"] == "not_a_git_repo"
+
+
+class TestCLIWiringToCell:
+    def test_wrong_expected_commit_wired_through_run_benchmark_reaches_cell_as_error(self, monkeypatch, tmp_path):
+        """The WIRED-UP path (round-3 acceptance): a deliberately wrong
+        --expected-quoin-commit, passed through run_benchmark's own CLI
+        surface (not the cell's invoke() directly), produces verdict=="error"
+        with subprocess.Popen never reached."""
+        from quoin.benchmarks.harness import runner
+        from quoin.benchmarks.scripts import run_benchmark as rb_mod
+
+        suite_path = tmp_path / "suite.json"
+        suite_path.write_text(json.dumps({"tasks": [{"id": "t1", "description": "x"}]}))
+
+        received_kwargs = {}
+
+        class StubAdapter:
+            @staticmethod
+            def invoke(task_spec, workdir, budget, run_id, expected_quoin_commit=None):
+                received_kwargs["expected_quoin_commit"] = expected_quoin_commit
+                if expected_quoin_commit == "wrong-sha":
+                    return {"verdict": "error", "extra": {"failure_reason": "commit-mismatch"}}
+                raise AssertionError("Popen must not be reached in this stub")
+
+        monkeypatch.setattr(runner, "_load_cell_adapter", lambda cell: StubAdapter)
+
+        rb_mod.run_benchmark(
+            suite_path=suite_path,
+            cells=["stub-cell"],
+            run_id="r1",
+            run_dir=tmp_path / "runs",
+            max_parallel=1,
+            expected_quoin_commit="wrong-sha",
+        )
+        assert received_kwargs["expected_quoin_commit"] == "wrong-sha"
+        judge_path = tmp_path / "runs" / "r1" / "stub-cell" / "t1" / "judge.json"
+        judge_data = json.loads(judge_path.read_text())
+        assert judge_data["verdict"] == "error"

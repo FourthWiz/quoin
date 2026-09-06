@@ -48,6 +48,15 @@ class HarnessConfig:
     asserts the worktree it actually installed from against this value and
     refuses to spawn on a mismatch (D-14)."""
 
+    quoin_install_mode: str = "script"
+    """One of "script" (default — shells `quoin_install_script`, today's
+    behaviour), "skip" (the gate mode: install nothing, the driver already
+    installed the arm), or "module" (`python -m quoin install`, pinned to
+    `arm_root`). See D-16."""
+
+    arm_root: Optional[Path] = None
+    """Arm worktree root, consumed by `quoin_install_mode == "module"`."""
+
     cells: list[str] = field(
         default_factory=lambda: [
             "simple-claude",

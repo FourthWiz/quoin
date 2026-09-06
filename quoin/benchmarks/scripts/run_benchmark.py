@@ -135,6 +135,24 @@ def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str
     return estimates
 
 
+def _fixture_repo_sha(fixture_repo: Optional[Path]) -> str:
+    """Return the fixture repo's HEAD SHA, or the literal `not_a_git_repo`
+    marker when the path isn't a git repo (or none was given). Never left
+    absent — absence is what made invariant 4 report WARN (F-02)."""
+    if fixture_repo is None:
+        return "not_a_git_repo"
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(fixture_repo), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return "not_a_git_repo"
+
+
 def _write_manifest(
     run_dir: Path,
     run_id: str,
@@ -143,8 +161,16 @@ def _write_manifest(
     max_parallel: int,
     resume: bool,
     repo_root: Path,
+    wall_clock_seconds: float = 600,
+    usd_cap: Optional[float] = None,
+    fixture_repo: Optional[Path] = None,
 ) -> Path:
-    """Write run-manifest.yaml at the start of a run."""
+    """Write run-manifest.yaml at the start of a run.
+
+    `wall_clock_seconds` and `usd_cap` are the CONFIGURED values (T-03) —
+    they used to be hardcoded literals here, which made invariants 5 and 6
+    pass on a string rather than on anything the harness enforced (F-02).
+    """
     manifest = {
         "run_id": run_id,
         "started_at": datetime.datetime.utcnow().isoformat() + "Z",
@@ -158,9 +184,10 @@ def _write_manifest(
         "quoin_claude_model": _probe_claude_model(),
         "simple_codex_model": _probe_codex_model(),
         "quoin_codex_model": _probe_codex_model(),
-        "wall_clock_budget_seconds": 600,
+        "wall_clock_budget_seconds": wall_clock_seconds,
         "max_retries": 0,
-        "usd_kill_switch_per_cell_pair": 10.0,
+        "usd_kill_switch_per_cell_pair": usd_cap,
+        "fixture_repo_sha": _fixture_repo_sha(fixture_repo),
         "isolation_mode": "per-task",
         "network_policy": "offline-after-clone-for-fixture",
         "temperature": "0 for HumanEval+, 0.2 for SWE-bench Lite",
@@ -174,7 +201,12 @@ def _write_manifest(
     # Write as YAML-like (no dependency on pyyaml for manifest writing)
     lines = []
     for k, v in manifest.items():
-        if isinstance(v, list):
+        if v is None:
+            # A bare str(v) renders a Python None as the literal token
+            # `None`, which is not YAML null and reads back as the STRING
+            # "None" rather than an absent value (round-2 fix).
+            lines.append(f"{k}: null")
+        elif isinstance(v, list):
             lines.append(f"{k}:")
             for item in v:
                 lines.append(f"  - {item}")
@@ -197,10 +229,24 @@ def run_benchmark(
     resume: bool = False,
     repo_root: Optional[Path] = None,
     fixture_repo: Optional[Path] = None,
+    quoin_install_script: Optional[Path] = None,
+    quoin_install_mode: str = "script",
+    arm_root: Optional[Path] = None,
+    expected_quoin_commit: Optional[str] = None,
+    max_budget_usd_per_task: Optional[float] = None,
+    usd_cap: Optional[float] = None,
+    wall_clock_seconds: float = 600,
 ) -> None:
-    """Execute the full benchmark run."""
+    """Execute the full benchmark run.
+
+    `usd_cap` is a BETWEEN-task cumulative bound (T-03's `SpendTracker`,
+    D-08's secondary bound) — it cannot stop a one-task suite, since it is
+    only checked after a task returns. `max_budget_usd_per_task` is the
+    intra-task, CLI-enforced bound (T-14's `--max-budget-usd`), the primary
+    one for a gate pilot.
+    """
     from quoin.benchmarks.harness.config import HarnessConfig, BudgetSpec
-    from quoin.benchmarks.harness.runner import run_cell
+    from quoin.benchmarks.harness.runner import run_cell, SpendTracker
     from quoin.benchmarks.harness.aggregate import aggregate_run
     from quoin.benchmarks.scripts.check_invariants import check_invariants
 
@@ -212,17 +258,33 @@ def run_benchmark(
 
     # Write manifest
     manifest_path = _write_manifest(
-        run_dir, run_id, suite_path, cells, max_parallel, resume, repo_root
+        run_dir, run_id, suite_path, cells, max_parallel, resume, repo_root,
+        wall_clock_seconds=wall_clock_seconds, usd_cap=usd_cap,
+        fixture_repo=fixture_repo,
     )
     print(f"Run manifest written to: {manifest_path}")
 
-    config = HarnessConfig(
+    config_kwargs: dict = dict(
         suite_path=suite_path,
         run_dir=run_dir,
         cells=cells,
         max_parallel=max_parallel,
-        budget=BudgetSpec(wall_clock_seconds=600, max_retries=0),
+        budget=BudgetSpec(wall_clock_seconds=wall_clock_seconds, max_retries=0),
+        quoin_install_mode=quoin_install_mode,
     )
+    if quoin_install_script is not None:
+        config_kwargs["quoin_install_script"] = quoin_install_script
+    if expected_quoin_commit is not None:
+        config_kwargs["expected_quoin_commit"] = expected_quoin_commit
+    if arm_root is not None:
+        config_kwargs["arm_root"] = arm_root
+    config = HarnessConfig(**config_kwargs)
+    # max_budget_usd is threaded via runner._threadable_kwargs by attribute
+    # name, ahead of HarnessConfig formally declaring the field (T-14) —
+    # setting it dynamically here keeps run_benchmark's own CLI contract
+    # stable regardless of whether T-14 has landed yet.
+    if max_budget_usd_per_task is not None:
+        config.max_budget_usd = max_budget_usd_per_task
 
     started_at = datetime.datetime.utcnow().isoformat() + "Z"
     print(f"\nStarting benchmark run: {run_id}")
@@ -233,6 +295,7 @@ def run_benchmark(
 
     def run_one_cell(cell: str):
         print(f"  Starting cell: {cell}")
+        tracker = SpendTracker(cap_usd=usd_cap)
         result = run_cell(
             cell=cell,
             suite=suite,
@@ -240,10 +303,13 @@ def run_benchmark(
             config=config,
             fixture_repo=fixture_repo,
             resume=resume,
+            tracker=tracker,
         )
         n_pass = sum(1 for r in result.task_results if r.verdict == "pass")
         n_total = len(result.task_results)
         print(f"  Finished cell: {cell} — {n_pass}/{n_total} passed")
+        if result.budget_stopped:
+            print(f"  Cell {cell} STOPPED by the between-task spend cap (${usd_cap})")
         return result
 
     if max_parallel > 1 and len(cells) > 1:
@@ -336,6 +402,55 @@ def main() -> None:
         default=Path("."),
         help="Path to quoin repo root (default: current directory)",
     )
+    parser.add_argument(
+        "--quoin-install-script",
+        type=Path,
+        default=None,
+        help="Path to the arm's quoin/install.sh (default: HarnessConfig's own default)",
+    )
+    parser.add_argument(
+        "--quoin-install-mode",
+        choices=["script", "skip", "module"],
+        default="script",
+        help="How the quoin-claude cell installs quoin per task (D-16). "
+             "'script' (default) shells install.sh, byte-unchanged from "
+             "today. 'skip' installs nothing (the gate mode — the driver "
+             "already installed the arm). 'module' runs "
+             "`python -m quoin install` pinned to --arm-root.",
+    )
+    parser.add_argument(
+        "--arm-root",
+        type=Path,
+        default=None,
+        help="Arm worktree root, consumed by --quoin-install-mode module",
+    )
+    parser.add_argument(
+        "--expected-quoin-commit",
+        type=str,
+        default=None,
+        help="Commit the quoin-claude cell must confirm it installed (D-14)",
+    )
+    parser.add_argument(
+        "--max-budget-usd-per-task",
+        type=float,
+        default=None,
+        help="CLI-enforced per-task spend cap, passed to `claude "
+             "--max-budget-usd` (T-14, D-08's primary bound)",
+    )
+    parser.add_argument(
+        "--usd-cap",
+        type=float,
+        default=None,
+        help="BETWEEN-task cumulative spend cap for this invocation (T-03, "
+             "D-08's secondary bound). Evaluated only after a task returns "
+             "— cannot stop a one-task suite.",
+    )
+    parser.add_argument(
+        "--wall-clock-seconds",
+        type=int,
+        default=600,
+        help="Per-task wall-clock budget in seconds (default: 600)",
+    )
     args = parser.parse_args()
 
     cells = [c.strip() for c in args.cells.split(",") if c.strip()]
@@ -378,6 +493,13 @@ def main() -> None:
         resume=args.resume,
         repo_root=args.repo_root,
         fixture_repo=args.fixture_repo,
+        quoin_install_script=args.quoin_install_script,
+        quoin_install_mode=args.quoin_install_mode,
+        arm_root=args.arm_root,
+        expected_quoin_commit=args.expected_quoin_commit,
+        max_budget_usd_per_task=args.max_budget_usd_per_task,
+        usd_cap=args.usd_cap,
+        wall_clock_seconds=args.wall_clock_seconds,
     )
 
 

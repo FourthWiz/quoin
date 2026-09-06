@@ -67,6 +67,9 @@ class CellResult:
     cell: str
     run_id: str
     task_results: list[RunResult] = field(default_factory=list)
+    budget_stopped: bool = False
+    """True when the between-task SpendTracker cap (T-03, D-08's secondary
+    bound) stopped this cell before every suite task ran."""
 
 
 def task_result_dir(run_dir: Path, run_id: str, cell: str, task_id: str) -> Path:
