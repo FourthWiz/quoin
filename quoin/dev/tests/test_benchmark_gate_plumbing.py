@@ -1130,3 +1130,38 @@ class TestVerifyModelPreflight:
 
         code = verify_model(ledger_path=ledger, run_probe=raising_probe)
         assert code == 2
+
+
+# ---------------------------------------------------------------------------
+# T-05: HarnessConfig.cells matches REQUIRED_MODE_IDS; gate results land
+# outside the design tree
+# ---------------------------------------------------------------------------
+
+
+class TestHarnessConfigInvariants:
+    def test_default_cells_match_required_mode_ids_exactly(self):
+        from quoin.benchmarks.harness.config import HarnessConfig
+        from quoin.benchmarks.scripts.validate_benchmarks import REQUIRED_MODE_IDS
+
+        cells = HarnessConfig().cells
+        assert set(cells) == REQUIRED_MODE_IDS
+        assert len(cells) == len(set(cells)), "default cells list contains a duplicate"
+
+    def test_a_fifth_cell_would_fail_this_assertion(self):
+        """Verifies the assertion above is load-bearing, not vacuous —
+        editing in a fifth cell locally (never committed) must break it."""
+        from quoin.benchmarks.harness.config import HarnessConfig
+        from quoin.benchmarks.scripts.validate_benchmarks import REQUIRED_MODE_IDS
+
+        cells = list(HarnessConfig().cells) + ["a-fifth-cell"]
+        assert set(cells) != REQUIRED_MODE_IDS
+
+    def test_run_dir_is_under_workflow_artifacts_and_not_under_benchmarks(self):
+        from quoin.benchmarks.harness.config import HarnessConfig
+
+        run_dir = str(HarnessConfig().run_dir)
+        assert run_dir.startswith(".workflow_artifacts")
+        assert "benchmarks" not in Path(run_dir).parts, (
+            "gate results must be recorded with the task, never published "
+            "as benchmark results (D-09)"
+        )
