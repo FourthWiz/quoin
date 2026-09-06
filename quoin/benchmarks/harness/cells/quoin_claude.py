@@ -39,7 +39,14 @@ from typing import Optional
 
 from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
-from .simple_claude import _build_claude_argv, _build_prompt, _gate_mode, _get_model
+from .simple_claude import (
+    _build_claude_argv,
+    _build_prompt,
+    _detect_budget_halt,
+    _extract_cost_usd,
+    _gate_mode,
+    _get_model,
+)
 
 # ---------------------------------------------------------------------------
 # Invariant: same dated model snapshot as simple-claude (invariant 1).
@@ -424,9 +431,9 @@ def invoke(
                 gate_intervention_count += 1
 
             if event_type == "result":
-                cost_val = event.get("cost_usd")
+                cost_val = _extract_cost_usd(event)
                 if cost_val is not None:
-                    total_cost_usd = float(cost_val)
+                    total_cost_usd = cost_val
                 usage = event.get("usage", {})
                 tokens_in = usage.get("input_tokens", tokens_in)
                 tokens_out = usage.get("output_tokens", tokens_out)
@@ -437,6 +444,23 @@ def invoke(
                 turn_count += 1
 
         proc.wait(timeout=10)
+        stderr_output = ""
+        if proc.stderr is not None:
+            try:
+                stderr_output = proc.stderr.read() or ""
+            except Exception:
+                stderr_output = ""
+
+        # A CLI-enforced budget halt (D-08) is reported as capped, not
+        # silently short — this cell's own refusal above only catches an
+        # UNARMED cap; this catches the cap actually firing mid-session.
+        if result["verdict"] is None:
+            halt_text = stderr_output + "".join(
+                str(evt.get("result", "")) + str(evt.get("error", "")) for evt in events
+            )
+            if _detect_budget_halt(halt_text):
+                result["verdict"] = "budget_stopped"
+                result["extra"]["failure_reason"] = "budget-halt-detected"
 
         # Get git diff from workdir
         try:

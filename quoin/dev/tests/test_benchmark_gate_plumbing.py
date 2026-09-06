@@ -323,6 +323,7 @@ class _FakeStdout:
 class _FakeClaudeProc:
     """Stands in for a spawned `claude` process: no output, exits clean."""
     stdout = _FakeStdout()
+    stderr = None
 
     def poll(self):
         return 0
@@ -823,3 +824,99 @@ class TestCLIWiringToCell:
         judge_path = tmp_path / "runs" / "r1" / "stub-cell" / "t1" / "judge.json"
         judge_data = json.loads(judge_path.read_text())
         assert judge_data["verdict"] == "error"
+
+
+# ---------------------------------------------------------------------------
+# T-14: cost field name (D-14) and the CLI-enforced budget-halt outcome
+# ---------------------------------------------------------------------------
+
+
+class TestCostFieldName:
+    def test_total_cost_usd_is_read(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _extract_cost_usd
+
+        assert _extract_cost_usd({"type": "result", "total_cost_usd": 1.23}) == 1.23
+
+    def test_legacy_cost_usd_is_a_fallback(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _extract_cost_usd
+
+        assert _extract_cost_usd({"type": "result", "cost_usd": 1.23}) == 1.23
+
+    def test_total_cost_usd_wins_over_legacy_when_both_present(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _extract_cost_usd
+
+        assert _extract_cost_usd({"total_cost_usd": 2.0, "cost_usd": 1.0}) == 2.0
+
+    def test_neither_field_yields_none(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _extract_cost_usd
+
+        assert _extract_cost_usd({"type": "result"}) is None
+
+    def test_max_budget_usd_reaches_argv_when_set_and_argv_unchanged_when_unset(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _build_claude_argv
+
+        with_cap = _build_claude_argv("p", "m", 5.0)
+        assert "--max-budget-usd" in with_cap
+        assert "5.0" in with_cap
+        without_cap = _build_claude_argv("p", "m", None)
+        assert "--max-budget-usd" not in without_cap
+
+
+class TestBudgetHaltDetection:
+    def test_reached_maximum_budget_string_detected(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _detect_budget_halt
+
+        assert _detect_budget_halt("... Reached maximum budget ($5.00) ...") is True
+
+    def test_session_cost_not_a_number_string_detected(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _detect_budget_halt
+
+        assert _detect_budget_halt("Session cost is not a number; refusing to continue") is True
+
+    def test_unrelated_text_not_detected(self):
+        from quoin.benchmarks.harness.cells.simple_claude import _detect_budget_halt
+
+        assert _detect_budget_halt("all good, nothing to see here") is False
+
+    def test_simulated_halt_yields_budget_stopped_verdict_and_short_circuits_judge(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        class HaltingStderr:
+            def read(self):
+                return "Reached maximum budget ($5.00); halting session"
+
+        class HaltingProc:
+            stdout = _FakeStdout()
+            stderr = HaltingStderr()
+            def poll(self):
+                return 0
+            def wait(self, timeout=None):
+                return 0
+
+        _patch_claude_popen(monkeypatch, simple_claude, on_claude_spawn=lambda cmd: HaltingProc())
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"},
+            workdir=tmp_path,
+            budget=BudgetSpec(),
+            run_id="r1",
+        )
+        assert result["verdict"] == "budget_stopped"
+        assert result["extra"]["failure_reason"] == "budget-halt-detected"
+
+        # And the runner-level short-circuit (T-01) treats it as terminal.
+        from quoin.benchmarks.harness import runner
+
+        def raising_judge(*a, **kw):
+            raise AssertionError("judge_task must not be called on budget_stopped")
+
+        monkeypatch.setattr(runner, "judge_task", raising_judge)
+        monkeypatch.setattr(runner, "_load_cell_adapter", lambda cell: simple_claude)
+        from quoin.benchmarks.harness.config import HarnessConfig
+
+        config = HarnessConfig(run_dir=tmp_path / "runs")
+        run_result = runner.run_one_task(
+            cell="simple-claude", task_spec={"id": "t1", "description": "x"},
+            run_id="r1", config=config,
+        )
+        assert run_result.verdict == "budget_stopped"

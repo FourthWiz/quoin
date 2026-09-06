@@ -57,6 +57,11 @@ class HarnessConfig:
     arm_root: Optional[Path] = None
     """Arm worktree root, consumed by `quoin_install_mode == "module"`."""
 
+    max_budget_usd: Optional[float] = None
+    """CLI-enforced per-task spend cap (D-08's primary bound), threaded to
+    both Claude cells and passed as `claude --max-budget-usd`. In gate mode
+    (`QUOIN_BENCHMARK_GATE=1`) a `None` value refuses to spawn."""
+
     cells: list[str] = field(
         default_factory=lambda: [
             "simple-claude",

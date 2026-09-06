@@ -278,13 +278,9 @@ def run_benchmark(
         config_kwargs["expected_quoin_commit"] = expected_quoin_commit
     if arm_root is not None:
         config_kwargs["arm_root"] = arm_root
-    config = HarnessConfig(**config_kwargs)
-    # max_budget_usd is threaded via runner._threadable_kwargs by attribute
-    # name, ahead of HarnessConfig formally declaring the field (T-14) —
-    # setting it dynamically here keeps run_benchmark's own CLI contract
-    # stable regardless of whether T-14 has landed yet.
     if max_budget_usd_per_task is not None:
-        config.max_budget_usd = max_budget_usd_per_task
+        config_kwargs["max_budget_usd"] = max_budget_usd_per_task
+    config = HarnessConfig(**config_kwargs)
 
     started_at = datetime.datetime.utcnow().isoformat() + "Z"
     print(f"\nStarting benchmark run: {run_id}")

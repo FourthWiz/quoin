@@ -57,6 +57,35 @@ def _gate_mode() -> bool:
     return os.environ.get(ENV_BENCHMARK_GATE) == "1"
 
 
+# Verified against CLI 2.1.261 (D-14): the result event carries
+# `total_cost_usd`; a bare `cost_usd` key does not appear anywhere in the
+# binary. Read the real field first, with the legacy name as a fallback so
+# this stays compatible with both older and newer CLI builds.
+def _extract_cost_usd(event: dict) -> Optional[float]:
+    cost_val = event.get("total_cost_usd")
+    if cost_val is None:
+        cost_val = event.get("cost_usd")
+    if cost_val is None:
+        return None
+    return float(cost_val)
+
+
+# Strings the CLI itself emits when `--max-budget-usd` halts a session
+# (verified against CLI 2.1.261, D-08). Detected on combined stdout-event
+# text and captured stderr, since neither the exact event `type` nor the
+# exact stream carrying the message is documented — a substring match on
+# the CLI's own enforcement strings is what fires without over-fitting to
+# either channel.
+_BUDGET_HALT_MARKERS = (
+    "Reached maximum budget ($",
+    "Session cost is not a number",
+)
+
+
+def _detect_budget_halt(text: str) -> bool:
+    return any(marker in text for marker in _BUDGET_HALT_MARKERS)
+
+
 def _build_claude_argv(prompt: str, model: str, max_budget_usd: Optional[float]) -> list[str]:
     """Assemble the `claude` argv shared by both Claude cells.
 
@@ -232,9 +261,9 @@ def invoke(
 
             # Extract cost and token data from stream-json events
             if event_type == "result":
-                cost_val = event.get("cost_usd")
+                cost_val = _extract_cost_usd(event)
                 if cost_val is not None:
-                    total_cost_usd = float(cost_val)
+                    total_cost_usd = cost_val
                 usage = event.get("usage", {})
                 tokens_in = usage.get("input_tokens", tokens_in)
                 tokens_out = usage.get("output_tokens", tokens_out)
@@ -245,6 +274,23 @@ def invoke(
                 turn_count += 1
 
         proc.wait(timeout=10)
+        stderr_output = ""
+        if proc.stderr is not None:
+            try:
+                stderr_output = proc.stderr.read() or ""
+            except Exception:
+                stderr_output = ""
+
+        # A CLI-enforced budget halt (D-08) is reported as capped, not
+        # silently short — this cell's own refusal above only catches an
+        # UNARMED cap; this catches the cap actually firing mid-session.
+        if result["verdict"] is None:
+            halt_text = stderr_output + "".join(
+                str(evt.get("result", "")) + str(evt.get("error", "")) for evt in events
+            )
+            if _detect_budget_halt(halt_text):
+                result["verdict"] = "budget_stopped"
+                result["extra"]["failure_reason"] = "budget-halt-detected"
 
         # Get git diff from workdir
         try:
