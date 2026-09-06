@@ -620,3 +620,122 @@ class TestDriverExceptionSafety:
         assert code == 0
         out = capsys.readouterr().out
         assert "WARN: compare_arms unavailable; comparison skipped" in out
+
+
+# ---------------------------------------------------------------------------
+# T-09: the dry-run gate
+# ---------------------------------------------------------------------------
+
+
+class TestDryRunGateCheck:
+    def test_no_cap_fails_with_unbounded(self):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=None)
+        assert ok is False
+        assert "UNBOUNDED" in reason
+
+    def test_worst_case_above_ceiling_fails(self):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=20.0, worst_case_usd=40.0)
+        assert ok is False
+        assert "38" in reason
+
+    def test_worst_case_at_ceiling_passes(self):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=6.0, worst_case_usd=38.0)
+        assert ok is True
+        assert reason == ""
+
+    def test_unpriced_model_override_fails(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+        from quoin.benchmarks.harness.cells import simple_claude
+
+        monkeypatch.setattr(simple_claude, "PINNED_MODEL", "claude-totally-unpriced-model")
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=6.0, worst_case_usd=6.0)
+        assert ok is False
+        assert "pricing.json" in reason
+
+    def test_model_override_outside_rehearsal_fails(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+        monkeypatch.setenv("QUOIN_BENCH_CLAUDE_MODEL", "claude-sonnet-4-6")
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=6.0, worst_case_usd=6.0, rehearsal=False)
+        assert ok is False
+        assert "rehearsal" in reason
+
+    def test_model_override_waived_under_rehearsal(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+        monkeypatch.setenv("QUOIN_BENCH_CLAUDE_MODEL", "claude-sonnet-4-6")
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=1.0, worst_case_usd=1.0, rehearsal=True)
+        assert ok is True
+
+    def test_everything_correct_passes(self, monkeypatch):
+        from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+        ok, reason = dry_run_gate_check(max_budget_usd_per_task=6.0, worst_case_usd=38.0)
+        assert ok is True
+        assert reason == ""
+
+
+class TestDryRunGateCLIExitCodes:
+    def _run(self, args_list, monkeypatch):
+        import sys as _sys
+        from quoin.benchmarks.scripts import run_benchmark as rb_mod
+
+        old_argv = _sys.argv
+        try:
+            _sys.argv = ["run_benchmark.py"] + args_list
+            with pytest.raises(SystemExit) as exc_info:
+                rb_mod.main()
+            return exc_info.value.code
+        finally:
+            _sys.argv = old_argv
+
+    def test_no_cap_stops_with_gate_stop_prefix_and_exit_2(self, monkeypatch, capsys):
+        code = self._run([
+            "--suite", str(_REPO_ROOT / "quoin" / "benchmarks" / "suite-gate-medium-refactor.json"),
+            "--cells", "simple-claude", "--run-id", "smoke", "--dry-run",
+        ], monkeypatch)
+        assert code == 2
+        err = capsys.readouterr().err
+        assert err.startswith("GATE-STOP: dry-run precondition failed")
+        assert "UNBOUNDED" in err
+
+    def test_caps_summing_above_threshold_stops(self, monkeypatch, capsys):
+        code = self._run([
+            "--suite", str(_REPO_ROOT / "quoin" / "benchmarks" / "suite-gate-medium-refactor.json"),
+            "--cells", "simple-claude,quoin-claude", "--run-id", "smoke", "--dry-run",
+            "--max-budget-usd-per-task", "20",
+        ], monkeypatch)
+        assert code == 2
+        err = capsys.readouterr().err
+        assert err.startswith("GATE-STOP:")
+
+    def test_everything_correct_exits_zero_and_prints_worst_case(self, monkeypatch, capsys):
+        code = self._run([
+            "--suite", str(_REPO_ROOT / "quoin" / "benchmarks" / "suite-gate-medium-refactor.json"),
+            "--cells", "simple-claude", "--run-id", "smoke", "--dry-run",
+            "--max-budget-usd-per-task", "6",
+        ], monkeypatch)
+        assert code == 0
+        out = capsys.readouterr().out
+        assert "WORST CASE: $6.00" in out
+
+    def test_dry_run_makes_zero_agent_invocations(self, monkeypatch):
+        from quoin.benchmarks.scripts import run_benchmark as rb_mod
+
+        def raising_run_benchmark(*a, **kw):
+            raise AssertionError("--dry-run must never invoke run_benchmark")
+
+        monkeypatch.setattr(rb_mod, "run_benchmark", raising_run_benchmark)
+        code = self._run([
+            "--suite", str(_REPO_ROOT / "quoin" / "benchmarks" / "suite-gate-medium-refactor.json"),
+            "--cells", "simple-claude", "--run-id", "smoke", "--dry-run",
+            "--max-budget-usd-per-task", "6",
+        ], monkeypatch)
+        assert code == 0

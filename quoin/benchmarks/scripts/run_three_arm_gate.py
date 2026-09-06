@@ -414,9 +414,20 @@ class ThreeArmGateDriver:
                     f"the quality comparison would be across different subsystems ({exc})"
                 )
 
-        for arm, cap in self.caps.items():
-            if cap is None:
-                problems.append(f"GATE-STOP: no --max-budget-usd set for arm {arm}")
+        if self.args.suite.exists():
+            suite_for_gate = json.loads(self.args.suite.read_text(encoding="utf-8"))
+            n_tasks = len(suite_for_gate["tasks"])
+            from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+            for arm, cap in self.caps.items():
+                passed, reason = dry_run_gate_check(
+                    cells=[self.arm_cells[arm]], n_tasks=n_tasks,
+                    max_budget_usd_per_task=cap, rehearsal=self.args.rehearsal,
+                )
+                if not passed:
+                    problems.append(
+                        f"GATE-STOP: dry-run precondition failed — {arm}: {reason}; "
+                        "re-authorisation required before any paid arm"
+                    )
 
         if not self.args.rehearsal and not self.args.plan_only:
             rehearsal_record = self.args.spend_ledger.parent / "rehearsal.md"

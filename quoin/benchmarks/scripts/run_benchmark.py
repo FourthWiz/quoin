@@ -202,7 +202,10 @@ def verify_model(
 
 def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str]:
     """
-    Estimate costs for a dry-run without invoking any agent.
+    Estimate costs for a dry-run without invoking any agent. ADVISORY only
+    — the only number the paid-run authorisation may be gated on is the
+    WORST CASE line printed separately below (T-09), computed from T-14's
+    CLI-enforced per-task cap, which is the only figure actually enforced.
 
     Returns {cell: cost_estimate_string}.
     """
@@ -219,23 +222,91 @@ def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str
             estimates[cell] = "cost: not_available — reconcile offline via OpenAI dashboard"
         else:
             if pricing:
-                # Rough estimate: assume average 2000 input tokens + 500 output per task
-                # (simple cell) or 5000 input + 2000 output (quoin cell with planning overhead)
                 model = _probe_claude_model()
                 model_pricing = pricing.get("models", {}).get(model, {})
                 input_rate = model_pricing.get("input_per_1m_usd", 15.0)
                 output_rate = model_pricing.get("output_per_1m_usd", 75.0)
 
-                if "quoin" in cell:
-                    est_per_task = (5000 / 1_000_000 * input_rate + 2000 / 1_000_000 * output_rate)
-                else:
-                    est_per_task = (2000 / 1_000_000 * input_rate + 500 / 1_000_000 * output_rate)
-
-                total_est = est_per_task * n_tasks
-                estimates[cell] = f"~${total_est:.2f} estimated ({n_tasks} tasks × ~${est_per_task:.4f}/task)"
+                total_est = 0.0
+                for task in suite:
+                    # Use the task's own est_tokens_in/out when present
+                    # (T-06's scenario suite carries these); otherwise the
+                    # original fixed heuristic, byte-unchanged: 2000/500 for
+                    # a simple cell, 5000/2000 for a quoin cell (planning
+                    # overhead).
+                    if "est_tokens_in" in task and "est_tokens_out" in task:
+                        tokens_in = task["est_tokens_in"]
+                        tokens_out = task["est_tokens_out"]
+                    elif "quoin" in cell:
+                        tokens_in, tokens_out = 5000, 2000
+                    else:
+                        tokens_in, tokens_out = 2000, 500
+                    total_est += (
+                        tokens_in / 1_000_000 * input_rate + tokens_out / 1_000_000 * output_rate
+                    )
+                est_per_task = total_est / n_tasks if n_tasks else 0.0
+                estimates[cell] = (
+                    f"ADVISORY ~${total_est:.2f} estimated ({n_tasks} tasks × ~${est_per_task:.4f}/task)"
+                )
             else:
-                estimates[cell] = "pricing.json not found; cost unknown"
+                estimates[cell] = "ADVISORY pricing.json not found; cost unknown"
     return estimates
+
+
+def dry_run_gate_check(
+    max_budget_usd_per_task: Optional[float],
+    worst_case_usd: Optional[float] = None,
+    worst_case_ceiling: float = 38.0,
+    rehearsal: bool = False,
+) -> tuple[bool, str]:
+    """
+    T-09's dry-run gate: the paid run is conditional on this passing.
+
+    PASSES only when all hold:
+      1. a per-task `--max-budget-usd` is set;
+      2. `worst_case_usd` (computed by the CALLER — the multiplication
+         differs between a standalone `run_benchmark.py --dry-run`
+         invocation, `max_budget_usd_per_task * n_tasks * len(cells)`, and
+         the three-arm driver's own combined-caps total across all three
+         arms) is <= `worst_case_ceiling` (round-3 correction, MIN-6: 38 is
+         what per-arm caps 6/16/16 sum to for the gate; the stage total of
+         ~41.50 additionally includes the rehearsal and probes, which are
+         not arm spend);
+      3. the pinned model has an EXACT pricing key (T-04d);
+      4. the live probe equals PINNED_MODEL — WAIVED under `rehearsal`
+         mode, where QUOIN_BENCH_CLAUDE_MODEL is set deliberately instead.
+
+    Returns (passed, reason). `reason` is empty on success; on failure it
+    is the specific clause that failed, for the caller to fold into the
+    named `GATE-STOP: dry-run precondition failed — {reason}; ...` message.
+    """
+    if max_budget_usd_per_task is None:
+        return False, "no per-task --max-budget-usd is set (WORST CASE: UNBOUNDED)"
+
+    if worst_case_usd is not None and worst_case_usd > worst_case_ceiling:
+        return False, (
+            f"worst-case total ${worst_case_usd:.2f} exceeds the "
+            f"${worst_case_ceiling:.0f} gate threshold"
+        )
+
+    from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
+    from quoin.benchmarks.harness.cost import load_pricing
+    try:
+        pricing = load_pricing()
+    except Exception:
+        pricing = {}
+    if PINNED_MODEL not in (pricing.get("models") or {}):
+        return False, f"PINNED_MODEL {PINNED_MODEL!r} is not an exact key of pricing.json['models']"
+
+    if not rehearsal:
+        model_override = os.environ.get("QUOIN_BENCH_CLAUDE_MODEL")
+        if model_override:
+            return False, (
+                "QUOIN_BENCH_CLAUDE_MODEL is set outside --rehearsal mode; "
+                "full mode must verify the real pinned model, not an override"
+            )
+
+    return True, ""
 
 
 def _fixture_repo_sha(fixture_repo: Optional[Path]) -> str:
@@ -599,6 +670,36 @@ def main() -> None:
             print(row)
         if len(suite) > 10:
             print(f"  ... ({len(suite) - 10} more tasks)")
+
+        print()
+        resolved_model = _probe_claude_model()
+        print(f"Resolved model: {resolved_model}")
+        try:
+            from quoin.benchmarks.harness.cost import load_pricing
+            pricing_models = load_pricing().get("models", {})
+        except Exception:
+            pricing_models = {}
+        exact_key = resolved_model in pricing_models
+        print(f"Exact pricing key: {exact_key}")
+
+        if args.max_budget_usd_per_task is not None:
+            worst_case = args.max_budget_usd_per_task * len(suite) * len(cells)
+            print(f"WORST CASE: ${worst_case:.2f} (max_budget_usd_per_task x n_tasks x len(cells))")
+        else:
+            worst_case = None
+            print("WORST CASE: UNBOUNDED (no --max-budget-usd-per-task set)")
+
+        passed, reason = dry_run_gate_check(
+            max_budget_usd_per_task=args.max_budget_usd_per_task,
+            worst_case_usd=worst_case,
+        )
+        if not passed:
+            print(
+                f"GATE-STOP: dry-run precondition failed — {reason}; "
+                "re-authorisation required before any paid arm",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         sys.exit(0)
 
     run_benchmark(

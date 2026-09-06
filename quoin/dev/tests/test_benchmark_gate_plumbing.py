@@ -1204,6 +1204,11 @@ class TestGateSuiteFile:
             _sys.argv = [
                 "run_benchmark.py", "--suite", str(_GATE_SUITE_PATH),
                 "--cells", "simple-claude", "--run-id", "smoke", "--dry-run",
+                # A real gate invocation always sets a per-task cap (T-09);
+                # this value clears the $38 worst-case threshold (1 task x
+                # 1 cell x $6). The "no cap set" / "caps too high" failure
+                # scenarios are covered explicitly in TestDryRunGate below.
+                "--max-budget-usd-per-task", "6",
             ]
             with pytest.raises(SystemExit) as exc_info:
                 rb_mod.main()
