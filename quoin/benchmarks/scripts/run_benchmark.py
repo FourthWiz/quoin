@@ -51,6 +51,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 
@@ -82,10 +83,15 @@ def _suite_sha(suite_path: Path) -> str:
 
 def _probe_claude_model() -> str:
     """
-    Probe the Claude CLI to resolve the dated model snapshot.
+    Return the PINNED_MODEL constant (with the env override applied).
 
-    Per D-11: query the model response for the resolved dated snapshot string.
-    The Claude API returns this in the 'model' field of responses.
+    Despite the name, this does NOT probe anything — it reads the
+    deterministic constant so invariant 1's byte-identical-model-ID-within-
+    pair property can't drift mid-run. For 4.6+-generation models this
+    dateless ID IS the permanent pin (see cells/simple_claude.py's module
+    docstring); there is no dated form to resolve. The one REAL, live probe
+    lives behind `--verify-model` (T-04c), which confirms the constant still
+    matches what the CLI actually reports.
     """
     from quoin.benchmarks.harness.cells.simple_claude import _get_model
     return _get_model()
@@ -95,6 +101,103 @@ def _probe_codex_model() -> str:
     """Return the pinned Codex model name (verify at benchmark time)."""
     from quoin.benchmarks.harness.cells.simple_codex import _get_codex_model
     return _get_codex_model()
+
+
+def _resolve_model_id_from_probe_response(data: dict) -> Optional[str]:
+    """Extract the resolved model ID from a `claude --output-format json`
+    response.
+
+    Verified 2026-09-06 against CLI 2.1.261: the response carries NO
+    top-level `model` field. The resolved ID appears as the sole key of
+    `modelUsage` (and again as that entry's `canonicalModel` value). The
+    top-level field is checked first for forward-compatibility with a CLI
+    version that does add one.
+    """
+    if data.get("model"):
+        return str(data["model"])
+    model_usage = data.get("modelUsage") or {}
+    if len(model_usage) == 1:
+        (only_key, only_value), = model_usage.items()
+        canonical = only_value.get("canonicalModel") if isinstance(only_value, dict) else None
+        return str(canonical or only_key)
+    return None
+
+
+def _run_live_model_probe(max_budget_usd: float) -> dict:
+    """Shell the real `claude` CLI for a one-turn, budget-capped probe.
+
+    This is the ONE live, spend-generating call behind `--verify-model`
+    (T-04c) — never confused with `--dry-run`, which stays spend-free.
+    """
+    result = subprocess.run(
+        [
+            "claude", "--print", "--output-format", "json",
+            "--model", "claude-opus-4-7",
+            "--max-budget-usd", str(max_budget_usd),
+            "reply with the single word ok",
+        ],
+        capture_output=True, text=True, timeout=120,
+    )
+    return json.loads(result.stdout)
+
+
+def verify_model(
+    ledger_path: Optional[Path] = None,
+    max_budget_usd: float = 1.0,
+    run_probe=_run_live_model_probe,
+) -> int:
+    """
+    `--verify-model` preflight (T-04c): make ONE live, $1-capped call,
+    compare the resolved model ID against `PINNED_MODEL`, and exit
+    accordingly. Runs before any paid arm (T-09's dry-run gate). Prechecks
+    and records against T-17's spend ledger like any other paid call — this
+    is NOT a spend-free operation, unlike `--dry-run`.
+
+    Returns the process exit code: 0 on match, 1 on mismatch, 2 if the
+    ledger precheck itself fails (no call made).
+    """
+    from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
+    from quoin.benchmarks.scripts import spend_ledger
+
+    if ledger_path is not None:
+        ok, message = spend_ledger.precheck(ledger_path, planned_caps=[max_budget_usd])
+        if not ok:
+            print(message, file=sys.stderr)
+            return 2
+
+    attempt_id = str(uuid.uuid4())
+    ts = datetime.datetime.utcnow().isoformat() + "Z"
+    if ledger_path is not None:
+        spend_ledger.append(ledger_path, {
+            "ts": ts, "attempt_id": attempt_id, "kind": "reservation",
+            "invocation": "full", "gate_id": "verify-model", "arm": "probe",
+            "cap_usd": max_budget_usd, "actual_usd": None, "run_id": None,
+            "new_ceiling_usd": None, "note": "--verify-model preflight",
+        })
+
+    data = run_probe(max_budget_usd)
+    resolved_id = _resolve_model_id_from_probe_response(data)
+    actual_usd = data.get("total_cost_usd")
+    if actual_usd is None:
+        actual_usd = data.get("cost_usd")
+
+    if ledger_path is not None:
+        spend_ledger.append(ledger_path, {
+            "ts": ts, "attempt_id": attempt_id, "kind": "settlement",
+            "invocation": "full", "gate_id": "verify-model", "arm": "probe",
+            "cap_usd": max_budget_usd,
+            "actual_usd": float(actual_usd) if actual_usd is not None else None,
+            "run_id": None, "new_ceiling_usd": None,
+            "note": "--verify-model preflight",
+        })
+
+    print(f"Pinned model:   {PINNED_MODEL}")
+    print(f"Resolved model: {resolved_id}")
+    if resolved_id == PINNED_MODEL:
+        print("--verify-model: MATCH")
+        return 0
+    print("--verify-model: MISMATCH", file=sys.stderr)
+    return 1
 
 
 def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str]:
@@ -447,7 +550,25 @@ def main() -> None:
         default=600,
         help="Per-task wall-clock budget in seconds (default: 600)",
     )
+    parser.add_argument(
+        "--verify-model",
+        action="store_true",
+        help="Make ONE live, $1-capped call to confirm PINNED_MODEL still "
+             "matches what the CLI resolves (T-04c). NOT spend-free, unlike "
+             "--dry-run. Exits 0 on match, 1 on mismatch, 2 on a failed "
+             "ledger precheck (no call made). Runs before any paid arm.",
+    )
+    parser.add_argument(
+        "--spend-ledger",
+        type=Path,
+        default=None,
+        help="Path to T-17's persisted spend ledger (used by --verify-model "
+             "and by the three-arm gate driver)",
+    )
     args = parser.parse_args()
+
+    if args.verify_model:
+        sys.exit(verify_model(ledger_path=args.spend_ledger))
 
     cells = [c.strip() for c in args.cells.split(",") if c.strip()]
     suite_path = args.suite

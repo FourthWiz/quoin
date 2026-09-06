@@ -5,13 +5,18 @@ Invokes Claude Code CLI in non-interactive mode inside an isolated git worktree
 of the fixture repo. No Quoin workflow artifacts; pure Claude Code baseline.
 
 Model snapshot pinning:
-    The model is pinned to a dated snapshot ID at implementation time (D-11).
-    At run time, update PINNED_MODEL below to the resolved dated snapshot from:
-        claude --version  # or from the 'model' field in a response JSON
-
-    Dated snapshot form example: claude-opus-4-7-20261001
-    Do NOT use alias IDs (claude-opus-4-7) — these may point to different
-    snapshots mid-suite, violating invariant 1.
+    Starting with the 4.6 generation, every Claude model ID is itself a
+    pinned snapshot — including the dateless form (verified against
+    Anthropic's docs, platform.claude.com/docs/en/models/opus-4-7/overview
+    and .../sonnet-4-6/overview: "Every Claude model ID is a pinned
+    snapshot, including the dateless IDs used from the 4.6 generation on").
+    There is no separate dated snapshot to discover for these models — the
+    bare ID below IS the permanent pin, confirmed by a live probe
+    (`claude --print --output-format json --model claude-opus-4-7 ...`
+    returns `canonicalModel: "claude-opus-4-7"` with no date suffix
+    anywhere in the response, and the installed CLI binary's own static
+    model table has no dated string for this alias either). No further
+    pinning action is possible or needed for this model generation.
 
 Rate-limit handling:
     The adapter catches 429 / overloaded responses from the Claude API and
@@ -32,12 +37,13 @@ from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
 
 # ---------------------------------------------------------------------------
-# Pin the dated model snapshot at implementation time (D-11).
-# Update this at benchmark time by running: claude --version
-# or inspecting the 'model' field of a claude --print --output-format json
-# response. This MUST be a dated snapshot ID, not an alias.
+# This dateless ID IS the permanent pin (D-11) for 4.6+-generation models —
+# see the module docstring. Verified 2026-09-06 against a live probe
+# (canonicalModel: "claude-opus-4-7", no date suffix anywhere in the
+# response) and against Anthropic's docs, which state this explicitly as
+# policy. There is no dated snapshot to swap in later.
 # ---------------------------------------------------------------------------
-PINNED_MODEL: str = "claude-opus-4-7"  # use alias; pin to dated snapshot before publishing results
+PINNED_MODEL: str = "claude-opus-4-7"
 
 # Overridable via environment for testing
 _MODEL_ENV_VAR = "QUOIN_BENCH_CLAUDE_MODEL"

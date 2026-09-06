@@ -1015,3 +1015,118 @@ class TestWorkflowArtifactsEvidenceDir:
         )
         assert result["workflow_artifacts_captured"] is True
         assert (fallback_dir / "workflow_artifacts_evidence").exists()
+
+
+# ---------------------------------------------------------------------------
+# T-04: PINNED_MODEL is the permanent (dateless) pin for 4.6+-generation
+# models — no dated snapshot exists to resolve (coordinator-verified against
+# Anthropic's live docs 2026-09-06). PINNED_MODEL/pricing.json consistency
+# and the --verify-model preflight, WITHOUT ever making a real live call.
+# ---------------------------------------------------------------------------
+
+
+class TestPinnedModelPricingConsistency:
+    def test_pinned_model_is_an_exact_pricing_key(self):
+        import json as _json
+        from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
+
+        pricing_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "benchmarks" / "harness" / "pricing.json"
+        )
+        pricing = _json.loads(pricing_path.read_text(encoding="utf-8"))
+        assert PINNED_MODEL in pricing["models"], (
+            f"PINNED_MODEL={PINNED_MODEL!r} is not an exact key of "
+            f"pricing.json['models']={list(pricing['models'])!r} — "
+            "cost.estimate_cost's prefix fallback would mask this, but "
+            "run_benchmark._estimate_cost_dry_run does an EXACT lookup and "
+            "silently falls back to hardcoded rates."
+        )
+
+    def test_pricing_json_has_no_stale_dated_snapshot_keys(self):
+        import json as _json
+
+        pricing_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "benchmarks" / "harness" / "pricing.json"
+        )
+        pricing = _json.loads(pricing_path.read_text(encoding="utf-8"))
+        for key in pricing["models"]:
+            last_segment = key.rsplit("-", 1)[-1]
+            assert not (len(last_segment) == 8 and last_segment.isdigit()), (
+                f"pricing.json key {key!r} looks like a stale dated-snapshot "
+                "placeholder; 4.6+-generation models have no dated form"
+            )
+
+
+class TestVerifyModelPreflight:
+    def test_resolve_model_id_reads_model_usage_key_when_no_top_level_model(self):
+        from quoin.benchmarks.scripts.run_benchmark import _resolve_model_id_from_probe_response
+
+        data = {
+            "modelUsage": {
+                "claude-opus-4-7": {"canonicalModel": "claude-opus-4-7", "costUSD": 0.35}
+            }
+        }
+        assert _resolve_model_id_from_probe_response(data) == "claude-opus-4-7"
+
+    def test_resolve_model_id_prefers_top_level_model_field(self):
+        from quoin.benchmarks.scripts.run_benchmark import _resolve_model_id_from_probe_response
+
+        data = {"model": "claude-opus-4-7", "modelUsage": {"other": {}}}
+        assert _resolve_model_id_from_probe_response(data) == "claude-opus-4-7"
+
+    def test_verify_model_match_exits_zero_with_no_real_call(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import verify_model
+
+        def stub_probe(max_budget_usd):
+            return {
+                "modelUsage": {"claude-opus-4-7": {"canonicalModel": "claude-opus-4-7"}},
+                "total_cost_usd": 0.35,
+            }
+
+        code = verify_model(ledger_path=tmp_path / "ledger.jsonl", run_probe=stub_probe)
+        assert code == 0
+
+    def test_verify_model_mismatch_exits_one(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import verify_model
+
+        def stub_probe(max_budget_usd):
+            return {
+                "modelUsage": {"claude-sonnet-4-6": {"canonicalModel": "claude-sonnet-4-6"}},
+                "total_cost_usd": 0.10,
+            }
+
+        code = verify_model(ledger_path=tmp_path / "ledger.jsonl", run_probe=stub_probe)
+        assert code == 1
+
+    def test_verify_model_records_probe_in_ledger(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import verify_model
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        def stub_probe(max_budget_usd):
+            return {
+                "modelUsage": {"claude-opus-4-7": {"canonicalModel": "claude-opus-4-7"}},
+                "total_cost_usd": 0.35,
+            }
+
+        ledger = tmp_path / "ledger.jsonl"
+        verify_model(ledger_path=ledger, run_probe=stub_probe)
+        assert recorded_total(ledger) == pytest.approx(0.35)
+
+    def test_verify_model_refuses_when_ledger_precheck_fails_and_makes_no_call(self, tmp_path):
+        from quoin.benchmarks.scripts.run_benchmark import verify_model
+        from quoin.benchmarks.scripts.spend_ledger import append
+
+        ledger = tmp_path / "ledger.jsonl"
+        append(ledger, {
+            "ts": "2026-09-06T00:00:00Z", "attempt_id": "a1", "kind": "reservation",
+            "invocation": "full", "gate_id": "g1", "arm": "candidate", "cap_usd": 50.0,
+            "actual_usd": None, "run_id": "g1-candidate", "new_ceiling_usd": None, "note": "",
+        })
+
+        def raising_probe(max_budget_usd):
+            raise AssertionError("must not spawn when the ledger precheck fails")
+
+        code = verify_model(ledger_path=ledger, run_probe=raising_probe)
+        assert code == 2
