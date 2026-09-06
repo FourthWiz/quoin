@@ -1238,15 +1238,36 @@ class TestScenarioPromptBranch:
         prompt = _build_prompt(task)
         assert task["target_subsystem"] in prompt
 
-    def test_quoin_cell_prompt_is_identical_apart_from_run_prepend(self):
+    def test_quoin_cell_prompt_is_identical_apart_from_run_prepend(self, monkeypatch, arm_git_repo, tmp_path):
+        """Verified against the REAL quoin_claude.invoke() prompt
+        construction (not a re-derived literal) so a prepend edit there
+        can't silently drift from this test (D-18: the prepend is
+        `/run --autonomous`, not plain `/run`, per F-11)."""
+        from quoin.benchmarks.harness.cells import quoin_claude
         from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
+        from quoin.benchmarks.harness.config import BudgetSpec
 
+        root, sha = arm_git_repo
         suite = json.loads(_GATE_SUITE_PATH.read_text(encoding="utf-8"))
         task = suite["tasks"][0]
         base_prompt = _build_prompt(task)
-        quoin_prompt = f"Use /run end-to-end on this task\n\n{base_prompt}"
-        assert quoin_prompt == f"Use /run end-to-end on this task\n\n{base_prompt}"
-        assert quoin_prompt.endswith(base_prompt)
+
+        captured = {}
+
+        def on_spawn(cmd):
+            captured["prompt"] = cmd[-1]
+            return _FakeClaudeProc()
+
+        _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=on_spawn)
+        # skip mode + an isolated arm_git_repo fixture: this test must never
+        # touch the real quoin/install.sh or this machine's real ~/.claude.
+        quoin_claude.invoke(
+            task_spec=task, workdir=tmp_path / "work", budget=BudgetSpec(), run_id="r1",
+            quoin_install_script=root / "quoin" / "install.sh", quoin_install_mode="skip",
+            arm_root=root, expected_quoin_commit=sha,
+        )
+        assert captured["prompt"] == f"Use /run --autonomous end-to-end on this task\n\n{base_prompt}"
+        assert captured["prompt"].endswith(base_prompt)
 
     def test_description_present_but_omitting_subsystem_raises_and_never_spawns(self):
         from quoin.benchmarks.harness.cells.simple_claude import _build_prompt

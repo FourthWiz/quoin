@@ -10,7 +10,14 @@ Key differences from simple_claude.py:
      followed by /init_workflow in non-interactive mode.
   2. Sets QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id> in the
      subprocess environment. Both must be set for /gate to auto-approve.
-  3. Prepends "Use /run end-to-end on this task" to the agent prompt.
+  3. Prepends "Use /run --autonomous end-to-end on this task" to the agent
+     prompt (D-18). `/run`'s SKILL.md has no non-interactive path (17
+     `AskUserQuestion` calls, zero `QUOIN_GATE_AUTO_APPROVE` /
+     `QUOIN_BENCHMARK_RUN` references — F-11), so a `--print` session given
+     the plain "/run end-to-end" prompt cannot answer its own checkpoints
+     and either degrades or stalls to the wall clock, burning the
+     authorisation for no evidence. `--autonomous` is present in both arms'
+     `run/SKILL.md` and adds no candidate-only capability.
   4. Post-run: captures .workflow_artifacts/<task-name>/ into the run output
      folder as evidence; validates that architecture.md and current-plan.md
      exist for at least one sampled task.
@@ -267,8 +274,14 @@ def invoke(
     """
     model = _get_model()
     base_prompt = _build_prompt(task_spec)
-    # Prepend quoin workflow directive
-    prompt = f"Use /run end-to-end on this task\n\n{base_prompt}"
+    # Prepend the quoin workflow directive with --autonomous (D-18): a
+    # `--print` session cannot answer /run's own interactive checkpoints
+    # (17 AskUserQuestion calls, no QUOIN_GATE_AUTO_APPROVE /
+    # QUOIN_BENCHMARK_RUN awareness — F-11), so the plain form either
+    # degrades or stalls to the wall clock. The fixture clone's remote is
+    # stripped (T-08a) as belt-and-braces containment for the
+    # /implement + /end_of_task capability --autonomous grants.
+    prompt = f"Use /run --autonomous end-to-end on this task\n\n{base_prompt}"
 
     result: dict = {
         "prompt": prompt,
