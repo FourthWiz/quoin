@@ -179,3 +179,125 @@ class TestSpendLedgerPrecheck:
 
         ok, _ = precheck(tmp_path / "nope.jsonl", planned_caps=[10.0], authorised=5.0)
         assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# T-11: the three-arm comparison emitter
+# ---------------------------------------------------------------------------
+
+
+def _write_summary(run_dir, run_id, cell, n_tasks=1, n_pass=1, total_cost=None,
+                    mean_wall=100.0, gate_interventions=0):
+    d = run_dir / run_id
+    d.mkdir(parents=True, exist_ok=True)
+    summary = {
+        "run_id": run_id,
+        "cells": {
+            cell: {
+                "n_tasks": n_tasks,
+                "n_pass": n_pass,
+                "total_cost_usd_or_null": total_cost,
+                "mean_wall_clock_s": mean_wall,
+                "gate_intervention_count": gate_interventions,
+            }
+        },
+    }
+    (d / "summary.json").write_text(json.dumps(summary), encoding="utf-8")
+
+
+class TestCompareArms:
+    def test_three_synthetic_summaries_produce_expected_table(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms
+
+        _write_summary(tmp_path, "g1-raw", "simple-claude", total_cost=1.2)
+        _write_summary(tmp_path, "g1-main", "quoin-claude", total_cost=10.0)
+        _write_summary(tmp_path, "g1-candidate", "quoin-claude", total_cost=8.0)
+
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"raw": "g1-raw", "main": "g1-main", "candidate": "g1-candidate"},
+            arm_cells={"raw": "simple-claude", "main": "quoin-claude", "candidate": "quoin-claude"},
+            arm_evidence={
+                "main": {"installed_quoin_commit": "aaa", "task_completion_quality": 3},
+                "candidate": {"installed_quoin_commit": "bbb", "task_completion_quality": 4},
+            },
+        )
+        assert out_path == tmp_path / "g1-comparison" / "three-arm-comparison.md"
+        text = out_path.read_text(encoding="utf-8")
+        assert "| raw | simple-claude | g1-raw |" in text
+        assert "aaa" in text and "bbb" in text
+        assert "cost: candidate <= main** — PASS" in text
+        assert "quality: candidate >= main (task_completion_quality)** — PASS" in text
+
+    def test_comparison_output_is_sibling_of_run_dirs_not_nested(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms
+
+        _write_summary(tmp_path, "g1-raw", "simple-claude")
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"raw": "g1-raw"}, arm_cells={"raw": "simple-claude"},
+        )
+        assert out_path.parent.name == "g1-comparison"
+        assert out_path.parent.parent == tmp_path
+        assert not (tmp_path / "g1-raw" / "g1-comparison").exists()
+
+    def test_missing_summary_json_yields_not_available_not_an_exception(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms, NOT_AVAILABLE
+
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"main": "g1-main"},  # no summary.json ever written
+            arm_cells={"main": "quoin-claude"},
+        )
+        text = out_path.read_text(encoding="utf-8")
+        assert NOT_AVAILABLE in text
+
+    def test_unscored_quality_yields_pending_never_fabricated_zero(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms
+
+        _write_summary(tmp_path, "g1-main", "quoin-claude", total_cost=10.0)
+        _write_summary(tmp_path, "g1-candidate", "quoin-claude", total_cost=8.0)
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"main": "g1-main", "candidate": "g1-candidate"},
+            arm_cells={"main": "quoin-claude", "candidate": "quoin-claude"},
+            # no task_completion_quality supplied for either arm
+        )
+        text = out_path.read_text(encoding="utf-8")
+        from quoin.benchmarks.harness.compare_arms import _COLUMNS
+        quality_col = _COLUMNS.index("task_completion_quality")
+        for line in text.splitlines():
+            if line.startswith("| main |") or line.startswith("| candidate |"):
+                cell_value = [c.strip() for c in line.strip("|").split("|")][quality_col]
+                assert cell_value == "pending", f"expected pending, got {cell_value!r} in row: {line}"
+        assert "quality: candidate >= main (task_completion_quality)** — pending" in text
+
+    def test_null_cost_yields_not_available_and_forces_cost_verdict_pending(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms
+
+        _write_summary(tmp_path, "g1-main", "quoin-claude", total_cost=None)
+        _write_summary(tmp_path, "g1-candidate", "quoin-claude", total_cost=8.0)
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"main": "g1-main", "candidate": "g1-candidate"},
+            arm_cells={"main": "quoin-claude", "candidate": "quoin-claude"},
+        )
+        text = out_path.read_text(encoding="utf-8")
+        assert "cost: candidate <= main** — pending" in text
+        assert "cost: candidate <= main** — PASS" not in text
+
+    def test_raw_arm_never_part_of_ac4_comparison(self, tmp_path):
+        from quoin.benchmarks.harness.compare_arms import compare_arms
+
+        # A pathological raw cost lower than candidate's must not affect
+        # the cost verdict — raw is excluded from both AC-4 comparisons.
+        _write_summary(tmp_path, "g1-raw", "simple-claude", total_cost=0.01)
+        _write_summary(tmp_path, "g1-main", "quoin-claude", total_cost=10.0)
+        _write_summary(tmp_path, "g1-candidate", "quoin-claude", total_cost=8.0)
+        out_path = compare_arms(
+            run_dir=tmp_path, gate_id="g1",
+            arm_run_ids={"raw": "g1-raw", "main": "g1-main", "candidate": "g1-candidate"},
+            arm_cells={"raw": "simple-claude", "main": "quoin-claude", "candidate": "quoin-claude"},
+        )
+        text = out_path.read_text(encoding="utf-8")
+        assert "cost: candidate <= main** — PASS" in text
