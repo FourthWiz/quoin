@@ -896,3 +896,129 @@ class TestDryRunGateCLIExitCodes:
             "--max-budget-usd-per-task", "6",
         ], monkeypatch)
         assert code == 0
+
+
+# ---------------------------------------------------------------------------
+# T-16: the rehearsal record (gates T-10's full-mode preflight)
+# ---------------------------------------------------------------------------
+
+
+def _write_task_files(run_dir, run_id, cell, verdict="pass", cost=1.0,
+                       installed_commit="abc", transcript="{}\n"):
+    task_dir = run_dir / run_id / cell / "scenario_medium_refactor_plan"
+    task_dir.mkdir(parents=True, exist_ok=True)
+    (task_dir / "judge.json").write_text(json.dumps({"verdict": verdict}))
+    (task_dir / "metrics.json").write_text(json.dumps({
+        "installed_quoin_commit": installed_commit, "budget_cap_armed": True,
+        "max_budget_usd_applied": 1.0,
+    }))
+    (task_dir / "transcript.jsonl").write_text(transcript)
+    run_root = run_dir / run_id
+    run_root.mkdir(parents=True, exist_ok=True)
+    (run_root / "summary.json").write_text(json.dumps({
+        "cells": {cell: {"total_cost_usd_or_null": cost}}
+    }))
+
+
+class TestRehearsalRecord:
+    def test_all_arms_green_writes_green_status(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit)
+        record_path = driver.write_rehearsal_record()
+        text = record_path.read_text()
+        assert "Status: **GREEN**" in text
+        assert "installed_quoin_commit=aaa" in text
+        assert "installed_quoin_commit=bbb" in text
+
+    def test_error_verdict_forces_red(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit,
+                               verdict="error" if arm == "raw" else "pass")
+        record_path = driver.write_rehearsal_record()
+        text = record_path.read_text()
+        assert "Status: **RED**" in text
+        assert "raw: verdict is error" in text
+
+    def test_same_installed_commit_on_main_and_candidate_forces_red(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        for arm, cell in (("raw", "simple-claude"), ("main", "quoin-claude"), ("candidate", "quoin-claude")):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit="same-sha")
+        record_path = driver.write_rehearsal_record()
+        text = record_path.read_text()
+        assert "Status: **RED**" in text
+        assert "SAME installed_quoin_commit" in text
+
+    def test_missing_files_reported_as_red_not_an_exception(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        record_path = driver.write_rehearsal_record()  # no task files written at all
+        text = record_path.read_text()
+        assert "Status: **RED**" in text
+
+    def test_record_written_to_spend_ledger_sibling_path(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        record_path = driver.write_rehearsal_record()
+        assert record_path == ns.spend_ledger.parent / "rehearsal.md"
+
+    def test_preflight_requires_green_record_before_full_mode(self, tmp_path, monkeypatch):
+        """The record this method writes is exactly what T-07 step 0's
+        full-mode preflight checks for — proven end to end here."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.verify_arm_installer_isolable",
+            lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
+            lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
+        )
+        import quoin.benchmarks.scripts.run_benchmark as rb_mod
+        monkeypatch.setattr(rb_mod, "verify_model", lambda ledger_path=None, **kw: 0)
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=False, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        # No rehearsal.md at all yet.
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems)
+
+        # Write a RED record -> still blocked.
+        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
+        (ns.spend_ledger.parent / "rehearsal.md").write_text("Status: **RED**\n")
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems)
+
+        # Write a GREEN record -> that specific problem clears.
+        (ns.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n")
+        problems = driver.preflight()
+        assert not any("no green rehearsal record found" in p for p in problems)

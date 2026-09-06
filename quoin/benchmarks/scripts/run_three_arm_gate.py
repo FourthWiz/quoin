@@ -611,6 +611,76 @@ class ThreeArmGateDriver:
         )
         return verified
 
+    # -- Rehearsal record (T-16) -----------------------------------------
+
+    def write_rehearsal_record(self) -> Path:
+        """Write `stage-8/gate-evidence/rehearsal.md` (T-16), the record
+        T-07 step 0's full-mode preflight requires before any real pilot
+        run. GREEN only when every arm produced a non-error verdict, a
+        numeric cost, and (for the quoin arms) a resolved
+        `installed_quoin_commit` that differs between main and candidate —
+        the acceptance bullets a fully-automated check can verify without
+        re-parsing transcripts. Anything short of that is RED, with the
+        specific reason recorded so a human can decide whether to fix and
+        re-rehearse (T-16's own contract) rather than proceed.
+        """
+        lines = [f"# Rehearsal record — {self.args.gate_id}", ""]
+        problems: list[str] = []
+        commits: dict[str, Optional[str]] = {}
+
+        for arm in ARMS:
+            run_id = f"{self.args.gate_id}-{arm}"
+            task_dir = self.args.run_dir / run_id / self.arm_cells[arm] / "scenario_medium_refactor_plan"
+            judge_path = task_dir / "judge.json"
+            metrics_path = task_dir / "metrics.json"
+            transcript_path = task_dir / "transcript.jsonl"
+
+            verdict = "not_available"
+            cost = None
+            if judge_path.exists():
+                verdict = json.loads(judge_path.read_text(encoding="utf-8")).get("verdict", "not_available")
+            if verdict == "error":
+                problems.append(f"{arm}: verdict is error")
+
+            if metrics_path.exists():
+                metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+                commits[arm] = metrics.get("installed_quoin_commit")
+                if not metrics.get("budget_cap_armed", True) and metrics.get("max_budget_usd_applied") is not None:
+                    problems.append(f"{arm}: budget cap was not armed despite a cap being applied")
+
+            summary_path = self.args.run_dir / run_id / "summary.json"
+            if summary_path.exists():
+                summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                cost = (summary.get("cells") or {}).get(self.arm_cells[arm], {}).get("total_cost_usd_or_null")
+                if cost is None:
+                    problems.append(f"{arm}: cost is not a number")
+
+            transcript_non_empty = transcript_path.exists() and transcript_path.stat().st_size > 0
+            if not transcript_non_empty:
+                problems.append(f"{arm}: transcript.jsonl is empty or missing")
+
+            lines.append(
+                f"- **{arm}** ({self.arm_cells[arm]}): verdict={verdict}, cost={cost}, "
+                f"installed_quoin_commit={commits.get(arm)}, "
+                f"transcript_non_empty={transcript_non_empty}, config_root={self.evidence.get(arm, {}).get('config_root')}"
+            )
+
+        if commits.get("main") is not None and commits.get("main") == commits.get("candidate"):
+            problems.append("main and candidate recorded the SAME installed_quoin_commit")
+
+        status = "GREEN" if not problems else "RED"
+        lines.insert(1, f"\nStatus: **{status}**\n")
+        if problems:
+            lines.append("\n## Problems")
+            for p in problems:
+                lines.append(f"- {p}")
+        lines.append(f"\nRaw arm isolation: {'isolated' if self.raw_isolated else 'fallback (unisolated)'} — {raw_arm_note(self.raw_isolated)}")
+
+        record_path = self.args.spend_ledger.parent / "rehearsal.md"
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return record_path
+
     # -- Orchestration --------------------------------------------------------
 
     def run(self) -> int:
@@ -678,6 +748,10 @@ class ThreeArmGateDriver:
                 print(f"Comparison written to: {out_path}")
             except ImportError:
                 print("WARN: compare_arms unavailable; comparison skipped")
+
+            if self.args.rehearsal:
+                record_path = self.write_rehearsal_record()
+                print(f"Rehearsal record written to: {record_path}")
 
             return 0
         except GateStop as exc:
