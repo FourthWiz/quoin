@@ -920,3 +920,98 @@ class TestBudgetHaltDetection:
             run_id="r1", config=config,
         )
         assert run_result.verdict == "budget_stopped"
+
+
+# ---------------------------------------------------------------------------
+# T-15: each arm/task gets its own workflow-artifact evidence directory
+# ---------------------------------------------------------------------------
+
+
+class TestWorkflowArtifactsEvidenceDir:
+    def test_run_output_dir_threaded_from_runner_to_quoin_claude(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness import runner
+        from quoin.benchmarks.harness.config import HarnessConfig
+        from quoin.benchmarks.harness.judge import JudgeResult
+
+        monkeypatch.setattr(
+            runner, "judge_task",
+            lambda *a, **kw: JudgeResult(task_id="t", source_benchmark="unknown", verdict="pass",
+                                          evidence_path=None, judge_runtime_seconds=0.0),
+        )
+        received = {}
+
+        class StubAdapter:
+            @staticmethod
+            def invoke(task_spec, workdir, budget, run_id, run_output_dir=None):
+                received["run_output_dir"] = run_output_dir
+                return {"verdict": "pass", "extra": {}}
+
+        monkeypatch.setattr(runner, "_load_cell_adapter", lambda cell: StubAdapter)
+        config = HarnessConfig(run_dir=tmp_path)
+        runner.run_one_task(cell="stub-cell", task_spec={"id": "t1"}, run_id="r1", config=config)
+        from quoin.benchmarks.harness.result_writer import task_result_dir
+        assert received["run_output_dir"] == task_result_dir(tmp_path, "r1", "stub-cell", "t1")
+
+    def test_two_invocations_with_different_run_id_write_to_different_dirs(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness.cells import quoin_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=lambda cmd: _FakeClaudeProc())
+        (tmp_path / "work" / ".workflow_artifacts" / "task").mkdir(parents=True)
+        (tmp_path / "work" / ".workflow_artifacts" / "task" / "architecture.md").write_text("x")
+
+        out1 = tmp_path / "runs" / "run-a" / "quoin-claude" / "t1"
+        out2 = tmp_path / "runs" / "run-b" / "quoin-claude" / "t1"
+        quoin_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
+            budget=BudgetSpec(), run_id="run-a", run_output_dir=out1,
+        )
+        # Recreate the workflow_artifacts fixture (invoke wipes it at start).
+        (tmp_path / "work" / ".workflow_artifacts" / "task").mkdir(parents=True)
+        (tmp_path / "work" / ".workflow_artifacts" / "task" / "architecture.md").write_text("x")
+        quoin_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
+            budget=BudgetSpec(), run_id="run-b", run_output_dir=out2,
+        )
+        assert (out1 / "workflow_artifacts_evidence").exists()
+        assert (out2 / "workflow_artifacts_evidence").exists()
+        assert out1 != out2
+
+    def test_preseeded_old_shared_path_does_not_leak_into_a_fresh_run(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness.cells import quoin_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=lambda cmd: _FakeClaudeProc())
+        # Old shared path: workdir.parent / "artifacts_evidence" — pre-seed it
+        # with an architecture.md the way a prior arm's leftovers would.
+        old_shared = (tmp_path / "work").parent / "artifacts_evidence"
+        old_shared.mkdir(parents=True, exist_ok=True)
+        (old_shared / "architecture.md").write_text("leftover from another arm")
+
+        (tmp_path / "work").mkdir(exist_ok=True)
+        result = quoin_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
+            budget=BudgetSpec(), run_id="run-c",
+            run_output_dir=tmp_path / "runs" / "run-c" / "quoin-claude" / "t1",
+        )
+        # No architecture.md was created inside THIS task's own worktree, so
+        # a run reading the arm-unique dest must not report the other arm's
+        # leftover as its own evidence.
+        assert result["workflow_artifacts_has_arch"] is False
+
+    def test_fallback_path_is_run_and_cell_unique_when_run_output_dir_omitted(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.harness.cells import quoin_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=lambda cmd: _FakeClaudeProc())
+        (tmp_path / "work").mkdir()
+        result = quoin_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
+            budget=BudgetSpec(), run_id="run-fallback",
+        )
+        fallback_dir = (
+            Path(quoin_claude.tempfile.gettempdir()) / "quoin-benchmarks"
+            / "artifacts_evidence-run-fallback-quoin-claude"
+        )
+        assert result["workflow_artifacts_captured"] is True
+        assert (fallback_dir / "workflow_artifacts_evidence").exists()

@@ -230,6 +230,11 @@ def run_one_task(
         # config fields to whichever adapters declare them (D-11).
         start = time.monotonic()
         extra_kwargs = _threadable_kwargs(adapter, config)
+        # `run_output_dir` (T-15) isn't a config value — it's this task's OWN
+        # result directory, computed above as `t_dir` — but it's threaded by
+        # the same declared-parameter mechanism, not a cell-name branch.
+        if "run_output_dir" in inspect.signature(adapter.invoke).parameters:
+            extra_kwargs["run_output_dir"] = t_dir
         invocation_result = adapter.invoke(
             task_spec=task_spec,
             workdir=worktree_path or Path("."),

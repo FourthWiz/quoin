@@ -33,6 +33,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Optional
@@ -220,6 +221,7 @@ def invoke(
     arm_root: Optional[Path] = None,
     expected_quoin_commit: Optional[str] = None,
     max_budget_usd: Optional[float] = None,
+    run_output_dir: Optional[Path] = None,
 ) -> dict:
     """
     Invoke Claude Code with the full Quoin workflow.
@@ -252,6 +254,12 @@ def invoke(
         Optional CLI-enforced spend cap (D-08), passed through to `claude
         --max-budget-usd`. In gate mode, a `None` value or an assembled
         argv missing the flag refuses to spawn.
+    run_output_dir:
+        This task's OWN result directory (`task_result_dir(run_dir, run_id,
+        cell, task_id)`, T-15). Workflow-artifact evidence is captured
+        under `run_output_dir/workflow_artifacts_evidence`, arm- and
+        task-unique. When omitted, falls back to a run-id-and-cell-unique
+        temp path rather than the old shared-across-every-task default.
 
     Returns
     -------
@@ -475,11 +483,24 @@ def invoke(
         except Exception:
             result["diff_patch"] = ""
 
-        # Capture .workflow_artifacts/ evidence
-        # (run output dir is determined by the caller via run_id+cell+task_id)
+        # Capture .workflow_artifacts/ evidence into THIS task's own result
+        # directory (T-15). The old default — `workdir.parent /
+        # "artifacts_evidence"` — is the SAME path for every task, cell and
+        # arm sharing a worktree tempdir root, so a later arm's "has
+        # architecture.md" check could find an earlier arm's leftovers.
+        # `_capture_workflow_artifacts` appends its own
+        # "workflow_artifacts_evidence" segment, so `run_output_dir` here is
+        # the bare task result dir, not that segment pre-appended.
+        if run_output_dir is not None:
+            evidence_root = run_output_dir
+        else:
+            evidence_root = (
+                Path(tempfile.gettempdir()) / "quoin-benchmarks"
+                / f"artifacts_evidence-{run_id}-quoin-claude"
+            )
         artifacts_evidence = _capture_workflow_artifacts(
             workdir=workdir,
-            run_output_dir=workdir.parent / "artifacts_evidence",
+            run_output_dir=evidence_root,
             task_id=task_spec["id"],
         )
         # Kept at both the top level (nothing that reads them today breaks)
