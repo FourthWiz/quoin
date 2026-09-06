@@ -396,6 +396,17 @@ class ThreeArmGateDriver:
                     "GATE-STOP: QUOIN_BENCH_CLAUDE_MODEL is set outside --rehearsal mode; "
                     "full mode must verify the real pinned model"
                 )
+            elif not self.args.plan_only:
+                # The ONE live, spend-generating preflight call (T-04c) —
+                # skipped under --plan-only (spend-free by definition) and
+                # under --rehearsal (waived; the override above substitutes).
+                from quoin.benchmarks.scripts.run_benchmark import verify_model
+                code = verify_model(ledger_path=self.args.spend_ledger)
+                if code != 0:
+                    problems.append(
+                        "GATE-STOP: --verify-model did not confirm PINNED_MODEL "
+                        f"(exit {code})"
+                    )
         else:
             if not os.environ.get("QUOIN_BENCH_CLAUDE_MODEL"):
                 problems.append("GATE-STOP: --rehearsal requires QUOIN_BENCH_CLAUDE_MODEL to be set")
@@ -418,10 +429,20 @@ class ThreeArmGateDriver:
             suite_for_gate = json.loads(self.args.suite.read_text(encoding="utf-8"))
             n_tasks = len(suite_for_gate["tasks"])
             from quoin.benchmarks.scripts.run_benchmark import dry_run_gate_check
+
+            # Each arm must individually have a cap set; the WORST CASE
+            # check is the SUM across all three arms (T-09), not a per-arm
+            # multiplication — each arm has its own distinct cap and is
+            # invoked separately with a single cell, unlike the standalone
+            # `run_benchmark.py --dry-run` CLI's cap*n_tasks*len(cells) shape.
+            combined_worst_case = sum(
+                (cap or 0.0) * n_tasks for cap in self.caps.values()
+            )
             for arm, cap in self.caps.items():
                 passed, reason = dry_run_gate_check(
-                    cells=[self.arm_cells[arm]], n_tasks=n_tasks,
-                    max_budget_usd_per_task=cap, rehearsal=self.args.rehearsal,
+                    max_budget_usd_per_task=cap,
+                    worst_case_usd=combined_worst_case if cap is not None else None,
+                    rehearsal=self.args.rehearsal,
                 )
                 if not passed:
                     problems.append(

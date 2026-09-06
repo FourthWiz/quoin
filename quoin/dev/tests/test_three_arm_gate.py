@@ -505,6 +505,75 @@ class TestDriverPlanOnly:
         out = capsys.readouterr().out
         assert "raw, main, candidate" in out
 
+    def test_plan_only_never_calls_verify_model(self, tmp_path, monkeypatch):
+        """--plan-only is spend-free by definition — the one live,
+        spend-generating preflight call (--verify-model) must never fire."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_benchmark as rb_mod
+
+        def raising_verify_model(*a, **kw):
+            raise AssertionError("--plan-only must never call verify_model")
+
+        monkeypatch.setattr(rb_mod, "verify_model", raising_verify_model)
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        args = self._make_args(tmp_path)
+        driver = ThreeArmGateDriver(args, run_arm_fn=lambda argv, env: (_ for _ in ()).throw(
+            AssertionError("must not spawn")))
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.verify_arm_installer_isolable",
+            lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
+            lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
+        )
+        code = driver.run()
+        assert code == 0  # all preflight checks pass, plan-only, never spawns
+
+    def test_full_mode_calls_verify_model_once(self, tmp_path, monkeypatch):
+        """Full mode (not plan-only, not rehearsal) DOES make the one live
+        call — proven here via a mock that never touches the real CLI."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_benchmark as rb_mod
+
+        calls = []
+
+        def mock_verify_model(ledger_path=None, **kw):
+            calls.append(ledger_path)
+            return 0
+
+        monkeypatch.setattr(rb_mod, "verify_model", mock_verify_model)
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        args = self._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(args, run_arm_fn=lambda argv, env: 0)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.verify_arm_installer_isolable",
+            lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
+            lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
+        )
+        driver.preflight()
+        assert len(calls) == 1
+        assert calls[0] == args.spend_ledger
+
 
 class TestDriverLedgerFlow:
     def test_reservation_then_settlement_recorded_per_arm(self, tmp_path):
