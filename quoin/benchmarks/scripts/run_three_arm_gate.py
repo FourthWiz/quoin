@@ -276,12 +276,23 @@ def verify_hooks_deployed(arm_root: Path, home: Path) -> bool:
     return True
 
 
-def assert_config_root(arm: str, arm_env: dict, home: Path, raw_config_dir: Path) -> None:
+def assert_config_root(
+    arm: str, arm_env: dict, home: Path, raw_config_dir: Path, raw_isolated: bool = True,
+) -> None:
     """D-15/R-19's config-root assertion, before the spawn. Raises GateStop
     on any mismatch — this is the ONLY check in the gate that can see a
-    leaked CLAUDE_CONFIG_DIR at all."""
+    leaked CLAUDE_CONFIG_DIR at all.
+
+    `raw_isolated=False` is the D-15 FALLBACK: the 2026-09-06 rehearsal
+    proved an isolated, freshly-created CLAUDE_CONFIG_DIR does not carry
+    this machine's auth (`"Not logged in · Please run /login"`), so a raw
+    arm run under it produces a $0, zero-signal auth failure rather than a
+    baseline. Under the fallback, raw is asserted exactly like main/
+    candidate — config dir absent or resolving to the real `~/.claude` —
+    and the honest label changes accordingly (see `raw_arm_note`).
+    """
     resolved = arm_env.get("CLAUDE_CONFIG_DIR")
-    if arm == "raw":
+    if arm == "raw" and raw_isolated:
         expected = str(raw_config_dir)
         if resolved != expected:
             raise GateStop(
@@ -294,17 +305,26 @@ def assert_config_root(arm: str, arm_env: dict, home: Path, raw_config_dir: Path
             )
 
 
-def build_arm_env(arm: str, raw_config_dir: Path) -> dict:
-    """Per-arm environment dict (D-15, round-4 fix MAJ-2): set for `raw`,
-    explicitly popped for `main`/`candidate`, and NEVER mutated on the
-    driver's own os.environ — both cells inherit whatever the driver holds."""
+def build_arm_env(arm: str, raw_config_dir: Path, raw_isolated: bool = True) -> dict:
+    """Per-arm environment dict (D-15, round-4 fix MAJ-2): set for `raw`
+    (when isolated), explicitly popped for `main`/`candidate` (and for
+    `raw` under the D-15 fallback), and NEVER mutated on the driver's own
+    os.environ — both cells inherit whatever the driver holds."""
     env = os.environ.copy()
-    if arm == "raw":
+    if arm == "raw" and raw_isolated:
         env["CLAUDE_CONFIG_DIR"] = str(raw_config_dir)
     else:
         env.pop("CLAUDE_CONFIG_DIR", None)
     env["QUOIN_BENCHMARK_GATE"] = "1"
     return env
+
+
+def raw_arm_note(raw_isolated: bool) -> str:
+    """The one-line, honest statement of what the raw arm actually is
+    (D-15), for compare_arms' Notes section."""
+    if raw_isolated:
+        return "quoin-free floor, isolated CLAUDE_CONFIG_DIR"
+    return "stock Claude prompt on a quoin-installed machine — NOT a quoin-free floor"
 
 
 def default_run_arm(argv: list[str], env: dict) -> int:
@@ -329,6 +349,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--rehearsal", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
+    parser.add_argument(
+        "--raw-no-isolation", action="store_true",
+        help="D-15 FALLBACK: skip the isolated CLAUDE_CONFIG_DIR for the "
+             "raw arm and run it against the real ~/.claude, honestly "
+             "relabeled as 'stock Claude prompt on a quoin-installed "
+             "machine' rather than a quoin-free floor. Use only after a "
+             "rehearsal has shown the isolated form fails to authenticate.",
+    )
     args = parser.parse_args(argv)
 
     driver = ThreeArmGateDriver(args)
@@ -352,6 +380,7 @@ class ThreeArmGateDriver:
         }
         self.arm_roots = {"main": args.main_worktree, "candidate": args.candidate_worktree}
         self.arm_cells = {"raw": "simple-claude", "main": "quoin-claude", "candidate": "quoin-claude"}
+        self.raw_isolated = not getattr(args, "raw_no_isolation", False)
         self.venv_python = sys.executable
         self.spawned_arms: set[str] = set()
         self.reservations: dict[str, str] = {}  # arm -> attempt_id
@@ -463,11 +492,14 @@ class ThreeArmGateDriver:
 
     def run_arm(self, arm: str) -> int:
         run_id = f"{self.args.gate_id}-{arm}"
-        arm_env = build_arm_env(arm, self.raw_config_dir)
-        if arm == "raw":
+        arm_env = build_arm_env(arm, self.raw_config_dir, raw_isolated=self.raw_isolated)
+        if arm == "raw" and self.raw_isolated:
             self.raw_config_dir.mkdir(parents=True, exist_ok=True)
 
-        assert_config_root(arm, arm_env, self.home, self.raw_config_dir)
+        assert_config_root(arm, arm_env, self.home, self.raw_config_dir, raw_isolated=self.raw_isolated)
+        self.evidence.setdefault(arm, {})["config_root"] = arm_env.get(
+            "CLAUDE_CONFIG_DIR", str(self.home / ".claude")
+        )
 
         arm_root = self.arm_roots.get(arm)
         if arm_root is not None:
@@ -633,13 +665,15 @@ class ThreeArmGateDriver:
                 arm_run_ids = {arm: f"{self.args.gate_id}-{arm}" for arm in ARMS}
                 comparison_evidence = {
                     arm: {"installed_quoin_commit": self.evidence.get(arm, {}).get("installed_quoin_commit"),
-                          "max_budget_usd_applied": self.caps[arm]}
+                          "max_budget_usd_applied": self.caps[arm],
+                          "config_root": self.evidence.get(arm, {}).get("config_root")}
                     for arm in ARMS
                 }
                 out_path = compare_arms(
                     run_dir=self.args.run_dir, gate_id=self.args.gate_id,
                     arm_run_ids=arm_run_ids, arm_cells=self.arm_cells,
                     arm_evidence=comparison_evidence,
+                    raw_arm_note=raw_arm_note(self.raw_isolated),
                 )
                 print(f"Comparison written to: {out_path}")
             except ImportError:

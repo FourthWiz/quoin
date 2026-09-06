@@ -465,6 +465,94 @@ class TestConfigRootAssertion:
             assert "CLAUDE_CONFIG_DIR" not in env
 
 
+class TestRawIsolationFallbackD15:
+    """The 2026-09-06 rehearsal found the isolated CLAUDE_CONFIG_DIR does
+    not carry this machine's auth ("Not logged in · Please run /login") —
+    a real, plan-anticipated D-15 fallback trigger, not a bug. These pin
+    the fallback path: raw runs unisolated, honestly relabeled."""
+
+    def test_raw_isolated_false_never_sets_config_dir(self, monkeypatch, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import build_arm_env
+
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        env = build_arm_env("raw", tmp_path / "raw-config", raw_isolated=False)
+        assert "CLAUDE_CONFIG_DIR" not in env
+
+    def test_raw_isolated_false_asserts_like_main_candidate(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import assert_config_root
+
+        # No CLAUDE_CONFIG_DIR set -> passes, same rule as main/candidate.
+        assert_config_root("raw", {}, tmp_path / "home", tmp_path / "raw-config", raw_isolated=False)
+
+    def test_raw_isolated_false_still_rejects_a_leaked_config_dir(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import assert_config_root, GateStop
+
+        leaked_env = {"CLAUDE_CONFIG_DIR": str(tmp_path / "somewhere-else")}
+        with pytest.raises(GateStop):
+            assert_config_root("raw", leaked_env, tmp_path / "home", tmp_path / "raw-config", raw_isolated=False)
+
+    def test_raw_arm_note_text_matches_isolation_state(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import raw_arm_note
+
+        assert raw_arm_note(True) == "quoin-free floor, isolated CLAUDE_CONFIG_DIR"
+        assert "NOT a quoin-free floor" in raw_arm_note(False)
+
+    def test_driver_defaults_to_isolated_unless_flag_passed(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        assert ThreeArmGateDriver(ns).raw_isolated is True
+        ns2 = TestDriverPlanOnly()._make_args(tmp_path, raw_no_isolation=True)
+        assert ThreeArmGateDriver(ns2).raw_isolated is False
+
+
+class TestSimpleClaudeAuthFailureNotCountedAsCompletion:
+    def test_error_result_event_with_assistant_turn_is_not_had_assistant_event(self, monkeypatch, tmp_path):
+        """Regression for the exact rehearsal finding: an authentication
+        failure still emits a type:"assistant" event (turn_count=1) but
+        the terminal result event carries is_error:true — that must NOT
+        count as a genuine completion."""
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        events = [
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Not logged in · Please run /login"}]}},
+            {"type": "result", "is_error": True, "total_cost_usd": 0, "result": "Not logged in · Please run /login"},
+        ]
+        lines = iter([__import__("json").dumps(e) for e in events] + [""])
+
+        class ScriptedStdout:
+            def readline(self):
+                try:
+                    return next(lines) + "\n"
+                except StopIteration:
+                    return ""
+
+        class ScriptedProc:
+            stdout = ScriptedStdout()
+            stderr = None
+            def poll(self):
+                return 0
+            def wait(self, timeout=None):
+                return 0
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                return ScriptedProc()
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        result = simple_claude.invoke(
+            task_spec={"id": "scenario_x", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(), run_id="r1",
+        )
+        assert result["turn_count"] == 1
+        assert result["extra"]["session_errored"] is True
+        assert result["extra"]["had_assistant_event"] is False
+
+
 class TestDriverPlanOnly:
     def _make_args(self, tmp_path, **overrides):
         ns = argparse.Namespace(

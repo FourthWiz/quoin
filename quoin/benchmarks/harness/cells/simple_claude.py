@@ -250,6 +250,7 @@ def invoke(
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
         turn_count = 0
+        session_errored = False
         retry_delay = 1.0
 
         while True:
@@ -301,6 +302,15 @@ def invoke(
                 tokens_out = usage.get("output_tokens", tokens_out)
                 tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
                 tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+                # The terminal result event is authoritative on whether the
+                # session actually completed (verified 2026-09-06: an
+                # authentication failure still emits a `type: "assistant"`
+                # event carrying the error text, e.g. "Not logged in ·
+                # Please run /login" — turn_count alone cannot distinguish
+                # that from a real completion, per the D-15 rehearsal
+                # finding that isolated CLAUDE_CONFIG_DIR loses auth).
+                if event.get("is_error"):
+                    session_errored = True
 
             if event_type == "assistant":
                 turn_count += 1
@@ -344,10 +354,13 @@ def invoke(
         result["tokens_cache_read"] = tokens_cache_read if tokens_cache_read else None
         result["tokens_cache_write"] = tokens_cache_write if tokens_cache_write else None
         # For the scenario judge (T-06): whether the run produced at least
-        # one assistant turn. Named distinctly from the top-level
-        # `turn_count` metrics key so merging `extra` into metrics.json
-        # never collides with a base key (T-01).
-        result["extra"]["had_assistant_event"] = turn_count > 0
+        # one GENUINE assistant turn — an errored terminal result (e.g. an
+        # authentication failure) does not count, even though it still
+        # emits an assistant-typed event. Named distinctly from the
+        # top-level `turn_count` metrics key so merging `extra` into
+        # metrics.json never collides with a base key (T-01).
+        result["extra"]["had_assistant_event"] = turn_count > 0 and not session_errored
+        result["extra"]["session_errored"] = session_errored
 
         # Cost handling
         if total_cost_usd is not None:
