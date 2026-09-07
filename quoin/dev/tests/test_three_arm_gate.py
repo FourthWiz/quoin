@@ -42,6 +42,22 @@ def _settlement(attempt_id, arm, cap_usd, actual_usd, run_id=None, invocation="f
     }
 
 
+def _binding_block(ns, **overrides):
+    """The identity lines a rehearsal record must carry to authorise a paid
+    run whose args are `ns`. Overrides let a test corrupt exactly one
+    component while leaving the rest correct."""
+    from quoin.benchmarks.scripts.run_three_arm_gate import suite_sha256
+
+    fields = {
+        "Run dir": str(ns.run_dir),
+        "Main commit": str(ns.main_commit),
+        "Candidate commit": str(ns.candidate_commit),
+        "Suite sha256": suite_sha256(ns.suite) if ns.suite.exists() else "unavailable",
+    }
+    fields.update(overrides)
+    return "".join(f"{k}: {v}\n" for k, v in fields.items())
+
+
 class TestSpendLedgerRecordedTotal:
     def test_absent_ledger_reads_as_zero_and_does_not_error(self, tmp_path):
         from quoin.benchmarks.scripts.spend_ledger import recorded_total
@@ -811,8 +827,7 @@ class TestDriverPlanOnly:
         # fix: MAJOR 5) — including the green-rehearsal gate, so full mode
         # needs one on disk to ever reach the probe at all.
         (args.spend_ledger.parent / "rehearsal.md").write_text(
-            f"Status: **GREEN**\n\nGate id: {args.gate_id}\nRun dir: {args.run_dir}\n",
-            encoding="utf-8",
+            "Status: **GREEN**\n\n" + _binding_block(args), encoding="utf-8",
         )
         driver.preflight()
         assert len(calls) == 1
@@ -1218,10 +1233,10 @@ class TestRehearsalRecord:
         problems = driver.preflight()
         assert any("no green rehearsal record found" in p for p in problems)
 
-        # Write a GREEN record for THIS gate-id/run-dir -> that specific
-        # problem clears.
+        # Write a GREEN record for THIS run-dir/commits/suite -> that
+        # specific problem clears.
         (ns.spend_ledger.parent / "rehearsal.md").write_text(
-            f"Status: **GREEN**\n\nGate id: {ns.gate_id}\nRun dir: {ns.run_dir}\n"
+            "Status: **GREEN**\n\n" + _binding_block(ns)
         )
         problems = driver.preflight()
         assert not any("no green rehearsal record found" in p for p in problems)
@@ -1320,14 +1335,20 @@ class TestRehearsalRecordAuthorisationPredicate:
             )
 
 
-class TestRehearsalRecordGateIdAndRunDirBinding:
-    """Review-8 finding 3: the anchored status-line predicate authorised
-    ANY GREEN record, regardless of which gate-id or run-dir it was
-    rendered for — a rehearsal run under a different --gate-id, or against
-    a different --run-dir, still authorised this invocation's ~$38-50 paid
-    spend. write_rehearsal_record now emits Gate id/Run dir lines and
-    preflight's reader requires both to match this invocation, under the
-    same exactly-one-match discipline as the status line."""
+class TestRehearsalRecordRunIdentityBinding:
+    """The anchored status-line predicate authorised ANY GREEN record,
+    regardless of which system it was rendered against — a rehearsal of a
+    different candidate tree, or against a different suite, still
+    authorised this invocation's ~$38-50 paid spend. write_rehearsal_record
+    now emits the run directory, both arm commits and the suite's content
+    hash, and preflight's reader requires every one to match this
+    invocation, under the same exactly-one-match discipline as the status
+    line.
+
+    The binding deliberately excludes --gate-id: a rehearsal and the paid
+    run it authorises must carry distinct gate-ids or their per-arm run-ids
+    and output directories collide, so requiring them to be equal would
+    make every correctly-executed rehearsal unusable."""
 
     def _preflight_ready_driver(self, tmp_path, monkeypatch):
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
@@ -1356,61 +1377,113 @@ class TestRehearsalRecordGateIdAndRunDirBinding:
         TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
         return ns, driver
 
-    def test_matching_gate_id_and_run_dir_authorises(self, tmp_path, monkeypatch):
-        """Positive control: a GREEN record naming THIS invocation's own
-        gate-id and run-dir authorises, same as before this round."""
-        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+    def _write_record(self, ns, body):
         ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
-        (ns.spend_ledger.parent / "rehearsal.md").write_text(
-            f"Status: **GREEN**\n\nGate id: {ns.gate_id}\nRun dir: {ns.run_dir}\n",
-            encoding="utf-8",
-        )
+        (ns.spend_ledger.parent / "rehearsal.md").write_text(body, encoding="utf-8")
+
+    def test_matching_run_identity_authorises(self, tmp_path, monkeypatch):
+        """Positive control: a GREEN record naming THIS invocation's run
+        dir, arm commits and suite hash authorises."""
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        self._write_record(ns, "Status: **GREEN**\n\n" + _binding_block(ns))
         problems = driver.preflight()
         assert not any("no green rehearsal record found" in p for p in problems)
 
-    def test_green_record_from_a_different_gate_id_does_not_authorise(self, tmp_path, monkeypatch):
+    def test_a_different_gate_id_on_an_otherwise_matching_record_still_authorises(
+        self, tmp_path, monkeypatch
+    ):
+        """The rehearsal that authorises a paid run necessarily ran under a
+        different --gate-id — its per-arm run-ids would otherwise collide
+        with the paid run's. A gate-id difference alone must therefore
+        never withhold authorisation."""
         ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
-        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
-        (ns.spend_ledger.parent / "rehearsal.md").write_text(
-            f"Status: **GREEN**\n\nGate id: some-other-gate\nRun dir: {ns.run_dir}\n",
-            encoding="utf-8",
+        self._write_record(
+            ns,
+            f"# Rehearsal record — {ns.gate_id}-rehearsal\n"
+            f"\nStatus: **GREEN**\n"
+            f"\nGate id: {ns.gate_id}-rehearsal\n" + _binding_block(ns),
         )
         problems = driver.preflight()
-        assert any("no green rehearsal record found" in p for p in problems), (
-            "a GREEN record rendered under a different --gate-id must not authorise this run"
+        assert not any("no green rehearsal record found" in p for p in problems), (
+            "a rehearsal under its own distinct --gate-id must still authorise the paid run"
         )
 
     def test_green_record_from_a_different_run_dir_does_not_authorise(self, tmp_path, monkeypatch):
         ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
-        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
-        (ns.spend_ledger.parent / "rehearsal.md").write_text(
-            f"Status: **GREEN**\n\nGate id: {ns.gate_id}\nRun dir: /some/other/run-dir\n",
-            encoding="utf-8",
+        self._write_record(
+            ns,
+            "Status: **GREEN**\n\n" + _binding_block(ns, **{"Run dir": "/some/other/run-dir"}),
         )
         problems = driver.preflight()
         assert any("no green rehearsal record found" in p for p in problems), (
             "a GREEN record rendered against a different --run-dir must not authorise this run"
         )
 
-    def test_missing_gate_id_or_run_dir_lines_fail_closed(self, tmp_path, monkeypatch):
-        """A hand-written 19-byte file containing only a correct status
-        line (review-8's own example) must not authorise once the binding
-        check is in place — no Gate id/Run dir lines at all is absence,
-        not an exact-one match."""
+    def test_green_record_from_a_different_candidate_commit_does_not_authorise(
+        self, tmp_path, monkeypatch
+    ):
         ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
-        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
-        (ns.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n", encoding="utf-8")
+        self._write_record(
+            ns,
+            "Status: **GREEN**\n\n" + _binding_block(ns, **{"Candidate commit": "stale-sha"}),
+        )
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems), (
+            "a GREEN record rendered against a different candidate commit must not authorise"
+        )
+
+    def test_green_record_from_a_different_main_commit_does_not_authorise(
+        self, tmp_path, monkeypatch
+    ):
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        self._write_record(
+            ns, "Status: **GREEN**\n\n" + _binding_block(ns, **{"Main commit": "stale-sha"}),
+        )
         problems = driver.preflight()
         assert any("no green rehearsal record found" in p for p in problems)
 
-    def test_write_rehearsal_record_emits_matching_gate_id_and_run_dir_lines(self, tmp_path):
-        """write_rehearsal_record's own output round-trips through the new
+    def test_green_record_from_a_different_suite_does_not_authorise(self, tmp_path, monkeypatch):
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        self._write_record(
+            ns, "Status: **GREEN**\n\n" + _binding_block(ns, **{"Suite sha256": "0" * 64}),
+        )
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems), (
+            "a GREEN record rendered against a different --suite must not authorise this run"
+        )
+
+    def test_missing_identity_lines_fail_closed(self, tmp_path, monkeypatch):
+        """A hand-written file containing only a correct status line must
+        not authorise — no identity lines at all is absence, not an
+        exactly-one match."""
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        self._write_record(ns, "Status: **GREEN**\n")
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems)
+
+    def test_unresolved_identity_component_never_binds(self):
+        """"unavailable" is what an unreadable suite renders as. Two
+        unresolved components comparing equal must not authorise."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import _rehearsal_record_binds_to
+
+        text = (
+            "Status: **GREEN**\n\nRun dir: /r\nMain commit: a\n"
+            "Candidate commit: b\nSuite sha256: unavailable\n"
+        )
+        assert _rehearsal_record_binds_to(
+            text, run_dir="/r", main_commit="a", candidate_commit="b",
+            suite_sha256="unavailable",
+        ) is False
+
+    def test_write_rehearsal_record_emits_matching_identity_lines(self, tmp_path):
+        """write_rehearsal_record's own output round-trips through the
         binding check — the writer and the reader agree on the format."""
         from quoin.benchmarks.scripts.run_three_arm_gate import (
-            ThreeArmGateDriver, _rehearsal_record_binds_to,
+            ThreeArmGateDriver, _rehearsal_record_binds_to, suite_sha256,
         )
 
         ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{"id": "scenario_x"}]}))
         driver = ThreeArmGateDriver(ns)
         for arm, cell, commit in (
             ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
@@ -1419,9 +1492,51 @@ class TestRehearsalRecordGateIdAndRunDirBinding:
             _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit)
         record_path = driver.write_rehearsal_record()
         text = record_path.read_text()
-        assert _rehearsal_record_binds_to(text, gate_id=ns.gate_id, run_dir=str(ns.run_dir)) is True
-        assert _rehearsal_record_binds_to(text, gate_id="wrong", run_dir=str(ns.run_dir)) is False
-        assert _rehearsal_record_binds_to(text, gate_id=ns.gate_id, run_dir="/wrong") is False
+        identity = dict(
+            run_dir=str(ns.run_dir), main_commit=ns.main_commit,
+            candidate_commit=ns.candidate_commit, suite_sha256=suite_sha256(ns.suite),
+        )
+        assert _rehearsal_record_binds_to(text, **identity) is True
+        for field, wrong in (
+            ("run_dir", "/wrong"), ("main_commit", "wrong"),
+            ("candidate_commit", "wrong"), ("suite_sha256", "wrong"),
+        ):
+            assert _rehearsal_record_binds_to(**{**identity, field: wrong}, text=text) is False
+
+    def test_a_rehearsal_gate_id_authorises_a_differently_named_paid_run_end_to_end(
+        self, tmp_path, monkeypatch
+    ):
+        """The full loop the operator actually runs: a rehearsal under
+        `<id>-rehearsal` writes the record, then a paid run under `<id>`
+        reads it. These are two separate invocations with deliberately
+        distinct gate-ids, and the second must clear preflight on the
+        first's evidence."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        rehearsal_ns = TestDriverPlanOnly()._make_args(
+            tmp_path, gate_id="g1-rehearsal", rehearsal=True, plan_only=False,
+        )
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(
+                rehearsal_ns.run_dir, f"g1-rehearsal-{arm}", cell, installed_commit=commit,
+                task_id="scenario_x",
+            )
+        rehearsal_record = ThreeArmGateDriver(rehearsal_ns).write_rehearsal_record()
+        assert "Status: **GREEN**" in rehearsal_record.read_text()
+
+        paid_ns, paid_driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        assert paid_ns.gate_id != rehearsal_ns.gate_id
+        problems = paid_driver.preflight()
+        assert not any("no green rehearsal record found" in p for p in problems), (
+            "the paid run must accept the rehearsal's record despite the distinct gate-ids"
+        )
 
 
 class TestGateIdValidation:
@@ -2309,6 +2424,229 @@ class TestDriverKillIsFatalNotAWarning:
         record_text = rehearsal_path.read_text(encoding="utf-8")
         assert "Status: **RED**" in record_text
         assert "aborted by signal" in record_text
+
+
+# ---------------------------------------------------------------------------
+# The entry-time invalidation's own failure path: when neither the full
+# record nor the last-resort stub can be written, a stale GREEN may still
+# be sitting on disk authorising the paid run this process is about to
+# start. Deleting it — and confirming the deletion — is the last guard.
+# ---------------------------------------------------------------------------
+
+
+class TestEntryTimeInvalidationFailureBlocksTheRun:
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, tmp_path, monkeypatch):
+        fake_home = tmp_path / "_fake_home"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    def _rehearsal_driver(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        record_path = ns.spend_ledger.parent / "rehearsal.md"
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+        return ns, driver, record_path
+
+    def test_failed_invalidation_stops_the_run_before_any_arm(self, tmp_path, capsys):
+        """Both write attempts failing must stop the run outright — the
+        record's authorisation state is unknown at the one moment nothing
+        has spent yet, so proceeding would risk paid arms running on a
+        stale GREEN."""
+        ns, driver, record_path = self._rehearsal_driver(tmp_path)
+        driver._invalidate_rehearsal_record = lambda reason: False
+
+        def raising_run_arm(arm):
+            raise AssertionError("no arm may run once invalidation has failed")
+
+        driver.run_arm = raising_run_arm
+
+        # Make the deletion fallback fail too, so the GATE-STOP is the only
+        # way out of this branch.
+        def raising_unlink(self, missing_ok=False):
+            raise PermissionError("read-only evidence directory")
+
+        original_unlink = Path.unlink
+        Path.unlink = raising_unlink
+        try:
+            code = driver.run()
+        finally:
+            Path.unlink = original_unlink
+
+        assert code == 2
+        err = capsys.readouterr().err
+        assert "GATE-STOP: could not invalidate or delete the rehearsal record" in err
+        assert record_path.read_text(encoding="utf-8") == "Status: **GREEN**\n"
+
+    def test_failed_invalidation_falls_back_to_deleting_the_record(self, tmp_path, capsys):
+        """When the writes fail but deletion works, the stale record is
+        gone — there is nothing left to authorise a paid run — and the
+        rehearsal is allowed to continue."""
+        ns, driver, record_path = self._rehearsal_driver(tmp_path)
+        driver._invalidate_rehearsal_record = lambda reason: False
+        seen = []
+
+        def observing_run_arm(arm):
+            seen.append((arm, record_path.exists()))
+            return 0
+
+        driver.run_arm = observing_run_arm
+
+        code = driver.run()
+
+        assert seen, "deletion succeeding must let the rehearsal proceed"
+        assert all(exists is False for _, exists in seen), (
+            "the stale record must be gone before any arm runs"
+        )
+        assert "deleted (invalidation fallback)" in capsys.readouterr().out
+        assert code != 2
+
+    def test_a_record_surviving_its_own_deletion_stops_the_run(self, tmp_path, capsys):
+        """`unlink` reporting success while the file is still readable is
+        the case a bare try/except cannot see; the existence recheck is
+        what turns it into a GATE-STOP."""
+        ns, driver, record_path = self._rehearsal_driver(tmp_path)
+        driver._invalidate_rehearsal_record = lambda reason: False
+        driver.run_arm = lambda arm: (_ for _ in ()).throw(
+            AssertionError("no arm may run while the stale record survives")
+        )
+
+        original_unlink = Path.unlink
+        Path.unlink = lambda self, missing_ok=False: None
+        try:
+            code = driver.run()
+        finally:
+            Path.unlink = original_unlink
+
+        assert code == 2
+        assert "still exists after attempting to delete it" in capsys.readouterr().err
+
+    def test_an_unwritable_evidence_directory_drives_the_real_invalidation_to_false(
+        self, tmp_path, capsys,
+    ):
+        """The real `_invalidate_rehearsal_record`, not a stub: with the
+        evidence directory made read-only, both the full render and the
+        last-resort stub fail, and the function must report that rather
+        than returning True on a write that never landed."""
+        ns, driver, record_path = self._rehearsal_driver(tmp_path)
+        evidence_dir = record_path.parent
+        dir_mode = evidence_dir.stat().st_mode
+        file_mode = record_path.stat().st_mode
+        os.chmod(record_path, 0o400)
+        os.chmod(evidence_dir, 0o500)
+        try:
+            if os.access(evidence_dir, os.W_OK) or os.access(record_path, os.W_OK):
+                pytest.skip("filesystem does not enforce write permissions")
+            assert driver._invalidate_rehearsal_record("the run has not finished") is False
+
+            driver.run_arm = lambda arm: (_ for _ in ()).throw(
+                AssertionError("no arm may run once invalidation has failed")
+            )
+            code = driver.run()
+        finally:
+            os.chmod(evidence_dir, dir_mode)
+            os.chmod(record_path, file_mode)
+
+        assert code == 2
+        assert "GATE-STOP: could not invalidate or delete the rehearsal record" in (
+            capsys.readouterr().err
+        )
+        assert record_path.read_text(encoding="utf-8") == "Status: **GREEN**\n"
+
+
+# ---------------------------------------------------------------------------
+# The entry-time invalidation fires only after preflight has passed:
+# a precondition failure under --rehearsal spends nothing and produces no
+# arm artifacts, so it must not destroy a still-valid GREEN record.
+# ---------------------------------------------------------------------------
+
+
+class TestEntryTimeInvalidationRunsAfterPreflight:
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, tmp_path, monkeypatch):
+        fake_home = tmp_path / "_fake_home"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
+    def _driver_with_a_green_record(self, tmp_path, **overrides):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+        settings = {"plan_only": False, "rehearsal": True}
+        settings.update(overrides)
+        ns = TestDriverPlanOnly()._make_args(tmp_path, **settings)
+        record_path = ns.spend_ledger.parent / "rehearsal.md"
+        record_path.parent.mkdir(parents=True, exist_ok=True)
+        record_path.write_text(
+            "# Rehearsal record — g1\n\nStatus: **GREEN**\n\n" + _binding_block(ns),
+            encoding="utf-8",
+        )
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.run_arm = lambda arm: (_ for _ in ()).throw(
+            AssertionError("a failing preflight must never reach the arm loop")
+        )
+        return ns, driver, record_path
+
+    def test_a_failing_preflight_leaves_a_green_record_byte_identical(
+        self, tmp_path, monkeypatch,
+    ):
+        """A real precondition failure — no model pinned — must stop the
+        run without touching the record. Rehearsing costs ~$3; a preflight
+        that spends nothing has not earned the right to destroy one."""
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+        ns, driver, record_path = self._driver_with_a_green_record(tmp_path)
+        before = record_path.read_bytes()
+
+        problems = driver.preflight()
+        assert problems, "this test needs preflight to actually fail"
+
+        code = driver.run()
+
+        assert code == 2
+        assert record_path.read_bytes() == before
+
+    def test_a_passing_preflight_does_invalidate_the_record(self, tmp_path):
+        """The control for the test above: once preflight passes, the
+        record goes RED before anything can spend."""
+        ns, driver, record_path = self._driver_with_a_green_record(tmp_path)
+        driver.preflight = lambda: []
+        arms_run = []
+        driver.run_arm = lambda arm: arms_run.append(arm) or 0
+
+        driver.run()
+
+        assert arms_run, "a passing preflight must reach the arm loop"
+        assert "Status: **RED**" in record_path.read_text(encoding="utf-8")
+
+    def test_plan_only_rehearsal_never_touches_the_record(self, tmp_path):
+        """`--rehearsal --plan-only` invokes no arm and spends nothing, so
+        it has no evidence to record and must leave a prior GREEN alone."""
+        ns, driver, record_path = self._driver_with_a_green_record(tmp_path, plan_only=True)
+        driver.preflight = lambda: []
+        before = record_path.read_bytes()
+
+        code = driver.run()
+
+        assert code == 0
+        assert record_path.read_bytes() == before
+
+        # And directly: the invalidation itself is a no-op under
+        # --plan-only, so no future caller can route a spend-free
+        # invocation into a record write.
+        assert driver._invalidate_rehearsal_record("the run has not finished") is True
+        assert record_path.read_bytes() == before
 
 
 # ---------------------------------------------------------------------------

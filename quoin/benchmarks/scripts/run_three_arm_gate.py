@@ -113,12 +113,26 @@ class GateStop(RuntimeError):
 # foreign subprocess text, none of which are the authorisation signal.
 _STATUS_LINE_RE = re.compile(r"^Status: \*\*(GREEN|RED)\*\*$", re.M)
 
-# The paid-run preflight also requires the record to name the gate-id and
-# run-dir it was rendered for, under the same exactly-one-match discipline
-# as the status line — otherwise a GREEN record from any rehearsal, under
-# any --gate-id or --run-dir, would authorise this invocation's spend.
-_GATE_ID_LINE_RE = re.compile(r"^Gate id: (.*)$", re.M)
+# The paid-run preflight also requires the record to name the system it was
+# rendered against, under the same exactly-one-match discipline as the
+# status line — otherwise a GREEN record from any rehearsal, of any tree,
+# against any suite, would authorise this invocation's spend.
+#
+# The bound identity is deliberately NOT the --gate-id: a rehearsal and the
+# paid run it authorises are two distinct runs and must carry distinct
+# gate-ids, or their `{gate-id}-{arm}` run-ids and output directories
+# collide. What has to match is what the rehearsal actually exercised — the
+# run directory, both arm commits, and the suite's own content hash.
 _RUN_DIR_LINE_RE = re.compile(r"^Run dir: (.*)$", re.M)
+_MAIN_COMMIT_LINE_RE = re.compile(r"^Main commit: (.*)$", re.M)
+_CANDIDATE_COMMIT_LINE_RE = re.compile(r"^Candidate commit: (.*)$", re.M)
+_SUITE_SHA256_LINE_RE = re.compile(r"^Suite sha256: (.*)$", re.M)
+
+# Placeholders a record can legitimately carry when an identity component
+# could not be resolved. None of them may ever satisfy the binding check —
+# two unresolved components comparing equal would authorise a paid run on
+# the strength of a value that means "unknown".
+_UNBINDABLE_IDENTITY_VALUES = frozenset({"", "None", "unavailable"})
 
 # A --gate-id is echoed verbatim into the rehearsal record (its H1 line and
 # the last-resort stub's own gate-id line) — restricting it at parse time
@@ -141,23 +155,37 @@ def _rehearsal_record_authorises(text: str) -> bool:
     return len(matches) == 1 and matches[0] == "GREEN"
 
 
-def _rehearsal_record_binds_to(text: str, *, gate_id: str, run_dir: str) -> bool:
-    """True only if `text` renders exactly one Gate id line and exactly
-    one Run dir line, and both match this invocation's own values.
+def _rehearsal_record_binds_to(
+    text: str,
+    *,
+    run_dir: str,
+    main_commit: str,
+    candidate_commit: str,
+    suite_sha256: str,
+) -> bool:
+    """True only if `text` renders exactly one line for each component of
+    the run identity — run dir, main commit, candidate commit, suite
+    sha256 — and every one matches this invocation's own value.
 
     `_rehearsal_record_authorises` anchors on WHAT the record says
     (a single, unambiguous GREEN status line) but says nothing about
-    WHOSE run it describes — a GREEN record from a rehearsal under a
-    different --gate-id, or against a different --run-dir, reads
+    WHICH system it describes — a GREEN record from a rehearsal of a
+    different candidate tree, or against a different suite, reads
     identically otherwise and would still authorise this invocation's
     paid spend. Same exactly-one-match discipline as the status line: no
-    match, more than one match, or a mismatched value fails closed."""
-    gate_id_matches = _GATE_ID_LINE_RE.findall(text)
-    if len(gate_id_matches) != 1 or gate_id_matches[0] != gate_id:
-        return False
-    run_dir_matches = _RUN_DIR_LINE_RE.findall(text)
-    if len(run_dir_matches) != 1 or run_dir_matches[0] != run_dir:
-        return False
+    match, more than one match, a mismatched value, or a value that
+    stands in for "unknown" all fail closed."""
+    for pattern, expected in (
+        (_RUN_DIR_LINE_RE, run_dir),
+        (_MAIN_COMMIT_LINE_RE, main_commit),
+        (_CANDIDATE_COMMIT_LINE_RE, candidate_commit),
+        (_SUITE_SHA256_LINE_RE, suite_sha256),
+    ):
+        if expected in _UNBINDABLE_IDENTITY_VALUES:
+            return False
+        matches = pattern.findall(text)
+        if len(matches) != 1 or matches[0] != expected:
+            return False
     return True
 
 
@@ -1038,18 +1066,18 @@ class ThreeArmGateDriver:
                     )
 
         if not self.args.rehearsal and not self.args.plan_only:
-            rehearsal_record = self.args.spend_ledger.parent / "rehearsal.md"
+            rehearsal_record = self._rehearsal_record_path()
             record_authorises = False
             if rehearsal_record.exists():
                 record_text = rehearsal_record.read_text(encoding="utf-8")
                 record_authorises = _rehearsal_record_authorises(
                     record_text
                 ) and _rehearsal_record_binds_to(
-                    record_text, gate_id=self.args.gate_id, run_dir=str(self.args.run_dir)
+                    record_text, **self._rehearsal_binding_identity()
                 )
             if not record_authorises:
                 problems.append(
-                    "GATE-STOP: no green rehearsal record found for this gate-id/run-dir — "
+                    "GATE-STOP: no green rehearsal record found for this run-dir/commits/suite — "
                     "run --rehearsal first"
                 )
 
@@ -1398,6 +1426,34 @@ class ThreeArmGateDriver:
         except Exception:
             return DEFAULT_GATE_TASK_ID
 
+    def _rehearsal_record_path(self) -> Path:
+        """The one authorisation record for this ledger's evidence
+        directory. Its writer, its reader and the delete-fallback all
+        address it through here so a future relocation cannot move some
+        call sites and silently leave others pointing at the old path."""
+        return self.args.spend_ledger.parent / "rehearsal.md"
+
+    def _suite_sha256_or_unavailable(self) -> str:
+        """The suite file's content hash, or the literal "unavailable" when
+        it cannot be read. "unavailable" is rejected by the binding check,
+        so a record rendered without a readable suite can never authorise a
+        later paid run."""
+        try:
+            return suite_sha256(self.args.suite)
+        except OSError:
+            return "unavailable"
+
+    def _rehearsal_binding_identity(self) -> dict:
+        """The identity a rehearsal record must name to authorise this
+        invocation: the run directory it wrote into, the two arm commits it
+        measured, and the suite it measured them against."""
+        return {
+            "run_dir": str(self.args.run_dir),
+            "main_commit": str(self.expected_worktree_commits.get("main")),
+            "candidate_commit": str(self.expected_worktree_commits.get("candidate")),
+            "suite_sha256": self._suite_sha256_or_unavailable(),
+        }
+
     def _read_json_artifact(self, path: Path, label: str, problems: list[str]) -> Optional[dict]:
         """Read one per-arm JSON artifact, degrading a malformed or
         truncated file to a recorded problem instead of an exception.
@@ -1497,11 +1553,15 @@ class ThreeArmGateDriver:
             problems.append("main and candidate recorded the SAME installed_quoin_commit")
 
         status = "GREEN" if not problems else "RED"
+        identity = self._rehearsal_binding_identity()
         lines.insert(
             1,
             f"\nStatus: **{status}**\n"
             f"\nGate id: {self.args.gate_id}\n"
-            f"Run dir: {self.args.run_dir}\n",
+            f"Run dir: {identity['run_dir']}\n"
+            f"Main commit: {identity['main_commit']}\n"
+            f"Candidate commit: {identity['candidate_commit']}\n"
+            f"Suite sha256: {identity['suite_sha256']}\n",
         )
         if problems:
             lines.append("\n## Problems")
@@ -1520,7 +1580,7 @@ class ThreeArmGateDriver:
                 f"guard for: {', '.join(bypassed_paths)}"
             )
 
-        record_path = self.args.spend_ledger.parent / "rehearsal.md"
+        record_path = self._rehearsal_record_path()
         record_path.parent.mkdir(parents=True, exist_ok=True)
         record_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return record_path
@@ -1556,7 +1616,7 @@ class ThreeArmGateDriver:
         except BaseException as exc:
             print(f"WARN: could not render the rehearsal record: {exc}", file=sys.stderr)
         try:
-            record_path = self.args.spend_ledger.parent / "rehearsal.md"
+            record_path = self._rehearsal_record_path()
             record_path.parent.mkdir(parents=True, exist_ok=True)
             record_path.write_text(
                 f"# Rehearsal record — {self.args.gate_id}\n"
@@ -1627,7 +1687,7 @@ class ThreeArmGateDriver:
                     # this process is about to start. Fall back to deleting
                     # the record outright and confirm the deletion actually
                     # landed before proceeding at all.
-                    record_path = self.args.spend_ledger.parent / "rehearsal.md"
+                    record_path = self._rehearsal_record_path()
                     try:
                         record_path.unlink(missing_ok=True)
                     except OSError as exc:
