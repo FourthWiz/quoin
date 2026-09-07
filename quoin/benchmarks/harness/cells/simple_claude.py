@@ -569,6 +569,22 @@ def invoke(
                     if timed_out:
                         break
 
+                # A final line with no trailing newline is never flushed
+                # through `_split_ready_lines` — at EOF it sits in
+                # `read_buffer` as the "remainder" the split machinery
+                # hands back for the NEXT chunk, and there is no next
+                # chunk. That silently dropped the terminal `result`
+                # event, and with it the arm's cost, whenever the child's
+                # last write wasn't newline-terminated. This must run
+                # unconditionally, before branching on `timed_out` — a
+                # session that hits the wall clock mid-stream still has a
+                # buffered terminal event worth recovering, and an earlier
+                # fix that only flushed on the clean-exit path left the
+                # timeout branch dropping it exactly as before.
+                if read_buffer.strip():
+                    _handle_stream_line(read_buffer)
+                    read_buffer = ""
+
                 if timed_out:
                     proc.terminate()
                     try:
@@ -577,17 +593,6 @@ def invoke(
                         proc.kill()
                     result["verdict"] = "timeout"
                 else:
-                    # A final line with no trailing newline is never
-                    # flushed through `_split_ready_lines` — at EOF it sits
-                    # in `read_buffer` as the "remainder" the split
-                    # machinery hands back for the NEXT chunk, and there is
-                    # no next chunk. That silently dropped the terminal
-                    # `result` event, and with it the arm's cost, whenever
-                    # the child's last write wasn't newline-terminated
-                    # (round-3 MAJOR regression).
-                    if read_buffer.strip():
-                        _handle_stream_line(read_buffer)
-                        read_buffer = ""
                     proc.wait(timeout=10)
             finally:
                 # Guaranteed regardless of how the block above exits — a

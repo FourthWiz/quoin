@@ -1435,7 +1435,44 @@ class TestDefaultRunArmAbortSafety:
         )
         code = default_run_arm(["prog", "--wall-clock-seconds", "600"], {})
         assert code == 0
-        assert captured["timeout"] == 720.0  # 600 + 120s margin
+        # 2x budget (the cell's own documented worst case, given its
+        # backoff-time exemption is itself capped at one budget's worth)
+        # plus the 120s teardown margin — round-5 fix, MAJOR 2. Pre-fix
+        # this was budget + 120s (720.0), which fires BEFORE a cell that
+        # legitimately used its full two-budget allowance could ever
+        # terminate itself cleanly.
+        assert captured["timeout"] == 1320.0
+
+    def test_driver_timeout_always_covers_the_cells_own_worst_case(self, monkeypatch):
+        """Regression (round-5 fix, MAJOR 2): the cell's own backoff
+        exemption (`min(backoff_total, budget_seconds)` in both
+        simple_claude.py and quoin_claude.py) lets a session run up to
+        TWICE its configured `--wall-clock-seconds` before it self-
+        terminates. The driver's SIGKILL backstop must never fire before
+        that self-termination has a chance to — i.e. its timeout must
+        stay >= 2x budget for every budget this CLI accepts, not just the
+        one value spot-checked above."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import default_run_arm
+
+        for budget in (1, 3, 30, 600, 5400):
+            captured = {}
+
+            class FakeProc:
+                pid = 1
+
+                def wait(self, timeout=None):
+                    captured["timeout"] = timeout
+                    return 0
+
+            monkeypatch.setattr(
+                "quoin.benchmarks.scripts.run_three_arm_gate.subprocess.Popen",
+                lambda argv, env, start_new_session: FakeProc(),
+            )
+            default_run_arm(["prog", "--wall-clock-seconds", str(budget)], {})
+            assert captured["timeout"] >= 2.0 * budget, (
+                f"budget={budget}: driver timeout {captured['timeout']} is tighter "
+                f"than the cell's own two-budget worst case"
+            )
 
     def test_wait_timeout_kills_process_group_and_returns_124(self, monkeypatch):
         from quoin.benchmarks.scripts.run_three_arm_gate import default_run_arm
@@ -1493,6 +1530,169 @@ class TestDefaultRunArmAbortSafety:
         _kill_process_group(proc.pid)
         proc.wait(timeout=5)
         assert proc.returncode is not None and proc.returncode != 0
+
+
+# ---------------------------------------------------------------------------
+# A driver-level SIGKILL (exit 124) is fatal, not a warning: it means a
+# fully paid arm produced no measurement, and spending the next arm on
+# top of that loss compounds it rather than containing it.
+# ---------------------------------------------------------------------------
+
+
+class TestDriverKillIsFatalNotAWarning:
+    def test_returncode_124_stops_the_run_and_skips_remaining_arms(self, tmp_path):
+        """Regression (round-5 fix, MAJOR 2). Pre-fix, `run()` only ever
+        printed `WARN: arm {arm} exited {returncode}` and kept spending
+        the remaining arms — including 124, which uniquely means the
+        driver itself killed the arm before it could write summary.json,
+        so the settlement below already booked it at cap with nothing to
+        compare. This must stop the run the same way any other GATE-STOP
+        does, not fall through as an ordinary warning."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        called_arms: list[str] = []
+
+        def fake_run_arm(argv, env):
+            run_id = argv[argv.index("--run-id") + 1]
+            arm = run_id.rsplit("-", 1)[-1]
+            called_arms.append(arm)
+            return 124
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=fake_run_arm)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+
+        assert code == 2  # the GateStop exit path, same as any other GATE-STOP
+        assert called_arms == ["raw"]  # main and candidate never spawned
+
+    def test_returncode_124_still_tears_down_cleanly(self, tmp_path):
+        """The GATE-STOP must not skip teardown — the same `finally` that
+        runs it for every other GateStop still applies here."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 124)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        driver.run()
+        assert driver._torn_down is True
+
+    def test_a_non_124_nonzero_exit_still_only_warns(self, tmp_path):
+        """Only 124 (the driver's own SIGKILL) is fatal — an arm's own
+        ordinary non-zero exit keeps the pre-existing warn-and-continue
+        behaviour, unchanged."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        called_arms: list[str] = []
+
+        def fake_run_arm(argv, env):
+            run_id = argv[argv.index("--run-id") + 1]
+            arm = run_id.rsplit("-", 1)[-1]
+            called_arms.append(arm)
+            return 1
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=fake_run_arm)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+        assert code == 0
+        assert called_arms == ["raw", "main", "candidate"]
+
+
+# ---------------------------------------------------------------------------
+# A non-finite cost read back from summary.json is sanitised to None,
+# not left to blow up spend_ledger.append with an unhandled ValueError
+# ---------------------------------------------------------------------------
+
+
+class TestNonFiniteCostSanitisedBeforeSettlement:
+    def test_read_arm_actual_cost_returns_none_for_nan(self, tmp_path):
+        """Regression (round-5 fix, MINOR 1). `spend_ledger.append`
+        already refuses a non-finite `actual_usd` by raising a bare
+        `ValueError` — correct on its own, but `run()`'s handler only
+        catches `GateStop`, so a poisoned summary.json used to crash the
+        driver as an unhandled traceback with the remaining arms unrun.
+        `_read_arm_actual_cost` now degrades a non-finite value to `None`
+        — the same "cost unknown" path an altogether-missing summary.json
+        already takes, which the settlement books at cap instead of
+        raising."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+
+        run_dir = tmp_path / "runs" / "g1-raw"
+        run_dir.mkdir(parents=True)
+        (run_dir / "summary.json").write_text(json.dumps(
+            {"cells": {"simple-claude": {"total_cost_usd_or_null": float("nan")}}}
+        ))
+        driver.args.run_dir = tmp_path / "runs"
+
+        assert driver._read_arm_actual_cost("g1-raw", "simple-claude") is None
+
+    def test_read_arm_actual_cost_returns_none_for_infinity(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+
+        run_dir = tmp_path / "runs" / "g1-raw"
+        run_dir.mkdir(parents=True)
+        (run_dir / "summary.json").write_text(json.dumps(
+            {"cells": {"simple-claude": {"total_cost_usd_or_null": float("inf")}}}
+        ))
+        driver.args.run_dir = tmp_path / "runs"
+
+        assert driver._read_arm_actual_cost("g1-raw", "simple-claude") is None
+
+    def test_a_poisoned_summary_json_does_not_crash_run_arm(self, tmp_path):
+        """End-to-end: `run_arm` must not raise when the arm it just ran
+        wrote a non-finite cost — it settles at `actual_usd=None` (cap)
+        instead of propagating spend_ledger.append's ValueError."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        def fake_run_arm(argv, env):
+            run_id = argv[argv.index("--run-id") + 1]
+            run_dir = tmp_path / "runs" / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            (run_dir / "summary.json").write_text(json.dumps(
+                {"cells": {"simple-claude": {"total_cost_usd_or_null": float("nan")}}}
+            ))
+            return 0
+
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path, plan_only=False, run_dir=tmp_path / "runs",
+        )
+        driver = ThreeArmGateDriver(ns, run_arm_fn=fake_run_arm)
+        driver.arm_roots = {}
+
+        returncode = driver.run_arm("raw")  # must not raise
+
+        assert returncode == 0
+        assert recorded_total(driver.args.spend_ledger) == driver.caps["raw"]  # booked at cap
 
 
 # ---------------------------------------------------------------------------
@@ -2271,14 +2471,17 @@ class TestStrandedNestedLedgerAndRunDirResolution:
         )
 
         nested = _repo_root / ".workflow_artifacts" / "some-task" / "spend-ledger.jsonl"
-        problem = _stranded_nested_ledger_problem(nested)
+        problem, bypassed = _stranded_nested_ledger_problem(nested)
         assert problem is not None
         assert "IVG-119" in problem
+        assert bypassed is False
 
     def test_ledger_outside_the_quoin_repo_is_fine(self, tmp_path):
         from quoin.benchmarks.scripts.run_three_arm_gate import _stranded_nested_ledger_problem
 
-        assert _stranded_nested_ledger_problem(tmp_path / "ledger.jsonl") is None
+        problem, bypassed = _stranded_nested_ledger_problem(tmp_path / "ledger.jsonl")
+        assert problem is None
+        assert bypassed is False
 
     def test_run_dir_inside_the_quoin_repo_is_also_a_gate_stop(self, tmp_path):
         """Regression (round-4 fix: MAJOR 11). --run-dir is a spend-relevant
@@ -2291,9 +2494,10 @@ class TestStrandedNestedLedgerAndRunDirResolution:
         )
 
         nested_run_dir = _repo_root / ".workflow_artifacts" / "quoin-benchmarks" / "runs"
-        problem = _stranded_nested_ledger_problem(nested_run_dir)
+        problem, bypassed = _stranded_nested_ledger_problem(nested_run_dir)
         assert problem is not None
         assert "IVG-119" in problem
+        assert bypassed is False
 
     def test_full_preflight_rejects_a_stranded_run_dir(self, tmp_path, monkeypatch):
         """End-to-end proof that preflight() itself, not just the bare
@@ -2322,7 +2526,43 @@ class TestStrandedNestedLedgerAndRunDirResolution:
 
         nested = _repo_root / ".workflow_artifacts" / "some-task" / "spend-ledger.jsonl"
         monkeypatch.setenv("QUOIN_ALLOW_NESTED_LEDGER", "1")
-        assert _stranded_nested_ledger_problem(nested) is None
+        problem, bypassed = _stranded_nested_ledger_problem(nested)
+        assert problem is None
+        assert bypassed is True
+
+    def test_escape_hatch_use_is_recorded_in_provenance_and_help_text(self, tmp_path, monkeypatch):
+        """Regression (round-5 fix, MINOR 5): the escape hatch used to
+        return silently with no trace anywhere an operator or a post-hoc
+        audit would see it. Now preflight() records the bypass in
+        `pre_provenance` (per path argument) and the env var is named in
+        both the GATE-STOP message and the --spend-ledger/--run-dir
+        --help text."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            ThreeArmGateDriver, main, _repo_root,
+        )
+
+        monkeypatch.setenv("QUOIN_ALLOW_NESTED_LEDGER", "1")
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path,
+            spend_ledger=_repo_root / ".workflow_artifacts" / "some-task" / "spend-ledger.jsonl",
+            run_dir=_repo_root / ".workflow_artifacts" / "some-task" / "runs",
+        )
+        driver = ThreeArmGateDriver(ns)
+        driver.preflight()
+        assert driver.pre_provenance.get("nested_root_guard_bypassed_spend_ledger") is True
+        assert driver.pre_provenance.get("nested_root_guard_bypassed_run_dir") is True
+
+        # main() builds its parser inline, so exercise it directly via -h
+        # (which argparse serves by printing help and raising SystemExit)
+        # rather than reconstructing an equivalent parser by hand.
+        import io
+        import contextlib
+
+        buf = io.StringIO()
+        with contextlib.suppress(SystemExit), contextlib.redirect_stdout(buf):
+            main(["-h"])
+        help_text = buf.getvalue()
+        assert "QUOIN_ALLOW_NESTED_LEDGER" in help_text
 
     def test_run_dir_is_resolved_to_an_absolute_path_at_parse_time(self, tmp_path, monkeypatch):
         from quoin.benchmarks.scripts.run_three_arm_gate import main

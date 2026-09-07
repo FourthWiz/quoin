@@ -1833,6 +1833,96 @@ class TestEofRemainderFlushed:
         assert result["tokens_in"] == 10
 
 
+class TestEofRemainderFlushedOnTimeout:
+    """Regression: the trailing-line flush that closes the lost-cost gap
+    above was added only to the clean-exit branch of `if timed_out: ...
+    else: ...` — a session that hits its own wall-clock budget mid-stream
+    still had an unflushed terminal `result` event sitting in
+    `read_buffer`, and the timeout branch threw it away exactly as the
+    unfixed code did. The flush must run once, unconditionally, before
+    branching on `timed_out`. This is the discriminating case the shipped
+    end-of-stream test could not catch (it uses a 10s budget the child
+    never exceeds); this one uses a budget the child deliberately outlives."""
+
+    def test_simple_claude_timed_out_run_still_recovers_the_trailing_result_event(
+        self, tmp_path, monkeypatch,
+    ):
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "no_trailing_newline_then_hang.py"
+        script.write_text(
+            "import sys, json, time\n"
+            "sys.stdout.write(json.dumps({'type': 'assistant'}) + '\\n')\n"
+            "sys.stdout.write(json.dumps({'type': 'result', 'total_cost_usd': 0.42, "
+            "'usage': {'input_tokens': 10}}))\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n"  # lingers well past the 2s budget below
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=2), run_id="r1",
+        )
+        assert result["verdict"] == "timeout"
+        assert result["cost_available"] is True
+        assert result["cost_runtime_usd"] == 0.42
+        assert result["tokens_in"] == 10
+
+    def test_quoin_claude_timed_out_run_still_recovers_the_trailing_result_event(
+        self, tmp_path, monkeypatch, arm_git_repo,
+    ):
+        root, sha = arm_git_repo
+        from quoin.benchmarks.harness.cells import quoin_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "no_trailing_newline_then_hang.py"
+        script.write_text(
+            "import sys, json, time\n"
+            "sys.stdout.write(json.dumps({'type': 'assistant'}) + '\\n')\n"
+            "sys.stdout.write(json.dumps({'type': 'result', 'total_cost_usd': 0.42, "
+            "'usage': {'input_tokens': 10}}))\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n"
+        )
+
+        real_popen = quoin_claude.subprocess.Popen
+
+        def on_spawn(cmd):
+            return real_popen(
+                [quoin_claude.sys.executable, str(script)],
+                cwd=str(tmp_path), stdout=quoin_claude.subprocess.PIPE,
+                stderr=quoin_claude.subprocess.PIPE, text=True,
+            )
+
+        _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=on_spawn)
+        result = quoin_claude.invoke(
+            task_spec={"id": "t1", "description": "x"},
+            workdir=tmp_path / "work-timeout-flush",
+            budget=BudgetSpec(wall_clock_seconds=2),
+            run_id="r1",
+            quoin_install_script=root / "quoin" / "install.sh",
+            quoin_install_mode="skip",
+            arm_root=root,
+            expected_quoin_commit=sha,
+        )
+        assert result["verdict"] == "timeout"
+        assert result["cost_available"] is True
+        assert result["cost_runtime_usd"] == 0.42
+        assert result["tokens_in"] == 10
+
+
 # ---------------------------------------------------------------------------
 # The paid subprocess is killed on any exception path through
 # the streaming loop, not just the happy path

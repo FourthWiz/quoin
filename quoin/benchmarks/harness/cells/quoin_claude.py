@@ -572,6 +572,18 @@ def invoke(
                     if timed_out:
                         break
 
+                # Flush a final unterminated line — see
+                # simple_claude.invoke: at EOF it would otherwise sit
+                # forever in `read_buffer`, silently dropping the terminal
+                # `result` event and the arm's cost. Unconditional, before
+                # branching on `timed_out` — a timed-out session still has
+                # a buffered terminal event worth recovering, and an
+                # earlier fix that only flushed on the clean-exit path
+                # left the timeout branch dropping it exactly as before.
+                if read_buffer.strip():
+                    _handle_stream_line(read_buffer)
+                    read_buffer = ""
+
                 if timed_out:
                     proc.terminate()
                     try:
@@ -580,13 +592,6 @@ def invoke(
                         proc.kill()
                     result["verdict"] = "timeout"
                 else:
-                    # Flush a final unterminated line — see
-                    # simple_claude.invoke: at EOF it would otherwise sit
-                    # forever in `read_buffer`, silently dropping the
-                    # terminal `result` event and the arm's cost.
-                    if read_buffer.strip():
-                        _handle_stream_line(read_buffer)
-                        read_buffer = ""
                     proc.wait(timeout=10)
             finally:
                 # Guaranteed regardless of how the block above exits — see

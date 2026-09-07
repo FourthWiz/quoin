@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import re
 import shutil
@@ -43,7 +44,7 @@ import uuid
 import datetime
 import hashlib
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 # Path bootstrap, mirroring run_benchmark.py.
 _repo_root = Path(__file__).resolve().parent.parent.parent.parent
@@ -486,27 +487,41 @@ def _kill_process_group(pid: int) -> None:
         pass
 
 
+# The cells (simple_claude.py, quoin_claude.py) exclude rate-limit backoff
+# time from their own wall-clock check, but only up to one budget's worth —
+# so a cell's self-imposed bound is at most twice its configured
+# `--wall-clock-seconds`, not once. This driver-level backstop must cover
+# that full worst case (plus a margin for teardown work on top of the cell's
+# own post-loop processing) or it fires BEFORE the cell has a chance to
+# terminate itself cleanly, discarding a measurement that was already paid
+# for. Keep this multiplier in step with the cells' own backoff cap.
+_CELL_MAX_BUDGET_MULTIPLE = 2.0
+_DRIVER_TIMEOUT_MARGIN_SECONDS = 120.0
+
+
 def default_run_arm(argv: list[str], env: dict) -> int:
     """Shell run_benchmark.py as a subprocess (round-5 fix, MIN-7 — never
     an in-process call, which would silently ignore `env`).
 
     Spawned in its own process group (`start_new_session=True`) with a
     timeout derived from the arm's own `--wall-clock-seconds` argument
-    (read back out of `argv`, plus margin for the harness's own teardown
-    work) — a driver-level backstop, independent of the cell's own
-    wall-clock check, that guarantees this call cannot block the driver
-    forever. On either the timeout or any other exception unwinding
-    through this call (a trapped SIGINT/SIGTERM raised as
-    KeyboardInterrupt, in particular), the whole process group is killed
-    before the exception (or the timeout's own return) reaches the
-    caller — so a driver abort cannot leave the paid `claude` grandchild
-    running while teardown starts rewriting ~/.claude underneath it.
+    (read back out of `argv`, scaled up to the cell's own documented worst
+    case, plus margin for the harness's own teardown work) — a
+    driver-level backstop, independent of the cell's own wall-clock check,
+    that guarantees this call cannot block the driver forever without
+    firing before the cell's own bound has a chance to. On either the
+    timeout or any other exception unwinding through this call (a trapped
+    SIGINT/SIGTERM raised as KeyboardInterrupt, in particular), the whole
+    process group is killed before the exception (or the timeout's own
+    return) reaches the caller — so a driver abort cannot leave the paid
+    `claude` grandchild running while teardown starts rewriting ~/.claude
+    underneath it.
     """
     timeout: Optional[float] = None
     if "--wall-clock-seconds" in argv:
         try:
             raw = argv[argv.index("--wall-clock-seconds") + 1]
-            timeout = float(raw) + 120.0
+            timeout = (float(raw) * _CELL_MAX_BUDGET_MULTIPLE) + _DRIVER_TIMEOUT_MARGIN_SECONDS
         except (ValueError, IndexError):
             timeout = None
 
@@ -534,11 +549,12 @@ def _resolved_path(raw: str) -> Path:
     return Path(raw).resolve()
 
 
-def _stranded_nested_ledger_problem(ledger_path: Path) -> Optional[str]:
-    """GATE-STOP text iff `ledger_path` resolves to somewhere INSIDE the
-    quoin git checkout itself (`_repo_root`) — the IVG-119 single-root-
-    invariant violation that split a real $0.35 of spend off the canonical
-    ledger during this stage's own first attempt (a `cd quoin` plus a
+def _stranded_nested_ledger_problem(ledger_path: Path) -> Tuple[Optional[str], bool]:
+    """Returns `(gate_stop_text, escape_hatch_used)`. `gate_stop_text` is
+    non-`None` iff `ledger_path` resolves to somewhere INSIDE the quoin
+    git checkout itself (`_repo_root`) — the IVG-119 single-root-invariant
+    violation that split a real $0.35 of spend off the canonical ledger
+    during this stage's own first attempt (a `cd quoin` plus a
     cwd-relative `--spend-ledger` silently resolved into a stray nested
     `quoin/.workflow_artifacts/` tree instead of the canonical
     project-root one). The canonical root lives one level up, at
@@ -552,21 +568,26 @@ def _stranded_nested_ledger_problem(ledger_path: Path) -> Optional[str]:
     unconditionally refused with no escape hatch.
     `QUOIN_ALLOW_NESTED_LEDGER=1` opts out for exactly that case; it does
     not relax the ledger's own spend-ceiling checks, only this
-    path-shape assumption."""
+    path-shape assumption. `escape_hatch_used` tells the caller when that
+    happened, so it can be surfaced somewhere an operator (or a later
+    audit) will actually see it, rather than the guard just going quiet
+    (round-5 fix: this escape hatch used to leave no trace at all)."""
     if os.environ.get("QUOIN_ALLOW_NESTED_LEDGER") == "1":
-        return None
+        return None, True
     resolved = ledger_path.resolve()
     try:
         resolved.relative_to(_repo_root.resolve())
     except ValueError:
-        return None
+        return None, False
     return (
         f"GATE-STOP: --spend-ledger {ledger_path} resolves inside the quoin git "
         f"checkout ({_repo_root}) rather than the canonical project "
         f".workflow_artifacts root one level up ({_repo_root.parent}) — this is "
         "the IVG-119 stranded-nested-root pattern; fix the path (or the cwd this "
-        "command runs from) before proceeding"
-    )
+        "command runs from) before proceeding, or set QUOIN_ALLOW_NESTED_LEDGER=1 "
+        "if this workspace's project root genuinely IS the quoin git checkout "
+        "(see --help)"
+    ), False
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -594,7 +615,16 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--max-budget-usd-raw", type=spend_ledger.positive_finite_float, required=True)
     parser.add_argument("--max-budget-usd-main", type=spend_ledger.positive_finite_float, required=True)
     parser.add_argument("--max-budget-usd-candidate", type=spend_ledger.positive_finite_float, required=True)
-    parser.add_argument("--spend-ledger", type=_resolved_path, required=True)
+    parser.add_argument(
+        "--spend-ledger", type=_resolved_path, required=True,
+        help="Resolved at parse time. Refused (GATE-STOP) if it resolves "
+             "inside the quoin git checkout itself, the IVG-119 stranded-"
+             "nested-root pattern — set QUOIN_ALLOW_NESTED_LEDGER=1 to "
+             "bypass this guard on both --spend-ledger and --run-dir when "
+             "the project root genuinely IS the quoin git checkout (e.g. a "
+             "standalone clone). The bypass is recorded in preflight's "
+             "provenance, not silent.",
+    )
     parser.add_argument(
         "--new-spend-ledger", action="store_true",
         help="Acknowledge that --spend-ledger does not exist yet and a "
@@ -625,7 +655,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         help="Resolved at parse time, like --spend-ledger — this is a "
              "spend-relevant lookup key via _read_arm_actual_cost, so a "
              "cwd-relative path must not silently drift across the "
-             "process boundary.",
+             "process boundary. Subject to the same stranded-nested-root "
+             "GATE-STOP and QUOIN_ALLOW_NESTED_LEDGER=1 escape hatch "
+             "described under --spend-ledger.",
     )
     parser.add_argument("--rehearsal", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
@@ -706,7 +738,13 @@ class ThreeArmGateDriver:
             )
             return problems
 
-        nested_problem = _stranded_nested_ledger_problem(self.args.spend_ledger)
+        nested_problem, nested_bypassed = _stranded_nested_ledger_problem(self.args.spend_ledger)
+        if nested_bypassed:
+            self.pre_provenance["nested_root_guard_bypassed_spend_ledger"] = True
+            print(
+                "WARN: QUOIN_ALLOW_NESTED_LEDGER=1 is set — the stranded-nested-root "
+                "guard on --spend-ledger is bypassed", file=sys.stderr,
+            )
         if nested_problem:
             problems.append(nested_problem)
             return problems
@@ -717,7 +755,13 @@ class ThreeArmGateDriver:
         # ledger is self-consistent within a single run (no mis-costing)
         # but writes real, paid evidence somewhere nothing downstream will
         # ever look for it again.
-        nested_run_dir_problem = _stranded_nested_ledger_problem(self.args.run_dir)
+        nested_run_dir_problem, nested_run_dir_bypassed = _stranded_nested_ledger_problem(self.args.run_dir)
+        if nested_run_dir_bypassed:
+            self.pre_provenance["nested_root_guard_bypassed_run_dir"] = True
+            print(
+                "WARN: QUOIN_ALLOW_NESTED_LEDGER=1 is set — the stranded-nested-root "
+                "guard on --run-dir is bypassed", file=sys.stderr,
+            )
         if nested_run_dir_problem:
             problems.append(nested_run_dir_problem.replace("--spend-ledger", "--run-dir"))
             return problems
@@ -1125,9 +1169,24 @@ class ThreeArmGateDriver:
             return None
         try:
             summary = json.loads(summary_path.read_text(encoding="utf-8"))
-            return (summary.get("cells") or {}).get(cell, {}).get("total_cost_usd_or_null")
+            cost = (summary.get("cells") or {}).get(cell, {}).get("total_cost_usd_or_null")
         except Exception:
             return None
+        # A `nan`/`inf` value here would otherwise reach
+        # `spend_ledger.append`'s own write-side validation and raise a
+        # bare `ValueError` that `run()`'s handler does not catch as a
+        # `GateStop`, crashing the driver as a traceback with the
+        # remaining arms unrun. Sanitising here instead degrades this arm
+        # to the same "cost unknown" path a missing summary.json already
+        # takes — the settlement books it at cap and the run continues
+        # (or stops cleanly via an explicit GATE-STOP raised elsewhere),
+        # rather than dying on an unhandled exception mid-loop.
+        try:
+            if cost is not None and not math.isfinite(float(cost)):
+                return None
+        except (TypeError, ValueError):
+            return None
+        return cost
 
     def _read_arm_metrics(self, run_id: str, cell: str) -> dict:
         """Read this arm's single task's metrics.json (the gate's suite is
@@ -1290,6 +1349,17 @@ class ThreeArmGateDriver:
             for p in problems:
                 lines.append(f"- {p}")
         lines.append(f"\nRaw arm isolation: {'isolated' if self.raw_isolated else 'fallback (unisolated)'} — {raw_arm_note(self.raw_isolated)}")
+        bypassed_paths = [
+            name for name, key in (
+                ("--spend-ledger", "nested_root_guard_bypassed_spend_ledger"),
+                ("--run-dir", "nested_root_guard_bypassed_run_dir"),
+            ) if self.pre_provenance.get(key)
+        ]
+        if bypassed_paths:
+            lines.append(
+                "\nQUOIN_ALLOW_NESTED_LEDGER=1 bypassed the stranded-nested-root "
+                f"guard for: {', '.join(bypassed_paths)}"
+            )
 
         record_path = self.args.spend_ledger.parent / "rehearsal.md"
         record_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1338,6 +1408,21 @@ class ThreeArmGateDriver:
             try:
                 for arm in ARMS:
                     returncode = self.run_arm(arm)
+                    if returncode == 124:
+                        # The arm was already fully paid for (the
+                        # settlement row is appended inside run_arm before
+                        # this return), but the driver-level timeout fired
+                        # before the cell could finish and produce a
+                        # measurement — summary.json was never written, so
+                        # the settlement books it at cap with nothing to
+                        # compare. Spending the next arm on top of a lost
+                        # measurement compounds the loss rather than
+                        # containing it, so this stops the run the same
+                        # way any other GATE-STOP does.
+                        raise GateStop(
+                            f"GATE-STOP: arm {arm} was killed by the driver's wall-clock "
+                            f"timeout (exit 124) before it produced a measurement"
+                        )
                     if returncode != 0:
                         print(f"WARN: arm {arm} exited {returncode}", file=sys.stderr)
             finally:
