@@ -113,10 +113,17 @@ class GateStop(RuntimeError):
 # foreign subprocess text, none of which are the authorisation signal.
 _STATUS_LINE_RE = re.compile(r"^Status: \*\*(GREEN|RED)\*\*$", re.M)
 
+# The paid-run preflight also requires the record to name the gate-id and
+# run-dir it was rendered for, under the same exactly-one-match discipline
+# as the status line — otherwise a GREEN record from any rehearsal, under
+# any --gate-id or --run-dir, would authorise this invocation's spend.
+_GATE_ID_LINE_RE = re.compile(r"^Gate id: (.*)$", re.M)
+_RUN_DIR_LINE_RE = re.compile(r"^Run dir: (.*)$", re.M)
+
 # A --gate-id is echoed verbatim into the rehearsal record (its H1 line and
 # the last-resort stub's own gate-id line) — restricting it at parse time
 # closes the channel before any writer ever sees an unsafe value.
-_GATE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_GATE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 # `stopped_reason` can carry up to ~2000 bytes of a candidate build's own
 # installer/stderr output (see the GateStop messages `run_arm` raises) —
@@ -132,6 +139,26 @@ def _rehearsal_record_authorises(text: str) -> bool:
     trusts, so ambiguity must never resolve to "authorised"."""
     matches = _STATUS_LINE_RE.findall(text)
     return len(matches) == 1 and matches[0] == "GREEN"
+
+
+def _rehearsal_record_binds_to(text: str, *, gate_id: str, run_dir: str) -> bool:
+    """True only if `text` renders exactly one Gate id line and exactly
+    one Run dir line, and both match this invocation's own values.
+
+    `_rehearsal_record_authorises` anchors on WHAT the record says
+    (a single, unambiguous GREEN status line) but says nothing about
+    WHOSE run it describes — a GREEN record from a rehearsal under a
+    different --gate-id, or against a different --run-dir, reads
+    identically otherwise and would still authorise this invocation's
+    paid spend. Same exactly-one-match discipline as the status line: no
+    match, more than one match, or a mismatched value fails closed."""
+    gate_id_matches = _GATE_ID_LINE_RE.findall(text)
+    if len(gate_id_matches) != 1 or gate_id_matches[0] != gate_id:
+        return False
+    run_dir_matches = _RUN_DIR_LINE_RE.findall(text)
+    if len(run_dir_matches) != 1 or run_dir_matches[0] != run_dir:
+        return False
+    return True
 
 
 def _validate_gate_id(value: str) -> str:
@@ -1012,11 +1039,18 @@ class ThreeArmGateDriver:
 
         if not self.args.rehearsal and not self.args.plan_only:
             rehearsal_record = self.args.spend_ledger.parent / "rehearsal.md"
-            if not rehearsal_record.exists() or not _rehearsal_record_authorises(
-                rehearsal_record.read_text(encoding="utf-8")
-            ):
+            record_authorises = False
+            if rehearsal_record.exists():
+                record_text = rehearsal_record.read_text(encoding="utf-8")
+                record_authorises = _rehearsal_record_authorises(
+                    record_text
+                ) and _rehearsal_record_binds_to(
+                    record_text, gate_id=self.args.gate_id, run_dir=str(self.args.run_dir)
+                )
+            if not record_authorises:
                 problems.append(
-                    "GATE-STOP: no green rehearsal record found — run --rehearsal first"
+                    "GATE-STOP: no green rehearsal record found for this gate-id/run-dir — "
+                    "run --rehearsal first"
                 )
 
         # The paid $1 model probe is the LAST thing preflight can do — every
@@ -1398,11 +1432,13 @@ class ThreeArmGateDriver:
         re-rehearse (T-16's own contract) rather than proceed.
 
         `stopped_reason` forces RED unconditionally when set. `run()` calls
-        this with "the run has not finished" before doing anything else in
-        a `--rehearsal` invocation, then again with a more specific reason
-        on every stop it can name — so RED is the default from the moment
-        a rehearsal starts, and only a clean success path overwrites it
-        with a fresh evaluation of the arms' own artifacts. Every other
+        this with "the run has not finished" as soon as preflight passes in
+        a `--rehearsal` invocation — after every precondition that could
+        reject the run for free, but before anything that can spend or
+        produce arm artifacts — then again with a more specific reason on
+        every stop it can name — so RED is the default from the moment a
+        rehearsal actually starts, and only a clean success path overwrites
+        it with a fresh evaluation of the arms' own artifacts. Every other
         problem source here is conditional on an artifact existing, so
         without that default a run stopped part-way through could find a
         previous run's complete artifacts under the same gate id and run
@@ -1461,7 +1497,12 @@ class ThreeArmGateDriver:
             problems.append("main and candidate recorded the SAME installed_quoin_commit")
 
         status = "GREEN" if not problems else "RED"
-        lines.insert(1, f"\nStatus: **{status}**\n")
+        lines.insert(
+            1,
+            f"\nStatus: **{status}**\n"
+            f"\nGate id: {self.args.gate_id}\n"
+            f"Run dir: {self.args.run_dir}\n",
+        )
         if problems:
             lines.append("\n## Problems")
             for p in problems:
@@ -1484,12 +1525,13 @@ class ThreeArmGateDriver:
         record_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return record_path
 
-    def _invalidate_rehearsal_record(self, stopped_reason: str) -> None:
-        """Re-render `rehearsal.md` as RED. Called once at the very start
-        of a `--rehearsal` run() (so RED is the default the moment a
-        rehearsal begins) and again, with a more specific reason, on every
-        stop `run()` can name — those later calls are refinements, not the
-        only source of truth.
+    def _invalidate_rehearsal_record(self, stopped_reason: str) -> bool:
+        """Re-render `rehearsal.md` as RED. Called once right after a
+        `--rehearsal` run()'s preflight passes (so RED is the default the
+        moment anything that could spend or produce arm artifacts starts)
+        and again, with a more specific reason, on every stop `run()` can
+        name — those later calls are refinements, not the only source of
+        truth.
 
         A record left over from an earlier successful rehearsal would
         otherwise still authorise a paid run on evidence from a different
@@ -1498,13 +1540,19 @@ class ThreeArmGateDriver:
         path, because leaving a stale GREEN standing is the worse outcome.
         Nothing here may change the caller's exit code — this is evidence
         bookkeeping on a path that is already stopping.
+
+        Returns True once either write attempt lands, False only when both
+        fail — the entry-time caller in run() is the one call site that may
+        not shrug a False off, since that is the moment nothing has spent
+        or produced artifacts yet and a stale GREEN left standing is still
+        the record a paid run would trust.
         """
-        if not self.args.rehearsal:
-            return
+        if not self.args.rehearsal or self.args.plan_only:
+            return True
         try:
             record_path = self.write_rehearsal_record(stopped_reason=stopped_reason)
             print(f"Rehearsal record written to: {record_path}")
-            return
+            return True
         except BaseException as exc:
             print(f"WARN: could not render the rehearsal record: {exc}", file=sys.stderr)
         try:
@@ -1519,12 +1567,14 @@ class ThreeArmGateDriver:
                 encoding="utf-8",
             )
             print(f"Rehearsal record written to: {record_path}")
-        except Exception as exc:
+            return True
+        except BaseException as exc:
             print(
                 f"WARN: could not write any rehearsal record: {exc}. "
                 "Delete the record by hand before running the paid gate.",
                 file=sys.stderr,
             )
+            return False
 
     # -- Orchestration --------------------------------------------------------
 
@@ -1535,16 +1585,6 @@ class ThreeArmGateDriver:
         old_sigint = signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
         old_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
         try:
-            if self.args.rehearsal and not self.args.plan_only:
-                # Write RED first and let only a clean success path (below)
-                # upgrade it to GREEN — this is the fail-closed default:
-                # any exit from here on, handled or not (an uncaught
-                # exception, SIGKILL, a second Ctrl-C during teardown),
-                # leaves RED standing instead of whatever record happened
-                # to already be on disk. The three call sites further down
-                # are refinements that improve this reason string; they are
-                # no longer the only places RED gets written.
-                self._invalidate_rehearsal_record("the run has not finished")
             problems = self.preflight()
             if self.args.plan_only:
                 print("PLAN ONLY — arm sequence:", ", ".join(ARMS))
@@ -1558,6 +1598,54 @@ class ThreeArmGateDriver:
                 for p in problems:
                     print(p, file=sys.stderr)
                 return 2
+
+            if self.args.rehearsal:
+                # Write RED first and let only a clean success path (below)
+                # upgrade it to GREEN — this is the fail-closed default:
+                # any exit from here on, handled or not (an uncaught
+                # exception, SIGKILL, a second Ctrl-C during teardown),
+                # leaves RED standing instead of whatever record happened
+                # to already be on disk. The three call sites further down
+                # are refinements that improve this reason string; they are
+                # no longer the only places RED gets written.
+                #
+                # Placed here, after preflight has already passed, rather
+                # than at the very top of run() — preflight is provably
+                # spend-free under --rehearsal (the one paid call,
+                # verify_model, is skipped whenever self.args.rehearsal), so
+                # a precondition failure (a missing env var, a stranded
+                # nested root, an unfrozen suite) no longer destroys a
+                # still-valid GREEN record for a run that never got to spend
+                # anything, and preflight's own guards get to reject a bad
+                # --spend-ledger or --suite before this write ever touches
+                # the filesystem on their behalf.
+                if not self._invalidate_rehearsal_record("the run has not finished"):
+                    # Both write attempts above failed — the record's
+                    # authorisation state could not be confirmed. This is
+                    # the one call site that may not shrug that off: a stale
+                    # GREEN left standing here would authorise the paid run
+                    # this process is about to start. Fall back to deleting
+                    # the record outright and confirm the deletion actually
+                    # landed before proceeding at all.
+                    record_path = self.args.spend_ledger.parent / "rehearsal.md"
+                    try:
+                        record_path.unlink(missing_ok=True)
+                    except OSError as exc:
+                        print(
+                            "GATE-STOP: could not invalidate or delete the rehearsal "
+                            f"record at {record_path}: {exc}. A stale record might "
+                            "still authorise a paid run; refusing to proceed.",
+                            file=sys.stderr,
+                        )
+                        return 2
+                    if record_path.exists():
+                        print(
+                            f"GATE-STOP: rehearsal record at {record_path} still exists "
+                            "after attempting to delete it; refusing to proceed.",
+                            file=sys.stderr,
+                        )
+                        return 2
+                    print(f"Rehearsal record at {record_path} deleted (invalidation fallback).")
 
             settings_path = self.home / ".claude" / "settings.json"
             pre_gate_bytes = settings_path.read_bytes() if settings_path.exists() else b"{}"

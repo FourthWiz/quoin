@@ -810,7 +810,10 @@ class TestDriverPlanOnly:
         # The probe now runs LAST, after every fall-through check (round-4
         # fix: MAJOR 5) — including the green-rehearsal gate, so full mode
         # needs one on disk to ever reach the probe at all.
-        (args.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n", encoding="utf-8")
+        (args.spend_ledger.parent / "rehearsal.md").write_text(
+            f"Status: **GREEN**\n\nGate id: {args.gate_id}\nRun dir: {args.run_dir}\n",
+            encoding="utf-8",
+        )
         driver.preflight()
         assert len(calls) == 1
         assert calls[0] == args.spend_ledger
@@ -1215,8 +1218,11 @@ class TestRehearsalRecord:
         problems = driver.preflight()
         assert any("no green rehearsal record found" in p for p in problems)
 
-        # Write a GREEN record -> that specific problem clears.
-        (ns.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n")
+        # Write a GREEN record for THIS gate-id/run-dir -> that specific
+        # problem clears.
+        (ns.spend_ledger.parent / "rehearsal.md").write_text(
+            f"Status: **GREEN**\n\nGate id: {ns.gate_id}\nRun dir: {ns.run_dir}\n"
+        )
         problems = driver.preflight()
         assert not any("no green rehearsal record found" in p for p in problems)
 
@@ -1312,6 +1318,110 @@ class TestRehearsalRecordAuthorisationPredicate:
             assert any("no green rehearsal record found" in p for p in problems), (
                 f"a RED status line must never authorise, regardless of body text:\n{body}"
             )
+
+
+class TestRehearsalRecordGateIdAndRunDirBinding:
+    """Review-8 finding 3: the anchored status-line predicate authorised
+    ANY GREEN record, regardless of which gate-id or run-dir it was
+    rendered for — a rehearsal run under a different --gate-id, or against
+    a different --run-dir, still authorised this invocation's ~$38-50 paid
+    spend. write_rehearsal_record now emits Gate id/Run dir lines and
+    preflight's reader requires both to match this invocation, under the
+    same exactly-one-match discipline as the status line."""
+
+    def _preflight_ready_driver(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.verify_arm_installer_isolable",
+            lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
+            lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
+        )
+        import quoin.benchmarks.scripts.run_benchmark as rb_mod
+        monkeypatch.setattr(rb_mod, "verify_model", lambda ledger_path=None, **kw: 0)
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=False, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+        return ns, driver
+
+    def test_matching_gate_id_and_run_dir_authorises(self, tmp_path, monkeypatch):
+        """Positive control: a GREEN record naming THIS invocation's own
+        gate-id and run-dir authorises, same as before this round."""
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
+        (ns.spend_ledger.parent / "rehearsal.md").write_text(
+            f"Status: **GREEN**\n\nGate id: {ns.gate_id}\nRun dir: {ns.run_dir}\n",
+            encoding="utf-8",
+        )
+        problems = driver.preflight()
+        assert not any("no green rehearsal record found" in p for p in problems)
+
+    def test_green_record_from_a_different_gate_id_does_not_authorise(self, tmp_path, monkeypatch):
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
+        (ns.spend_ledger.parent / "rehearsal.md").write_text(
+            f"Status: **GREEN**\n\nGate id: some-other-gate\nRun dir: {ns.run_dir}\n",
+            encoding="utf-8",
+        )
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems), (
+            "a GREEN record rendered under a different --gate-id must not authorise this run"
+        )
+
+    def test_green_record_from_a_different_run_dir_does_not_authorise(self, tmp_path, monkeypatch):
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
+        (ns.spend_ledger.parent / "rehearsal.md").write_text(
+            f"Status: **GREEN**\n\nGate id: {ns.gate_id}\nRun dir: /some/other/run-dir\n",
+            encoding="utf-8",
+        )
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems), (
+            "a GREEN record rendered against a different --run-dir must not authorise this run"
+        )
+
+    def test_missing_gate_id_or_run_dir_lines_fail_closed(self, tmp_path, monkeypatch):
+        """A hand-written 19-byte file containing only a correct status
+        line (review-8's own example) must not authorise once the binding
+        check is in place — no Gate id/Run dir lines at all is absence,
+        not an exact-one match."""
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
+        (ns.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n", encoding="utf-8")
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems)
+
+    def test_write_rehearsal_record_emits_matching_gate_id_and_run_dir_lines(self, tmp_path):
+        """write_rehearsal_record's own output round-trips through the new
+        binding check — the writer and the reader agree on the format."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            ThreeArmGateDriver, _rehearsal_record_binds_to,
+        )
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit)
+        record_path = driver.write_rehearsal_record()
+        text = record_path.read_text()
+        assert _rehearsal_record_binds_to(text, gate_id=ns.gate_id, run_dir=str(ns.run_dir)) is True
+        assert _rehearsal_record_binds_to(text, gate_id="wrong", run_dir=str(ns.run_dir)) is False
+        assert _rehearsal_record_binds_to(text, gate_id=ns.gate_id, run_dir="/wrong") is False
 
 
 class TestGateIdValidation:
@@ -2064,6 +2174,141 @@ class TestDriverKillIsFatalNotAWarning:
         assert code == 2
         assert rehearsal_path.read_text(encoding="utf-8") == original_text
         assert rehearsal_path.stat().st_mtime_ns == original_mtime_ns
+
+    def test_uncaught_exception_mid_arm_loop_leaves_the_entry_time_red_standing(self, tmp_path):
+        """Mutation-confirmed gap (review-8 finding 1): the entry-time
+        `_invalidate_rehearsal_record("the run has not finished")` call had
+        zero discriminating test coverage — deleting it left the full
+        161-test suite green. A plain RuntimeError (not GateStop, not
+        KeyboardInterrupt) raised mid-arm-loop reaches neither of run()'s
+        two stop handlers, so whatever the record reads afterward comes
+        from the entry-time write alone, with no other call site involved.
+        Deleting that call makes this test fail (the stale GREEN survives
+        untouched)."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.parent.mkdir(parents=True, exist_ok=True)
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        def raising_run_arm(arm):
+            raise RuntimeError("boom: not a GateStop, not a KeyboardInterrupt")
+
+        driver.run_arm = raising_run_arm
+
+        with pytest.raises(RuntimeError):
+            driver.run()
+
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "the run has not finished" in record_text
+
+    def test_teardown_raising_inside_gatestop_handler_still_leaves_red_standing(self, tmp_path):
+        """Mutation-confirmed gap (review-8 finding 1 / 13(b)): the
+        `except BaseException as teardown_exc:` wrapper around the
+        GateStop handler's own `self.teardown()` call exists so a second
+        teardown failure does not skip the refined
+        `_invalidate_rehearsal_record` call below it. The FIRST teardown
+        call (the `finally` around the arm loop) succeeds normally; only
+        the SECOND call — the handler's own redundant one — raises, which
+        is exactly the case reverting that wrapper to a bare, unguarded
+        `self.teardown()` call would leave uncaught (skipping the refined
+        write and letting the entry-time RED, or worse, an unhandled
+        exception, be the only outcome)."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.parent.mkdir(parents=True, exist_ok=True)
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        def raising_run_arm(arm):
+            raise GateStop("GATE-STOP: injected mid-arm failure")
+
+        driver.run_arm = raising_run_arm
+
+        call_count = {"n": 0}
+        real_teardown = driver.teardown
+
+        def flaky_teardown():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return real_teardown()
+            raise RuntimeError("teardown raised on its second call")
+
+        driver.teardown = flaky_teardown
+
+        code = driver.run()
+
+        assert code == 2  # unchanged: the GateStop exit path
+        assert call_count["n"] == 2, "both the finally's and the handler's own teardown call must fire"
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "GATE-STOP: injected mid-arm failure" in record_text
+
+    def test_teardown_raising_inside_keyboard_interrupt_handler_still_leaves_red_standing(self, tmp_path):
+        """Mutation-confirmed gap (review-8 finding 1 / 13(b)) — the
+        sharpest case the commit message itself names: a SECOND
+        KeyboardInterrupt (a second Ctrl-C) arriving while teardown() is
+        already running inside the `except KeyboardInterrupt:` handler.
+        Same two-call structure as the GateStop-handler test above: the
+        first (finally) teardown call succeeds; the second (the handler's
+        own) raises KeyboardInterrupt again."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.parent.mkdir(parents=True, exist_ok=True)
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        def raising_run_arm(arm):
+            raise KeyboardInterrupt()
+
+        driver.run_arm = raising_run_arm
+
+        call_count = {"n": 0}
+        real_teardown = driver.teardown
+
+        def flaky_teardown():
+            call_count["n"] += 1
+            if call_count["n"] == 1:
+                return real_teardown()
+            raise KeyboardInterrupt()
+
+        driver.teardown = flaky_teardown
+
+        code = driver.run()
+
+        assert code == 1  # verified=False on the handler's own teardown failure
+        assert call_count["n"] == 2, "both the finally's and the handler's own teardown call must fire"
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "aborted by signal" in record_text
 
 
 # ---------------------------------------------------------------------------
