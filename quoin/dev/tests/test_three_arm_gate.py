@@ -1617,6 +1617,37 @@ class TestDriverKillIsFatalNotAWarning:
         assert called_arms == ["raw", "main", "candidate"]
 
 
+    def test_returncode_124_rehearsal_invalidates_stale_green_record(self, tmp_path):
+        """Regression pin (round-6 review fix). Before this fix, a killed
+        rehearsal's GateStop exit skipped write_rehearsal_record()
+        entirely, so a stale GREEN rehearsal.md left over from a PRIOR
+        successful rehearsal survived untouched — and the full-mode
+        preflight's substring check on that fixed path would then wave
+        through a paid run on evidence from a different, older
+        rehearsal."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 124)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+
+        assert code == 2  # the GateStop exit path, same as any other GATE-STOP
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "GREEN" not in record_text, (
+            "a killed rehearsal must invalidate the stale record, not leave it standing"
+        )
+
+
 # ---------------------------------------------------------------------------
 # A non-finite cost read back from summary.json is sanitised to None,
 # not left to blow up spend_ledger.append with an unhandled ValueError

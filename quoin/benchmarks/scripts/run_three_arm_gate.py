@@ -1476,6 +1476,18 @@ class ThreeArmGateDriver:
         except GateStop as exc:
             print(str(exc), file=sys.stderr)
             self.teardown()
+            if self.args.rehearsal:
+                # A killed/aborted rehearsal must not leave a stale GREEN
+                # `rehearsal.md` standing — the full-mode preflight only
+                # substring-checks for "GREEN" at a fixed path, so a prior
+                # successful rehearsal's record would otherwise still
+                # satisfy that gate on evidence from a different run.
+                # write_rehearsal_record() renders RED for the arm(s) that
+                # never produced a transcript, invalidating the stale
+                # record and restoring an evidence artifact for the
+                # stopped run.
+                record_path = self.write_rehearsal_record()
+                print(f"Rehearsal record written to: {record_path}")
             return 2
         except KeyboardInterrupt:
             print("Aborted by signal; running teardown.", file=sys.stderr)
