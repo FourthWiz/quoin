@@ -1123,7 +1123,7 @@ class TestVerifyModelPreflight:
                 "total_cost_usd": 0.35,
             }
 
-        code = verify_model(ledger_path=tmp_path / "ledger.jsonl", run_probe=stub_probe)
+        code = verify_model(ledger_path=tmp_path / "ledger.jsonl", run_probe=stub_probe, authorised=50.0)
         assert code == 0
 
     def test_verify_model_mismatch_exits_one(self, tmp_path):
@@ -1135,7 +1135,7 @@ class TestVerifyModelPreflight:
                 "total_cost_usd": 0.10,
             }
 
-        code = verify_model(ledger_path=tmp_path / "ledger.jsonl", run_probe=stub_probe)
+        code = verify_model(ledger_path=tmp_path / "ledger.jsonl", run_probe=stub_probe, authorised=50.0)
         assert code == 1
 
     def test_verify_model_records_probe_in_ledger(self, tmp_path):
@@ -1149,7 +1149,7 @@ class TestVerifyModelPreflight:
             }
 
         ledger = tmp_path / "ledger.jsonl"
-        verify_model(ledger_path=ledger, run_probe=stub_probe)
+        verify_model(ledger_path=ledger, run_probe=stub_probe, authorised=50.0)
         assert recorded_total(ledger) == pytest.approx(0.35)
 
     def test_verify_model_refuses_when_ledger_precheck_fails_and_makes_no_call(self, tmp_path):
@@ -1168,6 +1168,38 @@ class TestVerifyModelPreflight:
 
         code = verify_model(ledger_path=ledger, run_probe=raising_probe)
         assert code == 2
+
+    def test_verify_model_with_ledger_requires_authorised_usd(self, tmp_path):
+        """Regression (round-4 fix: MAJOR 8). A standalone `--verify-model`
+        call against a real ledger is a real, spend-generating call —
+        pre-fix, omitting `--authorised-usd` silently derived a ceiling
+        from the ledger it was about to precheck spend against (the same
+        derive-the-ceiling-from-the-ledger-it-polices hole closed
+        elsewhere in the driver)."""
+        from quoin.benchmarks.scripts.run_benchmark import verify_model
+
+        def raising_probe(max_budget_usd):
+            raise AssertionError("must not spawn without an explicit --authorised-usd")
+
+        code = verify_model(
+            ledger_path=tmp_path / "ledger.jsonl", run_probe=raising_probe, authorised=None,
+        )
+        assert code == 2
+
+    def test_verify_model_without_a_ledger_does_not_require_authorised_usd(self, tmp_path):
+        """`ledger_path=None` is the unledgered/dry probe shape (no spend
+        tracking at all) — that path is unaffected by MAJOR 8, which only
+        concerns calls that DO touch a ledger."""
+        from quoin.benchmarks.scripts.run_benchmark import verify_model
+
+        def stub_probe(max_budget_usd):
+            return {
+                "modelUsage": {"claude-opus-4-7": {"canonicalModel": "claude-opus-4-7"}},
+                "total_cost_usd": 0.35,
+            }
+
+        code = verify_model(ledger_path=None, run_probe=stub_probe, authorised=None)
+        assert code == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1625,6 +1657,180 @@ class TestStderrDrainAndTimerDrivenWallClock:
         from quoin.benchmarks.harness.cells.simple_claude import _drain_stream
 
         _drain_stream(None, [])  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# Round-4 fix: the rate-limit backoff moved into the per-line inner loop
+# must still honour the wall clock, and a final unterminated stream-json
+# line must not be dropped at EOF, in both cells.
+# ---------------------------------------------------------------------------
+
+
+class TestRateLimitBackoffRespectsWallClock:
+    def test_simple_claude_chunk_full_of_429s_still_honours_the_budget(self, tmp_path, monkeypatch):
+        """Regression: the backoff sat inside the per-line inner loop with
+        no wall-clock re-check between retries, so a single chunk carrying
+        many rate-limit events ran every backoff (1+2+4+8+16+32+60+... up
+        to 60s each) uncapped before the outer loop's own budget check ever
+        got control again."""
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "rate_limited.py"
+        script.write_text(
+            "import sys, json, time\n"
+            "for _ in range(12):\n"
+            "    sys.stdout.write(json.dumps({'type': 'error', 'error': '429 rate limited'}) + '\\n')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        start = time.monotonic()
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=3), run_id="r1",
+        )
+        elapsed = time.monotonic() - start
+        assert result["verdict"] == "timeout"
+        # Naive uncapped per-line backoff sums to well over 400s pre-fix
+        # (measured 426.1s in review-3); the fix caps each sleep at
+        # whatever budget remains.
+        assert elapsed < 15
+
+    def test_quoin_claude_chunk_full_of_429s_still_honours_the_budget(self, tmp_path, monkeypatch, arm_git_repo):
+        """Same regression as above, for the quoin cell's own copy of the
+        reader (measured 306.1s in review-3 with 10 events). Reaches Popen
+        via the same `skip`-install-mode path `TestQuoinClaudeInstallGuard`
+        uses, so no real install.sh is run."""
+        root, sha = arm_git_repo
+        from quoin.benchmarks.harness.cells import quoin_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "rate_limited.py"
+        script.write_text(
+            "import sys, json, time\n"
+            "for _ in range(10):\n"
+            "    sys.stdout.write(json.dumps({'type': 'error', 'error': '429 rate limited'}) + '\\n')\n"
+            "sys.stdout.flush()\n"
+            "time.sleep(30)\n"
+        )
+
+        real_popen = quoin_claude.subprocess.Popen
+
+        def on_spawn(cmd):
+            return real_popen(
+                [quoin_claude.sys.executable, str(script)],
+                cwd=str(tmp_path), stdout=quoin_claude.subprocess.PIPE,
+                stderr=quoin_claude.subprocess.PIPE, text=True,
+            )
+
+        _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=on_spawn)
+        start = time.monotonic()
+        result = quoin_claude.invoke(
+            task_spec={"id": "t1", "description": "x"},
+            workdir=tmp_path / "work-ratelimit",
+            budget=BudgetSpec(wall_clock_seconds=3),
+            run_id="r1",
+            quoin_install_script=root / "quoin" / "install.sh",
+            quoin_install_mode="skip",
+            arm_root=root,
+            expected_quoin_commit=sha,
+        )
+        elapsed = time.monotonic() - start
+        assert result["verdict"] == "timeout"
+        assert elapsed < 15
+
+
+class TestNoBusySpinOnEofWithChildStillAlive:
+    def test_simple_claude_does_not_busy_spin_after_stdout_closes_early(self, tmp_path, monkeypatch):
+        """Regression (round-4 fix: MAJOR 14). A child that closes its own
+        stdout fd but keeps running (the same EOF-but-alive shape a
+        grandchild inheriting the pipe produces) made `_read_ready_chunk`
+        return `b""` forever, `select()` report an EOF'd fd readable
+        forever, and the loop `continue` with no sleep at all — measured
+        ~99% parent CPU for the remainder of the wall clock pre-fix."""
+        import resource as _resource
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "closes_stdout_early.py"
+        script.write_text(
+            "import os, time\n"
+            "os.close(1)\n"  # stdout EOFs from the parent's side; process itself stays alive
+            "time.sleep(2.5)\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+
+        before = _resource.getrusage(_resource.RUSAGE_SELF).ru_utime
+        simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=2.5), run_id="r1",
+        )
+        after = _resource.getrusage(_resource.RUSAGE_SELF).ru_utime
+        # A tight busy-spin loop burns nearly the whole ~2.5s wall-clock
+        # window as CPU time; sleeping between polls keeps this a small
+        # fraction of it.
+        assert (after - before) < 1.0
+
+
+class TestEofRemainderFlushed:
+    def test_simple_claude_final_unterminated_line_is_not_dropped(self, tmp_path, monkeypatch):
+        """Regression: `_split_ready_lines`'s trailing remainder is only
+        ever flushed by the NEXT chunk — at EOF there is no next chunk, so
+        a final stream-json line with no trailing newline (the terminal
+        `result` event, carrying the arm's cost) was silently lost."""
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "no_trailing_newline.py"
+        script.write_text(
+            "import sys, json\n"
+            "sys.stdout.write(json.dumps({'type': 'assistant'}) + '\\n')\n"
+            "sys.stdout.write(json.dumps({'type': 'result', 'total_cost_usd': 0.42, "
+            "'usage': {'input_tokens': 10}}))\n"
+            "sys.stdout.flush()\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=10), run_id="r1",
+        )
+        assert result["cost_available"] is True
+        assert result["cost_runtime_usd"] == 0.42
+        assert result["tokens_in"] == 10
 
 
 # ---------------------------------------------------------------------------

@@ -609,3 +609,69 @@ class TestGateSkillText:
             "within 10 lines of each other in any passage — the dual-guard AND context "
             "may be missing or split across the file"
         )
+
+
+# ---------------------------------------------------------------------------
+# Round-4 fix (MAJOR 4): a generic exception AFTER the cell already streamed
+# a real transcript.jsonl must not clobber it with an empty ring buffer.
+# ---------------------------------------------------------------------------
+
+
+class TestExceptionPathPreservesStreamedTranscript:
+    def test_judge_crash_after_streaming_does_not_truncate_transcript_jsonl(self, tmp_path, monkeypatch):
+        """Regression: `run_one_task`'s generic `except Exception` handler
+        used to build its `RunResult` with `extra={}` and
+        `transcript_events=[]`, regardless of what the cell had already
+        streamed to `transcript.jsonl` on disk. `write_run_result`'s own
+        `if not result.extra.get("transcript_streamed")` re-open guard
+        then never fired (because `extra` was empty), and the ring-buffer
+        write clobbered the real, paid transcript with an empty file."""
+        import types
+
+        from quoin.benchmarks.harness import runner as runner_mod
+        from quoin.benchmarks.harness.config import BudgetSpec, HarnessConfig
+
+        run_dir = tmp_path / "runs"
+        streamed_content = '{"type": "assistant"}\n{"type": "result", "total_cost_usd": 0.42}\n'
+
+        def fake_invoke(task_spec, workdir, budget, run_id, run_output_dir=None, **kwargs):
+            # Simulate the cell: stream a real transcript.jsonl to its own
+            # result dir and report that it did so via `extra`, exactly as
+            # simple_claude.invoke / quoin_claude.invoke now do at file-open
+            # time. `run_output_dir` must be a named parameter, not folded
+            # into **kwargs — the runner only threads it when
+            # `inspect.signature` reports it by name (T-15/D-11).
+            run_output_dir.mkdir(parents=True, exist_ok=True)
+            (run_output_dir / "transcript.jsonl").write_text(streamed_content, encoding="utf-8")
+            return {
+                "prompt": "x", "transcript_events": [{"type": "assistant"}, {"type": "result"}],
+                "diff_patch": "", "cost_available": True, "cost_runtime_usd": 0.42,
+                "cost_estimated_usd": None, "cost_delta_usd": None,
+                "tokens_in": 10, "tokens_out": 5, "tokens_cache_read": None,
+                "tokens_cache_write": None, "turn_count": 1, "gate_intervention_count": 0,
+                "verdict": None,  # not a cell-terminal verdict — falls through to judge_task
+                "extra": {"transcript_streamed": True},
+            }
+
+        fake_adapter = types.SimpleNamespace(invoke=fake_invoke)
+        monkeypatch.setattr(runner_mod, "_load_cell_adapter", lambda cell: fake_adapter)
+
+        def crashing_judge(*a, **kw):
+            raise RuntimeError("judge blew up after the transcript was already on disk")
+
+        monkeypatch.setattr(runner_mod, "judge_task", crashing_judge)
+
+        config = HarnessConfig(run_dir=run_dir, budget=BudgetSpec(wall_clock_seconds=60))
+        result = runner_mod.run_one_task(
+            cell="simple-claude", task_spec={"id": "t1", "description": "x"},
+            run_id="r1", config=config, fixture_repo=None,
+        )
+
+        assert result.verdict == "error"
+        assert result.extra.get("transcript_streamed") is True
+
+        out_dir = runner_mod.task_result_dir(run_dir, "r1", "simple-claude", "t1")
+        on_disk = (out_dir / "transcript.jsonl").read_text(encoding="utf-8")
+        assert on_disk == streamed_content, (
+            "the exception path must not truncate an already-streamed transcript"
+        )

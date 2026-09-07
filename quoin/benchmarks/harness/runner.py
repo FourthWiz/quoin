@@ -251,6 +251,16 @@ def run_one_task(
 
     worktree_path: Optional[Path] = None
     _tmpdir_obj = None  # holds the TemporaryDirectory for HumanEval+ tasks
+    # Pre-declared so the generic exception handler below can carry them
+    # through even when the exception fires before `adapter.invoke()`
+    # returns (round-4 fix: MAJOR 4) — most importantly
+    # `transcript_streamed`, which the cell now sets at file-open time
+    # specifically so a crash anywhere after that point (a judge crash,
+    # `cleanup_task_worktree`, the `RunResult` construction itself) does
+    # not make `write_run_result` re-open and truncate an already-streamed
+    # transcript.jsonl to empty.
+    invocation_extra: dict = {}
+    invocation_transcript_events: list = []
     try:
         # Create isolated worktree for the task.
         # SWE-bench tasks: git worktree of fixture_repo.
@@ -289,6 +299,7 @@ def run_one_task(
         # thread carried, not what was intended (round-3 addition, CRIT-2).
         invocation_extra = dict(invocation_result.get("extra", {}))
         invocation_extra["threaded_kwargs"] = sorted(extra_kwargs.keys())
+        invocation_transcript_events = invocation_result.get("transcript_events", [])
 
         # A cell-reported terminal verdict (error / timeout / budget_stopped)
         # short-circuits the judge: the cell already knows the outcome, and
@@ -355,12 +366,20 @@ def run_one_task(
         )
 
     except Exception as exc:
+        # `extra` (carrying `transcript_streamed`) and any transcript
+        # events collected before the exception are threaded through here,
+        # not defaulted to `{}`/`[]` (round-4 fix: MAJOR 4) — a default
+        # here is indistinguishable from "nothing was ever streamed" to
+        # `write_run_result`'s own re-open guard, which then clobbers a
+        # real, paid, already-on-disk transcript.jsonl with an empty one.
         result = RunResult(
             cell=cell,
             task_id=task_id,
             run_id=run_id,
             verdict="error",
             evidence_path=str(exc),
+            transcript_events=invocation_transcript_events,
+            extra=invocation_extra,
         )
     finally:
         if _tmpdir_obj is not None:

@@ -399,6 +399,8 @@ def invoke(
 
     budget_seconds = budget.wall_clock_seconds
     wall_start = time.monotonic()
+    # Capped at one budget's worth — see simple_claude.invoke for the full
+    # rationale.
     backoff_total = 0.0
 
     try:
@@ -432,6 +434,11 @@ def invoke(
                 transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
             except OSError:
                 transcript_file = None
+        # Set at OPEN time — see simple_claude.invoke for the full
+        # rationale: a generic exception handler downstream must be able to
+        # tell a partially-streamed transcript apart from an empty one
+        # without depending on this loop ever reaching its normal exit.
+        result["extra"]["transcript_streamed"] = transcript_file is not None
 
         # Drain stderr on a daemon thread started at spawn — see
         # simple_claude.invoke for the full rationale, including why the
@@ -453,20 +460,73 @@ def invoke(
         except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
             stdout_fd = None
 
+        def _handle_stream_line(raw_line: str) -> str:
+            """Parse and record one stream-json line — see
+            simple_claude.invoke for the full rationale. Returns
+            "rate_limited" for a 429/overloaded event the caller must back
+            off on, "skip" for a blank or unparseable line, "ok" otherwise.
+            """
+            nonlocal total_cost_usd, tokens_in, tokens_out, tokens_cache_read
+            nonlocal tokens_cache_write, turn_count, budget_halted
+            nonlocal events_seen, gate_intervention_count
+
+            line = raw_line.strip()
+            if not line:
+                return "skip"
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return "skip"
+
+            event_type = event.get("type", "")
+
+            # Handle rate-limit / overloaded events (same as simple_claude)
+            if event_type in ("error", "api_error"):
+                error_msg = str(event.get("error", ""))
+                if "429" in error_msg or "overloaded" in error_msg.lower():
+                    return "rate_limited"
+
+            events.append(event)
+            events_seen += 1
+            if transcript_file is not None:
+                transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+                transcript_file.flush()
+            if not budget_halted and _detect_budget_halt(
+                str(event.get("result", "")) + str(event.get("error", ""))
+            ):
+                budget_halted = True
+
+            # Track gate auto-approve events
+            # /gate in auto-approve mode emits an event with auto_approved: true
+            if event.get("auto_approved"):
+                gate_intervention_count += 1
+
+            if event_type == "result":
+                cost_val = _extract_cost_usd(event)
+                if cost_val is not None:
+                    total_cost_usd = cost_val
+                usage = event.get("usage", {})
+                tokens_in = usage.get("input_tokens", tokens_in)
+                tokens_out = usage.get("output_tokens", tokens_out)
+                tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
+                tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+
+            if event_type == "assistant":
+                turn_count += 1
+
+            return "ok"
+
         try:
             read_buffer = ""
             try:
+                timed_out = False
                 while True:
                     # Timer-driven, not event-driven — see simple_claude.invoke.
-                    elapsed = time.monotonic() - wall_start - backoff_total
+                    elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
                     remaining = budget_seconds - elapsed
                     if remaining <= 0:
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                        result["verdict"] = "timeout"
+                        timed_out = True
                         break
 
                     if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
@@ -477,6 +537,12 @@ def invoke(
                         if not chunk:
                             if proc.poll() is not None:
                                 break
+                            # See simple_claude.invoke for the full
+                            # rationale — an EOF'd fd is reported readable
+                            # by select() forever, so this would otherwise
+                            # busy-spin at ~100% CPU with no sleep at all
+                            # (round-4 fix: MAJOR 14).
+                            time.sleep(min(_POLL_INTERVAL_SECONDS, max(remaining, 0.0)))
                             continue
                         read_buffer += chunk.decode("utf-8", errors="replace")
                         ready_lines, read_buffer = _split_ready_lines(read_buffer)
@@ -487,56 +553,41 @@ def invoke(
                         ready_lines = [line] if line else []
 
                     for raw_line in ready_lines:
-                        line = raw_line.strip()
-                        if not line:
-                            continue
+                        # Re-evaluated per LINE — see simple_claude.invoke:
+                        # a chunk full of 429s must not run its backoffs
+                        # unchecked against the wall clock.
+                        elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
+                        remaining = budget_seconds - elapsed
+                        if remaining <= 0:
+                            timed_out = True
+                            break
 
-                        try:
-                            event = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
+                        outcome = _handle_stream_line(raw_line)
+                        if outcome == "rate_limited":
+                            backoff_start = time.monotonic()
+                            time.sleep(min(retry_delay, remaining))
+                            backoff_total += time.monotonic() - backoff_start
+                            retry_delay = min(retry_delay * 2, 60.0)
 
-                        event_type = event.get("type", "")
+                    if timed_out:
+                        break
 
-                        # Handle rate-limit / overloaded events (same as simple_claude)
-                        if event_type in ("error", "api_error"):
-                            error_msg = str(event.get("error", ""))
-                            if "429" in error_msg or "overloaded" in error_msg.lower():
-                                backoff_start = time.monotonic()
-                                time.sleep(retry_delay)
-                                backoff_total += time.monotonic() - backoff_start
-                                retry_delay = min(retry_delay * 2, 60.0)
-                                continue
-
-                        events.append(event)
-                        events_seen += 1
-                        if transcript_file is not None:
-                            transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
-                            transcript_file.flush()
-                        if not budget_halted and _detect_budget_halt(
-                            str(event.get("result", "")) + str(event.get("error", ""))
-                        ):
-                            budget_halted = True
-
-                        # Track gate auto-approve events
-                        # /gate in auto-approve mode emits an event with auto_approved: true
-                        if event.get("auto_approved"):
-                            gate_intervention_count += 1
-
-                        if event_type == "result":
-                            cost_val = _extract_cost_usd(event)
-                            if cost_val is not None:
-                                total_cost_usd = cost_val
-                            usage = event.get("usage", {})
-                            tokens_in = usage.get("input_tokens", tokens_in)
-                            tokens_out = usage.get("output_tokens", tokens_out)
-                            tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
-                            tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
-
-                        if event_type == "assistant":
-                            turn_count += 1
-
-                proc.wait(timeout=10)
+                if timed_out:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    result["verdict"] = "timeout"
+                else:
+                    # Flush a final unterminated line — see
+                    # simple_claude.invoke: at EOF it would otherwise sit
+                    # forever in `read_buffer`, silently dropping the
+                    # terminal `result` event and the arm's cost.
+                    if read_buffer.strip():
+                        _handle_stream_line(read_buffer)
+                        read_buffer = ""
+                    proc.wait(timeout=10)
             finally:
                 # Guaranteed regardless of how the block above exits — see
                 # simple_claude.invoke.

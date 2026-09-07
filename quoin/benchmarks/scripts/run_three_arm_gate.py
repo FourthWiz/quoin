@@ -34,6 +34,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -542,7 +543,18 @@ def _stranded_nested_ledger_problem(ledger_path: Path) -> Optional[str]:
     `quoin/.workflow_artifacts/` tree instead of the canonical
     project-root one). The canonical root lives one level up, at
     `_repo_root.parent`; nothing under `_repo_root` itself is ever a valid
-    `--spend-ledger` target."""
+    `--spend-ledger` target on THIS workspace's two-level layout.
+
+    That layout is this workspace's own convention, not a universal
+    invariant (round-4 fix: MAJOR 15) — a standalone quoin clone, the
+    layout `/init_workflow` produces, has the project root AS the git
+    root, so every valid `--spend-ledger` path would otherwise be
+    unconditionally refused with no escape hatch.
+    `QUOIN_ALLOW_NESTED_LEDGER=1` opts out for exactly that case; it does
+    not relax the ledger's own spend-ceiling checks, only this
+    path-shape assumption."""
+    if os.environ.get("QUOIN_ALLOW_NESTED_LEDGER") == "1":
+        return None
     resolved = ledger_path.resolve()
     try:
         resolved.relative_to(_repo_root.resolve())
@@ -579,9 +591,9 @@ def main(argv: Optional[list[str]] = None) -> int:
              "worktree it is meant to check — a self-derived expectation "
              "can never disagree with what it is checking.",
     )
-    parser.add_argument("--max-budget-usd-raw", type=float, required=True)
-    parser.add_argument("--max-budget-usd-main", type=float, required=True)
-    parser.add_argument("--max-budget-usd-candidate", type=float, required=True)
+    parser.add_argument("--max-budget-usd-raw", type=spend_ledger.positive_finite_float, required=True)
+    parser.add_argument("--max-budget-usd-main", type=spend_ledger.positive_finite_float, required=True)
+    parser.add_argument("--max-budget-usd-candidate", type=spend_ledger.positive_finite_float, required=True)
     parser.add_argument("--spend-ledger", type=_resolved_path, required=True)
     parser.add_argument(
         "--new-spend-ledger", action="store_true",
@@ -592,7 +604,7 @@ def main(argv: Optional[list[str]] = None) -> int:
              "spend.",
     )
     parser.add_argument(
-        "--authorised-usd", type=float, default=None,
+        "--authorised-usd", type=spend_ledger.positive_finite_float, default=None,
         help="Operator-supplied spend ceiling for this invocation's "
              "preflight precheck. When omitted, the ceiling is derived "
              "from the ledger's own latest reauth-note (or the $50 "
@@ -681,18 +693,33 @@ class ThreeArmGateDriver:
         problems: list[str] = []
 
         # Pure argument/path validation, before any file I/O that could
-        # spend or that assumes the ledger exists.
-        if not self.args.rehearsal and not self.args.plan_only and self.authorised_usd is None:
+        # spend or that assumes the ledger exists. --rehearsal is a real,
+        # paid mode too (~$3) — only --plan-only is genuinely spend-free
+        # (round-4 fix: MAJOR 8 — the derive-the-ceiling-from-the-ledger-
+        # it-polices fallback stayed live on this path even after full mode
+        # was hardened to require the flag).
+        if not self.args.plan_only and self.authorised_usd is None:
             problems.append(
-                "GATE-STOP: --authorised-usd is required in full mode — the spend "
-                "ceiling must be an explicit operator input, not silently derived "
-                "from the ledger it polices"
+                "GATE-STOP: --authorised-usd is required outside --plan-only — the "
+                "spend ceiling must be an explicit operator input, not silently "
+                "derived from the ledger it polices"
             )
             return problems
 
         nested_problem = _stranded_nested_ledger_problem(self.args.spend_ledger)
         if nested_problem:
             problems.append(nested_problem)
+            return problems
+
+        # --run-dir is a spend-relevant lookup key too — every arm's cost
+        # is read back from `_read_arm_actual_cost` under it (round-4 fix:
+        # MAJOR 11). Landing it inside the same stranded nested root as the
+        # ledger is self-consistent within a single run (no mis-costing)
+        # but writes real, paid evidence somewhere nothing downstream will
+        # ever look for it again.
+        nested_run_dir_problem = _stranded_nested_ledger_problem(self.args.run_dir)
+        if nested_run_dir_problem:
+            problems.append(nested_run_dir_problem.replace("--spend-ledger", "--run-dir"))
             return problems
 
         # FIRST — before anything that can spend (round-5 fix, MIN-4). The
@@ -799,6 +826,23 @@ class ThreeArmGateDriver:
             )
         else:
             self.pre_provenance["bare_quoin_file"] = bare_quoin_file
+            # The SAME repo-root property teardown demands after all three
+            # arms have spent (round-4 fix: MAJOR 10) — asserted here too,
+            # so a wrong-interpreter launch (the venv_python resolving
+            # `import quoin` outside the git checkout, e.g. a stale
+            # non-editable install in site-packages) stops at $0 instead of
+            # discovering the mismatch only in teardown, after the full
+            # authorisation has already been spent.
+            try:
+                Path(bare_quoin_file).resolve().relative_to(_repo_root.resolve())
+            except ValueError:
+                problems.append(
+                    f"GATE-STOP: {self.venv_python}'s bare `import quoin` resolves to "
+                    f"{bare_quoin_file}, outside the git checkout ({_repo_root}) — this "
+                    "is the wrong interpreter (teardown would fail this same check "
+                    "after the arms have already spent); re-invoke with the "
+                    "interpreter install.sh selects"
+                )
 
         main_manifest = cross_arm_manifest(self.args.main_worktree)
         candidate_manifest = cross_arm_manifest(self.args.candidate_worktree)
@@ -820,21 +864,6 @@ class ThreeArmGateDriver:
                     "GATE-STOP: QUOIN_BENCH_CLAUDE_MODEL is set outside --rehearsal mode; "
                     "full mode must verify the real pinned model"
                 )
-            elif not self.args.plan_only:
-                # The ONE live, spend-generating preflight call (T-04c) —
-                # skipped under --plan-only (spend-free by definition) and
-                # under --rehearsal (waived; the override above substitutes).
-                from quoin.benchmarks.scripts.run_benchmark import verify_model
-                code = verify_model(
-                    ledger_path=self.args.spend_ledger,
-                    max_budget_usd=MODEL_PROBE_MAX_BUDGET_USD,
-                    authorised=resolved_authorised,
-                )
-                if code != 0:
-                    problems.append(
-                        "GATE-STOP: --verify-model did not confirm PINNED_MODEL "
-                        f"(exit {code})"
-                    )
         else:
             if not os.environ.get("QUOIN_BENCH_CLAUDE_MODEL"):
                 problems.append("GATE-STOP: --rehearsal requires QUOIN_BENCH_CLAUDE_MODEL to be set")
@@ -885,6 +914,30 @@ class ThreeArmGateDriver:
                     "GATE-STOP: no green rehearsal record found — run --rehearsal first"
                 )
 
+        # The paid $1 model probe is the LAST thing preflight can do — every
+        # fall-through check above, including the green-rehearsal gate, must
+        # get a chance to GATE-STOP first (round-4 fix: a run already
+        # guaranteed to abort must not still spend real money on the probe).
+        if problems:
+            return problems
+
+        if not self.args.rehearsal and not self.args.plan_only:
+            # The ONE live, spend-generating preflight call (T-04c) —
+            # skipped under --plan-only (spend-free by definition) and
+            # under --rehearsal (waived; the env-var override above
+            # substitutes).
+            from quoin.benchmarks.scripts.run_benchmark import verify_model
+            code = verify_model(
+                ledger_path=self.args.spend_ledger,
+                max_budget_usd=MODEL_PROBE_MAX_BUDGET_USD,
+                authorised=resolved_authorised,
+            )
+            if code != 0:
+                problems.append(
+                    "GATE-STOP: --verify-model did not confirm PINNED_MODEL "
+                    f"(exit {code})"
+                )
+
         return problems
 
     # -- Step 1: per-arm loop ----------------------------------------------
@@ -898,10 +951,55 @@ class ThreeArmGateDriver:
         command execution as the operator during a live paid session run
         with `--permission-mode acceptEdits`. `mkdtemp` guarantees a
         unique, `0o700` directory it created itself; nothing pre-existing
-        can be adopted."""
-        base = Path(os.environ.get("TMPDIR", "/tmp")) / "quoin-gate"
-        base.mkdir(parents=True, exist_ok=True)
-        self.raw_config_dir = Path(tempfile.mkdtemp(prefix="raw-config-", dir=str(base)))
+        can be adopted.
+
+        `mkdtemp` directly in `tempfile.gettempdir()` — no fixed
+        intermediate directory (round-4 fix: MAJOR 9). The prior
+        `TMPDIR/quoin-gate` intermediate could itself be pre-created by an
+        attacker (as a symlink to an attacker-owned directory, on any
+        multi-user host with a shared `/tmp`); `mkdir(parents=True,
+        exist_ok=True)` follows symlinks and silently adopted it, and
+        everything created "inside" it — including the `mkdtemp` result —
+        then landed under attacker control. `gettempdir()` itself is not
+        attacker-creatable (it's `/tmp` or `$TMPDIR`, which already
+        exists), so there is no intermediate left to pre-create."""
+        self.raw_config_dir = Path(tempfile.mkdtemp(prefix="quoin-gate-raw-config-"))
+        self._assert_raw_config_dir_safe()
+
+    def _assert_raw_config_dir_safe(self) -> None:
+        """Re-assert ownership/mode of `self.raw_config_dir` (round-4 fix:
+        MAJOR 9) — called once right after `mkdtemp` and again immediately
+        before the raw arm spawns, since the directory could in principle
+        be renamed away and replaced between the two (the exact TOCTOU the
+        review demonstrated: the 0700 directory renamed aside, then
+        replaced with an attacker-controlled one carrying a malicious
+        `settings.json` `SessionStart` hook). `os.lstat` — never
+        `os.stat` — so a symlink swapped in for the directory itself is
+        caught rather than followed."""
+        path = self.raw_config_dir
+        if path is None:
+            raise GateStop("GATE-STOP: raw_config_dir safety check ran with no directory created")
+        try:
+            st = os.lstat(path)
+        except OSError as exc:
+            raise GateStop(f"GATE-STOP: raw_config_dir {path} could not be lstat'd: {exc}") from exc
+        if not stat.S_ISDIR(st.st_mode):
+            raise GateStop(
+                f"GATE-STOP: raw_config_dir {path} is not a plain directory "
+                f"(mode {oct(st.st_mode)}) — possible symlink substitution"
+            )
+        if st.st_uid != os.getuid():
+            raise GateStop(
+                f"GATE-STOP: raw_config_dir {path} is owned by uid {st.st_uid}, "
+                f"not this process's uid {os.getuid()} — refusing to hand a "
+                "possibly-attacker-owned directory to the raw arm as its "
+                "CLAUDE_CONFIG_DIR"
+            )
+        if st.st_mode & 0o077:
+            raise GateStop(
+                f"GATE-STOP: raw_config_dir {path} is group/other-accessible "
+                f"(mode {oct(stat.S_IMODE(st.st_mode))}) — expected 0700"
+            )
 
     def run_arm(self, arm: str) -> int:
         run_id = f"{self.args.gate_id}-{arm}"
@@ -989,6 +1087,12 @@ class ThreeArmGateDriver:
                 "--arm-root", str(arm_root),
                 "--expected-quoin-commit", str(expected_commit),
             ]
+        if arm == "raw" and self.raw_isolated and self.raw_config_dir is not None:
+            # Re-asserted immediately before the spawn (round-4 fix: MAJOR
+            # 9) — closes the TOCTOU gap between directory creation and
+            # the live, `--permission-mode acceptEdits` session that trusts
+            # it as CLAUDE_CONFIG_DIR.
+            self._assert_raw_config_dir_safe()
         returncode = self.run_arm_fn(argv, arm_env)
 
         actual_usd = self._read_arm_actual_cost(run_id, self.arm_cells[arm])

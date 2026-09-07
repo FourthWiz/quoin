@@ -49,11 +49,44 @@ more than the pilot's ~$50.
 
 from __future__ import annotations
 
+import argparse
 import json
+import math
 from pathlib import Path
 from typing import Optional
 
 DEFAULT_AUTHORISED_USD = 50.0
+
+
+def _is_finite_nonneg(value) -> bool:
+    """True iff `value` is a real, finite, non-negative number — rejects
+    `nan`, `inf`, `-inf` and negative values, all of which either disable
+    or invert the spend ceiling this ledger exists to enforce (round-4
+    fix: a single poisoned `nan` row used to make `recorded_total` return
+    `nan`, and `nan > x` is always `False`, so `precheck` passed any
+    planned spend against an already-exhausted ledger)."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(f) and f >= 0.0
+
+
+def positive_finite_float(raw: str) -> float:
+    """argparse `type=` for any money argument (`--authorised-usd`, every
+    `--max-budget-usd-*`) — rejects `nan`, `inf`, `-inf`, and non-positive
+    values at parse time (round-4 fix: MAJOR 6). Bare `type=float` accepts
+    all of these; a single mistyped `nan` or `-1` there silently removed
+    the entire spend ceiling this argument exists to set."""
+    try:
+        value = float(raw)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{raw!r} is not a valid number")
+    if not math.isfinite(value) or value <= 0.0:
+        raise argparse.ArgumentTypeError(
+            f"{raw!r} must be a finite, positive number (got {value})"
+        )
+    return value
 
 
 def recorded_total(path: Path) -> float:
@@ -81,17 +114,33 @@ def recorded_total(path: Path) -> float:
             group["reservation"] = row
 
     total = 0.0
-    for group in groups.values():
+    for attempt_id, group in groups.items():
         settlement = group["settlement"]
         if settlement is not None and settlement.get("actual_usd") is not None:
-            total += float(settlement["actual_usd"])
+            value = settlement["actual_usd"]
+            source = "settlement.actual_usd"
         elif group["reservation"] is not None:
-            total += float(group["reservation"].get("cap_usd") or 0.0)
+            value = group["reservation"].get("cap_usd") or 0.0
+            source = "reservation.cap_usd"
         elif settlement is not None:
             # A settlement with actual_usd: null and no matching reservation
             # (e.g. the arm aborted before any cost event) is charged at its
             # own cap_usd — an unmeasured attempt is never free.
-            total += float(settlement.get("cap_usd") or 0.0)
+            value = settlement.get("cap_usd") or 0.0
+            source = "settlement.cap_usd"
+        else:
+            continue
+        # A non-finite or negative value here would silently disable the
+        # ceiling: `nan` propagates through `total`, and `nan > x` is
+        # always False in `precheck`'s comparison (round-4 fix: MAJOR 7).
+        if not _is_finite_nonneg(value):
+            raise ValueError(
+                f"{path}: attempt_id {attempt_id!r} has a non-finite or "
+                f"negative {source} ({value!r}) — refusing to compute a "
+                "spend total that could silently disable the authorisation "
+                "ceiling"
+            )
+        total += float(value)
     return total
 
 
@@ -144,6 +193,24 @@ def precheck(
     `(False, <GATE-STOP message>)` on failure — the message is the literal
     text callers (T-07 step 0) print verbatim.
     """
+    # Re-asserted here, not just at argument-parse time (round-4 fix: MAJOR
+    # 6) — `precheck` is the one function every spend path funnels through,
+    # so this is the last line of defence against a `nan`/`inf`/negative
+    # ceiling or planned cap that would otherwise make the comparison below
+    # pass unconditionally.
+    if not _is_finite_nonneg(authorised) or authorised <= 0.0:
+        return False, (
+            f"GATE-STOP: --authorised-usd must be a finite, positive number "
+            f"(got {authorised!r}) — a non-finite or non-positive ceiling "
+            "disables the spend authorisation entirely"
+        )
+    for cap in planned_caps:
+        if not _is_finite_nonneg(cap):
+            return False, (
+                f"GATE-STOP: a planned spend cap must be a finite, "
+                f"non-negative number (got {cap!r})"
+            )
+
     recorded = recorded_total(path)
     planned = sum(planned_caps)
 
@@ -163,6 +230,19 @@ def append(path: Path, row: dict) -> None:
     No read-modify-write: this is what lets two concurrent appends both
     survive as two lines rather than one silently clobbering the other.
     """
+    # Validated on write too, not just on read (MAJOR 7) — a `nan`/`inf`
+    # cost written today is a poisoned row every future `recorded_total`
+    # call trips over; refusing it here is strictly cheaper than refusing
+    # it later, once it is already the sole record of real spend.
+    for field in ("cap_usd", "actual_usd"):
+        value = row.get(field)
+        if value is not None and not _is_finite_nonneg(value):
+            raise ValueError(
+                f"refusing to append a ledger row with a non-finite or "
+                f"negative {field} ({value!r}) — attempt_id "
+                f"{row.get('attempt_id')!r}"
+            )
+
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     line = (json.dumps(row, ensure_ascii=False) + "\n").encode("utf-8")

@@ -7,6 +7,7 @@ driver itself (T-07).
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -173,6 +174,76 @@ class TestSpendLedgerPrecheck:
 
         params = inspect.signature(precheck).parameters
         assert params["authorised"].default is inspect.Parameter.empty
+
+    def test_nan_authorised_no_longer_disables_the_ceiling(self, tmp_path):
+        """Regression (round-4 fix: MAJOR 6). Pre-fix, `nan > x` is always
+        False, so `recorded + planned > authorised` never fired and any
+        planned spend passed regardless of recorded spend."""
+        from quoin.benchmarks.scripts.spend_ledger import append, precheck
+
+        path = tmp_path / "ledger.jsonl"
+        append(path, _reservation("a1", "candidate", 49.0, run_id="g0-candidate"))
+        append(path, _settlement("a1", "candidate", 49.0, 49.0, run_id="g0-candidate"))
+        ok, message = precheck(path, planned_caps=[1000.0], authorised=float("nan"))
+        assert ok is False
+        assert "finite" in message
+
+    def test_negative_authorised_is_rejected(self, tmp_path):
+        from quoin.benchmarks.scripts.spend_ledger import precheck
+
+        ok, message = precheck(tmp_path / "nope.jsonl", planned_caps=[1.0], authorised=-1e9)
+        assert ok is False
+        assert "positive" in message
+
+    def test_infinite_authorised_is_rejected(self, tmp_path):
+        from quoin.benchmarks.scripts.spend_ledger import precheck
+
+        ok, message = precheck(tmp_path / "nope.jsonl", planned_caps=[1.0], authorised=float("inf"))
+        assert ok is False
+
+    def test_nan_planned_cap_is_rejected(self, tmp_path):
+        from quoin.benchmarks.scripts.spend_ledger import precheck
+
+        ok, message = precheck(tmp_path / "nope.jsonl", planned_caps=[float("nan")], authorised=50.0)
+        assert ok is False
+        assert "planned spend cap" in message
+
+    def test_positive_finite_float_argparse_type_rejects_nan_inf_and_negatives(self):
+        import argparse as _argparse
+
+        from quoin.benchmarks.scripts.spend_ledger import positive_finite_float
+
+        for bad in ("nan", "inf", "-inf", "1e400", "-5", "0"):
+            with pytest.raises(_argparse.ArgumentTypeError):
+                positive_finite_float(bad)
+        assert positive_finite_float("12.5") == 12.5
+
+    def test_nan_settlement_row_makes_recorded_total_raise_not_return_nan(self, tmp_path):
+        """Regression (round-4 fix: MAJOR 7). Pre-fix, `json.dumps(nan)`
+        writes bare `NaN`, `json.loads` accepts it back, and
+        `recorded_total` silently returned `nan` — which then makes
+        `precheck`'s own comparison always pass."""
+        import json as _json
+
+        from quoin.benchmarks.scripts.spend_ledger import recorded_total
+
+        path = tmp_path / "ledger.jsonl"
+        row = _reservation("a1", "candidate", 16.0, run_id="g1-candidate")
+        settlement = _settlement("a1", "candidate", 16.0, float("nan"), run_id="g1-candidate")
+        with path.open("w", encoding="utf-8") as f:
+            f.write(_json.dumps(row) + "\n")
+            f.write(_json.dumps(settlement) + "\n")
+        with pytest.raises(ValueError):
+            recorded_total(path)
+
+    def test_append_refuses_a_nan_cap_or_actual_usd(self, tmp_path):
+        from quoin.benchmarks.scripts.spend_ledger import append
+
+        path = tmp_path / "ledger.jsonl"
+        with pytest.raises(ValueError):
+            append(path, _reservation("a1", "raw", float("nan"), run_id="g1-raw"))
+        with pytest.raises(ValueError):
+            append(path, _settlement("a1", "raw", 6.0, float("-inf"), run_id="g1-raw"))
 
     def test_reauth_note_raises_ceiling_for_invocations_after_it_only(self, tmp_path):
         from quoin.benchmarks.scripts.spend_ledger import append, precheck, resolve_authorised_ceiling
@@ -736,9 +807,55 @@ class TestDriverPlanOnly:
             lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
         )
         self._patch_identity_checks(monkeypatch, tmp_path, args)
+        # The probe now runs LAST, after every fall-through check (round-4
+        # fix: MAJOR 5) — including the green-rehearsal gate, so full mode
+        # needs one on disk to ever reach the probe at all.
+        (args.spend_ledger.parent / "rehearsal.md").write_text("GREEN", encoding="utf-8")
         driver.preflight()
         assert len(calls) == 1
         assert calls[0] == args.spend_ledger
+
+    def test_missing_rehearsal_record_stops_the_probe_from_ever_firing(self, tmp_path, monkeypatch):
+        """Regression (round-4 fix: MAJOR 5). Pre-fix, the probe ran ahead
+        of the green-rehearsal-record check (and the suite-exists /
+        dry-run-gate checks), so a full-mode run guaranteed to abort still
+        spent the $1 probe call. Proved here with a stubbed verify_model
+        and only the rehearsal-record precondition violated."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_benchmark as rb_mod
+
+        calls = []
+
+        def mock_verify_model(ledger_path=None, **kw):
+            calls.append(ledger_path)
+            return 0
+
+        monkeypatch.setattr(rb_mod, "verify_model", mock_verify_model)
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        args = self._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(args, run_arm_fn=lambda argv, env: 0)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.verify_arm_installer_isolable",
+            lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
+            lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
+        )
+        self._patch_identity_checks(monkeypatch, tmp_path, args)
+        # Deliberately NOT writing rehearsal.md — the one precondition this
+        # test violates.
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems)
+        assert calls == [], "the paid probe must not fire when preflight is already guaranteed to abort"
 
 
 class TestDriverLedgerFlow:
@@ -1781,6 +1898,82 @@ class TestTeardownBareImportProvenance:
         monkeypatch.setattr(gate_mod, "bare_import_quoin_file", lambda py: "/some/path/quoin/__init__.py")
         assert driver.teardown() is False
 
+    def test_teardown_fails_when_bare_import_matches_recording_but_is_not_under_repo_root(
+        self, tmp_path, monkeypatch,
+    ):
+        """The one branch review-3 found untested: PRE_PROVENANCE and the
+        post-run bare import AGREE with each other (so the equality check
+        alone would pass) but BOTH point outside `_repo_root` — the
+        wrong-interpreter hazard T-13 documents (a stale non-editable
+        install in some other interpreter's site-packages). Proves the
+        `relative_to(_repo_root)` assertion is load-bearing on its own, not
+        redundant with the equality check."""
+        import types as _types
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"candidate": tmp_path / "candidate"}
+        driver.home = tmp_path / "home"
+        (driver.home / ".claude").mkdir(parents=True)
+        outside_repo_root = str(tmp_path / "some-other-venv" / "site-packages" / "quoin" / "__init__.py")
+        driver.pre_provenance["bare_quoin_file"] = outside_repo_root
+
+        monkeypatch.setattr(
+            gate_mod, "install_arm",
+            lambda root, py: _types.SimpleNamespace(returncode=0),
+        )
+        monkeypatch.setattr(gate_mod, "bare_import_quoin_file", lambda py: outside_repo_root)
+        assert driver.teardown() is False
+
+    def test_preflight_gate_stops_when_bare_import_resolves_outside_repo_root(self, tmp_path, monkeypatch):
+        """Regression (round-4 fix: MAJOR 10). Pre-fix, this same
+        wrong-interpreter property was only ever asserted in teardown,
+        AFTER all three arms had already spent the full authorisation — a
+        wrong-interpreter launch spent ~$38 before failing. Now asserted in
+        preflight too, so it stops at $0."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=True)
+        driver = ThreeArmGateDriver(ns)
+        monkeypatch.setattr(
+            gate_mod, "verify_arm_installer_isolable", lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            gate_mod, "cross_arm_manifest",
+            lambda root: {"main": 1} if root == ns.main_worktree else {"candidate": 2},
+        )
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+        outside_repo_root = str(tmp_path / "some-other-venv" / "site-packages" / "quoin" / "__init__.py")
+        monkeypatch.setattr(gate_mod, "bare_import_quoin_file", lambda py: outside_repo_root)
+        problems = driver.preflight()
+        assert any("outside the git checkout" in p for p in problems)
+
+    def test_preflight_does_not_gate_stop_when_bare_import_resolves_under_repo_root(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=True)
+        driver = ThreeArmGateDriver(ns)
+        monkeypatch.setattr(
+            gate_mod, "verify_arm_installer_isolable", lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            gate_mod, "cross_arm_manifest",
+            lambda root: {"main": 1} if root == ns.main_worktree else {"candidate": 2},
+        )
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+        under_repo_root = str(gate_mod._repo_root / "src" / "quoin" / "__init__.py")
+        monkeypatch.setattr(gate_mod, "bare_import_quoin_file", lambda py: under_repo_root)
+        problems = driver.preflight()
+        assert not any("outside the git checkout" in p for p in problems)
+
 
 # ---------------------------------------------------------------------------
 # The live model probe never fires once preflight has already collected a
@@ -1853,10 +2046,28 @@ class TestAuthorisedUsdRequiredInFullMode:
         problems = driver.preflight()
         assert any("--authorised-usd is required" in p for p in problems)
 
-    def test_rehearsal_mode_does_not_require_authorised_usd(self, tmp_path):
+    def test_rehearsal_mode_requires_authorised_usd(self, tmp_path):
+        """Round-4 fix (MAJOR 8): --rehearsal is a real, paid mode (~$3),
+        so it must not be exempt from the explicit-ceiling requirement —
+        only --plan-only (genuinely spend-free) stays exempt. Regression:
+        pre-fix, this returned no such problem and let `preflight` fall
+        through to `resolve_authorised_ceiling`'s derive-from-ledger
+        fallback."""
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
 
-        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True, authorised_usd=None)
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path, rehearsal=True, plan_only=False, authorised_usd=None,
+        )
+        driver = ThreeArmGateDriver(ns)
+        problems = driver.preflight()
+        assert any("--authorised-usd is required" in p for p in problems)
+
+    def test_rehearsal_mode_with_authorised_usd_does_not_hit_that_problem(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path, rehearsal=True, plan_only=False, authorised_usd=50.0,
+        )
         driver = ThreeArmGateDriver(ns)
         problems = driver.preflight()
         assert not any("--authorised-usd is required" in p for p in problems)
@@ -1949,6 +2160,103 @@ class TestRawConfigDirSecureCreation:
         assert driver.raw_config_dir != old_fixed_path
         assert not (driver.raw_config_dir / "settings.json").exists()
 
+    def test_no_fixed_intermediate_directory_is_created_under_tmpdir(self, tmp_path):
+        """Regression (round-4 fix: MAJOR 9). The old
+        `$TMPDIR/quoin-gate/raw-config-*` shape had `$TMPDIR/quoin-gate`
+        as a fixed, attacker-pre-creatable intermediate — `mkdir(parents=
+        True, exist_ok=True)` follows a symlink planted there. `mkdtemp`
+        now runs directly against `tempfile.gettempdir()` with no fixed
+        intermediate directory left to pre-create. (Not monkeypatching
+        TMPDIR here — `tempfile.gettempdir()` caches its result process-
+        wide on first call, so a later env-var override is not honoured
+        within one test session; this test instead checks the real
+        system temp dir the driver actually used.)"""
+        import tempfile as _tempfile
+
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver._ensure_raw_config_dir()
+        # The new directory itself must land directly under the system
+        # temp dir, not inside any fixed "quoin-gate" intermediate — an
+        # already-leaked `quoin-gate/` from an earlier dev run (unrelated
+        # to this fix) may still exist on this machine, so the assertion
+        # is on THIS call's own result, not on global filesystem state.
+        assert driver.raw_config_dir.parent.name != "quoin-gate"
+        assert driver.raw_config_dir.parent == Path(_tempfile.gettempdir())
+
+    def test_assert_raw_config_dir_safe_passes_for_a_freshly_created_mkdtemp_dir(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver._ensure_raw_config_dir()  # must not raise
+        driver._assert_raw_config_dir_safe()  # re-run must also not raise
+
+    def test_assert_raw_config_dir_safe_rejects_a_symlink_substituted_for_the_directory(self, tmp_path):
+        """Regression (round-4 fix: MAJOR 9). Proves the exact TOCTOU the
+        review demonstrated: the 0700 directory `mkdtemp` created is
+        renamed away and replaced by a symlink to an attacker-owned
+        directory before the spawn. `os.lstat` (never `os.stat`) catches
+        the substitution instead of following it."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver._ensure_raw_config_dir()
+        real_dir = driver.raw_config_dir
+        attacker_dir = tmp_path / "attacker-owned"
+        attacker_dir.mkdir(mode=0o700)
+        shutil.rmtree(real_dir)
+        os.symlink(attacker_dir, real_dir)
+        with pytest.raises(GateStop, match="not a plain directory|symlink"):
+            driver._assert_raw_config_dir_safe()
+
+    def test_assert_raw_config_dir_safe_rejects_group_or_other_accessible_mode(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver._ensure_raw_config_dir()
+        os.chmod(driver.raw_config_dir, 0o755)
+        with pytest.raises(GateStop, match="0700|accessible"):
+            driver._assert_raw_config_dir_safe()
+
+    def test_assert_raw_config_dir_safe_rejects_wrong_owner(self, tmp_path, monkeypatch):
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+        import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path)
+        driver = ThreeArmGateDriver(ns)
+        driver._ensure_raw_config_dir()
+        real_lstat = gate_mod.os.lstat
+
+        class _FakeStat:
+            def __init__(self, real):
+                self.st_mode = real.st_mode
+                self.st_uid = real.st_uid + 1  # never the real uid
+
+        monkeypatch.setattr(gate_mod.os, "lstat", lambda p: _FakeStat(real_lstat(p)))
+        with pytest.raises(GateStop, match="not this process's uid"):
+            driver._assert_raw_config_dir_safe()
+
+    def test_run_arm_re_asserts_raw_config_dir_safety_immediately_before_spawn(self, tmp_path):
+        """End-to-end: `run_arm` itself calls the re-assertion right
+        before `run_arm_fn`, not just at creation time — a directory
+        compromised AFTER creation but BEFORE spawn must still be caught."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False)
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: (_ for _ in ()).throw(
+            AssertionError("must not spawn once raw_config_dir safety fails")
+        ))
+        driver.arm_roots = {}
+        driver._ensure_raw_config_dir()
+        os.chmod(driver.raw_config_dir, 0o777)
+        with pytest.raises(GateStop):
+            driver.run_arm("raw")
+
 
 # ---------------------------------------------------------------------------
 # --spend-ledger inside the quoin git checkout is a GATE-STOP (IVG-119
@@ -1971,6 +2279,50 @@ class TestStrandedNestedLedgerAndRunDirResolution:
         from quoin.benchmarks.scripts.run_three_arm_gate import _stranded_nested_ledger_problem
 
         assert _stranded_nested_ledger_problem(tmp_path / "ledger.jsonl") is None
+
+    def test_run_dir_inside_the_quoin_repo_is_also_a_gate_stop(self, tmp_path):
+        """Regression (round-4 fix: MAJOR 11). --run-dir is a spend-relevant
+        lookup key too (`_read_arm_actual_cost` reads every arm's cost back
+        from under it) — pre-fix, only --spend-ledger was guarded, so a
+        run-dir landing in the same stranded nested root wrote real paid
+        evidence somewhere nothing downstream would ever look for it."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            _repo_root, _stranded_nested_ledger_problem,
+        )
+
+        nested_run_dir = _repo_root / ".workflow_artifacts" / "quoin-benchmarks" / "runs"
+        problem = _stranded_nested_ledger_problem(nested_run_dir)
+        assert problem is not None
+        assert "IVG-119" in problem
+
+    def test_full_preflight_rejects_a_stranded_run_dir(self, tmp_path, monkeypatch):
+        """End-to-end proof that preflight() itself, not just the bare
+        predicate, now checks --run-dir."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            ThreeArmGateDriver, _repo_root,
+        )
+
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path, run_dir=_repo_root / ".workflow_artifacts" / "some-task" / "runs",
+        )
+        driver = ThreeArmGateDriver(ns)
+        problems = driver.preflight()
+        assert any("--run-dir" in p and "IVG-119" in p for p in problems)
+
+    def test_allow_nested_ledger_env_var_is_an_escape_hatch(self, tmp_path, monkeypatch):
+        """Regression (round-4 fix: MAJOR 15). The stranded-nested-root
+        predicate encodes THIS workspace's two-level layout, not a
+        universal invariant — a standalone quoin clone (the layout
+        /init_workflow produces, where the project root IS the git root)
+        would otherwise have every valid --spend-ledger path refused with
+        no override."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            _repo_root, _stranded_nested_ledger_problem,
+        )
+
+        nested = _repo_root / ".workflow_artifacts" / "some-task" / "spend-ledger.jsonl"
+        monkeypatch.setenv("QUOIN_ALLOW_NESTED_LEDGER", "1")
+        assert _stranded_nested_ledger_problem(nested) is None
 
     def test_run_dir_is_resolved_to_an_absolute_path_at_parse_time(self, tmp_path, monkeypatch):
         from quoin.benchmarks.scripts.run_three_arm_gate import main

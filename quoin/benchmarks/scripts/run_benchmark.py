@@ -168,6 +168,21 @@ def verify_model(
     from quoin.benchmarks.scripts import spend_ledger
 
     if ledger_path is not None:
+        # Required here too, not just in the three-arm gate driver
+        # (round-4 fix: MAJOR 8) — a standalone `--verify-model` call
+        # against a real ledger is a real, spend-generating call, and the
+        # derive-a-ceiling-from-the-ledger-it-polices fallback is exactly
+        # the hole that lets any ledger-appending caller silently raise
+        # its own authorisation.
+        if authorised is None:
+            print(
+                "GATE-STOP: --verify-model with --spend-ledger requires "
+                "--authorised-usd — the ceiling must be an explicit "
+                "operator input, not derived from the ledger it prechecks "
+                "spend against",
+                file=sys.stderr,
+            )
+            return 2
         resolved_authorised = spend_ledger.resolve_authorised_ceiling(ledger_path, authorised)
         ok, message = spend_ledger.precheck(
             ledger_path, planned_caps=[max_budget_usd], authorised=resolved_authorised,
@@ -529,6 +544,8 @@ def run_benchmark(
 
 
 def main() -> None:
+    from quoin.benchmarks.scripts import spend_ledger
+
     parser = argparse.ArgumentParser(
         description="Quoin benchmark orchestrator CLI"
     )
@@ -613,7 +630,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--max-budget-usd-per-task",
-        type=float,
+        type=spend_ledger.positive_finite_float,
         default=None,
         help="CLI-enforced per-task spend cap, passed to `claude "
              "--max-budget-usd` (T-14, D-08's primary bound)",
@@ -651,7 +668,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--authorised-usd",
-        type=float,
+        type=spend_ledger.positive_finite_float,
         default=None,
         help="Operator-supplied spend ceiling for --verify-model's own "
              "ledger precheck. When omitted, the ceiling is derived from "

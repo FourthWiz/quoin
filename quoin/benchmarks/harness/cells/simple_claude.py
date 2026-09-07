@@ -347,7 +347,14 @@ def invoke(
 
     budget_seconds = budget.wall_clock_seconds
     wall_start = time.monotonic()
-    backoff_total = 0.0  # time spent in rate-limit backoff (excluded from budget)
+    # Time spent in rate-limit backoff, excluded from the wall-clock budget —
+    # but only up to one budget's worth (see `min(backoff_total,
+    # budget_seconds)` below). A chunk carrying many 429 events would
+    # otherwise let the retry_delay sum grow without any bound at all, since
+    # a fully-excluded backoff never shrinks `remaining`; capping it at
+    # `budget_seconds` means a session can spend at most ~2x its budget
+    # (once on real work, once amortised on backoff) before it's killed.
+    backoff_total = 0.0
 
     try:
         proc = subprocess.Popen(
@@ -389,6 +396,14 @@ def invoke(
                 transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
             except OSError:
                 transcript_file = None
+        # Set at OPEN time, not after the loop: an exception raised anywhere
+        # below (a JSON error, a killed-process TimeoutExpired, the git-diff
+        # subprocess) must still leave `extra["transcript_streamed"]`
+        # correctly True whenever a file was actually opened, so a generic
+        # exception handler downstream (`runner.py`) can tell a
+        # partially-streamed transcript apart from an empty one and never
+        # clobber it with the (possibly-empty) ring buffer.
+        result["extra"]["transcript_streamed"] = transcript_file is not None
 
         # Drain stderr on a daemon thread started at spawn: a session
         # that writes past one pipe buffer's worth of stderr over a long
@@ -419,23 +434,78 @@ def invoke(
         except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
             stdout_fd = None
 
+        def _handle_stream_line(raw_line: str) -> str:
+            """Parse and record one stream-json line. Returns "rate_limited"
+            when the line is a 429/overloaded event the caller must back off
+            on, "skip" for a blank or unparseable line, "ok" otherwise."""
+            nonlocal total_cost_usd, tokens_in, tokens_out, tokens_cache_read
+            nonlocal tokens_cache_write, turn_count, session_errored, budget_halted
+            nonlocal events_seen
+
+            line = raw_line.strip()
+            if not line:
+                return "skip"
+
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                return "skip"
+
+            # Handle rate-limit / overloaded events
+            event_type = event.get("type", "")
+            if event_type in ("error", "api_error"):
+                error_msg = str(event.get("error", ""))
+                if "429" in error_msg or "overloaded" in error_msg.lower():
+                    return "rate_limited"
+
+            events.append(event)
+            events_seen += 1
+            if transcript_file is not None:
+                transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+                transcript_file.flush()
+            if not budget_halted and _detect_budget_halt(
+                str(event.get("result", "")) + str(event.get("error", ""))
+            ):
+                budget_halted = True
+
+            # Extract cost and token data from stream-json events
+            if event_type == "result":
+                cost_val = _extract_cost_usd(event)
+                if cost_val is not None:
+                    total_cost_usd = cost_val
+                usage = event.get("usage", {})
+                tokens_in = usage.get("input_tokens", tokens_in)
+                tokens_out = usage.get("output_tokens", tokens_out)
+                tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
+                tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+                # The terminal result event is authoritative on whether the
+                # session actually completed (verified 2026-09-06: an
+                # authentication failure still emits a `type: "assistant"`
+                # event carrying the error text, e.g. "Not logged in ·
+                # Please run /login" — turn_count alone cannot distinguish
+                # that from a real completion, per the D-15 rehearsal
+                # finding that isolated CLAUDE_CONFIG_DIR loses auth).
+                if event.get("is_error"):
+                    session_errored = True
+
+            if event_type == "assistant":
+                turn_count += 1
+
+            return "ok"
+
         try:
             read_buffer = ""
             try:
+                timed_out = False
                 while True:
                     # Timer-driven, not event-driven: re-evaluated at least
                     # every _POLL_INTERVAL_SECONDS even when stdout is
                     # silent, via the bounded select() below — not only when
                     # a stdout line happens to arrive.
-                    elapsed = time.monotonic() - wall_start - backoff_total
+                    elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
                     remaining = budget_seconds - elapsed
                     if remaining <= 0:
-                        proc.terminate()
-                        try:
-                            proc.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            proc.kill()
-                        result["verdict"] = "timeout"
+                        timed_out = True
                         break
 
                     if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
@@ -451,6 +521,16 @@ def invoke(
                         if not chunk:
                             if proc.poll() is not None:
                                 break
+                            # An EOF'd fd is reported readable by select()
+                            # FOREVER, so `os.read` returning b"" here with
+                            # the child still alive would otherwise spin
+                            # this loop at ~100% CPU with no sleep at all
+                            # (round-4 fix: MAJOR 14 — measured 99% parent
+                            # CPU for the remainder of the wall clock).
+                            # Stop selecting on stdout for one interval and
+                            # let the outer loop's own wall-clock check
+                            # bound how long this can repeat.
+                            time.sleep(min(_POLL_INTERVAL_SECONDS, max(remaining, 0.0)))
                             continue
                         read_buffer += chunk.decode("utf-8", errors="replace")
                         ready_lines, read_buffer = _split_ready_lines(read_buffer)
@@ -461,61 +541,54 @@ def invoke(
                         ready_lines = [line] if line else []
 
                     for raw_line in ready_lines:
-                        line = raw_line.strip()
-                        if not line:
-                            continue
+                        # Re-evaluated per LINE, not just once per chunk: a
+                        # single 64 KB chunk can carry many rate-limit
+                        # events, and a bare `time.sleep(retry_delay)` per
+                        # event previously ran with no wall-clock check
+                        # between them — a chunk full of 429s could burn
+                        # minutes past the budget before the outer loop ever
+                        # got a turn (round-3 CRITICAL regression: measured
+                        # 426s against a 3s budget).
+                        elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
+                        remaining = budget_seconds - elapsed
+                        if remaining <= 0:
+                            timed_out = True
+                            break
 
-                        try:
-                            event = json.loads(line)
-                        except json.JSONDecodeError:
-                            continue
+                        outcome = _handle_stream_line(raw_line)
+                        if outcome == "rate_limited":
+                            # Exponential backoff; pause does not count
+                            # against budget, and is itself capped by
+                            # whatever budget remains so a single backoff
+                            # can never itself run past the wall clock.
+                            backoff_start = time.monotonic()
+                            time.sleep(min(retry_delay, remaining))
+                            backoff_total += time.monotonic() - backoff_start
+                            retry_delay = min(retry_delay * 2, 60.0)
 
-                        # Handle rate-limit / overloaded events
-                        event_type = event.get("type", "")
-                        if event_type in ("error", "api_error"):
-                            error_msg = str(event.get("error", ""))
-                            if "429" in error_msg or "overloaded" in error_msg.lower():
-                                # Exponential backoff; pause does not count against budget
-                                backoff_start = time.monotonic()
-                                time.sleep(retry_delay)
-                                backoff_total += time.monotonic() - backoff_start
-                                retry_delay = min(retry_delay * 2, 60.0)
-                                continue
+                    if timed_out:
+                        break
 
-                        events.append(event)
-                        events_seen += 1
-                        if transcript_file is not None:
-                            transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
-                            transcript_file.flush()
-                        if not budget_halted and _detect_budget_halt(
-                            str(event.get("result", "")) + str(event.get("error", ""))
-                        ):
-                            budget_halted = True
-
-                        # Extract cost and token data from stream-json events
-                        if event_type == "result":
-                            cost_val = _extract_cost_usd(event)
-                            if cost_val is not None:
-                                total_cost_usd = cost_val
-                            usage = event.get("usage", {})
-                            tokens_in = usage.get("input_tokens", tokens_in)
-                            tokens_out = usage.get("output_tokens", tokens_out)
-                            tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
-                            tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
-                            # The terminal result event is authoritative on whether the
-                            # session actually completed (verified 2026-09-06: an
-                            # authentication failure still emits a `type: "assistant"`
-                            # event carrying the error text, e.g. "Not logged in ·
-                            # Please run /login" — turn_count alone cannot distinguish
-                            # that from a real completion, per the D-15 rehearsal
-                            # finding that isolated CLAUDE_CONFIG_DIR loses auth).
-                            if event.get("is_error"):
-                                session_errored = True
-
-                        if event_type == "assistant":
-                            turn_count += 1
-
-                proc.wait(timeout=10)
+                if timed_out:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    result["verdict"] = "timeout"
+                else:
+                    # A final line with no trailing newline is never
+                    # flushed through `_split_ready_lines` — at EOF it sits
+                    # in `read_buffer` as the "remainder" the split
+                    # machinery hands back for the NEXT chunk, and there is
+                    # no next chunk. That silently dropped the terminal
+                    # `result` event, and with it the arm's cost, whenever
+                    # the child's last write wasn't newline-terminated
+                    # (round-3 MAJOR regression).
+                    if read_buffer.strip():
+                        _handle_stream_line(read_buffer)
+                        read_buffer = ""
+                    proc.wait(timeout=10)
             finally:
                 # Guaranteed regardless of how the block above exits — a
                 # raised TimeoutExpired, a JSON error, or any other escape
