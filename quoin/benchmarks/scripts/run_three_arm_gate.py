@@ -96,10 +96,39 @@ def _atomic_write_bytes(path: Path, data: bytes) -> None:
     crash mid-write leaves the ORIGINAL file intact rather than truncated
     or unparseable JSON. Used for every rewrite of the operator's
     `~/.claude/settings.json`, which this driver otherwise truncates and
-    rewrites twice per arm."""
+    rewrites twice per arm.
+
+    The `.tmp` sidecar name is fully predictable from `path` — on a
+    shared host another user could pre-plant a symlink there pointing at
+    an arbitrary file, and a plain `write_bytes` would happily write
+    through it. `unlink` first (it removes the directory entry itself
+    and never follows a symlink, so this is safe against a planted
+    symlink and also clears a stale sidecar left by a prior crashed
+    write), then create the real file with `O_EXCL | O_NOFOLLOW` so a
+    symlink replanted in the gap between the unlink and this open is
+    refused rather than followed. The destination's existing mode (e.g.
+    a hardened 0600 `settings.json`) is preserved across the rewrite
+    instead of silently widening to the temp file's own mode."""
     tmp_path = path.with_suffix(path.suffix + ".tmp")
-    tmp_path.write_bytes(data)
-    os.replace(tmp_path, path)
+    try:
+        os.unlink(tmp_path)
+    except FileNotFoundError:
+        pass
+
+    dest_mode = path.stat().st_mode & 0o777 if path.exists() else None
+    fd = os.open(tmp_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+        if dest_mode is not None:
+            os.chmod(tmp_path, dest_mode)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 class GateStop(RuntimeError):

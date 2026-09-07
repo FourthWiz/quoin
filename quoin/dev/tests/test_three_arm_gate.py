@@ -8,6 +8,7 @@ import argparse
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -920,6 +921,16 @@ class TestDriverLedgerFlow:
 
 
 class TestDriverExceptionSafety:
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, tmp_path, monkeypatch):
+        """Every test in this class drives `run()` (and therefore
+        `teardown()`, which reads and rewrites `self.home`'s
+        settings.json) — without this, each one touches the developer's
+        real `~/.claude/settings.json`."""
+        fake_home = tmp_path / "_fake_home"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
     def test_gatestop_mid_loop_still_runs_teardown_and_returns_2(self, tmp_path):
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver, GateStop
 
@@ -1536,6 +1547,28 @@ class TestRehearsalRecordRunIdentityBinding:
         problems = paid_driver.preflight()
         assert not any("no green rehearsal record found" in p for p in problems), (
             "the paid run must accept the rehearsal's record despite the distinct gate-ids"
+        )
+
+    def test_red_record_with_matching_run_identity_still_does_not_authorise(
+        self, tmp_path, monkeypatch
+    ):
+        """A rehearsal that started (preflight passed) but then hit a real
+        problem partway through writes a RED record carrying a fully
+        correct identity block — this is the ordinary "rehearsal ran but
+        didn't pass" path, not a contrived edge case. Matching identity
+        must never substitute for a GREEN status: this pins the GREEN-
+        status conjunct in preflight's authorisation expression directly,
+        independent of the identity-binding conjunct pinned above."""
+        ns, driver = self._preflight_ready_driver(tmp_path, monkeypatch)
+        self._write_record(
+            ns,
+            "Status: **RED**\n\n" + _binding_block(ns) +
+            "\n## Problems\n\n- raw: transcript.jsonl is empty or missing\n",
+        )
+        problems = driver.preflight()
+        assert any("no green rehearsal record found" in p for p in problems), (
+            "a RED record must not authorise the paid run even with a fully correct "
+            "identity block"
         )
 
 
@@ -2457,7 +2490,7 @@ class TestEntryTimeInvalidationFailureBlocksTheRun:
         driver.preflight = lambda: []
         return ns, driver, record_path
 
-    def test_failed_invalidation_stops_the_run_before_any_arm(self, tmp_path, capsys):
+    def test_failed_invalidation_stops_the_run_before_any_arm(self, tmp_path, capsys, monkeypatch):
         """Both write attempts failing must stop the run outright — the
         record's authorisation state is unknown at the one moment nothing
         has spent yet, so proceeding would risk paid arms running on a
@@ -2471,16 +2504,15 @@ class TestEntryTimeInvalidationFailureBlocksTheRun:
         driver.run_arm = raising_run_arm
 
         # Make the deletion fallback fail too, so the GATE-STOP is the only
-        # way out of this branch.
+        # way out of this branch. `monkeypatch.setattr` (not a raw
+        # class-attribute assignment) guarantees the restore always runs,
+        # even if this test itself raises, so it can never bleed into
+        # later tests in the same file.
         def raising_unlink(self, missing_ok=False):
             raise PermissionError("read-only evidence directory")
 
-        original_unlink = Path.unlink
-        Path.unlink = raising_unlink
-        try:
-            code = driver.run()
-        finally:
-            Path.unlink = original_unlink
+        monkeypatch.setattr(Path, "unlink", raising_unlink)
+        code = driver.run()
 
         assert code == 2
         err = capsys.readouterr().err
@@ -2510,7 +2542,7 @@ class TestEntryTimeInvalidationFailureBlocksTheRun:
         assert "deleted (invalidation fallback)" in capsys.readouterr().out
         assert code != 2
 
-    def test_a_record_surviving_its_own_deletion_stops_the_run(self, tmp_path, capsys):
+    def test_a_record_surviving_its_own_deletion_stops_the_run(self, tmp_path, capsys, monkeypatch):
         """`unlink` reporting success while the file is still readable is
         the case a bare try/except cannot see; the existence recheck is
         what turns it into a GATE-STOP."""
@@ -2520,12 +2552,11 @@ class TestEntryTimeInvalidationFailureBlocksTheRun:
             AssertionError("no arm may run while the stale record survives")
         )
 
-        original_unlink = Path.unlink
-        Path.unlink = lambda self, missing_ok=False: None
-        try:
-            code = driver.run()
-        finally:
-            Path.unlink = original_unlink
+        # `monkeypatch.setattr` (not a raw class-attribute assignment)
+        # guarantees the restore always runs, even if this test itself
+        # raises, so it can never bleed into later tests in the same file.
+        monkeypatch.setattr(Path, "unlink", lambda self, missing_ok=False: None)
+        code = driver.run()
 
         assert code == 2
         assert "still exists after attempting to delete it" in capsys.readouterr().err
@@ -2861,6 +2892,14 @@ class TestRunnerFixtureRemoteReassertion:
 
 
 class TestDriverPopulatesCompareArmsColumnsEndToEnd:
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, tmp_path, monkeypatch):
+        """This class drives `run()` to completion — without this, it
+        touches the developer's real `~/.claude/settings.json`."""
+        fake_home = tmp_path / "_fake_home"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
     def test_turn_count_and_compaction_event_count_flow_from_metrics_json(self, tmp_path):
         from quoin.benchmarks.harness.compare_arms import _COLUMNS
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
@@ -3348,6 +3387,41 @@ class TestSettingsJsonAtomicAndBackedUp:
         _atomic_write_bytes(target, b"new content")
         assert target.read_bytes() == b"new content"
         assert not target.with_suffix(target.suffix + ".tmp").exists()
+
+    def test_atomic_write_preserves_the_destination_mode(self, tmp_path):
+        """A hardened 0600 settings.json must not be silently widened to
+        the temp file's own mode across a rewrite."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import _atomic_write_bytes
+
+        target = tmp_path / "settings.json"
+        target.write_bytes(b"old content")
+        os.chmod(target, 0o600)
+        _atomic_write_bytes(target, b"new content")
+        assert target.read_bytes() == b"new content"
+        assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+    def test_atomic_write_does_not_follow_a_planted_symlink_at_the_tmp_path(self, tmp_path):
+        """The `.tmp` sidecar name is fully predictable from the
+        destination path. A pre-planted symlink there — pointing at some
+        other file entirely — must never be written through; it must be
+        cleared and replaced with a real file, and the symlink's target
+        must be left untouched."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import _atomic_write_bytes
+
+        target = tmp_path / "settings.json"
+        target.write_bytes(b"old content")
+        victim = tmp_path / "victim.txt"
+        victim.write_bytes(b"do not touch me")
+        tmp_sidecar = target.with_suffix(target.suffix + ".tmp")
+        tmp_sidecar.symlink_to(victim)
+
+        _atomic_write_bytes(target, b"new content")
+
+        assert target.read_bytes() == b"new content"
+        assert victim.read_bytes() == b"do not touch me", (
+            "a planted symlink at the predictable .tmp path must not be followed"
+        )
+        assert not tmp_sidecar.is_symlink()
 
 
 # ---------------------------------------------------------------------------
