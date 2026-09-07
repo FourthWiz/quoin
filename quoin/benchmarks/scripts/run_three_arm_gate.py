@@ -63,6 +63,11 @@ from quoin.benchmarks.scripts import spend_ledger  # noqa: E402
 
 ARMS = ("raw", "main", "candidate")
 
+# The task id of the suite this gate ships with. Only a fallback: readers
+# derive the id from the suite they were actually given, and use this when
+# that file cannot be read.
+DEFAULT_GATE_TASK_ID = "scenario_medium_refactor_plan"
+
 # Matches `verify_model`'s own default in run_benchmark.py — kept as an
 # explicit constant here so the live model probe's cap can be folded into
 # the ledger precheck's `planned` figure (T-04c) rather than spending
@@ -1287,7 +1292,45 @@ class ThreeArmGateDriver:
 
     # -- Rehearsal record (T-16) -----------------------------------------
 
-    def write_rehearsal_record(self) -> Path:
+    def _record_task_id(self) -> str:
+        """The task id whose per-task artifacts the record reads. Derived
+        from the suite the run was actually given, the same way
+        `_read_arm_metrics` derives it — a hardcoded id silently stops
+        matching the moment the gate is pointed at a different suite, and
+        the record's transcript check would then report every arm as
+        missing for a reason that has nothing to do with the run. Falls
+        back to the shipped gate suite's task when the suite file cannot be
+        read, which is all that is knowable at that point.
+        """
+        try:
+            suite = json.loads(self.args.suite.read_text(encoding="utf-8"))
+            return suite["tasks"][0]["id"]
+        except Exception:
+            return DEFAULT_GATE_TASK_ID
+
+    def _read_json_artifact(self, path: Path, label: str, problems: list[str]) -> Optional[dict]:
+        """Read one per-arm JSON artifact, degrading a malformed or
+        truncated file to a recorded problem instead of an exception.
+
+        These artifacts are written with a plain non-atomic `write_text` by
+        the cell, and the driver kills the whole process group when its
+        wall clock expires — a half-written file is the expected state
+        after exactly the event that makes this record matter most. Raising
+        from here would abandon the write entirely and leave whatever
+        record was already on disk standing, which is the failure this
+        record exists to prevent.
+        """
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            problems.append(f"{label} could not be read ({type(exc).__name__})")
+            return None
+        if not isinstance(data, dict):
+            problems.append(f"{label} is not a JSON object")
+            return None
+        return data
+
+    def write_rehearsal_record(self, stopped_reason: Optional[str] = None) -> Path:
         """Write `stage-8/gate-evidence/rehearsal.md` (T-16), the record
         T-07 step 0's full-mode preflight requires before any real pilot
         run. GREEN only when every arm produced a non-error verdict, a
@@ -1297,14 +1340,26 @@ class ThreeArmGateDriver:
         re-parsing transcripts. Anything short of that is RED, with the
         specific reason recorded so a human can decide whether to fix and
         re-rehearse (T-16's own contract) rather than proceed.
+
+        `stopped_reason` is set by every non-success exit and forces RED
+        unconditionally. Every other problem source here is conditional on
+        an artifact existing, so a run stopped part-way through can find a
+        previous run's complete artifacts under the same gate id and run
+        dir (neither is guarded against reuse) and render a fresh GREEN
+        attesting a run that never finished. Recording the stop itself is
+        the only thing that makes invalidation guaranteed rather than
+        incidental.
         """
         lines = [f"# Rehearsal record — {self.args.gate_id}", ""]
         problems: list[str] = []
         commits: dict[str, Optional[str]] = {}
+        if stopped_reason:
+            problems.append(f"run did not complete: {stopped_reason}")
+        task_id = self._record_task_id()
 
         for arm in ARMS:
             run_id = f"{self.args.gate_id}-{arm}"
-            task_dir = self.args.run_dir / run_id / self.arm_cells[arm] / "scenario_medium_refactor_plan"
+            task_dir = self.args.run_dir / run_id / self.arm_cells[arm] / task_id
             judge_path = task_dir / "judge.json"
             metrics_path = task_dir / "metrics.json"
             transcript_path = task_dir / "transcript.jsonl"
@@ -1312,22 +1367,26 @@ class ThreeArmGateDriver:
             verdict = "not_available"
             cost = None
             if judge_path.exists():
-                verdict = json.loads(judge_path.read_text(encoding="utf-8")).get("verdict", "not_available")
+                judge = self._read_json_artifact(judge_path, f"{arm}: judge.json", problems)
+                if judge is not None:
+                    verdict = judge.get("verdict", "not_available")
             if verdict == "error":
                 problems.append(f"{arm}: verdict is error")
 
             if metrics_path.exists():
-                metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-                commits[arm] = metrics.get("installed_quoin_commit")
-                if not metrics.get("budget_cap_armed", True) and metrics.get("max_budget_usd_applied") is not None:
-                    problems.append(f"{arm}: budget cap was not armed despite a cap being applied")
+                metrics = self._read_json_artifact(metrics_path, f"{arm}: metrics.json", problems)
+                if metrics is not None:
+                    commits[arm] = metrics.get("installed_quoin_commit")
+                    if not metrics.get("budget_cap_armed", True) and metrics.get("max_budget_usd_applied") is not None:
+                        problems.append(f"{arm}: budget cap was not armed despite a cap being applied")
 
             summary_path = self.args.run_dir / run_id / "summary.json"
             if summary_path.exists():
-                summary = json.loads(summary_path.read_text(encoding="utf-8"))
-                cost = (summary.get("cells") or {}).get(self.arm_cells[arm], {}).get("total_cost_usd_or_null")
-                if cost is None:
-                    problems.append(f"{arm}: cost is not a number")
+                summary = self._read_json_artifact(summary_path, f"{arm}: summary.json", problems)
+                if summary is not None:
+                    cost = (summary.get("cells") or {}).get(self.arm_cells[arm], {}).get("total_cost_usd_or_null")
+                    if cost is None:
+                        problems.append(f"{arm}: cost is not a number")
 
             transcript_non_empty = transcript_path.exists() and transcript_path.stat().st_size > 0
             if not transcript_non_empty:
@@ -1365,6 +1424,46 @@ class ThreeArmGateDriver:
         record_path.parent.mkdir(parents=True, exist_ok=True)
         record_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return record_path
+
+    def _invalidate_rehearsal_record(self, stopped_reason: str) -> None:
+        """Re-render `rehearsal.md` as RED for a rehearsal that did not
+        complete, on every non-success exit.
+
+        The full-mode preflight only substring-checks a fixed path for
+        "GREEN", so a record left over from an earlier successful rehearsal
+        would otherwise still authorise a paid run on evidence from a
+        different run. Rendering is best effort in one direction only: if
+        the full record cannot be built, a minimal RED stub still goes to
+        the same path, because leaving a stale GREEN standing is the worse
+        outcome. Nothing here may change the caller's exit code — this is
+        evidence bookkeeping on a path that is already stopping.
+        """
+        if not self.args.rehearsal:
+            return
+        try:
+            record_path = self.write_rehearsal_record(stopped_reason=stopped_reason)
+            print(f"Rehearsal record written to: {record_path}")
+            return
+        except Exception as exc:
+            print(f"WARN: could not render the rehearsal record: {exc}", file=sys.stderr)
+        try:
+            record_path = self.args.spend_ledger.parent / "rehearsal.md"
+            record_path.parent.mkdir(parents=True, exist_ok=True)
+            record_path.write_text(
+                f"# Rehearsal record — {self.args.gate_id}\n"
+                "\nStatus: **RED**\n"
+                "\n## Problems\n"
+                f"- run did not complete: {stopped_reason}\n"
+                "- the full record could not be rendered; re-run the rehearsal\n",
+                encoding="utf-8",
+            )
+            print(f"Rehearsal record written to: {record_path}")
+        except OSError as exc:
+            print(
+                f"WARN: could not write any rehearsal record: {exc}. "
+                "Delete the record by hand before running the paid gate.",
+                file=sys.stderr,
+            )
 
     # -- Orchestration --------------------------------------------------------
 
@@ -1438,6 +1537,12 @@ class ThreeArmGateDriver:
                     "GATE-STOP: teardown could not verify a clean candidate reinstall",
                     file=sys.stderr,
                 )
+                # A GATE-STOP by name, but an early return rather than a
+                # raised GateStop — so the handler below never sees it and
+                # the record has to be invalidated here too.
+                self._invalidate_rehearsal_record(
+                    "teardown could not verify a clean candidate reinstall"
+                )
                 return 1
 
             try:
@@ -1476,22 +1581,16 @@ class ThreeArmGateDriver:
         except GateStop as exc:
             print(str(exc), file=sys.stderr)
             self.teardown()
-            if self.args.rehearsal:
-                # A killed/aborted rehearsal must not leave a stale GREEN
-                # `rehearsal.md` standing — the full-mode preflight only
-                # substring-checks for "GREEN" at a fixed path, so a prior
-                # successful rehearsal's record would otherwise still
-                # satisfy that gate on evidence from a different run.
-                # write_rehearsal_record() renders RED for the arm(s) that
-                # never produced a transcript, invalidating the stale
-                # record and restoring an evidence artifact for the
-                # stopped run.
-                record_path = self.write_rehearsal_record()
-                print(f"Rehearsal record written to: {record_path}")
+            # Order matters: the record must be written AFTER teardown, so
+            # it describes the tree the operator is left with. Teardown
+            # produces nothing the writer reads, so the reverse order would
+            # not fail loudly — hence this note.
+            self._invalidate_rehearsal_record(str(exc))
             return 2
         except KeyboardInterrupt:
             print("Aborted by signal; running teardown.", file=sys.stderr)
             verified = self.teardown()
+            self._invalidate_rehearsal_record("aborted by signal before the run finished")
             return 1 if not verified else 130
         finally:
             signal.signal(signal.SIGINT, old_sigint)

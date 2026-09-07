@@ -1099,8 +1099,9 @@ class TestDryRunGateCLIExitCodes:
 
 
 def _write_task_files(run_dir, run_id, cell, verdict="pass", cost=1.0,
-                       installed_commit="abc", transcript="{}\n"):
-    task_dir = run_dir / run_id / cell / "scenario_medium_refactor_plan"
+                       installed_commit="abc", transcript="{}\n",
+                       task_id="scenario_medium_refactor_plan"):
+    task_dir = run_dir / run_id / cell / task_id
     task_dir.mkdir(parents=True, exist_ok=True)
     (task_dir / "judge.json").write_text(json.dumps({"verdict": verdict}))
     (task_dir / "metrics.json").write_text(json.dumps({
@@ -1618,13 +1619,11 @@ class TestDriverKillIsFatalNotAWarning:
 
 
     def test_returncode_124_rehearsal_invalidates_stale_green_record(self, tmp_path):
-        """Regression pin (round-6 review fix). Before this fix, a killed
-        rehearsal's GateStop exit skipped write_rehearsal_record()
-        entirely, so a stale GREEN rehearsal.md left over from a PRIOR
-        successful rehearsal survived untouched — and the full-mode
-        preflight's substring check on that fixed path would then wave
-        through a paid run on evidence from a different, older
-        rehearsal."""
+        """A killed rehearsal's GateStop exit must rewrite rehearsal.md.
+        Otherwise a stale GREEN left over from a PRIOR successful rehearsal
+        survives untouched — and the full-mode preflight's substring check
+        on that fixed path would then wave through a paid run on evidence
+        from a different, older rehearsal."""
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
 
         (tmp_path / "suite.json").write_text(json.dumps(
@@ -1646,6 +1645,123 @@ class TestDriverKillIsFatalNotAWarning:
         assert "GREEN" not in record_text, (
             "a killed rehearsal must invalidate the stale record, not leave it standing"
         )
+        # Pin the positive half too: the absence of "GREEN" alone is also
+        # satisfied by an empty file or an unrelated error blob.
+        assert "Status: **RED**" in record_text
+        assert "transcript.jsonl is empty or missing" in record_text
+        assert ns.gate_id in record_text, "the record must describe THIS run"
+
+    def test_stopped_run_is_red_even_over_a_prior_runs_complete_artifacts(self, tmp_path):
+        """Re-running a stopped gate under the same --gate-id is the
+        ordinary operator move after a timeout, and neither --gate-id nor
+        --run-dir is guarded against reuse. Every artifact-derived problem
+        source is conditional on the artifact being absent, so a run that
+        stopped part-way through finds the PREVIOUS run's complete
+        artifacts and would otherwise re-attest a fresh GREEN — carrying
+        the killed run's own gate id, which erases the staleness tells a
+        human auditor would have had. Recording the stop itself is what
+        makes the RED unconditional."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        # A prior successful rehearsal's artifacts, complete and GREEN-worthy.
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit,
+                               task_id="scenario_x")
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 124)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+
+        assert code == 2
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "GREEN" not in record_text
+        assert "run did not complete" in record_text
+
+    def test_truncated_summary_json_on_the_kill_path_still_writes_a_red_record(self, tmp_path):
+        """The cells write their artifacts with a plain non-atomic
+        write_text and the driver SIGKILLs the whole process group on its
+        wall-clock timeout, so a half-written summary.json is the expected
+        state after exactly this event. An unguarded json.loads would raise
+        out of the stop handler: no record would be written at all, the
+        prior GREEN would stand, and the documented exit code would become
+        a traceback."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit,
+                               task_id="scenario_x")
+        (ns.run_dir / "g1-raw" / "summary.json").write_text(
+            '{"cells": {"simple-claude": {"total_c', encoding="utf-8"
+        )
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 124)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+
+        assert code == 2, "a malformed artifact must not replace the exit code with a traceback"
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "GREEN" not in record_text
+        assert "raw: summary.json could not be read" in record_text
+
+    def test_teardown_verify_failure_also_invalidates_the_record(self, tmp_path):
+        """The teardown-verify exit is a GATE-STOP by name but an early
+        return rather than a raised GateStop, so it needs its own
+        invalidation — otherwise a run that could not restore a clean
+        candidate install leaves a GREEN record authorising the paid
+        run."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit,
+                               task_id="scenario_x")
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 0)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+        driver.teardown = lambda: False
+
+        code = driver.run()
+
+        assert code == 1
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "GREEN" not in record_text
+        assert "teardown could not verify a clean candidate reinstall" in record_text
 
 
 # ---------------------------------------------------------------------------
