@@ -101,6 +101,12 @@ def _detect_budget_halt(text: str) -> bool:
 _POLL_INTERVAL_SECONDS = 1.0
 _MAX_RETAINED_EVENTS = 2000
 
+# How many stderr LINES the drain thread keeps as a diagnostic tail. Not
+# a detection mechanism — the budget-halt marker is checked per-line as it
+# arrives (see `_drain_stream`), so this bound only limits how much of a
+# runaway stderr stream stays resident in memory.
+_MAX_RETAINED_STDERR_LINES = 500
+
 
 def _wait_readable(stream, timeout: float) -> bool:
     """True once `stream` has a line ready, `timeout` elapses, or `stream`
@@ -129,7 +135,35 @@ def _wait_readable(stream, timeout: float) -> bool:
     return bool(ready)
 
 
-def _drain_stream(stream, buffer: list) -> None:
+def _read_ready_chunk(fd: int) -> bytes:
+    """A single read from `fd`, called only after `select()` has already
+    reported it readable.
+
+    For a pipe, `os.read()` then returns whatever bytes are CURRENTLY
+    available (or `b""` at EOF) without waiting for a complete line —
+    unlike `TextIOWrapper.readline()`, which loops internally until it
+    sees a newline or EOF and can block on a partial line the child has
+    written but not yet completed. That gap is what let a child holding
+    stdout open past its wall-clock budget (a partial line written, then
+    the child sleeping) delay `invoke()`'s return until the child exited
+    on its own, even though `select()` had already woken this loop.
+    """
+    try:
+        return os.read(fd, 65536)
+    except (OSError, ValueError):
+        return b""
+
+
+def _split_ready_lines(buffer: str) -> tuple[list[str], str]:
+    """Split `buffer` on newlines, returning `(complete_lines, remainder)`
+    — `remainder` is the trailing partial line (or `""` when `buffer`
+    ended exactly on a newline), to be prefixed onto the next chunk."""
+    parts = buffer.split("\n")
+    remainder = parts.pop()
+    return parts, remainder
+
+
+def _drain_stream(stream, buffer, halt_event: Optional["threading.Event"] = None) -> None:
     """Continuously read `stream` into `buffer` on a background thread.
 
     Started right after `Popen` so the OS pipe buffer backing `stderr`
@@ -138,12 +172,22 @@ def _drain_stream(stream, buffer: list) -> None:
     process's `stdout` reads forever too — both pipes lead to the same
     child. Runs until EOF or the stream closes out from under it (the
     main thread killing/reaping the process).
+
+    `buffer` may be a plain list or a bounded `deque` — either way this
+    only ever calls `.append()`, so a caller bounding memory via
+    `deque(maxlen=...)` needs no change here. When `halt_event` is given,
+    each line is checked for a budget-halt marker (D-08) AS IT ARRIVES and
+    `halt_event.set()` fires on the first match — this is what lets a
+    caller bound `buffer`'s size without losing the ability to detect a
+    marker that has since scrolled out of a capped tail.
     """
     if stream is None:
         return
     try:
         for line in iter(stream.readline, ""):
             buffer.append(line)
+            if halt_event is not None and not halt_event.is_set() and _detect_budget_halt(line):
+                halt_event.set()
     except Exception:
         # A background thread — nothing upstream is positioned to handle
         # an exception here, and a stream that misbehaves (closed out
@@ -233,6 +277,7 @@ def invoke(
     budget: BudgetSpec,
     run_id: str,
     max_budget_usd: Optional[float] = None,
+    run_output_dir: Optional[Path] = None,
 ) -> dict:
     """
     Invoke Claude Code CLI in simple (no-quoin) mode.
@@ -251,6 +296,13 @@ def invoke(
         Optional CLI-enforced spend cap (D-08), passed through to `claude
         --max-budget-usd`. In gate mode (`QUOIN_BENCHMARK_GATE=1`), a `None`
         value or an assembled argv missing the flag refuses to spawn.
+    run_output_dir:
+        This task's own result directory. When given, every stream-json
+        event is streamed to `run_output_dir/transcript.jsonl` as it
+        arrives — the FULL transcript, independent of the in-memory ring
+        buffer's cap. When omitted, no file is written here and the
+        caller (`result_writer.write_run_result`) writes the (possibly
+        truncated) ring-buffer contents instead, as before.
 
     Returns
     -------
@@ -309,11 +361,13 @@ def invoke(
         # Ring buffer, not an unbounded list: peak retained memory is
         # bounded regardless of session length. A `--verbose` stream-json
         # session running the full wall clock can emit far more than this
-        # many events, and nothing downstream needs the full history —
-        # `turn_count` and the budget-halt check are both maintained
-        # incrementally below, not recomputed from a full concatenation
-        # at the end.
+        # many events, and nothing downstream needs the full history in
+        # MEMORY — `turn_count` and the budget-halt check are both
+        # maintained incrementally below, not recomputed from a full
+        # concatenation at the end. The full ORDERED event stream, if
+        # anyone needs it, is what `transcript_file` below writes.
         events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+        events_seen = 0
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
         turn_count = 0
@@ -321,116 +375,173 @@ def invoke(
         retry_delay = 1.0
         budget_halted = False
 
+        # Stream every retained event to transcript.jsonl AS IT ARRIVES,
+        # when the caller gave us this task's own result directory — the
+        # file on disk is then the FULL transcript regardless of the ring
+        # buffer's cap above, closing the silent-truncation gap: nothing
+        # previously recorded that the ring buffer had dropped anything,
+        # and the file was only ever written from the (possibly
+        # truncated) buffer after the fact.
+        transcript_file = None
+        if run_output_dir is not None:
+            try:
+                run_output_dir.mkdir(parents=True, exist_ok=True)
+                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+            except OSError:
+                transcript_file = None
+
         # Drain stderr on a daemon thread started at spawn: a session
         # that writes past one pipe buffer's worth of stderr over a long
         # run would otherwise block in the child's own write(2), which
         # stops it emitting stdout too — and the wall-clock check below
         # never gets a chance to fire because it sits above a blocking
-        # `readline()` that then never returns.
-        stderr_buffer: list = []
+        # `readline()` that then never returns. The retained buffer is a
+        # bounded diagnostic tail (`deque(maxlen=...)`), not an unbounded
+        # accumulator — a session emitting tens of MB of stderr must not
+        # grow this process's memory by a matching amount. The budget-halt
+        # marker is checked per-line, incrementally, as each line is
+        # drained (via `stderr_halt_event`), so bounding the buffer never
+        # costs detection accuracy.
+        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+        stderr_halt_event = threading.Event()
         stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer), daemon=True,
+            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
         )
         stderr_thread.start()
 
+        # A real OS pipe has a usable fd — that's the case this fix
+        # targets. A test double or anything else without one (matching
+        # `_wait_readable`'s own fallback) keeps the pre-fix line-buffered
+        # read, since there is no partial-line-blocking hazard to close
+        # for something that was never a real pipe in the first place.
         try:
-            while True:
-                # Timer-driven, not event-driven: re-evaluated at least
-                # every _POLL_INTERVAL_SECONDS even when stdout is
-                # silent, via the bounded select() below — not only when
-                # a stdout line happens to arrive.
-                elapsed = time.monotonic() - wall_start - backoff_total
-                remaining = budget_seconds - elapsed
-                if remaining <= 0:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    result["verdict"] = "timeout"
-                    break
+            stdout_fd: Optional[int] = proc.stdout.fileno()
+        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+            stdout_fd = None
 
-                if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
-                    continue
+        try:
+            read_buffer = ""
+            try:
+                while True:
+                    # Timer-driven, not event-driven: re-evaluated at least
+                    # every _POLL_INTERVAL_SECONDS even when stdout is
+                    # silent, via the bounded select() below — not only when
+                    # a stdout line happens to arrive.
+                    elapsed = time.monotonic() - wall_start - backoff_total
+                    remaining = budget_seconds - elapsed
+                    if remaining <= 0:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        result["verdict"] = "timeout"
+                        break
 
-                line = proc.stdout.readline()
-                if not line and proc.poll() is not None:
-                    break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                # Handle rate-limit / overloaded events
-                event_type = event.get("type", "")
-                if event_type in ("error", "api_error"):
-                    error_msg = str(event.get("error", ""))
-                    if "429" in error_msg or "overloaded" in error_msg.lower():
-                        # Exponential backoff; pause does not count against budget
-                        backoff_start = time.monotonic()
-                        time.sleep(retry_delay)
-                        backoff_total += time.monotonic() - backoff_start
-                        retry_delay = min(retry_delay * 2, 60.0)
+                    if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
                         continue
 
-                events.append(event)
-                if not budget_halted and _detect_budget_halt(
-                    str(event.get("result", "")) + str(event.get("error", ""))
-                ):
-                    budget_halted = True
+                    if stdout_fd is not None:
+                        # A single read of whatever is CURRENTLY available —
+                        # never `readline()`, which can block on a partial
+                        # line the child has written but not yet completed
+                        # even though `select()` already reported the fd
+                        # readable (see `_read_ready_chunk`'s docstring).
+                        chunk = _read_ready_chunk(stdout_fd)
+                        if not chunk:
+                            if proc.poll() is not None:
+                                break
+                            continue
+                        read_buffer += chunk.decode("utf-8", errors="replace")
+                        ready_lines, read_buffer = _split_ready_lines(read_buffer)
+                    else:
+                        line = proc.stdout.readline()
+                        if not line and proc.poll() is not None:
+                            break
+                        ready_lines = [line] if line else []
 
-                # Extract cost and token data from stream-json events
-                if event_type == "result":
-                    cost_val = _extract_cost_usd(event)
-                    if cost_val is not None:
-                        total_cost_usd = cost_val
-                    usage = event.get("usage", {})
-                    tokens_in = usage.get("input_tokens", tokens_in)
-                    tokens_out = usage.get("output_tokens", tokens_out)
-                    tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
-                    tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
-                    # The terminal result event is authoritative on whether the
-                    # session actually completed (verified 2026-09-06: an
-                    # authentication failure still emits a `type: "assistant"`
-                    # event carrying the error text, e.g. "Not logged in ·
-                    # Please run /login" — turn_count alone cannot distinguish
-                    # that from a real completion, per the D-15 rehearsal
-                    # finding that isolated CLAUDE_CONFIG_DIR loses auth).
-                    if event.get("is_error"):
-                        session_errored = True
+                    for raw_line in ready_lines:
+                        line = raw_line.strip()
+                        if not line:
+                            continue
 
-                if event_type == "assistant":
-                    turn_count += 1
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
 
-            proc.wait(timeout=10)
+                        # Handle rate-limit / overloaded events
+                        event_type = event.get("type", "")
+                        if event_type in ("error", "api_error"):
+                            error_msg = str(event.get("error", ""))
+                            if "429" in error_msg or "overloaded" in error_msg.lower():
+                                # Exponential backoff; pause does not count against budget
+                                backoff_start = time.monotonic()
+                                time.sleep(retry_delay)
+                                backoff_total += time.monotonic() - backoff_start
+                                retry_delay = min(retry_delay * 2, 60.0)
+                                continue
+
+                        events.append(event)
+                        events_seen += 1
+                        if transcript_file is not None:
+                            transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+                            transcript_file.flush()
+                        if not budget_halted and _detect_budget_halt(
+                            str(event.get("result", "")) + str(event.get("error", ""))
+                        ):
+                            budget_halted = True
+
+                        # Extract cost and token data from stream-json events
+                        if event_type == "result":
+                            cost_val = _extract_cost_usd(event)
+                            if cost_val is not None:
+                                total_cost_usd = cost_val
+                            usage = event.get("usage", {})
+                            tokens_in = usage.get("input_tokens", tokens_in)
+                            tokens_out = usage.get("output_tokens", tokens_out)
+                            tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
+                            tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+                            # The terminal result event is authoritative on whether the
+                            # session actually completed (verified 2026-09-06: an
+                            # authentication failure still emits a `type: "assistant"`
+                            # event carrying the error text, e.g. "Not logged in ·
+                            # Please run /login" — turn_count alone cannot distinguish
+                            # that from a real completion, per the D-15 rehearsal
+                            # finding that isolated CLAUDE_CONFIG_DIR loses auth).
+                            if event.get("is_error"):
+                                session_errored = True
+
+                        if event_type == "assistant":
+                            turn_count += 1
+
+                proc.wait(timeout=10)
+            finally:
+                # Guaranteed regardless of how the block above exits — a
+                # raised TimeoutExpired, a JSON error, or any other escape
+                # must not leave a paid `claude` process (or its stderr
+                # drain thread) orphaned.
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                stderr_thread.join(timeout=5)
         finally:
-            # Guaranteed regardless of how the block above exits — a
-            # raised TimeoutExpired, a JSON error, or any other escape
-            # must not leave a paid `claude` process (or its stderr
-            # drain thread) orphaned.
-            if proc.poll() is None:
-                proc.kill()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    pass
-            stderr_thread.join(timeout=5)
+            if transcript_file is not None:
+                transcript_file.close()
 
         stderr_output = "".join(stderr_buffer)
 
         # A CLI-enforced budget halt (D-08) is reported as capped, not
         # silently short — this cell's own refusal above only catches an
         # UNARMED cap; this catches the cap actually firing mid-session.
-        # Checked incrementally as events arrived (above) plus the final
-        # stderr buffer here, rather than rebuilding one giant
-        # concatenation of every retained event after the fact.
+        # `stderr_halt_event` is set incrementally as stderr lines arrive
+        # (never from re-scanning the bounded tail below, which may have
+        # already scrolled the marker out).
         if result["verdict"] is None:
-            if budget_halted or _detect_budget_halt(stderr_output):
+            if budget_halted or stderr_halt_event.is_set():
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
@@ -446,6 +557,20 @@ def invoke(
             result["diff_patch"] = diff_proc.stdout
         except Exception:
             result["diff_patch"] = ""
+
+        # The ring buffer silently drops the OLDEST events once
+        # `events_seen` exceeds its cap — record that it happened (rather
+        # than let a truncated in-memory value look complete) and mark the
+        # truncation inside the value itself, since not every caller reads
+        # `extra`.
+        transcript_events_dropped = max(0, events_seen - _MAX_RETAINED_EVENTS)
+        result["extra"]["transcript_events_dropped"] = transcript_events_dropped
+        result["extra"]["transcript_streamed"] = transcript_file is not None
+        if transcript_events_dropped:
+            events.appendleft({
+                "type": "truncation_notice",
+                "dropped_event_count": transcript_events_dropped,
+            })
 
         result["transcript_events"] = list(events)
         result["turn_count"] = turn_count

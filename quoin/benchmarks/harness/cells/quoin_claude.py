@@ -35,6 +35,7 @@ Cost:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
@@ -51,6 +52,7 @@ from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
+    _MAX_RETAINED_STDERR_LINES,
     _POLL_INTERVAL_SECONDS,
     _build_claude_argv,
     _build_prompt,
@@ -59,6 +61,8 @@ from .simple_claude import (
     _extract_cost_usd,
     _gate_mode,
     _get_model,
+    _read_ready_chunk,
+    _split_ready_lines,
     _wait_readable,
 )
 
@@ -411,6 +415,7 @@ def invoke(
         # for the full rationale; both cells share the same streaming
         # shape.
         events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+        events_seen = 0
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
         turn_count = 0
@@ -418,91 +423,133 @@ def invoke(
         retry_delay = 1.0
         budget_halted = False
 
+        # Stream every retained event to transcript.jsonl AS IT ARRIVES —
+        # see simple_claude.invoke for the full rationale.
+        transcript_file = None
+        if run_output_dir is not None:
+            try:
+                run_output_dir.mkdir(parents=True, exist_ok=True)
+                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+            except OSError:
+                transcript_file = None
+
         # Drain stderr on a daemon thread started at spawn — see
-        # simple_claude.invoke for the full rationale.
-        stderr_buffer: list = []
+        # simple_claude.invoke for the full rationale, including why the
+        # retained buffer is a bounded diagnostic tail (`deque`) with
+        # budget-halt detection folded in incrementally rather than an
+        # unbounded accumulator.
+        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+        stderr_halt_event = threading.Event()
         stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer), daemon=True,
+            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
         )
         stderr_thread.start()
 
+        # See simple_claude.invoke for the full rationale — a real OS pipe
+        # gets the chunk-based, timer-driven read; a test double without a
+        # usable fd keeps the pre-fix line-buffered read.
         try:
-            while True:
-                # Timer-driven, not event-driven — see simple_claude.invoke.
-                elapsed = time.monotonic() - wall_start - backoff_total
-                remaining = budget_seconds - elapsed
-                if remaining <= 0:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                    result["verdict"] = "timeout"
-                    break
+            stdout_fd: Optional[int] = proc.stdout.fileno()
+        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+            stdout_fd = None
 
-                if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
-                    continue
+        try:
+            read_buffer = ""
+            try:
+                while True:
+                    # Timer-driven, not event-driven — see simple_claude.invoke.
+                    elapsed = time.monotonic() - wall_start - backoff_total
+                    remaining = budget_seconds - elapsed
+                    if remaining <= 0:
+                        proc.terminate()
+                        try:
+                            proc.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                        result["verdict"] = "timeout"
+                        break
 
-                line = proc.stdout.readline()
-                if not line and proc.poll() is not None:
-                    break
-
-                line = line.strip()
-                if not line:
-                    continue
-
-                try:
-                    event = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-
-                event_type = event.get("type", "")
-
-                # Handle rate-limit / overloaded events (same as simple_claude)
-                if event_type in ("error", "api_error"):
-                    error_msg = str(event.get("error", ""))
-                    if "429" in error_msg or "overloaded" in error_msg.lower():
-                        backoff_start = time.monotonic()
-                        time.sleep(retry_delay)
-                        backoff_total += time.monotonic() - backoff_start
-                        retry_delay = min(retry_delay * 2, 60.0)
+                    if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
                         continue
 
-                events.append(event)
-                if not budget_halted and _detect_budget_halt(
-                    str(event.get("result", "")) + str(event.get("error", ""))
-                ):
-                    budget_halted = True
+                    if stdout_fd is not None:
+                        chunk = _read_ready_chunk(stdout_fd)
+                        if not chunk:
+                            if proc.poll() is not None:
+                                break
+                            continue
+                        read_buffer += chunk.decode("utf-8", errors="replace")
+                        ready_lines, read_buffer = _split_ready_lines(read_buffer)
+                    else:
+                        line = proc.stdout.readline()
+                        if not line and proc.poll() is not None:
+                            break
+                        ready_lines = [line] if line else []
 
-                # Track gate auto-approve events
-                # /gate in auto-approve mode emits an event with auto_approved: true
-                if event.get("auto_approved"):
-                    gate_intervention_count += 1
+                    for raw_line in ready_lines:
+                        line = raw_line.strip()
+                        if not line:
+                            continue
 
-                if event_type == "result":
-                    cost_val = _extract_cost_usd(event)
-                    if cost_val is not None:
-                        total_cost_usd = cost_val
-                    usage = event.get("usage", {})
-                    tokens_in = usage.get("input_tokens", tokens_in)
-                    tokens_out = usage.get("output_tokens", tokens_out)
-                    tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
-                    tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+                        try:
+                            event = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
 
-                if event_type == "assistant":
-                    turn_count += 1
+                        event_type = event.get("type", "")
 
-            proc.wait(timeout=10)
+                        # Handle rate-limit / overloaded events (same as simple_claude)
+                        if event_type in ("error", "api_error"):
+                            error_msg = str(event.get("error", ""))
+                            if "429" in error_msg or "overloaded" in error_msg.lower():
+                                backoff_start = time.monotonic()
+                                time.sleep(retry_delay)
+                                backoff_total += time.monotonic() - backoff_start
+                                retry_delay = min(retry_delay * 2, 60.0)
+                                continue
+
+                        events.append(event)
+                        events_seen += 1
+                        if transcript_file is not None:
+                            transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+                            transcript_file.flush()
+                        if not budget_halted and _detect_budget_halt(
+                            str(event.get("result", "")) + str(event.get("error", ""))
+                        ):
+                            budget_halted = True
+
+                        # Track gate auto-approve events
+                        # /gate in auto-approve mode emits an event with auto_approved: true
+                        if event.get("auto_approved"):
+                            gate_intervention_count += 1
+
+                        if event_type == "result":
+                            cost_val = _extract_cost_usd(event)
+                            if cost_val is not None:
+                                total_cost_usd = cost_val
+                            usage = event.get("usage", {})
+                            tokens_in = usage.get("input_tokens", tokens_in)
+                            tokens_out = usage.get("output_tokens", tokens_out)
+                            tokens_cache_read = usage.get("cache_read_input_tokens", tokens_cache_read)
+                            tokens_cache_write = usage.get("cache_creation_input_tokens", tokens_cache_write)
+
+                        if event_type == "assistant":
+                            turn_count += 1
+
+                proc.wait(timeout=10)
+            finally:
+                # Guaranteed regardless of how the block above exits — see
+                # simple_claude.invoke.
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                stderr_thread.join(timeout=5)
         finally:
-            # Guaranteed regardless of how the block above exits — see
-            # simple_claude.invoke.
-            if proc.poll() is None:
-                proc.kill()
-                try:
-                    proc.wait(timeout=10)
-                except subprocess.TimeoutExpired:
-                    pass
-            stderr_thread.join(timeout=5)
+            if transcript_file is not None:
+                transcript_file.close()
 
         stderr_output = "".join(stderr_buffer)
 
@@ -510,7 +557,7 @@ def invoke(
         # silently short — this cell's own refusal above only catches an
         # UNARMED cap; this catches the cap actually firing mid-session.
         if result["verdict"] is None:
-            if budget_halted or _detect_budget_halt(stderr_output):
+            if budget_halted or stderr_halt_event.is_set():
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
@@ -556,6 +603,19 @@ def invoke(
         result["extra"]["workflow_artifacts_captured"] = result["workflow_artifacts_captured"]
         result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
         result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
+
+        # See simple_claude.invoke — the ring buffer silently drops the
+        # OLDEST events once `events_seen` exceeds its cap; record that it
+        # happened rather than let a truncated in-memory value look
+        # complete.
+        transcript_events_dropped = max(0, events_seen - _MAX_RETAINED_EVENTS)
+        result["extra"]["transcript_events_dropped"] = transcript_events_dropped
+        result["extra"]["transcript_streamed"] = transcript_file is not None
+        if transcript_events_dropped:
+            events.appendleft({
+                "type": "truncation_notice",
+                "dropped_event_count": transcript_events_dropped,
+            })
 
         result["transcript_events"] = list(events)
         result["turn_count"] = turn_count

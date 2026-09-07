@@ -107,29 +107,49 @@ def _latest_reauth_ceiling(path: Path) -> Optional[float]:
     return latest
 
 
+def resolve_authorised_ceiling(path: Path, authorised: Optional[float]) -> float:
+    """Resolve the ceiling `precheck` should enforce: `authorised` itself
+    when the caller supplied one, otherwise the `new_ceiling_usd` of the
+    latest `reauth-note` row in the ledger at `path`, otherwise
+    `DEFAULT_AUTHORISED_USD` (50.0).
+
+    This is a SEPARATE, explicit step from `precheck` itself — the
+    "derive a ceiling from the same file whose spend it polices" fallback
+    used to live silently inside `precheck`, so a caller who forgot to
+    pass `authorised` got a ceiling from the ledger with no indication
+    that had happened. Call this first and pass its result to `precheck`.
+    """
+    if authorised is not None:
+        return authorised
+    derived = _latest_reauth_ceiling(path)
+    if derived is not None:
+        return derived
+    return DEFAULT_AUTHORISED_USD
+
+
 def precheck(
     path: Path,
     planned_caps: list[float],
-    authorised: Optional[float] = None,
+    authorised: float,
 ) -> tuple[bool, str]:
-    """Check whether this invocation's planned spend fits the authorisation.
+    """Check whether this invocation's planned spend fits `authorised`.
 
-    `authorised`, when `None`, is DERIVED from the ledger: the
-    `new_ceiling_usd` of the latest `reauth-note` row, falling back to
-    `DEFAULT_AUTHORISED_USD` (50.0) when there is none. Returns
-    `(True, "")` on success, or `(False, <GATE-STOP message>)` on failure —
-    the message is the literal text callers (T-07 step 0) print verbatim.
+    `authorised` is REQUIRED — this function no longer derives a ceiling
+    from the ledger it is prechecking spend against. Callers that want the
+    old derive-from-ledger-or-default behaviour call
+    `resolve_authorised_ceiling(path, None)` first and pass its result
+    here explicitly, so the derivation is visible at the call site rather
+    than a silent fallback inside the one function meant to be the
+    authoritative check. Returns `(True, "")` on success, or
+    `(False, <GATE-STOP message>)` on failure — the message is the literal
+    text callers (T-07 step 0) print verbatim.
     """
     recorded = recorded_total(path)
     planned = sum(planned_caps)
-    if authorised is None:
-        authorised = _latest_reauth_ceiling(path)
-        if authorised is None:
-            authorised = DEFAULT_AUTHORISED_USD
 
     if recorded + planned > authorised:
         message = (
-            f"GATE-STOP: cumulative spend would exceed the ~$50 authorisation "
+            f"GATE-STOP: cumulative spend would exceed the ${authorised:.2f} authorisation "
             f"(recorded {recorded:.2f} + this run {planned:.2f}); explicit "
             f"re-authorisation required"
         )

@@ -4,7 +4,11 @@ result_writer.py — Write per-task result files to the run output directory.
 Each task result directory has the structure:
     <run_dir>/<run_id>/<cell>/<task_id>/
         prompt.txt        — the prompt sent to the agent
-        transcript.jsonl  — the full agent session transcript (one JSON obj per line)
+        transcript.jsonl  — the agent session transcript (one JSON obj per line); the full,
+                            untruncated stream when the cell streamed it directly (see
+                            `extra["transcript_streamed"]` in metrics.json), otherwise a
+                            capped ring-buffer tail with `extra["transcript_events_dropped"]`
+                            recording how many earlier events were not retained
         diff.patch        — git diff of the worktree after agent execution
         judge.json        — verdict from judge.py: {verdict, task_id, source_benchmark, ...}
         metrics.json      — timing and secondary metrics
@@ -89,14 +93,20 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
     # prompt.txt
     (out_dir / "prompt.txt").write_text(result.prompt, encoding="utf-8")
 
-    # transcript.jsonl
-    transcript_lines = [
-        json.dumps(event, ensure_ascii=False) for event in result.transcript_events
-    ]
-    (out_dir / "transcript.jsonl").write_text(
-        "\n".join(transcript_lines) + ("\n" if transcript_lines else ""),
-        encoding="utf-8",
-    )
+    # transcript.jsonl — when the cell already streamed every event to
+    # this exact path as they arrived (`extra["transcript_streamed"]`,
+    # T-06/D-08's transcript-truncation fix), that file IS the full
+    # transcript; rewriting it here from `transcript_events` would
+    # overwrite it with the (possibly truncated) in-memory ring buffer.
+    # Otherwise, fall back to writing the ring buffer, as before.
+    if not result.extra.get("transcript_streamed"):
+        transcript_lines = [
+            json.dumps(event, ensure_ascii=False) for event in result.transcript_events
+        ]
+        (out_dir / "transcript.jsonl").write_text(
+            "\n".join(transcript_lines) + ("\n" if transcript_lines else ""),
+            encoding="utf-8",
+        )
 
     # diff.patch
     (out_dir / "diff.patch").write_text(result.diff_patch, encoding="utf-8")

@@ -36,6 +36,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import datetime
@@ -60,6 +61,12 @@ from quoin.benchmarks.scripts import spend_ledger  # noqa: E402
 
 ARMS = ("raw", "main", "candidate")
 
+# Matches `verify_model`'s own default in run_benchmark.py — kept as an
+# explicit constant here so the live model probe's cap can be folded into
+# the ledger precheck's `planned` figure (T-04c) rather than spending
+# outside what the precheck actually adds up.
+MODEL_PROBE_MAX_BUDGET_USD = 1.0
+
 DRIFT_CATEGORIES = ("skills", "scripts", "core-scripts", "core-workflow", "memory")
 HOOK_SCRIPTS = (
     "_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh",
@@ -74,6 +81,18 @@ CATEGORY_SUBDIRS = {
 }
 
 INSTALL_PY_CANDIDATES = ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")
+
+
+def _atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write `data` to `path` via a same-directory `.tmp` file plus
+    `os.replace` — the destination is never observed half-written, and a
+    crash mid-write leaves the ORIGINAL file intact rather than truncated
+    or unparseable JSON. Used for every rewrite of the operator's
+    `~/.claude/settings.json`, which this driver otherwise truncates and
+    rewrites twice per arm."""
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
+    tmp_path.write_bytes(data)
+    os.replace(tmp_path, path)
 
 
 class GateStop(RuntimeError):
@@ -187,7 +206,7 @@ def wipe_arm_stanzas(settings_path: Path, owned: set[tuple[str, str, str]]) -> t
         hooks[event] = kept
 
     settings["hooks"] = hooks
-    settings_path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    _atomic_write_bytes(settings_path, (json.dumps(settings, indent=2) + "\n").encode("utf-8"))
     return (before, hooks)
 
 
@@ -227,6 +246,28 @@ def verify_arm_installer_isolable(arm_root: Path, venv_python: str) -> bool:
         return False
 
 
+def bare_import_quoin_file(venv_python: str) -> Optional[str]:
+    """`{venv_python} -c "import quoin;print(quoin.__file__)"` with NO
+    `PYTHONPATH` override — what a plain, unmodified import resolves to on
+    this machine right now. Every arm-identity check elsewhere in this
+    module deliberately SETS `PYTHONPATH={arm}/src`; this is the one call
+    that deliberately does not, because its job is to prove the machine's
+    default resolution — not any arm's — is what teardown leaves behind
+    (R-14)."""
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+    try:
+        result = subprocess.run(
+            [venv_python, "-c", "import quoin;print(quoin.__file__)"],
+            capture_output=True, text=True, timeout=30, env=env,
+        )
+    except Exception:
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
 def worktree_head(root: Path) -> Optional[str]:
     """`git -C {root} rev-parse HEAD`, or `None` on any failure. Used to
     assert a worktree's actual identity against an operator-supplied
@@ -244,12 +285,26 @@ def worktree_head(root: Path) -> Optional[str]:
 
 
 def candidate_about_version_matches(arm_root: Path, venv_python: str) -> bool:
-    """Step-0 sanity check: the version the candidate worktree's OWN
-    `src/quoin/__about__.py` declares matches what the arm-pinned install
-    (`PYTHONPATH={arm}/src`) actually reports at import time. A mismatch
-    means the installed bytes are not what the worktree's own source
-    claims — a stale bytecode cache or a wrong `--source-dir` are both
-    caught here rather than surfacing later as an unexplained result."""
+    """Step-0 sanity check on the candidate worktree's PYTHONPATH-based
+    import isolation. Two independent assertions, not a value compared
+    against itself: the regex-parsed `__version__` from the worktree's own
+    `src/quoin/__about__.py` (a source-of-truth file read, no import
+    machinery involved) must equal the version a FRESH subprocess reports
+    when it imports `quoin` under `PYTHONPATH={arm}/src` — AND that same
+    subprocess's `quoin.__file__` must resolve to a path INSIDE
+    `arm_root`. Version equality alone would pass even when the import
+    silently resolved to a completely different `quoin` installation that
+    happened to declare the same version string (e.g. this venv's own
+    editable-installed package shadowing the arm's PYTHONPATH entry); the
+    file-path assertion is what actually proves the import came from this
+    worktree, not merely that it named the right version.
+
+    `quoin install` deploys skills/scripts/memory to `~/.claude`, not the
+    Python package itself, so there is no separately-deployed version
+    artifact to compare against — this checks that the arm-pinned import
+    mechanism resolves to the arm's own tree, which is the property that
+    actually matters here.
+    """
     about_path = arm_root / "src" / "quoin" / "__about__.py"
     if not about_path.exists():
         return False
@@ -261,12 +316,24 @@ def candidate_about_version_matches(arm_root: Path, venv_python: str) -> bool:
     env["PYTHONPATH"] = str(arm_root / "src")
     try:
         result = subprocess.run(
-            [venv_python, "-c", "import quoin; print(quoin.__version__)"],
+            [venv_python, "-c", "import quoin; print(quoin.__version__); print(quoin.__file__)"],
             capture_output=True, text=True, timeout=30, env=env,
         )
     except Exception:
         return False
-    return result.returncode == 0 and result.stdout.strip() == expected_version
+    if result.returncode != 0:
+        return False
+    lines = result.stdout.strip().splitlines()
+    if len(lines) != 2:
+        return False
+    reported_version, reported_file = lines
+    if reported_version != expected_version:
+        return False
+    try:
+        Path(reported_file).resolve().relative_to(arm_root.resolve())
+    except ValueError:
+        return False
+    return True
 
 
 def suite_sha256(suite_path: Path) -> str:
@@ -302,16 +369,40 @@ def verify_arm_deployed(arm_root: Path, project_root: Path) -> bool:
     return result.returncode == 0 and data.get("drift") == []
 
 
+def _load_arm_installer(arm_root: Path):
+    """Load `{arm_root}/src/quoin/installer.py` as its own module, by file
+    path — never via `importlib.import_module("quoin.installer")`. The
+    driver bootstraps its own `quoin` package at the top of this file, so
+    that name is already bound in `sys.modules` before this function ever
+    runs; `import_module` (and `reload`) then resolves through the ALREADY
+    -IMPORTED package's `__path__`, not through a `sys.path` insert — the
+    arm's own installer copy is never actually loaded, regardless of which
+    arm is being checked. Loading by explicit file path sidesteps
+    `sys.modules` entirely, so this always evaluates the arm's own bytes."""
+    installer_path = arm_root / "src" / "quoin" / "installer.py"
+    if not installer_path.exists():
+        return None
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("arm_installer", installer_path)
+    if spec is None or spec.loader is None:
+        return None
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        return None
+    return module
+
+
 def verify_hooks_deployed(arm_root: Path, home: Path) -> bool:
     """The hooks byte-compare `compute_drift` does not cover: each of the
     seven hook scripts, byte-for-byte, via the same
-    `expected_deployed_content` helper the installer itself uses."""
-    try:
-        sys.path.insert(0, str(arm_root / "src"))
-        import importlib
-        installer = importlib.import_module("quoin.installer")
-        importlib.reload(installer)
-    except Exception:
+    `expected_deployed_content` helper the installer itself uses — loaded
+    from THIS arm's own `installer.py` (`_load_arm_installer`), not
+    whichever `quoin.installer` happens to already be imported."""
+    installer = _load_arm_installer(arm_root)
+    if installer is None:
         return False
     dest_hooks = home / ".claude" / "hooks"
     for fname in HOOK_SCRIPTS:
@@ -442,6 +533,30 @@ def _resolved_path(raw: str) -> Path:
     return Path(raw).resolve()
 
 
+def _stranded_nested_ledger_problem(ledger_path: Path) -> Optional[str]:
+    """GATE-STOP text iff `ledger_path` resolves to somewhere INSIDE the
+    quoin git checkout itself (`_repo_root`) — the IVG-119 single-root-
+    invariant violation that split a real $0.35 of spend off the canonical
+    ledger during this stage's own first attempt (a `cd quoin` plus a
+    cwd-relative `--spend-ledger` silently resolved into a stray nested
+    `quoin/.workflow_artifacts/` tree instead of the canonical
+    project-root one). The canonical root lives one level up, at
+    `_repo_root.parent`; nothing under `_repo_root` itself is ever a valid
+    `--spend-ledger` target."""
+    resolved = ledger_path.resolve()
+    try:
+        resolved.relative_to(_repo_root.resolve())
+    except ValueError:
+        return None
+    return (
+        f"GATE-STOP: --spend-ledger {ledger_path} resolves inside the quoin git "
+        f"checkout ({_repo_root}) rather than the canonical project "
+        f".workflow_artifacts root one level up ({_repo_root.parent}) — this is "
+        "the IVG-119 stranded-nested-root pattern; fix the path (or the cwd this "
+        "command runs from) before proceeding"
+    )
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Three-arm benchmark gate driver (T-07)")
     parser.add_argument("--gate-id", required=True)
@@ -493,7 +608,13 @@ def main(argv: Optional[list[str]] = None) -> int:
              "already reviewed against silent edits.",
     )
     parser.add_argument("--wall-clock-seconds", type=int, default=600)
-    parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--run-dir", type=_resolved_path, required=True,
+        help="Resolved at parse time, like --spend-ledger — this is a "
+             "spend-relevant lookup key via _read_arm_actual_cost, so a "
+             "cwd-relative path must not silently drift across the "
+             "process boundary.",
+    )
     parser.add_argument("--rehearsal", action="store_true")
     parser.add_argument("--plan-only", action="store_true")
     parser.add_argument(
@@ -531,7 +652,11 @@ class ThreeArmGateDriver:
         self.venv_python = sys.executable
         self.spawned_arms: set[str] = set()
         self.reservations: dict[str, str] = {}  # arm -> attempt_id
-        self.raw_config_dir = Path(os.environ.get("TMPDIR", "/tmp")) / "quoin-gate" / "raw-config"
+        # Created lazily, per invocation, by `_ensure_raw_config_dir` — a
+        # fixed, predictable path here would let `mkdir(exist_ok=True)`
+        # silently ADOPT a pre-existing, attacker-owned directory. `None`
+        # until the raw arm actually runs.
+        self.raw_config_dir: Optional[Path] = None
         self.pre_provenance: dict = {}
         self.evidence: dict[str, dict] = {}
         self._aborted = False
@@ -555,6 +680,21 @@ class ThreeArmGateDriver:
         (empty means all passed). Never spawns `claude`."""
         problems: list[str] = []
 
+        # Pure argument/path validation, before any file I/O that could
+        # spend or that assumes the ledger exists.
+        if not self.args.rehearsal and not self.args.plan_only and self.authorised_usd is None:
+            problems.append(
+                "GATE-STOP: --authorised-usd is required in full mode — the spend "
+                "ceiling must be an explicit operator input, not silently derived "
+                "from the ledger it polices"
+            )
+            return problems
+
+        nested_problem = _stranded_nested_ledger_problem(self.args.spend_ledger)
+        if nested_problem:
+            problems.append(nested_problem)
+            return problems
+
         # FIRST — before anything that can spend (round-5 fix, MIN-4). The
         # ledger's own existence is checked BEFORE recorded_total is even
         # read from it: a missing file reading as $0 recorded spend is
@@ -570,9 +710,14 @@ class ThreeArmGateDriver:
         recorded_so_far = spend_ledger.recorded_total(ledger_path) if ledger_path.exists() else 0.0
         print(f"Spend ledger: {ledger_path} (recorded_total={recorded_so_far:.2f})")
 
-        planned = [self.caps["raw"], self.caps["main"], self.caps["candidate"]]
+        # The live model probe below (T-04c) spends against this same
+        # ceiling — its cap belongs in `planned` too, not just the three
+        # arm caps, or the precheck below would pass a combination that
+        # actually exceeds the authorisation once the probe fires.
+        planned = [self.caps["raw"], self.caps["main"], self.caps["candidate"], MODEL_PROBE_MAX_BUDGET_USD]
+        resolved_authorised = spend_ledger.resolve_authorised_ceiling(ledger_path, self.authorised_usd)
         ok, message = spend_ledger.precheck(
-            ledger_path, planned_caps=planned, authorised=self.authorised_usd,
+            ledger_path, planned_caps=planned, authorised=resolved_authorised,
         )
         if not ok:
             problems.append(message)
@@ -645,12 +790,28 @@ class ThreeArmGateDriver:
         else:
             self.pre_provenance["install_py"] = _install_py()
 
+        bare_quoin_file = bare_import_quoin_file(self.venv_python)
+        if bare_quoin_file is None:
+            problems.append(
+                "GATE-STOP: could not resolve a bare `import quoin` (no PYTHONPATH "
+                "override) before the gate starts — teardown has nothing to verify "
+                "the machine returns to"
+            )
+        else:
+            self.pre_provenance["bare_quoin_file"] = bare_quoin_file
+
         main_manifest = cross_arm_manifest(self.args.main_worktree)
         candidate_manifest = cross_arm_manifest(self.args.candidate_worktree)
         if main_manifest == candidate_manifest:
             problems.append(
                 "GATE-STOP: main and candidate deploy identical bytes; the gate would measure noise"
             )
+
+        # Every check above only ever APPENDS to `problems` and falls
+        # through — a run already guaranteed to abort must not still reach
+        # the live, money-spending model probe below.
+        if problems:
+            return problems
 
         if not self.args.rehearsal:
             model_override = os.environ.get("QUOIN_BENCH_CLAUDE_MODEL")
@@ -664,7 +825,11 @@ class ThreeArmGateDriver:
                 # skipped under --plan-only (spend-free by definition) and
                 # under --rehearsal (waived; the override above substitutes).
                 from quoin.benchmarks.scripts.run_benchmark import verify_model
-                code = verify_model(ledger_path=self.args.spend_ledger)
+                code = verify_model(
+                    ledger_path=self.args.spend_ledger,
+                    max_budget_usd=MODEL_PROBE_MAX_BUDGET_USD,
+                    authorised=resolved_authorised,
+                )
                 if code != 0:
                     problems.append(
                         "GATE-STOP: --verify-model did not confirm PINNED_MODEL "
@@ -724,11 +889,25 @@ class ThreeArmGateDriver:
 
     # -- Step 1: per-arm loop ----------------------------------------------
 
+    def _ensure_raw_config_dir(self) -> None:
+        """Create the isolated raw-arm `CLAUDE_CONFIG_DIR` via `mkdtemp` —
+        never a fixed, guessable path under a world-writable directory. A
+        fixed path let `mkdir(exist_ok=True)` silently ADOPT a pre-
+        existing, attacker-owned directory; adopting it here means that
+        directory becomes the raw arm's `settings.json` — its HOOKS — i.e.
+        command execution as the operator during a live paid session run
+        with `--permission-mode acceptEdits`. `mkdtemp` guarantees a
+        unique, `0o700` directory it created itself; nothing pre-existing
+        can be adopted."""
+        base = Path(os.environ.get("TMPDIR", "/tmp")) / "quoin-gate"
+        base.mkdir(parents=True, exist_ok=True)
+        self.raw_config_dir = Path(tempfile.mkdtemp(prefix="raw-config-", dir=str(base)))
+
     def run_arm(self, arm: str) -> int:
         run_id = f"{self.args.gate_id}-{arm}"
+        if arm == "raw" and self.raw_isolated and self.raw_config_dir is None:
+            self._ensure_raw_config_dir()
         arm_env = build_arm_env(arm, self.raw_config_dir, raw_isolated=self.raw_isolated)
-        if arm == "raw" and self.raw_isolated:
-            self.raw_config_dir.mkdir(parents=True, exist_ok=True)
 
         assert_config_root(arm, arm_env, self.home, self.raw_config_dir, raw_isolated=self.raw_isolated)
         self.evidence.setdefault(arm, {})["config_root"] = arm_env.get(
@@ -909,17 +1088,37 @@ class ThreeArmGateDriver:
         settings_path = self.home / ".claude" / "settings.json"
         verbatim = self.pre_provenance.get("settings_json_bytes")
         if verbatim is not None:
-            settings_path.write_bytes(verbatim)
+            _atomic_write_bytes(settings_path, verbatim)
+
+        if self.raw_config_dir is not None:
+            shutil.rmtree(self.raw_config_dir, ignore_errors=True)
 
         candidate_root = self.arm_roots.get("candidate")
         if candidate_root is None:
             self._teardown_result = True
             return True
         install_result = install_arm(candidate_root, self.venv_python)
+        # R-14's actual required property is the INVERSE of "the temp
+        # worktree is still isolable" (that only proves the arm mechanism
+        # still works, which says nothing about what the machine's own
+        # PYTHONPATH-free `import quoin` resolves to). Assert a BARE
+        # import — no PYTHONPATH override — still resolves to the exact
+        # path recorded in PRE_PROVENANCE before the arm loop started, and
+        # that this path lives under the git root, not under any arm's
+        # temp worktree that T-08b is about to delete.
+        current_bare_file = bare_import_quoin_file(self.venv_python)
+        recorded_bare_file = self.pre_provenance.get("bare_quoin_file")
         verified = (
             install_result.returncode == 0
-            and verify_arm_installer_isolable(candidate_root, self.venv_python)
+            and current_bare_file is not None
+            and recorded_bare_file is not None
+            and current_bare_file == recorded_bare_file
         )
+        if verified:
+            try:
+                Path(current_bare_file).resolve().relative_to(_repo_root.resolve())
+            except ValueError:
+                verified = False
         self._teardown_result = verified
         return verified
 
@@ -1017,9 +1216,19 @@ class ThreeArmGateDriver:
                 return 2
 
             settings_path = self.home / ".claude" / "settings.json"
-            self.pre_provenance["settings_json_bytes"] = (
-                settings_path.read_bytes() if settings_path.exists() else b"{}"
-            )
+            pre_gate_bytes = settings_path.read_bytes() if settings_path.exists() else b"{}"
+            self.pre_provenance["settings_json_bytes"] = pre_gate_bytes
+            # An on-disk copy, not just the in-memory one above: a crash
+            # between here and teardown otherwise leaves the sole surviving
+            # copy of the operator's pre-gate settings.json in a process
+            # that no longer exists.
+            backup_path = self.args.spend_ledger.parent / f"settings.json.pre-gate-{self.args.gate_id}"
+            try:
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                _atomic_write_bytes(backup_path, pre_gate_bytes)
+                print(f"Pre-gate settings.json backed up to: {backup_path}")
+            except OSError as exc:
+                print(f"WARN: could not write settings.json backup to {backup_path}: {exc}", file=sys.stderr)
 
             teardown_verified = True
             try:

@@ -147,6 +147,7 @@ def verify_model(
     ledger_path: Optional[Path] = None,
     max_budget_usd: float = 1.0,
     run_probe=_run_live_model_probe,
+    authorised: Optional[float] = None,
 ) -> int:
     """
     `--verify-model` preflight (T-04c): make ONE live, $1-capped call,
@@ -155,6 +156,11 @@ def verify_model(
     and records against T-17's spend ledger like any other paid call — this
     is NOT a spend-free operation, unlike `--dry-run`.
 
+    `authorised`, when given, is the operator-supplied spend ceiling
+    (`--authorised-usd`) threaded through to the precheck instead of the
+    ledger-derived default — the same ceiling the three-arm gate driver
+    enforces, so this one live call is checked against it too.
+
     Returns the process exit code: 0 on match, 1 on mismatch, 2 if the
     ledger precheck itself fails (no call made).
     """
@@ -162,7 +168,10 @@ def verify_model(
     from quoin.benchmarks.scripts import spend_ledger
 
     if ledger_path is not None:
-        ok, message = spend_ledger.precheck(ledger_path, planned_caps=[max_budget_usd])
+        resolved_authorised = spend_ledger.resolve_authorised_ceiling(ledger_path, authorised)
+        ok, message = spend_ledger.precheck(
+            ledger_path, planned_caps=[max_budget_usd], authorised=resolved_authorised,
+        )
         if not ok:
             print(message, file=sys.stderr)
             return 2
@@ -640,6 +649,14 @@ def main() -> None:
              "a mistyped or cwd-relative path cannot silently start a "
              "fresh, unledgered spend trail.",
     )
+    parser.add_argument(
+        "--authorised-usd",
+        type=float,
+        default=None,
+        help="Operator-supplied spend ceiling for --verify-model's own "
+             "ledger precheck. When omitted, the ceiling is derived from "
+             "the ledger's own latest reauth-note (or the $50 default).",
+    )
     args = parser.parse_args()
 
     if args.verify_model:
@@ -651,7 +668,7 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-        sys.exit(verify_model(ledger_path=args.spend_ledger))
+        sys.exit(verify_model(ledger_path=args.spend_ledger, authorised=args.authorised_usd))
 
     cells = [c.strip() for c in args.cells.split(",") if c.strip()]
     suite_path = args.suite

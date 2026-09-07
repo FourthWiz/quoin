@@ -1480,6 +1480,103 @@ class TestStderrDrainAndTimerDrivenWallClock:
         assert result["cost_available"] is True
         assert result["cost_runtime_usd"] == 0.01
 
+    def test_partial_stdout_line_does_not_block_past_the_wall_clock_budget(self, tmp_path, monkeypatch):
+        """Regression: text-mode `readline()` can block on a partial line
+        the child has written but not yet completed, even after `select()`
+        already reported the fd readable — the wall-clock check above it
+        in the loop then never gets re-evaluated until the child eventually
+        finishes the line (or exits). A child that writes a PARTIAL
+        stream-json event, flushes, then sleeps well past the budget must
+        still make `invoke()` return close to the budget, not the full
+        sleep."""
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        script = tmp_path / "partial.py"
+        script.write_text(
+            "import sys\n"
+            "sys.stdout.write('{\"type\": \"assistant\", ')\n"  # no trailing newline
+            "sys.stdout.flush()\n"
+            "import time; time.sleep(30)\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        start = time.monotonic()
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=5), run_id="r1",
+        )
+        elapsed = time.monotonic() - start
+        assert result["verdict"] == "timeout"
+        # The load-bearing bound: well under the child's 30s sleep. A
+        # readline()-based reader blocks on the partial line until the
+        # child exits (or writes a newline), so this takes ~30s pre-fix.
+        assert elapsed < 15
+
+    def test_stderr_buffer_growth_is_bounded_not_proportional_to_child_output(self, tmp_path, monkeypatch):
+        """Regression: pre-fix, stderr memory was accidentally bounded only
+        because an unread pipe deadlocked the child; the drain-thread fix
+        that closed the deadlock replaced it with a plain unbounded list,
+        so a session emitting tens of MB of stderr grew this process's
+        memory by a proportional amount. `deque(maxlen=...)` bounds it
+        regardless of session length."""
+        import resource as _resource
+        import sys as _sys
+
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        # Many separate lines, not one giant blob — this is the realistic
+        # shape of CLI diagnostic/log output, and the one the deque's
+        # line-count bound (rather than a byte-count bound) actually caps.
+        n_lines = 200_000
+        payload_mb = n_lines * 100 / 1_000_000
+        script = tmp_path / "loud.py"
+        script.write_text(
+            "import sys, json\n"
+            f"for _ in range({n_lines}):\n"
+            "    sys.stderr.write('x' * 99 + '\\n')\n"
+            "sys.stderr.flush()\n"
+            "print(json.dumps({'type': 'result', 'total_cost_usd': 0.01}))\n"
+            "sys.stdout.flush()\n"
+        )
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                kw.pop("cwd", None)
+                return real_popen([_sys.executable, str(script)], cwd=str(tmp_path), **kw)
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+
+        before = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(wall_clock_seconds=20), run_id="r1",
+        )
+        after = _resource.getrusage(_resource.RUSAGE_SELF).ru_maxrss
+        # ru_maxrss is bytes on macOS/BSD, kilobytes on Linux.
+        unit = 1 if _sys.platform == "darwin" else 1024
+        grown_mb = (after - before) * unit / 1_000_000
+
+        assert result["cost_available"] is True
+        # The deque retains only the last _MAX_RETAINED_STDERR_LINES lines
+        # (~100 bytes each) regardless of how many the child wrote — growth
+        # must stay a small fraction of the ~20 MB payload, not track it.
+        assert grown_mb < payload_mb / 4
+
     def test_wait_readable_returns_true_immediately_for_a_non_selectable_stream(self):
         from quoin.benchmarks.harness.cells.simple_claude import _wait_readable
 
@@ -1550,11 +1647,14 @@ class TestPaidProcessKilledOnExceptionPath:
         )
 
         real_popen = simple_claude.subprocess.Popen
+        spawned: list = []
 
         def fake_popen(cmd, *a, **kw):
             if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
                 kw.pop("cwd", None)
-                return real_popen([sys.executable, str(script)], cwd=str(tmp_path), **kw)
+                proc = real_popen([sys.executable, str(script)], cwd=str(tmp_path), **kw)
+                spawned.append(proc)
+                return proc
             return real_popen(cmd, *a, **kw)
 
         monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
@@ -1579,8 +1679,15 @@ class TestPaidProcessKilledOnExceptionPath:
         )
         elapsed = time.monotonic() - start
         assert result["verdict"] == "error"
-        # Proves the child was actually killed rather than left to run out
-        # its 30s sleep: this returns almost immediately.
+        # The load-bearing assertion: the child process was actually
+        # reaped (killed), not merely that invoke() happened to return
+        # quickly — a version that returns fast via the exception path
+        # WITHOUT killing anything would satisfy an elapsed-time-only
+        # check just as well, proving nothing about the child's fate.
+        assert len(spawned) == 1
+        assert spawned[0].poll() is not None
+        # Secondary signal, kept: proves the child was killed rather than
+        # left to run out its 30s sleep.
         assert elapsed < 10
 
 
@@ -1635,3 +1742,59 @@ class TestTranscriptRingBufferBounded:
         # ...but counters that must stay exact are tracked incrementally,
         # not derived from the (now-truncated) retained list.
         assert result["turn_count"] == n_events
+        # The in-memory truncation is disclosed, not silent.
+        assert result["extra"]["transcript_events_dropped"] == n_events + 1 - simple_claude._MAX_RETAINED_EVENTS
+        assert result["transcript_events"][0]["type"] == "truncation_notice"
+
+    def test_run_output_dir_streams_the_full_untruncated_transcript_to_disk(self, monkeypatch, tmp_path):
+        """The FILE on disk must hold every event, even ones the bounded
+        in-memory ring buffer already dropped — this is the actual fix for
+        the silent-truncation defect; the ring buffer bound above is only
+        a memory guarantee, not a completeness one."""
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.harness.config import BudgetSpec
+
+        n_events = simple_claude._MAX_RETAINED_EVENTS + 50
+        lines = (
+            [json.dumps({"type": "assistant", "message": {}}) for _ in range(n_events)]
+            + [json.dumps({"type": "result", "total_cost_usd": 0.01})]
+        )
+        line_iter = iter(lines + [""])
+
+        class ScriptedStdout:
+            def readline(self):
+                try:
+                    return next(line_iter) + "\n"
+                except StopIteration:
+                    return ""
+
+        class ScriptedProc:
+            stdout = ScriptedStdout()
+            stderr = None
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+        real_popen = simple_claude.subprocess.Popen
+
+        def fake_popen(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "claude":
+                return ScriptedProc()
+            return real_popen(cmd, *a, **kw)
+
+        monkeypatch.setattr(simple_claude.subprocess, "Popen", fake_popen)
+        out_dir = tmp_path / "result"
+        result = simple_claude.invoke(
+            task_spec={"id": "t1", "description": "x"}, workdir=tmp_path,
+            budget=BudgetSpec(), run_id="r1", run_output_dir=out_dir,
+        )
+        assert result["extra"]["transcript_streamed"] is True
+        written = (out_dir / "transcript.jsonl").read_text(encoding="utf-8").splitlines()
+        # n_events "assistant" lines plus one "result" line — ALL of them,
+        # not capped at _MAX_RETAINED_EVENTS like the in-memory buffer.
+        assert len(written) == n_events + 1
+        assert json.loads(written[0])["type"] == "assistant"
+        assert json.loads(written[-1])["type"] == "result"
