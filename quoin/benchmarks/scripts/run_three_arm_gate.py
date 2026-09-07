@@ -106,6 +106,60 @@ class GateStop(RuntimeError):
     """A named, fatal precondition failure. Callers print str(exc) and exit 2."""
 
 
+# The full-mode preflight's authorisation predicate anchors on this line
+# rather than searching the whole record for the bare token "GREEN" — the
+# body legitimately contains that token via an operator-chosen --gate-id,
+# a harness-written judge.json verdict, or a stopped_reason relaying
+# foreign subprocess text, none of which are the authorisation signal.
+_STATUS_LINE_RE = re.compile(r"^Status: \*\*(GREEN|RED)\*\*$", re.M)
+
+# A --gate-id is echoed verbatim into the rehearsal record (its H1 line and
+# the last-resort stub's own gate-id line) — restricting it at parse time
+# closes the channel before any writer ever sees an unsafe value.
+_GATE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+
+# `stopped_reason` can carry up to ~2000 bytes of a candidate build's own
+# installer/stderr output (see the GateStop messages `run_arm` raises) —
+# capped here so an authorisation artifact never relays that much foreign
+# text verbatim.
+_MAX_STOPPED_REASON_CHARS = 200
+
+
+def _rehearsal_record_authorises(text: str) -> bool:
+    """True only if `text` renders exactly one status line and it reads
+    GREEN. No status line, more than one, or anything other than GREEN
+    fails closed (RED) — this is the predicate the paid run's preflight
+    trusts, so ambiguity must never resolve to "authorised"."""
+    matches = _STATUS_LINE_RE.findall(text)
+    return len(matches) == 1 and matches[0] == "GREEN"
+
+
+def _validate_gate_id(value: str) -> str:
+    """argparse `type=` for --gate-id: restrict to a safe, short segment so
+    the value can never itself carry the literal token "GREEN", embedded
+    newlines, or anything else that could confound the rehearsal record's
+    rendered status line."""
+    if not _GATE_ID_RE.fullmatch(value):
+        raise argparse.ArgumentTypeError(
+            f"invalid --gate-id {value!r}: must match {_GATE_ID_RE.pattern!r} "
+            "(letters, digits, '.', '_', '-', 1-64 chars) — it is echoed "
+            "verbatim into the rehearsal record"
+        )
+    return value
+
+
+def _clip_stopped_reason(reason: str) -> str:
+    """Collapse a stopped-reason string to one line and cap its length.
+    `reason` can originate from a raised GateStop embedding a candidate
+    build's own stderr tail — this keeps that foreign text from ballooning
+    the rehearsal record or manufacturing a second status-line-shaped
+    string in it."""
+    one_line = " ".join(reason.split())
+    if len(one_line) > _MAX_STOPPED_REASON_CHARS:
+        one_line = one_line[: _MAX_STOPPED_REASON_CHARS - 1].rstrip() + "…"
+    return one_line
+
+
 def _install_py() -> Optional[str]:
     """Resolve the interpreter install.sh's own rule would select: the
     first of python3.13..python3.10/python3/python reporting version >=
@@ -597,7 +651,7 @@ def _stranded_nested_ledger_problem(ledger_path: Path) -> Tuple[Optional[str], b
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Three-arm benchmark gate driver (T-07)")
-    parser.add_argument("--gate-id", required=True)
+    parser.add_argument("--gate-id", type=_validate_gate_id, required=True)
     parser.add_argument("--suite", type=_resolved_path, required=True)
     parser.add_argument("--fixture-repo", type=_resolved_path, required=True)
     parser.add_argument("--main-worktree", type=_resolved_path, required=True)
@@ -958,7 +1012,9 @@ class ThreeArmGateDriver:
 
         if not self.args.rehearsal and not self.args.plan_only:
             rehearsal_record = self.args.spend_ledger.parent / "rehearsal.md"
-            if not rehearsal_record.exists() or "GREEN" not in rehearsal_record.read_text(encoding="utf-8"):
+            if not rehearsal_record.exists() or not _rehearsal_record_authorises(
+                rehearsal_record.read_text(encoding="utf-8")
+            ):
                 problems.append(
                     "GATE-STOP: no green rehearsal record found — run --rehearsal first"
                 )
@@ -1341,20 +1397,23 @@ class ThreeArmGateDriver:
         specific reason recorded so a human can decide whether to fix and
         re-rehearse (T-16's own contract) rather than proceed.
 
-        `stopped_reason` is set by every non-success exit and forces RED
-        unconditionally. Every other problem source here is conditional on
-        an artifact existing, so a run stopped part-way through can find a
+        `stopped_reason` forces RED unconditionally when set. `run()` calls
+        this with "the run has not finished" before doing anything else in
+        a `--rehearsal` invocation, then again with a more specific reason
+        on every stop it can name — so RED is the default from the moment
+        a rehearsal starts, and only a clean success path overwrites it
+        with a fresh evaluation of the arms' own artifacts. Every other
+        problem source here is conditional on an artifact existing, so
+        without that default a run stopped part-way through could find a
         previous run's complete artifacts under the same gate id and run
         dir (neither is guarded against reuse) and render a fresh GREEN
-        attesting a run that never finished. Recording the stop itself is
-        the only thing that makes invalidation guaranteed rather than
-        incidental.
+        attesting a run that never finished.
         """
         lines = [f"# Rehearsal record — {self.args.gate_id}", ""]
         problems: list[str] = []
         commits: dict[str, Optional[str]] = {}
         if stopped_reason:
-            problems.append(f"run did not complete: {stopped_reason}")
+            problems.append(f"run did not complete: {_clip_stopped_reason(stopped_reason)}")
         task_id = self._record_task_id()
 
         for arm in ARMS:
@@ -1426,17 +1485,19 @@ class ThreeArmGateDriver:
         return record_path
 
     def _invalidate_rehearsal_record(self, stopped_reason: str) -> None:
-        """Re-render `rehearsal.md` as RED for a rehearsal that did not
-        complete, on every non-success exit.
+        """Re-render `rehearsal.md` as RED. Called once at the very start
+        of a `--rehearsal` run() (so RED is the default the moment a
+        rehearsal begins) and again, with a more specific reason, on every
+        stop `run()` can name — those later calls are refinements, not the
+        only source of truth.
 
-        The full-mode preflight only substring-checks a fixed path for
-        "GREEN", so a record left over from an earlier successful rehearsal
-        would otherwise still authorise a paid run on evidence from a
-        different run. Rendering is best effort in one direction only: if
-        the full record cannot be built, a minimal RED stub still goes to
-        the same path, because leaving a stale GREEN standing is the worse
-        outcome. Nothing here may change the caller's exit code — this is
-        evidence bookkeeping on a path that is already stopping.
+        A record left over from an earlier successful rehearsal would
+        otherwise still authorise a paid run on evidence from a different
+        run. Rendering is best effort in one direction only: if the full
+        record cannot be built, a minimal RED stub still goes to the same
+        path, because leaving a stale GREEN standing is the worse outcome.
+        Nothing here may change the caller's exit code — this is evidence
+        bookkeeping on a path that is already stopping.
         """
         if not self.args.rehearsal:
             return
@@ -1444,7 +1505,7 @@ class ThreeArmGateDriver:
             record_path = self.write_rehearsal_record(stopped_reason=stopped_reason)
             print(f"Rehearsal record written to: {record_path}")
             return
-        except Exception as exc:
+        except BaseException as exc:
             print(f"WARN: could not render the rehearsal record: {exc}", file=sys.stderr)
         try:
             record_path = self.args.spend_ledger.parent / "rehearsal.md"
@@ -1453,12 +1514,12 @@ class ThreeArmGateDriver:
                 f"# Rehearsal record — {self.args.gate_id}\n"
                 "\nStatus: **RED**\n"
                 "\n## Problems\n"
-                f"- run did not complete: {stopped_reason}\n"
+                f"- run did not complete: {_clip_stopped_reason(stopped_reason)}\n"
                 "- the full record could not be rendered; re-run the rehearsal\n",
                 encoding="utf-8",
             )
             print(f"Rehearsal record written to: {record_path}")
-        except OSError as exc:
+        except Exception as exc:
             print(
                 f"WARN: could not write any rehearsal record: {exc}. "
                 "Delete the record by hand before running the paid gate.",
@@ -1474,6 +1535,16 @@ class ThreeArmGateDriver:
         old_sigint = signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
         old_sigterm = signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
         try:
+            if self.args.rehearsal and not self.args.plan_only:
+                # Write RED first and let only a clean success path (below)
+                # upgrade it to GREEN — this is the fail-closed default:
+                # any exit from here on, handled or not (an uncaught
+                # exception, SIGKILL, a second Ctrl-C during teardown),
+                # leaves RED standing instead of whatever record happened
+                # to already be on disk. The three call sites further down
+                # are refinements that improve this reason string; they are
+                # no longer the only places RED gets written.
+                self._invalidate_rehearsal_record("the run has not finished")
             problems = self.preflight()
             if self.args.plan_only:
                 print("PLAN ONLY — arm sequence:", ", ".join(ARMS))
@@ -1580,7 +1651,15 @@ class ThreeArmGateDriver:
             return 0
         except GateStop as exc:
             print(str(exc), file=sys.stderr)
-            self.teardown()
+            try:
+                self.teardown()
+            except BaseException as teardown_exc:
+                # A teardown failure (including a second Ctrl-C arriving
+                # while it runs) must not skip the refined write below —
+                # the early-RED write above already stands regardless, but
+                # the record should still get this GATE-STOP's own reason
+                # when it can.
+                print(f"WARN: teardown raised while handling a GATE-STOP: {teardown_exc}", file=sys.stderr)
             # Order matters: the record must be written AFTER teardown, so
             # it describes the tree the operator is left with. Teardown
             # produces nothing the writer reads, so the reverse order would
@@ -1589,7 +1668,17 @@ class ThreeArmGateDriver:
             return 2
         except KeyboardInterrupt:
             print("Aborted by signal; running teardown.", file=sys.stderr)
-            verified = self.teardown()
+            try:
+                verified = self.teardown()
+            except BaseException as teardown_exc:
+                # The sharpest case this closes: an ordinary second Ctrl-C
+                # arriving while teardown runs raises KeyboardInterrupt
+                # again, inside this very handler. Without this wrapper
+                # that escapes uncaught and skips the refined write below —
+                # the early-RED write above is what actually keeps the
+                # record blocking in that case.
+                print(f"WARN: teardown raised while handling an interrupt: {teardown_exc}", file=sys.stderr)
+                verified = False
             self._invalidate_rehearsal_record("aborted by signal before the run finished")
             return 1 if not verified else 130
         finally:

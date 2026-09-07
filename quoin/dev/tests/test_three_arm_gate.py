@@ -810,7 +810,7 @@ class TestDriverPlanOnly:
         # The probe now runs LAST, after every fall-through check (round-4
         # fix: MAJOR 5) — including the green-rehearsal gate, so full mode
         # needs one on disk to ever reach the probe at all.
-        (args.spend_ledger.parent / "rehearsal.md").write_text("GREEN", encoding="utf-8")
+        (args.spend_ledger.parent / "rehearsal.md").write_text("Status: **GREEN**\n", encoding="utf-8")
         driver.preflight()
         assert len(calls) == 1
         assert calls[0] == args.spend_ledger
@@ -1221,6 +1221,157 @@ class TestRehearsalRecord:
         assert not any("no green rehearsal record found" in p for p in problems)
 
 
+class TestRehearsalRecordAuthorisationPredicate:
+    """Recommendation 1 (review-7 finding 1): the paid-run authorisation
+    used to be a bare `"GREEN" in text` substring search over the whole
+    record, so a body containing the token anywhere still authorised even
+    when the rendered status line correctly read RED. These pin the
+    anchored replacement directly against the predicate itself."""
+
+    def test_exactly_one_green_status_line_authorises(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _rehearsal_record_authorises
+
+        assert _rehearsal_record_authorises("# x\n\nStatus: **GREEN**\n\nmore text\n") is True
+
+    def test_red_status_line_does_not_authorise(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _rehearsal_record_authorises
+
+        assert _rehearsal_record_authorises("Status: **RED**\n") is False
+
+    def test_red_status_line_with_the_token_elsewhere_does_not_authorise(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _rehearsal_record_authorises
+
+        assert _rehearsal_record_authorises(
+            "# Rehearsal record — GREEN-x\n\nStatus: **RED**\n\n## Problems\n"
+            "- run did not complete: installer cache hit: [GREEN] cached layer reused\n"
+        ) is False
+
+    def test_no_status_line_fails_closed(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _rehearsal_record_authorises
+
+        assert _rehearsal_record_authorises("nothing resembling a status line here\n") is False
+
+    def test_more_than_one_status_line_fails_closed(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _rehearsal_record_authorises
+
+        assert _rehearsal_record_authorises(
+            "Status: **GREEN**\nStatus: **GREEN**\n"
+        ) is False, "ambiguity must never resolve to authorised"
+
+    def test_a_red_status_line_with_the_token_elsewhere_in_the_body_does_not_authorise_via_preflight(
+        self, tmp_path, monkeypatch
+    ):
+        """End-to-end pin of the same fix through the actual preflight()
+        call site, against the three channels review-7 reproduced: an
+        operator-chosen --gate-id, a harness-written judge.json verdict,
+        and a stopped_reason relaying foreign subprocess text."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        tmp_path.joinpath("main").mkdir()
+        tmp_path.joinpath("candidate").mkdir()
+        (tmp_path / "suite.json").write_text(json.dumps({"tasks": [{
+            "id": "scenario_x", "source": "quoin_scenario", "description": "x subsys.py y",
+            "target_subsystem": "subsys.py",
+        }]}))
+        monkeypatch.delenv("QUOIN_BENCH_CLAUDE_MODEL", raising=False)
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.verify_arm_installer_isolable",
+            lambda root, py: True,
+        )
+        monkeypatch.setattr(
+            "quoin.benchmarks.scripts.run_three_arm_gate.cross_arm_manifest",
+            lambda root: {"main": 1} if root == tmp_path / "main" else {"candidate": 2},
+        )
+        import quoin.benchmarks.scripts.run_benchmark as rb_mod
+        monkeypatch.setattr(rb_mod, "verify_model", lambda ledger_path=None, **kw: 0)
+
+        ns = TestDriverPlanOnly()._make_args(
+            tmp_path, rehearsal=False, plan_only=False, gate_id="GREEN-x",
+        )
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {"main": tmp_path / "main", "candidate": tmp_path / "candidate"}
+        TestDriverPlanOnly()._patch_identity_checks(monkeypatch, tmp_path, ns)
+
+        bodies = (
+            # channel 1: the record's own H1 line echoes an operator-chosen
+            # --gate-id that itself contains the token.
+            f"# Rehearsal record — {ns.gate_id}\n\nStatus: **RED**\n\n## Problems\n- boom\n",
+            # channel 2: a harness-written judge.json verdict of "GREEN"
+            # landing in an otherwise-RED record.
+            "# Rehearsal record — g1\n\nStatus: **RED**\n\n- **raw** (simple-claude): "
+            "verdict=GREEN, cost=None\n\n## Problems\n- raw: transcript.jsonl is empty or missing\n",
+            # channel 3: a stopped_reason relaying foreign text that happens
+            # to contain the token.
+            "# Rehearsal record — g1\n\nStatus: **RED**\n\n## Problems\n"
+            "- run did not complete: installer cache hit: [GREEN] cached layer reused\n",
+        )
+        for body in bodies:
+            ns.spend_ledger.parent.mkdir(parents=True, exist_ok=True)
+            (ns.spend_ledger.parent / "rehearsal.md").write_text(body, encoding="utf-8")
+            problems = driver.preflight()
+            assert any("no green rehearsal record found" in p for p in problems), (
+                f"a RED status line must never authorise, regardless of body text:\n{body}"
+            )
+
+
+class TestGateIdValidation:
+    """Recommendation 1: --gate-id is echoed verbatim into the rehearsal
+    record, so it is restricted at parse time rather than left free-form."""
+
+    def test_valid_gate_id_passes_through(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _validate_gate_id
+
+        assert _validate_gate_id("release-2026-09-07.rc1") == "release-2026-09-07.rc1"
+
+    def test_gate_id_with_disallowed_characters_rejected(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _validate_gate_id
+
+        with pytest.raises(argparse.ArgumentTypeError):
+            _validate_gate_id("bad id with spaces")
+
+    def test_gate_id_over_length_cap_rejected(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import _validate_gate_id
+
+        with pytest.raises(argparse.ArgumentTypeError):
+            _validate_gate_id("x" * 65)
+
+
+class TestStoppedReasonClipping:
+    """Recommendation 1: a stopped_reason can relay a candidate build's own
+    stderr tail (up to ~2000 bytes) — clipped to one short line before it
+    reaches the authorisation artifact."""
+
+    def test_long_multiline_stopped_reason_is_clipped_to_one_short_line(self):
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            _MAX_STOPPED_REASON_CHARS, _clip_stopped_reason,
+        )
+
+        raw = "line one\nline two\n" + ("x" * 5000)
+        clipped = _clip_stopped_reason(raw)
+        assert "\n" not in clipped
+        assert len(clipped) <= _MAX_STOPPED_REASON_CHARS
+
+    def test_clipped_reason_lands_in_the_written_record(self, tmp_path):
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            _MAX_STOPPED_REASON_CHARS, ThreeArmGateDriver,
+        )
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        record_path = driver.write_rehearsal_record(
+            stopped_reason="GATE-STOP: arm candidate install failed (rc=1): " + ("z" * 3000)
+        )
+        text = record_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in text
+        problem_line = next(
+            line for line in text.splitlines() if line.startswith("- run did not complete:")
+        )
+        # +40 or so of slack for the "- run did not complete: " prose this
+        # is embedded in.
+        assert len(problem_line) < _MAX_STOPPED_REASON_CHARS + 40
+        assert "z" * 3000 not in text, "the 3000-byte foreign tail must not survive verbatim"
+
+
 # ---------------------------------------------------------------------------
 # A failed arm install must never let the arm spawn
 # ---------------------------------------------------------------------------
@@ -1541,6 +1692,17 @@ class TestDefaultRunArmAbortSafety:
 
 
 class TestDriverKillIsFatalNotAWarning:
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, tmp_path, monkeypatch):
+        """Every test in this class drives `run()` far enough to reach the
+        pre-gate settings.json backup/restore around `self.home` — without
+        this, each one rewrites the developer's real
+        `~/.claude/settings.json` (review-7 finding 6, measured rising
+        10 -> 12 rewrites this round)."""
+        fake_home = tmp_path / "_fake_home"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
     def test_returncode_124_stops_the_run_and_skips_remaining_arms(self, tmp_path):
         """Regression (round-5 fix, MAJOR 2). Pre-fix, `run()` only ever
         printed `WARN: arm {arm} exited {returncode}` and kept spending
@@ -1753,7 +1915,14 @@ class TestDriverKillIsFatalNotAWarning:
         driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 0)
         driver.arm_roots = {}
         driver.preflight = lambda: []
-        driver.teardown = lambda: False
+        # Stub the RESULT, not the method: the real teardown still runs
+        # (cleaning up the raw arm's mkdtemp'd config dir, restoring the
+        # fake home's settings.json) and we override only what it reports
+        # back. Replacing the method outright (as this test used to)
+        # skipped that cleanup entirely and leaked a
+        # `quoin-gate-raw-config-*` temp dir per run (review-7 finding 7).
+        real_teardown = driver.teardown
+        driver.teardown = lambda: (real_teardown(), False)[1]
 
         code = driver.run()
 
@@ -1762,6 +1931,139 @@ class TestDriverKillIsFatalNotAWarning:
         assert "Status: **RED**" in record_text
         assert "GREEN" not in record_text
         assert "teardown could not verify a clean candidate reinstall" in record_text
+
+    def test_full_success_over_a_scenario_x_suite_renders_green_and_authorises(self, tmp_path):
+        """Recommendation 3(a) — pins `_record_task_id`'s suite-derived
+        task id. With `DEFAULT_GATE_TASK_ID` hardcoded instead (as it was
+        before this round), every arm's per-task lookup would land under
+        the wrong directory and each would report a missing transcript —
+        the record would still end up RED, but for a reason unrelated to
+        the run, which is why a case where GREEN is the only correct
+        answer is what actually discriminates the revert."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import (
+            ThreeArmGateDriver, _rehearsal_record_authorises,
+        )
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        for arm, cell, commit in (
+            ("raw", "simple-claude", None), ("main", "quoin-claude", "aaa"),
+            ("candidate", "quoin-claude", "bbb"),
+        ):
+            _write_task_files(ns.run_dir, f"g1-{arm}", cell, installed_commit=commit,
+                               task_id="scenario_x")
+
+        driver = ThreeArmGateDriver(ns, run_arm_fn=lambda argv, env: 0)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        code = driver.run()
+
+        assert code == 0
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **GREEN**" in record_text
+        assert _rehearsal_record_authorises(record_text) is True
+
+    def test_rehearsal_run_arm_keyboard_interrupt_leaves_red_aborted_by_signal(self, tmp_path):
+        """Recommendation 3(b) — a `KeyboardInterrupt` raised mid-arm-loop
+        during a rehearsal must leave the record RED with a reason naming
+        the signal, overwriting whatever stale GREEN was already there."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.parent.mkdir(parents=True, exist_ok=True)
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        def raising_run_arm(arm):
+            raise KeyboardInterrupt()
+
+        driver.run_arm = raising_run_arm
+        code = driver.run()
+
+        assert code in (1, 130)
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "aborted by signal" in record_text
+
+    def test_write_rehearsal_record_raising_still_lands_the_last_resort_stub(self, tmp_path):
+        """Recommendation 3(c) — if the render helper itself raises (a bug
+        in the writer, not just a malformed artifact), the last-resort RED
+        stub must still land and `run()`'s exit code must stay whatever it
+        would have been without this failure."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=True)
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        def raising_run_arm(arm):
+            raise GateStop("GATE-STOP: injected mid-arm failure")
+
+        driver.run_arm = raising_run_arm
+
+        def raising_write_rehearsal_record(*a, **kw):
+            raise RuntimeError("boom: writer bug, not a malformed artifact")
+
+        driver.write_rehearsal_record = raising_write_rehearsal_record
+
+        code = driver.run()
+
+        assert code == 2  # unchanged: the GateStop exit path
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        record_text = rehearsal_path.read_text(encoding="utf-8")
+        assert "Status: **RED**" in record_text
+        assert "the full record could not be rendered" in record_text
+
+    def test_full_mode_gatestop_does_not_touch_a_pre_existing_rehearsal_record(self, tmp_path):
+        """Recommendation 3(d) — full mode (`rehearsal=False`) must not be
+        touched by this rehearsal-only invalidation logic at all, even
+        when a GATE-STOP fires: neither the early write-RED-first call nor
+        the stop handlers' refinement may run when `self.args.rehearsal`
+        is false."""
+        from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
+
+        (tmp_path / "suite.json").write_text(json.dumps(
+            {"tasks": [{"id": "scenario_x", "description": "x"}]}
+        ))
+
+        ns = TestDriverPlanOnly()._make_args(tmp_path, plan_only=False, rehearsal=False)
+        rehearsal_path = ns.spend_ledger.parent / "rehearsal.md"
+        rehearsal_path.parent.mkdir(parents=True, exist_ok=True)
+        rehearsal_path.write_text("Status: **GREEN**\n", encoding="utf-8")
+        original_text = rehearsal_path.read_text(encoding="utf-8")
+        original_mtime_ns = rehearsal_path.stat().st_mtime_ns
+
+        driver = ThreeArmGateDriver(ns)
+        driver.arm_roots = {}
+        driver.preflight = lambda: []
+
+        def raising_run_arm(arm):
+            raise GateStop("GATE-STOP: injected mid-arm failure")
+
+        driver.run_arm = raising_run_arm
+        code = driver.run()
+
+        assert code == 2
+        assert rehearsal_path.read_text(encoding="utf-8") == original_text
+        assert rehearsal_path.stat().st_mtime_ns == original_mtime_ns
 
 
 # ---------------------------------------------------------------------------
