@@ -127,16 +127,34 @@ class SpendSnapshot:
 # Short-model-name mapping
 # ---------------------------------------------------------------------------
 
+# Ordered (substring, tier) pairs — first match wins. This is the single
+# source of truth for both classification (_short_model) and display
+# ordering (_model_order); do not duplicate this list anywhere else.
+MODEL_TIERS = (
+    ("fable", "fable"),
+    ("opus", "opus"),
+    ("sonnet", "sonnet"),
+    ("haiku", "haiku"),
+)
+OTHER_TIER = "other"  # fallthrough default — never a row of MODEL_TIERS
+
+
 def _short_model(full_id: str) -> str:
-    """Map full model ID to short display name: opus / sonnet / haiku / other."""
+    """Map full model ID to short display name: fable / opus / sonnet / haiku / other."""
     fl = full_id.lower()
-    if "opus" in fl:
-        return "opus"
-    if "sonnet" in fl:
-        return "sonnet"
-    if "haiku" in fl:
-        return "haiku"
-    return "other"
+    for sub, tier in MODEL_TIERS:
+        if sub in fl:
+            return tier
+    return OTHER_TIER
+
+
+def _model_order() -> list:
+    """Display order for per-model rows, derived from MODEL_TIERS on every call.
+
+    Computed at call time (not cached at import) so the ordering can never
+    drift from the classification table — see D-03 in the stage plan.
+    """
+    return [tier for _sub, tier in MODEL_TIERS] + [OTHER_TIER]
 
 
 # ---------------------------------------------------------------------------
@@ -593,9 +611,8 @@ def render_compact(
     today_line = _fmt_amount_line(today_label, snap.today_usd, None, width)
     lines.append(today_line)
 
-    # Per-model rows (non-zero only, ordered: opus, sonnet, haiku, other)
-    model_order = ["opus", "sonnet", "haiku", "other"]
-    for short in model_order:
+    # Per-model rows (non-zero only, ordered per MODEL_TIERS — see _model_order)
+    for short in _model_order():
         usd = snap.by_model.get(short, 0.0)
         if usd <= 0:
             continue
