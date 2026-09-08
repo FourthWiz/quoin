@@ -966,6 +966,32 @@ class TestBudgetHaltDetection:
 
 
 class TestWorkflowArtifactsEvidenceDir:
+    @pytest.fixture(autouse=True)
+    def _hostile_cwd(self, monkeypatch, tmp_path):
+        """Regression guard (round-11 fix-round): `quoin_claude.invoke()`'s
+        `quoin_install_script` default is `Path("quoin/install.sh")`,
+        resolved against the process CWD — fine when pytest is invoked from
+        the repo root (the documented convention), but a real dispatch ran
+        the full suite one directory up (the checkout's parent) where that
+        relative default silently resolves to a path that neither exists
+        nor sits inside a git repo. That made `_initialize_workflow_artifacts`
+        (script-missing) and the unconditional `git rev-parse HEAD` commit
+        read (not-a-git-repo) both fail before `invoke()` ever reaches the
+        workflow-artifacts-evidence capture block — `workflow_artifacts_*`
+        keys were then missing from the result dict entirely, not merely
+        `False`.
+
+        Chdir every test in this class onto a directory with no
+        `quoin/install.sh` and no git repo, so any test here that calls
+        `quoin_claude.invoke()` without pinning an explicit
+        `quoin_install_script`/`arm_root` (the `arm_git_repo` fixture
+        pattern used below) fails immediately — regardless of which real
+        directory a human or CI happens to invoke pytest from.
+        """
+        hostile = tmp_path / "_hostile_cwd"
+        hostile.mkdir()
+        monkeypatch.chdir(hostile)
+
     def test_run_output_dir_threaded_from_runner_to_quoin_claude(self, monkeypatch, tmp_path):
         from quoin.benchmarks.harness import runner
         from quoin.benchmarks.harness.config import HarnessConfig
@@ -990,10 +1016,11 @@ class TestWorkflowArtifactsEvidenceDir:
         from quoin.benchmarks.harness.result_writer import task_result_dir
         assert received["run_output_dir"] == task_result_dir(tmp_path, "r1", "stub-cell", "t1")
 
-    def test_two_invocations_with_different_run_id_write_to_different_dirs(self, monkeypatch, tmp_path):
+    def test_two_invocations_with_different_run_id_write_to_different_dirs(self, monkeypatch, arm_git_repo, tmp_path):
         from quoin.benchmarks.harness.cells import quoin_claude
         from quoin.benchmarks.harness.config import BudgetSpec
 
+        root, sha = arm_git_repo
         _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=lambda cmd: _FakeClaudeProc())
         (tmp_path / "work" / ".workflow_artifacts" / "task").mkdir(parents=True)
         (tmp_path / "work" / ".workflow_artifacts" / "task" / "architecture.md").write_text("x")
@@ -1003,6 +1030,8 @@ class TestWorkflowArtifactsEvidenceDir:
         quoin_claude.invoke(
             task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
             budget=BudgetSpec(), run_id="run-a", run_output_dir=out1,
+            quoin_install_script=root / "quoin" / "install.sh",
+            quoin_install_mode="skip", arm_root=root,
         )
         # Recreate the workflow_artifacts fixture (invoke wipes it at start).
         (tmp_path / "work" / ".workflow_artifacts" / "task").mkdir(parents=True)
@@ -1010,15 +1039,18 @@ class TestWorkflowArtifactsEvidenceDir:
         quoin_claude.invoke(
             task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
             budget=BudgetSpec(), run_id="run-b", run_output_dir=out2,
+            quoin_install_script=root / "quoin" / "install.sh",
+            quoin_install_mode="skip", arm_root=root,
         )
         assert (out1 / "workflow_artifacts_evidence").exists()
         assert (out2 / "workflow_artifacts_evidence").exists()
         assert out1 != out2
 
-    def test_preseeded_old_shared_path_does_not_leak_into_a_fresh_run(self, monkeypatch, tmp_path):
+    def test_preseeded_old_shared_path_does_not_leak_into_a_fresh_run(self, monkeypatch, arm_git_repo, tmp_path):
         from quoin.benchmarks.harness.cells import quoin_claude
         from quoin.benchmarks.harness.config import BudgetSpec
 
+        root, sha = arm_git_repo
         _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=lambda cmd: _FakeClaudeProc())
         # Old shared path: workdir.parent / "artifacts_evidence" — pre-seed it
         # with an architecture.md the way a prior arm's leftovers would.
@@ -1031,21 +1063,26 @@ class TestWorkflowArtifactsEvidenceDir:
             task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
             budget=BudgetSpec(), run_id="run-c",
             run_output_dir=tmp_path / "runs" / "run-c" / "quoin-claude" / "t1",
+            quoin_install_script=root / "quoin" / "install.sh",
+            quoin_install_mode="skip", arm_root=root,
         )
         # No architecture.md was created inside THIS task's own worktree, so
         # a run reading the arm-unique dest must not report the other arm's
         # leftover as its own evidence.
         assert result["workflow_artifacts_has_arch"] is False
 
-    def test_fallback_path_is_run_and_cell_unique_when_run_output_dir_omitted(self, monkeypatch, tmp_path):
+    def test_fallback_path_is_run_and_cell_unique_when_run_output_dir_omitted(self, monkeypatch, arm_git_repo, tmp_path):
         from quoin.benchmarks.harness.cells import quoin_claude
         from quoin.benchmarks.harness.config import BudgetSpec
 
+        root, sha = arm_git_repo
         _patch_claude_popen(monkeypatch, quoin_claude, on_claude_spawn=lambda cmd: _FakeClaudeProc())
         (tmp_path / "work").mkdir()
         result = quoin_claude.invoke(
             task_spec={"id": "t1", "description": "x"}, workdir=tmp_path / "work",
             budget=BudgetSpec(), run_id="run-fallback",
+            quoin_install_script=root / "quoin" / "install.sh",
+            quoin_install_mode="skip", arm_root=root,
         )
         fallback_dir = (
             Path(quoin_claude.tempfile.gettempdir()) / "quoin-benchmarks"
