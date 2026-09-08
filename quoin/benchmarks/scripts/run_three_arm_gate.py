@@ -311,6 +311,33 @@ def arm_registered_stanzas(arm_root: Path) -> set[tuple[str, str, str]]:
     return {(event, matcher, basename) for event, matcher, basename in _STANZA_RE.findall(text)}
 
 
+def live_registered_stanzas(settings_path: Path) -> set[tuple[str, str, str]]:
+    """The (event, matcher, script-basename) triples actually present in the
+    LIVE settings.json `hooks` section right now. Unlike
+    `arm_registered_stanzas`, which reads an arm's installer *source* and is
+    therefore identical before and after an install ever runs, this reads
+    the file `install_arm()` actually wrote — the only way to tell whether a
+    dangerous stanza genuinely landed (review-11 finding 2: the main-arm
+    SessionStart/compact guard below compared source-vs-source and could
+    never fire)."""
+    if not settings_path.exists():
+        return set()
+    try:
+        settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    hooks = settings.get("hooks", {})
+    result: set[tuple[str, str, str]] = set()
+    for event, entries in hooks.items():
+        for entry in entries:
+            matcher = entry.get("matcher", "")
+            for hook in entry.get("hooks", []):
+                command = hook.get("command", "")
+                basename = command.rsplit("/", 1)[-1]
+                result.add((event, matcher, basename))
+    return result
+
+
 def wipe_arm_stanzas(settings_path: Path, owned: set[tuple[str, str, str]]) -> tuple[list, list]:
     """Delete only the stanzas THIS arm's own installer registers, matched
     CONJUNCTIVELY on (event, matcher, basename) AND a `~/.claude/hooks/`
@@ -1308,9 +1335,11 @@ class ThreeArmGateDriver:
             after_stanzas = arm_registered_stanzas(arm_root)
             self.evidence[arm]["stanzas_after_owned"] = sorted(after_stanzas)
             if arm == "main":
-                if ("SessionStart", "compact", "sessionstart.sh") in after_stanzas:
+                live_after = live_registered_stanzas(settings_path)
+                self.evidence[arm]["live_stanzas_after"] = sorted(live_after)
+                if ("SessionStart", "compact", "sessionstart.sh") in live_after:
                     raise GateStop(
-                        "GATE-STOP: main arm's registered stanza set contains SessionStart/compact"
+                        "GATE-STOP: main arm's live settings.json contains a SessionStart/compact stanza"
                     )
 
         return returncode

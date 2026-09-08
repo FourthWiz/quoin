@@ -1636,6 +1636,17 @@ class TestStoppedReasonClipping:
 
 
 class TestArmInstallFailureBlocksSpawn:
+    @pytest.fixture(autouse=True)
+    def _fake_home(self, tmp_path, monkeypatch):
+        """Both tests below drive `run_arm()` far enough to reach the
+        pre-gate settings.json wipe/restore around `self.home` — without
+        this, each one rewrites the developer's real
+        `~/.claude/settings.json` (review-11 finding 1: observed deleting
+        all 12 hook stanzas during a review session on unmodified HEAD)."""
+        fake_home = tmp_path / "_fake_home"
+        (fake_home / ".claude").mkdir(parents=True)
+        monkeypatch.setattr(Path, "home", lambda: fake_home)
+
     def test_failing_install_raises_gatestop_before_spawn_or_reservation(self, tmp_path, monkeypatch):
         from quoin.benchmarks.scripts.run_three_arm_gate import GateStop, ThreeArmGateDriver
         import quoin.benchmarks.scripts.run_three_arm_gate as gate_mod
