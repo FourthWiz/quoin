@@ -69,6 +69,8 @@ PRICES = _cfj.PRICES          # single source of truth; no second price dict her
 cost_for_entry = _cfj.cost_for_entry
 jsonl_path_for = _cfj.jsonl_path_for
 project_hash = _cfj.project_hash
+is_priced = _cfj.is_priced
+is_costable = _cfj.is_costable
 
 
 def _load_core(name: str):
@@ -208,11 +210,11 @@ def parse_session_today(
                     continue
 
                 model = msg.get("model") or ""
-                cost, tok = cost_for_entry(model, usage)
-                if model:
+                if is_costable(model):
+                    cost, tok = cost_for_entry(model, usage)
                     per_model_cost[model] = per_model_cost.get(model, 0.0) + cost
                     per_model_tok[model] = per_model_tok.get(model, 0) + tok
-                    if model not in PRICES:
+                    if not is_priced(model):
                         unknown_models.add(model)
 
     except (IOError, OSError):

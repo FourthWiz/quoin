@@ -264,12 +264,12 @@ def test_symmetry_unresolved_case(fixtures_home):
 # Expected USD computed as NUMERIC LITERALS (mirrors the EXPECTED_USD idiom
 # above) — deliberately NOT derived from cfj.PRICES, so this assertion isn't
 # tautological against the same table it is meant to pin. Rates per the
-# claude-api skill catalog, verified 2026-08-13:
-#   claude-sonnet-5: input $3.00/1M, output $15.00/1M, cache_read $0.30/1M
+# Anthropic pricing page, verified 2026-09-08:
+#   claude-sonnet-5: input $2.00/1M, output $10.00/1M, cache_read $0.20/1M
 #   claude-opus-5:   input $5.00/1M, output $25.00/1M, cache_read $0.50/1M
 # ---------------------------------------------------------------------------
 EXPECTED_CLAUDE5_USD = round(
-    (1000 * 3.00 + 500 * 15.00 + 200 * 0.30) / 1_000_000.0
+    (1000 * 2.00 + 500 * 10.00 + 200 * 0.20) / 1_000_000.0
     + (2000 * 5.00 + 300 * 25.00 + 400 * 0.50) / 1_000_000.0,
     6,
 )
@@ -549,3 +549,27 @@ def test_inline_cost_capture_flag_gated_not_unconditional_in_orchestrators():
     assert "reverts to the pre-`IVG-249` behavior" in tp_text
     assert "FIRST; either way, THEN append" in tp_text
     assert "the on-behalf write rather than a guess" in tp_text
+
+
+# ---------------------------------------------------------------------------
+# IVG-260 T-11: the <synthetic> sentinel through price_agent_jsonl
+# ---------------------------------------------------------------------------
+def test_synthetic_only_transcript_is_priceable_via_price_agent_jsonl(tmp_path):
+    import json
+
+    row = {
+        "message": {
+            "model": "<synthetic>",
+            "usage": {
+                "input_tokens": 0, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            },
+        }
+    }
+    jf = tmp_path / "00000000-0000-0000-0000-000000000014.jsonl"
+    jf.write_text(json.dumps(row) + "\n")
+
+    r = atc.price_agent_jsonl(jf)
+    assert r["priceable"] is True
+    assert r["usd"] == 0.0
+    assert r["models"] == []
