@@ -1,0 +1,19 @@
+{
+  "schema_version": 2,
+  "description": "Three-arm benchmark gate (IVG-258 stage 8) — one hand-authored medium-refactor-plan scenario task, frozen for the gate's single authorised pilot run. NOT reproducible from pick_subset.py (D-06): pick_subset.py composes only HumanEval+ and SWE-bench Lite pickers and has no code path that emits a scenario task.",
+  "generated_by": "hand-authored for IVG-258 stage 8 (T-06); see .workflow_artifacts/ivg-258-compaction-aware-run-continuity/stage-8/current-plan.md",
+  "tasks": [
+    {
+      "id": "scenario_medium_refactor_plan",
+      "source": "quoin_scenario",
+      "source_id": "medium-refactor-plan",
+      "scenario_file": "scenarios/medium-refactor-plan.md",
+      "description": "Plan a medium refactor for the target subsystem, src/black/trans.py. Identify the current structure, proposed stages, affected files, correctness risks, validation strategy, and explicit non-goals. Do not implement the refactor.",
+      "target_subsystem": "src/black/trans.py",
+      "difficulty_band": "hard",
+      "expected_minutes_p50": 60,
+      "est_tokens_in": 8000,
+      "est_tokens_out": 4000
+    }
+  ]
+}

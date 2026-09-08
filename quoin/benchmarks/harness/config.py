@@ -43,6 +43,25 @@ class HarnessConfig:
     quoin_install_script: Path = Path("quoin/install.sh")
     """Path to the quoin install.sh script (used by quoin-claude cell)."""
 
+    expected_quoin_commit: Optional[str] = None
+    """Commit SHA the arm intends to have installed. The quoin-claude cell
+    asserts the worktree it actually installed from against this value and
+    refuses to spawn on a mismatch (D-14)."""
+
+    quoin_install_mode: str = "script"
+    """One of "script" (default — shells `quoin_install_script`, today's
+    behaviour), "skip" (the gate mode: install nothing, the driver already
+    installed the arm), or "module" (`python -m quoin install`, pinned to
+    `arm_root`). See D-16."""
+
+    arm_root: Optional[Path] = None
+    """Arm worktree root, consumed by `quoin_install_mode == "module"`."""
+
+    max_budget_usd: Optional[float] = None
+    """CLI-enforced per-task spend cap (D-08's primary bound), threaded to
+    both Claude cells and passed as `claude --max-budget-usd`. In gate mode
+    (`QUOIN_BENCHMARK_GATE=1`) a `None` value refuses to spawn."""
+
     cells: list[str] = field(
         default_factory=lambda: [
             "simple-claude",

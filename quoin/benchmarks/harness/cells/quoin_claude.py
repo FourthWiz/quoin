@@ -10,7 +10,14 @@ Key differences from simple_claude.py:
      followed by /init_workflow in non-interactive mode.
   2. Sets QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id> in the
      subprocess environment. Both must be set for /gate to auto-approve.
-  3. Prepends "Use /run end-to-end on this task" to the agent prompt.
+  3. Prepends "Use /run --autonomous end-to-end on this task" to the agent
+     prompt (D-18). `/run`'s SKILL.md has no non-interactive path (17
+     `AskUserQuestion` calls, zero `QUOIN_GATE_AUTO_APPROVE` /
+     `QUOIN_BENCHMARK_RUN` references — F-11), so a `--print` session given
+     the plain "/run end-to-end" prompt cannot answer its own checkpoints
+     and either degrades or stalls to the wall clock, burning the
+     authorisation for no evidence. `--autonomous` is present in both arms'
+     `run/SKILL.md` and adds no candidate-only capability.
   4. Post-run: captures .workflow_artifacts/<task-name>/ into the run output
      folder as evidence; validates that architecture.md and current-plan.md
      exist for at least one sampled task.
@@ -28,17 +35,36 @@ Cost:
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
+import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Optional
 
 from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
-from .simple_claude import _build_prompt, _get_model
+from .simple_claude import (
+    _MAX_RETAINED_EVENTS,
+    _MAX_RETAINED_STDERR_LINES,
+    _POLL_INTERVAL_SECONDS,
+    _build_claude_argv,
+    _build_prompt,
+    _detect_budget_halt,
+    _drain_stream,
+    _extract_cost_usd,
+    _gate_mode,
+    _get_model,
+    _read_ready_chunk,
+    _split_ready_lines,
+    _wait_readable,
+)
 
 # ---------------------------------------------------------------------------
 # Invariant: same dated model snapshot as simple-claude (invariant 1).
@@ -50,35 +76,107 @@ ENV_GATE_AUTO_APPROVE = "QUOIN_GATE_AUTO_APPROVE"
 ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 
 
-def _initialize_workflow_artifacts(workdir: Path, quoin_install_script: Path) -> bool:
+_INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
+
+
+def _tail(text: Optional[str], limit: int = 4000) -> str:
+    """Bound a captured stdout/stderr string to its last `limit` characters."""
+    if not text:
+        return ""
+    return text[-limit:]
+
+
+def _initialize_workflow_artifacts(
+    workdir: Path,
+    quoin_install_script: Path,
+    quoin_install_mode: str = "script",
+    arm_root: Optional[Path] = None,
+) -> dict:
     """
     Bootstrap a fresh .workflow_artifacts/ inside the worktree.
 
     Steps:
     1. Remove any existing .workflow_artifacts/ (guarantee fresh start).
-    2. Run quoin/install.sh to deploy skills to ~/.claude/ (idempotent).
-    3. Create empty .workflow_artifacts/ structure.
+    2. Install quoin per `quoin_install_mode` (see below).
+    3. Create empty .workflow_artifacts/ structure (step 1 above).
 
-    Returns True on success, False on failure.
+    `quoin_install_mode` (D-16), one of:
+      "script" (DEFAULT — today's behaviour, byte-unchanged): shell
+        `bash {quoin_install_script}`.
+      "skip" (what the gate uses): install nothing. The driver has already
+        installed and verified the arm; a per-task reinstall buys nothing
+        and, for the main arm, would fire `install.sh`'s pip tier-3 path
+        and downgrade the machine's quoin (D-12, R-14).
+      "module": `PYTHONPATH={arm_root}/src {sys.executable} -m quoin
+        install --source-dir {arm_root}/quoin --scope user` (D-12's
+        arm-pinned form, derived from the worktree ROOT). When `arm_root`
+        is `None`, it is derived as `quoin_install_script.resolve().parent.parent`.
+
+    Returns {"ok": bool, "reason": str, "returncode": int | None,
+             "stdout_tail": str, "stderr_tail": str}. A failed, skipped or
+    timed-out install is surfaced here rather than swallowed — the caller
+    treats a non-ok result as fatal before any paid spend (D-03).
     """
     artifacts_dir = workdir / ".workflow_artifacts"
     if artifacts_dir.exists():
         shutil.rmtree(artifacts_dir)
     artifacts_dir.mkdir(parents=True)
 
-    # Run install.sh to ensure skills are deployed (idempotent; fast if already done)
-    if quoin_install_script.exists():
-        try:
-            subprocess.run(
-                ["bash", str(quoin_install_script)],
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
-        except Exception:
-            pass  # install failures are non-fatal; skills may already be deployed
+    if quoin_install_mode == "skip":
+        return {
+            "ok": True, "reason": "skip-driver-installed",
+            "returncode": None, "stdout_tail": "", "stderr_tail": "",
+        }
 
-    return True
+    if quoin_install_mode == "module":
+        root = arm_root or quoin_install_script.resolve().parent.parent
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(root / "src")
+        argv = [
+            sys.executable, "-m", "quoin", "install",
+            "--source-dir", str(root / "quoin"), "--scope", "user",
+        ]
+        return _run_install_subprocess(argv, env=env)
+
+    # "script" mode — today's behaviour, byte-unchanged except that a
+    # failure, timeout or missing script is now reported, not swallowed.
+    if not quoin_install_script.exists():
+        return {
+            "ok": False, "reason": "script-missing",
+            "returncode": None, "stdout_tail": "", "stderr_tail": "",
+        }
+    return _run_install_subprocess(["bash", str(quoin_install_script)])
+
+
+def _run_install_subprocess(argv: list[str], env: Optional[dict] = None) -> dict:
+    try:
+        proc = subprocess.run(
+            argv,
+            capture_output=True,
+            text=True,
+            timeout=_INSTALL_TIMEOUT_SECONDS,
+            check=False,
+            env=env,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "ok": False, "reason": "install-timeout", "returncode": None,
+            "stdout_tail": _tail(exc.stdout), "stderr_tail": _tail(exc.stderr),
+        }
+    except Exception as exc:
+        return {
+            "ok": False, "reason": "install-error", "returncode": None,
+            "stdout_tail": "", "stderr_tail": str(exc),
+        }
+    if proc.returncode != 0:
+        return {
+            "ok": False, "reason": "install-failed", "returncode": proc.returncode,
+            "stdout_tail": _tail(proc.stdout), "stderr_tail": _tail(proc.stderr),
+        }
+    return {
+        "ok": True, "reason": "ok", "returncode": proc.returncode,
+        "stdout_tail": _tail(proc.stdout), "stderr_tail": _tail(proc.stderr),
+    }
 
 
 def _capture_workflow_artifacts(
@@ -136,6 +234,11 @@ def invoke(
     run_id: str,
     quoin_install_script: Optional[Path] = None,
     quoin_repo_root: Optional[Path] = None,
+    quoin_install_mode: str = "script",
+    arm_root: Optional[Path] = None,
+    expected_quoin_commit: Optional[str] = None,
+    max_budget_usd: Optional[float] = None,
+    run_output_dir: Optional[Path] = None,
 ) -> dict:
     """
     Invoke Claude Code with the full Quoin workflow.
@@ -154,6 +257,26 @@ def invoke(
         Path to quoin/install.sh. Defaults to quoin/install.sh relative to cwd.
     quoin_repo_root:
         Path to the quoin repo root. Used to locate install.sh if not given.
+    quoin_install_mode:
+        "script" (default), "skip" or "module" — see
+        `_initialize_workflow_artifacts` (D-16).
+    arm_root:
+        The arm worktree root, used by "module" mode and by the commit
+        assertion below. Derived from `quoin_install_script` when omitted.
+    expected_quoin_commit:
+        The commit this arm intends to have installed (D-14). In gate mode
+        (`QUOIN_BENCHMARK_GATE=1`) a `None` value refuses to spawn; whenever
+        set, a mismatch against the arm's actual worktree HEAD refuses too.
+    max_budget_usd:
+        Optional CLI-enforced spend cap (D-08), passed through to `claude
+        --max-budget-usd`. In gate mode, a `None` value or an assembled
+        argv missing the flag refuses to spawn.
+    run_output_dir:
+        This task's OWN result directory (`task_result_dir(run_dir, run_id,
+        cell, task_id)`, T-15). Workflow-artifact evidence is captured
+        under `run_output_dir/workflow_artifacts_evidence`, arm- and
+        task-unique. When omitted, falls back to a run-id-and-cell-unique
+        temp path rather than the old shared-across-every-task default.
 
     Returns
     -------
@@ -161,8 +284,14 @@ def invoke(
     """
     model = _get_model()
     base_prompt = _build_prompt(task_spec)
-    # Prepend quoin workflow directive
-    prompt = f"Use /run end-to-end on this task\n\n{base_prompt}"
+    # Prepend the quoin workflow directive with --autonomous (D-18): a
+    # `--print` session cannot answer /run's own interactive checkpoints
+    # (17 AskUserQuestion calls, no QUOIN_GATE_AUTO_APPROVE /
+    # QUOIN_BENCHMARK_RUN awareness — F-11), so the plain form either
+    # degrades or stalls to the wall clock. The fixture clone's remote is
+    # stripped (T-08a) as belt-and-braces containment for the
+    # /implement + /end_of_task capability --autonomous grants.
+    prompt = f"Use /run --autonomous end-to-end on this task\n\n{base_prompt}"
 
     result: dict = {
         "prompt": prompt,
@@ -179,6 +308,7 @@ def invoke(
         "turn_count": 0,
         "gate_intervention_count": 0,
         "verdict": None,
+        "extra": {},
     }
 
     # Resolve quoin install script path
@@ -188,26 +318,89 @@ def invoke(
         else:
             quoin_install_script = Path("quoin/install.sh")
 
-    # Bootstrap fresh .workflow_artifacts/ per-task
-    _initialize_workflow_artifacts(workdir, quoin_install_script)
+    gate_mode = _gate_mode()
+    resolved_arm_root = arm_root or quoin_install_script.resolve().parent.parent
+
+    # Read the commit this arm's OWN worktree is actually at, BEFORE
+    # installing anything (D-14's required assertion) — the worktree's HEAD
+    # is what `--source-dir` pins the install to (D-12), so this is the
+    # truthful answer to "which commit does this arm intend to install".
+    installed_quoin_commit: Optional[str] = None
+    commit_error: Optional[str] = None
+    try:
+        commit_proc = subprocess.run(
+            ["git", "-C", str(resolved_arm_root), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=30, check=False,
+        )
+        if commit_proc.returncode == 0:
+            installed_quoin_commit = commit_proc.stdout.strip()
+        else:
+            commit_error = _tail(commit_proc.stderr) or "git rev-parse failed"
+    except Exception as exc:
+        commit_error = str(exc)
+
+    # Bootstrap fresh .workflow_artifacts/ per-task, installing per the
+    # arm-pinned mechanism (D-12/D-16) rather than always shelling install.sh.
+    install_result = _initialize_workflow_artifacts(
+        workdir, quoin_install_script,
+        quoin_install_mode=quoin_install_mode, arm_root=resolved_arm_root,
+    )
+
+    result["extra"].update({
+        "quoin_install_script": str(quoin_install_script),
+        "installed_quoin_commit": installed_quoin_commit,
+        "expected_quoin_commit": expected_quoin_commit,
+        "install_ok": install_result["ok"],
+        "install_reason": install_result["reason"],
+        "install_returncode": install_result["returncode"],
+    })
+
+    # Hard-fail paths: each returns BEFORE subprocess.Popen so no tokens are
+    # spent (D-03). A failed/skipped install, an unresolvable commit, or a
+    # commit mismatch are all fatal — a silently-wrong install would make
+    # the candidate arm secretly measure whatever was installed last.
+    if not install_result["ok"]:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "install-failed"
+        return result
+    if commit_error is not None:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "commit-unresolvable"
+        result["extra"]["commit_error"] = commit_error
+        return result
+    if expected_quoin_commit is not None and installed_quoin_commit != expected_quoin_commit:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "commit-mismatch"
+        return result
+
+    # Fail-closed guards, evaluated in gate mode only (D-08's CRIT-2 fix).
+    # Outside gate mode both remain advisory records so nothing outside the
+    # gate changes behaviour.
+    expected_commit_armed = expected_quoin_commit is not None
+    result["extra"]["expected_quoin_commit_armed"] = expected_commit_armed
+    if gate_mode and not expected_commit_armed:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "expected-commit-unarmed"
+        return result
+
+    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+    budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
+    result["extra"]["budget_cap_armed"] = budget_cap_armed
+    result["extra"]["max_budget_usd_applied"] = max_budget_usd
+    if gate_mode and not budget_cap_armed:
+        result["verdict"] = "error"
+        result["extra"]["failure_reason"] = "budget-cap-unarmed"
+        return result
 
     # Build subprocess environment with gate auto-approve
     env = os.environ.copy()
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
 
-    cmd = [
-        "claude",
-        "--print",
-        "--output-format", "stream-json",
-        "--verbose",
-        "--permission-mode", "acceptEdits",
-        "--model", model,
-        prompt,
-    ]
-
     budget_seconds = budget.wall_clock_seconds
     wall_start = time.monotonic()
+    # Capped at one budget's worth — see simple_claude.invoke for the full
+    # rationale.
     backoff_total = 0.0
 
     try:
@@ -220,36 +413,71 @@ def invoke(
             env=env,
         )
 
-        events = []
+        # Ring buffer, not an unbounded list — see simple_claude.invoke
+        # for the full rationale; both cells share the same streaming
+        # shape.
+        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+        events_seen = 0
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
         turn_count = 0
         gate_intervention_count = 0
         retry_delay = 1.0
+        budget_halted = False
 
-        while True:
-            elapsed = time.monotonic() - wall_start - backoff_total
-            if elapsed > budget_seconds:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-                result["verdict"] = "timeout"
-                break
+        # Stream every retained event to transcript.jsonl AS IT ARRIVES —
+        # see simple_claude.invoke for the full rationale.
+        transcript_file = None
+        if run_output_dir is not None:
+            try:
+                run_output_dir.mkdir(parents=True, exist_ok=True)
+                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+            except OSError:
+                transcript_file = None
+        # Set at OPEN time — see simple_claude.invoke for the full
+        # rationale: a generic exception handler downstream must be able to
+        # tell a partially-streamed transcript apart from an empty one
+        # without depending on this loop ever reaching its normal exit.
+        result["extra"]["transcript_streamed"] = transcript_file is not None
 
-            line = proc.stdout.readline()
-            if not line and proc.poll() is not None:
-                break
+        # Drain stderr on a daemon thread started at spawn — see
+        # simple_claude.invoke for the full rationale, including why the
+        # retained buffer is a bounded diagnostic tail (`deque`) with
+        # budget-halt detection folded in incrementally rather than an
+        # unbounded accumulator.
+        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+        stderr_halt_event = threading.Event()
+        stderr_thread = threading.Thread(
+            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
+        )
+        stderr_thread.start()
 
-            line = line.strip()
+        # See simple_claude.invoke for the full rationale — a real OS pipe
+        # gets the chunk-based, timer-driven read; a test double without a
+        # usable fd keeps the pre-fix line-buffered read.
+        try:
+            stdout_fd: Optional[int] = proc.stdout.fileno()
+        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+            stdout_fd = None
+
+        def _handle_stream_line(raw_line: str) -> str:
+            """Parse and record one stream-json line — see
+            simple_claude.invoke for the full rationale. Returns
+            "rate_limited" for a 429/overloaded event the caller must back
+            off on, "skip" for a blank or unparseable line, "ok" otherwise.
+            """
+            nonlocal total_cost_usd, tokens_in, tokens_out, tokens_cache_read
+            nonlocal tokens_cache_write, turn_count, budget_halted
+            nonlocal events_seen, gate_intervention_count
+
+            line = raw_line.strip()
             if not line:
-                continue
+                return "skip"
 
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
-                continue
+                return "skip"
 
             event_type = event.get("type", "")
 
@@ -257,13 +485,17 @@ def invoke(
             if event_type in ("error", "api_error"):
                 error_msg = str(event.get("error", ""))
                 if "429" in error_msg or "overloaded" in error_msg.lower():
-                    backoff_start = time.monotonic()
-                    time.sleep(retry_delay)
-                    backoff_total += time.monotonic() - backoff_start
-                    retry_delay = min(retry_delay * 2, 60.0)
-                    continue
+                    return "rate_limited"
 
             events.append(event)
+            events_seen += 1
+            if transcript_file is not None:
+                transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
+                transcript_file.flush()
+            if not budget_halted and _detect_budget_halt(
+                str(event.get("result", "")) + str(event.get("error", ""))
+            ):
+                budget_halted = True
 
             # Track gate auto-approve events
             # /gate in auto-approve mode emits an event with auto_approved: true
@@ -271,9 +503,9 @@ def invoke(
                 gate_intervention_count += 1
 
             if event_type == "result":
-                cost_val = event.get("cost_usd")
+                cost_val = _extract_cost_usd(event)
                 if cost_val is not None:
-                    total_cost_usd = float(cost_val)
+                    total_cost_usd = cost_val
                 usage = event.get("usage", {})
                 tokens_in = usage.get("input_tokens", tokens_in)
                 tokens_out = usage.get("output_tokens", tokens_out)
@@ -283,7 +515,107 @@ def invoke(
             if event_type == "assistant":
                 turn_count += 1
 
-        proc.wait(timeout=10)
+            return "ok"
+
+        try:
+            read_buffer = ""
+            try:
+                timed_out = False
+                while True:
+                    # Timer-driven, not event-driven — see simple_claude.invoke.
+                    elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
+                    remaining = budget_seconds - elapsed
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+
+                    if not _wait_readable(proc.stdout, min(_POLL_INTERVAL_SECONDS, remaining)):
+                        continue
+
+                    if stdout_fd is not None:
+                        chunk = _read_ready_chunk(stdout_fd)
+                        if not chunk:
+                            if proc.poll() is not None:
+                                break
+                            # See simple_claude.invoke for the full
+                            # rationale — an EOF'd fd is reported readable
+                            # by select() forever, so this would otherwise
+                            # busy-spin at ~100% CPU with no sleep at all
+                            # (round-4 fix: MAJOR 14).
+                            time.sleep(min(_POLL_INTERVAL_SECONDS, max(remaining, 0.0)))
+                            continue
+                        read_buffer += chunk.decode("utf-8", errors="replace")
+                        ready_lines, read_buffer = _split_ready_lines(read_buffer)
+                    else:
+                        line = proc.stdout.readline()
+                        if not line and proc.poll() is not None:
+                            break
+                        ready_lines = [line] if line else []
+
+                    for raw_line in ready_lines:
+                        # Re-evaluated per LINE — see simple_claude.invoke:
+                        # a chunk full of 429s must not run its backoffs
+                        # unchecked against the wall clock.
+                        elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
+                        remaining = budget_seconds - elapsed
+                        if remaining <= 0:
+                            timed_out = True
+                            break
+
+                        outcome = _handle_stream_line(raw_line)
+                        if outcome == "rate_limited":
+                            backoff_start = time.monotonic()
+                            time.sleep(min(retry_delay, remaining))
+                            backoff_total += time.monotonic() - backoff_start
+                            retry_delay = min(retry_delay * 2, 60.0)
+
+                    if timed_out:
+                        break
+
+                # Flush a final unterminated line — see
+                # simple_claude.invoke: at EOF it would otherwise sit
+                # forever in `read_buffer`, silently dropping the terminal
+                # `result` event and the arm's cost. Unconditional, before
+                # branching on `timed_out` — a timed-out session still has
+                # a buffered terminal event worth recovering, and an
+                # earlier fix that only flushed on the clean-exit path
+                # left the timeout branch dropping it exactly as before.
+                if read_buffer.strip():
+                    _handle_stream_line(read_buffer)
+                    read_buffer = ""
+
+                if timed_out:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                    result["verdict"] = "timeout"
+                else:
+                    proc.wait(timeout=10)
+            finally:
+                # Guaranteed regardless of how the block above exits — see
+                # simple_claude.invoke.
+                if proc.poll() is None:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                stderr_thread.join(timeout=5)
+        finally:
+            if transcript_file is not None:
+                transcript_file.close()
+
+        stderr_output = "".join(stderr_buffer)
+
+        # A CLI-enforced budget halt (D-08) is reported as capped, not
+        # silently short — this cell's own refusal above only catches an
+        # UNARMED cap; this catches the cap actually firing mid-session.
+        if result["verdict"] is None:
+            if budget_halted or stderr_halt_event.is_set():
+                result["verdict"] = "budget_stopped"
+                result["extra"]["failure_reason"] = "budget-halt-detected"
 
         # Get git diff from workdir
         try:
@@ -298,18 +630,50 @@ def invoke(
         except Exception:
             result["diff_patch"] = ""
 
-        # Capture .workflow_artifacts/ evidence
-        # (run output dir is determined by the caller via run_id+cell+task_id)
+        # Capture .workflow_artifacts/ evidence into THIS task's own result
+        # directory (T-15). The old default — `workdir.parent /
+        # "artifacts_evidence"` — is the SAME path for every task, cell and
+        # arm sharing a worktree tempdir root, so a later arm's "has
+        # architecture.md" check could find an earlier arm's leftovers.
+        # `_capture_workflow_artifacts` appends its own
+        # "workflow_artifacts_evidence" segment, so `run_output_dir` here is
+        # the bare task result dir, not that segment pre-appended.
+        if run_output_dir is not None:
+            evidence_root = run_output_dir
+        else:
+            evidence_root = (
+                Path(tempfile.gettempdir()) / "quoin-benchmarks"
+                / f"artifacts_evidence-{run_id}-quoin-claude"
+            )
         artifacts_evidence = _capture_workflow_artifacts(
             workdir=workdir,
-            run_output_dir=workdir.parent / "artifacts_evidence",
+            run_output_dir=evidence_root,
             task_id=task_spec["id"],
         )
+        # Kept at both the top level (nothing that reads them today breaks)
+        # and in `extra` (where `RunResult.extra` and the judge can see
+        # them — T-01/T-02 fix; they were top-level-only before).
         result["workflow_artifacts_captured"] = artifacts_evidence.get("captured", False)
         result["workflow_artifacts_has_arch"] = artifacts_evidence.get("has_architecture_md", False)
         result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
+        result["extra"]["workflow_artifacts_captured"] = result["workflow_artifacts_captured"]
+        result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
+        result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
 
-        result["transcript_events"] = events
+        # See simple_claude.invoke — the ring buffer silently drops the
+        # OLDEST events once `events_seen` exceeds its cap; record that it
+        # happened rather than let a truncated in-memory value look
+        # complete.
+        transcript_events_dropped = max(0, events_seen - _MAX_RETAINED_EVENTS)
+        result["extra"]["transcript_events_dropped"] = transcript_events_dropped
+        result["extra"]["transcript_streamed"] = transcript_file is not None
+        if transcript_events_dropped:
+            events.appendleft({
+                "type": "truncation_notice",
+                "dropped_event_count": transcript_events_dropped,
+            })
+
+        result["transcript_events"] = list(events)
         result["turn_count"] = turn_count
         result["gate_intervention_count"] = gate_intervention_count
         result["tokens_in"] = tokens_in if tokens_in else None

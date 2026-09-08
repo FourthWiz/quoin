@@ -19,7 +19,10 @@ respecting --resume (skips tasks whose result dir is already well-formed).
 
 from __future__ import annotations
 
+import inspect
 import json
+import os
+import subprocess
 import tempfile
 import time
 from pathlib import Path
@@ -36,6 +39,117 @@ from .result_writer import (
     write_run_result,
 )
 
+# Terminal verdicts a cell can report on its own invocation result. When the
+# cell reports one of these, the judge is never called — the cell already
+# knows the outcome and the judge would be scoring evidence that was never
+# produced (D-03).
+_CELL_TERMINAL_VERDICTS = frozenset({"error", "timeout", "budget_stopped"})
+
+_ENV_BENCHMARK_GATE = "QUOIN_BENCHMARK_GATE"
+
+
+def _assert_no_remote_in_gate_mode(worktree_path: Path) -> None:
+    """Re-assert the fixture repo's remote is stripped, on the actual
+    per-task worktree, in gate mode only.
+
+    `git worktree add` shares its parent repo's `.git/config` (remotes
+    included), so this should always agree with whatever the fixture repo
+    itself reports — but that agreement is exactly what a re-clone or an
+    operator skipping the manual `git remote remove origin` step (T-08a)
+    would break, silently. The quoin arms run `/run --autonomous`, the one
+    mode allowed to invoke `/end_of_task` and push a branch, so a leftover
+    `origin` here is not a theoretical containment gap. Outside gate mode
+    this is a no-op — a fixture repo legitimately keeping its remote for
+    ordinary (non-gate) benchmark runs is not this check's business.
+    """
+    if os.environ.get(_ENV_BENCHMARK_GATE) != "1":
+        return
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree_path), "remote"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            f"GATE-STOP: could not check fixture worktree {worktree_path} for a "
+            f"configured remote: {exc}"
+        ) from exc
+    if result.returncode == 0 and result.stdout.strip():
+        raise RuntimeError(
+            f"GATE-STOP: fixture worktree {worktree_path} still has a remote "
+            f"configured ({result.stdout.strip()!r}); the fixture repo's own "
+            "`origin` must be removed before it is used in gate mode"
+        )
+
+# Spend-critical config fields that, if silently dropped by inspect.signature
+# threading, would leave a guardrail unarmed with no error (T-01, D-08).
+# Named explicitly rather than derived from "every field whose value is not
+# None", because several threadable fields (quoin_install_script,
+# quoin_install_mode) default to non-None values that every cell — including
+# ones that declare neither spend-critical field — must keep working with.
+_SPEND_CRITICAL_FIELDS = ("max_budget_usd", "expected_quoin_commit")
+
+
+class SpendTracker:
+    """A between-task cumulative-spend cap for a single `run_cell` call.
+
+    This is a SECONDARY bound (D-08): it is only evaluated after a task
+    returns, so it cannot stop anything within a one-task suite — the
+    intra-task bound is the CLI's own `--max-budget-usd` (T-14). For a
+    multi-task suite this stops a cell once its running total exceeds
+    `cap_usd`, so a lengthy run does not silently run away between the
+    per-task caps.
+    """
+
+    def __init__(self, cap_usd: Optional[float] = None) -> None:
+        self.cap_usd = cap_usd
+        self.total_usd: float = 0.0
+
+    def add(self, amount: float) -> bool:
+        """Record `amount` spent; return True if the cap is now exceeded."""
+        self.total_usd += amount
+        return self.cap_usd is not None and self.total_usd > self.cap_usd
+
+
+class ConfigThreadError(RuntimeError):
+    """Raised when a spend-critical config field cannot reach any adapter.
+
+    `inspect.signature`-based kwarg threading (D-11) fails silently: a field
+    an adapter does not declare is simply not passed. That silence is
+    acceptable for optional plumbing and unacceptable for a spend cap. This
+    error makes the omission loud, before any task runs.
+    """
+
+
+# Config fields threaded to cell adapters via D-11 signature inspection,
+# beyond the four base `run_one_task` kwargs. Extended as later tasks add
+# cell parameters (T-02: install mode + arm root; T-14: budget cap; T-15:
+# result dir). A name not yet present on HarnessConfig (a field a later task
+# adds) is simply never threaded — `hasattr` guards it — so this list can be
+# filled in ahead of the field existing without breaking anything.
+_THREADABLE_CONFIG_FIELDS = (
+    "quoin_install_script",
+    "expected_quoin_commit",
+    "quoin_install_mode",
+    "arm_root",
+    "max_budget_usd",
+)
+
+
+def _threadable_kwargs(adapter, config: HarnessConfig) -> dict:
+    """Build the kwargs to pass to `adapter.invoke` beyond the four base ones.
+
+    Only passes a field when the adapter's `invoke` declares a parameter of
+    that exact name (D-11) — this is what lets cells that don't need a field
+    stay byte-unchanged.
+    """
+    params = inspect.signature(adapter.invoke).parameters
+    return {
+        name: getattr(config, name)
+        for name in _THREADABLE_CONFIG_FIELDS
+        if name in params and hasattr(config, name)
+    }
+
 
 def _load_cell_adapter(cell: str):
     """Dynamically import the cell adapter module."""
@@ -46,6 +160,42 @@ def _load_cell_adapter(cell: str):
         f"quoin.benchmarks.harness.cells.{cell_module_name}"
     )
     return module
+
+
+def _check_spend_critical_fields_threadable(config: HarnessConfig) -> None:
+    """Raise loudly, before any task runs, if a configured spend-critical
+    field cannot reach any adapter in `config.cells`.
+
+    `inspect.signature` threading (D-11) fails silently when the target
+    adapter does not declare a parameter of that name — a field simply is
+    not passed, with no exception and no log. That silence is acceptable for
+    optional plumbing and unacceptable for a spend cap (D-08's CRIT-2 fix).
+    The check is scoped to the named field list only: a rule of "any field
+    whose value is not None" also fires on non-None DEFAULTS (e.g.
+    `quoin_install_script`), which every existing single-cell invocation
+    carries regardless of whether that cell needs it.
+    """
+    for field_name in _SPEND_CRITICAL_FIELDS:
+        value = getattr(config, field_name, None)
+        if value is None:
+            continue
+        declares = False
+        for cell_id in config.cells:
+            try:
+                adapter = _load_cell_adapter(cell_id)
+            except Exception:
+                continue
+            if field_name in inspect.signature(adapter.invoke).parameters:
+                declares = True
+                break
+        if not declares:
+            raise ConfigThreadError(
+                f"{field_name!r} is set to {value!r} but no adapter among "
+                f"config.cells ({', '.join(config.cells)}) declares an "
+                f"'{field_name}' parameter on invoke() — it would be "
+                "silently dropped and the guardrail it configures would be "
+                "unarmed."
+            )
 
 
 def run_one_task(
@@ -101,6 +251,16 @@ def run_one_task(
 
     worktree_path: Optional[Path] = None
     _tmpdir_obj = None  # holds the TemporaryDirectory for HumanEval+ tasks
+    # Pre-declared so the generic exception handler below can carry them
+    # through even when the exception fires before `adapter.invoke()`
+    # returns (round-4 fix: MAJOR 4) — most importantly
+    # `transcript_streamed`, which the cell now sets at file-open time
+    # specifically so a crash anywhere after that point (a judge crash,
+    # `cleanup_task_worktree`, the `RunResult` construction itself) does
+    # not make `write_run_result` re-open and truncate an already-streamed
+    # transcript.jsonl to empty.
+    invocation_extra: dict = {}
+    invocation_transcript_events: list = []
     try:
         # Create isolated worktree for the task.
         # SWE-bench tasks: git worktree of fixture_repo.
@@ -110,12 +270,20 @@ def run_one_task(
             worktree_path = create_task_worktree(
                 fixture_repo, run_id, cell, task_id
             )
+            _assert_no_remote_in_gate_mode(worktree_path)
         else:
             _tmpdir_obj = tempfile.TemporaryDirectory(prefix=f"qbench_{task_id}_")
             worktree_path = Path(_tmpdir_obj.name)
 
-        # Invoke the cell adapter
+        # Invoke the cell adapter, threading spend-critical and plumbing
+        # config fields to whichever adapters declare them (D-11).
         start = time.monotonic()
+        extra_kwargs = _threadable_kwargs(adapter, config)
+        # `run_output_dir` (T-15) isn't a config value — it's this task's OWN
+        # result directory, computed above as `t_dir` — but it's threaded by
+        # the same declared-parameter mechanism, not a cell-name branch.
+        if "run_output_dir" in inspect.signature(adapter.invoke).parameters:
+            extra_kwargs["run_output_dir"] = t_dir
         invocation_result = adapter.invoke(
             task_spec=task_spec,
             workdir=worktree_path or Path("."),
@@ -124,15 +292,52 @@ def run_one_task(
                 max_retries=budget.max_retries,
             ),
             run_id=run_id,
+            **extra_kwargs,
         )
         elapsed = time.monotonic() - start
+        # Record what actually reached the cell — the evidence of what the
+        # thread carried, not what was intended (round-3 addition, CRIT-2).
+        invocation_extra = dict(invocation_result.get("extra", {}))
+        invocation_extra["threaded_kwargs"] = sorted(extra_kwargs.keys())
+        invocation_transcript_events = invocation_result.get("transcript_events", [])
+
+        # A cell-reported terminal verdict (error / timeout / budget_stopped)
+        # short-circuits the judge: the cell already knows the outcome, and
+        # calling the judge would score evidence a failed invocation never
+        # produced (D-03).
+        if invocation_result.get("verdict") in _CELL_TERMINAL_VERDICTS:
+            result = RunResult(
+                cell=cell,
+                task_id=task_id,
+                run_id=run_id,
+                transcript_events=invocation_result.get("transcript_events", []),
+                verdict=invocation_result["verdict"],
+                evidence_path=invocation_extra.get("failure_reason"),
+                judge_runtime_seconds=0.0,
+                wall_clock_seconds=elapsed,
+                tokens_in=invocation_result.get("tokens_in"),
+                tokens_out=invocation_result.get("tokens_out"),
+                tokens_cache_read=invocation_result.get("tokens_cache_read"),
+                tokens_cache_write=invocation_result.get("tokens_cache_write"),
+                gate_intervention_count=invocation_result.get("gate_intervention_count", 0),
+                turn_count=invocation_result.get("turn_count", 0),
+                cost_runtime_usd=invocation_result.get("cost_runtime_usd"),
+                cost_estimated_usd=invocation_result.get("cost_estimated_usd"),
+                cost_delta_usd=invocation_result.get("cost_delta_usd"),
+                cost_available=invocation_result.get("cost_available", False),
+                prompt=invocation_result.get("prompt", ""),
+                diff_patch=invocation_result.get("diff_patch", ""),
+                extra=invocation_extra,
+            )
+            write_run_result(result, run_dir)
+            return result
 
         # Run judge
-        task_work_dir = t_dir  # judge looks for solution.py / diff.patch here
         judge_result = judge_task(
             task_id=task_id,
             task_dir=worktree_path or Path("."),
             run_id=run_id,
+            invocation_extra=invocation_extra,
         )
 
         # Build RunResult
@@ -157,15 +362,24 @@ def run_one_task(
             cost_available=invocation_result.get("cost_available", False),
             prompt=invocation_result.get("prompt", ""),
             diff_patch=invocation_result.get("diff_patch", ""),
+            extra=invocation_extra,
         )
 
     except Exception as exc:
+        # `extra` (carrying `transcript_streamed`) and any transcript
+        # events collected before the exception are threaded through here,
+        # not defaulted to `{}`/`[]` (round-4 fix: MAJOR 4) — a default
+        # here is indistinguishable from "nothing was ever streamed" to
+        # `write_run_result`'s own re-open guard, which then clobbers a
+        # real, paid, already-on-disk transcript.jsonl with an empty one.
         result = RunResult(
             cell=cell,
             task_id=task_id,
             run_id=run_id,
             verdict="error",
             evidence_path=str(exc),
+            transcript_events=invocation_transcript_events,
+            extra=invocation_extra,
         )
     finally:
         if _tmpdir_obj is not None:
@@ -185,6 +399,7 @@ def run_cell(
     config: Optional[HarnessConfig] = None,
     fixture_repo: Optional[Path] = None,
     resume: bool = False,
+    tracker: Optional[SpendTracker] = None,
 ) -> CellResult:
     """
     Run all tasks in the suite for a given cell.
@@ -203,6 +418,12 @@ def run_cell(
         Path to fixture repo (required for SWE-bench Lite).
     resume:
         If True, skip tasks whose result dir is already well-formed.
+    tracker:
+        Optional `SpendTracker` enforcing a BETWEEN-task cumulative USD cap
+        (T-03, D-08's secondary bound — the intra-task bound is the CLI's
+        own `--max-budget-usd`, T-14). With `tracker is None` or a `None`
+        `cap_usd`, this loop is byte-equivalent to today: every suite task
+        runs regardless of cost.
 
     Returns
     -------
@@ -210,6 +431,8 @@ def run_cell(
     """
     if config is None:
         config = HarnessConfig()
+
+    _check_spend_critical_fields_threadable(config)
 
     cell_result = CellResult(cell=cell, run_id=run_id)
 
@@ -240,5 +463,11 @@ def run_cell(
             fixture_repo=fixture_repo,
         )
         cell_result.task_results.append(result)
+
+        if tracker is not None:
+            cap_exceeded = tracker.add(result.cost_runtime_usd or 0.0)
+            if cap_exceeded:
+                cell_result.budget_stopped = True
+                break
 
     return cell_result

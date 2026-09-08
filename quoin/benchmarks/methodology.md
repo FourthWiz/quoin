@@ -121,8 +121,10 @@ measured value. The T-15 calibration run will provide empirical variance data.
 
 ## Cost Derivation
 
-Cost estimates below assume claude-opus-4-7 dated snapshot. Actual costs are
-pinned from T-15 calibration; these are planning estimates.
+Cost estimates below assume the `claude-opus-4-7` model ID. Starting with the
+4.6 generation, this dateless ID is itself the permanent pinned snapshot — no
+separate dated form exists to swap in later. Actual costs are pinned from
+T-15 calibration; these are planning estimates.
 
 | Slice | Per-task estimate | N tasks | N cells | Total estimate |
 |---|---|---|---|---|

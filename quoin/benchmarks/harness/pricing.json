@@ -2,26 +2,25 @@
   "_comment": "Per-model per-1M-token pricing for quoin benchmark harness. Claude-only. Codex models NOT included (no public per-token pricing; would constitute token inference per quoin/adapters/codex/cost.md). Update at benchmark time by verifying against current Anthropic pricing page.",
   "_sources": [
     "https://www.anthropic.com/pricing (verified at implementation time)",
-    "https://docs.anthropic.com/en/docs/about-claude/models (model IDs)"
+    "https://platform.claude.com/docs/en/models/opus-4-7/overview",
+    "https://platform.claude.com/docs/en/models/sonnet-4-6/overview"
   ],
-  "_last_verified": "2026-05-17",
-  "_note": "Dated snapshot model IDs must match the PINNED_MODEL constant in cells/simple_claude.py. Verify and update both at benchmark time.",
+  "_last_verified": "2026-09-06",
+  "_note": "Starting with the 4.6 generation, every Claude model ID is a pinned snapshot including the dateless form (see Anthropic's docs above) — there is no separate dated snapshot to discover for these models. Keys here are therefore the bare model IDs, matching the CLI's `canonicalModel` field exactly.",
   "models": {
-    "claude-opus-4-7-20261001": {
-      "_note": "UPDATE at benchmark time — verify exact dated snapshot ID from Claude API response 'model' field",
-      "input_per_1m_usd": 15.0,
-      "output_per_1m_usd": 75.0,
-      "cache_write_per_1m_usd": 18.75,
-      "cache_read_per_1m_usd": 1.50,
-      "_source": "https://www.anthropic.com/pricing — Claude Opus 4.7 tier at implementation time"
+    "claude-opus-4-7": {
+      "input_per_1m_usd": 5.0,
+      "output_per_1m_usd": 25.0,
+      "cache_write_per_1m_usd": 6.25,
+      "cache_read_per_1m_usd": 0.50,
+      "_source": "https://platform.claude.com/docs/en/models/opus-4-7/overview — Specifications table"
     },
-    "claude-sonnet-4-6-20261001": {
-      "_note": "UPDATE at benchmark time — verify exact dated snapshot ID",
+    "claude-sonnet-4-6": {
       "input_per_1m_usd": 3.0,
       "output_per_1m_usd": 15.0,
       "cache_write_per_1m_usd": 3.75,
       "cache_read_per_1m_usd": 0.30,
-      "_source": "https://www.anthropic.com/pricing — Claude Sonnet 4.6 tier at implementation time"
+      "_source": "https://platform.claude.com/docs/en/models/sonnet-4-6/overview — Specifications table"
     }
   }
 }
