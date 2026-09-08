@@ -284,22 +284,26 @@ def test_prices_claude5_entries_pinned():
                               "cache_create": 12.50, "cache_read": 1.00},
         "claude-opus-5":    {"input": 5.00, "output": 25.00,
                               "cache_create": 6.25, "cache_read": 0.50},
-        "claude-sonnet-5":  {"input": 3.00, "output": 15.00,
-                              "cache_create": 3.75, "cache_read": 0.30},
+        "claude-sonnet-5":  {"input": 2.00, "output": 10.00,
+                              "cache_create": 2.50, "cache_read": 0.20},
         "claude-haiku-4-5": {"input": 1.00, "output": 5.00,
                               "cache_create": 1.25, "cache_read": 0.10},
     }
+    rate_fields = ("input", "output", "cache_create", "cache_read")
     for slug, rates in expected.items():
         assert slug in PRICES, f"{slug} missing from PRICES"
-        assert PRICES[slug] == rates, (
-            f"{slug} rate mismatch: got {PRICES[slug]}, expected {rates}"
+        # Compare the four rate fields explicitly (not the whole dict) — the
+        # entry also carries "src"/"verified" provenance fields (IVG-260).
+        got_rates = {k: PRICES[slug][k] for k in rate_fields}
+        assert got_rates == rates, (
+            f"{slug} rate mismatch: got {got_rates}, expected {rates}"
         )
 
 
 def test_last_updated_pinned():
     from cost_from_jsonl import LAST_UPDATED
 
-    assert LAST_UPDATED == "2026-08-13", (
+    assert LAST_UPDATED == "2026-09-08", (
         f"LAST_UPDATED mismatch: got {LAST_UPDATED!r}"
     )
 
@@ -369,6 +373,250 @@ def test_parse_session_unknown_model_is_not_priceable_and_warns(tmp_path):
     assert "claude-imaginary-9" in stderr_output, (
         f"Expected the deduped unknown-model WARN naming the slug; got: {stderr_output!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# IVG-260 T-10: negative path and provenance
+# ---------------------------------------------------------------------------
+def test_live_non_anthropic_slug_is_never_priceable(tmp_path):
+    """deepseek/deepseek-v4-pro (a real, live CCR-routed slug — 1075 rows
+    across sampled transcripts) must never resolve to a price, and the
+    deduplicated stderr warning must fire exactly once for two rows of the
+    same slug."""
+    from cost_from_jsonl import parse_session
+
+    row = {
+        "message": {
+            "model": "deepseek/deepseek-v4-pro",
+            "usage": {
+                "input_tokens": 100, "output_tokens": 50,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            },
+        }
+    }
+    jsonl_file = tmp_path / "00000000-0000-0000-0000-000000000010.jsonl"
+    jsonl_file.write_text((json.dumps(row) + "\n") * 2)
+
+    import io as _io
+    captured_stderr = _io.StringIO()
+    old_stderr = sys.stderr
+    sys.stderr = captured_stderr
+    try:
+        result = parse_session(jsonl_file)
+    finally:
+        sys.stderr = old_stderr
+
+    assert result["totalCost"] == 0.0
+    assert result["unknown_models"] == ["deepseek/deepseek-v4-pro"]
+    assert result["priceable"] is False
+    stderr_output = captured_stderr.getvalue()
+    assert stderr_output.count("deepseek/deepseek-v4-pro") == 1, (
+        f"Expected exactly one deduped warning; got: {stderr_output!r}"
+    )
+
+
+def test_one_rewrite_away_slug_stays_unpriced():
+    """claude-opus-4-5-legacy (the fixture at
+    test_backfill_cost_attribution.py:109) sits exactly one banned rewrite
+    away from the newly-added claude-opus-4-5 key. Under the two-rule
+    resolver (trailing [1m], trailing -DDDDDDDD) it stays a miss — neither
+    rule matches "-legacy"."""
+    from cost_from_jsonl import resolve_prices
+
+    assert resolve_prices("claude-opus-4-5-legacy") is None
+
+
+def test_one_rewrite_away_slug_session_not_priceable(tmp_path):
+    from cost_from_jsonl import parse_session
+
+    row = {
+        "message": {
+            "model": "claude-opus-4-5-legacy",
+            "usage": {
+                "input_tokens": 100, "output_tokens": 50,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            },
+        }
+    }
+    jsonl_file = tmp_path / "00000000-0000-0000-0000-000000000011.jsonl"
+    jsonl_file.write_text(json.dumps(row) + "\n")
+    result = parse_session(jsonl_file)
+    assert result["totalCost"] == 0.0
+    assert result["unknown_models"] == ["claude-opus-4-5-legacy"]
+    assert result["priceable"] is False
+
+
+def test_every_prices_entry_has_provenance():
+    import re as _re
+    from cost_from_jsonl import PRICES
+
+    for model, entry in PRICES.items():
+        src = entry.get("src", "")
+        assert isinstance(src, str) and src.startswith("http"), (
+            f"{model}: 'src' missing or not an http(s) URL: {src!r}"
+        )
+        verified = entry.get("verified", "")
+        assert _re.match(r"^\d{4}-\d{2}-\d{2}$", verified or ""), (
+            f"{model}: 'verified' missing or not YYYY-MM-DD: {verified!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# IVG-260 T-11: the <synthetic> sentinel through cost_from_jsonl's own reader
+# ---------------------------------------------------------------------------
+_SYNTHETIC_ROW = {
+    "message": {
+        "model": "<synthetic>",
+        "usage": {
+            "input_tokens": 0, "output_tokens": 0,
+            "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+        },
+    }
+}
+
+
+def test_synthetic_only_session_is_priceable_and_free(tmp_path):
+    from cost_from_jsonl import parse_session
+
+    jsonl_file = tmp_path / "00000000-0000-0000-0000-000000000012.jsonl"
+    jsonl_file.write_text(json.dumps(_SYNTHETIC_ROW) + "\n")
+
+    import io as _io
+    captured_stderr = _io.StringIO()
+    old_stderr = sys.stderr
+    sys.stderr = captured_stderr
+    try:
+        result = parse_session(jsonl_file)
+    finally:
+        sys.stderr = old_stderr
+
+    assert result["totalCost"] == 0.0
+    assert result["entries"] == []
+    assert result["unknown_models"] == []
+    assert result["priceable"] is True
+    assert result["sentinel_rows"] == 1
+    assert captured_stderr.getvalue() == ""
+
+
+def test_mixed_synthetic_and_real_session_stays_priceable(tmp_path):
+    from cost_from_jsonl import parse_session
+
+    real_row = {
+        "message": {
+            "model": "claude-sonnet-4-6",
+            "usage": {
+                "input_tokens": 100, "output_tokens": 50,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            },
+        }
+    }
+    jsonl_file = tmp_path / "00000000-0000-0000-0000-000000000013.jsonl"
+    jsonl_file.write_text(json.dumps(_SYNTHETIC_ROW) + "\n" + json.dumps(real_row) + "\n")
+
+    result = parse_session(jsonl_file)
+    assert result["priceable"] is True
+    assert len(result["entries"]) == 1
+    assert result["sentinel_rows"] == 1
+
+
+# ---------------------------------------------------------------------------
+# IVG-260 T-09: newly-priced model IDs and normalization
+# ---------------------------------------------------------------------------
+def _one_row_jsonl(tmp_path, model, usage, name="00000000-0000-0000-0000-000000000099.jsonl"):
+    row = {"message": {"model": model, "usage": usage}}
+    jsonl_file = tmp_path / name
+    jsonl_file.write_text(json.dumps(row) + "\n")
+    return jsonl_file
+
+
+_USAGE_BLOCK = {
+    "input_tokens": 1000,
+    "output_tokens": 500,
+    "cache_creation_input_tokens": 200,
+    "cache_read_input_tokens": 300,
+}
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["claude-fable-5-1", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5"],
+)
+def test_newly_priced_model_is_costable_and_priceable(tmp_path, model):
+    from cost_from_jsonl import parse_session
+
+    jsonl_file = _one_row_jsonl(tmp_path, model, _USAGE_BLOCK)
+    result = parse_session(jsonl_file)
+    assert result["totalCost"] > 0, (
+        f"Expected totalCost > 0 for newly-priced model {model!r}; got {result['totalCost']}"
+    )
+    assert result["unknown_models"] == [], (
+        f"Expected no unknown_models for {model!r}; got {result['unknown_models']}"
+    )
+    assert result["priceable"] is True, (
+        f"Expected priceable=True for {model!r}; got {result['priceable']}"
+    )
+
+
+def test_bracketed_1m_slug_prices_same_as_base_slug():
+    from cost_from_jsonl import cost_for_entry
+
+    # Defensive normalization only — no live transcript row carries a
+    # bracketed slug (message.model is never bracketed across 82 sampled
+    # transcripts; "[1m]" appears only in toolUseResult.resolvedModel /
+    # fallbackModel, fields the cost path never reads). This fixture is
+    # synthetic by design.
+    assert cost_for_entry("claude-opus-5[1m]", _USAGE_BLOCK) == cost_for_entry(
+        "claude-opus-5", _USAGE_BLOCK
+    )
+
+
+def test_dated_snapshot_slug_prices_same_as_base_slug():
+    from cost_from_jsonl import cost_for_entry
+
+    assert cost_for_entry(
+        "claude-sonnet-4-6-20260101", _USAGE_BLOCK
+    ) == cost_for_entry("claude-sonnet-4-6", _USAGE_BLOCK)
+
+
+def test_dated_haiku_alias_byte_identity_cost():
+    """claude-haiku-4-5-20251001 must price at its OWN entry's rates, not the
+    bare claude-haiku-4-5 alias's (they carry equal rates today, so this only
+    discriminates exact-match-first ordering via the hardcoded expectation
+    below, not via a value that happens to differ)."""
+    from cost_from_jsonl import cost_for_entry, PRICES
+
+    own_rates = PRICES["claude-haiku-4-5-20251001"]
+    assert own_rates == {
+        "input": 1.00, "output": 5.00, "cache_create": 1.25, "cache_read": 0.10,
+        "src": own_rates["src"], "verified": own_rates["verified"],
+    }
+    expected = round(
+        (1000 * 1.00 + 500 * 5.00 + 200 * 1.25 + 300 * 0.10) / 1_000_000.0, 6
+    )
+    cost, _ = cost_for_entry("claude-haiku-4-5-20251001", _USAGE_BLOCK)
+    assert round(cost, 6) == expected
+
+
+def test_dated_haiku_alias_object_identity():
+    """The dated entry and the bare alias hold equal rates but are distinct
+    dict objects — `is` (unlike `==`) genuinely discriminates exact-match-first
+    from normalize-first resolver ordering."""
+    from cost_from_jsonl import resolve_prices, PRICES
+
+    assert resolve_prices("claude-haiku-4-5-20251001") is PRICES["claude-haiku-4-5-20251001"]
+
+
+def test_sentinel_set_is_exactly_one_non_model_string():
+    from cost_from_jsonl import PRICES, NON_MODEL_SENTINELS, is_costable
+
+    assert len(NON_MODEL_SENTINELS) == 1
+    for key in PRICES:
+        if key.startswith("claude-"):
+            assert is_costable(key), f"{key} should be costable"
+    # Cheap partial fix (round-1 MIN-2): expressible against the
+    # pre-existing PRICES symbol alone, so it carries behavioural content
+    # even before is_costable/NON_MODEL_SENTINELS existed.
+    assert "<synthetic>" not in PRICES
 
 
 # ---------------------------------------------------------------------------

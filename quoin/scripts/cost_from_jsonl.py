@@ -10,73 +10,75 @@
 # (.workflow_artifacts/quoin-foundation/architecture.md lines 92-123) and the
 # parent's resolved open-question two: this is FALLBACK ONLY in stage 2.
 #
-# Pricing source: ccusage v18.0.11 price table (cross-checked 2026-04-27).
-# IMPLEMENTATION NOTE: the stage-2 plan specified opus-4-7 at $15/$75/$18.75/$1.50,
-# but ccusage v18.0.11 uses $5/$25/$6.25/$0.50 for that model. Parity testing
-# confirmed ccusage's lower rates match real session costs. The plan's prices appear
-# to be the "per-1M-request" batch API rate rather than the actual API rates.
-# Using ccusage-matched prices for <1% parity. Logged to lessons-learned.md.
+# Pricing source: https://platform.claude.com/docs/en/about-claude/pricing,
+# fetched and cross-checked against every entry below on each `verified` date.
 # When prices drift in production (per lesson 2026-04-22), append a row to
 # .workflow_artifacts/memory/lessons-learned.md and bump LAST_UPDATED.
 #
-# Price snapshot (Wayback Machine archive for anthropic.com/pricing):
-#   https://web.archive.org/web/20260427000000*/https://www.anthropic.com/pricing
-# Rates verified 2026-04-27 against ccusage v18.0.11 price table (verbatim):
-#   claude-opus-4-7:           input $5.00/1M,  output $25.00/1M,
-#                              cache_create $6.25/1M,  cache_read $0.50/1M
-#   claude-sonnet-4-6:         input $3.00/1M,  output $15.00/1M,
-#                              cache_create $3.75/1M,  cache_read $0.30/1M
-#   claude-haiku-4-5-20251001: input $1.00/1M,  output $5.00/1M,
-#                              cache_create $1.25/1M,  cache_read $0.10/1M
-# If these rates differ from ccusage at implementation time, halt and ask before
-# committing — do NOT silently update.
+# Every PRICES entry below carries its own "src" (the pricing page URL) and
+# "verified" (ISO date of the fetch that confirmed it) — see IVG-260. Do not
+# add an entry without both fields; the provenance test enforces this.
 #
-# Claude 5 rates verified 2026-08-13 against the Anthropic model catalog via
-# the claude-api skill reference (IVG-249 T-03), USD per 1M tokens:
-#   claude-fable-5:   input $10.00/1M, output $50.00/1M,
-#                      cache_create $12.50/1M, cache_read $1.00/1M
-#   claude-opus-5:    input  $5.00/1M, output $25.00/1M,
-#                      cache_create  $6.25/1M, cache_read $0.50/1M
-#   claude-sonnet-5:  input  $3.00/1M, output $15.00/1M,
-#                      cache_create  $3.75/1M, cache_read $0.30/1M
-# cache_create is the 5-minute-TTL write rate at 1.25x input; cache_read is
-# 0.1x input — both are documented general multipliers, not per-model figures.
+# cache_create is the 5-minute-TTL write rate (1.25x input on most models);
+# cache_read is 0.1x input on most models — except claude-fable-5-1 and the
+# Mythos 5.x family, which use 0.025x input for cache_read instead.
 #
-# Known gaps in this table (pre-existing, not introduced by the Claude 5
-# additions — recorded here so a later reader does not re-discover them):
-#   - 1-hour-TTL cache writes are 2x input, not 1.25x. This single-field
-#     table has no TTL dimension, so ALL slugs understate 1-hour-TTL writes.
-#   - Claude Opus 5 fast mode bills at $10.00/$50.00 rather than $5.00/$25.00.
-#     This table has no speed dimension, so fast-mode Opus 5 sessions are
-#     under-priced by this table.
-#   - claude-sonnet-5 carries an introductory discount of $2.00 input /
-#     $10.00 output through 2026-08-31. Sticker rates above OVERSTATE
-#     sonnet-5 cost until that date; tok counts stay durable so affected
-#     rows remain re-priceable later (see R-01 in the ivg-249 stage-1 plan).
-LAST_UPDATED = "2026-08-13"
-PRICES = {  # USD per 1M tokens — verified against ccusage v18.0.11 on 2026-04-27
+# Known gaps in this table (not per-model, and not fixed by IVG-260):
+#   - 1-hour-TTL cache writes are 2x input, not the 5-minute 1.25x rate. This
+#     single-field table has no TTL dimension, so ALL slugs understate
+#     1-hour-TTL writes.
+#   - Claude Opus 5 / Opus 4.8 fast mode bills at $10.00/$50.00 rather than
+#     $5.00/$25.00. This table has no speed dimension, so fast-mode sessions
+#     on those two models are under-priced by this table.
+#   - claude-sonnet-5's introductory $2.00/$10.00 rate is now the standard,
+#     permanent rate (the previously scheduled increase to $3.00/$15.00 on
+#     2026-09-01 will not occur) — no discount-expiry caveat applies.
+#   - This table has no long-context dimension, so a 1M-context session is
+#     priced at the base slug's standard rates.
+LAST_UPDATED = "2026-09-08"
+_PRICING_SRC = "https://platform.claude.com/docs/en/about-claude/pricing"
+PRICES = {  # USD per 1M tokens
     "claude-opus-4-7":            {"input":  5.00, "output": 25.00,
-                                   "cache_create":  6.25, "cache_read":  0.50},
-    # claude-opus-4-8: same Claude 4 Opus tier as 4-7; rates matched to 4-7
-    # (Anthropic pricing page 2026-06-07: $15/$75 list rate = $5/$25 effective,
-    # consistent with the ccusage-matched rates used for 4-7 — see IMPLEMENTATION NOTE above)
+                                   "cache_create":  6.25, "cache_read":  0.50,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
     "claude-opus-4-8":            {"input":  5.00, "output": 25.00,
-                                   "cache_create":  6.25, "cache_read":  0.50},
+                                   "cache_create":  6.25, "cache_read":  0.50,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
+    "claude-opus-4-6":            {"input":  5.00, "output": 25.00,
+                                   "cache_create":  6.25, "cache_read":  0.50,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
+    "claude-opus-4-5":            {"input":  5.00, "output": 25.00,
+                                   "cache_create":  6.25, "cache_read":  0.50,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
     "claude-sonnet-4-6":          {"input":  3.00, "output": 15.00,
-                                   "cache_create":  3.75, "cache_read":  0.30},
+                                   "cache_create":  3.75, "cache_read":  0.30,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
+    "claude-sonnet-4-5":          {"input":  3.00, "output": 15.00,
+                                   "cache_create":  3.75, "cache_read":  0.30,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
     "claude-haiku-4-5-20251001":  {"input":  1.00, "output":  5.00,
-                                   "cache_create":  1.25, "cache_read":  0.10},
+                                   "cache_create":  1.25, "cache_read":  0.10,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
     # claude-haiku-4-5: bare catalog alias of claude-haiku-4-5-20251001, added
     # defensively (IVG-249 T-03) — a bare alias is added only when the same
     # family already has a dated slug priced in this table, which this one does.
     "claude-haiku-4-5":           {"input":  1.00, "output":  5.00,
-                                   "cache_create":  1.25, "cache_read":  0.10},
+                                   "cache_create":  1.25, "cache_read":  0.10,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
     "claude-fable-5":             {"input": 10.00, "output": 50.00,
-                                   "cache_create": 12.50, "cache_read":  1.00},
+                                   "cache_create": 12.50, "cache_read":  1.00,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
+    # claude-fable-5-1: cache_read is 0.025x input on this model (not the
+    # usual 0.1x) — do not derive it from the standard multiplier.
+    "claude-fable-5-1":           {"input": 10.00, "output": 50.00,
+                                   "cache_create": 12.50, "cache_read":  0.25,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
     "claude-opus-5":              {"input":  5.00, "output": 25.00,
-                                   "cache_create":  6.25, "cache_read":  0.50},
-    "claude-sonnet-5":            {"input":  3.00, "output": 15.00,
-                                   "cache_create":  3.75, "cache_read":  0.30},
+                                   "cache_create":  6.25, "cache_read":  0.50,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
+    "claude-sonnet-5":            {"input":  2.00, "output": 10.00,
+                                   "cache_create":  2.50, "cache_read":  0.20,
+                                   "src": _PRICING_SRC, "verified": "2026-09-08"},
 }
 
 import argparse
@@ -87,6 +89,68 @@ import pathlib
 import re
 import sys
 from datetime import datetime, timezone
+
+
+# Non-model sentinel values that can appear in a transcript's message.model
+# field. These are never real model IDs and are skipped before both the
+# price lookup and per-model aggregation (IVG-260 D-07).
+NON_MODEL_SENTINELS = frozenset({"<synthetic>"})
+
+# Fallback-only normalization rewrites, applied in order, repeatedly, until
+# the string stops changing. Exact PRICES lookup always runs first and wins;
+# these only fire on an exact-lookup miss (IVG-260 D-02). Do NOT add a
+# prefix-scan or family-inference rule here — see resolve_prices' docstring.
+MODEL_ID_NORMALIZERS = (
+    (re.compile(r"\[1m\]$"), ""),
+    (re.compile(r"-\d{8}$"), ""),
+)
+
+
+def is_costable(model) -> bool:
+    """True iff `model` is a non-empty string that isn't a non-model sentinel.
+    Reproduces today's `if model:` guard byte-for-byte for the empty-string
+    case, and additionally excludes NON_MODEL_SENTINELS."""
+    return bool(model) and model not in NON_MODEL_SENTINELS
+
+
+def resolve_prices(model):
+    """Return the PRICES entry for `model`, or None if not costable/priced.
+
+    Exact match always wins first. Only on a miss does this apply
+    MODEL_ID_NORMALIZERS (stripping a trailing `[1m]` suffix, then a
+    trailing `-` plus 8 digits) repeatedly until the string stops changing,
+    then perform exactly one more exact PRICES lookup. A rewrite output that
+    is not itself an exact key is a miss — this is NOT a prefix scan.
+
+    Do NOT copy quoin/benchmarks/harness/cost.py:111's mechanism onto this
+    path: that function does a prefix SCAN over the pricing table's keys
+    (`model.startswith(key.rsplit("-", 1)[0])` tested per key), not a
+    rewrite of the model string. A scan-derived match here would make an
+    unrecognized slug silently price at a related model's rate and kill the
+    unknown-model signal — exactly what IVG-260 D-02 exists to prevent.
+    """
+    if not is_costable(model):
+        return None
+    exact = PRICES.get(model)
+    if exact is not None:
+        return exact
+    normalized = model
+    while True:
+        changed = False
+        for pattern, replacement in MODEL_ID_NORMALIZERS:
+            new_normalized = pattern.sub(replacement, normalized)
+            if new_normalized != normalized:
+                normalized = new_normalized
+                changed = True
+        if not changed:
+            break
+    return PRICES.get(normalized)
+
+
+def is_priced(model) -> bool:
+    """True iff resolve_prices(model) finds a price entry (exact or
+    normalized)."""
+    return resolve_prices(model) is not None
 
 
 def project_hash(project_path: str) -> str:
@@ -115,7 +179,7 @@ def cost_for_entry(model: str, usage: dict) -> tuple:
     """Returns (costUSD, totalTokens) for a single message.
     Unknown model values return (0.0, total_tokens) with no stderr side-effect
     — the caller (parse_session) handles unknown-model dedup and warning."""
-    prices = PRICES.get(model)
+    prices = resolve_prices(model)
     in_tok  = usage.get("input_tokens", 0) or 0
     out_tok = usage.get("output_tokens", 0) or 0
     cc_tok  = usage.get("cache_creation_input_tokens", 0) or 0
@@ -132,11 +196,16 @@ def cost_for_entry(model: str, usage: dict) -> tuple:
 
 def parse_session(path: pathlib.Path) -> dict:
     """Return {sessionId, totalCost, totalTokens, entries:[{model, costUSD, tokens}, ...],
-    unknown_models, priceable}.
+    unknown_models, priceable, sentinel_rows}.
     unknown_models is the sorted, deduped list of model slugs seen that are not
-    in PRICES. priceable is True iff entries is non-empty AND unknown_models is
-    empty (IVG-249 T-04) — both are additive; every existing key keeps
-    byte-identical semantics and every existing caller keeps working unchanged.
+    priced (via resolve_prices, exact-or-normalized). A non-model sentinel
+    value (e.g. "<synthetic>") is skipped before both the price lookup and
+    the per-model aggregation — it never reaches entries, unknown_models, or
+    the warning branch; sentinel_rows counts how many such rows were seen
+    (IVG-260 D-07). priceable is True iff (entries is non-empty OR
+    sentinel_rows > 0) AND unknown_models is empty (IVG-260 D-08) — without
+    the sentinel_rows clause, a session containing only sentinel rows would
+    incorrectly report priceable=False since entries would be empty.
     Aggregates per-MESSAGE rows: each row's 'message' object may contain
     'model' and 'usage' (input_tokens, output_tokens, cache_creation_input_tokens,
     cache_read_input_tokens). Per architecture I-04 (line 306), missing fields
@@ -155,6 +224,7 @@ def parse_session(path: pathlib.Path) -> dict:
     per_model_cost = {}    # model -> float
     per_model_tok  = {}    # model -> int
     warned_models  = set()
+    sentinel_rows  = 0
 
     with open(path, "r", encoding="utf-8") as fh:
         for line_no, raw_line in enumerate(fh, start=1):
@@ -178,15 +248,24 @@ def parse_session(path: pathlib.Path) -> dict:
             if not isinstance(usage, dict):
                 usage = {}
 
-            if model and model not in PRICES and model not in warned_models:
+            if not is_costable(model):
+                # A non-model sentinel (e.g. "<synthetic>") is dropped here,
+                # before the price lookup and before aggregation — it must
+                # never reach entries, unknown_models, or the warning below
+                # (IVG-260 D-07). A truthy-but-sentinel model is counted; a
+                # genuinely modelless row (model == "") is not.
+                if model:
+                    sentinel_rows += 1
+                continue
+
+            if not is_priced(model) and model not in warned_models:
                 print(f"cost_from_jsonl: unknown model '{model}' — cost set to 0",
                       file=sys.stderr)
                 warned_models.add(model)
 
             cost, tok = cost_for_entry(model, usage)
-            if model:
-                per_model_cost[model] = per_model_cost.get(model, 0.0) + cost
-                per_model_tok[model]  = per_model_tok.get(model, 0) + tok
+            per_model_cost[model] = per_model_cost.get(model, 0.0) + cost
+            per_model_tok[model]  = per_model_tok.get(model, 0) + tok
 
     total_cost   = sum(per_model_cost.values())
     total_tokens = sum(per_model_tok.values())
@@ -202,7 +281,8 @@ def parse_session(path: pathlib.Path) -> dict:
         "totalTokens": total_tokens,
         "entries":     entries,
         "unknown_models": unknown_models,
-        "priceable":   bool(entries) and not unknown_models,
+        "priceable":   (bool(entries) or sentinel_rows > 0) and not unknown_models,
+        "sentinel_rows": sentinel_rows,
     }
 
 

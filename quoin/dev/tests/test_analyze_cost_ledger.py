@@ -59,6 +59,24 @@ def _make_jsonl(home: Path, uuid: str, proj_hash: str, cost_input_tokens: int = 
     jsonl_path.write_text(json.dumps(row) + "\n")
 
 
+def _make_synthetic_only_jsonl(home: Path, uuid: str, proj_hash: str) -> None:
+    """IVG-260 T-11: write a fixture JSONL whose only row is the
+    non-model "<synthetic>" sentinel with all-zero usage."""
+    proj_dir = home / ".claude" / "projects" / proj_hash
+    proj_dir.mkdir(parents=True, exist_ok=True)
+    jsonl_path = proj_dir / f"{uuid}.jsonl"
+    row = {
+        "message": {
+            "model": "<synthetic>",
+            "usage": {
+                "input_tokens": 0, "output_tokens": 0,
+                "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0,
+            },
+        }
+    }
+    jsonl_path.write_text(json.dumps(row) + "\n")
+
+
 def _make_unknown_model_jsonl(home: Path, uuid: str, proj_hash: str) -> None:
     """IVG-249 T-09 (MAJ-2): write a fixture JSONL that exists but whose only
     model is unpriced (never a real slug — mirrors T-02's claude-imaginary-9
@@ -120,6 +138,24 @@ def test_6col_legacy_row_resolves_via_jsonl(tmp_path):
     assert report["unresolvable_count"] == 0
     assert report["resolved_total"] > 0
     assert report["total_cost"] == report["resolved_total"]
+
+
+def test_synthetic_only_session_now_resolvable_via_lookup_session_cost(tmp_path):
+    """IVG-260 D-08: a session whose JSONL contains only the "<synthetic>"
+    sentinel now reports (0.0, True) via lookup_session_cost — cost zero,
+    resolvable True — pinning the behaviour change D-08's priceable flip
+    causes at this consumer, which reads `parse_session`'s `priceable` field
+    directly (analyze_cost_ledger.py:207). Pre-change this returned
+    (0.0, False)."""
+    lookup_session_cost = _ACL.lookup_session_cost
+    project_root = tmp_path / "project"
+    home = tmp_path / "home"
+    ph = project_hash(str(project_root))
+    _make_synthetic_only_jsonl(home, "uuid-synthetic", ph)
+
+    cost, resolvable = lookup_session_cost("uuid-synthetic", ph, home)
+    assert cost == 0.0
+    assert resolvable is True
 
 
 def test_7col_legacy_row_missing_jsonl_is_unresolvable_not_silent_zero(tmp_path):

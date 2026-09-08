@@ -75,7 +75,7 @@ EXPECTED_TOK = 1000 + 200 + 500 + 100
 # claude5resolvable001 fixture — mirrors test_agent_transcript_cost.py's
 # EXPECTED_CLAUDE5_USD/EXPECTED_CLAUDE5_TOK formula verbatim.
 EXPECTED_CLAUDE5_USD = round(
-    (1000 * 3.00 + 500 * 15.00 + 200 * 0.30) / 1_000_000.0
+    (1000 * 2.00 + 500 * 10.00 + 200 * 0.20) / 1_000_000.0
     + (2000 * 5.00 + 300 * 25.00 + 400 * 0.50) / 1_000_000.0,
     6,
 )

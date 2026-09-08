@@ -63,6 +63,7 @@ PRICES = _cfj.PRICES
 parse_session = _cfj.parse_session
 project_hash = _cfj.project_hash
 cost_for_entry = _cfj.cost_for_entry
+is_priced = _cfj.is_priced
 
 
 # ---------------------------------------------------------------------------
@@ -173,10 +174,15 @@ def price_agent_jsonl(path):
 
     # IVG-249 root-cause note: the locate path (resolve_attribution above) was
     # never broken. Sidecar attribution returned "src=unresolved" purely
-    # because a model seen in the transcript was absent from PRICES (e.g. the
-    # Claude 5 family before this stage added it) — this `all(m in PRICES ...)`
+    # because a model seen in the transcript wasn't resolvable via
+    # is_priced (e.g. the Claude 5 family before this stage added it, or a
+    # normalizable slug before IVG-260's resolver) — this `all(is_priced ...)`
     # check is where that absence flips `priceable` False and drops `usd`.
-    priceable = bool(s["entries"]) and all(m in PRICES for m in models) and not modelless
+    priceable = (
+        (bool(s["entries"]) or s.get("sentinel_rows", 0) > 0)
+        and all(is_priced(m) for m in models)
+        and not modelless
+    )
     return {
         "usd": s["totalCost"] if priceable else None,
         "tok": s["totalTokens"],
