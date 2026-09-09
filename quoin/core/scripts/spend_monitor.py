@@ -33,7 +33,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -148,11 +148,11 @@ def _short_model(full_id: str) -> str:
     return OTHER_TIER
 
 
-def _model_order() -> list:
+def _model_order() -> List[str]:
     """Display order for per-model rows, derived from MODEL_TIERS on every call.
 
-    Computed at call time (not cached at import) so the ordering can never
-    drift from the classification table — see D-03 in the stage plan.
+    Computed at call time, not cached at import, so the ordering can never
+    drift from the classification table it is derived from.
     """
     return [tier for _sub, tier in MODEL_TIERS] + [OTHER_TIER]
 
@@ -588,12 +588,15 @@ def render_compact(
 
     TOKEN SPEND (all)
     today   $4.21
+    fable   $0.15   3%
     opus    $3.10  62%
     sonnet  $0.88  18%
     haiku   $0.23   5%
     ── by task (partial) ──
     ivg-62  $1.40
     ⟳ 3s   live
+
+    Rows are illustrative; the tiers themselves come from MODEL_TIERS.
     """
     lines = []
 

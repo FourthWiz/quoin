@@ -975,7 +975,7 @@ def test_prices_single_source(sm):
 
 
 # ---------------------------------------------------------------------------
-# ivg-260 stage 2: MODEL_TIERS tier-table unification (fable tier)
+# MODEL_TIERS tier-table unification (fable tier)
 # ---------------------------------------------------------------------------
 
 def test_fable_bucket_present_in_by_model(sm, tmp_path):
@@ -1060,6 +1060,10 @@ def test_model_tiers_single_source_for_mapping_and_ordering(sm, monkeypatch):
 
 
 def test_other_is_not_a_model_tiers_row(sm):
-    """'other' must never appear as a substring or tier in MODEL_TIERS itself (D-02 guard)."""
+    """'other' must stay a fallthrough, never a row of MODEL_TIERS.
+
+    A substring row would only match IDs containing the literal text 'other',
+    so unknown slugs would stop classifying.
+    """
     assert "other" not in [sub for sub, _tier in sm.MODEL_TIERS]
     assert "other" not in [tier for _sub, tier in sm.MODEL_TIERS]
