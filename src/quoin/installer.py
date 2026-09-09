@@ -53,6 +53,8 @@ TIER1_MEMORY_FILES = (
     "workflow-catalog.md",
     # Shared clean-authored-content rule (Tier-1 memory file)
     "clean-authored-content.md",
+    # Added IVG-255: category-3 comment-cleanup criteria (Tier-1 memory file)
+    "comment-cleanup-criteria.md",
 )
 
 # T-05: canonical skill list — must match quoin/skills/ on disk exactly
@@ -146,6 +148,7 @@ DEPLOYED_SCRIPTS = (
     "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
     "handoff_measure.py",  # IVG-248: agent-handoff payload-size instrument (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors footprint_report.py)
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
+    "comment_cleanup.py",  # IVG-255: pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
 )
 
 # T-05: obsolete artifacts to remove from prior installs
@@ -451,6 +454,7 @@ CORE_SCRIPTS = (
     "authored_content_lint.py",  # advisory authored-content lint core impl (wrapped portable-core)
     "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator core impl; required by ~/.claude/scripts/handoff_validate.py parents[1] loader
+    "comment_cleanup.py",  # IVG-255: pre-PR comment cleanup core impl; required by the wrapper's parents[1] loader
 )
 
 
