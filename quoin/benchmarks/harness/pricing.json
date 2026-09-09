@@ -7,6 +7,7 @@
   ],
   "_last_verified": "2026-09-06",
   "_note": "Starting with the 4.6 generation, every Claude model ID is a pinned snapshot including the dateless form (see Anthropic's docs above) — there is no separate dated snapshot to discover for these models. Keys here are therefore the bare model IDs, matching the CLI's `canonicalModel` field exactly.",
+  "_authoritative_source": "quoin/scripts/cost_from_jsonl.py's PRICES table is the authoritative Claude pricing source for quoin's cost tooling. This file is a deliberately narrower copy covering only the models the benchmark suite pins, kept so the harness reads as a standalone artifact. Every rate here must match PRICES for the same model; a test enforces that. When a shared model's price changes, update both.",
   "models": {
     "claude-opus-4-7": {
       "input_per_1m_usd": 5.0,

@@ -1133,6 +1133,46 @@ class TestPinnedModelPricingConsistency:
                 "placeholder; 4.6+-generation models have no dated form"
             )
 
+    def test_pricing_json_rates_agree_with_the_authoritative_prices_table(self):
+        import json as _json
+        import sys as _sys
+
+        scripts_dir = str(
+            Path(__file__).resolve().parent.parent.parent / "scripts"
+        )
+        if scripts_dir not in _sys.path:
+            _sys.path.insert(0, scripts_dir)
+        from cost_from_jsonl import PRICES
+
+        pricing_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "benchmarks" / "harness" / "pricing.json"
+        )
+        pricing = _json.loads(pricing_path.read_text(encoding="utf-8"))
+
+        # pricing.json rate key -> PRICES rate key. Both tables are USD per 1M
+        # tokens, so the values compare directly with no conversion.
+        rate_keys = {
+            "input_per_1m_usd": "input",
+            "output_per_1m_usd": "output",
+            "cache_write_per_1m_usd": "cache_create",
+            "cache_read_per_1m_usd": "cache_read",
+        }
+
+        for model, harness_rates in pricing["models"].items():
+            assert model in PRICES, (
+                f"pricing.json prices {model!r}, which is absent from the "
+                "authoritative PRICES table in cost_from_jsonl.py; every "
+                "benchmark model must be priced in both"
+            )
+            for harness_key, prices_key in rate_keys.items():
+                assert harness_rates[harness_key] == PRICES[model][prices_key], (
+                    f"rate drift for {model!r}: pricing.json "
+                    f"{harness_key}={harness_rates[harness_key]} but PRICES "
+                    f"{prices_key}={PRICES[model][prices_key]}; the two tables "
+                    "must agree on every shared model"
+                )
+
 
 class TestVerifyModelPreflight:
     def test_resolve_model_id_reads_model_usage_key_when_no_top_level_model(self):
@@ -1150,6 +1190,39 @@ class TestVerifyModelPreflight:
 
         data = {"model": "claude-opus-4-7", "modelUsage": {"other": {}}}
         assert _resolve_model_id_from_probe_response(data) == "claude-opus-4-7"
+
+    def test_live_probe_shells_the_pinned_model_constant(self, monkeypatch):
+        from quoin.benchmarks.harness.cells import simple_claude
+        from quoin.benchmarks.scripts import run_benchmark
+
+        sentinel = "claude-probe-argv-sentinel-0-0"
+        # The probe imports PINNED_MODEL from this module inside its own body,
+        # so patching the module attribute is what reaches the subprocess argv.
+        monkeypatch.setattr(simple_claude, "PINNED_MODEL", sentinel)
+
+        captured = {}
+
+        class _StubCompleted:
+            stdout = (
+                '{"modelUsage": {"' + sentinel + '": '
+                '{"canonicalModel": "' + sentinel + '"}}, "total_cost_usd": 0.0}'
+            )
+
+        def _stub_run(argv, **kwargs):
+            captured["argv"] = argv
+            return _StubCompleted()
+
+        # Stub the call itself: this test must never shell a real CLI.
+        monkeypatch.setattr(run_benchmark.subprocess, "run", _stub_run)
+
+        run_benchmark._run_live_model_probe(1.0)
+
+        argv = captured["argv"]
+        assert "--model" in argv, f"probe argv carries no --model flag: {argv!r}"
+        assert argv[argv.index("--model") + 1] == sentinel, (
+            "the probe must shell the model named by PINNED_MODEL, not a "
+            f"re-typed literal; argv was {argv!r}"
+        )
 
     def test_verify_model_match_exits_zero_with_no_real_call(self, tmp_path):
         from quoin.benchmarks.scripts.run_benchmark import verify_model
