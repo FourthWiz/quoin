@@ -57,6 +57,7 @@ import ast
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -284,7 +285,13 @@ def group_blocks(relpath, text, exclusion_lines):
 # T-04 — clause span and reflow (excision engine, shared by categories 1-3)
 # ---------------------------------------------------------------------------
 
-_SEPARATOR_RE = re.compile(r"\s*(?:—|–|;|:|,)|(?<=[.!?])\s+")
+# The negative lookbehind pins a match's start to a non-whitespace position
+# (or the run boundary immediately before a sentence-ending `\s+` match) —
+# without it, an unanchored leading `\s*` re-tries the whole whitespace run
+# from every offset inside it whenever the run isn't followed by a separator,
+# which is quadratic in run length. Python 3.10 has no possessive quantifier
+# (`\s*+`), so the lookbehind is the fix, not a quantifier change.
+_SEPARATOR_RE = re.compile(r"(?<!\s)\s*(?:—|–|;|:|,)|(?<=[.!?])\s+")
 _LEADING_SEP_CONJ_RE = re.compile(
     r"^\s*(?:—|–|;|:|,)\s*(?:and|or|but|nor|yet|so)\b\s*", re.IGNORECASE
 )
@@ -432,10 +439,21 @@ def _run(args):
 
 
 def resolve_worktree_text(repo_root, relpath):
-    """Always the worktree file — never read_text_source(..., 'committed')."""
+    """Always the worktree file — never read_text_source(..., 'committed').
+
+    Reads strictly as UTF-8. A file with non-UTF-8 bytes anywhere — even on
+    a line this pass never touches — must not be silently transcoded:
+    reading with `errors="replace"` and then rewriting the whole file as
+    UTF-8 turns every undecodable byte into U+FFFD, changing live string
+    literals outside the edited region. Raises `UnicodeDecodeError` (not
+    `Undeterminable`) on a decode failure so callers can distinguish "this
+    one file can't be read" from "the whole run is undeterminable" — the
+    CLI's per-file loop marks the file undeterminable and continues with
+    the rest of the run instead of aborting it.
+    """
     full = Path(repo_root) / relpath
     try:
-        return full.read_text(encoding="utf-8", errors="replace")
+        return full.read_text(encoding="utf-8")
     except OSError as exc:
         raise Undeterminable(f"cannot read {relpath}: {exc}") from exc
 
@@ -461,12 +479,39 @@ def atomic_write(path, text):
     mode onto the destination unless it is corrected first — left alone,
     every cleaned file narrows (0644 -> 0600, or an executable entrypoint
     loses its exec bit).
+
+    Refuses a non-regular destination. `mkstemp` writes into the parent
+    directory and `os.replace` swaps whatever name currently occupies
+    `path` — for a symlink that replaces the link itself with a regular
+    file, silently destroying it while its (possibly out-of-repo) target
+    is left untouched. Callers should already skip symlinked candidates
+    before reaching here; this is the backstop for anything that doesn't.
+    Also refuses to write when the destination's current on-disk bytes are
+    not valid UTF-8 — a second guard against the same corruption
+    `resolve_worktree_text`'s strict read exists to prevent, in case some
+    future caller feeds this function a path it didn't read that way.
     """
     path = Path(path)
+    if path.is_symlink():
+        raise Undeterminable(f"refusing to write through a symlink: {path}")
     try:
-        original_mode = path.stat().st_mode & 0o777
+        original_stat = path.stat()
     except OSError:
-        original_mode = None
+        original_stat = None
+    if original_stat is not None and not stat.S_ISREG(original_stat.st_mode):
+        raise Undeterminable(f"refusing to write to a non-regular destination: {path}")
+    original_mode = original_stat.st_mode & 0o777 if original_stat is not None else None
+    try:
+        original_bytes = path.read_bytes()
+    except OSError:
+        original_bytes = None
+    if original_bytes is not None:
+        try:
+            original_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise Undeterminable(
+                f"refusing to write {path}: destination is not valid UTF-8 ({exc})"
+            ) from exc
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
@@ -744,7 +789,13 @@ def emit_candidates(repo_root, base_ref, judge_max, text_max=1000):
     for relpath in sorted(candidates.keys()):
         if Path(relpath).suffix != ".py":
             continue
-        text = resolve_worktree_text(repo_root, relpath)
+        full_path = Path(repo_root) / relpath
+        if full_path.is_symlink():
+            continue
+        try:
+            text = resolve_worktree_text(repo_root, relpath)
+        except UnicodeDecodeError:
+            continue
         exclusion = docstring_exclusion_lines(text)
         blocks = group_blocks(relpath, text, exclusion)
         for block in blocks:
@@ -821,8 +872,30 @@ def _resolve_repo_from_args(args):
     return resolve_repo_root(Path.cwd())
 
 
+def _print_result(result, fmt):
+    """Emit `result` on stdout in the requested format. Shared by the
+    success path and by both undeterminable-exit branches in `main` so an
+    exit 3 still reports which files were written or skipped, instead of
+    leaving the caller with an empty stdout and no way to identify the
+    files a mid-run failure touched."""
+    if fmt == "json":
+        print(json.dumps(result))
+    else:
+        print(_format_text(result))
+
+
 def _format_text(result):
     lines = [f"base_ref: {result.get('base_ref')}"]
+    if "error" in result:
+        lines.append(f"error: {result['error']}")
+    if "written" in result:
+        lines.append(f"written before failure ({len(result['written'])}):")
+        for f in result["written"]:
+            lines.append(f"  {f}")
+    if "undeterminable_files" in result:
+        lines.append(f"undeterminable files ({len(result['undeterminable_files'])}):")
+        for f in result["undeterminable_files"]:
+            lines.append(f"  {f['file']}: {f['reason']}")
     if "decisions" in result:
         changed = [d for d in result["decisions"] if d["changed"]]
         if not changed:
@@ -855,6 +928,7 @@ def main(argv=None):
     if args.allow_dirty and not args.emit_candidates:
         parser.error("--allow-dirty is only valid with --emit-candidates")
 
+    result = {}
     try:
         repo_root = _resolve_repo_from_args(args)
         if repo_root is None:
@@ -871,7 +945,7 @@ def main(argv=None):
         judge_max = int(os.environ.get(_ENV_JUDGE_MAX, "40"))
         text_max = int(os.environ.get(_ENV_JUDGE_TEXT_MAX, "1000"))
 
-        result = {"base_ref": base_ref}
+        result["base_ref"] = base_ref
         exit_code = 0
 
         if args.emit_candidates:
@@ -898,10 +972,23 @@ def main(argv=None):
                 }
             decisions = []
             written = []
+            undeterminable_files = []
             try:
                 for relpath in sorted(candidates.keys()):
                     cand_lines = candidates[relpath]
-                    text = resolve_worktree_text(repo_root, relpath)
+                    full_path = repo_root / relpath
+                    if full_path.is_symlink():
+                        undeterminable_files.append({"file": relpath, "reason": "symlink"})
+                        continue
+                    try:
+                        text = resolve_worktree_text(repo_root, relpath)
+                    except UnicodeDecodeError as exc:
+                        # One file that isn't valid UTF-8 marks itself
+                        # undeterminable and is skipped — it must not zero
+                        # out decisions already made for the rest of the run
+                        # by propagating to the except Exception below.
+                        undeterminable_files.append({"file": relpath, "reason": str(exc)})
+                        continue
                     decision = decide_file(relpath, text, cand_lines, retain, include_tests)
                     if decision.changed:
                         decisions.append(decision)
@@ -909,24 +996,30 @@ def main(argv=None):
                             atomic_write(repo_root / relpath, decision.new_text)
                             written.append(relpath)
             except Exception as exc:
+                result["written"] = written
+                if undeterminable_files:
+                    result["undeterminable_files"] = undeterminable_files
                 if written:
                     restore_written(repo_root, written, exc)
                 raise
             result["decisions"] = [{"file": d.relpath, "changed": d.changed} for d in decisions]
+            if undeterminable_files:
+                result["undeterminable_files"] = undeterminable_files
             if decisions:
                 exit_code = max(exit_code, 1)
 
     except Undeterminable as exc:
         print(f"comment_cleanup: undeterminable — {exc}", file=sys.stderr)
+        result["error"] = str(exc)
+        _print_result(result, args.format)
         return 3
     except Exception as exc:  # noqa: BLE001 — fail-OPEN: never crash the caller
         print(f"comment_cleanup: undeterminable — {exc}", file=sys.stderr)
+        result["error"] = str(exc)
+        _print_result(result, args.format)
         return 3
 
-    if args.format == "json":
-        print(json.dumps(result))
-    else:
-        print(_format_text(result))
+    _print_result(result, args.format)
 
     return exit_code
 

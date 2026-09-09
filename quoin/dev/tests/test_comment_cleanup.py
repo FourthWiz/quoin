@@ -14,9 +14,15 @@ fails this test loudly rather than letting the yield claim silently drift.
 """
 
 import ast
+import itertools
+import json
+import os
+import random
+import re
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -1070,3 +1076,199 @@ def test_base_ref_accepts_a_non_default_parent_branch(tmp_path):
     # diffs against the ref, not the branch name gh pr create would use.
     assert (repo / "m.py").read_text(encoding="utf-8") == before
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL regression — a file with non-UTF-8 bytes anywhere must never be
+# silently transcoded (errors="replace" round-tripped through a whole-file
+# UTF-8 rewrite turns every undecodable byte into U+FFFD, changing live
+# string literals outside the edited region). The fix reads strictly and
+# marks an undecodable file undeterminable instead.
+# ---------------------------------------------------------------------------
+
+def test_resolve_worktree_text_raises_on_non_utf8_bytes(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    f = repo / "x.py"
+    f.write_bytes(b"NAME = \"caf\xe9\"\n")
+    with pytest.raises(UnicodeDecodeError):
+        cc.resolve_worktree_text(repo, "x.py")
+
+
+def test_non_utf8_untouched_bytes_never_transcoded(tmp_path, capsys):
+    # The non-UTF-8 byte is committed on the base, unchanged on the branch —
+    # matching the reported repro exactly, including why it survives to
+    # decide_file at all: `git diff -U0 <base> HEAD` only emits *changed*
+    # lines, so a file-scoped fix that only guarded the diff step would
+    # still pass here. The comment removal candidate is on a separate,
+    # pure-ASCII line that IS part of the diff.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    src = repo / "m.py"
+    src.write_bytes(b'NAME = "caf\xe9"\n' b"z = 0\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "base file with a non-utf8 byte")
+    _git(repo, "switch", "-c", "feature")
+    src.write_bytes(
+        b'NAME = "caf\xe9"\n'
+        b"z = 0  # keep this; an earlier fix did the thing here.\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "touch only the pure-ascii line")
+
+    before = src.read_bytes()
+    rc = cc.main(
+        ["--project-root", str(repo), "--apply", "--base", "main", "--format", "json"]
+    )
+    after = src.read_bytes()
+    assert b"\xef\xbf\xbd" not in after, "must never transcode undecodable bytes to U+FFFD"
+    # A file that fails to decode is skipped whole, not partially rewritten
+    # -- decide_file never runs on text the tool couldn't read strictly.
+    assert after == before
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert '"undeterminable_files"' in out
+    assert "m.py" in out
+
+
+def test_mid_apply_failure_reports_written_files_in_stdout_json(tmp_path, monkeypatch, capsys):
+    """MAJOR 2 companion: main's exception path must print the JSON result
+    (with the files written so far) to stdout before returning exit 3 -- an
+    exit-3 caller must be able to identify affected files from stdout, not
+    only from the stderr message."""
+    repo = _init_repo(tmp_path)
+    a = repo / "a.py"
+    b = repo / "b.py"
+    a.write_text("def f():\n    return 1\n", encoding="utf-8")
+    b.write_text("def g():\n    return 2\n", encoding="utf-8")
+    _commit_all(repo, message="base files")
+    a.write_text(
+        "def f():\n"
+        "    # An earlier fix did the thing here for real, entirely done.\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    b.write_text(
+        "def g():\n"
+        "    # An earlier fix did another thing here for real, entirely done.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo, message="add comments")
+
+    real_atomic_write = cc.atomic_write
+    calls = []
+
+    def _flaky_write(path, text):
+        calls.append(Path(path).name)
+        if len(calls) == 2:
+            raise OSError("simulated disk failure")
+        real_atomic_write(path, text)
+
+    monkeypatch.setattr(cc, "atomic_write", _flaky_write)
+
+    rc = cc.main(
+        ["--project-root", str(repo), "--apply", "--base", "main", "--format", "json"]
+    )
+    captured = capsys.readouterr()
+
+    assert rc == 3
+    assert captured.out.strip(), "exit 3 must not leave stdout empty"
+    payload = json.loads(captured.out)
+    assert "a.py" in payload.get("written", []), (
+        "the JSON result must name the file written before the failure"
+    )
+    assert "error" in payload
+
+
+# ---------------------------------------------------------------------------
+# MAJOR regression — atomic_write must refuse a non-regular destination
+# (symlink) rather than replacing it with a regular file, and must refuse
+# to write when the destination's current bytes are not valid UTF-8 (a
+# byte-level backstop for the same corruption resolve_worktree_text's
+# strict read exists to prevent).
+# ---------------------------------------------------------------------------
+
+def test_atomic_write_refuses_symlink_destination(tmp_path):
+    outside = tmp_path / "outside.py"
+    outside.write_text("x = 1\n", encoding="utf-8")
+    link = tmp_path / "link.py"
+    link.symlink_to(outside)
+    with pytest.raises(cc.Undeterminable):
+        cc.atomic_write(link, "x = 2\n")
+    assert link.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "x = 1\n"
+
+
+def test_atomic_write_refuses_non_utf8_destination(tmp_path):
+    target = tmp_path / "m.py"
+    target.write_bytes(b'NAME = "caf\xe9"\n')
+    with pytest.raises(cc.Undeterminable):
+        cc.atomic_write(target, "NAME = 'new'\n")
+    assert target.read_bytes() == b'NAME = "caf\xe9"\n'
+
+
+def test_apply_skips_symlinked_candidate_via_paths(tmp_path):
+    """The --paths escape hatch reaches a symlinked candidate directly
+    (bypassing resolve_candidates' diff scoping); the tool must still skip
+    it rather than replacing the link with a regular file holding the
+    target's (edited) content."""
+    repo = _init_repo(tmp_path)
+    outside_content = (
+        "def f():\n"
+        "    # An earlier fix did the thing here for real, entirely done.\n"
+        "    return 1\n"
+    )
+    outside = tmp_path / "outside.py"
+    outside.write_text(outside_content, encoding="utf-8")
+    link = repo / "link.py"
+    os.symlink(outside, link)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "add a tracked symlink")
+
+    rc = cc.main(["--project-root", str(repo), "--apply", "--paths", "link.py"])
+
+    assert link.is_symlink()
+    assert os.readlink(link) == str(outside)
+    assert outside.read_text(encoding="utf-8") == outside_content
+    assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# MAJOR regression — _SEPARATOR_RE must not be quadratic in whitespace-run
+# length, and the negative-lookbehind fix must be behaviorally equivalent
+# to the old pattern over a broad corpus, not just the reported shapes.
+# ---------------------------------------------------------------------------
+
+_OLD_SEPARATOR_RE = re.compile(r"\s*(?:—|–|;|:|,)|(?<=[.!?])\s+")
+
+
+def _spans(pattern, s):
+    return [(m.start(), m.end()) for m in pattern.finditer(s)]
+
+
+def test_separator_regex_equivalence_exhaustive_short_strings():
+    alphabet = " .!?,;a\t"
+    for length in range(0, 6):
+        for combo in itertools.product(alphabet, repeat=length):
+            s = "".join(combo)
+            assert _spans(cc._SEPARATOR_RE, s) == _spans(_OLD_SEPARATOR_RE, s), repr(s)
+
+
+def test_separator_regex_equivalence_random_corpus():
+    alphabet = "ab .!?,;:—–\t()"
+    rng = random.Random(20260909)
+    for _ in range(20000):
+        s = "".join(rng.choice(alphabet) for _ in range(30))
+        assert _spans(cc._SEPARATOR_RE, s) == _spans(_OLD_SEPARATOR_RE, s), repr(s)
+
+
+def test_separator_regex_performance_on_long_whitespace_run():
+    text = "x" + " " * 16000 + "y"
+    start = time.perf_counter()
+    list(cc._SEPARATOR_RE.finditer(text))
+    elapsed = time.perf_counter() - start
+    assert elapsed < 0.1, f"expected near-linear scaling, took {elapsed:.3f}s"
