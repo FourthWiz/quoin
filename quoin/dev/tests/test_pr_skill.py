@@ -300,3 +300,15 @@ def test_cleanup_pathspec_set_is_git_status_porcelain():
     assert "same pathspecs" in normalized or "same pathspec set" in normalized, (
         "the failure-path checkout must reuse the same pathspec set defined above"
     )
+
+
+def test_cleanup_pathspec_set_excludes_untracked_entries():
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert "excluding `??`" in normalized or "excludes `??`" in normalized, (
+        "check 4's pathspec set must explicitly exclude untracked (??) entries"
+    )
+    assert "git clean -f --" in normalized, (
+        "the failure path must clean up leftover untracked residue, not abort on it"
+    )

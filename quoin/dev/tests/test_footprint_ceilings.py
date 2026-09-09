@@ -98,7 +98,9 @@ CEILINGS = {
     "skill:gate": 61580,  # S-4: post-description-trim 55981 * 1.10, monotonic vs prior 62430
     "skill:implement": 54414,  # S-4: post-description-trim 49467 * 1.10, monotonic vs prior 54715
     "skill:next_steps": 13106,  # R: post-slim 11914 * 1.10
-    "skill:pr": 20371,  # S-4: post-description-trim 18519 * 1.10, monotonic vs prior 20534
+    "skill:pr": 20850,  # ratchet: check-4 pathspec-narrowing fix grew the file
+    # to 20784 (untracked-entry exclusion, script/judge file union, untrusted-
+    # candidate-text note); 20371 no longer holds headroom for that fix
     "skill:revise-fast": 29330,  # S-4: post-description-trim 26663 * 1.10, monotonic vs prior 29521
     "skill:rollback": 23984,  # S-4: post-description-trim 21803 * 1.10, monotonic vs prior 24247
     "skill:sleep": 27739,  # S-4: HELD (D-12 monotonic) — candidate 25252*1.10=27778 > prior; file grew since 2026-08-02 derivation
