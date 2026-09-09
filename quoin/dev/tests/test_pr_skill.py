@@ -309,6 +309,42 @@ def test_cleanup_pathspec_set_excludes_untracked_entries():
     assert "excluding `??`" in normalized or "excludes `??`" in normalized, (
         "check 4's pathspec set must explicitly exclude untracked (??) entries"
     )
-    assert "git clean -f --" in normalized, (
-        "the failure path must clean up leftover untracked residue, not abort on it"
+    assert "git clean -fd --" in normalized, (
+        "the restore must clean up leftover untracked residue with -fd "
+        "(the -d flag is required — a plain -f misses untracked directories)"
+    )
+
+
+def test_check4_every_exit_restores():
+    """Check 4 must never leave check 5 a dirty tree: the abort branch, the
+    success branch and the failure branch must each restore before check 4
+    ends, not only the failure branch."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert "restore" in normalized.lower(), (
+        "check 4 must define a restore step"
+    )
+    # The abort branch (a non-`??` porcelain entry outside script_files ∪
+    # judge_files) must restore before aborting, not just warn and abort.
+    abort_idx = normalized.find("outside")
+    assert abort_idx != -1, "check 4 must define the abort-branch trigger"
+    abort_clause = normalized[abort_idx : abort_idx + 60]
+    assert "restore" in abort_clause.lower(), (
+        "the abort branch must restore before aborting check 4"
+    )
+    # The success branch must also restore (leftover untracked residue),
+    # not only set cleanup_committed=true.
+    success_idx = normalized.find("Success")
+    assert success_idx != -1, "check 4 must define a success branch"
+    success_clause = normalized[success_idx : success_idx + 60]
+    assert "restore" in success_clause.lower(), (
+        "the success branch must restore leftover untracked residue"
+    )
+    # The failure branch (pre-existing) must restore too.
+    failure_idx = normalized.find("Failure")
+    assert failure_idx != -1, "check 4 must define a failure branch"
+    failure_clause = normalized[failure_idx : failure_idx + 60]
+    assert "restore" in failure_clause.lower(), (
+        "the failure branch must restore before continuing"
     )
