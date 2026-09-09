@@ -35,6 +35,14 @@
 #     2026-09-01 will not occur) — no discount-expiry caveat applies.
 #   - This table has no long-context dimension, so a 1M-context session is
 #     priced at the base slug's standard rates.
+#
+# This table is the authoritative Claude pricing source for quoin's cost
+# tooling. The benchmark harness keeps a second, deliberately narrower table at
+# quoin/benchmarks/harness/pricing.json, covering only the models the benchmark
+# suite pins, so the harness reads as a standalone artifact. The two tables are
+# not merged, but they must agree: a test cross-checks every model in the
+# harness table against this one and fails on any drifted rate. When a shared
+# model's price changes, update both.
 LAST_UPDATED = "2026-09-08"
 _PRICING_SRC = "https://platform.claude.com/docs/en/about-claude/pricing"
 PRICES = {  # USD per 1M tokens
