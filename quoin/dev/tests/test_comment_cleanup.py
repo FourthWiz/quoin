@@ -531,6 +531,41 @@ def test_pragma_survives_category_3(tmp_path):
     assert out["candidates"] == []
 
 
+@pytest.mark.parametrize(
+    "directive_line",
+    [
+        "    # pyright: ignore[reportAny]",
+        "    # pytype: disable=attribute-error",
+        "    # nosec",
+        "    # yapf: disable",
+        "    # noinspection PyUnresolvedReferences",
+        "    # skipcq: PTC-W0033",
+        "    # sourcery skip: no-conditionals",
+        "    # type : ignore",
+    ],
+)
+def test_directive_re_covers_extended_markers(directive_line):
+    assert cc._DIRECTIVE_RE.search(directive_line) is not None
+
+
+def test_reflow_suppresses_terminal_period_on_directive_residue():
+    prefix = "An earlier fix noted this and"
+    tail = " pyright: ignore[reportAny]"
+    block = _block(prefix + tail, width=200)
+    result = cc.reflow(block, (0, len(prefix)))
+    assert result is not None
+    assert result[0].rstrip().endswith("]")
+
+
+def test_reflow_still_appends_terminal_period_without_directive():
+    prefix = "An earlier fix noted this and"
+    tail = " the value stays here"
+    block = _block(prefix + tail, width=200)
+    result = cc.reflow(block, (0, len(prefix)))
+    assert result is not None
+    assert result[0].rstrip().endswith(".")
+
+
 def test_directive_comment_survives_reflow(tmp_path):
     # A block containing a tool-directive line (here, `# type: ignore`) must
     # be vetoed entirely, not reflowed into free prose alongside the
@@ -783,6 +818,20 @@ def test_judge_max_overflow_reports_count_emits_nothing(tmp_path, monkeypatch):
     assert out["candidates"] == []
 
 
+def test_emit_candidates_drops_oversized_candidate_text(tmp_path):
+    repo = _init_repo(tmp_path)
+    long_comment = "# this is not a bug, it just looks odd. " + ("filler " * 200)
+    (repo / "m.py").write_text(
+        f"def f():\n    {long_comment}\n    return 1\n", encoding="utf-8"
+    )
+    _commit_all(repo)
+    capped = cc.emit_candidates(repo, "main", judge_max=40, text_max=50)
+    assert capped["count"] == 0
+    assert capped["candidates"] == []
+    uncapped = cc.emit_candidates(repo, "main", judge_max=40, text_max=100_000)
+    assert uncapped["count"] == 1
+
+
 def test_mid_apply_failure_restores_written_files_and_reports_them(tmp_path, monkeypatch, capsys):
     repo = _init_repo(tmp_path)
     a = repo / "a.py"
@@ -824,6 +873,38 @@ def test_mid_apply_failure_restores_written_files_and_reports_them(tmp_path, mon
         ["git", "-C", str(repo), "show", "HEAD:a.py"], capture_output=True, text=True, check=True
     ).stdout
     assert a.read_text(encoding="utf-8") == committed_a
+
+
+def test_restore_written_without_cause_keeps_implicit_context(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+    src.write_text("x = 2\n", encoding="utf-8")
+    try:
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError:
+            cc.restore_written(repo, ["m.py"])
+        pytest.fail("expected Undeterminable")
+    except cc.Undeterminable as exc:
+        assert exc.__cause__ is None
+        assert exc.__suppress_context__ is False
+        assert isinstance(exc.__context__, RuntimeError)
+
+
+def test_restore_written_with_cause_chains_it(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+    src.write_text("x = 2\n", encoding="utf-8")
+    original = ValueError("disk full")
+    try:
+        cc.restore_written(repo, ["m.py"], cause=original)
+        pytest.fail("expected Undeterminable")
+    except cc.Undeterminable as exc:
+        assert exc.__cause__ is original
 
 
 def test_untouched_file_survives_diff_scoping(tmp_path):
