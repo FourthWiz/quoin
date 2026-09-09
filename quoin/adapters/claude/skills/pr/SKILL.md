@@ -237,77 +237,56 @@ On start:
 
 ### Step 1: Pre-flight checks
 
-**Check 0 — base resolution.** Two values, two namespaces — they are not
-interchangeable, so resolve both up front and route each to its own
-consumers:
-- `base_name` — a **branch name in the remote repository**. The user's
-  `--base` if given; else `main` verified with
-  `git ls-remote --heads origin main`; else `master`. Consumers: `gh pr
-  create --base` (Step 4), Step 6's `git checkout`.
-- `base_ref` — a **git ref**. `origin/BASE_NAME` when
-  `git rev-parse --verify` resolves it, else bare `BASE_NAME`. Consumers:
-  every `comment_cleanup.py --base` invocation (4b, 4c, 4e) and category 4's
-  `git log`.
+**Check 0 — base resolution.** Two namespaces, not interchangeable:
+- `base_name` — branch name in the remote. User's `--base`, else `main`
+  (verified via `git ls-remote --heads origin main`), else `master`. Used by
+  `gh pr create --base` (Step 4) and Step 6's `git checkout`.
+- `base_ref` — a git ref: `origin/BASE_NAME` when `git rev-parse --verify`
+  resolves it, else bare `BASE_NAME`. Used by every `comment_cleanup.py
+  --base` call (4b, 4c, 4e) and category 4's `git log`.
 
-  `gh pr create --base origin/main` fails because no remote branch has that
-  name; `git checkout origin/main` in Step 6 lands on a detached HEAD. Keep
-  the two separate throughout.
+  (`--base origin/main` fails on `gh pr create` — no such remote branch;
+  `git checkout origin/main` lands on a detached HEAD.)
 
-**Check 1 — branch check** — run `git branch --show-current` and verify the
-result is NOT `main` or `master`. If it is, STOP with:
-"Cannot create a PR from main/master. Switch to a feature branch first."
-This check must precede any commit.
+**Check 1 — branch check** — `git branch --show-current` must not be `main`
+or `master`. If it is, STOP: "Cannot create a PR from main/master. Switch to
+a feature branch first."
 
-**Check 2 — gh CLI check** — run `command -v gh`. If not found, STOP with:
+**Check 2 — gh CLI check** — `command -v gh`. Missing: STOP —
 "GitHub CLI (gh) is not installed. Install it from: https://cli.github.com/"
 
-**Check 3 — gh auth check** — run `gh auth status`. If it fails, STOP with:
+**Check 3 — gh auth check** — `gh auth status`. Fails: STOP —
 "Not authenticated with GitHub CLI. Run: gh auth login"
 
 **Check 4 — comment cleanup (pre-PR).** Removes superseded and duplicated
-code comments before the uncommitted-changes check sees the tree. Every
-sub-step is non-blocking — a cleanup step must never be what stops a PR:
+code comments before check 5 sees the tree. Every sub-step is non-blocking:
 
-- 4a. Clean-tree probe (`git status --porcelain`). If dirty, skip the whole
-  of check 4 and fall through to check 5 — the cleanup only runs against a
-  clean entry state.
-- 4b. `comment_cleanup.py --base <base_ref> --apply` — categories 1 and 2
-  (archaeology and stale cross-reference chains).
+- 4a. Clean-tree probe. Dirty → skip check 4, fall through to check 5.
+- 4b. `comment_cleanup.py --base <base_ref> --apply` (categories 1+2:
+  archaeology, stale cross-reference chains).
 - 4c. `comment_cleanup.py --base <base_ref> --emit-candidates --allow-dirty`,
-  then an agent judgment pass over what it emits, applying
-  `__QUOIN_HOME__/memory/comment-cleanup-criteria.md` — category 3
-  (defensive over-explanation). Point at the criteria file; do not inline
-  the criteria into this skill.
-- 4d. **If and only if some path changed:** one commit, with the fixed
-  message `chore: remove superseded and duplicated code comments`, no body,
-  and explicit pathspecs (never `git commit -a` or `git add -A` — this
-  commit must never sweep the user's own unrelated work). `git commit` with
-  nothing staged exits non-zero, which is why this step is conditional
-  rather than unconditional. On success, set `cleanup_committed=true`. On
-  failure, run `git checkout HEAD -- <paths>` to restore the working tree,
-  print a one-line warning, and continue — leaving the edits in place would
-  trip check 5 and stop the PR outright.
-- 4e. `comment_cleanup.py --base <base_ref> --commit-subjects` — category 4
-  (planning-vocabulary scan over commit subjects). Report only; never
-  rewrites, amends or rebases.
-- 4f. Print one merged per-file report of everything removed, including the
-  agent's own category-3 removals from 4c, which are invisible to the
-  script.
+  then judge what it emits against
+  `__QUOIN_HOME__/memory/comment-cleanup-criteria.md` (category 3: point at
+  the file, don't inline it).
+- 4d. If some path changed: one commit, message `chore: remove superseded
+  and duplicated code comments`, no body, explicit pathspecs (never
+  `-a`/`-A`). Success → `cleanup_committed=true`. Failure →
+  `git checkout HEAD -- <paths>`, warn, continue.
+- 4e. `comment_cleanup.py --base <base_ref> --commit-subjects` (category 4,
+  report only — never rewrites/amends/rebases).
+- 4f. Print one merged per-file report, including 4c's own removals
+  (invisible to the script).
 
-  Every exit code from `comment_cleanup.py` is non-blocking: 0 and 1 are
-  expected; 2 and 3 print a one-line warning and continue. A missing script
-  or a missing criteria file prints a one-line note and continues.
+  Every exit code is non-blocking: 0/1 expected; 2/3 warn and continue.
+  Missing script/criteria file → note and continue.
 
-**Check 5 — uncommitted changes check** — run `git status --porcelain`. If
-output is non-empty, STOP with:
-"There are uncommitted changes. Please commit or stash them before running /pr."
-By this point the tree is clean unless the user had unrelated changes of
-their own at entry (check 4a already skipped cleanup in that case).
+**Check 5 — uncommitted changes check** — `git status --porcelain`
+non-empty → STOP: "There are uncommitted changes. Please commit or stash
+them before running /pr."
 
-**Check 6 — push state check** — run:
+**Check 6 — push state check** —
 `git ls-remote --exit-code origin "$(git branch --show-current)" 2>/dev/null`
-- Exit 0: branch is already pushed on remote. Set `already_pushed=true`.
-- Exit 2: branch is not on remote. Set `already_pushed=false`.
+- Exit 0: `already_pushed=true`. Exit 2: `already_pushed=false`.
 
 ### Step 2: Version bump (conditional)
 
@@ -342,10 +321,8 @@ their own at entry (check 4a already skipped cleanup in that case).
 
 1. If `already_pushed=true` AND `version_bump_committed=false` AND
    `cleanup_committed=false`: **skip** this step. (A cleanup commit also
-   forces the push — without this, the canonical invocation of `/pr` after
-   `/end_of_task` already pushed and the user skips the version bump would
-   create the cleanup commit locally, skip the push, and open the PR
-   against a remote that lacks it.)
+   forces the push, or it would land locally and never reach the remote the
+   PR is opened against.)
 2. Otherwise: run `git push -u origin "$(git branch --show-current)"`.
    - If push fails, report the error and STOP.
 
