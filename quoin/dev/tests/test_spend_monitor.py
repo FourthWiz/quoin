@@ -972,3 +972,98 @@ def test_prices_single_source(sm):
         f"spend_monitor.py must not define its own price table (found {len(matches)} matches). "
         "Use PRICES = _cfj.PRICES only."
     )
+
+
+# ---------------------------------------------------------------------------
+# MODEL_TIERS tier-table unification (fable tier)
+# ---------------------------------------------------------------------------
+
+def test_fable_bucket_present_in_by_model(sm, tmp_path):
+    """A today-file with only a fable row classifies to 'fable', not 'other'."""
+    home = tmp_path / "home"
+    proj_hash_str = sm.project_hash(str(tmp_path))
+    proj_dir = home / ".claude" / "projects" / proj_hash_str
+    proj_dir.mkdir(parents=True)
+    jsonl_path = proj_dir / "fable-today.jsonl"
+    jsonl_path.write_text(_make_row("claude-fable-5-1", 1000, 500, _ts_today()) + "\n")
+
+    snap = sm.aggregate_today(home=home)
+    assert "fable" in snap.by_model, f"fable missing from by_model: {snap.by_model}"
+    assert snap.by_model["fable"] > 0
+    assert "other" not in snap.by_model, f"fable spend leaked into other: {snap.by_model}"
+
+
+def test_fable_and_opus_pct_tolerance(sm, tmp_path):
+    """fable + opus rows both classify correctly and by_model_pct still sums ~100."""
+    home = tmp_path / "home"
+    proj_hash_str = sm.project_hash(str(tmp_path))
+    proj_dir = home / ".claude" / "projects" / proj_hash_str
+    proj_dir.mkdir(parents=True)
+    jsonl_path = proj_dir / "fable-opus-today.jsonl"
+    jsonl_path.write_text(
+        _make_row("claude-fable-5-1", 1000, 500, _ts_today()) + "\n"
+        + _make_row("claude-opus-5", 1000, 500, _ts_today()) + "\n"
+    )
+
+    snap = sm.aggregate_today(home=home)
+    assert set(snap.by_model) == {"fable", "opus"}, f"got {snap.by_model}"
+    total_pct = sum(snap.by_model_pct.values())
+    assert abs(total_pct - 100) <= 2, (
+        f"by_model_pct sum should be ~100 (±2), got {total_pct}: {snap.by_model_pct}"
+    )
+
+
+def test_render_compact_fable_row_ordering(sm, tmp_path):
+    """render_compact places the fable row before opus, and every line fits width=38."""
+    home = tmp_path / "home"
+    proj_hash_str = sm.project_hash(str(tmp_path))
+    proj_dir = home / ".claude" / "projects" / proj_hash_str
+    proj_dir.mkdir(parents=True)
+    jsonl_path = proj_dir / "fable-opus-today.jsonl"
+    jsonl_path.write_text(
+        _make_row("claude-fable-5-1", 1000, 500, _ts_today()) + "\n"
+        + _make_row("claude-opus-5", 1000, 500, _ts_today()) + "\n"
+    )
+
+    width = 38
+    snap = sm.aggregate_today(home=home)
+    rendered = sm.render_compact(snap, width=width)
+    assert "fable" in rendered, f"'fable' not in render:\n{rendered}"
+    assert rendered.index("fable") < rendered.index("opus"), (
+        f"fable should render before opus:\n{rendered}"
+    )
+    for line in rendered.splitlines():
+        assert len(line) <= width, f"Line exceeds width={width}: {line!r} (len={len(line)})"
+
+
+def test_short_model_other_stays_terminal(sm):
+    """Unknown slugs classify to 'other', and 'other' is the last entry in _model_order()."""
+    assert sm._short_model("deepseek/deepseek-v4-pro") == "other"
+    assert sm._short_model("claude-mythos-5-1") == "other"
+    assert sm._short_model("") == "other"
+    assert sm._model_order()[-1] == "other"
+
+
+def test_model_tiers_single_source_for_mapping_and_ordering(sm, monkeypatch):
+    """MODEL_TIERS is the single source for both classification and display order."""
+    # Without monkeypatch: _model_order() is exactly MODEL_TIERS's tiers, plus
+    # OTHER_TIER appended, with no duplicate tier strings.
+    order = sm._model_order()
+    assert order == [tier for _sub, tier in sm.MODEL_TIERS] + [sm.OTHER_TIER]
+    assert len(order) == len(set(order)), f"duplicate tier in _model_order(): {order}"
+
+    # With monkeypatch: adding a synthetic row changes BOTH classification and
+    # ordering from the same edit — proof the two derive from one constant.
+    monkeypatch.setattr(sm, "MODEL_TIERS", sm.MODEL_TIERS + (("zzsynthetic", "zztier"),))
+    assert sm._short_model("model-zzsynthetic-1") == "zztier"
+    assert sm._model_order() == ["fable", "opus", "sonnet", "haiku", "zztier", "other"]
+
+
+def test_other_is_not_a_model_tiers_row(sm):
+    """'other' must stay a fallthrough, never a row of MODEL_TIERS.
+
+    A substring row would only match IDs containing the literal text 'other',
+    so unknown slugs would stop classifying.
+    """
+    assert "other" not in [sub for sub, _tier in sm.MODEL_TIERS]
+    assert "other" not in [tier for _sub, tier in sm.MODEL_TIERS]
