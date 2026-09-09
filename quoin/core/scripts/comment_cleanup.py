@@ -1,0 +1,789 @@
+"""comment_cleanup.py — remove superseded and duplicated code comments before
+a PR.
+
+Review-round comments accumulate planning-process residue that has no value
+once the code ships: archaeology ("an earlier fix did X", "pre-fix, this
+returned Y"), stale cross-reference chains that repeat the same pointer on
+every touched line, and (via an external agent judgment pass over
+quoin/memory/comment-cleanup-criteria.md) defensive over-explanation of
+non-issues. This module finds and removes the first two categories
+mechanically and exposes the third as verbatim candidates for an agent to
+judge; it never rewrites commit history (category 4 is report-only).
+
+Public API:
+  docstring_exclusion_lines(text) -> set[int]
+  group_blocks(relpath, text, exclusion_lines) -> list[Block]
+  match_archaeology(joined) -> re.Match | None
+  is_bare_pointer(joined, match) -> bool
+  normalize_referent(s) -> str
+  all_sentences_archaeological(joined) -> bool
+  is_judge_candidate(joined) -> bool
+  separable_clause_span(joined, m_start, m_end) -> tuple[int, int] | None
+  reflow(block, span) -> list[str] | None
+  resolve_worktree_text(repo_root, relpath) -> str
+  assert_clean_tree(repo_root, allow_dirty) -> None
+  atomic_write(path, text) -> None
+  restore_written(repo_root, paths) -> None
+  decide_file(relpath, text, cand_lines, retain, include_tests) -> FileDecision
+  emit_candidates(repo_root, base_ref, judge_max) -> dict
+  scan_commit_subjects(repo_root, base_ref) -> list[dict]
+  main(argv=None) -> int
+
+Exit codes (CLI):
+  0 — nothing found, disabled, or (for --emit-candidates/--commit-subjects)
+      report-only modes with nothing to flag
+  1 — findings or edits applied
+  2 — argparse / invocation error
+  3 — undeterminable (fail-OPEN: unresolvable repo/base branch, dirty tree
+      without --allow-dirty, a git command failed, unparseable Python source)
+
+Env:
+  QUOIN_DISABLE_COMMENT_CLEANUP=1 — global opt-out; exit 0, checked before
+    argument parsing.
+  QUOIN_COMMENT_CLEANUP_INCLUDE_TESTS=1 — disable the category-1 test-path
+    exclusion (category 2 and 3 never apply it, regardless of this knob).
+  QUOIN_COMMENT_XREF_RETAIN — category-2 retained-occurrence count, default 1.
+  QUOIN_COMMENT_JUDGE_MAX — category-3 emission cap, default 40; over cap
+    reports the count and emits nothing.
+"""
+
+import argparse
+import ast
+import json
+import os
+import re
+import subprocess
+import sys
+import tempfile
+import textwrap
+from dataclasses import dataclass, field
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from authored_content_lint import (
+    Undeterminable, extract_comment_regions, match_taxonomy,
+    read_text_source, resolve_candidates, resolve_repo_root,
+    resolve_tracker_prefixes, _resolve_base_branch,
+)
+
+_SUBPROCESS_TIMEOUT = 30
+_ENV_DISABLE = "QUOIN_DISABLE_COMMENT_CLEANUP"
+_ENV_INCLUDE_TESTS = "QUOIN_COMMENT_CLEANUP_INCLUDE_TESTS"
+_ENV_XREF_RETAIN = "QUOIN_COMMENT_XREF_RETAIN"
+_ENV_JUDGE_MAX = "QUOIN_COMMENT_JUDGE_MAX"
+_PRAGMA = "quoin-lint: allow"
+
+# Self-exclusion mirrors authored_content_lint._EXCLUDE_PATHS — this module's
+# own two paths are also added there (arch D-21) so the lint never flags its
+# own vocabulary-adjacent identifiers.
+_EXCLUDE_PATHS = frozenset(
+    {
+        "quoin/core/scripts/comment_cleanup.py",
+        "quoin/scripts/comment_cleanup.py",
+    }
+)
+
+
+# ---------------------------------------------------------------------------
+# Category 1 / 2 discriminators (arch D-03, D-04, D-05)
+# ---------------------------------------------------------------------------
+
+# The hyphenated lookahead admits no whitespace: "pre-fix," qualifies,
+# "pre-fix line-buffered" does not. The five multi-word phrases are
+# unconditional matches regardless of surrounding punctuation.
+_ARCH_HYPHENATED_RE = re.compile(r"\b(?:pre|post)-(?:fix|change)(?=[,:.!?])", re.IGNORECASE)
+_ARCH_MULTIWORD_RE = re.compile(
+    r"an earlier fix|before the fix|previously dropped|used to be|earlier round",
+    re.IGNORECASE,
+)
+
+_POINTER_RE = re.compile(
+    r"\b(?:see|per|cf\.|refer to)\s+"
+    r"(?P<ref>[A-Za-z_]\w*(?:[./][A-Za-z_]\w*)+)",
+    re.IGNORECASE,
+)
+_STOCK_FILLER_RE = re.compile(
+    r"\A\s*(?:for the full rationale|for details|for why|for the reasoning)?\s*[.,;:]?\s*\Z",
+    re.IGNORECASE,
+)
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+_JUDGE_MARKERS = (
+    "this is not",
+    "one might think",
+    "note that this does not",
+    "no, this is not a bug",
+    "contrary to",
+)
+
+_TEST_PATH_RE = re.compile(r"(^|/)tests/")
+_TEST_BASENAME_RE = re.compile(r"^(test_.*\.py|.*_test\.py)$")
+
+
+def match_archaeology(joined):
+    """Earliest-starting archaeology hit, or None."""
+    candidates = [m for m in (_ARCH_HYPHENATED_RE.search(joined), _ARCH_MULTIWORD_RE.search(joined)) if m]
+    if not candidates:
+        return None
+    return min(candidates, key=lambda m: m.start())
+
+
+def is_bare_pointer(joined, match):
+    return bool(_STOCK_FILLER_RE.fullmatch(joined[match.end("ref"):]))
+
+
+def normalize_referent(s):
+    return s.lower().rstrip(".,;:")
+
+
+def all_sentences_archaeological(joined):
+    """True iff every non-empty sentence in `joined` carries an archaeology
+    hit. Gates whole-block removal only."""
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split(joined) if s.strip()]
+    if not sentences:
+        return False
+    return all(match_archaeology(s) is not None for s in sentences)
+
+
+def is_judge_candidate(joined):
+    lowered = joined.lower()
+    return any(marker in lowered for marker in _JUDGE_MARKERS)
+
+
+def _is_test_path(relpath, include_tests):
+    if include_tests:
+        return False
+    if _TEST_PATH_RE.search(relpath):
+        return True
+    return bool(_TEST_BASENAME_RE.match(Path(relpath).name))
+
+
+# ---------------------------------------------------------------------------
+# T-02 — docstring exclusion set + block grouper
+# ---------------------------------------------------------------------------
+
+def docstring_exclusion_lines(text):
+    """AST-derived set of every line number covered by a module/class/
+    function docstring — never a text-shape heuristic, so a comment-shaped
+    line that merely appears inside a docstring (a markdown heading, a `#
+    ---` rule) is excluded on the same footing as any other docstring line."""
+    try:
+        tree = ast.parse(text)
+    except SyntaxError as exc:
+        raise Undeterminable(f"unparseable Python source: {exc}") from exc
+    exclusion = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        body = getattr(node, "body", None)
+        if not body:
+            continue
+        first = body[0]
+        if not (
+            isinstance(first, ast.Expr)
+            and isinstance(first.value, ast.Constant)
+            and isinstance(first.value.value, str)
+        ):
+            continue
+        start = first.value.lineno
+        end = getattr(first.value, "end_lineno", start) or start
+        exclusion.update(range(start, end + 1))
+    return exclusion
+
+
+@dataclass
+class Block:
+    start: int
+    end: int
+    indent: str
+    raw_lines: list
+    joined: str
+    is_trailing: bool
+    code_prefix: str
+    width: int
+
+
+def _strip_marker(text):
+    """Strip a leading '#' and at most one following space, then .strip()."""
+    s = text.lstrip()
+    if s.startswith("#"):
+        s = s[1:]
+        if s.startswith(" "):
+            s = s[1:]
+    return s.strip()
+
+
+def group_blocks(relpath, text, exclusion_lines):
+    regions = extract_comment_regions(relpath, text)
+    dedup = {}
+    for ln, txt in regions:
+        dedup.setdefault(ln, txt)
+    linenos = sorted(ln for ln in dedup if ln not in exclusion_lines)
+    source_lines = text.splitlines()
+    is_py = Path(relpath).suffix == ".py"
+
+    blocks = []
+    i = 0
+    n = len(linenos)
+    while i < n:
+        ln = linenos[i]
+        line = source_lines[ln - 1] if 1 <= ln <= len(source_lines) else ""
+        if line.lstrip().startswith("#"):
+            indent = line[: len(line) - len(line.lstrip())]
+            run = [ln]
+            j = i + 1
+            while j < n and linenos[j] == run[-1] + 1:
+                next_line = source_lines[linenos[j] - 1] if 1 <= linenos[j] <= len(source_lines) else ""
+                if not next_line.lstrip().startswith("#"):
+                    break
+                next_indent = next_line[: len(next_line) - len(next_line.lstrip())]
+                if next_indent != indent:
+                    break
+                run.append(linenos[j])
+                j += 1
+            raw = [source_lines[l - 1] for l in run]
+            joined = " ".join(p for p in (_strip_marker(l) for l in raw) if p)
+            blocks.append(
+                Block(
+                    start=run[0], end=run[-1], indent=indent, raw_lines=raw,
+                    joined=joined, is_trailing=False, code_prefix="",
+                    width=max(len(l) for l in raw),
+                )
+            )
+            i = j
+        else:
+            region_text = dedup[ln]
+            idx = line.rfind(region_text) if is_py else line.rfind(region_text)
+            if idx == -1:
+                # Should not happen for a genuine trailing region. Abandon
+                # rather than risk truncating the code line at the wrong
+                # offset — the line is left untouched, as if never found.
+                i += 1
+                continue
+            code_prefix = line[:idx]
+            joined = _strip_marker(region_text)
+            blocks.append(
+                Block(
+                    start=ln, end=ln, indent="", raw_lines=[line],
+                    joined=joined, is_trailing=True, code_prefix=code_prefix,
+                    width=len(line),
+                )
+            )
+            i += 1
+    return blocks
+
+
+# ---------------------------------------------------------------------------
+# T-04 — clause span and reflow (excision engine, shared by categories 1-3)
+# ---------------------------------------------------------------------------
+
+_SEPARATOR_RE = re.compile(r"\s*(?:—|–|;|:|,)|(?<=[.!?])\s+")
+_LEADING_SEP_CONJ_RE = re.compile(
+    r"^\s*(?:—|–|;|:|,)\s*(?:and|or|but|nor|yet|so)\b\s*", re.IGNORECASE
+)
+_BARE_COMMENT_MARKER_RE = re.compile(r"^#+\s*$")
+_PAREN_TAIL_RE = re.compile(r"[.!?\s]*")
+
+
+def separable_clause_span(joined, m_start, m_end):
+    # Step 1 — trailing parenthetical. Prefer the tightest enclosing pair
+    # that (a) contains the match and (b) is followed only by sentence-
+    # ending punctuation and whitespace.
+    stack = []
+    pairs = []
+    for i, ch in enumerate(joined):
+        if ch == "(":
+            stack.append(i)
+        elif ch == ")" and stack:
+            pairs.append((stack.pop(), i))
+    qualifying = [
+        (open_idx, close_idx)
+        for open_idx, close_idx in pairs
+        if open_idx <= m_start
+        and m_end <= close_idx + 1
+        and _PAREN_TAIL_RE.fullmatch(joined[close_idx + 1 :])
+    ]
+    if qualifying:
+        open_idx, close_idx = min(qualifying, key=lambda p: p[1] - p[0])
+        # Absorb preceding whitespace into the span so it never survives
+        # into the residue as an orphaned space before the terminal
+        # punctuation.
+        while open_idx > 0 and joined[open_idx - 1].isspace():
+            open_idx -= 1
+        return (open_idx, close_idx + 1)
+
+    # Step 2 — else the last separator before the match.
+    seps = [sm for sm in _SEPARATOR_RE.finditer(joined) if sm.start() < m_start]
+    if not seps:
+        # Step 3: no separator precedes the match — nothing to excise.
+        return None
+    span_start = seps[-1].start()
+
+    # Right edge clamped at the first sentence boundary at or after the
+    # match end, or the end of the block if none exists — a trailing
+    # forward-acting sentence stays in the residue instead of being
+    # excised alongside the archaeological clause.
+    boundaries = [bm for bm in _SENTENCE_SPLIT_RE.finditer(joined) if bm.start() >= m_end]
+    span_end = boundaries[0].start() if boundaries else len(joined)
+    return (span_start, span_end)
+
+
+def _apply_excision_step(joined, span):
+    """reflow steps 1-2 for a single span: seam-repair the join, then strip
+    a leading separator+conjunction remnant at the seam.
+
+    Seam repair fires only when the excised span left a real, substantive
+    tail — the clamp branch always does; the trailing-parenthetical branch
+    never does, because step 1 above already guaranteed its tail is only
+    sentence-ending punctuation and whitespace (so the lstripped tail is
+    empty, or starts with one of .!? and the clause is a no-op there).
+    """
+    start, end = span
+    tail = joined[end:]
+    tail_lstripped = tail.lstrip()
+    seam_needed = bool(tail_lstripped) and tail_lstripped[0] not in ".!?"
+    head = joined[:start]
+    if seam_needed and not head.rstrip().endswith((".", "!", "?")):
+        residue = head.rstrip() + "." + tail
+        join_at = len(head.rstrip()) + 1
+    else:
+        residue = head + tail
+        join_at = len(head)
+
+    m = _LEADING_SEP_CONJ_RE.match(residue[join_at:])
+    if m:
+        residue = residue[:join_at] + residue[join_at + m.end() :]
+    return residue
+
+
+def reflow(block, span):
+    """Excise `span` (a single (start, end) tuple, or a list of such tuples
+    for the rare case where both categories cut disjoint spans from the same
+    block — arch D-24) from `block.joined` and return the block's
+    replacement lines, or None if the excision is abandoned."""
+    spans = [span] if isinstance(span, tuple) else list(span)
+    residue = block.joined
+    for s in sorted(spans, key=lambda sp: -sp[0]):
+        residue = _apply_excision_step(residue, s)
+
+    residue = residue.strip()
+
+    if not block.is_trailing:
+        if not residue or _BARE_COMMENT_MARKER_RE.match(residue):
+            return None
+
+    fully_excised_trailing = block.is_trailing and not residue
+    if fully_excised_trailing:
+        return [block.code_prefix.rstrip()]
+
+    # Steps 4-5 apply to whole-line blocks and partially-excised trailing
+    # blocks; only a fully-excised trailing block skips straight here.
+    if residue[-1] not in ".!?":
+        residue = residue + "."
+
+    if block.is_trailing:
+        width = block.width - len(block.code_prefix) - 2
+    else:
+        width = block.width - len(block.indent) - 2
+    wrapped = textwrap.wrap(residue, width=max(width, 1)) or [residue]
+
+    if block.is_trailing:
+        if len(wrapped) != 1:
+            # A trailing comment has no continuation line to wrap onto.
+            return None
+        return [block.code_prefix + "# " + wrapped[0]]
+
+    return [block.indent + "# " + line for line in wrapped]
+
+
+def _overlaps(a, b):
+    return a[0] < b[1] and b[0] < a[1]
+
+
+# ---------------------------------------------------------------------------
+# T-05 — git and filesystem layer
+# ---------------------------------------------------------------------------
+
+def _run(args):
+    try:
+        proc = subprocess.run(args, capture_output=True, text=True, timeout=_SUBPROCESS_TIMEOUT)
+        return proc.stdout.strip(), proc.stderr.strip(), proc.returncode
+    except subprocess.TimeoutExpired:
+        return "", "timeout", 1
+    except FileNotFoundError:
+        return "", "git not found", 1
+    except OSError as exc:
+        return "", str(exc), 1
+
+
+def resolve_worktree_text(repo_root, relpath):
+    """Always the worktree file — never read_text_source(..., 'committed')."""
+    full = Path(repo_root) / relpath
+    try:
+        return full.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        raise Undeterminable(f"cannot read {relpath}: {exc}") from exc
+
+
+def assert_clean_tree(repo_root, allow_dirty):
+    if allow_dirty:
+        return
+    out, err, rc = _run(["git", "-C", str(repo_root), "status", "--porcelain"])
+    if rc != 0:
+        raise Undeterminable(f"git status failed: {err}")
+    if out:
+        raise Undeterminable("worktree not clean at entry")
+
+
+def atomic_write(path, text):
+    """Mirrors quoin/core/scripts/run_state.py's mkstemp atomic-write
+    variant (def _atomic_write_record at line 161, closing pass at line
+    180) — finally: + a guarded unlink, not except BaseException."""
+    path = Path(path)
+    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        os.replace(tmp_name, str(path))
+    finally:
+        if tmp_path.exists():
+            try:
+                tmp_path.unlink()
+            except OSError:
+                pass
+
+
+def restore_written(repo_root, paths):
+    """Mid-run failure recovery (arch D-15): restore already-written paths
+    to their committed state, then re-raise so /pr can report exactly which
+    files were touched and rolled back."""
+    _run(["git", "-C", str(repo_root), "checkout", "HEAD", "--", *paths])
+    raise Undeterminable(f"restored after write failure: {', '.join(paths)}")
+
+
+# ---------------------------------------------------------------------------
+# T-06 — categories 1 and 2: decide and apply
+# ---------------------------------------------------------------------------
+
+@dataclass
+class FileDecision:
+    relpath: str
+    new_text: object
+    changed: bool
+
+
+def decide_category_1(block, cand_lines, relpath, include_tests):
+    match = match_archaeology(block.joined)
+    if match is None:
+        return None
+    if cand_lines is not None and not any(ln in cand_lines for ln in range(block.start, block.end + 1)):
+        return None
+    if _is_test_path(relpath, include_tests):
+        return None
+    if all_sentences_archaeological(block.joined):
+        return ("remove_block", (0, len(block.joined)))
+    span = separable_clause_span(block.joined, match.start(), match.end())
+    if span is not None:
+        return ("excise", span)
+    return ("report", None)
+
+
+def _category2_verdicts(blocks, cand_lines, retain):
+    """Category 2 for a whole file at once: retention is ordered over every
+    pointer block in the post-image file, so it cannot be decided per block
+    in isolation (arch D-07 — an occurrence on an unchanged line still
+    anchors the count)."""
+    pointer_blocks = []
+    for block in blocks:
+        m = _POINTER_RE.search(block.joined)
+        if m:
+            pointer_blocks.append((block, m))
+    pointer_blocks.sort(key=lambda pair: pair[0].start)
+
+    seen = {}
+    verdicts = {}
+    for block, m in pointer_blocks:
+        key = normalize_referent(m.group("ref"))
+        count = seen.get(key, 0)
+        seen[key] = count + 1
+        pointer_span = (m.start(), m.end())
+        if count < retain:
+            verdicts[id(block)] = ("report", pointer_span)
+            continue
+        eligible = is_bare_pointer(block.joined, m) and (
+            cand_lines is None or any(ln in cand_lines for ln in range(block.start, block.end + 1))
+        )
+        span = separable_clause_span(block.joined, m.start(), m.end()) if eligible else None
+        if eligible and span is not None:
+            verdicts[id(block)] = ("excise", span)
+        else:
+            verdicts[id(block)] = ("report", pointer_span)
+    return verdicts
+
+
+def _has_pragma(block):
+    return any(_PRAGMA in line for line in block.raw_lines)
+
+
+def decide_file(relpath, text, cand_lines, retain, include_tests):
+    """One pass, decisions computed from the pre-edit state."""
+    is_py = Path(relpath).suffix == ".py"
+    exclusion = docstring_exclusion_lines(text) if is_py else set()
+    blocks = group_blocks(relpath, text, exclusion)
+    blocks = [b for b in blocks if not _has_pragma(b)]
+
+    cat2 = _category2_verdicts(blocks, cand_lines, retain)
+
+    edits = {}
+    for block in blocks:
+        cat1 = decide_category_1(block, cand_lines, relpath, include_tests)
+        v2 = cat2.get(id(block))
+
+        proposals = [p for p in (cat1, v2) if p is not None]
+        cut_spans = [
+            s if v != "remove_block" else (0, len(block.joined))
+            for v, s in proposals
+            if v in ("excise", "remove_block")
+        ]
+        keep_spans = [s for v, s in proposals if v == "report" and s is not None]
+
+        # A keep vetoes only an overlapping span, never a disjoint one.
+        for keep_span in keep_spans:
+            cut_spans = [s for s in cut_spans if not _overlaps(s, keep_span)]
+
+        if not cut_spans:
+            continue
+
+        is_remove_block = (
+            cat1 is not None and cat1[0] == "remove_block" and cat1[1] in cut_spans
+        )
+        if is_remove_block:
+            edits[block.start] = ("remove", None)
+        else:
+            replacement = reflow(block, cut_spans)
+            if replacement is None:
+                continue
+            edits[block.start] = ("excise", replacement)
+
+    if not edits:
+        return FileDecision(relpath=relpath, new_text=None, changed=False)
+
+    lines = text.splitlines(keepends=True)
+    # Apply block edits in descending block.start order so a later block's
+    # edit never shifts the still-to-be-applied offsets of an earlier one.
+    for block in sorted(blocks, key=lambda b: -b.start):
+        if block.start not in edits:
+            continue
+        kind, payload = edits[block.start]
+        if kind == "remove":
+            del lines[block.start - 1 : block.end]
+        else:
+            trailing_nl = "\n" if lines[block.end - 1].endswith("\n") else ""
+            replacement_lines = [l + trailing_nl for l in payload]
+            lines[block.start - 1 : block.end] = replacement_lines
+
+    new_text = "".join(lines)
+    return FileDecision(relpath=relpath, new_text=new_text, changed=(new_text != text))
+
+
+# ---------------------------------------------------------------------------
+# T-07 — category 3 emission and category 4 scan
+# ---------------------------------------------------------------------------
+
+def emit_candidates(repo_root, base_ref, judge_max):
+    """File-scoped, not line-scoped (arch D-11): runs over the current
+    worktree, so every surviving block in a touched file is reachable, not
+    only diff-scoped ones. Bounded by is_judge_candidate and judge_max."""
+    candidates, _merge_base = resolve_candidates(repo_root, "committed", base_ref)
+    found = []
+    for relpath in sorted(candidates.keys()):
+        if Path(relpath).suffix != ".py":
+            continue
+        text = resolve_worktree_text(repo_root, relpath)
+        exclusion = docstring_exclusion_lines(text)
+        blocks = group_blocks(relpath, text, exclusion)
+        for block in blocks:
+            if _has_pragma(block):
+                continue
+            if _is_test_path(relpath, include_tests=False):
+                continue
+            if is_judge_candidate(block.joined):
+                found.append(
+                    {"file": relpath, "start": block.start, "end": block.end, "text": block.joined}
+                )
+    if len(found) > judge_max:
+        return {"count": len(found), "candidates": []}
+    return {"count": len(found), "candidates": found}
+
+
+def _current_branch_name(repo_root):
+    out, _err, rc = _run(["git", "-C", str(repo_root), "rev-parse", "--abbrev-ref", "HEAD"])
+    return out if rc == 0 else ""
+
+
+def scan_commit_subjects(repo_root, base_ref):
+    """Report-only: never rewrites, amends or rebases."""
+    out, err, rc = _run(["git", "-C", str(repo_root), "log", "--format=%s", f"{base_ref}..HEAD"])
+    if rc != 0:
+        raise Undeterminable(f"git log failed: {err}")
+    prefixes = resolve_tracker_prefixes(_current_branch_name(repo_root))
+    findings = []
+    for subject in out.splitlines():
+        match = match_taxonomy(subject, prefixes)
+        if match is not None:
+            tier, token = match
+            findings.append({"subject": subject, "token": token, "tier": tier})
+    return findings
+
+
+# ---------------------------------------------------------------------------
+# T-08 — CLI surface
+# ---------------------------------------------------------------------------
+
+def _build_parser():
+    parser = argparse.ArgumentParser(
+        prog="comment_cleanup.py",
+        description="Remove superseded and duplicated code comments before a PR.",
+    )
+    parser.add_argument("--base", default=None, metavar="BASE_REF")
+    parser.add_argument("--basis", choices=("committed", "union"), default="committed")
+    parser.add_argument("--apply", action="store_true", default=False)
+    parser.add_argument("--emit-candidates", action="store_true", default=False)
+    parser.add_argument("--allow-dirty", action="store_true", default=False)
+    parser.add_argument("--commit-subjects", action="store_true", default=False)
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+    parser.add_argument("--project-root", default=None, metavar="PATH")
+    parser.add_argument("--repo", default=None, metavar="PATH")
+    parser.add_argument(
+        "--paths",
+        nargs="+",
+        default=None,
+        metavar="PATH",
+        help="Dogfood escape hatch: explicit relpaths, cand_lines=None, bypassing resolve_candidates.",
+    )
+    return parser
+
+
+def _resolve_repo_from_args(args):
+    if args.repo:
+        candidate = Path(args.repo).resolve()
+        out, _err, rc = _run(["git", "-C", str(candidate), "rev-parse", "--show-toplevel"])
+        return Path(out) if (rc == 0 and out) else None
+    if args.project_root:
+        return resolve_repo_root(args.project_root)
+    return resolve_repo_root(Path.cwd())
+
+
+def _format_text(result):
+    lines = [f"base_ref: {result.get('base_ref')}"]
+    if "decisions" in result:
+        changed = [d for d in result["decisions"] if d["changed"]]
+        if not changed:
+            lines.append("comment_cleanup: OK — nothing to remove")
+        else:
+            lines.append(f"files changed ({len(changed)}):")
+            for d in changed:
+                lines.append(f"  {d['file']}")
+    if "emit_candidates" in result:
+        out = result["emit_candidates"]
+        lines.append(f"category-3 candidates: {out['count']}")
+        for c in out["candidates"]:
+            lines.append(f"  {c['file']}:{c['start']}-{c['end']}: {c['text']}")
+    if "commit_subjects" in result:
+        findings = result["commit_subjects"]
+        lines.append(f"commit-subject findings ({len(findings)}):")
+        for f in findings:
+            lines.append(f"  [{f['tier']}] {f['token']}: {f['subject']}")
+    return "\n".join(lines)
+
+
+def main(argv=None):
+    if os.environ.get(_ENV_DISABLE) == "1":
+        print(json.dumps({"disabled": True}))
+        return 0
+
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+
+    if args.allow_dirty and not args.emit_candidates:
+        parser.error("--allow-dirty is only valid with --emit-candidates")
+
+    try:
+        repo_root = _resolve_repo_from_args(args)
+        if repo_root is None:
+            print("comment_cleanup: no resolvable git repo", file=sys.stderr)
+            return 3
+
+        base_ref = args.base or _resolve_base_branch(str(repo_root))
+        if base_ref is None:
+            print("comment_cleanup: no resolvable base branch", file=sys.stderr)
+            return 3
+
+        retain = int(os.environ.get(_ENV_XREF_RETAIN, "1"))
+        include_tests = os.environ.get(_ENV_INCLUDE_TESTS) == "1"
+        judge_max = int(os.environ.get(_ENV_JUDGE_MAX, "40"))
+
+        result = {"base_ref": base_ref}
+        exit_code = 0
+
+        if args.emit_candidates:
+            assert_clean_tree(repo_root, args.allow_dirty)
+            out = emit_candidates(repo_root, base_ref, judge_max)
+            result["emit_candidates"] = out
+            if out["count"] > judge_max or out["candidates"]:
+                exit_code = max(exit_code, 1)
+
+        if args.commit_subjects:
+            findings = scan_commit_subjects(repo_root, base_ref)
+            result["commit_subjects"] = findings
+            if findings:
+                exit_code = max(exit_code, 1)
+
+        if not args.emit_candidates and not args.commit_subjects:
+            assert_clean_tree(repo_root, allow_dirty=False)
+            if args.paths:
+                candidates = {p: None for p in args.paths}
+            else:
+                candidates, _merge_base = resolve_candidates(repo_root, args.basis, base_ref)
+                candidates = {
+                    f: lines for f, lines in candidates.items() if f not in _EXCLUDE_PATHS
+                }
+            decisions = []
+            written = []
+            try:
+                for relpath in sorted(candidates.keys()):
+                    cand_lines = candidates[relpath]
+                    text = resolve_worktree_text(repo_root, relpath)
+                    decision = decide_file(relpath, text, cand_lines, retain, include_tests)
+                    if decision.changed:
+                        decisions.append(decision)
+                        if args.apply and Path(relpath).suffix == ".py":
+                            atomic_write(repo_root / relpath, decision.new_text)
+                            written.append(relpath)
+            except Exception:
+                if written:
+                    restore_written(repo_root, written)
+                raise
+            result["decisions"] = [{"file": d.relpath, "changed": d.changed} for d in decisions]
+            if decisions:
+                exit_code = max(exit_code, 1)
+
+    except Undeterminable as exc:
+        print(f"comment_cleanup: undeterminable — {exc}", file=sys.stderr)
+        return 3
+    except Exception as exc:  # noqa: BLE001 — fail-OPEN: never crash the caller
+        print(f"comment_cleanup: undeterminable — {exc}", file=sys.stderr)
+        return 3
+
+    if args.format == "json":
+        print(json.dumps(result))
+    else:
+        print(_format_text(result))
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main())
