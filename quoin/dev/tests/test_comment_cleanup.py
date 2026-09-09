@@ -261,6 +261,111 @@ def test_trailing_comment_multiline_wrap_abandons():
     assert result is None or len(result) == 1
 
 
+def test_docstring_heading_line_with_archaeology_phrase_survives_every_removal_path():
+    # A "#"-leading docstring line that itself carries an archaeology phrase
+    # must never form a block — the D-09 exclusion runs before grouping, so
+    # this content is inert to every removal path (decide_file included),
+    # not merely to group_blocks in isolation.
+    text = (
+        '"""Title\n'
+        "\n"
+        "# an earlier fix note kept for historical context, entirely done.\n"
+        "# ---\n"
+        '"""\n'
+        "\n"
+        "x = 1\n"
+    )
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert not decision.changed
+
+
+def test_archaeology_match_spans_original_line_break():
+    # The phrase is split across two physical comment lines pre-join;
+    # match_archaeology must find it in the block's single joined string.
+    text = (
+        "def f():\n"
+        "    # an earlier\n"
+        "    # fix broke this decisively for good.\n"
+        "    return 1\n"
+    )
+    blocks = cc.group_blocks("m.py", text, set())
+    assert len(blocks) == 1
+    block = blocks[0]
+    assert block.joined == "an earlier fix broke this decisively for good."
+    assert cc.match_archaeology(block.joined) is not None
+
+
+def test_clause_span_last_separator_not_first():
+    joined = "First, second, an earlier fix did the thing."
+    m = cc.match_archaeology(joined)
+    span = cc.separable_clause_span(joined, m.start(), m.end())
+    assert span is not None
+    assert span[0] == joined.rindex(",", 0, m.start())
+
+
+def test_clause_span_mid_block_parenthetical_falls_through_to_separator():
+    joined = (
+        "This part must stay exactly as documented for the API contract "
+        "clearly. An earlier fix broke this here (previously dropped "
+        "silently). Still matters for the caller."
+    )
+    m = cc.match_archaeology(joined)
+    assert m is not None
+    span = cc.separable_clause_span(joined, m.start(), m.end())
+    assert span is not None
+    open_idx = joined.index("(")
+    close_idx = joined.index(")")
+    # The parenthetical does not reach end-of-block -- real text follows it
+    # -- so step 1 must not select it; the span comes from the last
+    # separator before the match instead.
+    assert span != (open_idx, close_idx + 1)
+    block = _block(joined)
+    result = cc.reflow(block, span)
+    assert result is not None
+    joined_result = " ".join(result)
+    assert "Still matters for the caller." in joined_result
+    assert "previously dropped" not in joined_result
+
+
+def test_reflow_appends_terminal_period_when_residue_lacks_punctuation():
+    joined = "Keep this part, an earlier fix did X entirely for good"
+    m = cc.match_archaeology(joined)
+    span = cc.separable_clause_span(joined, m.start(), m.end())
+    block = _block(joined)
+    result = cc.reflow(block, span)
+    assert result == ["# Keep this part."]
+
+
+def test_reflow_abandons_when_residue_is_empty():
+    joined = "An earlier fix did the thing entirely for good."
+    block = _block(joined)
+    result = cc.reflow(block, (0, len(joined)))
+    assert result is None
+
+
+def test_reflow_preserves_block_indent():
+    text = (
+        "def f():\n"
+        "        # Keep this, an earlier fix did X here entirely for good.\n"
+        "        return 1\n"
+    )
+    blocks = cc.group_blocks("m.py", text, set())
+    block = blocks[0]
+    m = cc.match_archaeology(block.joined)
+    span = cc.separable_clause_span(block.joined, m.start(), m.end())
+    result = cc.reflow(block, span)
+    assert result is not None
+    for line in result:
+        assert line.startswith(block.indent + "# ")
+
+
+def test_all_sentences_archaeological_requires_every_sentence_to_match():
+    both = "An earlier fix did X. Previously dropped for good reason."
+    assert cc.all_sentences_archaeological(both)
+    mixed = "An earlier fix did X. This sentence has no archaeology phrase at all."
+    assert not cc.all_sentences_archaeological(mixed)
+
+
 # ---------------------------------------------------------------------------
 # Pinned measured-corpus fixture — reads the five live source files
 # ---------------------------------------------------------------------------
@@ -505,3 +610,210 @@ def test_judge_max_overflow_reports_count_emits_nothing(tmp_path, monkeypatch):
     out = cc.emit_candidates(repo, "main", judge_max=40)
     assert out["count"] > 40
     assert out["candidates"] == []
+
+
+def test_mid_apply_failure_restores_written_files_and_reports_them(tmp_path, monkeypatch, capsys):
+    repo = _init_repo(tmp_path)
+    a = repo / "a.py"
+    b = repo / "b.py"
+    a.write_text("def f():\n    return 1\n", encoding="utf-8")
+    b.write_text("def g():\n    return 2\n", encoding="utf-8")
+    _commit_all(repo, message="base files")
+    a.write_text(
+        "def f():\n"
+        "    # An earlier fix did the thing here for real, entirely done.\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    b.write_text(
+        "def g():\n"
+        "    # An earlier fix did another thing here for real, entirely done.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo, message="add comments")
+
+    real_atomic_write = cc.atomic_write
+    calls = []
+
+    def _flaky_write(path, text):
+        calls.append(Path(path).name)
+        if len(calls) == 2:
+            raise OSError("simulated disk failure")
+        real_atomic_write(path, text)
+
+    monkeypatch.setattr(cc, "atomic_write", _flaky_write)
+
+    rc = cc.main(["--project-root", str(repo), "--apply", "--base", "main"])
+    captured = capsys.readouterr()
+
+    assert rc == 3
+    assert "a.py" in captured.err
+    committed_a = subprocess.run(
+        ["git", "-C", str(repo), "show", "HEAD:a.py"], capture_output=True, text=True, check=True
+    ).stdout
+    assert a.read_text(encoding="utf-8") == committed_a
+
+
+def test_untouched_file_survives_diff_scoping(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / "untouched.py").write_text(
+        "def g():\n"
+        "    # An earlier fix did this exact thing, entirely for good.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    (repo / "touched.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "initial commit")
+    _git(repo, "switch", "-c", "feature")
+    (repo / "touched.py").write_text("def f():\n    x = 1\n    return x\n", encoding="utf-8")
+    _commit_all(repo, message="touch only touched.py")
+
+    before = (repo / "untouched.py").read_text(encoding="utf-8")
+    cc.main(["--project-root", str(repo), "--apply", "--base", "main"])
+    assert (repo / "untouched.py").read_text(encoding="utf-8") == before
+
+
+def test_emit_candidates_reflects_post_edit_worktree_not_pre_edit_frame(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # An earlier fix did this thing here.\n"
+        "    # Before the fix it broke everything badly for real this time.\n"
+        "    # Previously dropped entirely, used to be missing before.\n"
+        "    return 1\n"
+        "\n"
+        "\n"
+        "def g():\n"
+        "    # This is not a bug, contrary to appearances in this codebase.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo, message="base")
+    pre_edit_marker_lineno = 9
+
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert decision.changed
+    src.write_text(decision.new_text, encoding="utf-8")
+
+    post_edit_lines = src.read_text(encoding="utf-8").splitlines()
+    post_edit_marker_lineno = next(
+        i + 1 for i, line in enumerate(post_edit_lines) if "This is not a bug" in line
+    )
+    assert post_edit_marker_lineno != pre_edit_marker_lineno
+
+    out = cc.emit_candidates(repo, "main", judge_max=40)
+    matches = [c for c in out["candidates"] if "This is not a bug" in c["text"]]
+    assert len(matches) == 1
+    assert matches[0]["start"] == post_edit_marker_lineno
+
+
+def test_overlapping_keep_vetoes_the_excision_it_intersects():
+    text = (
+        "def f():\n"
+        "    # This part must stay exactly as documented for the API "
+        "contract clearly. An earlier fix broke this, see module.func for "
+        "the full rationale.\n"
+        "    return 1\n"
+    )
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert not decision.changed
+
+
+def test_category3_emits_marker_block_in_untouched_region_of_touched_file(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    return 1\n"
+        "\n"
+        "\n"
+        "def g():\n"
+        "    # This is not a bug, contrary to appearances in this project.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo, message="base")
+    # Touch f() only -- g()'s marker-bearing block stays on the exact lines
+    # it already occupied at HEAD, an untouched *region* of a touched *file*.
+    src.write_text(
+        "def f():\n"
+        "    return 42\n"
+        "\n"
+        "\n"
+        "def g():\n"
+        "    # This is not a bug, contrary to appearances in this project.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo, message="touch f only")
+
+    out = cc.emit_candidates(repo, "main", judge_max=40)
+    matches = [c for c in out["candidates"] if "This is not a bug" in c["text"]]
+    assert len(matches) == 1
+    assert matches[0]["start"] == 6
+
+
+def test_pointer_retention_anchored_by_first_occurrence_even_if_unchanged():
+    text = (
+        "def f():\n"
+        "    # see helpers.util for the full rationale.\n"
+        "    return 1\n"
+        "\n"
+        "\n"
+        "def g():\n"
+        "    # Also, see helpers.util for the full rationale.\n"
+        "    return 2\n"
+    )
+    # Only line 7 (the second occurrence) is this branch's diff -- line 2
+    # (the first occurrence) predates the branch entirely and is not a
+    # candidate line, yet it must still anchor the retained-count (D-07).
+    decision = cc.decide_file("m.py", text, {7}, retain=1, include_tests=False)
+    assert decision.changed
+    new_lines = decision.new_text.splitlines()
+    assert new_lines[1] == "    # see helpers.util for the full rationale."
+    assert "helpers.util" not in new_lines[6]
+
+
+def test_base_ref_accepts_a_non_default_parent_branch(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    (repo / "m.py").write_text(
+        "def f():\n"
+        "    # An earlier fix did the parent-branch thing here, entirely done.\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "main base")
+    _git(repo, "switch", "-c", "parent-feature")
+    (repo / "other.py").write_text("x = 1\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "parent adds other.py")
+    _git(repo, "switch", "-c", "stacked-feature")
+    (repo / "stacked.py").write_text(
+        "def g():\n"
+        "    # An earlier fix did the stacked-branch thing, entirely done here.\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "stacked adds stacked.py")
+
+    before = (repo / "m.py").read_text(encoding="utf-8")
+    rc = cc.main(["--project-root", str(repo), "--apply", "--base", "parent-feature"])
+    # The parent branch's own pre-existing comment sits outside the
+    # parent-feature..HEAD diff and must stay untouched -- the cleanup
+    # diffs against the ref, not the branch name gh pr create would use.
+    assert (repo / "m.py").read_text(encoding="utf-8") == before
+    assert rc == 1
