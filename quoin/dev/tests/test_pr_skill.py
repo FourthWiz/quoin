@@ -217,7 +217,7 @@ def test_claude_md_git_safety_references_pr():
     assert "/pr" in text, "CLAUDE.md Git & PR Safety section must reference /pr"
 
 
-# ── T-14: comment-cleanup pre-flight wiring (IVG-255) ─────────────────────────
+# ── Comment-cleanup pre-flight wiring ──────────────────────────────────────────
 
 def test_check_0_resolves_both_base_namespaces():
     text = _read(PR_ADAPTER_SKILL)

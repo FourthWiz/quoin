@@ -1,5 +1,5 @@
-"""IVG-255 T-10: install.sh deploys comment_cleanup.py to both targets, plus
-the criteria memory file.
+"""install.sh deploys comment_cleanup.py to both targets, plus the criteria
+memory file.
 
 Three-tier test (mirrors test_install_plan_path_lint_deployed.py, plus a
 third manifest assertion for TIER1_MEMORY_FILES):

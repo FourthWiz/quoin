@@ -486,7 +486,7 @@ def test_self_scan_zero_findings():
 
 
 # ---------------------------------------------------------------------------
-# T-01 promotion (IVG-255): public names are aliases, not copies
+# Public API promotion: public names are aliases, not copies
 # ---------------------------------------------------------------------------
 
 def test_promoted_public_names_are_identical_objects_to_private_aliases():

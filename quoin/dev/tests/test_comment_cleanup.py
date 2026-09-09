@@ -63,7 +63,7 @@ def _block(joined, is_trailing=False, code_prefix="", indent="", width=None):
 
 
 # ---------------------------------------------------------------------------
-# T-02: docstring exclusion + block grouping
+# Docstring exclusion + block grouping
 # ---------------------------------------------------------------------------
 
 def test_docstring_exclusion_set_covers_module_docstring():
@@ -115,8 +115,8 @@ def test_trailing_comment_is_a_singleton_block_with_code_prefix():
 
 
 def test_trailing_comment_survives_hash_inside_string_literal():
-    # MAJ-4: code_prefix must come from rfind on the region's own token
-    # text, never the first '#' — which here sits inside a string literal.
+    # code_prefix must come from rfind on the region's own token text, never
+    # the first '#' — which here sits inside a string literal.
     text = 'x = "a#b"  # an earlier fix, foo\n'
     blocks = cc.group_blocks("m.py", text, set())
     assert len(blocks) == 1
@@ -124,7 +124,7 @@ def test_trailing_comment_survives_hash_inside_string_literal():
 
 
 # ---------------------------------------------------------------------------
-# T-03: archaeology and pointer discriminators
+# Archaeology and pointer discriminators
 # ---------------------------------------------------------------------------
 
 def test_hyphenated_archaeology_requires_terminal_punctuation():
@@ -172,7 +172,7 @@ def test_judge_marker_prefilter():
 
 
 # ---------------------------------------------------------------------------
-# T-04: clause span and reflow
+# Clause span and reflow
 # ---------------------------------------------------------------------------
 
 def test_clause_span_none_when_no_preceding_separator():
@@ -182,10 +182,9 @@ def test_clause_span_none_when_no_preceding_separator():
 
 
 def test_dashboard_model_parenthetical_seam_character_exact():
-    # CRIT-1 / MAJ-1 — the pinned dashboard_model.py:345-347 shape: a
-    # trailing parenthetical immediately preceded by a space, tail is a
-    # single period. Must reflow with NO seam defect (no double period,
-    # no missing period).
+    # The pinned dashboard_model.py:345-347 shape: a trailing parenthetical
+    # immediately preceded by a space, tail is a single period. Must reflow
+    # with no seam defect (no double period, no missing period).
     joined = (
         'Merge provider output over counts default. "partial" propagates the '
         "never-silent-$0 signal into the emitted dashboard JSON "
@@ -203,9 +202,8 @@ def test_dashboard_model_parenthetical_seam_character_exact():
 
 
 def test_substantive_trailing_text_clamped_character_exact():
-    # MAJ-5 (round-4 tightened): the clamp preserves a real trailing
-    # sentence, and the round-4 seam-repair clause terminates the head with
-    # exactly one period, no more.
+    # The clamp preserves a real trailing sentence, and the seam-repair
+    # clause terminates the head with exactly one period, no more.
     joined = "Buffered read is required here, an earlier fix did X. Always call foo() before bar()."
     m = cc.match_archaeology(joined)
     assert (m.start(), m.end()) == (32, 46)
@@ -220,13 +218,13 @@ def test_block_entirely_one_clause_reflows_to_none():
     joined = "An earlier fix did X."
     block = _block(joined)
     # No separator precedes the match -> no span -> nothing to test via
-    # reflow; the block-is-fully-archaeological case is a remove_block
-    # verdict, not an excise, so this exercises decide_category_1 instead.
+    # reflow; the block-is-fully-archaeological case routes to a whole-block
+    # removal, not an excise, so this exercises decide_category_1 instead.
     assert cc.all_sentences_archaeological(joined)
 
 
 def test_synthetic_separator_and_conjunction_reflow():
-    # MIN-6: the pinned corpus never exercises the leading-separator +
+    # The pinned corpus never exercises the leading-separator +
     # coordinating-conjunction strip inside a fully-excised tail; only a
     # synthetic fixture does.
     joined = "Keep this part, and an earlier fix broke it entirely for good."
@@ -264,7 +262,7 @@ def test_trailing_comment_multiline_wrap_abandons():
 
 
 # ---------------------------------------------------------------------------
-# T-13: pinned measured-corpus fixture — reads the five live source files
+# Pinned measured-corpus fixture — reads the five live source files
 # ---------------------------------------------------------------------------
 
 _DASHBOARD_MODEL = "quoin/core/scripts/dashboard_model.py"
@@ -374,8 +372,8 @@ def test_non_py_file_reported_not_written(tmp_path):
     text = src.read_text(encoding="utf-8")
     decision = cc.decide_file("m.sh", text, None, retain=1, include_tests=False)
     # decide_file computes the decision regardless of suffix; the CLI's
-    # apply step is what gates writes to .py only (arch D-08). Confirm the
-    # decision layer still proposes a change...
+    # apply step is what gates writes to .py only. Confirm the decision
+    # layer still proposes a change...
     assert decision.changed
     # ...but the file on disk is untouched unless the CLI writes it.
     assert src.read_text(encoding="utf-8") == "echo hi  # an earlier fix did the thing here.\n"
