@@ -402,6 +402,23 @@ def test_include_tests_env_widens(tmp_path, monkeypatch):
     assert decision.changed
 
 
+def test_multiline_whole_block_removal_leaves_no_orphaned_fragment(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # An earlier fix did the thing. Before the fix this was broken.\n"
+        "    # Previously dropped entirely, used to be missing.\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert decision.changed
+    assert decision.new_text == "def f():\n    return 1\n"
+
+
 def test_reapplying_decide_file_is_idempotent(tmp_path):
     repo = _init_repo(tmp_path)
     src = repo / "m.py"
