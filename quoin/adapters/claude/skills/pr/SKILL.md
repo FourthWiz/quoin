@@ -242,11 +242,11 @@ On start:
   (verified via `git ls-remote --heads origin main`), else `master`. Used by
   `gh pr create --base` (Step 4) and Step 6's `git checkout`.
 - `base_ref` — a git ref: `origin/BASE_NAME` when `git rev-parse --verify`
-  resolves it, else bare `BASE_NAME`. Used by every `comment_cleanup.py
-  --base` call (4b, 4c, 4e) and category 4's `git log`.
+  resolves it, else bare `BASE_NAME`. Used by every comment-cleanup
+  invocation below (4b, 4c, 4e) and category 4's `git log`.
 
-  (`--base origin/main` fails on `gh pr create` — no such remote branch;
-  `git checkout origin/main` lands on a detached HEAD.)
+  (`--base origin/main` fails on `gh pr create`; `git checkout origin/main`
+  detaches HEAD.)
 
 **Check 1 — branch check** — `git branch --show-current` must not be `main`
 or `master`. If it is, STOP: "Cannot create a PR from main/master. Switch to
@@ -258,27 +258,28 @@ a feature branch first."
 **Check 3 — gh auth check** — `gh auth status`. Fails: STOP —
 "Not authenticated with GitHub CLI. Run: gh auth login"
 
-**Check 4 — comment cleanup (pre-PR).** Removes superseded and duplicated
-code comments before check 5 sees the tree. Every sub-step is non-blocking:
+**Check 4 — comment cleanup (pre-PR).** Removes superseded/duplicated
+comments before check 5 sees the tree. Non-blocking:
 
 - 4a. Clean-tree probe. Dirty → skip check 4, fall through to check 5.
-- 4b. `comment_cleanup.py --base <base_ref> --apply` (categories 1+2:
-  archaeology, stale cross-reference chains).
-- 4c. `comment_cleanup.py --base <base_ref> --emit-candidates --allow-dirty`,
-  then judge what it emits against
-  `__QUOIN_HOME__/memory/comment-cleanup-criteria.md` (category 3: point at
-  the file, don't inline it).
-- 4d. If some path changed: one commit, message `chore: remove superseded
-  and duplicated code comments`, no body, explicit pathspecs (never
-  `-a`/`-A`). Success → `cleanup_committed=true`. Failure →
-  `git checkout HEAD -- <paths>`, warn, continue.
-- 4e. `comment_cleanup.py --base <base_ref> --commit-subjects` (category 4,
-  report only — never rewrites/amends/rebases).
+- 4b. `python3 __QUOIN_HOME__/scripts/comment_cleanup.py --base <base_ref>
+  --apply` (cat 1+2).
+- 4c. `python3 __QUOIN_HOME__/scripts/comment_cleanup.py --base <base_ref>
+  --emit-candidates --allow-dirty`, then judge emissions against
+  `__QUOIN_HOME__/memory/comment-cleanup-criteria.md` (cat 3).
+- 4d. Pathspecs = every path `git status --porcelain` reports here (also
+  covers 4c's own edits, invisible to the script). If non-empty: one
+  commit, `chore: remove superseded and duplicated code comments`, no
+  body, those pathspecs (never `-a`/`-A`). Success →
+  `cleanup_committed=true`. Failure → `git checkout HEAD -- <same
+  pathspecs>`, warn, continue.
+- 4e. `python3 __QUOIN_HOME__/scripts/comment_cleanup.py --base <base_ref>
+  --commit-subjects` (cat 4, report-only).
 - 4f. Print one merged per-file report, including 4c's own removals
   (invisible to the script).
 
-  Every exit code is non-blocking: 0/1 expected; 2/3 warn and continue.
-  Missing script/criteria file → note and continue.
+  Exit codes: 0/1 expected; 2/3 warn+continue; missing script/criteria
+  file → note+continue.
 
 **Check 5 — uncommitted changes check** — `git status --porcelain`
 non-empty → STOP: "There are uncommitted changes. Please commit or stash

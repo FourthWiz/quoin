@@ -263,3 +263,40 @@ def test_core_doc_preconditions_updated():
     text = _read(PR_CORE_DOC)
     preconditions = text[text.index("## Preconditions"):text.index("## Contract")]
     assert "cleanup" in preconditions.lower()
+
+
+def test_comment_cleanup_invocations_are_fully_qualified():
+    """Every mention of comment_cleanup.py in the adapter must be reachable
+    on PATH — ~/.claude/scripts/ is not on PATH, so a bare filename silently
+    no-ops the whole feature (the "missing script" branch fires and check 4
+    quietly does nothing on every /pr)."""
+    text = _read(PR_ADAPTER_SKILL)
+    prefix = "python3 __QUOIN_HOME__/scripts/comment_cleanup.py"
+    idx = 0
+    mentions = 0
+    while True:
+        idx = text.find("comment_cleanup.py", idx)
+        if idx == -1:
+            break
+        mentions += 1
+        start = idx - len(prefix) + len("comment_cleanup.py")
+        assert text[start:idx + len("comment_cleanup.py")] == prefix, (
+            f"unqualified comment_cleanup.py mention at offset {idx}"
+        )
+        idx += len("comment_cleanup.py")
+    assert mentions >= 3, "expected at least the 4b/4c/4e invocations"
+
+
+def test_cleanup_pathspec_set_is_git_status_porcelain():
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    assert "git status --porcelain" in check4, (
+        "check 4's pathspec set must be defined as git status --porcelain output"
+    )
+    # The failure path must reuse the same set, not a script-report-derived
+    # subset that omits the judgment pass's own edits. Normalize whitespace
+    # first since the prose wraps mid-phrase.
+    normalized = " ".join(check4.split())
+    assert "same pathspecs" in normalized or "same pathspec set" in normalized, (
+        "the failure-path checkout must reuse the same pathspec set defined above"
+    )
