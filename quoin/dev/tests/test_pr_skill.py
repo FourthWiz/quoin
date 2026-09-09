@@ -215,3 +215,51 @@ def test_claude_md_pr_in_model_assignments():
 def test_claude_md_git_safety_references_pr():
     text = _read(CLAUDE_MD)
     assert "/pr" in text, "CLAUDE.md Git & PR Safety section must reference /pr"
+
+
+# ── T-14: comment-cleanup pre-flight wiring (IVG-255) ─────────────────────────
+
+def test_check_0_resolves_both_base_namespaces():
+    text = _read(PR_ADAPTER_SKILL)
+    assert "base_name" in text and "base_ref" in text, (
+        "check 0 must resolve both base_name and base_ref"
+    )
+    assert text.index("Check 0") < text.index("Check 1"), (
+        "base resolution must be check 0, ahead of the branch check"
+    )
+
+
+def test_gh_pr_create_uses_base_name():
+    text = _read(PR_ADAPTER_SKILL)
+    assert "--base <base_name>" in text, "gh pr create must consume base_name, not base_ref"
+
+
+def test_step_6_checkout_uses_base_name():
+    text = _read(PR_ADAPTER_SKILL)
+    step6 = text[text.index("### Step 6"):]
+    assert "base_name" in step6.split("### Step 6", 1)[-1][:400]
+
+
+def test_cleanup_check_precedes_uncommitted_check():
+    text = _read(PR_ADAPTER_SKILL)
+    cleanup_idx = text.index("Check 4 — comment cleanup")
+    uncommitted_idx = text.index("Check 5 — uncommitted changes check")
+    assert cleanup_idx < uncommitted_idx
+
+
+def test_step_3_push_condition_names_cleanup_committed():
+    text = _read(PR_ADAPTER_SKILL)
+    step3 = text[text.index("### Step 3"):text.index("### Step 4")]
+    assert "cleanup_committed" in step3
+
+
+def test_core_doc_contract_mentions_cleanup():
+    text = _read(PR_CORE_DOC)
+    contract = text[text.index("## Contract"):]
+    assert "comment" in contract.lower() and "cleanup" in contract.lower()
+
+
+def test_core_doc_preconditions_updated():
+    text = _read(PR_CORE_DOC)
+    preconditions = text[text.index("## Preconditions"):text.index("## Contract")]
+    assert "cleanup" in preconditions.lower()
