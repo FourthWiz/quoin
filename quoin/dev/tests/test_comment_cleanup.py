@@ -13,6 +13,8 @@ run_benchmark.py) — never an embedded copy, so an edit to a measured file
 fails this test loudly rather than letting the yield claim silently drift.
 """
 
+import ast
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -263,9 +265,9 @@ def test_trailing_comment_multiline_wrap_abandons():
 
 def test_docstring_heading_line_with_archaeology_phrase_survives_every_removal_path():
     # A "#"-leading docstring line that itself carries an archaeology phrase
-    # must never form a block — the D-09 exclusion runs before grouping, so
-    # this content is inert to every removal path (decide_file included),
-    # not merely to group_blocks in isolation.
+    # must never form a block — the docstring exclusion set is applied
+    # before grouping, so this content is inert to every removal path
+    # (decide_file included), not merely to group_blocks in isolation.
     text = (
         '"""Title\n'
         "\n"
@@ -384,6 +386,27 @@ def _read_live(relpath):
     return path.read_text(encoding="utf-8")
 
 
+def _block_level_verdict_counts(relpath, text):
+    """Re-derive category 1 and category 2's per-block verdicts directly
+    (mirroring decide_file's own block loop) so the excision count can be
+    asserted exactly, instead of inferring it from residue substrings or a
+    line-count inequality that a whole-block removal would also satisfy."""
+    exclusion = cc.docstring_exclusion_lines(text)
+    blocks = cc.group_blocks(relpath, text, exclusion)
+    blocks = [b for b in blocks if not cc._has_pragma(b) and not cc._has_directive(b)]
+    cat2 = cc._category2_verdicts(blocks, None, retain=1)
+    counts = {"excise": 0, "remove_block": 0}
+    for block in blocks:
+        cat1 = cc.decide_category_1(block, None, relpath, include_tests=False)
+        for verdict in (cat1, cat2.get(id(block))):
+            if verdict is None:
+                continue
+            kind, _span = verdict
+            if kind in counts:
+                counts[kind] += 1
+    return counts
+
+
 def test_pinned_corpus_yields_exactly_six_excisions():
     dashboard_text = _read_live(_DASHBOARD_MODEL)
     quoin_claude_text = _read_live(_QUOIN_CLAUDE)
@@ -405,19 +428,20 @@ def test_pinned_corpus_yields_exactly_six_excisions():
     assert "worth recovering.\n" in d2.new_text
     assert "worth recovering.\n" in d3.new_text
 
-    # Negative: no whole-block removal anywhere in the pinned corpus.
-    for old_text, decision in (
-        (dashboard_text, d1),
-        (quoin_claude_text, d2),
-        (simple_claude_text, d3),
+    # Count block-level verdicts directly: 1 category-1 excision each in
+    # dashboard_model.py, quoin_claude.py and simple_claude.py, plus 3
+    # category-2 excisions in quoin_claude.py (428-429, 525, 597-598) — 6
+    # total, and zero whole-block removals anywhere in the pinned corpus.
+    totals = {"excise": 0, "remove_block": 0}
+    for relpath, text in (
+        (_DASHBOARD_MODEL, dashboard_text),
+        (_QUOIN_CLAUDE, quoin_claude_text),
+        (_SIMPLE_CLAUDE, simple_claude_text),
     ):
-        old_lines = old_text.splitlines()
-        new_lines = decision.new_text.splitlines()
-        # A whole-block removal would drop lines outright; every pinned
-        # excision here is a same-line-count reflow-in-place or a
-        # line-count-reducing multi-line-to-one-line reflow, never a bare
-        # deletion of an entire standalone block with nothing replacing it.
-        assert len(new_lines) <= len(old_lines)
+        counts = _block_level_verdict_counts(relpath, text)
+        totals["excise"] += counts["excise"]
+        totals["remove_block"] += counts["remove_block"]
+    assert totals == {"excise": 6, "remove_block": 0}
 
 
 def test_pinned_corpus_untouched_files_stay_byte_identical():
@@ -454,7 +478,7 @@ def test_pinned_corpus_docstring_hits_byte_identical():
 # Git fixtures
 # ---------------------------------------------------------------------------
 
-def test_pragma_survives_all_categories(tmp_path):
+def test_pragma_survives_category_1(tmp_path):
     repo = _init_repo(tmp_path)
     src = repo / "m.py"
     src.write_text(
@@ -469,10 +493,77 @@ def test_pragma_survives_all_categories(tmp_path):
     assert not decision.changed
 
 
+def test_pragma_survives_category_2(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # see helpers.util for details.\n"
+        "    return 1\n"
+        "\n"
+        "\n"
+        "def g():\n"
+        "    # see helpers.util for details.  quoin-lint: allow\n"
+        "    return 2\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    # Without the pragma, this would be the second occurrence of the same
+    # referent and bare-pointer eligible for excision; the pragma removes
+    # the block from consideration before category 2 ever orders it.
+    assert not decision.changed
+
+
+def test_pragma_survives_category_3(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # This is not a bug, contrary to appearances.  quoin-lint: allow\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    out = cc.emit_candidates(repo, "main", judge_max=40)
+    assert out["count"] == 0
+    assert out["candidates"] == []
+
+
+def test_directive_comment_survives_reflow(tmp_path):
+    # A block containing a tool-directive line (here, `# type: ignore`) must
+    # be vetoed entirely, not reflowed into free prose alongside the
+    # archaeological line it happens to sit next to.
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # Do the thing, an earlier fix returned None here.\n"
+        "    # type: ignore[arg-type]\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert not decision.changed
+
+
+def test_atomic_write_preserves_destination_file_mode(tmp_path):
+    target = tmp_path / "m.py"
+    target.write_text("x = 1\n", encoding="utf-8")
+    target.chmod(0o755)
+    cc.atomic_write(target, "x = 2\n")
+    assert target.read_text(encoding="utf-8") == "x = 2\n"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o755
+
+
 def test_non_py_file_reported_not_written(tmp_path):
     repo = _init_repo(tmp_path)
     src = repo / "m.sh"
-    src.write_text("echo hi  # an earlier fix did the thing here.\n", encoding="utf-8")
+    original = "echo hi  # do the setup, an earlier fix did the thing here.\n"
+    src.write_text(original, encoding="utf-8")
     _commit_all(repo)
     text = src.read_text(encoding="utf-8")
     decision = cc.decide_file("m.sh", text, None, retain=1, include_tests=False)
@@ -481,7 +572,7 @@ def test_non_py_file_reported_not_written(tmp_path):
     # layer still proposes a change...
     assert decision.changed
     # ...but the file on disk is untouched unless the CLI writes it.
-    assert src.read_text(encoding="utf-8") == "echo hi  # an earlier fix did the thing here.\n"
+    assert src.read_text(encoding="utf-8") == original
 
 
 def test_test_path_archaeology_reported_not_removed(tmp_path):
@@ -539,6 +630,86 @@ def test_reapplying_decide_file_is_idempotent(tmp_path):
     assert first.changed
     second = cc.decide_file("m.py", first.new_text, None, retain=1, include_tests=False)
     assert not second.changed
+
+
+def test_two_archaeology_hits_converge_in_one_pass(tmp_path):
+    # A block with two archaeological sentences (and one live one) must
+    # excise both hits in the same decide_file pass; a second pass on the
+    # result is then a genuine no-op, not a further shrink.
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # Alpha holds here. Foo bar, pre-fix, this returned Y. Baz used to be Z.\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    first = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert first.changed
+    assert "Alpha holds here" in first.new_text
+    assert "pre-fix" not in first.new_text
+    assert "used to be" not in first.new_text
+    second = cc.decide_file("m.py", first.new_text, None, retain=1, include_tests=False)
+    assert not second.changed
+
+
+# ---------------------------------------------------------------------------
+# CRITICAL regression — whole-block removal must never take a trailing
+# comment's code line with it. All three reproduced shapes must leave the
+# code intact and the file parseable.
+# ---------------------------------------------------------------------------
+
+def test_trailing_fully_archaeological_comment_never_deletes_the_statement(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f(a):\n"
+        "    return a  # an earlier fix, this used to be wrong.\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    new_text = decision.new_text if decision.changed else text
+    assert "return a" in new_text
+    ast.parse(new_text)
+
+
+def test_trailing_two_sentence_archaeological_comment_never_deletes_the_assignment(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    x = compute()  # An earlier fix. Used to be None.\n"
+        "    return x\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    new_text = decision.new_text if decision.changed else text
+    assert "x = compute()" in new_text
+    ast.parse(new_text)
+
+
+def test_trailing_archaeological_comment_never_deletes_a_call_argument(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    return g(\n"
+        "        a,  # an earlier fix, previously dropped.\n"
+        "    )\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    text = src.read_text(encoding="utf-8")
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    new_text = decision.new_text if decision.changed else text
+    assert "a," in new_text or "a)" in new_text
+    ast.parse(new_text)
 
 
 def test_self_exclusion_of_own_two_paths():
@@ -774,7 +945,8 @@ def test_pointer_retention_anchored_by_first_occurrence_even_if_unchanged():
     )
     # Only line 7 (the second occurrence) is this branch's diff -- line 2
     # (the first occurrence) predates the branch entirely and is not a
-    # candidate line, yet it must still anchor the retained-count (D-07).
+    # candidate line, yet it must still anchor the retained-count: retention
+    # is ordered over the whole post-image file, not just the diff.
     decision = cc.decide_file("m.py", text, {7}, retain=1, include_tests=False)
     assert decision.changed
     new_lines = decision.new_text.splitlines()

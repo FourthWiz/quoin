@@ -103,7 +103,7 @@ _POINTER_RE = re.compile(
     re.IGNORECASE,
 )
 _STOCK_FILLER_RE = re.compile(
-    r"\A\s*(?:for the full rationale|for details|for why|for the reasoning)?\s*[.,;:]?\s*\Z",
+    r"\A\s*(?:(?:for the full rationale|for details|for why|for the reasoning)\s*)?(?:[.,;:]\s*)?\Z",
     re.IGNORECASE,
 )
 
@@ -439,13 +439,27 @@ def assert_clean_tree(repo_root, allow_dirty):
 def atomic_write(path, text):
     """Mirrors quoin/core/scripts/run_state.py's mkstemp atomic-write
     variant (def _atomic_write_record at line 161, closing pass at line
-    180) — finally: + a guarded unlink, not except BaseException."""
+    180) — finally: + a guarded unlink, not except BaseException.
+
+    Unlike run_state.py's own record file, the destination here is a
+    pre-existing user source file, so its mode must survive the rewrite:
+    mkstemp always creates the temp file 0600, and os.replace carries that
+    mode onto the destination unless it is corrected first — left alone,
+    every cleaned file narrows (0644 -> 0600, or an executable entrypoint
+    loses its exec bit).
+    """
     path = Path(path)
+    try:
+        original_mode = path.stat().st_mode & 0o777
+    except OSError:
+        original_mode = None
     fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".", suffix=".tmp")
     tmp_path = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(text)
+        if original_mode is not None:
+            os.chmod(tmp_name, original_mode)
         os.replace(tmp_name, str(path))
     finally:
         if tmp_path.exists():
@@ -455,12 +469,33 @@ def atomic_write(path, text):
                 pass
 
 
-def restore_written(repo_root, paths):
+def restore_written(repo_root, paths, cause=None):
     """Mid-run failure recovery (arch D-15): restore already-written paths
     to their committed state, then re-raise so /pr can report exactly which
-    files were touched and rolled back."""
-    _run(["git", "-C", str(repo_root), "checkout", "HEAD", "--", *paths])
-    raise Undeterminable(f"restored after write failure: {', '.join(paths)}")
+    files were touched and rolled back.
+
+    `git checkout HEAD -- <paths>` is all-or-nothing: if any one pathspec is
+    absent from HEAD, the whole checkout aborts and every other listed file
+    is left modified. Check the return code and, on failure, fall back to
+    restoring paths one at a time so the report names exactly which files
+    were and were not recovered — never a blanket claimed success. `cause`
+    (the exception that triggered the write failure, if known) is chained
+    via `from` so the operator still learns why the write failed, not only
+    that a restore was attempted.
+    """
+    _out, err, rc = _run(["git", "-C", str(repo_root), "checkout", "HEAD", "--", *paths])
+    if rc == 0:
+        raise Undeterminable(f"restored after write failure: {', '.join(paths)}") from cause
+
+    restored, failed = [], []
+    for p in paths:
+        _o, _e, prc = _run(["git", "-C", str(repo_root), "checkout", "HEAD", "--", p])
+        (restored if prc == 0 else failed).append(p)
+    raise Undeterminable(
+        f"restore after write failure was incomplete ({err}) — "
+        f"restored: {', '.join(restored) or 'none'}; "
+        f"NOT restored (still modified): {', '.join(failed) or 'none'}"
+    ) from cause
 
 
 # ---------------------------------------------------------------------------
@@ -474,19 +509,62 @@ class FileDecision:
     changed: bool
 
 
+def _all_archaeology_matches(joined):
+    """Every non-overlapping archaeology hit in `joined`, left to right —
+    unlike match_archaeology (earliest hit only), this drives category 1's
+    excision so a block carrying two or more archaeological sentences
+    converges in a single decide_file pass instead of needing one pass per
+    hit (each pass only ever excised the earliest one)."""
+    raw = sorted(
+        list(_ARCH_HYPHENATED_RE.finditer(joined)) + list(_ARCH_MULTIWORD_RE.finditer(joined)),
+        key=lambda m: m.start(),
+    )
+    matches = []
+    last_end = -1
+    for m in raw:
+        if m.start() >= last_end:
+            matches.append(m)
+            last_end = m.end()
+    return matches
+
+
 def decide_category_1(block, cand_lines, relpath, include_tests):
-    match = match_archaeology(block.joined)
-    if match is None:
+    matches = _all_archaeology_matches(block.joined)
+    if not matches:
         return None
     if cand_lines is not None and not any(ln in cand_lines for ln in range(block.start, block.end + 1)):
         return None
     if _is_test_path(relpath, include_tests):
         return None
-    if all_sentences_archaeological(block.joined):
+
+    # Try clause excision on the earliest hit first. Whole-block removal is
+    # the fallback, taken only when that earliest hit has no separable
+    # clause of its own (the phrase leads the comment with nothing before it
+    # to cut against) — and only for a genuinely whole-line block. A
+    # trailing block's "whole block" is the code line it rides on
+    # (decide_file's apply step deletes the physical line for a remove_block
+    # edit), so a trailing block never qualifies here; it falls through to
+    # the excise attempt below instead, where reflow correctly strips only
+    # the comment and leaves the code.
+    earliest = matches[0]
+    earliest_span = separable_clause_span(block.joined, earliest.start(), earliest.end())
+    if (
+        earliest_span is None
+        and not block.is_trailing
+        and all_sentences_archaeological(block.joined)
+    ):
         return ("remove_block", (0, len(block.joined)))
-    span = separable_clause_span(block.joined, match.start(), match.end())
-    if span is not None:
-        return ("excise", span)
+
+    # Accumulate a clause span per archaeological hit (not just the earliest
+    # one) so a block carrying two or more archaeological sentences excises
+    # all of them in this single pass instead of needing one pass per hit.
+    spans = []
+    for m in matches:
+        span = earliest_span if m is earliest else separable_clause_span(block.joined, m.start(), m.end())
+        if span is not None and not any(_overlaps(span, existing) for existing in spans):
+            spans.append(span)
+    if spans:
+        return ("excise", spans)
     return ("report", None)
 
 
@@ -527,12 +605,27 @@ def _has_pragma(block):
     return any(_PRAGMA in line for line in block.raw_lines)
 
 
+# A tool-directive comment (a type-checker/linter/formatter instruction) must
+# never be reflowed into free prose alongside an adjacent archaeological
+# comment — grouping and reflow both operate on raw text with no notion of
+# directive syntax, so any block containing one is vetoed outright, the same
+# way _has_pragma vetoes a block carrying the opt-out marker.
+_DIRECTIVE_RE = re.compile(
+    r"\b(?:type|pragma|fmt|pylint|flake8|mypy|ruff|isort):|\bnoqa\b|\bcoding[:=]",
+    re.IGNORECASE,
+)
+
+
+def _has_directive(block):
+    return any(_DIRECTIVE_RE.search(line) for line in block.raw_lines)
+
+
 def decide_file(relpath, text, cand_lines, retain, include_tests):
     """One pass, decisions computed from the pre-edit state."""
     is_py = Path(relpath).suffix == ".py"
     exclusion = docstring_exclusion_lines(text) if is_py else set()
     blocks = group_blocks(relpath, text, exclusion)
-    blocks = [b for b in blocks if not _has_pragma(b)]
+    blocks = [b for b in blocks if not _has_pragma(b) and not _has_directive(b)]
 
     cat2 = _category2_verdicts(blocks, cand_lines, retain)
 
@@ -542,11 +635,15 @@ def decide_file(relpath, text, cand_lines, retain, include_tests):
         v2 = cat2.get(id(block))
 
         proposals = [p for p in (cat1, v2) if p is not None]
-        cut_spans = [
-            s if v != "remove_block" else (0, len(block.joined))
-            for v, s in proposals
-            if v in ("excise", "remove_block")
-        ]
+        cut_spans = []
+        for v, s in proposals:
+            if v == "remove_block":
+                cut_spans.append((0, len(block.joined)))
+            elif v == "excise":
+                # Category 1 may hand back a list of non-overlapping spans
+                # (one per archaeological sentence in the block); category 2
+                # always hands back a single span.
+                cut_spans.extend(s if isinstance(s, list) else [s])
         keep_spans = [s for v, s in proposals if v == "report" and s is not None]
 
         # A keep vetoes only an overlapping span, never a disjoint one.
@@ -557,7 +654,10 @@ def decide_file(relpath, text, cand_lines, retain, include_tests):
             continue
 
         is_remove_block = (
-            cat1 is not None and cat1[0] == "remove_block" and cat1[1] in cut_spans
+            cat1 is not None
+            and cat1[0] == "remove_block"
+            and cat1[1] in cut_spans
+            and not block.is_trailing
         )
         if is_remove_block:
             edits[block.start] = ("remove", None)
@@ -585,6 +685,17 @@ def decide_file(relpath, text, cand_lines, retain, include_tests):
             lines[block.start - 1 : block.end] = replacement_lines
 
     new_text = "".join(lines)
+    if is_py:
+        # Cheap defense-in-depth for a tool that rewrites and auto-commits
+        # source: never hand back an edit that would leave the file
+        # unparseable, whatever the reason. Fails loud (Undeterminable)
+        # rather than writing corrupted text.
+        try:
+            ast.parse(new_text)
+        except SyntaxError as exc:
+            raise Undeterminable(
+                f"cleanup of {relpath} would produce unparseable Python ({exc}); aborting this file's edit"
+            ) from exc
     return FileDecision(relpath=relpath, new_text=new_text, changed=(new_text != text))
 
 
@@ -605,7 +716,7 @@ def emit_candidates(repo_root, base_ref, judge_max):
         exclusion = docstring_exclusion_lines(text)
         blocks = group_blocks(relpath, text, exclusion)
         for block in blocks:
-            if _has_pragma(block):
+            if _has_pragma(block) or _has_directive(block):
                 continue
             if _is_test_path(relpath, include_tests=False):
                 continue
@@ -762,9 +873,9 @@ def main(argv=None):
                         if args.apply and Path(relpath).suffix == ".py":
                             atomic_write(repo_root / relpath, decision.new_text)
                             written.append(relpath)
-            except Exception:
+            except Exception as exc:
                 if written:
-                    restore_written(repo_root, written)
+                    restore_written(repo_root, written, exc)
                 raise
             result["decisions"] = [{"file": d.relpath, "changed": d.changed} for d in decisions]
             if decisions:
