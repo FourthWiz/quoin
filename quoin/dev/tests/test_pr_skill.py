@@ -215,3 +215,265 @@ def test_claude_md_pr_in_model_assignments():
 def test_claude_md_git_safety_references_pr():
     text = _read(CLAUDE_MD)
     assert "/pr" in text, "CLAUDE.md Git & PR Safety section must reference /pr"
+
+
+# ── Comment-cleanup pre-flight wiring ──────────────────────────────────────────
+
+def test_check_0_resolves_both_base_namespaces():
+    text = _read(PR_ADAPTER_SKILL)
+    assert "base_name" in text and "base_ref" in text, (
+        "check 0 must resolve both base_name and base_ref"
+    )
+    assert text.index("Check 0") < text.index("Check 1"), (
+        "base resolution must be check 0, ahead of the branch check"
+    )
+
+
+def test_gh_pr_create_uses_base_name():
+    text = _read(PR_ADAPTER_SKILL)
+    assert "--base <base_name>" in text, "gh pr create must consume base_name, not base_ref"
+
+
+def test_step_6_checkout_uses_base_name():
+    text = _read(PR_ADAPTER_SKILL)
+    step6 = text[text.index("### Step 6"):]
+    assert "base_name" in step6.split("### Step 6", 1)[-1][:400]
+
+
+def test_cleanup_check_precedes_uncommitted_check():
+    text = _read(PR_ADAPTER_SKILL)
+    cleanup_idx = text.index("Check 4 — comment cleanup")
+    uncommitted_idx = text.index("Check 5 — uncommitted changes check")
+    assert cleanup_idx < uncommitted_idx
+
+
+def test_step_3_push_condition_names_cleanup_committed():
+    text = _read(PR_ADAPTER_SKILL)
+    step3 = text[text.index("### Step 3"):text.index("### Step 4")]
+    assert "cleanup_committed" in step3
+
+
+def test_core_doc_contract_mentions_cleanup():
+    text = _read(PR_CORE_DOC)
+    contract = text[text.index("## Contract"):]
+    assert "comment" in contract.lower() and "cleanup" in contract.lower()
+
+
+def test_core_doc_preconditions_updated():
+    text = _read(PR_CORE_DOC)
+    preconditions = text[text.index("## Preconditions"):text.index("## Contract")]
+    assert "cleanup" in preconditions.lower()
+
+
+def test_comment_cleanup_invocations_are_fully_qualified():
+    """Every mention of comment_cleanup.py in the adapter must be reachable
+    on PATH — ~/.claude/scripts/ is not on PATH, so a bare filename silently
+    no-ops the whole feature (the "missing script" branch fires and check 4
+    quietly does nothing on every /pr)."""
+    text = _read(PR_ADAPTER_SKILL)
+    prefix = "python3 __QUOIN_HOME__/scripts/comment_cleanup.py"
+    idx = 0
+    mentions = 0
+    while True:
+        idx = text.find("comment_cleanup.py", idx)
+        if idx == -1:
+            break
+        mentions += 1
+        start = idx - len(prefix) + len("comment_cleanup.py")
+        assert text[start:idx + len("comment_cleanup.py")] == prefix, (
+            f"unqualified comment_cleanup.py mention at offset {idx}"
+        )
+        idx += len("comment_cleanup.py")
+    assert mentions >= 3, "expected at least the 4b/4c/4e invocations"
+
+
+def test_cleanup_pathspec_set_is_git_status_porcelain():
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    assert "git status --porcelain" in check4, (
+        "check 4's pathspec set must be defined as git status --porcelain output"
+    )
+    # A single "Restore =" procedure is defined once and reused by every
+    # exit (abort/success/failure/empty), rather than each branch re-deriving
+    # or restating its own pathspec set — a stronger guarantee than a mere
+    # "same pathspecs" reminder, since there is only one definition to drift
+    # from. Normalize whitespace first since the prose wraps mid-phrase.
+    normalized = " ".join(check4.split())
+    assert normalized.count("Restore =") == 1, (
+        "check 4 must define exactly one restore procedure, reused by every exit"
+    )
+
+
+def test_check4a_probe_pinned_to_git_status_porcelain():
+    """4a must define `clean_at_entry` directly off `git status --porcelain`
+    output, not leave it as a bare prose clause with no command and no
+    definition of what 'dirty' means."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    fourA_idx = normalized.find("- 4a.")
+    assert fourA_idx != -1, "check 4 must define step 4a"
+    fourA_clause = normalized[fourA_idx : fourA_idx + 100]
+    assert "clean_at_entry" in fourA_clause, (
+        "4a must define clean_at_entry"
+    )
+    assert "git status --porcelain" in fourA_clause, (
+        "4a's clean_at_entry must be pinned to git status --porcelain output, "
+        "not left as an undefined 'clean-tree probe'"
+    )
+
+
+def test_cleanup_pathspec_set_excludes_untracked_entries():
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert "excluding `??`" in normalized or "excludes `??`" in normalized, (
+        "check 4's pathspec set must explicitly exclude untracked (??) entries"
+    )
+    # `git clean -fd` must be scoped to the untracked entries check 4 itself
+    # observed, never bare (which would reach outside the residue check 4
+    # created).
+    assert "git clean -fd -- <untracked>" in normalized, (
+        "the restore must scope `git clean -fd` to the observed untracked "
+        "entries, never invoke it bare"
+    )
+
+
+def test_check4_every_exit_restores():
+    """Check 4 must never leave check 5 a dirty tree: the abort branch, the
+    success branch, the failure branch, and the empty-pathspec branch must
+    each restore before check 4 ends, not only the failure branch."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert "restore" in normalized.lower(), (
+        "check 4 must define a restore step"
+    )
+    # The abort branch (a non-`??` porcelain entry outside script_files ∪
+    # judge_files) must restore before aborting, not just warn and abort.
+    abort_idx = normalized.find("outside")
+    assert abort_idx != -1, "check 4 must define the abort-branch trigger"
+    abort_clause = normalized[abort_idx : abort_idx + 60]
+    assert "restore" in abort_clause.lower(), (
+        "the abort branch must restore before aborting check 4"
+    )
+    # The success branch must also restore (leftover untracked residue),
+    # not only set cleanup_committed=true.
+    success_idx = normalized.find("Success")
+    assert success_idx != -1, "check 4 must define a success branch"
+    success_clause = normalized[success_idx : success_idx + 60]
+    assert "restore" in success_clause.lower(), (
+        "the success branch must restore leftover untracked residue"
+    )
+    # The failure branch (pre-existing) must restore too.
+    failure_idx = normalized.find("Failure")
+    assert failure_idx != -1, "check 4 must define a failure branch"
+    failure_clause = normalized[failure_idx : failure_idx + 60]
+    assert "restore" in failure_clause.lower(), (
+        "the failure branch must restore before continuing"
+    )
+    # The empty-pathspec exit (no outside entry, nothing to commit) must
+    # also restore — it is the one 4d exit most likely to be overlooked
+    # since there is nothing to commit on this path.
+    empty_idx = normalized.find("Empty pathspecs")
+    assert empty_idx != -1, "check 4 must define the empty-pathspec exit"
+    empty_clause = normalized[empty_idx : empty_idx + 60]
+    assert "restore" in empty_clause.lower(), (
+        "the empty-pathspec exit must restore too"
+    )
+    # Check 4 must gate the entire restore on 4a's clean-tree probe AND 4b
+    # not having reported a dirty tree — a 4b exit 3 with the dirty-entry
+    # error must end check 4 outright, with no restore and no commit, rather
+    # than continuing into 4c/4d.
+    assert "clean_at_entry" in normalized, (
+        "check 4 must track whether 4a's probe actually passed"
+    )
+    dirty_idx = normalized.find("worktree not clean at entry")
+    assert dirty_idx != -1, "check 4 must name the dirty-entry error verbatim"
+    dirty_clause = normalized[dirty_idx : dirty_idx + 80]
+    assert "ends check 4" in dirty_clause.lower() or "ENDS check 4" in dirty_clause, (
+        "a 4b dirty-entry exit 3 must end check 4, not warn+continue into 4c"
+    )
+    assert "no restore, no commit" in normalized.lower(), (
+        "the dirty-entry exit must skip both the restore and the commit"
+    )
+
+
+def test_exit_code_table_ends_check4_on_dirty_entry_not_warn_continue():
+    """The exit-code table must carve the dirty-at-entry exit 3 out of the
+    generic 2/3-warn+continue bucket — a shared bucket would let check 4
+    continue into 4c/4d on a tree it never proved clean."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    table_idx = normalized.find("Exit codes:")
+    assert table_idx != -1, "check 4 must define an exit-code table"
+    table = normalized[table_idx:]
+    assert "dirty-entry error" in table and "ends check 4" in table, (
+        "the exit-code table must route the dirty-entry exit 3 to ending "
+        "check 4, distinct from the generic warn+continue row"
+    )
+    # The generic row must no longer swallow exit 3 wholesale (the old "2/3
+    # warn+continue" bucket that let the dirty-entry case slip through).
+    assert "2/3 warn+continue" not in table, (
+        "exit 2 and exit 3 must no longer share one undifferentiated row"
+    )
+
+
+def test_check4f_reports_undeterminable_files():
+    """A file the tool could not examine (symlinked or undecodable) must not
+    be invisible at the /pr layer — 4c must record it, and 4f's merged
+    report must name it alongside cleaned files."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert normalized.count("undeterminable_files") >= 2, (
+        "4c must record undeterminable_files and 4f must name them"
+    )
+    fourf_idx = normalized.find("- 4f.")
+    assert fourf_idx != -1, "check 4 must define step 4f"
+    fourf_clause = normalized[fourf_idx : fourf_idx + 150]
+    assert "undeterminable_files" in fourf_clause, (
+        "4f's merged report must mention undeterminable_files"
+    )
+
+
+def test_check4c_fences_untrusted_candidate_text():
+    """4c judges emissions from a comment_cleanup.py run whose `text` field
+    is untrusted repo content — the skill must say so explicitly, so the
+    judging agent is told to judge it for removal rather than obey it."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    fourc_idx = normalized.find("- 4c.")
+    assert fourc_idx != -1, "check 4 must define step 4c"
+    fourc_clause = normalized[fourc_idx : fourc_idx + 280]
+    assert "untrusted" in fourc_clause and "never obey it" in fourc_clause, (
+        "4c must fence candidate text as untrusted content, never obeyed"
+    )
+
+
+def test_check4d_pathspecs_are_script_and_judge_files_union():
+    """4d's restore/commit pathspec set must be the union of both cleanup
+    passes' edited files (script_files from 4b, judge_files from 4c) — a
+    narrower set would silently miss one pass's edits at restore time."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert "script_files ∪ judge_files" in normalized, (
+        "4d's pathspec set must be defined as script_files ∪ judge_files"
+    )
+
+
+def test_cleanup_committed_initialized_false_before_4a():
+    """`cleanup_committed` must start false before 4a runs, so every early
+    exit (a dirty tree at 4a, a 4b dirty-entry error) leaves it at its
+    correct default rather than undefined."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    set_idx = normalized.find("cleanup_committed=false")
+    fourA_idx = normalized.find("- 4a.")
+    assert set_idx != -1 and fourA_idx != -1 and set_idx < fourA_idx, (
+        "cleanup_committed must be initialized false before step 4a runs"
+    )

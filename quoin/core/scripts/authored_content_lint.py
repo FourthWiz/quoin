@@ -16,6 +16,11 @@ Public API:
   resolve_tracker_prefixes(branch) -> set[str]
   scan(repo_root, basis, *, triage=False) -> dict
   main(argv=None) -> int
+  resolve_candidates(repo_root, basis, base_ref) -> (dict, str | None)
+  read_text_source(repo_root, relpath, basis) -> str
+  match_taxonomy(text, tracker_prefixes) -> (str, str) | None
+  Undeterminable — exception raised when the scan cannot reach a definite
+    result (maps to exit 3)
 
 Exit codes (CLI):
   0 — clean (no findings), triage mode (always non-blocking), or globally
@@ -76,6 +81,8 @@ _EXCLUDE_PATHS = frozenset(
     {
         "quoin/core/scripts/authored_content_lint.py",
         "quoin/scripts/authored_content_lint.py",
+        "quoin/core/scripts/comment_cleanup.py",
+        "quoin/scripts/comment_cleanup.py",
     }
 )
 
@@ -132,8 +139,11 @@ _TRACKER_STOPLIST = frozenset(
 _BRANCH_TOKEN_RE = re.compile(r"\b([A-Za-z]{2,6})-\d+\b")
 
 
-class _Undeterminable(Exception):
+class Undeterminable(Exception):
     """Raised when the scan cannot reach a definite result (maps to exit 3)."""
+
+
+_Undeterminable = Undeterminable
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +295,7 @@ def _parse_diff_added_lines(diff_text):
 def _git_ls_files(repo_root, extra_args):
     out, err, rc = _run(["git", "-C", str(repo_root), "ls-files", *extra_args])
     if rc != 0:
-        raise _Undeterminable(f"git ls-files failed: {err}")
+        raise Undeterminable(f"git ls-files failed: {err}")
     return [f for f in out.splitlines() if f.strip()]
 
 
@@ -299,7 +309,7 @@ def _is_excluded(path):
     return any(seg in path for seg in _EXCLUDE_SEGMENTS)
 
 
-def _resolve_candidates(repo_root, basis, base_ref):
+def resolve_candidates(repo_root, basis, base_ref):
     """Return (candidates, merge_base) where candidates is
     dict[relpath] -> list[int] | None (None means "scan every line")."""
     if basis == "whole-tree":
@@ -312,7 +322,7 @@ def _resolve_candidates(repo_root, basis, base_ref):
         ["git", "-C", str(repo_root), "merge-base", base_ref, "HEAD"]
     )
     if merge_rc != 0 or not merge_base_out:
-        raise _Undeterminable(f"merge-base resolution failed: {merge_err}")
+        raise Undeterminable(f"merge-base resolution failed: {merge_err}")
     merge_base = merge_base_out
 
     if basis == "union":
@@ -320,7 +330,7 @@ def _resolve_candidates(repo_root, basis, base_ref):
             ["git", "-C", str(repo_root), "diff", "-U0", merge_base]
         )
         if diff_rc != 0:
-            raise _Undeterminable(f"git diff failed: {diff_err}")
+            raise Undeterminable(f"git diff failed: {diff_err}")
         candidates = _parse_diff_added_lines(diff_out)
         untracked = _git_ls_files(repo_root, ["--others", "--exclude-standard"])
         for f in untracked:
@@ -330,7 +340,7 @@ def _resolve_candidates(repo_root, basis, base_ref):
             ["git", "-C", str(repo_root), "diff", "-U0", merge_base, "HEAD"]
         )
         if diff_rc != 0:
-            raise _Undeterminable(f"git diff failed: {diff_err}")
+            raise Undeterminable(f"git diff failed: {diff_err}")
         candidates = _parse_diff_added_lines(diff_out)
 
     candidates = {
@@ -341,19 +351,25 @@ def _resolve_candidates(repo_root, basis, base_ref):
     return candidates, merge_base
 
 
-def _read_text_source(repo_root, relpath, basis):
+_resolve_candidates = resolve_candidates
+
+
+def read_text_source(repo_root, relpath, basis):
     """Read the post-image text for `relpath`, matching the basis frame:
     worktree file for union/whole-tree; the HEAD blob for committed."""
     if basis == "committed":
         out, err, rc = _run_content(["git", "-C", str(repo_root), "show", f"HEAD:{relpath}"])
         if rc != 0:
-            raise _Undeterminable(f"git show HEAD:{relpath} failed: {err}")
+            raise Undeterminable(f"git show HEAD:{relpath} failed: {err}")
         return out
     full = repo_root / relpath
     try:
         return full.read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
-        raise _Undeterminable(f"cannot read {relpath}: {exc}") from exc
+        raise Undeterminable(f"cannot read {relpath}: {exc}") from exc
+
+
+_read_text_source = read_text_source
 
 
 # ---------------------------------------------------------------------------
@@ -381,11 +397,11 @@ def _extract_python_regions(text):
             if tok.type == tokenize.COMMENT:
                 regions.append((tok.start[0], tok.string))
     except (tokenize.TokenError, IndentationError, SyntaxError) as exc:
-        raise _Undeterminable(f"unparseable Python source: {exc}") from exc
+        raise Undeterminable(f"unparseable Python source: {exc}") from exc
     try:
         tree = ast.parse(text)
     except SyntaxError as exc:
-        raise _Undeterminable(f"unparseable Python source: {exc}") from exc
+        raise Undeterminable(f"unparseable Python source: {exc}") from exc
     lines = text.splitlines()
     for node in ast.walk(tree):
         if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -451,7 +467,7 @@ def _select_regions(regions, candidate_lines):
 # Matching
 # ---------------------------------------------------------------------------
 
-def _match_taxonomy(text, tracker_prefixes):
+def match_taxonomy(text, tracker_prefixes):
     for pat in _TIER_A_REGEXES:
         m = pat.search(text)
         if m:
@@ -479,6 +495,9 @@ def _match_taxonomy(text, tracker_prefixes):
     return None
 
 
+_match_taxonomy = match_taxonomy
+
+
 def _is_triage_candidate(text):
     if _TRIAGE_ID_SHAPE.search(text):
         return True
@@ -493,12 +512,12 @@ def _is_triage_candidate(text):
 def scan(repo_root, basis, *, triage=False, base_ref=None):
     """Run the full scan. Returns a result dict (see main() for shape)."""
     tracker_prefixes = resolve_tracker_prefixes(_current_branch(repo_root))
-    candidates, merge_base = _resolve_candidates(repo_root, basis, base_ref)
+    candidates, merge_base = resolve_candidates(repo_root, basis, base_ref)
 
     findings = []
     triage_candidates = []
     for relpath, cand_lines in sorted(candidates.items()):
-        text = _read_text_source(repo_root, relpath, basis)
+        text = read_text_source(repo_root, relpath, basis)
         regions = extract_comment_regions(relpath, text)
         selected = _select_regions(regions, cand_lines)
         for lineno, region_text in selected:
@@ -510,7 +529,7 @@ def scan(repo_root, basis, *, triage=False, base_ref=None):
                         {"file": relpath, "line": lineno, "text": region_text.strip()}
                     )
                 continue
-            match = _match_taxonomy(region_text, tracker_prefixes)
+            match = match_taxonomy(region_text, tracker_prefixes)
             if match is not None:
                 tier, token = match
                 findings.append(
@@ -616,7 +635,7 @@ def main(argv=None):
                 return 3
 
         result = scan(repo_root, args.basis, triage=args.triage, base_ref=base_ref)
-    except _Undeterminable as exc:
+    except Undeterminable as exc:
         print(f"authored_content_lint: undeterminable — {exc}", file=sys.stderr)
         return 3
     except Exception as exc:  # noqa: BLE001 — fail-OPEN: never crash the caller

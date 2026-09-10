@@ -327,6 +327,8 @@ def test_live_quoin_tree_whole_tree_file_count_matches_independent_computation()
     excluded_paths = {
         "quoin/core/scripts/authored_content_lint.py",
         "quoin/scripts/authored_content_lint.py",
+        "quoin/core/scripts/comment_cleanup.py",
+        "quoin/scripts/comment_cleanup.py",
     }
     expected = {
         f
@@ -481,3 +483,26 @@ def test_self_scan_zero_findings():
     }
     own_findings = [f for f in result["findings"] if f["file"] in own_files]
     assert not own_findings, own_findings
+
+
+# ---------------------------------------------------------------------------
+# Public API promotion: public names are aliases, not copies
+# ---------------------------------------------------------------------------
+
+def test_promoted_public_names_are_identical_objects_to_private_aliases():
+    assert acl.resolve_candidates is acl._resolve_candidates
+    assert acl.read_text_source is acl._read_text_source
+    assert acl.match_taxonomy is acl._match_taxonomy
+    assert acl.Undeterminable is acl._Undeterminable
+
+
+def test_private_aliases_retained():
+    assert hasattr(acl, "_resolve_candidates")
+    assert hasattr(acl, "_read_text_source")
+    assert hasattr(acl, "_match_taxonomy")
+    assert hasattr(acl, "_Undeterminable")
+
+
+def test_exclude_paths_contains_both_comment_cleanup_paths():
+    assert "quoin/core/scripts/comment_cleanup.py" in acl._EXCLUDE_PATHS
+    assert "quoin/scripts/comment_cleanup.py" in acl._EXCLUDE_PATHS

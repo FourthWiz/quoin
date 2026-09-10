@@ -41,23 +41,35 @@ to the merge target branch and pull latest.
 
 - Work committed on a feature branch (not main/master).
 - The host CLI is installed and authenticated (e.g., `gh auth status` passes).
-- No uncommitted changes in the working tree.
+- The working tree must be clean at entry to pre-flight. The pre-PR comment
+  cleanup step deliberately dirties the tree mid-pre-flight (it removes
+  superseded and duplicated code comments) and commits its own changes
+  before the uncommitted-changes check evaluates — that check still expects
+  a clean tree, just later in the sequence.
 - The branch may already be pushed (e.g., by `/end_of_task`) or not yet pushed.
 
 ## Contract
 
 - Shipped authored content (the PR description) MUST follow the clean-authored-content rule: plain engineering language, no plan/decision/finding IDs, severities, review-round narration, gate verdicts, or planning-artifact paths.
 
-1. **Pre-flight:** Refuse on main/master. Verify CLI present and authenticated.
-   Check for uncommitted changes. Determine if branch is already pushed.
+1. **Pre-flight (checks 0-6):** Resolve the base branch in both namespaces —
+   a base **name** (for the host CLI and the post-merge checkout) and a base
+   **ref** (for the comment-cleanup step and the commit-subject scan), since
+   the two are not interchangeable. Refuse on main/master. Verify CLI
+   present and authenticated. Run the pre-PR comment cleanup (non-blocking —
+   a cleanup failure or nothing-to-clean never stops the PR). Check for
+   uncommitted changes. Determine if branch is already pushed.
 2. **Version bump (conditional):** Scan for version files (pyproject.toml,
    package.json, Cargo.toml, setup.cfg, __about__.py, _version.py). If found,
    offer patch/minor/major/skip bump options. Commit and push the bump if chosen.
-3. **Push (conditional):** Push branch if not already pushed, or if a version
-   bump added a new commit.
+3. **Push (conditional):** Push branch if not already pushed, if a version
+   bump added a new commit, or if the comment cleanup added its own commit —
+   a cleanup commit also forces the push, since otherwise it would land
+   locally and never reach the remote the PR is opened against.
 4. **PR creation:** Derive title from branch name (kebab → title case, preserve
    ticket prefix). Build structured body: summary, changes (from git log),
-   tests summary. Create PR targeting the base branch.
+   tests summary. Create PR targeting the base branch resolved at pre-flight
+   (not re-derived here).
 5. **Wait for merge:** Tell the user the PR URL and wait for confirmation.
 6. **Post-merge cleanup:** Switch to merge target branch and pull latest.
 
