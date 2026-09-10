@@ -1211,6 +1211,56 @@ def test_atomic_write_refuses_non_utf8_destination(tmp_path):
     assert target.read_bytes() == b'NAME = "caf\xe9"\n'
 
 
+def test_emit_candidates_reports_symlink_as_undeterminable(tmp_path):
+    """The apply path already surfaces skipped files under
+    `undeterminable_files`; `emit_candidates` skipped a symlinked candidate
+    with a bare `continue` and recorded nothing, so an operator could not
+    tell "nothing to clean" from "one file could not be read" at the /pr
+    layer."""
+    repo = _init_repo(tmp_path)
+    outside = tmp_path / "outside.py"
+    outside.write_text("x = 1\n", encoding="utf-8")
+    link = repo / "link.py"
+    os.symlink(outside, link)
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "add a tracked symlink")
+
+    out = cc.emit_candidates(repo, "main", judge_max=40)
+
+    assert "undeterminable_files" in out
+    entry = next(f for f in out["undeterminable_files"] if f["file"] == "link.py")
+    assert entry["reason"] == "symlink"
+
+
+def test_emit_candidates_reports_non_utf8_as_undeterminable(tmp_path):
+    # Mirrors test_non_utf8_untouched_bytes_never_transcoded: the non-UTF-8
+    # byte is committed on the base, unchanged on the branch, so `git diff
+    # -U0` (which resolve_candidates uses) never has to decode it — only the
+    # pure-ASCII line change makes the file a candidate at all.
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "test@example.com")
+    _git(repo, "config", "user.name", "Test")
+    src = repo / "bad.py"
+    src.write_bytes(b'NAME = "caf\xe9"\n' b"z = 0\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "base file with a non-utf8 byte")
+    _git(repo, "switch", "-c", "feature")
+    src.write_bytes(
+        b'NAME = "caf\xe9"\n'
+        b"z = 0  # not a bug, this is expected behavior.\n"
+    )
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-m", "touch only the pure-ascii line")
+
+    out = cc.emit_candidates(repo, "main", judge_max=40)
+
+    assert "undeterminable_files" in out
+    entry = next(f for f in out["undeterminable_files"] if f["file"] == "bad.py")
+    assert "codec" in entry["reason"] or "decode" in entry["reason"]
+
+
 def test_apply_skips_symlinked_candidate_via_paths(tmp_path):
     """The --paths escape hatch reaches a symlinked candidate directly
     (bypassing resolve_candidates' diff scoping); the tool must still skip
@@ -1272,3 +1322,45 @@ def test_separator_regex_performance_on_long_whitespace_run():
     list(cc._SEPARATOR_RE.finditer(text))
     elapsed = time.perf_counter() - start
     assert elapsed < 0.1, f"expected near-linear scaling, took {elapsed:.3f}s"
+
+
+# ---------------------------------------------------------------------------
+# Review round 5 — reflow terminator must never suffix every payload line
+# with a possibly-empty terminator (MAJOR 2), and must derive that
+# terminator from the actual line ending, not membership in "\n" (MINOR 3).
+# ---------------------------------------------------------------------------
+
+def test_reflow_at_eof_without_trailing_newline_emits_clean_lines():
+    # A wrapping (multi-line) reflow block that is also the very last thing
+    # in the file, with no trailing newline. Pre-fix, the empty terminator
+    # derived from the last line got applied to every payload line, so the
+    # join collapsed three lines into one run-on line with "#" markers
+    # embedded mid-sentence.
+    text = (
+        "def f():\n"
+        "    return 1\n"
+        "    # The parser walks each node and produces a result which is passed\n"
+        "    # further down. An earlier fix returned early here for safety reasons.\n"
+        "    # The caller then merges the result into the final output by its name."
+    )
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert decision.changed
+    body_lines = decision.new_text.splitlines()
+    comment_lines = [l for l in body_lines if l.strip().startswith("#")]
+    # Clean line-by-line output: every comment line is its own line, and no
+    # line carries a "#" anywhere but at its own start (the run-on bug
+    # embedded a second "#" mid-line).
+    assert len(comment_lines) >= 2
+    for line in comment_lines:
+        assert line.count("#") == 1
+    assert not decision.new_text.endswith("\n")
+
+
+def test_reflow_crlf_file_preserves_carriage_returns():
+    text = "x = 1\r\ny = 2  # keep this; an earlier fix did X\r\nz = 3\r\n"
+    decision = cc.decide_file("m.py", text, None, retain=1, include_tests=False)
+    assert decision.changed
+    for line in decision.new_text.splitlines(keepends=True):
+        if line.strip("\r\n"):
+            assert line.endswith("\r\n")
+    assert "y = 2  # keep this.\r\n" in decision.new_text

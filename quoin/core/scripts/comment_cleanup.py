@@ -749,8 +749,21 @@ def decide_file(relpath, text, cand_lines, retain, include_tests):
         if kind == "remove":
             del lines[block.start - 1 : block.end]
         else:
-            trailing_nl = "\n" if lines[block.end - 1].endswith("\n") else ""
-            replacement_lines = [l + trailing_nl for l in payload]
+            # The terminator belongs on the LAST payload line only — every
+            # other line gets a real "\n" so a multi-line reflow never
+            # collapses into one run-on line when the block's last line
+            # carries no trailing newline (empty terminator). Derive the
+            # terminator from the actual line ending (CRLF vs LF vs none)
+            # rather than testing membership in "\n", which is also true
+            # for "\r\n" and would silently drop the "\r".
+            last_line = lines[block.end - 1]
+            if last_line.endswith("\r\n"):
+                terminator = "\r\n"
+            elif last_line.endswith("\n"):
+                terminator = "\n"
+            else:
+                terminator = ""
+            replacement_lines = [l + "\n" for l in payload[:-1]] + [payload[-1] + terminator]
             lines[block.start - 1 : block.end] = replacement_lines
 
     new_text = "".join(lines)
@@ -786,15 +799,18 @@ def emit_candidates(repo_root, base_ref, judge_max, text_max=1000):
     """
     candidates, _merge_base = resolve_candidates(repo_root, "committed", base_ref)
     found = []
+    undeterminable_files = []
     for relpath in sorted(candidates.keys()):
         if Path(relpath).suffix != ".py":
             continue
         full_path = Path(repo_root) / relpath
         if full_path.is_symlink():
+            undeterminable_files.append({"file": relpath, "reason": "symlink"})
             continue
         try:
             text = resolve_worktree_text(repo_root, relpath)
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as exc:
+            undeterminable_files.append({"file": relpath, "reason": str(exc)})
             continue
         exclusion = docstring_exclusion_lines(text)
         blocks = group_blocks(relpath, text, exclusion)
@@ -809,9 +825,10 @@ def emit_candidates(repo_root, base_ref, judge_max, text_max=1000):
                 found.append(
                     {"file": relpath, "start": block.start, "end": block.end, "text": block.joined}
                 )
-    if len(found) > judge_max:
-        return {"count": len(found), "candidates": []}
-    return {"count": len(found), "candidates": found}
+    result = {"count": len(found), "candidates": [] if len(found) > judge_max else found}
+    if undeterminable_files:
+        result["undeterminable_files"] = undeterminable_files
+    return result
 
 
 def _current_branch_name(repo_root):
@@ -909,6 +926,10 @@ def _format_text(result):
         lines.append(f"category-3 candidates: {out['count']}")
         for c in out["candidates"]:
             lines.append(f"  {c['file']}:{c['start']}-{c['end']}: {c['text']}")
+        if out.get("undeterminable_files"):
+            lines.append(f"undeterminable files ({len(out['undeterminable_files'])}):")
+            for f in out["undeterminable_files"]:
+                lines.append(f"  {f['file']}: {f['reason']}")
     if "commit_subjects" in result:
         findings = result["commit_subjects"]
         lines.append(f"commit-subject findings ({len(findings)}):")
