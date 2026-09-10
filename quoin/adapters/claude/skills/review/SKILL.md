@@ -212,10 +212,10 @@ A `Review shape: single-pass (fast-path)` line in `current-plan.md` takes preced
 
 **Pre-fan-out context budget (IVG-141) — Medium/Large fan-out AND the Large carve-out branch; Small path (including the plain single-pass override on Small/Medium/undetermined) unchanged.** At the START of this Medium/Large branch — or, on the Large carve-out branch, before dispatching its single `/security_review` OWASP subagent — BEFORE dispatching any dimension subagent, run the on-demand budget guard (best-effort leaf measurement per the T-02 spike, which PASSED — `/review` subagents resolve their own transcript):
 ```bash
-python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
-  --current-uuid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase review)"
+_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
+  --current-uuid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase review)")"
 ```
-Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGET=1`. On exit 0 (`OK|...` incl. the `OK|0|` fail-OPEN path) → proceed with the fan-out. On exit 1 (`OVER|util|path`), react NON-BLOCKING and uniform in all modes (NO `AskUserQuestion`, NO decision-gate marker):
+Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGET=1`. On exit 0 (`OK|...` incl. the `OK|0|` fail-OPEN path) → proceed with the fan-out. On exit 1 AND `$_cbg_out` starts with `OVER|` (`OVER|util|path`), react NON-BLOCKING and uniform in all modes (NO `AskUserQuestion`, NO decision-gate marker):
   1. Save the boundary checkpoint:
      ```bash
      python3 __QUOIN_HOME__/scripts/boundary_checkpoint.py \
@@ -228,6 +228,13 @@ Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGE
      - **default** → PROCEED with the fan-out. Never prompts, never blocks.
      - **`QUOIN_PHASE_BUDGET_BLOCK=1`** (opt-in, default off) → print a fresh-session resume instruction (re-invoke `/review`) and STOP. A printed instruction, NOT an `AskUserQuestion`.
      - **`_AUTONOMOUS`** → the SAME non-blocking path, and ADDITIONALLY hand back per the existing autonomous behavior. No new `[no-interactive]` sentinel parsing is added for this non-blocking check (it never prompts).
+  Exit 1 but `$_cbg_out` does NOT start with `OVER|` (helper crashed before
+  reaching its own fail-OPEN try/except — e.g. empty output or a traceback,
+  never a genuine budget read) → treat identically to the `OK|0|` fail-OPEN
+  path above: proceed with the fan-out. Never infer OVER from bare exit code 1
+  alone (lessons-learned 2026-09-04 — a crash outside the guard's own
+  try/except is otherwise indistinguishable from a genuine over-budget
+  verdict).
 
 **Medium/Large — parallel dimension fan-out.** Fires when `Task profile:` is Medium or Large (or undetermined, per the default above) AND no `Review shape: single-pass (fast-path)` override is present — the Large carve-out above is the one case where a review-shape override still triggers a partial fan-out (OWASP only); this full three-way fan-out never fires when an override is present. Gather shared context ONCE at Step 1 of the Review process below (plan, architecture, diff via `git diff <base-branch>...HEAD`, changed-file set), then dispatch three parallel `model: "opus"` Agent subagents — one per dimension: **security**, **performance**, **architecture/integration**. Each subagent's prompt is focused to its dimension only, and carries the plan path, branch, and diff scope. Each subagent returns a structured block: `` `<verdict>APPROVED|CHANGES_REQUESTED|BLOCKED</verdict>` `` (the identical 3-value enum used everywhere in this contract — D-08) plus dimension-tagged issues (CRITICAL/MAJOR/MINOR, each with file:line and fix).
 

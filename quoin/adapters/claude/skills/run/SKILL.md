@@ -294,14 +294,14 @@ bootstrap) OR `QUOIN_DISABLE_PHASE_BUDGET=1` is set, SKIP the guard entirely
 
 **Run the guard (foreground):**
 ```bash
-python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT"
+_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT")"
 ```
 - Exit 0 (`OK|...|` or `OK|disabled|`, incl. the `OK|0|` fail-OPEN path) → proceed
   with the phase spawn. On the fail-OPEN/missing-helper `OK|0|` path emit
   `[quoin-budget: guard unavailable; proceeding]`; otherwise emit nothing.
-- Exit 1 (`OVER|util|path`) → run the ORDERED, NON-BLOCKING over-budget sequence
-  (identical in interactive AND autonomous; NO prompt, NO `AskUserQuestion`, NO
-  decision-gate marker):
+- Exit 1 AND `$_cbg_out` starts with `OVER|` (`OVER|util|path`) → run the ORDERED,
+  NON-BLOCKING over-budget sequence (identical in interactive AND autonomous; NO
+  prompt, NO `AskUserQuestion`, NO decision-gate marker):
   1. ALWAYS save the boundary checkpoint (durable resume point):
      ```bash
      python3 __QUOIN_HOME__/scripts/boundary_checkpoint.py \
@@ -324,6 +324,13 @@ python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_
      (reuse the "Hook cooperation (autonomous)" contract — no new mechanism).
      Interactive has no supervisor → it continues in-session with the checkpoint
      as a clean-recovery backstop.
+- Exit 1 but `$_cbg_out` does NOT start with `OVER|` (helper crashed before
+  reaching its own fail-OPEN try/except — e.g. empty output or a traceback, never
+  a genuine budget read) → treat identically to the `OK|0|` fail-OPEN path above:
+  emit `[quoin-budget: guard unavailable; proceeding]` and proceed with the phase
+  spawn. Never infer OVER from bare exit code 1 alone (lessons-learned
+  2026-09-04 — a crash outside the guard's own try/except is otherwise
+  indistinguishable from a genuine over-budget verdict).
 
 This adds NO new `AskUserQuestion` site and NO decision-gate `best-effort` marker
 (the over-budget path is non-blocking). It also does NOT touch `/run`'s existing
