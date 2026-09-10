@@ -1325,9 +1325,10 @@ def test_separator_regex_performance_on_long_whitespace_run():
 
 
 # ---------------------------------------------------------------------------
-# Review round 5 — reflow terminator must never suffix every payload line
-# with a possibly-empty terminator (MAJOR 2), and must derive that
-# terminator from the actual line ending, not membership in "\n" (MINOR 3).
+# Reflow terminator handling: a multi-line reflow must never suffix every
+# payload line with a possibly-empty terminator, and the terminator itself
+# must be derived from the actual line ending, not from membership in "\n"
+# (which is also true of "\r\n" and would silently drop the "\r").
 # ---------------------------------------------------------------------------
 
 def test_reflow_at_eof_without_trailing_newline_emits_clean_lines():
