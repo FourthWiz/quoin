@@ -53,6 +53,8 @@ Emission sites use --wrap — markers are never hand-rolled in shell.
 Degradation-safe: exit 0 on all errors; empty output → caller's guard catches it.
 """
 
+from __future__ import annotations
+
 import argparse
 import re
 import subprocess

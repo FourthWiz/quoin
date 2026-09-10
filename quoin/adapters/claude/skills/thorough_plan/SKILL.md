@@ -538,14 +538,18 @@ OWN, IVG-98 writer — do NOT call `boundary_checkpoint.py` here, per D-3), ALSO
 the on-demand budget guard, reusing the already-acquired startup SID
 (`$_TPCKPT_SID`) as a best-effort leaf measurement (T-02 spike PASSED):
 ```bash
-python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root {root} \
-  --current-uuid "$_TPCKPT_SID" || true
+_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root {root} \
+  --current-uuid "$_TPCKPT_SID" || true)"
 ```
 Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGET=1`.
-On exit 0 → proceed with the next planning round. On exit 1 (`OVER|util|path`),
-react NON-BLOCKING and uniform in all modes (NO `AskUserQuestion`, NO
-decision-gate marker): the IVG-98 checkpoint above is ALREADY durable, so no
-second checkpoint is written — just emit the advisory
+Branch on stdout content, never on exit code (the trailing `|| true` above
+intentionally always yields exit 0, so exit code carries no signal here — this
+also closes the gap where the guard's own crash, e.g. lessons-learned
+2026-09-04, would otherwise be indistinguishable from a genuine `OVER|`
+verdict). If `$_cbg_out` starts with `OVER|` (`OVER|util|path`), react
+NON-BLOCKING and uniform in all modes (NO `AskUserQuestion`, NO decision-gate
+marker): the IVG-98 checkpoint above is ALREADY durable, so no second
+checkpoint is written — just emit the advisory
 `[quoin-budget: util NN% ≥ threshold at thorough_plan boundary; checkpoint saved → /thorough_plan {task}]`,
 then:
   - **default** → PROCEED with the next planning round. Never prompts, never blocks.
@@ -554,6 +558,9 @@ then:
     NOT an `AskUserQuestion`.
   - **`_AUTONOMOUS`** → the SAME non-blocking path, and ADDITIONALLY hand back per
     the existing autonomous behavior so a supervisor resumes in a fresh session.
+If `$_cbg_out` does NOT start with `OVER|` (`OK|...`, `OK|disabled|`, `OK|0|`
+fail-OPEN, empty output, or a crash traceback with no `OVER|` line) → proceed
+with the next planning round; none of the above reactions fire.
 No new `[no-interactive]` sentinel parsing is added for this
 non-blocking check (it never prompts).
 

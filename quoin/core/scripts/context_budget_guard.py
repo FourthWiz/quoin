@@ -59,6 +59,8 @@ Design decisions:
     session_age_guard._project_hash).
 """
 
+from __future__ import annotations
+
 import argparse
 import os
 import re

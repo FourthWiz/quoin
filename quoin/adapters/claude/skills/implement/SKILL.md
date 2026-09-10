@@ -249,14 +249,15 @@ boundary (after each committed batch, before starting the next task), run the
 on-demand budget guard (best-effort leaf measurement per the T-02 spike, which
 PASSED — `/implement` subagents resolve their own transcript):
 ```bash
-python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
-  --current-uuid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement)"
+_cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "$PROJECT_ROOT" \
+  --current-uuid "$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement)")"
 ```
 Bypass entirely on `[no-phase-budget]` (strip at bootstrap) or
 `QUOIN_DISABLE_PHASE_BUDGET=1`. On exit 0 (`OK|...` incl. the `OK|0|` fail-OPEN
-path) → continue with the next task. On exit 1 (`OVER|util|path`), react
-NON-BLOCKING and uniform in all modes (NO `AskUserQuestion`, NO decision-gate
-marker), folding into the SAME §0a soft-cap handoff path:
+path) → continue with the next task. On exit 1 AND `$_cbg_out` starts with
+`OVER|` (`OVER|util|path`), react NON-BLOCKING and uniform in all modes (NO
+`AskUserQuestion`, NO decision-gate marker), folding into the SAME §0a soft-cap
+handoff path:
   1. Mark remaining tasks `⏳` + `[continue in fresh /implement dispatch]` in
      `current-plan.md` and commit any in-progress files (same as the tool-count
      soft cap above — one handoff mechanism).
@@ -280,6 +281,12 @@ marker), folding into the SAME §0a soft-cap handoff path:
      non-blocking path, and ADDITIONALLY hand back per the existing
      soft-cap/autonomous relaunch contract so a supervisor resumes in a fresh
      session.
+- Exit 1 but `$_cbg_out` does NOT start with `OVER|` (helper crashed before
+  reaching its own fail-OPEN try/except — e.g. empty output or a traceback, never
+  a genuine budget read) → treat identically to the `OK|0|` fail-OPEN path above:
+  continue with the next task. Never infer OVER from bare exit code 1 alone
+  (lessons-learned 2026-09-04 — a crash outside the guard's own try/except is
+  otherwise indistinguishable from a genuine over-budget verdict).
 This is additive — no hook threshold is touched. If the T-02 spike had FAILED,
 this would checkpoint on the §0a trigger without self-measuring; it PASSED, so
 `/implement` measures its own transcript as above.
