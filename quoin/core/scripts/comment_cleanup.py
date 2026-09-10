@@ -228,7 +228,6 @@ def group_blocks(relpath, text, exclusion_lines):
         dedup.setdefault(ln, txt)
     linenos = sorted(ln for ln in dedup if ln not in exclusion_lines)
     source_lines = text.splitlines()
-    is_py = Path(relpath).suffix == ".py"
 
     blocks = []
     i = 0
@@ -261,7 +260,17 @@ def group_blocks(relpath, text, exclusion_lines):
             i = j
         else:
             region_text = dedup[ln]
-            idx = line.rfind(region_text) if is_py else line.rfind(region_text)
+            # Both .py and non-.py files use the same lookup here,
+            # deliberately: for .py files region_text is the tokenizer's
+            # exact comment-token text, so rfind is unambiguous; for
+            # non-.py files region_text is already the line suffix from
+            # the first "#" (extract_comment_regions's hash/slash
+            # fallback), so rfind trivially finds that same suffix
+            # position. The two file kinds are intentionally handled
+            # identically here — a real .py-only narrowing would need a
+            # different code path, with no behavioral change, since this
+            # formula already produces the correct offset for both.
+            idx = line.rfind(region_text)
             if idx == -1:
                 # Should not happen for a genuine trailing region. Abandon
                 # rather than risk truncating the code line at the wrong
@@ -299,10 +308,11 @@ _BARE_COMMENT_MARKER_RE = re.compile(r"^#+\s*$")
 _PAREN_TAIL_RE = re.compile(r"[.!?\s]*")
 
 
-def separable_clause_span(joined, m_start, m_end, seps=None):
-    # Step 1 — trailing parenthetical. Prefer the tightest enclosing pair
-    # that (a) contains the match and (b) is followed only by sentence-
-    # ending punctuation and whitespace.
+def _balanced_paren_pairs(joined):
+    """Every balanced '(' ... ')' pair's (open_idx, close_idx) in `joined`,
+    left to right. Factored out so callers that probe multiple matches
+    against the same block text can compute it once (see the `pairs` hoist
+    in `decide_category_1`) instead of rebuilding it on every call."""
     stack = []
     pairs = []
     for i, ch in enumerate(joined):
@@ -310,6 +320,18 @@ def separable_clause_span(joined, m_start, m_end, seps=None):
             stack.append(i)
         elif ch == ")" and stack:
             pairs.append((stack.pop(), i))
+    return pairs
+
+
+def separable_clause_span(joined, m_start, m_end, seps=None, pairs=None):
+    # Step 1 — trailing parenthetical. Prefer the tightest enclosing pair
+    # that (a) contains the match and (b) is followed only by sentence-
+    # ending punctuation and whitespace. `pairs` is the full balanced-paren
+    # list over `joined`, precomputed once per block by callers that probe
+    # multiple matches against the same text (avoids rebuilding the pair
+    # list once per archaeological hit) — mirrors the `seps` hoist below.
+    if pairs is None:
+        pairs = _balanced_paren_pairs(joined)
     qualifying = [
         (open_idx, close_idx)
         for open_idx, close_idx in pairs
@@ -614,8 +636,9 @@ def decide_category_1(block, cand_lines, relpath, include_tests):
     # the excise attempt below instead, where reflow correctly strips only
     # the comment and leaves the code.
     seps = list(_SEPARATOR_RE.finditer(block.joined))
+    pairs = _balanced_paren_pairs(block.joined)
     earliest = matches[0]
-    earliest_span = separable_clause_span(block.joined, earliest.start(), earliest.end(), seps)
+    earliest_span = separable_clause_span(block.joined, earliest.start(), earliest.end(), seps, pairs)
     if (
         earliest_span is None
         and not block.is_trailing
@@ -628,7 +651,7 @@ def decide_category_1(block, cand_lines, relpath, include_tests):
     # all of them in this single pass instead of needing one pass per hit.
     spans = []
     for m in matches:
-        span = earliest_span if m is earliest else separable_clause_span(block.joined, m.start(), m.end(), seps)
+        span = earliest_span if m is earliest else separable_clause_span(block.joined, m.start(), m.end(), seps, pairs)
         if span is not None and not any(_overlaps(span, existing) for existing in spans):
             spans.append(span)
     if spans:
@@ -785,6 +808,22 @@ def decide_file(relpath, text, cand_lines, retain, include_tests):
 # T-07 — category 3 emission and category 4 scan
 # ---------------------------------------------------------------------------
 
+# C0 control characters and DEL — an erase-line-plus-cursor-home sequence
+# (or a bare \r) in candidate text could overwrite a terminal's view of the
+# report's own attribution line. Newline injection is already impossible
+# (block.joined is a space-join of stripped single lines), so this closes
+# the remaining terminal-rewrite channel.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _sanitize_candidate_text(text):
+    """Strip terminal control characters from candidate text before it is
+    emitted. Candidate text is untrusted repo content shown to both a
+    judging agent and a human operator's terminal; this is defense in
+    depth alongside the report's own delimiting of the text on output."""
+    return _CONTROL_CHARS_RE.sub("", text)
+
+
 def emit_candidates(repo_root, base_ref, judge_max, text_max=1000):
     """File-scoped, not line-scoped (arch D-11): runs over the current
     worktree, so every surviving block in a touched file is reachable, not
@@ -799,6 +838,7 @@ def emit_candidates(repo_root, base_ref, judge_max, text_max=1000):
     """
     candidates, _merge_base = resolve_candidates(repo_root, "committed", base_ref)
     found = []
+    dropped_oversize = 0
     undeterminable_files = []
     for relpath in sorted(candidates.keys()):
         if Path(relpath).suffix != ".py":
@@ -819,13 +859,26 @@ def emit_candidates(repo_root, base_ref, judge_max, text_max=1000):
                 continue
             if _is_test_path(relpath, include_tests=False):
                 continue
-            if len(block.joined) > text_max:
+            if not is_judge_candidate(block.joined):
                 continue
-            if is_judge_candidate(block.joined):
-                found.append(
-                    {"file": relpath, "start": block.start, "end": block.end, "text": block.joined}
-                )
+            if len(block.joined) > text_max:
+                # Correct direction (never smuggle an oversized payload
+                # past the judge just because it's dropped), but silent
+                # before this: an operator had no way to tell a comment
+                # was too long to judge. Count it so they can.
+                dropped_oversize += 1
+                continue
+            found.append(
+                {
+                    "file": relpath,
+                    "start": block.start,
+                    "end": block.end,
+                    "text": _sanitize_candidate_text(block.joined),
+                }
+            )
     result = {"count": len(found), "candidates": [] if len(found) > judge_max else found}
+    if dropped_oversize:
+        result["dropped_oversize"] = dropped_oversize
     if undeterminable_files:
         result["undeterminable_files"] = undeterminable_files
     return result
@@ -921,11 +974,23 @@ def _format_text(result):
             lines.append(f"files changed ({len(changed)}):")
             for d in changed:
                 lines.append(f"  {d['file']}")
+    if "skipped_non_py" in result:
+        lines.append(
+            f"decided but not written, non-.py write gate ({len(result['skipped_non_py'])}):"
+        )
+        for f in result["skipped_non_py"]:
+            lines.append(f"  {f}")
     if "emit_candidates" in result:
         out = result["emit_candidates"]
         lines.append(f"category-3 candidates: {out['count']}")
+        if out.get("dropped_oversize"):
+            lines.append(f"category-3 dropped (oversized): {out['dropped_oversize']}")
         for c in out["candidates"]:
-            lines.append(f"  {c['file']}:{c['start']}-{c['end']}: {c['text']}")
+            # repr() delimits the text with quotes and escapes any residual
+            # non-printable character, so untrusted candidate text can never
+            # visually continue past its own line and forge this report's
+            # attribution or trailer lines.
+            lines.append(f"  {c['file']}:{c['start']}-{c['end']}: {c['text']!r}")
         if out.get("undeterminable_files"):
             lines.append(f"undeterminable files ({len(out['undeterminable_files'])}):")
             for f in out["undeterminable_files"]:
@@ -960,6 +1025,21 @@ def main(argv=None):
         if base_ref is None:
             print("comment_cleanup: no resolvable base branch", file=sys.stderr)
             return 3
+        if args.base:
+            # An explicit --base is passed straight to `git log`/`git diff`
+            # downstream with no separator; an option-shaped bad ref (e.g.
+            # a typo git parses as a flag) would otherwise make those calls
+            # silently yield an empty scan at exit 0 instead of failing.
+            # Verify it resolves before using it anywhere.
+            _out, _err, rc = _run(
+                ["git", "-C", str(repo_root), "rev-parse", "--verify", "--quiet", base_ref]
+            )
+            if rc != 0:
+                print(
+                    f"comment_cleanup: --base {base_ref!r} does not resolve to a valid ref",
+                    file=sys.stderr,
+                )
+                return 3
 
         retain = int(os.environ.get(_ENV_XREF_RETAIN, "1"))
         include_tests = os.environ.get(_ENV_INCLUDE_TESTS) == "1"
@@ -985,7 +1065,29 @@ def main(argv=None):
         if not args.emit_candidates and not args.commit_subjects:
             assert_clean_tree(repo_root, allow_dirty=False)
             if args.paths:
-                candidates = {p: None for p in args.paths}
+                # The dogfood escape hatch bypasses resolve_candidates, so it
+                # must apply the same self-exclusion and repository-boundary
+                # check that branch already gets — otherwise it can propose
+                # an edit to the tool's own source, or write outside the
+                # repo via a relative-parent or absolute entry.
+                # Normalize the path string itself (collapsing ".." and
+                # resolving to an absolute form) WITHOUT following symlinks —
+                # unlike Path.resolve(), which would dereference a tracked
+                # symlink and evaluate its target's location instead of the
+                # entry's own location inside the repo, wrongly rejecting a
+                # legitimate (if symlinked) candidate.
+                repo_normalized = os.path.normpath(str(repo_root))
+                for p in args.paths:
+                    candidate_normalized = os.path.normpath(str(repo_root / p))
+                    if candidate_normalized != repo_normalized and not candidate_normalized.startswith(
+                        repo_normalized + os.sep
+                    ):
+                        print(
+                            f"comment_cleanup: --paths entry {p!r} resolves outside the repository root",
+                            file=sys.stderr,
+                        )
+                        return 2
+                candidates = {p: None for p in args.paths if p not in _EXCLUDE_PATHS}
             else:
                 candidates, _merge_base = resolve_candidates(repo_root, args.basis, base_ref)
                 candidates = {
@@ -993,6 +1095,7 @@ def main(argv=None):
                 }
             decisions = []
             written = []
+            skipped_non_py = []
             undeterminable_files = []
             try:
                 for relpath in sorted(candidates.keys()):
@@ -1012,10 +1115,20 @@ def main(argv=None):
                         continue
                     decision = decide_file(relpath, text, cand_lines, retain, include_tests)
                     if decision.changed:
-                        decisions.append(decision)
-                        if args.apply and Path(relpath).suffix == ".py":
+                        is_py = Path(relpath).suffix == ".py"
+                        if args.apply and is_py:
                             atomic_write(repo_root / relpath, decision.new_text)
                             written.append(relpath)
+                            decisions.append(decision)
+                        elif args.apply:
+                            # decide_file found a change, but the write gate
+                            # only ever writes .py files — report this
+                            # separately rather than folding it into
+                            # `decisions`, so the report never claims a file
+                            # was cleaned when nothing was written to it.
+                            skipped_non_py.append(relpath)
+                        else:
+                            decisions.append(decision)
             except Exception as exc:
                 result["written"] = written
                 if undeterminable_files:
@@ -1026,6 +1139,8 @@ def main(argv=None):
             result["decisions"] = [{"file": d.relpath, "changed": d.changed} for d in decisions]
             if undeterminable_files:
                 result["undeterminable_files"] = undeterminable_files
+            if skipped_non_py:
+                result["skipped_non_py"] = skipped_non_py
             if decisions:
                 exit_code = max(exit_code, 1)
 

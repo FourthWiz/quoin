@@ -1365,3 +1365,116 @@ def test_reflow_crlf_file_preserves_carriage_returns():
         if line.strip("\r\n"):
             assert line.endswith("\r\n")
     assert "y = 2  # keep this.\r\n" in decision.new_text
+
+
+# ---------------------------------------------------------------------------
+# Fix-round follow-ups: hoisted paren scan, sanitized candidate text,
+# --paths guardrails, --base validation, and accurate write reporting.
+# ---------------------------------------------------------------------------
+
+def test_balanced_paren_pairs_finds_nested_pairs():
+    joined = "a (b (c) d) e"
+    pairs = cc._balanced_paren_pairs(joined)
+    assert (2, 10) in pairs
+    assert (5, 7) in pairs
+
+
+def test_separable_clause_span_with_precomputed_pairs_matches_default():
+    joined = "keep this (an earlier fix did X for real)."
+    m_start = joined.index("an earlier fix did X")
+    m_end = m_start + len("an earlier fix did X")
+    pairs = cc._balanced_paren_pairs(joined)
+    default = cc.separable_clause_span(joined, m_start, m_end)
+    hoisted = cc.separable_clause_span(joined, m_start, m_end, pairs=pairs)
+    assert default == hoisted == (9, 41)
+
+
+def test_emit_candidates_strips_control_characters(tmp_path):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.py"
+    src.write_text(
+        "def f():\n"
+        "    # this is not a bug, it just looks odd\x1b[2K\x1b[H here.\n"
+        "    return 1\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo)
+    out = cc.emit_candidates(repo, "main", judge_max=40)
+    assert out["count"] == 1
+    assert "\x1b" not in out["candidates"][0]["text"]
+
+
+def test_emit_candidates_reports_dropped_oversize_count(tmp_path):
+    repo = _init_repo(tmp_path)
+    long_comment = "# this is not a bug, it just looks odd. " + ("filler " * 200)
+    (repo / "m.py").write_text(
+        f"def f():\n    {long_comment}\n    return 1\n", encoding="utf-8"
+    )
+    _commit_all(repo)
+    out = cc.emit_candidates(repo, "main", judge_max=40, text_max=50)
+    assert out["count"] == 0
+    assert out.get("dropped_oversize") == 1
+
+
+def test_paths_flag_applies_self_exclusion(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "m.py").write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+    rc = cc.main(
+        [
+            "--project-root", str(repo), "--apply", "--base", "main",
+            "--paths", "quoin/core/scripts/comment_cleanup.py",
+        ]
+    )
+    # The self-excluded path never reaches a file lookup, so this exits 0
+    # cleanly instead of erroring on a path that does not exist in this repo.
+    assert rc == 0
+
+
+def test_paths_flag_rejects_path_outside_repo(tmp_path):
+    repo = _init_repo(tmp_path)
+    (repo / "m.py").write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+    rc = cc.main(
+        ["--project-root", str(repo), "--apply", "--base", "main", "--paths", "../outside.py"]
+    )
+    assert rc == 2
+
+
+def test_base_flag_with_option_shaped_bad_ref_fails_instead_of_empty_scan(tmp_path, capsys):
+    repo = _init_repo(tmp_path)
+    (repo / "m.py").write_text("x = 1\n", encoding="utf-8")
+    _commit_all(repo)
+    rc = cc.main(
+        ["--project-root", str(repo), "--base=--not-a-ref", "--commit-subjects"]
+    )
+    captured = capsys.readouterr()
+    assert rc == 3
+    assert "does not resolve" in captured.err
+
+
+def test_apply_mode_reports_non_py_as_skipped_not_changed(tmp_path, capsys):
+    repo = _init_repo(tmp_path)
+    src = repo / "m.sh"
+    src.write_text("x=1\n", encoding="utf-8")
+    _commit_all(repo, message="base file")
+    src.write_text(
+        "x=1  # do the setup, an earlier fix did the thing here for real, entirely done.\n",
+        encoding="utf-8",
+    )
+    _commit_all(repo, message="add comment")
+    rc = cc.main(["--project-root", str(repo), "--apply", "--base", "main", "--format", "json"])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    changed_files = [d["file"] for d in payload.get("decisions", []) if d["changed"]]
+    assert "m.sh" not in changed_files, (
+        "a non-.py file must never be reported as changed when nothing was written to it"
+    )
+    assert "m.sh" in payload.get("skipped_non_py", []), (
+        "a non-.py decided-but-unwritten file must be named in skipped_non_py"
+    )
+    assert rc == 0, "nothing was actually applied, so exit code must reflect that"
+    # The file itself was genuinely never touched.
+    assert src.read_text(encoding="utf-8") == (
+        "x=1  # do the setup, an earlier fix did the thing here for real, entirely done.\n"
+    )

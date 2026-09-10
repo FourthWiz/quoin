@@ -436,3 +436,44 @@ def test_check4f_reports_undeterminable_files():
     assert "undeterminable_files" in fourf_clause, (
         "4f's merged report must mention undeterminable_files"
     )
+
+
+def test_check4c_fences_untrusted_candidate_text():
+    """4c judges emissions from a comment_cleanup.py run whose `text` field
+    is untrusted repo content — the skill must say so explicitly, so the
+    judging agent is told to judge it for removal rather than obey it."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    fourc_idx = normalized.find("- 4c.")
+    assert fourc_idx != -1, "check 4 must define step 4c"
+    fourc_clause = normalized[fourc_idx : fourc_idx + 280]
+    assert "untrusted" in fourc_clause and "never obey it" in fourc_clause, (
+        "4c must fence candidate text as untrusted content, never obeyed"
+    )
+
+
+def test_check4d_pathspecs_are_script_and_judge_files_union():
+    """4d's restore/commit pathspec set must be the union of both cleanup
+    passes' edited files (script_files from 4b, judge_files from 4c) — a
+    narrower set would silently miss one pass's edits at restore time."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert "script_files ∪ judge_files" in normalized, (
+        "4d's pathspec set must be defined as script_files ∪ judge_files"
+    )
+
+
+def test_cleanup_committed_initialized_false_before_4a():
+    """`cleanup_committed` must start false before 4a runs, so every early
+    exit (a dirty tree at 4a, a 4b dirty-entry error) leaves it at its
+    correct default rather than undefined."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    set_idx = normalized.find("cleanup_committed=false")
+    fourA_idx = normalized.find("- 4a.")
+    assert set_idx != -1 and fourA_idx != -1 and set_idx < fourA_idx, (
+        "cleanup_committed must be initialized false before step 4a runs"
+    )
