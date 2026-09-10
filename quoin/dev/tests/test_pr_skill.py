@@ -293,12 +293,35 @@ def test_cleanup_pathspec_set_is_git_status_porcelain():
     assert "git status --porcelain" in check4, (
         "check 4's pathspec set must be defined as git status --porcelain output"
     )
-    # The failure path must reuse the same set, not a script-report-derived
-    # subset that omits the judgment pass's own edits. Normalize whitespace
-    # first since the prose wraps mid-phrase.
+    # Round 5 (review-4.md MAJOR 1 / MINOR 4): a single "Restore =" procedure
+    # is defined once and reused by every exit (abort/success/failure/empty),
+    # rather than each branch re-deriving or restating its own pathspec set —
+    # a stronger guarantee than the old "same pathspecs" reminder text, since
+    # there is only one definition to drift from. Normalize whitespace first
+    # since the prose wraps mid-phrase.
     normalized = " ".join(check4.split())
-    assert "same pathspecs" in normalized or "same pathspec set" in normalized, (
-        "the failure-path checkout must reuse the same pathspec set defined above"
+    assert normalized.count("Restore =") == 1, (
+        "check 4 must define exactly one restore procedure, reused by every exit"
+    )
+
+
+def test_check4a_probe_pinned_to_git_status_porcelain():
+    """Round 5 (review-4.md MAJOR 1, finding's 'two independent amplifiers'):
+    4a was a bare prose clause with no command and no definition of 'dirty' —
+    nothing pinned it to mean `git status --porcelain` empty. 4a must now
+    define `clean_at_entry` directly off that command's output."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    fourA_idx = normalized.find("- 4a.")
+    assert fourA_idx != -1, "check 4 must define step 4a"
+    fourA_clause = normalized[fourA_idx : fourA_idx + 100]
+    assert "clean_at_entry" in fourA_clause, (
+        "4a must define clean_at_entry"
+    )
+    assert "git status --porcelain" in fourA_clause, (
+        "4a's clean_at_entry must be pinned to git status --porcelain output, "
+        "not left as an undefined 'clean-tree probe'"
     )
 
 
@@ -309,16 +332,19 @@ def test_cleanup_pathspec_set_excludes_untracked_entries():
     assert "excluding `??`" in normalized or "excludes `??`" in normalized, (
         "check 4's pathspec set must explicitly exclude untracked (??) entries"
     )
-    assert "git clean -fd --" in normalized, (
-        "the restore must clean up leftover untracked residue with -fd "
-        "(the -d flag is required — a plain -f misses untracked directories)"
+    # Round 5 (review-4.md MAJOR 1c): `git clean -fd` must be scoped to the
+    # untracked entries check 4 itself observed, never bare (which would
+    # reach outside the residue check 4 created).
+    assert "git clean -fd -- <untracked>" in normalized, (
+        "the restore must scope `git clean -fd` to the observed untracked "
+        "entries, never invoke it bare"
     )
 
 
 def test_check4_every_exit_restores():
     """Check 4 must never leave check 5 a dirty tree: the abort branch, the
-    success branch and the failure branch must each restore before check 4
-    ends, not only the failure branch."""
+    success branch, the failure branch, and the empty-pathspec branch must
+    each restore before check 4 ends, not only the failure branch."""
     text = _read(PR_ADAPTER_SKILL)
     check4 = text[text.index("Check 4"):text.index("Check 5")]
     normalized = " ".join(check4.split())
@@ -347,4 +373,70 @@ def test_check4_every_exit_restores():
     failure_clause = normalized[failure_idx : failure_idx + 60]
     assert "restore" in failure_clause.lower(), (
         "the failure branch must restore before continuing"
+    )
+    # Round 5 (review-4.md MINOR 4): the empty-pathspec exit (no outside
+    # entry, nothing to commit) must also restore — this was the one 4d exit
+    # that previously left with no restore at all.
+    empty_idx = normalized.find("Empty pathspecs")
+    assert empty_idx != -1, "check 4 must define the empty-pathspec exit"
+    empty_clause = normalized[empty_idx : empty_idx + 60]
+    assert "restore" in empty_clause.lower(), (
+        "the empty-pathspec exit must restore too"
+    )
+    # Round 5 (review-4.md MAJOR 1a/1b): check 4 must gate the entire restore
+    # on 4a's clean-tree probe AND 4b not having reported a dirty tree —
+    # a 4b exit 3 with the dirty-entry error must end check 4 outright, with
+    # no restore and no commit, rather than continuing into 4c/4d.
+    assert "clean_at_entry" in normalized, (
+        "check 4 must track whether 4a's probe actually passed"
+    )
+    dirty_idx = normalized.find("worktree not clean at entry")
+    assert dirty_idx != -1, "check 4 must name the dirty-entry error verbatim"
+    dirty_clause = normalized[dirty_idx : dirty_idx + 80]
+    assert "ends check 4" in dirty_clause.lower() or "ENDS check 4" in dirty_clause, (
+        "a 4b dirty-entry exit 3 must end check 4, not warn+continue into 4c"
+    )
+    assert "no restore, no commit" in normalized.lower(), (
+        "the dirty-entry exit must skip both the restore and the commit"
+    )
+
+
+def test_exit_code_table_ends_check4_on_dirty_entry_not_warn_continue():
+    """Round 5 (review-4.md MAJOR 1b): the exit-code table must carve the
+    dirty-at-entry exit 3 out of the generic 2/3-warn+continue bucket — that
+    bucket previously let check 4 continue into 4c/4d on a tree it never
+    proved clean."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    table_idx = normalized.find("Exit codes:")
+    assert table_idx != -1, "check 4 must define an exit-code table"
+    table = normalized[table_idx:]
+    assert "dirty-entry error" in table and "ends check 4" in table, (
+        "the exit-code table must route the dirty-entry exit 3 to ending "
+        "check 4, distinct from the generic warn+continue row"
+    )
+    # The generic row must no longer swallow exit 3 wholesale (the old "2/3
+    # warn+continue" bucket that let the dirty-entry case slip through).
+    assert "2/3 warn+continue" not in table, (
+        "exit 2 and exit 3 must no longer share one undifferentiated row"
+    )
+
+
+def test_check4f_reports_undeterminable_files():
+    """Round 5 (review-4.md MINOR 5): a file the tool could not examine
+    (symlinked or undecodable) must not be invisible at the /pr layer — 4c
+    must record it, and 4f's merged report must name it alongside cleaned
+    files."""
+    text = _read(PR_ADAPTER_SKILL)
+    check4 = text[text.index("Check 4"):text.index("Check 5")]
+    normalized = " ".join(check4.split())
+    assert normalized.count("undeterminable_files") >= 2, (
+        "4c must record undeterminable_files and 4f must name them"
+    )
+    fourf_idx = normalized.find("- 4f.")
+    assert fourf_idx != -1, "check 4 must define step 4f"
+    fourf_clause = normalized[fourf_idx : fourf_idx + 150]
+    assert "undeterminable_files" in fourf_clause, (
+        "4f's merged report must mention undeterminable_files"
     )
