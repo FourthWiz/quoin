@@ -30,3 +30,15 @@ try:
         _quoin_pkg.__path__.append(_quoin_src_dir)
 except ImportError:
     pass  # quoin not yet importable; sys.path insert above will handle it
+
+# Disable quoin.router's real npm-prefix query for the whole test run so
+# detect_ccr's empty-store fallback never reads this machine's actual global
+# npm install (host state such as a real globally-installed CCR would
+# otherwise leak into detection results). See quoin.router._npm_global_prefix
+# and the ccr-v3-upgrade stage-1 plan's Test Plan section for the full
+# rationale. Test-only; never set in production.
+try:
+    import quoin.router as _quoin_router
+    _quoin_router._npm_query_enabled = False
+except ImportError:
+    pass  # quoin.router not yet importable; individual tests will fail loudly

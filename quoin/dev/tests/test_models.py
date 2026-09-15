@@ -333,7 +333,7 @@ class TestValidateSlug:
         with no advisory warning — i.e. the alias target is always a member
         of KNOWN_SLUGS, not just structurally plausible."""
         resolved, warnings = validate_slug("glm")
-        assert resolved == "z-ai/glm-5.2"
+        assert resolved == FRIENDLY_ALIASES["glm"] == DEFAULT_MODELS["opus"]
         assert warnings == []
 
 
@@ -349,6 +349,61 @@ class TestSlugTableConsistency:
 
     def test_friendly_aliases_are_known_slugs(self) -> None:
         assert set(FRIENDLY_ALIASES.values()) <= KNOWN_SLUGS
+
+    def test_default_models_tier_assignment(self) -> None:
+        """CRIT-1 guard: the pre-existing consistency check above passes even
+        when tiers are transposed, because the additive allowlist contains
+        all three slugs regardless of which tier holds which. This is the
+        only test that pins *which slug goes in which tier*."""
+        assert DEFAULT_MODELS["haiku"] == "z-ai/glm-5.3-flash"
+        assert DEFAULT_MODELS["sonnet"] == "deepseek/deepseek-v4.1-flash"
+        assert DEFAULT_MODELS["opus"] == "z-ai/glm-5.3"
+
+    def test_friendly_alias_tier_mapping(self) -> None:
+        """The non-tautological remainder of AC-36 under derivation: the
+        alias→tier mapping (flash→haiku, pro→sonnet, glm→opus) is the new,
+        meaningful literal content and can be wrong even though the slug
+        values themselves cannot drift from DEFAULT_MODELS."""
+        assert FRIENDLY_ALIASES["flash"] is DEFAULT_MODELS["haiku"]
+        assert FRIENDLY_ALIASES["pro"] is DEFAULT_MODELS["sonnet"]
+        assert FRIENDLY_ALIASES["glm"] is DEFAULT_MODELS["opus"]
+
+
+class TestOriginReclassification:
+    """R-06: correcting DEFAULT_MODELS legitimately reclassifies a
+    models.json pin of a now-superseded slug from 'default' to 'user'."""
+
+    def test_pinned_superseded_slug_reports_user(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("shutil.which", lambda name: None)
+
+        mp = quoin_models_path(home=tmp_path)
+        mp.parent.mkdir(parents=True, exist_ok=True)
+        mp.write_text(json.dumps({"opus": "z-ai/glm-5.2"}), encoding="utf-8")
+
+        args = _make_args(home=tmp_path)
+        buf = io.StringIO()
+        import builtins
+        orig = builtins.print
+
+        def fake_print(*a, file=None, **kw2):
+            if file is None or file is sys.stdout:
+                orig(*a, file=buf, **kw2)
+            else:
+                orig(*a, file=file, **kw2)
+
+        monkeypatch.setattr(builtins, "print", fake_print)
+        rc = _cmd_models_show(args)
+        out = buf.getvalue()
+
+        assert rc == 0
+        assert "opus" in out
+        opus_line = next(line for line in out.splitlines() if line.strip().startswith("opus"))
+        assert "(user)" in opus_line
+        for tier in ("haiku", "sonnet"):
+            tier_line = next(line for line in out.splitlines() if line.strip().startswith(tier))
+            assert "(default)" in tier_line
 
 
 # ── quoin models show ─────────────────────────────────────────────────────────

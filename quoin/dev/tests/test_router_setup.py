@@ -33,8 +33,11 @@ from quoin.ccr_config import (  # noqa: E402
     write_config,
 )
 from quoin.router import (  # noqa: E402
+    CCR_PINNED_VERSION,
     DEFAULT_MODELS,
+    MIN_NODE_MAJOR,
     ROUTER_MAP,
+    CcrVersion,
     _cmd_router_setup,
     _cmd_router_status,
     quoin_models_path,
@@ -261,6 +264,7 @@ class TestCmdRouterSetup:
         tmp_path: Path,
         *,
         node_present: bool = True,
+        node_major: int | None = None,
         ccr_initially_present: bool = False,
         install_rc: int = 0,
         api_key: str = "sk-or-SENTINEL-KEY",
@@ -270,6 +274,22 @@ class TestCmdRouterSetup:
         # Patch injectable seams
         monkeypatch.setenv("OPENROUTER_API_KEY", api_key)
         monkeypatch.setattr("quoin.router._node_present", lambda: node_present)
+        monkeypatch.setattr("quoin.router._node_major", lambda: node_major)
+        # Gate detect_ccr to "unknown" so the install-branch decision comes
+        # from the patched _verify_ccr() below exactly as it did before
+        # detection existed (belt-and-braces over the conftest npm-isolation
+        # flag; see T-06 group (g)).
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
+        # This host has a real global `ccr` on PATH (claude-code-router 2.0.0
+        # via Homebrew npm), so the unknown-major fallback's
+        # `bool(shutil.which("ccr"))` half would otherwise silently override
+        # the `ccr_initially_present` fixture below on every developer
+        # machine that has CCR installed. Neutralize it so the fallback
+        # rests solely on the patched _verify_ccr(), matching every test's
+        # actual intent.
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
         ccr_state = {"verified": ccr_initially_present}
 
         def _verify():
@@ -311,6 +331,9 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
         assert rc == 1
@@ -346,11 +369,182 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", _verify)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
 
         args = _make_args(home=tmp_path)
         _cmd_router_setup(args)
         _cmd_router_setup(args)  # second run
         assert install_call_count["n"] == 0, "_install_ccr should not be called when CCR already present"
+
+    # ── T-06(e): Node gate (AC-13, user-visible half) ──────────────────────────
+
+    def test_node_below_min_does_not_install(self, monkeypatch, tmp_path: Path) -> None:
+        install_call_count = {"n": 0}
+
+        def _install():
+            install_call_count["n"] += 1
+            return 0
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._node_major", lambda: 21)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+
+        assert rc != 0
+        assert install_call_count["n"] == 0
+
+    def test_node_below_min_names_required_version(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._node_major", lambda: 21)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
+
+        args = _make_args(home=tmp_path)
+        _cmd_router_setup(args)
+        captured = capsys.readouterr()
+        assert "22" in captured.err
+
+    def test_node_at_min_installs(self, monkeypatch, tmp_path: Path) -> None:
+        install_call_count = {"n": 0}
+        ccr_state = {"verified": False}
+
+        def _verify():
+            return ccr_state["verified"]
+
+        def _install():
+            install_call_count["n"] += 1
+            ccr_state["verified"] = True
+            return 0
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._node_major", lambda: 22)
+        monkeypatch.setattr("quoin.router._verify_ccr", _verify)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 1
+        assert rc == 0
+
+    # ── T-06(f): reinstall-skip (AC-14) and the `unknown` fallback ─────────────
+
+    def test_detected_v2_skips_install(self, monkeypatch, tmp_path: Path) -> None:
+        """The real AC-14 evidence: skip rests on the store, not on _verify_ccr."""
+        install_call_count = {"n": 0}
+
+        def _install():
+            install_call_count["n"] += 1
+            return 0
+
+        (tmp_path / ".claude-code-router").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".claude-code-router" / "config.json").write_text(
+            "{}", encoding="utf-8"
+        )
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 0
+        assert rc == 0
+
+    def test_detected_v3_skips_install(self, monkeypatch, tmp_path: Path) -> None:
+        """Stable half only — no return-code or message assertion, so this
+        survives the sibling stage's supersession of the v3 refusal."""
+        install_call_count = {"n": 0}
+
+        def _install():
+            install_call_count["n"] += 1
+            return 0
+
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        sqlite_path = store_dir / "config.sqlite"
+        sqlite_path.write_bytes(b"")
+        before = sqlite_path.read_bytes()
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+
+        args = _make_args(home=tmp_path)
+        _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 0
+        assert sqlite_path.read_bytes() == before
+
+    def test_v3_refusal_is_s1_local_contract(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        """S-1-local contract, isolated from the stable skip test above so the
+        sibling stage that adds the v3 writer can delete just this test when
+        it replaces the early return with the store-emission path."""
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.sqlite").write_bytes(b"")
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+        captured = capsys.readouterr()
+
+        assert rc == 0
+        assert "Nothing was changed" in captured.out
+
+    def test_unknown_major_with_which_preserves_skip(self, monkeypatch, tmp_path: Path) -> None:
+        """R-03: on the unknown-major fallback, `which` is the load-bearing
+        half that preserves idempotence on a machine class where
+        `_verify_ccr()` is known-inert (ccr -v exits 1 on a healthy v3
+        install)."""
+        install_call_count = {"n": 0}
+
+        def _install():
+            install_call_count["n"] += 1
+            return 0
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
+
+        args = _make_args(home=tmp_path)
+        _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 0
 
     def test_idempotent_config_no_duplicates(self, monkeypatch, tmp_path: Path) -> None:
         """Second run: backup created, no duplicate providers/keys, models.json untouched."""
@@ -358,6 +552,9 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
 
         args = _make_args(home=tmp_path)
         _cmd_router_setup(args)
@@ -391,6 +588,9 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
 
         args = _make_args(home=tmp_path)
         _cmd_router_setup(args)
@@ -406,6 +606,9 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
 
         args = _make_args(home=tmp_path)
         _cmd_router_setup(args)
@@ -454,6 +657,9 @@ class TestSetupHonorsModelsJson:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
         args = _make_args(dry_run=dry_run, home=tmp_path)
         return _cmd_router_setup(args)
 
@@ -573,6 +779,12 @@ class TestCmdRouterStatus:
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: ccr_installed)
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: live)
         monkeypatch.setattr("quoin.router.probe_service", lambda **kw: live)
+        # Forward-looking gate: _cmd_router_status does not call detect_ccr in
+        # this stage, but this pins the class against host store state before
+        # a later stage wires detection into status.
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
 
         if key_set:
             monkeypatch.setenv("OPENROUTER_API_KEY", "sk-test")
@@ -626,6 +838,9 @@ class TestCmdRouterStatus:
         monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router.probe_service", lambda **kw: False)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+        )
         args = argparse.Namespace(_home_override=tmp_path)
         _cmd_router_status(args)
         out = capsys.readouterr().out
