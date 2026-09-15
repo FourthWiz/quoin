@@ -31,24 +31,31 @@ TIER_KEYS = ("haiku", "sonnet", "opus")
 
 # Friendly aliases: short name → OpenRouter slug.
 # These are the "blessed" open-model mappings shipped with quoin.
+# Derived from DEFAULT_MODELS by tier so the two tables cannot drift apart —
+# the alias→tier mapping below (flash→haiku, pro→sonnet, glm→opus) is the
+# only literal content; the slugs themselves always track the tier defaults.
 FRIENDLY_ALIASES: dict[str, str] = {
-    "flash": "deepseek/deepseek-v4-flash",
-    "pro": "deepseek/deepseek-v4-pro",
-    "glm": "z-ai/glm-5.2",
+    "flash": DEFAULT_MODELS["haiku"],
+    "pro": DEFAULT_MODELS["sonnet"],
+    "glm": DEFAULT_MODELS["opus"],
 }
 
 # Hand-curated slug allowlist — ADVISORY ONLY.
 # Expected to drift stale as OpenRouter evolves.
 # Unknown-but-plausible slugs (containing '/') are accepted with a warning;
 # only obviously-malformed input is rejected.
-# Verified August 2026.
+# Verified September 2026. Additive only — superseded slugs stay so a user
+# who pinned one keeps validating with origin "user" and no advisory warning.
 KNOWN_SLUGS: frozenset[str] = frozenset(
     {
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-pro",
+        "z-ai/glm-5.3-flash",           # blessed haiku default
+        "deepseek/deepseek-v4.1-flash",  # blessed sonnet default
+        "z-ai/glm-5.3",                  # blessed opus default
+        "deepseek/deepseek-v4-flash",    # superseded haiku default
+        "deepseek/deepseek-v4-pro",      # superseded sonnet default
         "deepseek/deepseek-v4-flash-0731",
         "z-ai/glm-5.1",
-        "z-ai/glm-5.2",
+        "z-ai/glm-5.2",                  # superseded opus default
         # A small extra set for user convenience.
         "anthropic/claude-3.5-sonnet",
         "anthropic/claude-3-haiku",
