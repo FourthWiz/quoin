@@ -52,6 +52,14 @@ CCR_PINNED_VERSION = "3.1.0"     # exact; no caret or tilde range
 CCR_PINNED_MAJOR = int(CCR_PINNED_VERSION.split(".")[0])
 CCR_VERSION_CONSTRAINT = f"@{CCR_PINNED_VERSION}"
 
+# Whether quoin has a config writer for the version it pins. This is
+# deliberately its own flag rather than a check against CCR_PINNED_MAJOR:
+# the pinned major is "what we install", not "what we can configure", and
+# those two facts must be free to change independently. Bumping the pin
+# alone must never silently re-enable a v2-shaped write for a package quoin
+# still cannot configure. Stage 2 flips this to True when its v3 writer lands.
+_HAS_V3_WRITER = False
+
 MIN_NODE_MAJOR = 22
 
 
@@ -77,7 +85,11 @@ def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
             return None                      # mid-test only; never set in production
-        r = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True, timeout=5)
+        # 10s, not 5s: `npm.cmd` plus antivirus/Defender scanning routinely
+        # pushes a cold-start `npm prefix -g` past 2s on Windows, and a
+        # timeout here silently degrades to "not installed" (see the
+        # `_npm_global_prefix` docstring on `_npm_major`'s caller side).
+        r = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True, timeout=10)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0:
@@ -109,7 +121,10 @@ def _npm_major() -> int | None:              # seam C: the package reader both p
         if len(raw_bytes) > _PACKAGE_JSON_MAX_BYTES:
             return None
         data = json.loads(raw_bytes.decode("utf-8"))
-        major = int(str(data["version"]).split(".")[0])
+        # Slice before int(): an unbounded digit run reaching int() can hang
+        # (quadratic on Python < 3.11, which has no conversion-length cap).
+        # No real semver major is anywhere near 16 digits.
+        major = int(str(data["version"]).split(".")[0][:16])
     except (
         ValueError,
         KeyError,
@@ -222,11 +237,22 @@ def _node_major() -> int | None:
 
 def _install_ccr() -> int:
     """Run npm install -g @musistudio/claude-code-router. Return exit code."""
+    # The npm-presence guard lives here rather than in _cmd_router_setup so
+    # it protects every caller of this function, not just the setup
+    # handler's own npm-less-Node case — a test or a future caller that
+    # stubs this function wholesale bypasses it either way, which is why
+    # test_detection.py exercises it directly.
     if not shutil.which("npm"):
         return 1
+    # npm (and any lifecycle script it runs) inherits the environment by
+    # default, which would otherwise hand OPENROUTER_API_KEY to an install
+    # that delivers the user nothing on this branch. Scrub it from a copy;
+    # the key's own file-permission exposure is unrelated and unchanged.
+    install_env = {k: v for k, v in os.environ.items() if k != "OPENROUTER_API_KEY"}
     try:
         result = subprocess.run(
             ["npm", "install", "-g", f"@musistudio/claude-code-router{CCR_VERSION_CONSTRAINT}"],
+            env=install_env,
         )
     except (FileNotFoundError, OSError):
         return 1
@@ -247,24 +273,21 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     dry_run: bool = getattr(args, "dry_run", False)
     home_override: pathlib.Path | None = getattr(args, "_home_override", None)
 
-    def _refuse_v3(version: CcrVersion, *, just_installed: bool = False) -> int:
+    def _refuse_v3(version: CcrVersion, *, pre_install: bool = False) -> int:
         # No v3 config writer yet — refuse rather than write a v2 store
-        # that v3 will not read. Shared by the pre-install and post-install
-        # detection sites so a v3 package is never treated differently
-        # depending on when it was found.
-        if just_installed:
-            # An install did run in this case, so the message must not
-            # claim nothing changed — it names what landed and how to
-            # remove it instead.
+        # that v3 will not read. Shared by the pre-install detection site
+        # and the hoisted pre-install-spawn refusal below, so a v3 package
+        # is never treated differently depending on when it was found. A
+        # freshly-installed-then-refused shape doesn't exist any more: the
+        # hoist below refuses before npm ever spawns, so this function is
+        # never reached with an install that just ran.
+        if pre_install:
             print(
-                f"quoin: installed claude-code-router {CCR_PINNED_VERSION} via npm, "
-                "but quoin's v3 configuration writer is not available yet."
+                f"quoin: installing claude-code-router would pin {CCR_PINNED_VERSION}, "
+                "but quoin's v3 configuration writer is not available yet. Nothing "
+                "was installed or changed."
             )
-            print(f"  Detected:  v3 (store: {version.store}, via {version.source})")
-            print(
-                "  Configure CCR itself until then, or remove the package with:\n"
-                "    npm uninstall -g @musistudio/claude-code-router"
-            )
+            print("  Configure CCR itself until then; nothing here needs undoing.")
         else:
             print(
                 "quoin: claude-code-router 3.x is installed; quoin's v3 configuration "
@@ -275,26 +298,49 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         return 0            # int, never SystemExit
 
     # ── Steps 1-2: detection-driven install decision ──────────────────────────
-    # Thread one npm read through detect_ccr and the presence check below
-    # instead of letting each call `npm prefix -g` on its own: detect_ccr
-    # already reads npm internally whenever a config.sqlite is present (or
-    # neither store file is), so precompute it there and skip the read
-    # entirely for a lone config.json, which never consults npm.
+    # Thread one npm read through detect_ccr and the presence/stale-store
+    # checks below instead of letting each call `npm prefix -g` on its own:
+    # detect_ccr already reads npm internally whenever a config.sqlite is
+    # present (or neither store file is), so precompute it there; the lone
+    # config.json case is deferred to the stale-store guard just below,
+    # which reads npm once and threads that same value into the presence
+    # check that follows it.
     store_dir = ccr_store_dir(home_override)
     sqlite_present = (store_dir / "config.sqlite").exists()
     json_only = (store_dir / "config.json").exists() and not sqlite_present
     npm_major = _NPM_MAJOR_UNSET if json_only else _npm_major()
     detected = detect_ccr(home=home_override, npm_major=npm_major)
-    if detected.major in _CCR_INSTALLED_MAJORS:
+
+    # The config.json store branch of detect_ccr never consults npm — the
+    # residual rule's antecedent is "the store says v3", which config.json
+    # can never satisfy. That leaves a real gap: a leftover config.json
+    # beside a genuinely-v3(+) npm package still classifies as v2 here, and
+    # without this guard the v2 write below would land in a file CCR itself
+    # will never read. Read npm once for the json-only case — the same read
+    # the presence check a few lines down needs — and refuse before any
+    # write is possible, rather than let the mis-classification reach it.
+    json_npm_major = _npm_major() if json_only else npm_major
+    if (
+        detected.source == "store:json"
+        and json_npm_major is not None
+        and json_npm_major >= CCR_KNOWN_MAJOR_MAX
+    ):
+        result = _refuse_v3(CcrVersion(json_npm_major, "json", "npm"))
+        if dry_run:
+            print("  --dry-run has no effect here: nothing is written on v3 either way.")
+        return result
+
+    # A capped source (`npm-capped` / `store:sqlite-npm-capped`) is positive
+    # proof a newer package is already on disk — treat it as installed so
+    # the branch below never reinstalls the (older) pinned version over it.
+    if detected.major in _CCR_INSTALLED_MAJORS or detected.source.endswith("npm-capped"):
         # A store on disk (config.json / config.sqlite) is quoin's own artifact
         # and outlives the npm package — it is not proof the package is still
         # there. Require a live presence signal alongside the store signal.
         # A version query (`ccr -v` / `ccr version`) is deliberately not that
         # signal: both exit 1 on a healthy v3 install with no providers
         # configured yet, so it would only add noise.
-        installed = bool(shutil.which("ccr")) or (
-            (_npm_major() if json_only else npm_major) is not None
-        )
+        installed = bool(shutil.which("ccr")) or (json_npm_major is not None)
     else:
         # Unknown major: no store signal to lean on, so fall back to a plain
         # PATH check rather than assuming absent — odd installs are preserved
@@ -302,7 +348,11 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         installed = bool(shutil.which("ccr"))
 
     if installed:
-        if detected.major == 3:
+        # A sqlite store can never be served by writing config.json, whatever
+        # major produced it — exactly 3, or capped-unknown beside a package
+        # newer than quoin recognises. Refuse rather than write beside it or
+        # downgrade what's there.
+        if detected.major == 3 or detected.store == "sqlite":
             result = _refuse_v3(detected)
             if dry_run:
                 print("  --dry-run has no effect here: nothing is written on v3 either way.")
@@ -325,6 +375,20 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
+        if not _HAS_V3_WRITER:
+            # Installing would pin CCR_PINNED_VERSION (major 3), and quoin
+            # has no v3 configuration writer yet — refuse now rather than
+            # spawn npm (handing it a subprocess environment that carries
+            # OPENROUTER_API_KEY) only to refuse the moment it finishes.
+            if dry_run:
+                print(
+                    "[dry-run] Would refuse to install claude-code-router: "
+                    f"installing would pin {CCR_PINNED_VERSION}, and quoin's v3 "
+                    "configuration writer is not available yet."
+                )
+                print("[dry-run] No files written.")
+                return 0
+            return _refuse_v3(CcrVersion(CCR_PINNED_MAJOR, None, "none"), pre_install=True)
         if dry_run:
             # Short-circuit before spawning npm at all — a dry run must never
             # install anything, only report what a real run would do.
@@ -361,20 +425,12 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        if CCR_PINNED_MAJOR == 3:
-            # The install just placed the pinned package on disk, so its
-            # major is known by construction — asking detect_ccr to
-            # reclassify would ask a store-shaped detector what quoin
-            # itself just installed. A leftover config.json answers "v2"
-            # regardless of what the freshly-installed package reports,
-            # because config.sqlite is only created once CCR itself first
-            # runs. `detected` (the store shape read before this install)
-            # is still accurate here, since installing an npm package does
-            # not touch the CCR store directory.
-            return _refuse_v3(
-                CcrVersion(CCR_PINNED_MAJOR, detected.store, "npm"),
-                just_installed=True,
-            )
+        # Reachable only once _HAS_V3_WRITER is True (the branch above
+        # already refused and returned for every caller where it is
+        # False), so the install this function just ran was known-good to
+        # attempt. `detected` (the store shape read before this install)
+        # is still accurate here, since installing an npm package does not
+        # touch the CCR store directory.
         print("claude-code-router installed successfully.")
 
     # ── Step 3: Read API key ───────────────────────────────────────────────────
