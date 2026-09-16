@@ -315,8 +315,9 @@ def _cmd_models_show(args: argparse.Namespace) -> int:
     print(f"  active mode: {mode}")
 
     # Additive install hint — only in the else branch AND CCR is not installed.
-    # ccr_installed mirrors router.py's PATH-only install check: _verify_ccr()
-    # opens with the same `which` guard, so it adds nothing on top of it.
+    # ccr_installed mirrors router.py's own PATH-only presence check; a
+    # version query would misreport a healthy v3 install as absent, so this
+    # stays a direct `which` check rather than shelling out to `ccr`.
     if not cfg_present:
         ccr_installed = bool(shutil.which("ccr"))
         if not ccr_installed:
