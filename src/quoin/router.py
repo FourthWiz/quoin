@@ -49,6 +49,7 @@ ROUTER_MAP: dict[str, str] = {
 
 CCR_KNOWN_MAJOR_MAX = 3          # highest major quoin recognises today
 CCR_PINNED_VERSION = "3.1.0"     # exact; no caret or tilde range
+CCR_PINNED_MAJOR = int(CCR_PINNED_VERSION.split(".")[0])
 CCR_VERSION_CONSTRAINT = f"@{CCR_PINNED_VERSION}"
 
 MIN_NODE_MAJOR = 22
@@ -74,7 +75,7 @@ _PACKAGE_JSON_MAX_BYTES = 1024 * 1024  # 1 MiB; refuse to read an oversized mani
 
 def _npm_global_prefix() -> str | None:      # seam A
     try:
-        if not _npm_query_enabled:
+        if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
             return None                      # mid-test only; never set in production
         r = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True, timeout=5)
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
@@ -100,14 +101,24 @@ def _npm_major() -> int | None:              # seam C: the package reader both p
     try:
         # Bounded read instead of stat-then-read: a stat cap alone leaves a
         # window where the file can grow between the size check and the
-        # read that follows it.
-        with open(pkg, encoding="utf-8") as f:
-            raw = f.read(_PACKAGE_JSON_MAX_BYTES + 1)
-        if len(raw) > _PACKAGE_JSON_MAX_BYTES:
+        # read that follows it. Read as bytes and decode after the cap, so
+        # a multibyte manifest is bounded by its actual byte size rather
+        # than by decoded character count.
+        with open(pkg, "rb") as f:
+            raw_bytes = f.read(_PACKAGE_JSON_MAX_BYTES + 1)
+        if len(raw_bytes) > _PACKAGE_JSON_MAX_BYTES:
             return None
-        data = json.loads(raw)
+        data = json.loads(raw_bytes.decode("utf-8"))
         major = int(str(data["version"]).split(".")[0])
-    except (ValueError, KeyError, TypeError, OSError, RecursionError, json.JSONDecodeError):
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        OSError,
+        RecursionError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ):
         return None
     return major if major > 0 else None
 
@@ -211,9 +222,14 @@ def _node_major() -> int | None:
 
 def _install_ccr() -> int:
     """Run npm install -g @musistudio/claude-code-router. Return exit code."""
-    result = subprocess.run(
-        ["npm", "install", "-g", f"@musistudio/claude-code-router{CCR_VERSION_CONSTRAINT}"],
-    )
+    if not shutil.which("npm"):
+        return 1
+    try:
+        result = subprocess.run(
+            ["npm", "install", "-g", f"@musistudio/claude-code-router{CCR_VERSION_CONSTRAINT}"],
+        )
+    except (FileNotFoundError, OSError):
+        return 1
     return result.returncode
 
 
@@ -231,17 +247,31 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     dry_run: bool = getattr(args, "dry_run", False)
     home_override: pathlib.Path | None = getattr(args, "_home_override", None)
 
-    def _refuse_v3(version: CcrVersion) -> int:
+    def _refuse_v3(version: CcrVersion, *, just_installed: bool = False) -> int:
         # No v3 config writer yet — refuse rather than write a v2 store
         # that v3 will not read. Shared by the pre-install and post-install
         # detection sites so a v3 package is never treated differently
         # depending on when it was found.
-        print(
-            "quoin: claude-code-router 3.x is installed; quoin's v3 configuration "
-            "writer is not available yet. Nothing was changed."
-        )
-        print(f"  Detected:  v3 (store: {version.store}, via {version.source})")
-        print("  Configure CCR itself until then; nothing here needs undoing.")
+        if just_installed:
+            # An install did run in this case, so the message must not
+            # claim nothing changed — it names what landed and how to
+            # remove it instead.
+            print(
+                f"quoin: installed claude-code-router {CCR_PINNED_VERSION} via npm, "
+                "but quoin's v3 configuration writer is not available yet."
+            )
+            print(f"  Detected:  v3 (store: {version.store}, via {version.source})")
+            print(
+                "  Configure CCR itself until then, or remove the package with:\n"
+                "    npm uninstall -g @musistudio/claude-code-router"
+            )
+        else:
+            print(
+                "quoin: claude-code-router 3.x is installed; quoin's v3 configuration "
+                "writer is not available yet. Nothing was changed."
+            )
+            print(f"  Detected:  v3 (store: {version.store}, via {version.source})")
+            print("  Configure CCR itself until then; nothing here needs undoing.")
         return 0            # int, never SystemExit
 
     # ── Steps 1-2: detection-driven install decision ──────────────────────────
@@ -262,8 +292,9 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         # A version query (`ccr -v` / `ccr version`) is deliberately not that
         # signal: both exit 1 on a healthy v3 install with no providers
         # configured yet, so it would only add noise.
-        npm_readable = (_npm_major() if json_only else npm_major) is not None
-        installed = bool(shutil.which("ccr")) or npm_readable
+        installed = bool(shutil.which("ccr")) or (
+            (_npm_major() if json_only else npm_major) is not None
+        )
     else:
         # Unknown major: no store signal to lean on, so fall back to a plain
         # PATH check rather than assuming absent — odd installs are preserved
@@ -306,10 +337,10 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         print("Installing claude-code-router globally...")
         rc = _install_ccr()
         if rc != 0:
-            # Deliberately unpinned: this manual fallback keeps working even
-            # when the pinned version above is no longer installable, which
-            # also gives the user a path to newer patch and security fixes
-            # that pinning an exact version otherwise forgoes.
+            # The sudo fallback below is pinned to the same constraint as
+            # the primary install command; a Node version manager (nvm,
+            # fnm) is offered first because it keeps a path open to newer
+            # patch and security fixes that this pinned command does not.
             print(
                 f"quoin: npm install failed (exit {rc}).\n"
                 "Prefer a Node version manager (nvm, fnm) over the command below —\n"
@@ -330,13 +361,20 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        # Re-detect: the install may have put a v3 package in place (the
-        # pinned version above always does, absent a v3 config writer), and
-        # that must route into the same refusal as a pre-existing v3 install
-        # rather than fall through to writing a v2 config onto it.
-        post_install = detect_ccr(home=home_override)
-        if post_install.major == 3:
-            return _refuse_v3(post_install)
+        if CCR_PINNED_MAJOR == 3:
+            # The install just placed the pinned package on disk, so its
+            # major is known by construction — asking detect_ccr to
+            # reclassify would ask a store-shaped detector what quoin
+            # itself just installed. A leftover config.json answers "v2"
+            # regardless of what the freshly-installed package reports,
+            # because config.sqlite is only created once CCR itself first
+            # runs. `detected` (the store shape read before this install)
+            # is still accurate here, since installing an npm package does
+            # not touch the CCR store directory.
+            return _refuse_v3(
+                CcrVersion(CCR_PINNED_MAJOR, detected.store, "npm"),
+                just_installed=True,
+            )
         print("claude-code-router installed successfully.")
 
     # ── Step 3: Read API key ───────────────────────────────────────────────────
@@ -346,9 +384,8 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         print(f"quoin: {exc}", file=sys.stderr)
         return 1
 
-    # ── Step 4: Backup, load, merge, write ────────────────────────────────────
+    # ── Step 4: Load and merge ────────────────────────────────────────────────
     config_path = ccr_config_path(home=home_override)
-    backup = backup_config(config_path)
     cfg = load_config(config_path)
 
     # Function-local import — a module-level import here creates a circular
@@ -361,7 +398,11 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     cfg, prov_changes = merge_openrouter_provider(cfg, key, models_list)
     cfg, rk_changes, rk_warnings = merge_router_keys(cfg, build_router_map(effective))
 
-    # ── Step 5: Build summary ─────────────────────────────────────────────────
+    # ── Step 5: Backup (real runs only) + build summary ───────────────────────
+    # The backup is deferred until here, past the dry-run return below, so a
+    # dry run never writes a backup copy of the user's config to disk.
+    backup = None if dry_run else backup_config(config_path)
+
     summary_lines = ["", "quoin router setup — changes:"]
     for change in prov_changes + rk_changes:
         summary_lines.append(f"  + {change}")
@@ -390,6 +431,11 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     print(summary)
     if seeded:
         print(f"  Seeded model defaults to: {models_path}")
+        print(
+            "  Note: the haiku and opus defaults now route through Z.ai "
+            "(haiku was previously DeepSeek) — edit models.json to pin a "
+            "different provider."
+        )
     else:
         print(f"  Model defaults file already exists (user edits preserved): {models_path}")
 
@@ -409,8 +455,9 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
     """
     home_override: pathlib.Path | None = getattr(args, "_home_override", None)
 
-    # _verify_ccr() opens with the same `which` guard, so it cannot add
-    # anything `shutil.which` doesn't already tell us; check PATH directly.
+    # A version query would add nothing `shutil.which` doesn't already tell
+    # us, and both `ccr -v` and `ccr version` are destructive on a v3 store
+    # (see the setup path above) — check PATH directly instead.
     installed = bool(shutil.which("ccr"))
     config_path = ccr_config_path(home=home_override)
     cfg_present = config_path.exists()
