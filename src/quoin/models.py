@@ -23,7 +23,7 @@ import sys
 from typing import Any
 
 import quoin.ccr_config as ccr_config
-from quoin.router import DEFAULT_MODELS, _verify_ccr, quoin_models_path
+from quoin.router import DEFAULT_MODELS, quoin_models_path
 
 # ── Module-level constants ─────────────────────────────────────────────────────
 
@@ -315,9 +315,10 @@ def _cmd_models_show(args: argparse.Namespace) -> int:
     print(f"  active mode: {mode}")
 
     # Additive install hint — only in the else branch AND CCR is not installed.
-    # ccr_installed mirrors router.py:209 exactly.
+    # ccr_installed mirrors router.py's PATH-only install check: _verify_ccr()
+    # opens with the same `which` guard, so it adds nothing on top of it.
     if not cfg_present:
-        ccr_installed = _verify_ccr() or bool(shutil.which("ccr"))
+        ccr_installed = bool(shutil.which("ccr"))
         if not ccr_installed:
             print(
                 "  CCR not set up — run `quoin router setup` to enable open-model routing."

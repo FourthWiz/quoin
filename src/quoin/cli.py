@@ -724,8 +724,9 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     # Open-model router probe (user-scope only — home CCR paths are not project-scoped)
     if not is_project_mode:
         from quoin import ccr_config as _ccr
-        from quoin import router as _router
-        ccr_installed = _router._verify_ccr() or bool(shutil.which("ccr"))
+        # _verify_ccr() opens with the same `which` guard, so it adds nothing
+        # on top of a direct PATH check.
+        ccr_installed = bool(shutil.which("ccr"))
         ccr_cfg = _ccr.ccr_config_path().exists()
         ccr_live = _ccr.probe_service()
         if ccr_installed or ccr_cfg:

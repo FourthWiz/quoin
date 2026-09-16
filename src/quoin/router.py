@@ -69,12 +69,15 @@ def ccr_store_dir(home: pathlib.Path | None = None) -> pathlib.Path:
 _npm_query_enabled = True   # False under pytest; see _npm_global_prefix
 
 
+_PACKAGE_JSON_MAX_BYTES = 1024 * 1024  # 1 MiB; refuse to read an oversized manifest
+
+
 def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled:
             return None                      # mid-test only; never set in production
-        r = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True)
-    except (FileNotFoundError, OSError):
+        r = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0:
         return None
@@ -95,9 +98,11 @@ def _npm_major() -> int | None:              # seam C: the package reader both p
     if pkg is None:
         return None
     try:
-        data = json.loads(pkg.read_text())
+        if pkg.stat().st_size > _PACKAGE_JSON_MAX_BYTES:
+            return None
+        data = json.loads(pkg.read_text(encoding="utf-8"))
         major = int(str(data["version"]).split(".")[0])
-    except (ValueError, KeyError, TypeError, OSError, json.JSONDecodeError):
+    except (ValueError, KeyError, TypeError, OSError, RecursionError, json.JSONDecodeError):
         return None
     return major if major > 0 else None
 
@@ -169,8 +174,8 @@ def _node_major() -> int | None:
     if not shutil.which("node"):
         return None
     try:
-        result = subprocess.run(["node", "--version"], capture_output=True, text=True)
-    except (FileNotFoundError, OSError):
+        result = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5)
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
         return None
@@ -224,22 +229,30 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     # ── Steps 1-2: detection-driven install decision ──────────────────────────
     detected = detect_ccr(home=home_override)
     if detected.major in _CCR_INSTALLED_MAJORS:
-        installed = True
+        # A store on disk (config.json / config.sqlite) is quoin's own artifact
+        # and outlives the npm package — it is not proof the package is still
+        # there. Require a live presence signal alongside the store signal.
+        # _verify_ccr() is left out here: it is provably false on a healthy
+        # v3 install (`ccr -v` exits 1 there), so it would only add noise.
+        installed = bool(shutil.which("ccr")) or _npm_major() is not None
     else:
-        # Unknown major: fall back to the existing double-check rather than
-        # assuming absent, so odd installs are preserved rather than
-        # reinstalled over.
-        installed = _verify_ccr() or bool(shutil.which("ccr"))
+        # Unknown major: no store signal to lean on, so fall back to a plain
+        # PATH check rather than assuming absent — odd installs are preserved
+        # rather than reinstalled over.
+        installed = bool(shutil.which("ccr"))
 
     if installed:
         if detected.major == 3:
-            # S-1-local refusal: this stage has no v3 config writer yet.
+            # No v3 config writer yet — refuse rather than write a v2 store
+            # that v3 will not read.
             print(
                 "quoin: claude-code-router 3.x is installed; quoin's v3 configuration "
                 "writer is not available yet. Nothing was changed."
             )
             print(f"  Detected:  v3 (store: {detected.store}, via {detected.source})")
             print("  Configure CCR itself until then; nothing here needs undoing.")
+            if dry_run:
+                print("  --dry-run has no effect here: nothing is written on v3 either way.")
             return 0            # int, never SystemExit
         print("claude-code-router already installed — skipping npm install.")
     else:
@@ -262,6 +275,9 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         print("Installing claude-code-router globally...")
         rc = _install_ccr()
         if rc != 0:
+            # Deliberately unpinned: this manual fallback is meant to work even
+            # when the pinned version above is no longer installable, so it
+            # trades the version guarantee for a command that keeps working.
             print(
                 f"quoin: npm install failed (exit {rc}).\n"
                 "If you see a permissions error, try:\n"
@@ -350,7 +366,9 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
     """
     home_override: pathlib.Path | None = getattr(args, "_home_override", None)
 
-    installed = _verify_ccr() or bool(shutil.which("ccr"))
+    # _verify_ccr() opens with the same `which` guard, so it cannot add
+    # anything `shutil.which` doesn't already tell us; check PATH directly.
+    installed = bool(shutil.which("ccr"))
     config_path = ccr_config_path(home=home_override)
     cfg_present = config_path.exists()
     live = probe_service()
