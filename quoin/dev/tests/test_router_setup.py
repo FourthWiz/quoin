@@ -1,7 +1,8 @@
 """Tests for quoin router setup (IVG-64 Stage 1).
 
 All tests run in CI with NO network/npm access.
-- _install_ccr and _verify_ccr are monkeypatched.
+- _install_ccr is monkeypatched; presence is faked via shutil.which/_npm_major
+  rather than a version query (`ccr -v`/`ccr version` are never invoked).
 - Temp HOME (tmp_path) isolates filesystem side-effects.
 - No subprocess calls to npm or ccr in the test suite.
 """
@@ -276,31 +277,26 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: node_present)
         monkeypatch.setattr("quoin.router._node_major", lambda: node_major)
         # Gate detect_ccr to "unknown" so the install-branch decision comes
-        # from the patched _verify_ccr() below exactly as it did before
-        # detection existed (belt-and-braces over the conftest npm-isolation
-        # flag; see T-06 group (g)).
+        # from the patched shutil.which() below (belt-and-braces over the
+        # conftest npm-isolation flag; see T-06 group (g)).
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr",
+            lambda home=None, npm_major=None: CcrVersion(0, None, "none"),
         )
         # This host has a real global `ccr` on PATH (claude-code-router 2.0.0
         # via Homebrew npm), so the unknown-major fallback's
         # `bool(shutil.which("ccr"))` half would otherwise silently override
         # the `ccr_initially_present` fixture below on every developer
-        # machine that has CCR installed. Neutralize it so the fallback
-        # rests solely on the patched _verify_ccr(), matching every test's
-        # actual intent.
-        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
-        ccr_state = {"verified": ccr_initially_present}
-
-        def _verify():
-            return ccr_state["verified"]
-
-        def _install():
-            ccr_state["verified"] = (install_rc == 0)
-            return install_rc
-
-        monkeypatch.setattr("quoin.router._verify_ccr", _verify)
-        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        # machine that has CCR installed. Neutralize it so the presence
+        # signal rests solely on `ccr_initially_present`, matching every
+        # test's actual intent. None of the callers of this helper exercise
+        # the fresh-install-succeeds path, so a static (not post-install
+        # stateful) fake is sufficient here.
+        monkeypatch.setattr(
+            "quoin.router.shutil.which",
+            lambda cmd: "/usr/bin/ccr" if (cmd == "ccr" and ccr_initially_present) else None,
+        )
+        monkeypatch.setattr("quoin.router._install_ccr", lambda: install_rc)
 
         # Optionally pre-seed a config
         config_path = ccr_config_path(home=tmp_path)
@@ -321,18 +317,21 @@ class TestCmdRouterSetup:
         assert "default" in cfg["Router"]
         assert "NON_INTERACTIVE_MODE" not in cfg.get("Router", {})
 
-    def test_node_absent_returns_1_writes_nothing(self, monkeypatch, tmp_path: Path) -> None:
+    def test_node_absent_returns_1_writes_nothing(self, monkeypatch, tmp_path: Path, capsys) -> None:
         rc = self._run_setup(monkeypatch, tmp_path, node_present=False)
         assert rc == 1
         assert not ccr_config_path(home=tmp_path).exists()
+        captured = capsys.readouterr()
+        assert_no_secret_in(captured.out, "sk-or-SENTINEL-KEY")
+        assert_no_secret_in(captured.err, "sk-or-SENTINEL-KEY")
 
     def test_missing_key_returns_1_writes_nothing(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
@@ -358,23 +357,19 @@ class TestCmdRouterSetup:
         """D-06: probe-first — _install_ccr must NOT be called when CCR is already present."""
         install_call_count = {"n": 0}
 
-        def _verify():
-            return True
-
         def _install():
             install_call_count["n"] += 1
             return 0
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", _verify)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
         # The unknown-major fallback now rests on PATH alone (m1 fix); supply
         # the presence signal explicitly so the test is deterministic on a
         # host with no real `ccr` on PATH.
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -384,21 +379,21 @@ class TestCmdRouterSetup:
 
     # ── T-06(e): Node gate (AC-13, user-visible half) ──────────────────────────
 
-    def test_node_below_min_does_not_install(self, monkeypatch, tmp_path: Path) -> None:
+    def test_node_below_min_does_not_install(self, monkeypatch, tmp_path: Path, capsys) -> None:
         install_call_count = {"n": 0}
+        sentinel = "sk-or-SENTINEL"
 
         def _install():
             install_call_count["n"] += 1
             return 0
 
-        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._node_major", lambda: 21)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -406,6 +401,9 @@ class TestCmdRouterSetup:
 
         assert rc != 0
         assert install_call_count["n"] == 0
+        captured = capsys.readouterr()
+        assert_no_secret_in(captured.out, sentinel)
+        assert_no_secret_in(captured.err, sentinel)
 
     def test_node_below_min_names_required_version(
         self, monkeypatch, tmp_path: Path, capsys
@@ -413,11 +411,10 @@ class TestCmdRouterSetup:
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._node_major", lambda: 21)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -427,24 +424,23 @@ class TestCmdRouterSetup:
 
     def test_node_at_min_installs(self, monkeypatch, tmp_path: Path) -> None:
         install_call_count = {"n": 0}
-        ccr_state = {"verified": False}
+        which_state = {"present": False}
 
-        def _verify():
-            return ccr_state["verified"]
+        def _which(cmd):
+            return "/usr/bin/ccr" if (cmd == "ccr" and which_state["present"]) else None
 
         def _install():
             install_call_count["n"] += 1
-            ccr_state["verified"] = True
+            which_state["present"] = True
             return 0
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._node_major", lambda: 22)
-        monkeypatch.setattr("quoin.router._verify_ccr", _verify)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
-        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("quoin.router.shutil.which", _which)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -471,7 +467,6 @@ class TestCmdRouterSetup:
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
 
@@ -498,7 +493,6 @@ class TestCmdRouterSetup:
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
 
@@ -508,19 +502,46 @@ class TestCmdRouterSetup:
         assert install_call_count["n"] == 0
         assert sqlite_path.read_bytes() == before
 
-    def test_config_json_present_without_binary_installs(self, monkeypatch, tmp_path: Path) -> None:
-        """MAJ-1 fix: a leftover config.json is quoin's own artifact and must
-        not stand in for a live package — install must run when neither
-        `ccr` nor a readable npm package can be found."""
+    def test_npm_presence_signal_skips_install_without_which(self, monkeypatch, tmp_path: Path) -> None:
+        """m1: the npm half of the presence signal (`_npm_major() is not
+        None` when `which` is absent) is real production code, but the
+        conftest-wide npm isolation flag meant no test exercised it — stub
+        the npm seam to a readable major with `which` returning None and
+        pin that the install is still skipped."""
         install_call_count = {"n": 0}
-        ccr_state = {"verified": False}
-
-        def _verify():
-            return ccr_state["verified"]
 
         def _install():
             install_call_count["n"] += 1
-            ccr_state["verified"] = True
+            return 0
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 2)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 0
+        assert rc == 0
+
+    def test_config_json_present_without_binary_installs(self, monkeypatch, tmp_path: Path) -> None:
+        """MAJ-1 fix: a leftover config.json is quoin's own artifact and must
+        not stand in for a live package — install must run when neither
+        `ccr` nor a readable npm package can be found. Presence is faked via
+        a stateful `shutil.which`, not a version query: on a real v3 install
+        `ccr -v`/`ccr version` both exit 1, so a test that hard-coded that
+        route to success would pin an outcome production cannot produce."""
+        install_call_count = {"n": 0}
+        which_state = {"present": False}
+
+        def _which(cmd):
+            return "/usr/bin/ccr" if (cmd == "ccr" and which_state["present"]) else None
+
+        def _install():
+            install_call_count["n"] += 1
+            which_state["present"] = True
             return 0
 
         (tmp_path / ".claude-code-router").mkdir(parents=True, exist_ok=True)
@@ -528,9 +549,8 @@ class TestCmdRouterSetup:
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", _verify)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
-        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("quoin.router.shutil.which", _which)
 
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
@@ -552,7 +572,6 @@ class TestCmdRouterSetup:
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
 
@@ -573,7 +592,6 @@ class TestCmdRouterSetup:
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
 
@@ -586,9 +604,9 @@ class TestCmdRouterSetup:
 
     def test_unknown_major_with_which_preserves_skip(self, monkeypatch, tmp_path: Path) -> None:
         """R-03: on the unknown-major fallback, `which` is the load-bearing
-        half that preserves idempotence on a machine class where
-        `_verify_ccr()` is known-inert (ccr -v exits 1 on a healthy v3
-        install)."""
+        half that preserves idempotence on a machine class where a version
+        query is known-inert (`ccr -v` exits 1 on a healthy v3 install —
+        which is exactly why this path never uses one)."""
         install_call_count = {"n": 0}
 
         def _install():
@@ -597,11 +615,10 @@ class TestCmdRouterSetup:
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -613,10 +630,10 @@ class TestCmdRouterSetup:
         """Second run: backup created, no duplicate providers/keys, models.json untouched."""
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -644,15 +661,134 @@ class TestCmdRouterSetup:
         openrouter_models = openrouter_entries[0].get("models", [])
         assert "user-edited-model" in openrouter_models
 
+    # ── Post-install verification (C1/C2): re-detect, never version-query ──────
+
+    def test_fresh_install_with_v3_detected_refuses_and_writes_nothing(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """C1/C2: a successful install of the pinned 3.1.0 must not fall
+        through to a v2 config write. Presence is confirmed via PATH or a
+        readable npm package, then detection is re-run; a v3 result routes
+        into the same refusal used pre-install, and nothing is written."""
+        install_call_count = {"n": 0}
+        npm_state = {"major": None}
+
+        def _install():
+            install_call_count["n"] += 1
+            npm_state["major"] = 3  # the pinned package is now on disk
+            return 0
+
+        detect_calls: list[int] = []
+
+        def _fake_detect(home=None, **kw):
+            detect_calls.append(1)
+            if len(detect_calls) == 1:
+                return CcrVersion(0, None, "none")  # nothing installed yet
+            return CcrVersion(3, None, "npm")  # re-detected after install
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("quoin.router._npm_major", lambda: npm_state["major"])
+        monkeypatch.setattr("quoin.router.detect_ccr", _fake_detect)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+        captured = capsys.readouterr()
+
+        assert install_call_count["n"] == 1
+        assert rc == 0
+        assert "Nothing was changed" in captured.out
+        assert not ccr_config_path(home=tmp_path).exists()
+
+    def test_fresh_install_without_presence_signal_returns_1(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """C1: `_install_ccr()` returning 0 is not proof of presence — if
+        neither `which` nor a readable npm package confirms it afterward,
+        the handler must report 'not on PATH' rather than trust the exit
+        code (and must never fall back to a version query to decide)."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+        captured = capsys.readouterr()
+
+        assert rc == 1
+        assert "not on PATH" in captured.err
+        assert not ccr_config_path(home=tmp_path).exists()
+
+    def test_setup_never_invokes_ccr_version_query(self, monkeypatch, tmp_path: Path) -> None:
+        """C1 regression guard: nothing on the setup path may shell out to
+        `ccr -v` / `ccr version` — both exit 1 on a healthy v3.1.0 install
+        and migrate-and-delete the user's v2 config.json."""
+        recorded_argv: list[list[str]] = []
+
+        class _Result:
+            def __init__(self, returncode: int = 0, stdout: str = "") -> None:
+                self.returncode = returncode
+                self.stdout = stdout
+
+        def _spy_run(argv, *a, **kw):
+            recorded_argv.append(list(argv))
+            return _Result(returncode=0, stdout="/fake/prefix\n")
+
+        monkeypatch.setattr("quoin.router.subprocess.run", _spy_run)
+        monkeypatch.setattr("quoin.router._npm_query_enabled", True)
+        monkeypatch.setattr("quoin.router._ccr_package_json", lambda prefix: None)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._node_major", lambda: 22)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+
+        args = _make_args(home=tmp_path)
+        _cmd_router_setup(args)
+
+        assert recorded_argv, "expected the install/npm-probe path to spawn at least once"
+        for argv in recorded_argv:
+            assert not (
+                argv and argv[0] == "ccr" and any(a in ("-v", "version") for a in argv[1:])
+            ), f"ccr invoked with a version query: {argv}"
+
+    def test_dry_run_before_install_never_calls_install(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """M2: --dry-run must short-circuit before any install is
+        attempted — not just before the config write — so it can never
+        spawn a real npm install, let alone delete or mutate anything."""
+        install_call_count = {"n": 0}
+
+        def _install():
+            install_call_count["n"] += 1
+            return 0
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        args = _make_args(home=tmp_path, dry_run=True)
+        rc = _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 0
+        assert rc == 0
+        assert not ccr_config_path(home=tmp_path).exists()
+
     def test_secret_not_in_stdout(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """R-03: OPENROUTER_API_KEY must never appear in stdout."""
         sentinel = "sk-or-SENTINEL-KEY-DO-NOT-PRINT"
         monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -670,7 +806,7 @@ class TestCmdRouterSetup:
         monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(3, "sqlite", "store:sqlite")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(3, "sqlite", "store:sqlite")
         )
 
         args = _make_args(home=tmp_path)
@@ -687,10 +823,10 @@ class TestCmdRouterSetup:
         sentinel = "sk-or-SENTINEL-KEY-MODELS-FILE"
         monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         args = _make_args(home=tmp_path)
@@ -738,10 +874,10 @@ class TestSetupHonorsModelsJson:
     def _run_setup(self, monkeypatch, tmp_path: Path, *, dry_run: bool = False) -> int:
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
         args = _make_args(dry_run=dry_run, home=tmp_path)
         return _cmd_router_setup(args)
@@ -859,14 +995,16 @@ class TestCmdRouterStatus:
         key_set: bool = False,
     ) -> tuple[int, str]:
         import io
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: ccr_installed)
+        monkeypatch.setattr(
+            "quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if (cmd == "ccr" and ccr_installed) else None
+        )
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: live)
         monkeypatch.setattr("quoin.router.probe_service", lambda **kw: live)
         # Forward-looking gate: _cmd_router_status does not call detect_ccr in
         # this stage, but this pins the class against host store state before
         # a later stage wires detection into status.
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
 
         if key_set:
@@ -919,10 +1057,10 @@ class TestCmdRouterStatus:
     def test_key_shown_as_set_unset_never_value(self, monkeypatch, tmp_path: Path, capsys) -> None:
         sentinel = "sk-or-SECRET-STATUS-LEAK"
         monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
         monkeypatch.setattr("quoin.router.probe_service", lambda **kw: False)
         monkeypatch.setattr(
-            "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
         )
         args = argparse.Namespace(_home_override=tmp_path)
         _cmd_router_status(args)

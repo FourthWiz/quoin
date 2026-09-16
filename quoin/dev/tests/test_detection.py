@@ -253,16 +253,25 @@ def test_npm_flag_gates_seam_a(monkeypatch) -> None:
 
 
 def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
-    """M2 fix: a wedged `npm prefix -g` degrades to None, not a raise."""
+    """M2 fix: a wedged `npm prefix -g` degrades to None, not a raise — and
+    it must actually carry a positive timeout kwarg, or a mutant that
+    deletes `timeout=5` from the call site would still pass this test."""
     from quoin.router import _npm_global_prefix
 
+    recorded_timeouts: list[object] = []
+
     def hanging_run(argv, **kwargs):
+        recorded_timeouts.append(kwargs.get("timeout"))
         raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
 
     monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
     with monkeypatch.context() as m:
         m.setattr("quoin.router._npm_query_enabled", True)
         assert _npm_global_prefix() is None
+
+    assert recorded_timeouts and all(
+        isinstance(t, (int, float)) and t > 0 for t in recorded_timeouts
+    )
 
 
 def test_npm_flag_off_vs_on_through_detect(monkeypatch, tmp_path: Path) -> None:
@@ -417,16 +426,25 @@ def test_node_major_none_when_absent(monkeypatch) -> None:
 
 
 def test_node_major_none_on_timeout(monkeypatch) -> None:
-    """M2 fix: a wedged `node --version` degrades to None, not a raise."""
+    """M2 fix: a wedged `node --version` degrades to None, not a raise — and
+    it must actually carry a positive timeout kwarg, or a mutant that
+    deletes `timeout=5` from the call site would still pass this test."""
     monkeypatch.setattr(
         "quoin.router.shutil.which", lambda name: "/usr/local/bin/node" if name == "node" else None
     )
 
+    recorded_timeouts: list[object] = []
+
     def hanging_run(argv, **kwargs):
+        recorded_timeouts.append(kwargs.get("timeout"))
         raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
 
     monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
     assert _node_major() is None
+
+    assert recorded_timeouts and all(
+        isinstance(t, (int, float)) and t > 0 for t in recorded_timeouts
+    )
 
 
 def test_node_major_none_on_bad_output(monkeypatch) -> None:

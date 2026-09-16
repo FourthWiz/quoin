@@ -2,7 +2,7 @@
 
 All tests run in CI with NO network/ccr/npm access.
 - ccr_config.probe_service is monkeypatched for deterministic liveness.
-- router._verify_ccr and shutil.which are monkeypatched for CCR install state.
+- shutil.which is monkeypatched for CCR install state.
 - Temp HOME (tmp_path) isolates filesystem side-effects.
 
 Import style note (load-bearing):
@@ -375,7 +375,6 @@ class TestOriginReclassification:
 
     def test_pinned_superseded_slug_reports_user(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("shutil.which", lambda name: None)
 
         mp = quoin_models_path(home=tmp_path)
@@ -419,7 +418,6 @@ class TestCmdModelsShow:
         ccr_installed: bool = False,
     ) -> tuple[int, str]:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: live)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: ccr_installed)
         monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/ccr" if (name == "ccr" and ccr_installed) else None)
 
         if cfg_present:
@@ -919,7 +917,6 @@ class TestCcrNotInstalledPath:
         self, monkeypatch, tmp_path: Path
     ) -> None:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("shutil.which", lambda name: None)
         args = _make_args(home=tmp_path)
         rc = _cmd_models_show(args)
@@ -943,7 +940,6 @@ class TestCliWiring:
 
     def _run_cli(self, monkeypatch, tmp_path: Path, argv: list[str]) -> tuple[int, str]:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
-        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("shutil.which", lambda name: None)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
