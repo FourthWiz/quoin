@@ -263,7 +263,7 @@ workflow intent through natural-language phase requests and repo-local docs.
 ## Open-model routing (opt-in)
 
 Quoin can route Claude Code through [claude-code-router](https://github.com/musistudio/claude-code-router)
-to use open models from OpenRouter (DeepSeek V4, GLM-5.1, and others) when your
+to use open models from OpenRouter (DeepSeek V4.1, GLM-5.3, and others) when your
 Anthropic quota is low. This is fully opt-in — `quoin install` is unchanged.
 
 ### Setup
@@ -273,7 +273,7 @@ export OPENROUTER_API_KEY=sk-or-...   # your OpenRouter key
 quoin router setup                    # install CCR + scaffold config
 ```
 
-This installs `claude-code-router` globally (requires Node.js) and scaffolds
+This installs `claude-code-router` globally (requires Node 22 or newer) and scaffolds
 `~/.claude-code-router/config.json` with an OpenRouter provider and a tier routing
 map. Any existing config is backed up with a timestamp before changes are applied.
 
@@ -333,15 +333,15 @@ quoin models reset --native   # identical to reset (explicit-intent spelling)
 
 | Alias | Slug |
 |-------|------|
-| `flash` | `deepseek/deepseek-v4-flash` |
-| `pro` | `deepseek/deepseek-v4-pro` |
-| `glm` | `z-ai/glm-5.2` |
+| `flash` | `z-ai/glm-5.3-flash` |
+| `pro` | `deepseek/deepseek-v4.1-flash` |
+| `glm` | `z-ai/glm-5.3` |
 
 Examples:
 
 ```bash
-quoin models set opus glm          # set opus → z-ai/glm-5.2 (alias)
-quoin models set sonnet pro        # set sonnet → deepseek/deepseek-v4-pro (alias)
+quoin models set opus glm          # set opus → z-ai/glm-5.3 (alias)
+quoin models set sonnet pro        # set sonnet → deepseek/deepseek-v4.1-flash (alias)
 quoin models set haiku anthropic/claude-3-haiku  # any OpenRouter slug
 ```
 
