@@ -16,6 +16,7 @@ All tests run in CI with NO network/npm/ccr access.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -251,6 +252,19 @@ def test_npm_flag_gates_seam_a(monkeypatch) -> None:
     assert result == "/fake/prefix"
 
 
+def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
+    """M2 fix: a wedged `npm prefix -g` degrades to None, not a raise."""
+    from quoin.router import _npm_global_prefix
+
+    def hanging_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
+    with monkeypatch.context() as m:
+        m.setattr("quoin.router._npm_query_enabled", True)
+        assert _npm_global_prefix() is None
+
+
 def test_npm_flag_off_vs_on_through_detect(monkeypatch, tmp_path: Path) -> None:
     """The flag gate end-to-end, with seam A intact: both the gate and the
     package.json read are genuinely in the path, so the flip is the only
@@ -340,6 +354,17 @@ def test_non_numeric_version_is_unknown(monkeypatch, tmp_path: Path) -> None:
     assert _npm_major() is None
 
 
+def test_oversized_package_json_is_unknown(monkeypatch, tmp_path: Path) -> None:
+    """m5 fix: refuse to read an oversized manifest rather than loading it."""
+    prefix = tmp_path / "prefix"
+    pkg_dir = prefix / "lib" / "node_modules" / "@musistudio" / "claude-code-router"
+    pkg_dir.mkdir(parents=True, exist_ok=True)
+    oversized = {"version": "3.0.0", "padding": "x" * (1024 * 1024 + 1)}
+    (pkg_dir / "package.json").write_text(json.dumps(oversized), encoding="utf-8")
+    monkeypatch.setattr("quoin.router._npm_global_prefix", lambda: str(prefix))
+    assert _npm_major() is None
+
+
 # ── (d) Pin (AC-11, AC-12) and Node-major parse (AC-13, seam level) ─────────
 
 def test_install_command_carries_pinned_version(monkeypatch) -> None:
@@ -388,6 +413,19 @@ def test_node_major_parses_v22_11_0(monkeypatch) -> None:
 
 def test_node_major_none_when_absent(monkeypatch) -> None:
     monkeypatch.setattr("quoin.router.shutil.which", lambda name: None)
+    assert _node_major() is None
+
+
+def test_node_major_none_on_timeout(monkeypatch) -> None:
+    """M2 fix: a wedged `node --version` degrades to None, not a raise."""
+    monkeypatch.setattr(
+        "quoin.router.shutil.which", lambda name: "/usr/local/bin/node" if name == "node" else None
+    )
+
+    def hanging_run(argv, **kwargs):
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+
+    monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
     assert _node_major() is None
 
 

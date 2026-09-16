@@ -333,7 +333,7 @@ class TestValidateSlug:
         with no advisory warning — i.e. the alias target is always a member
         of KNOWN_SLUGS, not just structurally plausible."""
         resolved, warnings = validate_slug("glm")
-        assert resolved == FRIENDLY_ALIASES["glm"] == DEFAULT_MODELS["opus"]
+        assert resolved == "z-ai/glm-5.3"
         assert warnings == []
 
 

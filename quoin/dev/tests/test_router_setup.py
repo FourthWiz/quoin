@@ -369,6 +369,10 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", _verify)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
+        # The unknown-major fallback now rests on PATH alone (m1 fix); supply
+        # the presence signal explicitly so the test is deterministic on a
+        # host with no real `ccr` on PATH.
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
             "quoin.router.detect_ccr", lambda home=None: CcrVersion(0, None, "none")
         )
@@ -452,7 +456,8 @@ class TestCmdRouterSetup:
     # ── T-06(f): reinstall-skip (AC-14) and the `unknown` fallback ─────────────
 
     def test_detected_v2_skips_install(self, monkeypatch, tmp_path: Path) -> None:
-        """The real AC-14 evidence: skip rests on the store, not on _verify_ccr."""
+        """The real AC-14 evidence: skip rests on the store plus a live
+        presence signal (MAJ-1 fix), not on _verify_ccr alone."""
         install_call_count = {"n": 0}
 
         def _install():
@@ -468,6 +473,7 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
 
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
@@ -494,12 +500,68 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
 
         args = _make_args(home=tmp_path)
         _cmd_router_setup(args)
 
         assert install_call_count["n"] == 0
         assert sqlite_path.read_bytes() == before
+
+    def test_config_json_present_without_binary_installs(self, monkeypatch, tmp_path: Path) -> None:
+        """MAJ-1 fix: a leftover config.json is quoin's own artifact and must
+        not stand in for a live package — install must run when neither
+        `ccr` nor a readable npm package can be found."""
+        install_call_count = {"n": 0}
+        ccr_state = {"verified": False}
+
+        def _verify():
+            return ccr_state["verified"]
+
+        def _install():
+            install_call_count["n"] += 1
+            ccr_state["verified"] = True
+            return 0
+
+        (tmp_path / ".claude-code-router").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".claude-code-router" / "config.json").write_text("{}", encoding="utf-8")
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._verify_ccr", _verify)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+
+        assert install_call_count["n"] == 1
+        assert rc == 0
+
+    def test_config_sqlite_present_without_binary_reaches_not_on_path(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """Same fix, v3-shaped store: a `config.sqlite` left behind by an
+        uninstalled package must not skip the install, and must reach the
+        pre-existing 'not on PATH' diagnostic when the install itself still
+        cannot put `ccr` on PATH — the merge-base return-1 path this
+        branch's store-based skip had made unreachable for this case."""
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.sqlite").write_bytes(b"")
+
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
+        monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+        captured = capsys.readouterr()
+
+        assert rc == 1
+        assert "not on PATH" in captured.err
 
     def test_v3_refusal_is_s1_local_contract(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """S-1-local contract, isolated from the stable skip test above so the
@@ -513,6 +575,7 @@ class TestCmdRouterSetup:
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._verify_ccr", lambda: False)
         monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
 
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
@@ -596,6 +659,26 @@ class TestCmdRouterSetup:
         _cmd_router_setup(args)
 
         captured = capsys.readouterr()
+        assert_no_secret_in(captured.out, sentinel)
+        assert_no_secret_in(captured.err, sentinel)
+
+    def test_secret_not_in_stdout_on_v3_refusal(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        """A detected-v3 machine returns before the key is read at all; pin
+        that the refusal path carries no secret now, ahead of the sibling
+        stage's v3 writer that will actually read the key on this branch."""
+        sentinel = "sk-or-SENTINEL-KEY-DO-NOT-PRINT"
+        monkeypatch.setenv("OPENROUTER_API_KEY", sentinel)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None: CcrVersion(3, "sqlite", "store:sqlite")
+        )
+
+        args = _make_args(home=tmp_path)
+        rc = _cmd_router_setup(args)
+        captured = capsys.readouterr()
+
+        assert rc == 0
+        assert "Nothing was changed" in captured.out
         assert_no_secret_in(captured.out, sentinel)
         assert_no_secret_in(captured.err, sentinel)
 
