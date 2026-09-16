@@ -364,8 +364,8 @@ class TestCmdRouterSetup:
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
-        # The unknown-major fallback now rests on PATH alone (m1 fix); supply
-        # the presence signal explicitly so the test is deterministic on a
+        # The unknown-major fallback rests on PATH alone; supply the
+        # presence signal explicitly so the test is deterministic on a
         # host with no real `ccr` on PATH.
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
         monkeypatch.setattr(
@@ -453,7 +453,7 @@ class TestCmdRouterSetup:
 
     def test_detected_v2_skips_install(self, monkeypatch, tmp_path: Path) -> None:
         """The real AC-14 evidence: skip rests on the store plus a live
-        presence signal (MAJ-1 fix), not on _verify_ccr alone."""
+        presence signal, never on a version query."""
         install_call_count = {"n": 0}
 
         def _install():
@@ -503,8 +503,8 @@ class TestCmdRouterSetup:
         assert sqlite_path.read_bytes() == before
 
     def test_npm_presence_signal_skips_install_without_which(self, monkeypatch, tmp_path: Path) -> None:
-        """m1: the npm half of the presence signal (`_npm_major() is not
-        None` when `which` is absent) is real production code, but the
+        """The npm half of the presence signal (`_npm_major() is not None`
+        when `which` is absent) is real production code, but the
         conftest-wide npm isolation flag meant no test exercised it — stub
         the npm seam to a readable major with `which` returning None and
         pin that the install is still skipped."""
@@ -526,13 +526,22 @@ class TestCmdRouterSetup:
         assert install_call_count["n"] == 0
         assert rc == 0
 
-    def test_config_json_present_without_binary_installs(self, monkeypatch, tmp_path: Path) -> None:
-        """MAJ-1 fix: a leftover config.json is quoin's own artifact and must
-        not stand in for a live package — install must run when neither
-        `ccr` nor a readable npm package can be found. Presence is faked via
-        a stateful `shutil.which`, not a version query: on a real v3 install
-        `ccr -v`/`ccr version` both exit 1, so a test that hard-coded that
-        route to success would pin an outcome production cannot produce."""
+    def test_config_json_present_without_binary_installs(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """A leftover config.json is quoin's own artifact and must not stand
+        in for a live package — install must run when neither `ccr` nor a
+        readable npm package can be found. Presence is faked via a stateful
+        `shutil.which`, not a version query: on a real v3 install `ccr -v`/
+        `ccr version` both exit 1, so a test that hard-coded that route to
+        success would pin an outcome production cannot produce.
+
+        The install succeeds, but the post-install decision must come from
+        the pinned constant, not from re-asking a detector whose store-first
+        classification would still answer "v2" for this leftover file — so
+        it must refuse rather than merge the API key into that file. Only
+        the seams are stubbed here — the detector itself is never
+        monkeypatched, so this exercises the real classification path."""
         install_call_count = {"n": 0}
         which_state = {"present": False}
 
@@ -545,7 +554,8 @@ class TestCmdRouterSetup:
             return 0
 
         (tmp_path / ".claude-code-router").mkdir(parents=True, exist_ok=True)
-        (tmp_path / ".claude-code-router" / "config.json").write_text("{}", encoding="utf-8")
+        config_path = tmp_path / ".claude-code-router" / "config.json"
+        config_path.write_text("{}", encoding="utf-8")
 
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
@@ -554,9 +564,13 @@ class TestCmdRouterSetup:
 
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
+        captured = capsys.readouterr()
 
         assert install_call_count["n"] == 1
         assert rc == 0
+        assert "quoin's v3 configuration writer is not available yet" in captured.out
+        assert config_path.read_text(encoding="utf-8") == "{}"
+        assert_no_secret_in(config_path.read_text(encoding="utf-8"), "sk-or-SENTINEL")
 
     def test_config_sqlite_present_without_binary_reaches_not_on_path(
         self, monkeypatch, tmp_path: Path, capsys
@@ -581,6 +595,46 @@ class TestCmdRouterSetup:
 
         assert rc == 1
         assert "not on PATH" in captured.err
+
+    def test_npm_spawn_census_per_machine_state(self, monkeypatch, tmp_path: Path) -> None:
+        """Regression guard for the npm-read threading: pins the number of
+        `_npm_major()` reads per machine state, so a future edit that
+        reintroduces a duplicate spawn (or drops the thread-through
+        entirely) fails here rather than only being caught by inspection."""
+        call_count = {"n": 0}
+
+        def _counting_npm_major():
+            call_count["n"] += 1
+            return 2
+
+        monkeypatch.setattr("quoin.router._npm_major", _counting_npm_major)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._install_ccr", lambda: (_ for _ in ()).throw(
+            AssertionError("must not install when already present")
+        ))
+
+        # (a) a lone config.json with `ccr` live on PATH: the json branch
+        # never reads npm, and `which` alone satisfies the presence check —
+        # zero npm spawns.
+        call_count["n"] = 0
+        (tmp_path / ".claude-code-router").mkdir(parents=True, exist_ok=True)
+        (tmp_path / ".claude-code-router" / "config.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None)
+        rc = _cmd_router_setup(_make_args(home=tmp_path))
+        assert rc == 0
+        assert call_count["n"] == 0
+
+        # (b) a lone config.sqlite with `ccr` live on PATH: the sqlite
+        # branch reads npm once (to resolve the residual-rule cap), and
+        # that same read is threaded into the presence check — one spawn.
+        call_count["n"] = 0
+        tmp_path2 = tmp_path.parent / (tmp_path.name + "-b")
+        (tmp_path2 / ".claude-code-router").mkdir(parents=True, exist_ok=True)
+        (tmp_path2 / ".claude-code-router" / "config.sqlite").write_bytes(b"")
+        rc = _cmd_router_setup(_make_args(home=tmp_path2))
+        assert rc == 0
+        assert call_count["n"] == 1
 
     def test_v3_refusal_is_s1_local_contract(self, monkeypatch, tmp_path: Path, capsys) -> None:
         """S-1-local contract, isolated from the stable skip test above so the
@@ -661,15 +715,18 @@ class TestCmdRouterSetup:
         openrouter_models = openrouter_entries[0].get("models", [])
         assert "user-edited-model" in openrouter_models
 
-    # ── Post-install verification (C1/C2): re-detect, never version-query ──────
+    # ── Post-install decision: pinned constant, never a version-query ─────────
 
     def test_fresh_install_with_v3_detected_refuses_and_writes_nothing(
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
-        """C1/C2: a successful install of the pinned 3.1.0 must not fall
-        through to a v2 config write. Presence is confirmed via PATH or a
-        readable npm package, then detection is re-run; a v3 result routes
-        into the same refusal used pre-install, and nothing is written."""
+        """A successful install of the pinned 3.1.0 must not fall through
+        to a v2 config write. Presence is confirmed via PATH or a readable
+        npm package; the refusal that follows comes from the pinned
+        constant (the install just placed it there, by construction), not
+        from re-asking a detector whose store-first classification would
+        still answer "no store" here — and the message must say what was
+        installed rather than claim nothing changed."""
         install_call_count = {"n": 0}
         npm_state = {"major": None}
 
@@ -678,20 +735,14 @@ class TestCmdRouterSetup:
             npm_state["major"] = 3  # the pinned package is now on disk
             return 0
 
-        detect_calls: list[int] = []
-
-        def _fake_detect(home=None, **kw):
-            detect_calls.append(1)
-            if len(detect_calls) == 1:
-                return CcrVersion(0, None, "none")  # nothing installed yet
-            return CcrVersion(3, None, "npm")  # re-detected after install
-
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._install_ccr", _install)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
         monkeypatch.setattr("quoin.router._npm_major", lambda: npm_state["major"])
-        monkeypatch.setattr("quoin.router.detect_ccr", _fake_detect)
+        monkeypatch.setattr(
+            "quoin.router.detect_ccr", lambda home=None, **kw: CcrVersion(0, None, "none")
+        )
 
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
@@ -699,32 +750,44 @@ class TestCmdRouterSetup:
 
         assert install_call_count["n"] == 1
         assert rc == 0
-        assert "Nothing was changed" in captured.out
+        assert "installed claude-code-router" in captured.out
+        assert "not available yet" in captured.out
+        assert "Nothing was changed" not in captured.out
         assert not ccr_config_path(home=tmp_path).exists()
 
-    def test_fresh_install_without_presence_signal_returns_1(
+    def test_fresh_install_with_no_store_real_detection_refuses_after_install(
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
-        """C1: `_install_ccr()` returning 0 is not proof of presence — if
-        neither `which` nor a readable npm package confirms it afterward,
-        the handler must report 'not on PATH' rather than trust the exit
-        code (and must never fall back to a version query to decide)."""
+        """Same guarantee through the real (unstubbed) detector: an empty
+        home with no readable npm package resolves to no store at all
+        pre-install; once `_install_ccr()` succeeds and presence is
+        confirmed, the refusal still comes from the pinned constant, and
+        nothing is written to the CCR config."""
+        install_call_count = {"n": 0}
+        npm_state = {"major": None}
+
+        def _install():
+            install_call_count["n"] += 1
+            npm_state["major"] = 3
+            return 0
+
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
-        monkeypatch.setattr("quoin.router._install_ccr", lambda: 0)
+        monkeypatch.setattr("quoin.router._install_ccr", _install)
         monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
-        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+        monkeypatch.setattr("quoin.router._npm_major", lambda: npm_state["major"])
 
         args = _make_args(home=tmp_path)
         rc = _cmd_router_setup(args)
         captured = capsys.readouterr()
 
-        assert rc == 1
-        assert "not on PATH" in captured.err
+        assert install_call_count["n"] == 1
+        assert rc == 0
+        assert "installed claude-code-router" in captured.out
         assert not ccr_config_path(home=tmp_path).exists()
 
     def test_setup_never_invokes_ccr_version_query(self, monkeypatch, tmp_path: Path) -> None:
-        """C1 regression guard: nothing on the setup path may shell out to
+        """Regression guard: nothing on the setup path may shell out to
         `ccr -v` / `ccr version` — both exit 1 on a healthy v3.1.0 install
         and migrate-and-delete the user's v2 config.json."""
         recorded_argv: list[list[str]] = []
@@ -758,9 +821,9 @@ class TestCmdRouterSetup:
     def test_dry_run_before_install_never_calls_install(
         self, monkeypatch, tmp_path: Path
     ) -> None:
-        """M2: --dry-run must short-circuit before any install is
-        attempted — not just before the config write — so it can never
-        spawn a real npm install, let alone delete or mutate anything."""
+        """--dry-run must short-circuit before any install is attempted —
+        not just before the config write — so it can never spawn a real
+        npm install, let alone delete or mutate anything."""
         install_call_count = {"n": 0}
 
         def _install():

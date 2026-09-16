@@ -1,8 +1,7 @@
-"""Tests for CCR version detection (ccr-v3-upgrade stage 1).
+"""Tests for CCR version detection.
 
 Pure units only — everything that drives a handler (_cmd_router_setup /
-_cmd_router_status) lives in test_router_setup.py instead (groups (e)-(g)
-of the stage-1 plan's Test Plan).
+_cmd_router_status) lives in test_router_setup.py instead.
 
 All tests run in CI with NO network/npm/ccr access.
 - The shared conftest.py sets quoin.router._npm_query_enabled = False for the
@@ -181,9 +180,10 @@ def test_detect_uses_no_ccr_subcommand(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_no_writes_attempted(monkeypatch, tmp_path: Path) -> None:
-    """Asserts the property (zero write-mode open calls), not a side effect
-    of directory permissions. See stage-1 plan T-06(b) for the measured
-    background on why a read-only-dir barrier test was replaced."""
+    """Asserts the property directly (zero write-mode open calls) rather
+    than as a side effect of directory permissions — a read-only-directory
+    trick is unreliable across platforms and doesn't pin what actually
+    changed."""
     _seed_store(tmp_path, sqlite=True)
 
     write_calls: list[tuple] = []
@@ -253,9 +253,9 @@ def test_npm_flag_gates_seam_a(monkeypatch) -> None:
 
 
 def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
-    """M2 fix: a wedged `npm prefix -g` degrades to None, not a raise — and
-    it must actually carry a positive timeout kwarg, or a mutant that
-    deletes `timeout=5` from the call site would still pass this test."""
+    """A wedged `npm prefix -g` degrades to None, not a raise — and it must
+    actually carry a positive timeout kwarg, or a mutant that deletes
+    `timeout=5` from the call site would still pass this test."""
     from quoin.router import _npm_global_prefix
 
     recorded_timeouts: list[object] = []
@@ -299,10 +299,10 @@ def test_npm_flag_off_vs_on_through_detect(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_store_branch_ignores_npm_flag(tmp_path: Path) -> None:
-    """Survives MAJ-1's fix: unreadable npm degrades to 'no opinion', it
-    does not degrade to 'a value'. With config.sqlite present and the
-    conftest-default flag (False), detection still resolves v3 — the store
-    signal alone is sufficient when npm is unreadable."""
+    """Unreadable npm degrades to 'no opinion', it does not degrade to
+    'a value'. With config.sqlite present and the conftest-default flag
+    (False), detection still resolves v3 — the store signal alone is
+    sufficient when npm is unreadable."""
     _seed_store(tmp_path, sqlite=True)
     result = detect_ccr(home=tmp_path)
     assert result.major == 3
@@ -311,9 +311,9 @@ def test_store_branch_ignores_npm_flag(tmp_path: Path) -> None:
 
 
 def test_sqlite_and_npm_capped_is_unknown(monkeypatch, tmp_path: Path) -> None:
-    """The AC-4 conjunction, and the MAJ-1 pin. Also asserts the sibling
-    below-max case so an over-broad implementation of the residual rule
-    (capping on ANY npm/store mismatch) would be caught."""
+    """The AC-4 conjunction. Also asserts the sibling below-max case so an
+    over-broad implementation of the residual rule (capping on ANY
+    npm/store mismatch) would be caught."""
     _seed_store(tmp_path, sqlite=True)
 
     monkeypatch.setattr("quoin.router._npm_major", lambda: 4)
@@ -364,7 +364,7 @@ def test_non_numeric_version_is_unknown(monkeypatch, tmp_path: Path) -> None:
 
 
 def test_oversized_package_json_is_unknown(monkeypatch, tmp_path: Path) -> None:
-    """m5 fix: refuse to read an oversized manifest rather than loading it."""
+    """Refuse to read an oversized manifest rather than loading it."""
     prefix = tmp_path / "prefix"
     pkg_dir = prefix / "lib" / "node_modules" / "@musistudio" / "claude-code-router"
     pkg_dir.mkdir(parents=True, exist_ok=True)
@@ -384,6 +384,9 @@ def test_install_command_carries_pinned_version(monkeypatch) -> None:
         return _FakeCompletedProcess(returncode=0)
 
     monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None
+    )
     _install_ccr()
 
     assert recorded
@@ -403,9 +406,45 @@ def test_install_command_derives_from_constant(monkeypatch) -> None:
 
     monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
     monkeypatch.setattr("quoin.router.CCR_VERSION_CONSTRAINT", "@9.9.9")
+    monkeypatch.setattr(
+        "quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None
+    )
     _install_ccr()
 
     assert "@musistudio/claude-code-router@9.9.9" in recorded[0]
+
+
+def test_install_ccr_returns_1_when_npm_absent(monkeypatch) -> None:
+    """Node without npm (some distributions ship it separately) must
+    return a plain failure code rather than spawning at all."""
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+
+    assert _install_ccr() == 1
+    assert recorded == []
+
+
+def test_install_ccr_returns_1_on_missing_binary(monkeypatch) -> None:
+    """A spawn that raises FileNotFoundError (npm resolved on PATH but the
+    binary itself is gone, or a race with the presence check) must return
+    an int, never propagate the exception — every handler on this path
+    must always return int, never raise."""
+
+    def fake_run(argv, **kwargs):
+        raise FileNotFoundError("npm")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None
+    )
+
+    assert _install_ccr() == 1
 
 
 def test_node_major_parses_v22_11_0(monkeypatch) -> None:
@@ -426,9 +465,9 @@ def test_node_major_none_when_absent(monkeypatch) -> None:
 
 
 def test_node_major_none_on_timeout(monkeypatch) -> None:
-    """M2 fix: a wedged `node --version` degrades to None, not a raise — and
-    it must actually carry a positive timeout kwarg, or a mutant that
-    deletes `timeout=5` from the call site would still pass this test."""
+    """A wedged `node --version` degrades to None, not a raise — and it
+    must actually carry a positive timeout kwarg, or a mutant that deletes
+    `timeout=5` from the call site would still pass this test."""
     monkeypatch.setattr(
         "quoin.router.shutil.which", lambda name: "/usr/local/bin/node" if name == "node" else None
     )
