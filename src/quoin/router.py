@@ -12,7 +12,7 @@ import pathlib
 import shutil
 import subprocess
 import sys
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, cast
 
 from quoin.ccr_config import (
     CcrConfigError,
@@ -52,6 +52,14 @@ CCR_PINNED_VERSION = "3.1.0"     # exact; no caret or tilde range
 CCR_PINNED_MAJOR = int(CCR_PINNED_VERSION.split(".")[0])
 CCR_VERSION_CONSTRAINT = f"@{CCR_PINNED_VERSION}"
 
+# The only npm major a `config.json` store is ever a live artifact for. Kept
+# separate from CCR_KNOWN_MAJOR_MAX (which tracks what quoin can *recognise*,
+# not what a v2-shaped store can *serve*) so bumping the recognised ceiling
+# — the edit that happens the moment quoin learns about a new CCR major —
+# can never silently change which packages the stale-config.json guard lets
+# through.
+_CONFIG_JSON_STORE_MAJOR = 2
+
 # Whether quoin has a config writer for the version it pins. This is
 # deliberately its own flag rather than a check against CCR_PINNED_MAJOR:
 # the pinned major is "what we install", not "what we can configure", and
@@ -81,6 +89,18 @@ _npm_query_enabled = True   # False under pytest; see _npm_global_prefix
 _PACKAGE_JSON_MAX_BYTES = 1024 * 1024  # 1 MiB; refuse to read an oversized manifest
 
 
+def _scrubbed_env() -> dict[str, str]:
+    """A copy of the process environment with OPENROUTER_API_KEY removed.
+
+    Every subprocess this module spawns inherits the environment by
+    default, which would otherwise hand the key to a probe or install that
+    never needs it. Used for all three spawn sites (the npm and node
+    version probes, and the npm install itself) — the key's own
+    file-permission exposure is unrelated and unchanged.
+    """
+    return {k: v for k, v in os.environ.items() if k != "OPENROUTER_API_KEY"}
+
+
 def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
@@ -89,7 +109,13 @@ def _npm_global_prefix() -> str | None:      # seam A
         # pushes a cold-start `npm prefix -g` past 2s on Windows, and a
         # timeout here silently degrades to "not installed" (see the
         # `_npm_global_prefix` docstring on `_npm_major`'s caller side).
-        r = subprocess.run(["npm", "prefix", "-g"], capture_output=True, text=True, timeout=10)
+        r = subprocess.run(
+            ["npm", "prefix", "-g"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            env=_scrubbed_env(),
+        )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0:
@@ -221,7 +247,13 @@ def _node_major() -> int | None:
     if not shutil.which("node"):
         return None
     try:
-        result = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=5)
+        result = subprocess.run(
+            ["node", "--version"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env=_scrubbed_env(),
+        )
     except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
         return None
     if result.returncode != 0:
@@ -244,15 +276,10 @@ def _install_ccr() -> int:
     # test_detection.py exercises it directly.
     if not shutil.which("npm"):
         return 1
-    # npm (and any lifecycle script it runs) inherits the environment by
-    # default, which would otherwise hand OPENROUTER_API_KEY to an install
-    # that delivers the user nothing on this branch. Scrub it from a copy;
-    # the key's own file-permission exposure is unrelated and unchanged.
-    install_env = {k: v for k, v in os.environ.items() if k != "OPENROUTER_API_KEY"}
     try:
         result = subprocess.run(
             ["npm", "install", "-g", f"@musistudio/claude-code-router{CCR_VERSION_CONSTRAINT}"],
-            env=install_env,
+            env=_scrubbed_env(),
         )
     except (FileNotFoundError, OSError):
         return 1
@@ -319,12 +346,21 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     # will never read. Read npm once for the json-only case — the same read
     # the presence check a few lines down needs — and refuse before any
     # write is possible, rather than let the mis-classification reach it.
-    json_npm_major = _npm_major() if json_only else npm_major
+    # When json_only is False, npm_major was already resolved to int | None
+    # above (never the sentinel) — cast narrows the seam's static type to
+    # match, rather than leaving it widened to the sentinel's type.
+    json_npm_major = _npm_major() if json_only else cast("int | None", npm_major)
     if (
-        detected.source == "store:json"
+        not _HAS_V3_WRITER
+        and detected.source == "store:json"
         and json_npm_major is not None
-        and json_npm_major >= CCR_KNOWN_MAJOR_MAX
+        and json_npm_major != _CONFIG_JSON_STORE_MAJOR
     ):
+        # Keyed on the invariant ("config.json is a live store only for
+        # major 2"), not on CCR_KNOWN_MAJOR_MAX — that ceiling tracks what
+        # quoin recognises and is bumped independently of what a v2-shaped
+        # store can serve; coupling this refusal to it would let a future
+        # ceiling bump silently re-admit a v3+ package here.
         result = _refuse_v3(CcrVersion(json_npm_major, "json", "npm"))
         if dry_run:
             print("  --dry-run has no effect here: nothing is written on v3 either way.")
@@ -349,10 +385,18 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
 
     if installed:
         # A sqlite store can never be served by writing config.json, whatever
-        # major produced it — exactly 3, or capped-unknown beside a package
-        # newer than quoin recognises. Refuse rather than write beside it or
-        # downgrade what's there.
-        if detected.major == 3 or detected.store == "sqlite":
+        # major produced it — exactly 3, capped-unknown beside a package
+        # newer than quoin recognises, or (via the leading conjunct) any
+        # major at all once a v3 writer exists to serve it properly instead
+        # of refusing. `_HAS_V3_WRITER` gates this refusal (and the
+        # stale-config.json guard above) the same way it already gated the
+        # pre-install refusal below — flipping it is the single switch for
+        # all three sites, not just one of them.
+        if not _HAS_V3_WRITER and (
+            detected.major == 3
+            or detected.store == "sqlite"
+            or detected.source.endswith("npm-capped")
+        ):
             result = _refuse_v3(detected)
             if dry_run:
                 print("  --dry-run has no effect here: nothing is written on v3 either way.")
