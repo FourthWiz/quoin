@@ -73,7 +73,10 @@ MIN_NODE_MAJOR = 22
 
 
 class CcrVersion(NamedTuple):
-    major: int                   # 2 | 3 | 0 (0 = unknown, never a guess)
+    major: int                   # a real npm major when one was read directly
+                                 #   (so 4, 5, ... are possible, not just 2 | 3);
+                                 #   0 only when detection declined to classify,
+                                 #   never a guess
     store: str | None            # "sqlite" | "json" | None
     source: str                  # "store:sqlite" | "store:json" | "npm" | "none"
                                  #   | "npm-capped" | "store:sqlite-npm-capped"
