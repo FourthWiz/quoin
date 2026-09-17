@@ -96,3 +96,30 @@ def test_agentdesk_deploy_skipped_in_project_mode(tmp_path: Path) -> None:
             deploy_agentdesk(tmp_path, tmp_path / ".config" / "agentdesk")
 
         mock_deploy.assert_not_called()
+
+
+def test_ccr_modules_never_resolve_an_agentdesk_path() -> None:
+    """The CCR surfaces read and write CCR's own store, never agentdesk's tree.
+
+    The pane command in agentdesk.zsh sources ~/.config/agentdesk/agentdesk.zsh
+    at launch time, which is the user's shell reading the file agentdesk owns.
+    Nothing in the CCR code path may turn that into a quoin write target.
+    """
+    src = REPO_ROOT / "src" / "quoin"
+    for name in ("router.py", "models.py", "ccr_store.py", "ccr_config.py"):
+        text = (src / name).read_text(encoding="utf-8")
+        assert '"agentdesk"' not in text, f"{name} joins an agentdesk path component"
+        assert "config/agentdesk" not in text, f"{name} names the agentdesk directory"
+
+
+def test_home_anchored_agentdesk_path_is_resolved_in_one_place() -> None:
+    """Only the install command resolves ~/.config/agentdesk as a destination."""
+    import re
+
+    src = REPO_ROOT / "src" / "quoin"
+    owners = sorted(
+        path.name
+        for path in src.glob("*.py")
+        if re.search(r"home\(\)[^\n]*agentdesk", path.read_text(encoding="utf-8"))
+    )
+    assert owners == ["cli.py"], f"unexpected agentdesk destination owners: {owners}"

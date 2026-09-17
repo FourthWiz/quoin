@@ -290,7 +290,10 @@ _agentdesk_pane_cmd() {
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/spend_monitor.py\" --compact --watch'
       ;;
     ccr)
-      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo '\''CCR (OpenRouter) - project root:'\'' \"$PWD\" && if command -v ccr >/dev/null 2>&1; then ccr code; else echo '\''ccr not found'\''; fi; zsh'
+      # The store shape is the launch signal: CCR v3 has no `code`
+      # subcommand, and `ccr -v` cannot be used to ask which version this is
+      # because a version query migrates (and removes) the v2 config.json.
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo '\''CCR (OpenRouter) - project root:'\'' \"$PWD\" && if command -v ccr >/dev/null 2>&1; then if [ -f \"$HOME/.claude-code-router/config.sqlite\" ]; then ccr default-claude-code; else ccr code; fi; else echo '\''ccr not found'\''; fi; zsh'
       ;;
     dashboard)
       # T-06: Internal-only token — set by AGENTDESK_DASHBOARD flag, not by user picker.
@@ -670,7 +673,7 @@ Window types (positional):
   codex    start Codex in pane
   shell    plain zsh shell
   status   show workflow pipeline status graph
-  ccr      start ccr code (OpenRouter via CCR) in pane
+  ccr      start an open-model CCR (OpenRouter) session in pane
   spend    realtime token-spend monitor
 
 Layout memory:
