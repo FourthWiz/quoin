@@ -278,6 +278,53 @@ def v3_is_empty(cfg: dict[str, Any]) -> bool:
     return True
 
 
+def upgrade_loss_lines(
+    detected_major: int,
+    config_json_present: bool,
+    cfg: dict[str, Any],
+    api_key_rows: int | None,
+    *,
+    rebuilt: bool = False,
+) -> list[str]:
+    """Lines warning that a v2 -> v3 upgrade silently discarded the old config.
+
+    Fires only when all four signals agree: the detected major is 3, a
+    leftover config.json is still on disk, the v3 store carries no provider
+    and no API key (`v3_is_empty`), and the store's api_keys table is empty
+    or unreadable. No content comparison between the two stores is
+    performed (FR-2.9) — this is a presence-only heuristic, not a diff.
+    Never prints or echoes the key itself (FR-2.12).
+
+    `rebuilt` parameterises the one clause that differs by caller: False
+    (the default) is the forward-looking instruction, correct on
+    `router status` and on a `--dry-run` `setup` where nothing was in fact
+    written; True is correct on a `setup` run that just wrote, where the
+    forward-looking instruction would be false by the time it is printed.
+    """
+    if detected_major != 3:
+        return []
+    if not config_json_present:
+        return []
+    if not v3_is_empty(cfg):
+        return []
+    if api_key_rows not in (0, None):
+        return []
+    if rebuilt:
+        closing = "quoin has just rebuilt them from `models.json` and your exported key."
+    else:
+        closing = (
+            "re-run `quoin router setup` with OPENROUTER_API_KEY exported to rebuild them."
+        )
+    return [
+        "quoin: this looks like a claude-code-router v2 -> v3 upgrade that lost your "
+        "configuration. CCR v3 does not read the old config.json store, so your "
+        "providers, models, and API key were not carried over.",
+        "  The old config.json is still on disk but CCR no longer reads it — this is "
+        'why CCR reports "No available models".',
+        f"  {closing}",
+    ]
+
+
 def v3_api_key_row_count(path: pathlib.Path) -> int | None:
     """Count of rows in the store's api_keys table, or None if unreadable.
 

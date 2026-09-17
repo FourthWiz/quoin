@@ -294,3 +294,47 @@ def launch_guidance(major: int | None) -> tuple[str, str]:
     if major == 2:
         return V2_LAUNCH_COMMAND, ""
     return "", UNKNOWN_LAUNCH_NOTE
+
+
+# The clause that qualifies `ccr code` wherever it is rendered. Kept as its
+# own constant, reachable only through launch_command_phrase's major == 2
+# arm, so a v3 caller can never be handed the v2 command by accident.
+V2_LAUNCH_CLAUSE = "auto-starts the proxy; quoin skills work normally"
+
+
+def launch_command_phrase(major: int | None) -> str:
+    """One rendered clause: the command plus the qualification that command needs.
+
+    Callers pass the *effective* detected CCR major, not a raw
+    `route.version.major` — on a leftover-config.json machine those two
+    differ, and passing the raw one would offer `ccr code` to a v3 user.
+    Returns "" for any major this function does not recognise; callers fall
+    back to UNKNOWN_LAUNCH_NOTE in that case.
+    """
+    if major == 2:
+        return f"`{V2_LAUNCH_COMMAND}` ({V2_LAUNCH_CLAUSE})"
+    if major == 3:
+        return f"`{V3_LAUNCH_COMMAND}` — {V3_LAUNCH_NOTE}"
+    return ""
+
+
+# ── Version-boundary notice (v3 upgrade groundwork) ────────────────────────────
+
+# v3 has no equivalent of the v2 `background`, `think`, and `longContext`
+# Router keys — those route to distinct models under v2's key-per-tier map,
+# and v3 has no matching concept. quoin writes the provider, the model list,
+# and the built-in Claude Code route, and deliberately does not translate
+# the three lost routes into rules that would only look equivalent. Printed
+# unconditionally on every v3 write path, including --dry-run, so a v3 user
+# always sees it rather than only on a detected upgrade.
+#
+# Must NOT contain the literal substring "ccr code" — the same constraint
+# V3_LAUNCH_NOTE carries above, for the same reason: several tests assert
+# that substring's absence from v3-path output.
+V3_ROUTING_GAP_NOTICE = (
+    "quoin wrote the OpenRouter provider, your model list, and the built-in "
+    "Claude Code route to CCR v3. The v2 `background`, `think`, and "
+    "`longContext` routes have no v3 equivalent, so quoin deliberately did "
+    "not translate them into rules that would only look equivalent — "
+    "configure those by hand in `ccr ui` if you need them."
+)

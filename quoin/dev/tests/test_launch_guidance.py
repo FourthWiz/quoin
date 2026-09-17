@@ -18,11 +18,14 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from quoin.ccr_config import (  # noqa: E402
     OPENROUTER_PREFIX,
     UNKNOWN_LAUNCH_NOTE,
+    V2_LAUNCH_CLAUSE,
     V2_LAUNCH_COMMAND,
     V3_LAUNCH_COMMAND,
     V3_PROFILE_NAME,
+    V3_ROUTING_GAP_NOTICE,
     ccr_config_path,
     ccr_store_path,
+    launch_command_phrase,
     launch_guidance,
     owned_key_is_writable,
 )
@@ -120,6 +123,44 @@ def test_launch_guidance_returns_a_pair():
         assert isinstance(result, tuple)
         assert len(result) == 2
         assert all(isinstance(part, str) for part in result)
+
+
+# ── launch_command_phrase ────────────────────────────────────────────────────
+
+
+def test_launch_command_phrase_v2_names_command_and_clause():
+    phrase = launch_command_phrase(2)
+    assert V2_LAUNCH_COMMAND in phrase
+    assert V2_LAUNCH_CLAUSE in phrase
+
+
+def test_launch_command_phrase_v3_names_command_and_note():
+    phrase = launch_command_phrase(3)
+    assert V3_LAUNCH_COMMAND in phrase
+    assert V3_PROFILE_NAME in phrase
+    assert "ccr code" not in phrase
+
+
+def test_launch_command_phrase_unknown_falls_back_to_empty():
+    for major in (None, 0, 4):
+        assert launch_command_phrase(major) == ""
+
+
+# ── V3_ROUTING_GAP_NOTICE ────────────────────────────────────────────────────
+
+
+def test_v3_routing_gap_notice_names_the_three_lost_routes():
+    assert "background" in V3_ROUTING_GAP_NOTICE
+    assert "think" in V3_ROUTING_GAP_NOTICE
+    assert "longContext" in V3_ROUTING_GAP_NOTICE
+
+
+def test_v3_routing_gap_notice_never_says_ccr_code():
+    assert "ccr code" not in V3_ROUTING_GAP_NOTICE
+
+
+def test_v3_routing_gap_notice_points_at_ccr_ui():
+    assert "ccr ui" in V3_ROUTING_GAP_NOTICE
 
 
 # ── doc-surface agreement ───────────────────────────────────────────────────

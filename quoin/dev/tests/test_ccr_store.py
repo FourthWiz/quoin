@@ -348,6 +348,42 @@ def test_v3_is_empty_false_with_api_key():
     assert ccr_store.v3_is_empty({"Providers": [], "APIKEY": "sk-x"}) is False
 
 
+def test_upgrade_loss_lines_fires_when_all_four_signals_agree():
+    lines = ccr_store.upgrade_loss_lines(3, True, {"Providers": []}, 0)
+    assert lines
+    assert any("No available models" in line for line in lines)
+    assert not any("sk-" in line for line in lines)
+
+
+def test_upgrade_loss_lines_fires_with_unreadable_row_count():
+    lines = ccr_store.upgrade_loss_lines(3, True, {"Providers": []}, None)
+    assert lines
+
+
+def test_upgrade_loss_lines_empty_unless_major_is_3():
+    assert ccr_store.upgrade_loss_lines(2, True, {"Providers": []}, 0) == []
+
+
+def test_upgrade_loss_lines_empty_unless_config_json_present():
+    assert ccr_store.upgrade_loss_lines(3, False, {"Providers": []}, 0) == []
+
+
+def test_upgrade_loss_lines_empty_unless_store_is_empty():
+    cfg = {"Providers": [{"name": "openrouter"}]}
+    assert ccr_store.upgrade_loss_lines(3, True, cfg, 0) == []
+
+
+def test_upgrade_loss_lines_empty_when_api_key_rows_present():
+    assert ccr_store.upgrade_loss_lines(3, True, {"Providers": []}, 2) == []
+
+
+def test_upgrade_loss_lines_closing_clause_by_rebuilt():
+    forward = ccr_store.upgrade_loss_lines(3, True, {"Providers": []}, 0, rebuilt=False)
+    done = ccr_store.upgrade_loss_lines(3, True, {"Providers": []}, 0, rebuilt=True)
+    assert any("re-run" in line and "quoin router setup" in line for line in forward)
+    assert any("just rebuilt" in line for line in done)
+
+
 def test_v3_api_key_row_count_none_when_absent(tmp_path):
     assert ccr_store.v3_api_key_row_count(tmp_path / "config.sqlite") is None
 
