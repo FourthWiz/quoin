@@ -65,7 +65,8 @@ _CONFIG_JSON_STORE_MAJOR = 2
 # the pinned major is "what we install", not "what we can configure", and
 # those two facts must be free to change independently. Bumping the pin
 # alone must never silently re-enable a v2-shaped write for a package quoin
-# still cannot configure. Stage 2 flips this to True when its v3 writer lands.
+# still cannot configure. The writer stage flips this to True when its
+# v3 writer lands.
 _HAS_V3_WRITER = False
 
 MIN_NODE_MAJOR = 22
@@ -316,11 +317,20 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
             )
             print("  Configure CCR itself until then; nothing here needs undoing.")
         else:
+            # Derived from the version we were actually handed, not
+            # hardcoded — this path is reached with major 3, 4, and the
+            # capped sentinel 0 alike, and each must say what it detected.
+            if version.major == 0:
+                headline = "claude-code-router (a version newer than quoin recognises) is installed"
+                detected_label = "unrecognised"
+            else:
+                headline = f"claude-code-router {version.major}.x is installed"
+                detected_label = f"v{version.major}"
             print(
-                "quoin: claude-code-router 3.x is installed; quoin's v3 configuration "
-                "writer is not available yet. Nothing was changed."
+                f"quoin: {headline}; quoin's v3 configuration writer is not "
+                "available yet. Nothing was changed."
             )
-            print(f"  Detected:  v3 (store: {version.store}, via {version.source})")
+            print(f"  Detected:  {detected_label} (store: {version.store or 'none'}, via {version.source})")
             print("  Configure CCR itself until then; nothing here needs undoing.")
         return 0            # int, never SystemExit
 
@@ -385,17 +395,19 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
 
     if installed:
         # A sqlite store can never be served by writing config.json, whatever
-        # major produced it — exactly 3, capped-unknown beside a package
-        # newer than quoin recognises, or (via the leading conjunct) any
-        # major at all once a v3 writer exists to serve it properly instead
-        # of refusing. `_HAS_V3_WRITER` gates this refusal (and the
-        # stale-config.json guard above) the same way it already gated the
-        # pre-install refusal below — flipping it is the single switch for
-        # all three sites, not just one of them.
-        if not _HAS_V3_WRITER and (
-            detected.major == 3
-            or detected.store == "sqlite"
+        # major produced it, and neither can a package newer than quoin
+        # recognises (capped-unknown) — those two refuse unconditionally,
+        # not gated by `_HAS_V3_WRITER`: turning them off is a dispatch
+        # decision (which writer serves this store?) the writer stage must
+        # make explicitly by adding a real branch here, not a side effect
+        # of flipping a capability flag. The plain-major-3 case is the
+        # capability question `_HAS_V3_WRITER` answers, so only it — and
+        # the stale-config.json guard above, and the pre-install refusal
+        # below — is gated by the flag.
+        if (
+            detected.store == "sqlite"
             or detected.source.endswith("npm-capped")
+            or (not _HAS_V3_WRITER and detected.major == 3)
         ):
             result = _refuse_v3(detected)
             if dry_run:
