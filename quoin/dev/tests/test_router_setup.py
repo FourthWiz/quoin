@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -1383,6 +1384,29 @@ class TestImportOrderRegression:
                 f"{result.stderr}"
             )
 
+    def test_ccr_store_imports_first_without_a_cycle(self) -> None:
+        """router -> ccr_store -> router must not close into a cycle."""
+        src_path = str(REPO_ROOT / "src")
+        script = (
+            f"import sys; sys.path.insert(0, {src_path!r}); "
+            "import quoin.ccr_store; import quoin.router; import quoin.models; "
+            "assert quoin.router.ccr_store is quoin.ccr_store"
+        )
+        result = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True
+        )
+        assert result.returncode == 0, result.stderr
+
+    def test_ccr_store_imports_only_the_standard_library(self) -> None:
+        """AC-25: the store module stays free of quoin's own install path."""
+        source = (REPO_ROOT / "src" / "quoin" / "ccr_store.py").read_text()
+        for line in source.splitlines():
+            stripped = line.strip()
+            if stripped.startswith(("import ", "from ")) and "quoin" in stripped:
+                raise AssertionError(f"non-stdlib import in ccr_store.py: {stripped}")
+            if stripped.startswith(("import ", "from ")) and "installer" in stripped:
+                raise AssertionError(f"install-path import in ccr_store.py: {stripped}")
+
 
 # ── Integration tests for _cmd_router_status ──────────────────────────────────
 
@@ -1498,3 +1522,665 @@ class TestOptInIsolation:
         assert "from quoin import ccr_config" not in top_level
         assert "from quoin.router" not in top_level
         assert "from quoin.ccr_config" not in top_level
+
+
+# ── Production wiring of the three v3 writers ─────────────────────────────────
+
+@pytest.mark.parametrize("writer", ["router setup", "models set", "models preset"])
+def test_every_v3_writer_backs_up_into_the_store_directory(
+    monkeypatch, tmp_path: Path, writer: str
+) -> None:
+    """The sidecar lands beside the store, on all three write paths.
+
+    The unit-level backup cells deliberately decouple backup_dir from the
+    store directory so a read-only-directory failure is reachable, which
+    leaves the production call sites free to drift. This is the assertion
+    that pins them.
+    """
+    import quoin.ccr_store as ccr_store
+    from quoin.ccr_config import ccr_store_path
+    from quoin.models import _cmd_models_preset, _cmd_models_set
+    from quoin.router import ccr_store_dir
+
+    store_dir = ccr_store_dir(tmp_path)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    make_v3_store(
+        store_dir,
+        {
+            "Providers": [
+                {
+                    "name": "openrouter",
+                    "api_base_url": "https://openrouter.ai/api/v1/chat/completions",
+                    "api_key": "sk-or-EXISTING",
+                    "models": ["old/model"],
+                    "transformer": {"use": ["openrouter"]},
+                }
+            ]
+        },
+    )
+
+    seen: dict[str, Path] = {}
+    real_update = ccr_store.update_v3_config
+
+    def spy(path, mutate, *, backup_dir, dry_run=False):
+        seen["path"] = path
+        seen["backup_dir"] = backup_dir
+        return real_update(path, mutate, backup_dir=backup_dir, dry_run=dry_run)
+
+    monkeypatch.setattr("quoin.ccr_store.update_v3_config", spy)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-WIRING")
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None,
+    )
+
+    if writer == "router setup":
+        rc = _cmd_router_setup(_make_args(home=tmp_path))
+    elif writer == "models set":
+        rc = _cmd_models_set(
+            argparse.Namespace(_home_override=tmp_path, tier="opus", model="x/model")
+        )
+    else:
+        rc = _cmd_models_preset(argparse.Namespace(_home_override=tmp_path, name="open"))
+
+    assert rc == 0
+    assert seen["path"] == ccr_store_path(home=tmp_path)
+    assert seen["backup_dir"] == store_dir
+    assert list(store_dir.glob("config.sqlite.value-bak-*.json"))
+
+
+# ── dispatch_store: the whole store x npm cross product ───────────────────────
+
+_DETECTED_BY_CELL = {
+    ("sqlite", None): CcrVersion(3, "sqlite", "store:sqlite"),
+    ("sqlite", 2): CcrVersion(3, "sqlite", "store:sqlite"),
+    ("sqlite", 3): CcrVersion(3, "sqlite", "store:sqlite"),
+    ("sqlite", 4): CcrVersion(0, "sqlite", "store:sqlite-npm-capped"),
+    ("json", None): CcrVersion(2, "json", "store:json"),
+    ("json", 2): CcrVersion(2, "json", "store:json"),
+    ("json", 3): CcrVersion(2, "json", "store:json"),
+    ("json", 4): CcrVersion(2, "json", "store:json"),
+    ("none", None): CcrVersion(0, None, "none"),
+    ("none", 2): CcrVersion(2, None, "npm"),
+    ("none", 3): CcrVersion(3, None, "npm"),
+    ("none", 4): CcrVersion(0, None, "npm-capped"),
+}
+
+_EXPECTED_ROUTE_BY_CELL = {
+    ("sqlite", None): "v3",
+    ("sqlite", 2): "v3",
+    ("sqlite", 3): "v3",
+    ("sqlite", 4): "unknown",
+    ("json", None): "v2",
+    ("json", 2): "v2",
+    ("json", 3): "v3-store-absent",
+    ("json", 4): "unknown",
+    ("none", None): "v2",
+    ("none", 2): "v2",
+    ("none", 3): "v3-store-absent",
+    ("none", 4): "unknown",
+}
+
+
+@pytest.mark.parametrize(
+    "cell",
+    [(store, npm) for store in ("sqlite", "json", "none") for npm in (None, 2, 3, 4)],
+)
+def test_dispatch_store_cross_product(cell) -> None:
+    """Pure function, every machine state: no handler, no IO."""
+    from quoin.router import dispatch_store
+
+    assert dispatch_store(_DETECTED_BY_CELL[cell], cell[1]) == _EXPECTED_ROUTE_BY_CELL[cell]
+
+
+def test_dispatch_store_table_covers_the_whole_cross_product() -> None:
+    """The count is derived from the enumeration, never asserted beside it."""
+    expected = {
+        (store, npm) for store in ("sqlite", "json", "none") for npm in (None, 2, 3, 4)
+    }
+    assert set(_EXPECTED_ROUTE_BY_CELL) == expected
+    assert set(_DETECTED_BY_CELL) == expected
+
+
+# ── resolve_ccr_route: the assume_installed_major surface ─────────────────────
+
+class TestAssumeInstalledMajor:
+    def _route(self, tmp_path: Path, *, assume: int | None):
+        from quoin.router import resolve_ccr_route
+
+        if assume is None:
+            return resolve_ccr_route(tmp_path)
+        return resolve_ccr_route(tmp_path, assume_installed_major=assume)
+
+    def test_default_leaves_no_signal_on_v2(self, tmp_path: Path) -> None:
+        assert self._route(tmp_path, assume=None).route == "v2"
+
+    def test_no_store_and_unreadable_npm_becomes_store_absent(self, tmp_path: Path) -> None:
+        from quoin.router import CCR_PINNED_MAJOR
+
+        route = self._route(tmp_path, assume=CCR_PINNED_MAJOR)
+        assert route.route == "v3-store-absent"
+
+    def test_stale_json_and_unreadable_npm_becomes_store_absent(
+        self, tmp_path: Path
+    ) -> None:
+        from quoin.router import CCR_PINNED_MAJOR, ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.json").write_text("{}")
+        assert self._route(tmp_path, assume=None).route == "v2"
+        assert self._route(tmp_path, assume=CCR_PINNED_MAJOR).route == "v3-store-absent"
+
+    def test_stale_json_with_readable_npm_reaches_store_absent_without_assuming(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """The stale-json rule, not the substitution, is what decides here."""
+        from quoin.router import CCR_PINNED_MAJOR, ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.json").write_text("{}")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 3)
+        route = self._route(tmp_path, assume=CCR_PINNED_MAJOR)
+        assert route.route == "v3-store-absent"
+        assert route.version.source != "just-installed"
+
+    def test_capped_source_is_never_substituted(self, monkeypatch, tmp_path: Path) -> None:
+        from quoin.router import CCR_PINNED_MAJOR
+
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 9)
+        assert self._route(tmp_path, assume=CCR_PINNED_MAJOR).route == "unknown"
+
+    def test_sqlite_store_still_routes_to_v3(self, tmp_path: Path) -> None:
+        from quoin.router import CCR_PINNED_MAJOR, ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        make_v3_store(store_dir, {})
+        assert self._route(tmp_path, assume=CCR_PINNED_MAJOR).route == "v3"
+
+
+# ── The post-install re-dispatch ──────────────────────────────────────────────
+
+class TestPostInstallRedispatch:
+    def _run(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        *,
+        npm_after: int | None = None,
+        seed_json: bool = False,
+    ) -> tuple[int, int]:
+        from quoin.router import ccr_store_dir
+
+        state = {"installed": False, "calls": 0}
+
+        def which(cmd: str):
+            if cmd in ("node", "npx"):
+                return "/usr/bin/node"
+            if cmd == "ccr":
+                return "/usr/bin/ccr" if state["installed"] else None
+            return None
+
+        def install() -> int:
+            state["calls"] += 1
+            state["installed"] = True
+            return 0
+
+        monkeypatch.setattr("quoin.router.shutil.which", which)
+        monkeypatch.setattr("quoin.router._install_ccr", install)
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr("quoin.router._node_major", lambda: MIN_NODE_MAJOR)
+        monkeypatch.setattr(
+            "quoin.router._npm_major",
+            lambda: npm_after if state["installed"] else None,
+        )
+        if seed_json:
+            store_dir = ccr_store_dir(tmp_path)
+            store_dir.mkdir(parents=True, exist_ok=True)
+            (store_dir / "config.json").write_text("{}")
+
+        rc = _cmd_router_setup(_make_args(home=tmp_path))
+        return rc, state["calls"]
+
+    def test_unreadable_npm_declines_store_absent(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        rc, calls = self._run(monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert calls == 1
+        assert rc == 2
+        assert "it has not created its config store yet" in out
+        assert not ccr_config_path(home=tmp_path).exists()
+
+    def test_readable_npm_reaches_the_same_outcome_without_assuming(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        rc, calls = self._run(monkeypatch, tmp_path, npm_after=3)
+        out = capsys.readouterr().out
+        assert calls == 1
+        assert rc == 2
+        assert "it has not created its config store yet" in out
+        assert not ccr_config_path(home=tmp_path).exists()
+
+    def test_stale_config_json_is_not_overwritten(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        rc, calls = self._run(monkeypatch, tmp_path, seed_json=True)
+        out = capsys.readouterr().out
+        assert calls == 1
+        assert rc == 2
+        assert "it has not created its config store yet" in out
+        assert ccr_config_path(home=tmp_path).read_text() == "{}"
+
+    def test_already_installed_line_is_absent_after_a_real_install(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        _rc, calls = self._run(monkeypatch, tmp_path)
+        captured = capsys.readouterr()
+        assert calls == 1
+        assert "already installed — skipping npm install." not in (
+            captured.out + captured.err
+        )
+
+
+# ── v3 writes from router setup ───────────────────────────────────────────────
+
+def _seed_store(tmp_path: Path, blob, *, wal: bool = False):
+    from quoin.router import ccr_store_dir
+
+    store_dir = ccr_store_dir(tmp_path)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    return store_dir, make_v3_store(store_dir, blob, wal=wal)
+
+
+def _run_setup_on_store(
+    monkeypatch, tmp_path: Path, *, dry_run: bool = False, key: str = "sk-or-KEY"
+) -> int:
+    monkeypatch.setenv("OPENROUTER_API_KEY", key)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None,
+    )
+    return _cmd_router_setup(_make_args(dry_run=dry_run, home=tmp_path))
+
+
+class TestSetupV3Writes:
+    def test_happy_path_writes_provider_and_built_in_route(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        _store_dir, path = _seed_store(tmp_path, {})
+        rc = _run_setup_on_store(monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert rc == 0
+        blob = json.loads(store_value_snapshot(path)[0])
+        provider = next(p for p in blob["Providers"] if p.get("name") == "openrouter")
+        assert provider["api_key"] == "sk-or-KEY"
+        assert blob["Router"]["builtInRules"]["claude-code"]["enabled"] is True
+        for v2_key in ("default", "background", "think", "longContext"):
+            assert v2_key not in blob["Router"]
+        assert "rules" not in blob["Router"]
+        assert "NON_INTERACTIVE_MODE" not in json.dumps(blob)
+        assert "NON_INTERACTIVE_MODE" not in blob.get("Router", {})
+        assert "no v3 equivalent" in out
+        assert not ccr_config_path(home=tmp_path).exists()
+
+    def test_table_absent_store_is_populated_by_the_write(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """AC-24: a store quoin did not make must not crash it."""
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        path = store_dir / "config.sqlite"
+        con = sqlite3.connect(str(path))
+        con.close()
+        rc = _run_setup_on_store(monkeypatch, tmp_path)
+        assert rc == 0
+        blob = json.loads(store_value_snapshot(path)[0])
+        assert any(p.get("name") == "openrouter" for p in blob["Providers"])
+
+    def test_re_run_is_idempotent(self, monkeypatch, tmp_path: Path) -> None:
+        _store_dir, path = _seed_store(tmp_path, {})
+        assert _run_setup_on_store(monkeypatch, tmp_path) == 0
+        first = store_value_snapshot(path)
+        assert _run_setup_on_store(monkeypatch, tmp_path) == 0
+        assert store_value_snapshot(path) == first
+
+    def test_dry_run_writes_nothing_but_reports_everything(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        store_dir, path = _seed_store(tmp_path, {}, wal=True)
+        before = store_value_snapshot(path)
+        rc = _run_setup_on_store(monkeypatch, tmp_path, dry_run=True)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "quoin router setup — changes:" in out
+        assert "no v3 equivalent" in out
+        assert "[dry-run] No files written." in out
+        assert store_value_snapshot(path) == before
+        assert list(store_dir.glob("config.sqlite.value-bak-*.json")) == []
+
+    def test_malformed_blob_backs_up_and_fails(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        path = store_dir / "config.sqlite"
+        con = sqlite3.connect(str(path))
+        con.execute(
+            "CREATE TABLE app_config (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO app_config VALUES ('default', '{not json', '2026-01-01 00:00:00')"
+        )
+        con.commit()
+        con.close()
+        rc = _run_setup_on_store(monkeypatch, tmp_path)
+        err = capsys.readouterr().err
+        assert rc == 1
+        assert "malformed" in err
+        assert list(store_dir.glob("config.sqlite.value-bak-*.json"))
+
+    def test_locked_store_reports_a_store_error_not_a_raw_sqlite_error(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        _store_dir, path = _seed_store(tmp_path, {})
+        holder = sqlite3.connect(str(path), isolation_level=None)
+        try:
+            holder.execute("BEGIN IMMEDIATE")
+            rc = _run_setup_on_store(monkeypatch, tmp_path)
+            err = capsys.readouterr().err
+            assert rc == 1
+            assert "failed to write CCR v3 store" in err
+            assert "running ccr process" in err
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+
+class TestUpgradeLossReport:
+    def _seed_upgrade_machine(self, tmp_path: Path, *, leftover_json: bool = True):
+        store_dir, path = _seed_store(tmp_path, {})
+        if leftover_json:
+            (store_dir / "config.json").write_text("{}")
+        return path
+
+    def test_setup_reports_the_loss_and_says_it_rebuilt(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        self._seed_upgrade_machine(tmp_path)
+        rc = _run_setup_on_store(monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "v2 -> v3 upgrade that lost your configuration" in out
+        assert "quoin has just rebuilt them from `models.json`" in out
+        assert "re-run `quoin router setup` with OPENROUTER_API_KEY" not in out
+
+    def test_dry_run_reports_the_loss_without_claiming_a_rebuild(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        path = self._seed_upgrade_machine(tmp_path)
+        before = store_value_snapshot(path)
+        rc = _run_setup_on_store(monkeypatch, tmp_path, dry_run=True)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "v2 -> v3 upgrade that lost your configuration" in out
+        assert "re-run `quoin router setup` with OPENROUTER_API_KEY" in out
+        assert "quoin has just rebuilt them" not in out
+        assert store_value_snapshot(path) == before
+
+    def test_no_leftover_config_json_means_no_report(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        self._seed_upgrade_machine(tmp_path, leftover_json=False)
+        rc = _run_setup_on_store(monkeypatch, tmp_path)
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "v2 -> v3 upgrade that lost your configuration" not in out
+
+
+# ── router status on a v3 machine ─────────────────────────────────────────────
+
+class TestCmdRouterStatusV3:
+    def _run(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+        capsys,
+        *,
+        blob=None,
+        on_path: bool = True,
+        live: bool = False,
+        leftover_json: bool = False,
+        npm_major: int | None = None,
+    ) -> str:
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        if blob is not None:
+            make_v3_store(store_dir, blob)
+        if leftover_json:
+            (store_dir / "config.json").write_text("{}")
+        monkeypatch.setattr(
+            "quoin.router.shutil.which",
+            lambda cmd: "/usr/bin/ccr" if (cmd == "ccr" and on_path) else None,
+        )
+        monkeypatch.setattr("quoin.router.probe_service", lambda **kw: live)
+        if npm_major is not None:
+            monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        assert _cmd_router_status(_make_args(home=tmp_path)) == 0
+        return capsys.readouterr().out
+
+    def test_populated_store_reports_populated_and_omits_config_present(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(
+            monkeypatch,
+            tmp_path,
+            capsys,
+            blob={"Providers": [{"name": "openrouter", "models": ["a/b"]}]},
+        )
+        assert "Store populated: yes" in out
+        assert "Config present:" not in out
+        assert "CCR version:     v3 (via store:sqlite)" in out
+        assert "(authoritative for v3)" in out
+
+    def test_empty_store_reports_not_populated(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(monkeypatch, tmp_path, capsys, blob={})
+        assert "Store populated: no  (no providers, no API key)" in out
+        assert "Active mode:     native" in out
+
+    def test_malformed_store_degrades_to_unknown(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        path = store_dir / "config.sqlite"
+        con = sqlite3.connect(str(path))
+        con.execute(
+            "CREATE TABLE app_config (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO app_config VALUES ('default', '{not json', '2026-01-01 00:00:00')"
+        )
+        con.commit()
+        con.close()
+        out = self._run(monkeypatch, tmp_path, capsys)
+        assert "Store populated: unknown  (" in out
+
+    def test_locked_store_degrades_to_unknown(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        make_v3_store(store_dir, {})
+        holder = sqlite3.connect(str(store_dir / "config.sqlite"), isolation_level=None)
+        try:
+            holder.execute("BEGIN EXCLUSIVE")
+            out = self._run(monkeypatch, tmp_path, capsys)
+            assert "Store populated: unknown  (" in out
+        finally:
+            holder.execute("ROLLBACK")
+            holder.close()
+
+    def test_store_vouches_for_presence_when_path_does_not(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(
+            monkeypatch,
+            tmp_path,
+            capsys,
+            blob={"Providers": [{"name": "openrouter"}]},
+            on_path=False,
+        )
+        assert "CCR installed:   yes  (store present; `ccr` not on PATH)" in out
+
+    def test_populated_store_with_proxy_down_names_the_v3_command(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(
+            monkeypatch,
+            tmp_path,
+            capsys,
+            blob={"Providers": [{"name": "openrouter"}]},
+        )
+        assert "run `ccr default-claude-code` to start" in out
+        assert "no `code` subcommand" in out
+        assert "ccr code" not in out
+
+    def test_upgrade_loss_report_is_forward_looking_from_status(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(monkeypatch, tmp_path, capsys, blob={}, leftover_json=True)
+        assert "v2 -> v3 upgrade that lost your configuration" in out
+        assert "re-run `quoin router setup` with OPENROUTER_API_KEY" in out
+        assert "quoin has just rebuilt them" not in out
+
+    def test_no_signal_machine_reads_not_detected(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(monkeypatch, tmp_path, capsys, on_path=False)
+        assert "CCR version:    not detected" in out
+        assert "(via" not in out.split("CCR version:")[1].split("\n")[0]
+
+    def test_capped_machine_reads_unrecognised(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        out = self._run(monkeypatch, tmp_path, capsys, npm_major=9)
+        assert "CCR version:    unrecognised (via npm-capped)" in out
+
+
+# ── The effective version, at each render site ────────────────────────────────
+
+def _v3_by_npm_fixture(monkeypatch, tmp_path: Path, npm_major: int) -> None:
+    """A leftover config.json beside a newer package, and no config.sqlite."""
+    from quoin.router import ccr_store_dir
+
+    store_dir = ccr_store_dir(tmp_path)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    (store_dir / "config.json").write_text("{}")
+    monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None,
+    )
+    monkeypatch.setattr("quoin.router.probe_service", lambda **kw: False)
+    monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
+
+
+def test_effective_version_on_router_setup(monkeypatch, tmp_path: Path, capsys) -> None:
+    _v3_by_npm_fixture(monkeypatch, tmp_path, 3)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-KEY")
+    assert _cmd_router_setup(_make_args(home=tmp_path)) == 2
+    out = capsys.readouterr().out
+    assert "CCR v3 is installed" in out
+    assert "CCR v2" not in out
+
+
+def test_effective_version_on_models_set(monkeypatch, tmp_path: Path, capsys) -> None:
+    from quoin.models import _cmd_models_set
+
+    _v3_by_npm_fixture(monkeypatch, tmp_path, 3)
+    rc = _cmd_models_set(
+        argparse.Namespace(_home_override=tmp_path, tier="opus", model="x/model")
+    )
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "CCR v3 is installed" in out
+    assert "CCR v2" not in out
+
+
+def test_effective_version_on_models_show(monkeypatch, tmp_path: Path, capsys) -> None:
+    from quoin.models import _cmd_models_show
+
+    _v3_by_npm_fixture(monkeypatch, tmp_path, 3)
+    assert _cmd_models_show(argparse.Namespace(_home_override=tmp_path)) == 0
+    out = capsys.readouterr().out
+    # No store exists, so nothing is configured and no launch clause is
+    # offered — but the v2 command must never appear on a v3 machine.
+    assert "ccr code" not in out
+    assert "active mode: native" in out
+
+
+def test_effective_version_on_router_status(monkeypatch, tmp_path: Path, capsys) -> None:
+    _v3_by_npm_fixture(monkeypatch, tmp_path, 3)
+    assert _cmd_router_status(_make_args(home=tmp_path)) == 0
+    out = capsys.readouterr().out
+    version_line = next(
+        line for line in out.splitlines() if line.strip().startswith("CCR version:")
+    )
+    assert version_line.strip() == "CCR version:    v3 (via npm)"
+    assert "v2" not in version_line
+    assert "store:json" not in version_line
+    assert "Config present: yes" not in out
+
+
+def test_effective_version_npm_four_variant_names_v4(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    from quoin.models import _cmd_models_set
+
+    _v3_by_npm_fixture(monkeypatch, tmp_path, 4)
+    rc = _cmd_models_set(
+        argparse.Namespace(_home_override=tmp_path, tier="opus", model="x/model")
+    )
+    out = capsys.readouterr().out
+    assert rc == 2
+    assert "Detected:  v4" in out
+    assert "v2" not in out.split("Detected:")[1].split("\n")[0]
+
+
+def test_genuine_v2_machine_keeps_the_v2_rendering(
+    monkeypatch, tmp_path: Path, capsys
+) -> None:
+    """The identity half of the same fix: a real v2 machine still reads v2."""
+    from quoin.models import _cmd_models_show
+
+    _v3_by_npm_fixture(monkeypatch, tmp_path, 2)
+    write_config(
+        ccr_config_path(home=tmp_path),
+        {"Providers": [{"name": "openrouter", "models": []}], "Router": {}},
+    )
+    assert _cmd_router_status(_make_args(home=tmp_path)) == 0
+    status_out = capsys.readouterr().out
+    assert "CCR version:    v2 (via store:json)" in status_out
+    assert "Config present: yes" in status_out
+
+    assert _cmd_models_show(argparse.Namespace(_home_override=tmp_path)) == 0
+    show_out = capsys.readouterr().out
+    assert "run `ccr code`" in show_out
