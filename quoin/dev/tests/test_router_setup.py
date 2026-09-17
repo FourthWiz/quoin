@@ -640,6 +640,14 @@ class TestCmdRouterSetup:
                 assert config_path.read_text(encoding="utf-8") == "{}"
                 assert_no_secret_in(captured.out, "sk-or-SENTINEL")
                 assert_no_secret_in(config_path.read_text(encoding="utf-8"), "sk-or-SENTINEL")
+                # The message must name the version it was actually
+                # handed, not a hardcoded "3.x"/"v3" — a CCR 4 machine must
+                # never be told it is on 3.
+                if npm_major == 3:
+                    assert "v3" in captured.out and "3.x is installed" in captured.out
+                else:
+                    assert "v4" in captured.out
+                    assert "3.x" not in captured.out
 
     def test_json_store_with_npm_v2_still_writes(
         self, monkeypatch, tmp_path: Path
@@ -769,15 +777,81 @@ class TestCmdRouterSetup:
         assert config_path.read_text(encoding="utf-8") == "{}"
         assert_no_secret_in(captured.out, "sk-or-SENTINEL")
 
+    def test_refusal_message_names_the_detected_version(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """The refusal text must be derived from the `CcrVersion` it
+        was handed, not hardcoded to "3.x"/"v3" — pinned on three machines
+        that exist today: a real v3 (sqlite store), a real v4 (stale
+        config.json beside an npm 4 package), and a capped cell (an npm
+        package newer than quoin recognises, major forced to the sentinel
+        `0`). The capped cell must not claim "v3" either, even though that
+        is the only major this stage is pinned to install."""
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+        monkeypatch.setattr("quoin.router._node_present", lambda: True)
+        monkeypatch.setattr(
+            "quoin.router._install_ccr",
+            lambda: (_ for _ in ()).throw(AssertionError("must not install")),
+        )
+
+        # v3: config.sqlite store, npm major 3, `ccr` on PATH.
+        home_v3 = tmp_path / "v3"
+        (home_v3 / ".claude-code-router").mkdir(parents=True, exist_ok=True)
+        (home_v3 / ".claude-code-router" / "config.sqlite").write_bytes(b"")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 3)
+        monkeypatch.setattr(
+            "quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None
+        )
+        rc = _cmd_router_setup(_make_args(home=home_v3))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "claude-code-router 3.x is installed" in out
+        assert "Detected:  v3 (store: sqlite, via store:sqlite)" in out
+
+        # v4: stale config.json beside an npm 4 package (the primary
+        # migration path, driven through the stale-store guard).
+        home_v4 = tmp_path / "v4"
+        (home_v4 / ".claude-code-router").mkdir(parents=True, exist_ok=True)
+        (home_v4 / ".claude-code-router" / "config.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 4)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        rc = _cmd_router_setup(_make_args(home=home_v4))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "claude-code-router 4.x is installed" in out
+        assert "Detected:  v4 (store: json, via npm)" in out
+        assert "3.x" not in out
+
+        # Capped: no store at all, npm major beyond CCR_KNOWN_MAJOR_MAX,
+        # `ccr` not on PATH — detected.major is the deliberate sentinel 0.
+        home_capped = tmp_path / "capped"
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 5)
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        rc = _cmd_router_setup(_make_args(home=home_capped))
+        out = capsys.readouterr().out
+        assert rc == 0
+        assert "a version newer than quoin recognises" in out
+        assert "Detected:  unrecognised" in out
+        # The boilerplate legitimately says "quoin's v3 configuration
+        # writer" (that's the writer quoin lacks) — what must not appear
+        # is the capped major being *claimed* as a detected version.
+        assert "3.x is installed" not in out
+        assert "Detected:  v0" not in out
+        assert "Detected:  v3" not in out
+
     def test_has_v3_writer_flag_reopens_every_refusal_site(
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
-        """`_HAS_V3_WRITER` must gate all three refusal sites, not only the
-        pre-install one, so flipping it is genuinely the single switch a
-        future writer needs: the stale-config.json guard (a) and the
-        installed-and-v3-shaped guard (b) must both stop refusing once a
-        writer is available, the same way the pre-install hoist already
-        does."""
+        """`_HAS_V3_WRITER` gates the stale-config.json guard (a) and the
+        plain-major-3 branch of the installed-and-v3-shaped guard (c) —
+        the same capability question the pre-install hoist already
+        answers — so flipping the flag lifts both. It must NOT gate the
+        sqlite refusal (b): a sqlite store can never be served by writing
+        `config.json`, whatever major produced it, and lifting that
+        refusal is a dispatch decision (which writer serves this store?)
+        the writer stage must make explicitly by adding a real branch, not
+        a side effect of flipping this flag alone. Case (b) asserts the
+        refusal, and the on-disk state, survive the flip."""
         monkeypatch.setattr("quoin.router._HAS_V3_WRITER", True)
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
@@ -795,15 +869,36 @@ class TestCmdRouterSetup:
         assert rc == 0
         assert "quoin's v3 configuration writer is not available yet" not in captured.out
 
-        # (b) installed-and-v3-shaped guard: config.sqlite + `ccr` on PATH.
+        # (b) installed-and-v3-shaped guard, sqlite sub-case: config.sqlite
+        # + `ccr` on PATH. Unlike (a) and (c), this refusal must SURVIVE
+        # the flip — no config.json and no key may ever land beside a live
+        # sqlite store as the side effect of a one-token flag flip.
         home_b = tmp_path / "b"
-        (home_b / ".claude-code-router").mkdir(parents=True, exist_ok=True)
-        (home_b / ".claude-code-router" / "config.sqlite").write_bytes(b"")
+        store_dir_b = home_b / ".claude-code-router"
+        store_dir_b.mkdir(parents=True, exist_ok=True)
+        sqlite_path = store_dir_b / "config.sqlite"
+        sqlite_path.write_bytes(b"")
+        before = sqlite_path.read_bytes()
         monkeypatch.setattr(
             "quoin.router.shutil.which", lambda cmd: "/usr/bin/ccr" if cmd == "ccr" else None
         )
 
         rc = _cmd_router_setup(_make_args(home=home_b))
+        captured = capsys.readouterr()
+        assert rc == 0
+        assert "quoin's v3 configuration writer is not available yet" in captured.out
+        assert not (store_dir_b / "config.json").exists()
+        assert sqlite_path.read_bytes() == before
+        assert_no_secret_in(captured.out, "sk-or-SENTINEL")
+
+        # (c) installed-and-v3-shaped guard, plain-major-3 sub-case: no
+        # store at all, npm major 3, `ccr` off PATH — the actual
+        # capability question `_HAS_V3_WRITER` exists to answer, so it
+        # must still lift here.
+        home_c = tmp_path / "c"
+        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+
+        rc = _cmd_router_setup(_make_args(home=home_c))
         captured = capsys.readouterr()
         assert rc == 0
         assert "quoin's v3 configuration writer is not available yet" not in captured.out

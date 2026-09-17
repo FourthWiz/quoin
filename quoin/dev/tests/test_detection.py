@@ -15,6 +15,7 @@ All tests run in CI with NO network/npm/ccr access.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -30,6 +31,7 @@ from quoin.router import (  # noqa: E402
     _install_ccr,
     _node_major,
     _npm_major,
+    _scrubbed_env,
     detect_ccr,
 )
 
@@ -496,3 +498,90 @@ def test_node_major_none_on_bad_output(monkeypatch) -> None:
 
     monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
     assert _node_major() is None
+
+
+# ── Environment scrubbing (the env passed to every spawn) ──────────────────────
+
+def test_scrubbed_env_removes_key_and_copies_the_rest(monkeypatch) -> None:
+    """`_scrubbed_env` must drop the API key and nothing else, and must
+    hand back a copy — not the live `os.environ` mapping — so a caller
+    mutating the result can never touch the real process environment."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+    monkeypatch.setenv("SOME_OTHER_VAR", "keep-me")
+
+    env = _scrubbed_env()
+
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["SOME_OTHER_VAR"] == "keep-me"
+    assert env["PATH"] == os.environ["PATH"]
+    assert env is not os.environ
+
+
+def test_npm_global_prefix_spawn_env_is_scrubbed(monkeypatch) -> None:
+    """Seam A (`npm prefix -g`, used by `_npm_major`) must pass a scrubbed
+    `env` kwarg — a probe never needs the OpenRouter key, so it must never
+    see it."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+    recorded: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(kwargs)
+        return _FakeCompletedProcess(returncode=0, stdout="/fake/prefix\n")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    with monkeypatch.context() as m:
+        m.setattr("quoin.router._npm_query_enabled", True)
+        from quoin.router import _npm_global_prefix
+
+        _npm_global_prefix()
+
+    assert recorded
+    env = recorded[0]["env"]
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_node_major_spawn_env_is_scrubbed(monkeypatch) -> None:
+    """Seam for `node --version` must also receive a scrubbed `env` —
+    a probe that only reads a version string never needs the key either."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+    monkeypatch.setattr(
+        "quoin.router.shutil.which", lambda name: "/usr/local/bin/node" if name == "node" else None
+    )
+    recorded: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(kwargs)
+        return _FakeCompletedProcess(returncode=0, stdout="v22.11.0\n")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    _node_major()
+
+    assert recorded
+    env = recorded[0]["env"]
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["PATH"] == os.environ["PATH"]
+
+
+def test_install_ccr_spawn_env_is_scrubbed(monkeypatch) -> None:
+    """The highest-value site: `npm install -g` runs the package's
+    lifecycle scripts, so this is the spawn the scrub matters most for —
+    and it is unreachable in production today while `_HAS_V3_WRITER` is
+    `False`, so only a test catches a regression here."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
+    monkeypatch.setattr(
+        "quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None
+    )
+    recorded: list[dict] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(kwargs)
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    _install_ccr()
+
+    assert recorded
+    env = recorded[0]["env"]
+    assert "OPENROUTER_API_KEY" not in env
+    assert env["PATH"] == os.environ["PATH"]
