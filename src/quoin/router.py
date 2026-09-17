@@ -14,10 +14,14 @@ import subprocess
 import sys
 from typing import Any, NamedTuple, cast
 
+import quoin.ccr_store as ccr_store
 from quoin.ccr_config import (
+    V3_ROUTING_GAP_NOTICE,
     CcrConfigError,
     backup_config,
     ccr_config_path,
+    ccr_store_path,
+    launch_command_phrase,
     launch_guidance,  # by-name here; a test must also stub quoin.router.launch_guidance,
     # not only quoin.ccr_config.launch_guidance — models.py uses the module-qualified
     # form instead, so a single-location stub proves only one of the two call sites.
@@ -62,15 +66,6 @@ CCR_VERSION_CONSTRAINT = f"@{CCR_PINNED_VERSION}"
 # can never silently change which packages the stale-config.json guard lets
 # through.
 _CONFIG_JSON_STORE_MAJOR = 2
-
-# Whether quoin has a config writer for the version it pins. This is
-# deliberately its own flag rather than a check against CCR_PINNED_MAJOR:
-# the pinned major is "what we install", not "what we can configure", and
-# those two facts must be free to change independently. Bumping the pin
-# alone must never silently re-enable a v2-shaped write for a package quoin
-# still cannot configure. The writer stage flips this to True when its
-# v3 writer lands.
-_HAS_V3_WRITER = False
 
 MIN_NODE_MAJOR = 22
 
@@ -229,6 +224,172 @@ def detect_ccr(
     return CcrVersion(major, None, "npm")
 
 
+class CcrRoute(NamedTuple):
+    version: CcrVersion
+    route: str                   # "v2" | "v3" | "v3-store-absent" | "unknown"
+    npm_major: int | None
+
+
+def dispatch_store(detected: CcrVersion, npm_major: int | None) -> str:
+    """Which store shape quoin should serve, given a detection result.
+
+    Pure. The order of the tests is load-bearing: a capped detection carries
+    major 0, so the capped tests must come before any test on the major.
+    """
+    if detected.source.endswith("npm-capped"):
+        return "unknown"
+    if npm_major is not None and npm_major > CCR_KNOWN_MAJOR_MAX:
+        return "unknown"
+    if detected.store == "sqlite":
+        return "v3"
+    if (
+        detected.store == "json"
+        and npm_major is not None
+        and npm_major != _CONFIG_JSON_STORE_MAJOR
+    ):
+        # config.json is a live store only for major 2; a newer package beside
+        # one means the store CCR actually reads has not been created yet.
+        return "v3-store-absent"
+    if detected.major > _CONFIG_JSON_STORE_MAJOR:
+        return "v3-store-absent"
+    return "v2"
+
+
+def resolve_ccr_route(
+    home: pathlib.Path | None = None,
+    *,
+    assume_installed_major: int | None = None,
+) -> CcrRoute:
+    """Detect CCR once, then decide which store shape serves it.
+
+    The sole dispatch authority: every handler that needs to know which CCR
+    store it is talking to calls this rather than re-deriving the rule.
+    Spawns `npm prefix -g` at most once per call — detect_ccr already reads
+    npm internally whenever a config.sqlite is present (or neither store file
+    is), so the read is precomputed there; the lone config.json case defers
+    its read to the stale-store question below, which needs the same value.
+
+    `assume_installed_major` is for the one caller that has just installed a
+    known version itself. On a machine where npm is unreadable and the only
+    store signal is absent (or a leftover config.json), detection has no
+    signal at all and falls through to v2 — correct before an install, wrong
+    immediately after one quoin performed. A readable npm is a real signal
+    and still wins, so the assumption is one of last resort.
+    """
+    store_dir = ccr_store_dir(home)
+    sqlite_present = (store_dir / "config.sqlite").exists()
+    json_only = (store_dir / "config.json").exists() and not sqlite_present
+    npm_major = _NPM_MAJOR_UNSET if json_only else _npm_major()
+    detected = detect_ccr(home=home, npm_major=npm_major)
+    # When json_only is False, npm_major was already resolved to int | None
+    # above (never the sentinel) — cast narrows the seam's static type to
+    # match, rather than leaving it widened to the sentinel's type.
+    json_npm_major = _npm_major() if json_only else cast("int | None", npm_major)
+    if (
+        assume_installed_major is not None
+        and detected.source in ("none", "store:json")
+        and json_npm_major is None
+    ):
+        # The substitution is on the detected version, not on the npm
+        # reading: with major 0 and no store, overriding npm alone would
+        # still leave every rule in dispatch_store missing.
+        detected = CcrVersion(assume_installed_major, detected.store, "just-installed")
+    return CcrRoute(detected, dispatch_store(detected, json_npm_major), json_npm_major)
+
+
+def _decline_unknown(version: CcrVersion, *, lead: str | None = None) -> None:
+    """Report that the installed CCR major is one quoin does not recognise.
+
+    Prints and returns None — the return code belongs to the caller, because
+    `router setup` and the `models` handlers do not agree on it. `lead`, when
+    given, is printed first so a caller can report work it already did.
+    """
+    if lead:
+        print(lead)
+    # Derived from the version we were handed, not hardcoded — this path is
+    # reached with major 4, 5, and the capped sentinel 0 alike, and each must
+    # say what it detected.
+    if version.major == 0:
+        headline = "claude-code-router (a version newer than quoin recognises) is installed"
+        detected_label = "unrecognised"
+    else:
+        headline = f"claude-code-router {version.major}.x is installed"
+        detected_label = f"v{version.major}"
+    print(
+        f"quoin: {headline}; quoin recognises claude-code-router up to major "
+        f"{CCR_KNOWN_MAJOR_MAX} and declined to write rather than guess at a "
+        "configuration shape it does not know."
+    )
+    print(f"  Detected:  {detected_label} (store: {version.store or 'none'}, via {version.source})")
+    print("  This is caution, not a failure — your CCR install is untouched.")
+    print(
+        "  To move to the version quoin supports:  npm install -g "
+        f"@musistudio/claude-code-router@{CCR_PINNED_VERSION}"
+    )
+    print("quoin declined to write to CCR; nothing in your CCR configuration was changed.")
+
+
+def _decline_store_absent(
+    version: CcrVersion,
+    store_dir: pathlib.Path,
+    *,
+    lead: str | None = None,
+) -> None:
+    """Report that CCR v3 is installed but has not created its store yet.
+
+    Reads exactly one field off `version` — `major` — so no detection source
+    string ever reaches this path's output; the detected version is not what
+    this message is about, and no `Detected:` line is printed.
+    """
+    if lead:
+        print(lead)
+    print(
+        f"quoin: CCR v{version.major} is installed, but it has not created its "
+        "config store yet, so there is nothing for quoin to merge into."
+    )
+    print(f"  Store directory: {store_dir}")
+    print(
+        "  Run `ccr start` once and stop it again to let CCR create the store, "
+        "then re-run `quoin router setup`."
+    )
+    print(
+        "  Do not run `ccr -v` or `ccr version` first: on v3 a version query "
+        "triggers migration and removes config.json from disk. The old bytes "
+        "survive only inside the store's legacy_storage_backups table, which "
+        "quoin cannot read."
+    )
+    print("quoin declined to write to CCR; nothing in your CCR configuration was changed.")
+
+
+def _effective_version(route: CcrRoute) -> CcrVersion:
+    """The version to *render*, never the one to dispatch on.
+
+    detect_ccr's config.json arm reports major 2 without reading npm at all,
+    so on a machine with a leftover config.json beside a newer package the
+    raw detected major is a false claim. Where npm was readable and disagrees,
+    the npm reading is the honest thing to show. Identity on every other cell,
+    including every genuine v2 machine.
+    """
+    npm_major = route.npm_major
+    if (
+        route.version.source == "store:json"
+        and npm_major is not None
+        and npm_major != _CONFIG_JSON_STORE_MAJOR
+    ):
+        return CcrVersion(npm_major, "json", "npm")
+    return route.version
+
+
+def _dry_run_tail(args: argparse.Namespace) -> None:
+    """The one line a decline adds under --dry-run, printed by the caller.
+
+    Lives at the dispatch site rather than inside the decline helpers: the
+    helpers take no args, and the `models` call sites have no --dry-run flag.
+    """
+    if getattr(args, "dry_run", False):
+        print("  --dry-run has no effect here: nothing is written on v3 either way.")
+
+
 def quoin_models_path(home: pathlib.Path | None = None) -> pathlib.Path:
     """Return ~/.config/quoin/models.json (agentdesk precedent; outside deploy tree)."""
     base = home if home is not None else pathlib.Path.home()
@@ -311,6 +472,121 @@ def _install_ccr() -> int:
 _CCR_INSTALLED_MAJORS = (2, 3)   # majors detect_ccr can resolve confidently
 
 
+def _setup_v3(args: argparse.Namespace, route: CcrRoute, store_dir: pathlib.Path) -> int:
+    """Merge the OpenRouter provider and the built-in route into a v3 store."""
+    dry_run: bool = getattr(args, "dry_run", False)
+    home_override: pathlib.Path | None = getattr(args, "_home_override", None)
+    store_path = ccr_store_path(home=home_override)
+
+    try:
+        key = read_openrouter_key()
+    except CcrConfigError as exc:
+        print(f"quoin: {exc}", file=sys.stderr)
+        return 1
+
+    # Function-local import — a module-level import here creates a circular
+    # ImportError, since models.py back-imports DEFAULT_MODELS from this
+    # module at module scope (D-01).
+    from quoin.models import read_effective_models
+
+    effective = read_effective_models(home=home_override)
+    models_list = list(effective.values())
+
+    # Read the upgrade-loss signals from the store as it stands *before* the
+    # write. After a successful write the provider and the key are present by
+    # definition, so a post-write read can never report the loss these three
+    # exist to detect. Do not collapse them into the write's own read.
+    pre = ccr_store.read_v3_config(store_path)
+    pre_rows = ccr_store.v3_api_key_row_count(store_path)
+    pre_json = ccr_config_path(home=home_override).exists()
+
+    def mutate(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
+        cfg, prov = merge_openrouter_provider(cfg, key, models_list)
+        br_changes, br_warnings = ccr_store.merge_built_in_claude_code_route(cfg)
+        return prov + br_changes, br_warnings
+
+    try:
+        result = ccr_store.update_v3_config(
+            store_path, mutate, backup_dir=store_dir, dry_run=dry_run
+        )
+    except ccr_store.CcrStoreError as exc:
+        print(f"quoin: {exc}", file=sys.stderr)
+        return 1
+
+    summary_lines = ["", "quoin router setup — changes:"]
+    for change in result.changes:
+        summary_lines.append(f"  + {change}")
+    if result.backup:
+        summary_lines.append(f"  Backed up existing store value to: {result.backup}")
+    for warning in result.warnings:
+        summary_lines.append(f"  ⚠ {warning}")
+    for tier in ("haiku", "sonnet", "opus"):
+        origin = "default" if effective[tier] == DEFAULT_MODELS.get(tier) else "user"
+        summary_lines.append(f"  {tier}: {effective[tier]} ({origin})")
+    summary_lines.append(f"  Config store: {store_path}")
+    print("\n".join(summary_lines))
+
+    if not dry_run:
+        models_path = quoin_models_path(home=home_override)
+        if seed_models_file_if_absent(models_path, DEFAULT_MODELS):
+            print(f"  Seeded model defaults to: {models_path}")
+            print(
+                "  Note: the haiku and opus defaults now route through Z.ai "
+                "(haiku was previously DeepSeek) — edit models.json to pin a "
+                "different provider."
+            )
+        else:
+            print(f"  Model defaults file already exists (user edits preserved): {models_path}")
+
+        major = _effective_version(route).major
+        phrase = launch_command_phrase(major)
+        if phrase:
+            open_models_line = f"\nTo use open models:  {phrase}"
+        else:
+            _cmd, note = launch_guidance(major)
+            open_models_line = f"\n{note}"
+        print(
+            open_models_line +
+            "\nTo use native models: claude"
+            "\n\nSanity-check: inside an open-model session, type /help — the quoin skill list should resolve."
+        )
+
+    print("")
+    print(V3_ROUTING_GAP_NOTICE)
+
+    # detected_major is a condition input rather than a rendered value, and
+    # this path is reached only on a store:sqlite detection, where the
+    # effective version is the identity — so the raw major is used here.
+    for line in ccr_store.upgrade_loss_lines(
+        route.version.major, pre_json, pre.config, pre_rows, rebuilt=result.wrote
+    ):
+        print(line)
+
+    if dry_run:
+        print("\n[dry-run] No files written.")
+    return 0
+
+
+def _dispatch_installed(
+    args: argparse.Namespace,
+    route: CcrRoute,
+    store_dir: pathlib.Path,
+) -> int | None:
+    """The three decline/write arms. None means no arm matched."""
+    ev = _effective_version(route)
+    if route.route == "unknown":
+        _decline_unknown(ev)
+        _dry_run_tail(args)
+        return 2
+    if route.route == "v3-store-absent":
+        _decline_store_absent(ev, store_dir)
+        _dry_run_tail(args)
+        return 2
+    if route.route == "v3":
+        return _setup_v3(args, route, store_dir)
+    return None
+
+
 def _cmd_router_setup(args: argparse.Namespace) -> int:
     """quoin router setup — install CCR and scaffold the OpenRouter config.
 
@@ -320,80 +596,14 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     dry_run: bool = getattr(args, "dry_run", False)
     home_override: pathlib.Path | None = getattr(args, "_home_override", None)
 
-    def _refuse_v3(version: CcrVersion, *, pre_install: bool = False) -> int:
-        # No v3 config writer yet — refuse rather than write a v2 store
-        # that v3 will not read. Shared by the pre-install detection site
-        # and the hoisted pre-install-spawn refusal below, so a v3 package
-        # is never treated differently depending on when it was found. A
-        # freshly-installed-then-refused shape doesn't exist any more: the
-        # hoist below refuses before npm ever spawns, so this function is
-        # never reached with an install that just ran.
-        if pre_install:
-            print(
-                f"quoin: installing claude-code-router would pin {CCR_PINNED_VERSION}, "
-                "but quoin's v3 configuration writer is not available yet. Nothing "
-                "was installed or changed."
-            )
-            print("  Configure CCR itself until then; nothing here needs undoing.")
-        else:
-            # Derived from the version we were actually handed, not
-            # hardcoded — this path is reached with major 3, 4, and the
-            # capped sentinel 0 alike, and each must say what it detected.
-            if version.major == 0:
-                headline = "claude-code-router (a version newer than quoin recognises) is installed"
-                detected_label = "unrecognised"
-            else:
-                headline = f"claude-code-router {version.major}.x is installed"
-                detected_label = f"v{version.major}"
-            print(
-                f"quoin: {headline}; quoin's v3 configuration writer is not "
-                "available yet. Nothing was changed."
-            )
-            print(f"  Detected:  {detected_label} (store: {version.store or 'none'}, via {version.source})")
-            print("  Configure CCR itself until then; nothing here needs undoing.")
-        return 0            # int, never SystemExit
-
     # ── Steps 1-2: detection-driven install decision ──────────────────────────
-    # Thread one npm read through detect_ccr and the presence/stale-store
-    # checks below instead of letting each call `npm prefix -g` on its own:
-    # detect_ccr already reads npm internally whenever a config.sqlite is
-    # present (or neither store file is), so precompute it there; the lone
-    # config.json case is deferred to the stale-store guard just below,
-    # which reads npm once and threads that same value into the presence
-    # check that follows it.
+    # One resolution for the whole handler: which CCR is installed, and which
+    # store shape serves it. store_dir survives separately because the
+    # dispatch helpers below need it and the route does not carry it.
     store_dir = ccr_store_dir(home_override)
-    sqlite_present = (store_dir / "config.sqlite").exists()
-    json_only = (store_dir / "config.json").exists() and not sqlite_present
-    npm_major = _NPM_MAJOR_UNSET if json_only else _npm_major()
-    detected = detect_ccr(home=home_override, npm_major=npm_major)
-
-    # The config.json store branch of detect_ccr never consults npm — the
-    # residual rule's antecedent is "the store says v3", which config.json
-    # can never satisfy. That leaves a real gap: a leftover config.json
-    # beside a genuinely-v3(+) npm package still classifies as v2 here, and
-    # without this guard the v2 write below would land in a file CCR itself
-    # will never read. Read npm once for the json-only case — the same read
-    # the presence check a few lines down needs — and refuse before any
-    # write is possible, rather than let the mis-classification reach it.
-    # When json_only is False, npm_major was already resolved to int | None
-    # above (never the sentinel) — cast narrows the seam's static type to
-    # match, rather than leaving it widened to the sentinel's type.
-    json_npm_major = _npm_major() if json_only else cast("int | None", npm_major)
-    if (
-        not _HAS_V3_WRITER
-        and detected.source == "store:json"
-        and json_npm_major is not None
-        and json_npm_major != _CONFIG_JSON_STORE_MAJOR
-    ):
-        # Keyed on the invariant ("config.json is a live store only for
-        # major 2"), not on CCR_KNOWN_MAJOR_MAX — that ceiling tracks what
-        # quoin recognises and is bumped independently of what a v2-shaped
-        # store can serve; coupling this refusal to it would let a future
-        # ceiling bump silently re-admit a v3+ package here.
-        result = _refuse_v3(CcrVersion(json_npm_major, "json", "npm"))
-        if dry_run:
-            print("  --dry-run has no effect here: nothing is written on v3 either way.")
-        return result
+    route = resolve_ccr_route(home_override)
+    detected = route.version
+    json_npm_major = route.npm_major
 
     # A capped source (`npm-capped` / `store:sqlite-npm-capped`) is positive
     # proof a newer package is already on disk — treat it as installed so
@@ -413,25 +623,9 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
         installed = bool(shutil.which("ccr"))
 
     if installed:
-        # A sqlite store can never be served by writing config.json, whatever
-        # major produced it, and neither can a package newer than quoin
-        # recognises (capped-unknown) — those two refuse unconditionally,
-        # not gated by `_HAS_V3_WRITER`: turning them off is a dispatch
-        # decision (which writer serves this store?) the writer stage must
-        # make explicitly by adding a real branch here, not a side effect
-        # of flipping a capability flag. The plain-major-3 case is the
-        # capability question `_HAS_V3_WRITER` answers, so only it — and
-        # the stale-config.json guard above, and the pre-install refusal
-        # below — is gated by the flag.
-        if (
-            detected.store == "sqlite"
-            or detected.source.endswith("npm-capped")
-            or (not _HAS_V3_WRITER and detected.major == 3)
-        ):
-            result = _refuse_v3(detected)
-            if dry_run:
-                print("  --dry-run has no effect here: nothing is written on v3 either way.")
-            return result
+        disp = _dispatch_installed(args, route, store_dir)
+        if disp is not None:
+            return disp
         print("claude-code-router already installed — skipping npm install.")
     else:
         if not _node_present():
@@ -450,20 +644,6 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        if not _HAS_V3_WRITER:
-            # Installing would pin CCR_PINNED_VERSION (major 3), and quoin
-            # has no v3 configuration writer yet — refuse now rather than
-            # spawn npm (handing it a subprocess environment that carries
-            # OPENROUTER_API_KEY) only to refuse the moment it finishes.
-            if dry_run:
-                print(
-                    "[dry-run] Would refuse to install claude-code-router: "
-                    f"installing would pin {CCR_PINNED_VERSION}, and quoin's v3 "
-                    "configuration writer is not available yet."
-                )
-                print("[dry-run] No files written.")
-                return 0
-            return _refuse_v3(CcrVersion(CCR_PINNED_MAJOR, None, "none"), pre_install=True)
         if dry_run:
             # Short-circuit before spawning npm at all — a dry run must never
             # install anything, only report what a real run would do.
@@ -500,12 +680,14 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        # Reachable only once _HAS_V3_WRITER is True (the branch above
-        # already refused and returned for every caller where it is
-        # False), so the install this function just ran was known-good to
-        # attempt. `detected` (the store shape read before this install)
-        # is still accurate here, since installing an npm package does not
-        # touch the CCR store directory.
+        # The install changed what quoin knows, so re-resolve rather than
+        # keep dispatching on the pre-install reading. The keyword says the
+        # one thing detection cannot see on a machine whose npm is
+        # unreadable: quoin just put this major there itself.
+        route = resolve_ccr_route(home_override, assume_installed_major=CCR_PINNED_MAJOR)
+        disp = _dispatch_installed(args, route, store_dir)
+        if disp is not None:
+            return disp
         print("claude-code-router installed successfully.")
 
     # ── Step 3: Read API key ───────────────────────────────────────────────────
@@ -570,12 +752,15 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     else:
         print(f"  Model defaults file already exists (user edits preserved): {models_path}")
 
-    cmd, note = launch_guidance(None)
-    if cmd:
-        open_models_line = (
-            f"\nTo use open models:  {cmd}    (auto-starts the proxy; quoin skills work normally)"
-        )
+    # The rendered major, not the dispatched one: the clause that qualifies
+    # `ccr code` is reachable only through launch_command_phrase's v2 arm, so
+    # a v3 machine can never be handed the v2 command here.
+    major = _effective_version(route).major
+    phrase = launch_command_phrase(major)
+    if phrase:
+        open_models_line = f"\nTo use open models:  {phrase}"
     else:
+        _cmd, note = launch_guidance(major)
         open_models_line = f"\n{note}"
     print(
         open_models_line +

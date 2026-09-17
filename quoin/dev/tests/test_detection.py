@@ -653,9 +653,9 @@ def test_node_major_spawn_env_is_scrubbed(monkeypatch) -> None:
 
 def test_install_ccr_spawn_env_is_scrubbed(monkeypatch) -> None:
     """The highest-value site: `npm install -g` runs the package's
-    lifecycle scripts, so this is the spawn the scrub matters most for —
-    and it is unreachable in production today while `_HAS_V3_WRITER` is
-    `False`, so only a test catches a regression here."""
+    lifecycle scripts, so this is the spawn the scrub matters most for.
+    Nothing observable downstream records which environment was handed to
+    npm, so only a test catches a regression here."""
     monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
     monkeypatch.setattr(
         "quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None
