@@ -18,6 +18,7 @@ from quoin.ccr_config import (
     CcrConfigError,
     backup_config,
     ccr_config_path,
+    launch_guidance,
     load_config,
     merge_openrouter_provider,
     merge_router_keys,
@@ -109,12 +110,24 @@ def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
             return None                      # mid-test only; never set in production
-        # 10s, not 5s: `npm.cmd` plus antivirus/Defender scanning routinely
-        # pushes a cold-start `npm prefix -g` past 2s on Windows, and a
-        # timeout here silently degrades to "not installed" (see the
-        # `_npm_global_prefix` docstring on `_npm_major`'s caller side).
+        # Resolve npm's path once and spawn that path — argv[0] "npm" is
+        # never looked up against Windows' PATHEXT without a shell, so a
+        # bare subprocess.run(["npm", ...]) raises FileNotFoundError on
+        # every Windows machine even when npm.cmd is on PATH. Spawning the
+        # shutil.which-resolved path also closes the gap between checking
+        # and spawning (the binary can't be replaced/removed between the
+        # two calls because there is only one).
+        npm_path = shutil.which("npm")
+        if npm_path is None:
+            return None
+        # 10s, not 5s: now that npm_path resolves to the real npm.cmd on
+        # Windows, this call actually reaches it, and npm.cmd plus
+        # antivirus/Defender scanning routinely pushes a cold-start
+        # `npm prefix -g` past 2s there; a timeout here silently degrades
+        # to "not installed" (see the `_npm_global_prefix` docstring on
+        # `_npm_major`'s caller side).
         r = subprocess.run(
-            ["npm", "prefix", "-g"],
+            [npm_path, "prefix", "-g"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -278,11 +291,12 @@ def _install_ccr() -> int:
     # handler's own npm-less-Node case — a test or a future caller that
     # stubs this function wholesale bypasses it either way, which is why
     # test_detection.py exercises it directly.
-    if not shutil.which("npm"):
+    npm_path = shutil.which("npm")
+    if npm_path is None:
         return 1
     try:
         result = subprocess.run(
-            ["npm", "install", "-g", f"@musistudio/claude-code-router{CCR_VERSION_CONSTRAINT}"],
+            [npm_path, "install", "-g", f"@musistudio/claude-code-router{CCR_VERSION_CONSTRAINT}"],
             env=_scrubbed_env(),
         )
     except (FileNotFoundError, OSError):
@@ -554,10 +568,17 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     else:
         print(f"  Model defaults file already exists (user edits preserved): {models_path}")
 
+    cmd, note = launch_guidance(None)
+    if cmd:
+        open_models_line = (
+            f"\nTo use open models:  {cmd}    (auto-starts the proxy; quoin skills work normally)"
+        )
+    else:
+        open_models_line = f"\n{note}"
     print(
-        "\nTo use open models:  ccr code    (auto-starts the proxy; quoin skills work normally)"
+        open_models_line +
         "\nTo use native models: claude"
-        "\n\nSanity-check: inside a `ccr code` session, type /help — the quoin skill list should resolve."
+        "\n\nSanity-check: inside an open-model session, type /help — the quoin skill list should resolve."
     )
     return 0
 
@@ -582,7 +603,11 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
     if live and cfg_present:
         mode = "open via CCR (proxy running)"
     elif cfg_present and not live:
-        mode = "native (CCR configured but proxy not running — run `ccr code` to start)"
+        cmd, _note = launch_guidance(None)
+        if cmd:
+            mode = f"native (CCR configured but proxy not running — run `{cmd}` to start)"
+        else:
+            mode = "native (CCR configured but proxy not running)"
     else:
         mode = "native"
 

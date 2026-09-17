@@ -288,13 +288,16 @@ quoin doctor           # includes a one-line CCR probe
 
 | Mode | Command | When to use |
 |------|---------|-------------|
-| Open models via CCR | `ccr code` | Quota exhausted, cost-sensitive work |
+| Open models via CCR (v2) | `ccr code` | Quota exhausted, cost-sensitive work |
+| Open models via CCR (v3) | `ccr default-claude-code` | Same, on CCR v3 — profile exists but routes nothing until configured in `ccr ui` |
 | Native Anthropic | `claude` | Normal use, full quoin skill fidelity |
 
-`ccr code` auto-starts the local proxy and launches the real `claude` binary in
-your terminal — quoin's slash commands and skills work normally.
+On CCR v2, `ccr code` auto-starts the local proxy and launches the real `claude`
+binary in your terminal — quoin's slash commands and skills work normally. CCR v3
+has no `code` subcommand; `ccr default-claude-code` selects its profile, but that
+profile routes nothing until you configure its models in `ccr ui`.
 
-**Sanity-check:** inside a `ccr code` session, type `/help`. The quoin skill list
+**Sanity-check:** inside an open-model session, type `/help`. The quoin skill list
 should resolve. If it does not, run `quoin doctor` and file an issue.
 
 > **Note:** the model shown in the Claude Code header will still say "Sonnet 4.6" (or
@@ -304,9 +307,9 @@ should resolve. If it does not, run `quoin doctor` and file an issue.
 
 ### Switching back
 
-Run `claude` directly (not `ccr code`) to use native Anthropic models. No config
-changes needed — the CCR config is left intact so you can flip back by running
-`ccr code` again.
+Run `claude` directly (not `ccr code` / `ccr default-claude-code`) to use native
+Anthropic models. No config changes needed — the CCR config is left intact so you
+can flip back by running `ccr code` (v2) or `ccr default-claude-code` (v3) again.
 
 ### Model defaults
 
@@ -355,7 +358,8 @@ provider's `models` list in-place, leaving `api_key` byte-unchanged.
 
 **reset is non-destructive:** `quoin models reset` backs up the CCR config and prints
 native-launch instructions, but leaves the Router keys, provider block, and `models.json`
-intact. Run `ccr code` again to switch back to open models with no re-setup required.
+intact. Run `ccr code` (v2) or `ccr default-claude-code` (v3) again to switch back
+to open models with no re-setup required.
 
 ## Agentdesk
 

@@ -308,7 +308,11 @@ def _cmd_models_show(args: argparse.Namespace) -> int:
     if live and cfg_present:
         mode = "open via CCR (proxy running)"
     elif cfg_present and not live:
-        mode = "native (CCR configured, proxy down — run `ccr code`)"
+        cmd, _note = ccr_config.launch_guidance(None)
+        if cmd:
+            mode = f"native (CCR configured, proxy down — run `{cmd}`)"
+        else:
+            mode = "native (CCR configured, proxy down)"
     else:
         mode = "native"
 
@@ -396,7 +400,8 @@ def _cmd_models_set(args: argparse.Namespace) -> int:
         print(f"  Backed up CCR config to: {backup}")
     for warning in rk_warnings:
         print(f"  ⚠ {warning}")
-    print("\nTo use open models: ccr code")
+    cmd, note = ccr_config.launch_guidance(None)
+    print(f"\nTo use open models: {cmd}" if cmd else f"\n{note}")
     return 0
 
 
@@ -455,7 +460,8 @@ def _cmd_models_preset(args: argparse.Namespace) -> int:
         print(f"  Backed up CCR config to: {backup}")
     for warning in rk_warnings:
         print(f"  ⚠ {warning}")
-    print("\nTo use open models: ccr code")
+    cmd, note = ccr_config.launch_guidance(None)
+    print(f"\nTo use open models: {cmd}" if cmd else f"\n{note}")
     return 0
 
 
@@ -480,9 +486,18 @@ def _cmd_models_reset(args: argparse.Namespace) -> int:
     backup = ccr_config.backup_config(config_path)
 
     print(f"quoin: Backed up CCR config to: {backup}")
+    cmd, _note = ccr_config.launch_guidance(None)
+    if cmd:
+        switch_back = (
+            f"Your CCR config and model mapping are intact — run `{cmd}` to switch back "
+            "to open models; `quoin models` shows your current mapping."
+        )
+    else:
+        switch_back = (
+            "Your CCR config and model mapping are intact; "
+            "`quoin models` shows your current mapping."
+        )
     print(
-        "To use native Anthropic models, launch `claude` directly.\n"
-        "Your CCR config and model mapping are intact — run `ccr code` to switch back "
-        "to open models; `quoin models` shows your current mapping."
+        "To use native Anthropic models, launch `claude` directly.\n" + switch_back
     )
     return 0
