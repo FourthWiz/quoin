@@ -476,6 +476,17 @@ class TestCmdModelsShow:
         for tier in TIER_KEYS:
             assert tier in out
 
+    def test_models_show_unknown_branch_has_no_dangling_parenthetical(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        # Site 4: no handler runs detection in this stage, so the mode string
+        # on the config-present/proxy-down path carries no command and no
+        # note — a parenthetical with nothing to say would be a hole in the
+        # sentence, so it is omitted entirely rather than left dangling.
+        _, out = self._run(monkeypatch, tmp_path, live=False, cfg_present=True)
+        assert "native (CCR configured, proxy down)" in out
+        assert "run `" not in out
+
 
 # ── quoin models set ──────────────────────────────────────────────────────────
 
@@ -658,6 +669,17 @@ class TestCmdModelsSet:
         data = json.loads(quoin_models_path(home=tmp_path).read_text())
         assert data["opus"] == FRIENDLY_ALIASES["glm"]
 
+    def test_models_set_and_preset_print_no_v2_command(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        # Site 5: no handler runs detection in this stage, so the final
+        # "to use open models" line carries the unknown-branch decline note
+        # rather than a command that may not exist on this machine.
+        rc, out = self._run(monkeypatch, tmp_path, "opus", "x/model")
+        assert rc == 0
+        assert "ccr code" not in out
+        assert "could not be identified" in out
+
 
 # ── quoin models preset ───────────────────────────────────────────────────────
 
@@ -749,6 +771,18 @@ class TestCmdModelsPreset:
     def test_returns_int(self, monkeypatch, tmp_path: Path) -> None:
         rc, _ = self._run(monkeypatch, tmp_path, "open")
         assert isinstance(rc, int)
+
+    def test_models_preset_prints_no_v2_command(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        # Site 6. The `_write_ccr_config`-seeded fixture (with_ccr_config=True,
+        # the default) is required to reach the final print — set_provider_
+        # models_inplace's early return at a bare-config fixture would make
+        # a "ccr code" absence assertion vacuous.
+        rc, out = self._run(monkeypatch, tmp_path, "open")
+        assert rc == 0
+        assert "ccr code" not in out
+        assert "could not be identified" in out
 
 
 # ── quoin models reset ────────────────────────────────────────────────────────
@@ -845,6 +879,21 @@ class TestCmdModelsReset:
         rc, out = self._run(monkeypatch, tmp_path)
         assert rc == 0
         assert "claude" in out
+
+    def test_models_reset_unknown_branch_reflows_switch_back(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        # Site 7: no handler runs detection in this stage, so the switch-back
+        # clause is dropped rather than left dangling on a command that may
+        # not exist, and the sentence re-flows to the committed two-clause form.
+        rc, out = self._run(monkeypatch, tmp_path)
+        assert rc == 0
+        assert (
+            "Your CCR config and model mapping are intact; "
+            "`quoin models` shows your current mapping." in out
+        )
+        assert "ccr code" not in out
+        assert "intact —" not in out
 
     def test_returns_int(self, monkeypatch, tmp_path: Path) -> None:
         rc, _ = self._run(monkeypatch, tmp_path)

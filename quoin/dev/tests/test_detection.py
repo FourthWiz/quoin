@@ -139,28 +139,37 @@ def test_does_not_invoke_ccr_version(monkeypatch, tmp_path: Path) -> None:
     """Exercises the exclusion rather than asserting it: seam A is left
     intact (with the flag genuinely on, scoped to this test) and
     subprocess.run is stubbed to dispatch on argv, so a "ccr" call would
-    really raise and an "npm" call is really answered."""
+    really raise and an "npm" call is really answered. The resolved npm
+    path (not the bare "npm" argv[0] the pre-fix code spawned, which never
+    reaches npm.cmd's PATHEXT resolution on Windows) is what gets spawned."""
     prefix = tmp_path / "npm_prefix"
     _seed_npm_package(prefix, "3.0.5")
+    fake_npm_path = "/usr/local/bin/npm"
     recorded: list[list[str]] = []
 
     def fake_run(argv, **kwargs):
         recorded.append(list(argv))
         if argv[0] == "ccr":
             raise FileNotFoundError("ccr must never be invoked by detect_ccr")
-        if argv[:2] == ["npm", "prefix"]:
+        if argv[:2] == [fake_npm_path, "prefix"]:
             return _FakeCompletedProcess(returncode=0, stdout=str(prefix))
         raise AssertionError(f"unexpected subprocess call: {argv}")
 
     with monkeypatch.context() as m:
         m.setattr("quoin.router._npm_query_enabled", True)
         m.setattr("quoin.router.subprocess.run", fake_run)
+        m.setattr(
+            "quoin.router.shutil.which",
+            lambda cmd: fake_npm_path if cmd == "npm" else None,
+        )
         result = detect_ccr(home=tmp_path)  # no store present
 
     assert result.major == 3
     assert result.source == "npm"
     assert not any(argv[0] == "ccr" for argv in recorded)
-    assert any(argv[:2] == ["npm", "prefix"] for argv in recorded)
+    assert any(argv[:2] == [fake_npm_path, "prefix"] for argv in recorded)
+    # The resolved-path plumbing, not bare "npm" — pins F-08's fix.
+    assert not any(argv and argv[0] == "npm" for argv in recorded)
 
 
 def test_detect_uses_no_ccr_subcommand(monkeypatch, tmp_path: Path) -> None:
@@ -252,6 +261,57 @@ def test_npm_flag_gates_seam_a(monkeypatch) -> None:
 
     assert len(recorded) == 1
     assert result == "/fake/prefix"
+
+
+def test_npm_global_prefix_spawns_resolved_path(monkeypatch) -> None:
+    """F-08: the spawn argv[0] is the shutil.which-resolved npm path, not
+    a bare "npm" literal — a bare argv[0] never reaches npm.cmd's PATHEXT
+    resolution on Windows, so the fix is to spawn the path shutil.which
+    already found rather than re-resolving "npm" at spawn time."""
+    from quoin.router import _npm_global_prefix
+
+    resolved_path = "/opt/homebrew/bin/npm"
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0, stdout="/fake/prefix\n")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: resolved_path if cmd == "npm" else None,
+    )
+
+    with monkeypatch.context() as m:
+        m.setattr("quoin.router._npm_query_enabled", True)
+        _npm_global_prefix()
+
+    assert recorded
+    assert recorded[0][0] == resolved_path
+    assert recorded[0][0] != "npm"
+
+
+def test_npm_global_prefix_none_when_npm_absent_without_spawning(monkeypatch) -> None:
+    """When shutil.which finds nothing, _npm_global_prefix must not spawn
+    at all — the gate is checked once, not re-resolved at spawn time."""
+    from quoin.router import _npm_global_prefix
+
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0, stdout="/fake/prefix\n")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+
+    with monkeypatch.context() as m:
+        m.setattr("quoin.router._npm_query_enabled", True)
+        result = _npm_global_prefix()
+
+    assert result is None
+    assert recorded == []
 
 
 def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
@@ -395,6 +455,30 @@ def test_install_command_carries_pinned_version(monkeypatch) -> None:
     argv = recorded[0]
     assert f"@musistudio/claude-code-router@{CCR_PINNED_VERSION}" in argv
     assert "@musistudio/claude-code-router" not in argv
+
+
+def test_install_ccr_spawns_resolved_path(monkeypatch) -> None:
+    """F-08: `_install_ccr` spawns the shutil.which-resolved npm path as
+    argv[0], not a bare "npm" literal — the same fix as
+    `_npm_global_prefix`, closing the check-then-spawn re-resolution race
+    at both npm spawn sites."""
+    resolved_path = "/opt/homebrew/bin/npm"
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0)
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: resolved_path if cmd == "npm" else None,
+    )
+    _install_ccr()
+
+    assert recorded
+    assert recorded[0][0] == resolved_path
+    assert recorded[0][0] != "npm"
 
 
 def test_install_command_derives_from_constant(monkeypatch) -> None:

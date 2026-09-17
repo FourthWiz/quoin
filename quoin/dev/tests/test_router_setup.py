@@ -201,6 +201,20 @@ class TestMergeRouterKeys:
         cfg, _, _ = merge_router_keys({}, ROUTER_MAP)
         assert "NON_INTERACTIVE_MODE" not in cfg["Router"]
 
+    def test_merge_router_keys_message_split_preserved(self) -> None:
+        # Pins owned_key_is_writable's `was_absent` reconstruction: a fresh
+        # config yields "set to" and a pre-existing openrouter key yields
+        # "updated to", the one distinction the two AC-47 tests don't assert.
+        cfg, changes, _ = merge_router_keys({}, ROUTER_MAP)
+        assert changes
+        assert all("set to" in c for c in changes)
+
+        cfg0 = {"Router": {"default": "openrouter,old-model"}}
+        cfg, changes, warnings = merge_router_keys(cfg0, ROUTER_MAP)
+        default_change = next(c for c in changes if c.startswith("Router.default"))
+        assert "updated to" in default_change
+        assert not any("default" in w for w in warnings)
+
 
 class TestProbeService:
     def test_returns_false_when_nothing_listening(self) -> None:
@@ -306,6 +320,17 @@ class TestCmdRouterSetup:
 
         args = _make_args(dry_run=dry_run, home=tmp_path)
         return _cmd_router_setup(args)
+
+    def test_setup_print_names_no_v2_command_in_this_stage(self, monkeypatch, tmp_path: Path, capsys) -> None:
+        # Site 1 passes None to launch_guidance (no handler runs detection in
+        # this stage), so the setup print renders the unknown-branch note
+        # instead of naming a command.
+        rc = self._run_setup(monkeypatch, tmp_path, ccr_initially_present=True)
+        assert rc == 0
+        captured = capsys.readouterr()
+        assert "ccr code" not in captured.out
+        assert "ccr default-claude-code" not in captured.out
+        assert "could not be identified" in captured.out
 
     def test_happy_path_creates_config(self, monkeypatch, tmp_path: Path) -> None:
         rc = self._run_setup(monkeypatch, tmp_path, ccr_initially_present=True)
@@ -1112,7 +1137,13 @@ class TestCmdRouterSetup:
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         monkeypatch.setattr("quoin.router._node_present", lambda: True)
         monkeypatch.setattr("quoin.router._node_major", lambda: 22)
-        monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+        # npm resolves (so the npm-probe path actually spawns); ccr does not
+        # (so the ccr-presence check takes the "absent" branch, same as
+        # before F-08's shutil.which(npm)-then-spawn-resolved-path fix).
+        monkeypatch.setattr(
+            "quoin.router.shutil.which",
+            lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None,
+        )
 
         args = _make_args(home=tmp_path)
         _cmd_router_setup(args)
