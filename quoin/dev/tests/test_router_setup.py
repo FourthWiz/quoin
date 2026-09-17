@@ -23,6 +23,7 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from quoin.ccr_config import (  # noqa: E402
     CcrConfigError,
+    UNKNOWN_LAUNCH_NOTE,
     assert_no_secret_in,
     backup_config,
     ccr_config_path,
@@ -330,7 +331,7 @@ class TestCmdRouterSetup:
         captured = capsys.readouterr()
         assert "ccr code" not in captured.out
         assert "ccr default-claude-code" not in captured.out
-        assert "could not be identified" in captured.out
+        assert UNKNOWN_LAUNCH_NOTE.split(";")[0] in captured.out
 
     def test_happy_path_creates_config(self, monkeypatch, tmp_path: Path) -> None:
         rc = self._run_setup(monkeypatch, tmp_path, ccr_initially_present=True)

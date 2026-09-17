@@ -250,6 +250,7 @@ def test_npm_flag_gates_seam_a(monkeypatch) -> None:
         return _FakeCompletedProcess(returncode=0, stdout="/fake/prefix\n")
 
     monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None)
 
     # Default under pytest (conftest.py): flag is False.
     assert _npm_global_prefix() is None
@@ -329,6 +330,7 @@ def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
     monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
     with monkeypatch.context() as m:
         m.setattr("quoin.router._npm_query_enabled", True)
+        m.setattr("quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None)
         assert _npm_global_prefix() is None
 
     assert recorded_timeouts and all(
@@ -354,6 +356,7 @@ def test_npm_flag_off_vs_on_through_detect(monkeypatch, tmp_path: Path) -> None:
 
     with monkeypatch.context() as m:
         m.setattr("quoin.router._npm_query_enabled", True)
+        m.setattr("quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None)
         result_on = detect_ccr(home=tmp_path)
 
     assert result_on.major == 2
@@ -615,6 +618,7 @@ def test_npm_global_prefix_spawn_env_is_scrubbed(monkeypatch) -> None:
     monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
     with monkeypatch.context() as m:
         m.setattr("quoin.router._npm_query_enabled", True)
+        m.setattr("quoin.router.shutil.which", lambda cmd: "/usr/local/bin/npm" if cmd == "npm" else None)
         from quoin.router import _npm_global_prefix
 
         _npm_global_prefix()

@@ -141,7 +141,7 @@ def owned_key_is_writable(existing_val: Any) -> bool:
 
     True when the key is absent (None) or already points at quoin's openrouter
     provider. False means the key belongs to something else: preserve it and
-    warn — never overwrite (D-05).
+    warn — never overwrite.
     """
     if existing_val is None:
         return True

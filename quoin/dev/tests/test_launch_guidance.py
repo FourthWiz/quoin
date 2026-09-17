@@ -1,5 +1,5 @@
 """Tests for the shared non-clobber predicate, the v3 store path helper, and
-the version-aware launch-guidance helper (IVG-267 stage 2).
+the version-aware launch-guidance helper.
 
 Pure units plus a file-content agreement test across the three doc surfaces
 (`README.md`, `quoin/CLAUDE.md`, `quoin/memory/workflow-catalog.md`). No
@@ -11,9 +11,6 @@ import builtins
 import os
 import sys
 from pathlib import Path
-from unittest.mock import patch
-
-import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -34,7 +31,7 @@ from quoin.ccr_config import (  # noqa: E402
 # source package dir that also holds CLAUDE.md and memory/workflow-catalog.md).
 
 
-# ── T-01: owned_key_is_writable ──────────────────────────────────────────────
+# ── owned_key_is_writable ────────────────────────────────────────────────────
 
 
 def test_owned_key_is_writable_absent():
@@ -61,7 +58,7 @@ def test_owned_key_is_writable_uses_build_router_map_prefix():
     assert owned_key_is_writable(value) is True
 
 
-# ── T-02: ccr_store_path ─────────────────────────────────────────────────────
+# ── ccr_store_path ───────────────────────────────────────────────────────────
 
 
 def test_ccr_store_path_matches_config_dir(tmp_path):
@@ -92,14 +89,16 @@ def test_ccr_store_path_does_not_touch_disk(tmp_path, monkeypatch):
     assert not result.exists()
 
 
-# ── T-03: launch_guidance ────────────────────────────────────────────────────
+# ── launch_guidance ──────────────────────────────────────────────────────────
 
 
 def test_launch_guidance_v3_names_profile():
     cmd, note = launch_guidance(3)
     assert cmd == V3_LAUNCH_COMMAND
     assert V3_PROFILE_NAME in note
-    assert "configure" in note and "models" in note
+    assert "configure its models" in note
+    assert "routes nothing" in note  # does not claim it routes
+    assert "ccr code" not in note
 
 
 def test_launch_guidance_v2_is_todays_command():
@@ -112,7 +111,7 @@ def test_launch_guidance_unknown_declines():
     for major in (None, 0, 4):
         cmd, note = launch_guidance(major)
         assert cmd == ""
-        assert note != ""
+        assert note == UNKNOWN_LAUNCH_NOTE
 
 
 def test_launch_guidance_returns_a_pair():
@@ -123,7 +122,7 @@ def test_launch_guidance_returns_a_pair():
         assert all(isinstance(part, str) for part in result)
 
 
-# ── T-05: doc-surface agreement ──────────────────────────────────────────────
+# ── doc-surface agreement ───────────────────────────────────────────────────
 
 
 def _read(path: Path) -> str:
@@ -153,8 +152,9 @@ def test_readme_names_both_paths():
     assert V3_LAUNCH_COMMAND in text
 
     idx = text.index(V3_LAUNCH_COMMAND)
-    window = text[max(0, idx - 400): idx + 400]
-    assert "configure" in window
+    window = text[max(0, idx - 500): idx + 500]
+    assert "configure its models" in window
+    assert "routes nothing" in window  # does not claim it routes
 
 
 def test_catalog_is_generated_from_claude_md():

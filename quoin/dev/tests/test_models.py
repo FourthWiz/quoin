@@ -27,6 +27,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from quoin.ccr_config import (  # noqa: E402
+    UNKNOWN_LAUNCH_NOTE,
     assert_no_secret_in,
     backup_config,
     ccr_config_path,
@@ -678,7 +679,7 @@ class TestCmdModelsSet:
         rc, out = self._run(monkeypatch, tmp_path, "opus", "x/model")
         assert rc == 0
         assert "ccr code" not in out
-        assert "could not be identified" in out
+        assert UNKNOWN_LAUNCH_NOTE.split(";")[0] in out
 
 
 # ── quoin models preset ───────────────────────────────────────────────────────
@@ -782,7 +783,7 @@ class TestCmdModelsPreset:
         rc, out = self._run(monkeypatch, tmp_path, "open")
         assert rc == 0
         assert "ccr code" not in out
-        assert "could not be identified" in out
+        assert UNKNOWN_LAUNCH_NOTE.split(";")[0] in out
 
 
 # ── quoin models reset ────────────────────────────────────────────────────────

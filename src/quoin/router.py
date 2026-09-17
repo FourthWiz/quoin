@@ -18,7 +18,9 @@ from quoin.ccr_config import (
     CcrConfigError,
     backup_config,
     ccr_config_path,
-    launch_guidance,
+    launch_guidance,  # by-name here; a test must also stub quoin.router.launch_guidance,
+    # not only quoin.ccr_config.launch_guidance — models.py uses the module-qualified
+    # form instead, so a single-location stub proves only one of the two call sites.
     load_config,
     merge_openrouter_provider,
     merge_router_keys,
