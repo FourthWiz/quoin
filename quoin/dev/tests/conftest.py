@@ -10,8 +10,16 @@ package's __path__ to include the source-tree `quoin/` directory. This
 allows `from quoin.benchmarks.*` to resolve even when the regular package
 at `src/quoin` takes precedence for CLI/installer imports.
 """
+import builtins
+import io
+import json
+import os
+import sqlite3
 import sys
 from pathlib import Path
+from urllib.parse import unquote, urlparse
+
+import pytest
 
 # Repo root is 3 levels up from this file: quoin/dev/tests/conftest.py → quoin/
 REPO_ROOT = Path(__file__).parent.parent.parent.parent
@@ -41,3 +49,152 @@ try:
     _quoin_router._npm_query_enabled = False
 except ImportError:
     pass  # quoin.router not yet importable; individual tests will fail loudly
+
+
+# ── v3 store hermeticity guard (autouse, session-wide) ──────────────────────
+# Wraps the seams through which any v3 store code can reach disk and fails a
+# test whose resolved target is under the real ~/.claude-code-router/. The
+# guard is process-wide (not module-local) so it also covers v3 writes
+# reached indirectly from test_router_setup.py and test_models.py, and
+# writes that bypass sqlite3.connect (the backup sidecar's os.open, its
+# re-read, and any temp file).
+
+
+def _target_path(arg, kwargs):
+    """Resolve the on-disk path a guarded call is about to touch, or None.
+
+    Normalises a `file:` URI (the form both v3 store readers use) before
+    resolving, and recognises the sqlite ":memory:" / "file::memory:" /
+    "file:?mode=memory" forms as having no file target at all.
+    """
+    s = str(arg)
+    if kwargs.get("uri") or s.startswith("file:"):
+        s = unquote(urlparse(s).path)
+        if not s:
+            return None  # file:?mode=memory and friends: no file target
+    if s == ":memory:" or s.startswith("file::memory:"):
+        return None
+    try:
+        return Path(s).resolve()
+    except (OSError, ValueError):
+        return None
+
+
+@pytest.fixture(scope="session", autouse=True)
+def no_real_ccr_store(tmp_path_factory):
+    forbidden = (Path.home() / ".claude-code-router").resolve()
+    escape_root = Path(str(tmp_path_factory.getbasetemp())).resolve()
+
+    def _check(path):
+        if path is None:
+            return
+        if path == escape_root or escape_root in path.parents:
+            return
+        if path == forbidden or forbidden in path.parents:
+            raise AssertionError(
+                "quoin test hermeticity: refusing to touch the real CCR "
+                f"config directory ({path}). Point the code under test at "
+                "tmp_path."
+            )
+
+    mp = pytest.MonkeyPatch()
+
+    real_sqlite_connect = sqlite3.connect
+
+    def _guarded_sqlite_connect(*args, **kwargs):
+        if args:
+            _check(_target_path(args[0], kwargs))
+        return real_sqlite_connect(*args, **kwargs)
+
+    real_os_open = os.open
+
+    def _guarded_os_open(path, *args, **kwargs):
+        _check(_target_path(path, {}))
+        return real_os_open(path, *args, **kwargs)
+
+    real_builtins_open = builtins.open
+
+    def _guarded_builtins_open(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)):
+            _check(_target_path(file, {}))
+        return real_builtins_open(file, *args, **kwargs)
+
+    real_io_open = io.open
+
+    def _guarded_io_open(file, *args, **kwargs):
+        if isinstance(file, (str, os.PathLike)):
+            _check(_target_path(file, {}))
+        return real_io_open(file, *args, **kwargs)
+
+    real_os_replace = os.replace
+
+    def _guarded_os_replace(src, dst, *args, **kwargs):
+        _check(_target_path(dst, {}))
+        return real_os_replace(src, dst, *args, **kwargs)
+
+    mp.setattr(sqlite3, "connect", _guarded_sqlite_connect)
+    mp.setattr(os, "open", _guarded_os_open)
+    mp.setattr(builtins, "open", _guarded_builtins_open)
+    mp.setattr(io, "open", _guarded_io_open)
+    mp.setattr(os, "replace", _guarded_os_replace)
+    try:
+        yield
+    finally:
+        mp.undo()
+
+
+def make_v3_store(dir_, blob, *, wal=False):
+    """Build a v3 sqlite store at `dir_/config.sqlite` seeded with `blob`.
+
+    `blob` is written as app_config['default']. With wal=True the database
+    is switched to WAL journal mode before the seed write, matching the
+    shape v3 actually ships (config.sqlite-wal / config.sqlite-shm).
+    """
+    path = Path(dir_) / "config.sqlite"
+    con = sqlite3.connect(str(path))
+    try:
+        if wal:
+            con.execute("PRAGMA journal_mode=WAL")
+        con.execute(
+            "CREATE TABLE IF NOT EXISTS app_config ("
+            "key TEXT PRIMARY KEY, value_json TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        payload = json.dumps(blob, ensure_ascii=False)
+        con.execute(
+            "INSERT INTO app_config (key, value_json, updated_at) VALUES (?, ?, ?)",
+            ("default", payload, "2026-01-01T00:00:00.000Z"),
+        )
+        con.commit()
+    finally:
+        con.close()
+    return path
+
+
+def store_value_snapshot(path):
+    """Read-only (value_json, updated_at) tuple, or None iff file/table/row
+    is absent. Raises on any other sqlite3.Error — an oracle that cannot
+    read must fail loudly, never report "unchanged". Use this, not a byte
+    comparison of config.sqlite, as the "quoin wrote nothing" oracle: a
+    committed WAL write is invisible in the main file for as long as any
+    connection holds the store open.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+    try:
+        cur = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='app_config'"
+        )
+        if cur.fetchone() is None:
+            return None
+        cur = con.execute(
+            "SELECT value_json, updated_at FROM app_config WHERE key='default'"
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return (row[0], row[1])
+    finally:
+        con.close()
