@@ -518,6 +518,13 @@ def _setup_v3(args: argparse.Namespace, route: CcrRoute, store_dir: pathlib.Path
         summary_lines.append(f"  + {change}")
     if result.backup:
         summary_lines.append(f"  Backed up existing store value to: {result.backup}")
+    elif result.wrote:
+        # Said rather than left silent: the rollback recipe promises a backup
+        # path on every write, and "there was nothing to back up" is the only
+        # other way a write can end.
+        summary_lines.append(
+            "  no backup needed — the store had no existing configuration blob"
+        )
     for warning in result.warnings:
         summary_lines.append(f"  ⚠ {warning}")
     for tier in ("haiku", "sonnet", "opus"):
@@ -770,6 +777,24 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def _status_version_line(version: CcrVersion) -> str:
+    """The `CCR version:` value, keyed on the detection source.
+
+    The two degenerate renderings are separated by source and never by the
+    major: a capped reading and a no-signal reading both carry major 0, so a
+    major test would match both and order would silently decide which one
+    won. "not detected" is `source == "none"` and nothing else; a capped
+    source is the only thing that reads "unrecognised".
+    """
+    if version.source == "none":
+        # No suffix: a "(via …)" clause here would contradict the
+        # `CCR installed: no` line printed directly above it.
+        return "not detected"
+    if version.source.endswith("npm-capped"):
+        return f"unrecognised (via {version.source})"
+    return f"v{version.major} (via {version.source})"
+
+
 def _cmd_router_status(args: argparse.Namespace) -> int:
     """quoin router status — read-only report. Always returns 0 (D-07).
 
@@ -778,19 +803,50 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
     """
     home_override: pathlib.Path | None = getattr(args, "_home_override", None)
 
+    # One resolution for the whole handler, exactly as the setup path does it.
+    route = resolve_ccr_route(home_override)
+    # The version every line below renders *and* every predicate below keys
+    # on. A leftover config.json beside a newer package detects as major 2,
+    # and reporting that file as a present, active config would be a false
+    # report about a machine whose CCR cannot read it.
+    version = _effective_version(route)
+    config_path = ccr_config_path(home=home_override)
+    config_json_present = config_path.exists()
+    store_path = ccr_store_path(home=home_override)
+
     # A version query would add nothing `shutil.which` doesn't already tell
     # us, and both `ccr -v` and `ccr version` are destructive on a v3 store
     # (see the setup path above) — check PATH directly instead.
-    installed = bool(shutil.which("ccr"))
-    config_path = ccr_config_path(home=home_override)
-    cfg_present = config_path.exists()
+    on_path = bool(shutil.which("ccr"))
     live = probe_service()
     key_set = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
 
-    if live and cfg_present:
+    v3_store = route.route == "v3"
+    populated: bool | None = None
+    populated_detail = ""
+    store_cfg: dict[str, Any] = {}
+    if v3_store:
+        # read_v3_config never raises: a malformed, locked or unreadable
+        # store comes back as a status string, which becomes the "unknown"
+        # rendering below rather than a traceback out of a read-only report.
+        read = ccr_store.read_v3_config(store_path)
+        store_cfg = read.config
+        if read.status == "ok":
+            populated = not ccr_store.v3_is_empty(read.config)
+        else:
+            populated_detail = read.detail
+        configured = populated is True
+    else:
+        # config.json is a live store only where the effective major still
+        # reads it. On a v3 machine it is a leftover, so it cannot make the
+        # machine configured and cannot put CCR in front of Claude.
+        configured = config_json_present and version.major != 3
+
+    note = ""
+    if live and configured:
         mode = "open via CCR (proxy running)"
-    elif cfg_present and not live:
-        cmd, _note = launch_guidance(None)
+    elif configured and not live:
+        cmd, note = launch_guidance(version.major)
         if cmd:
             mode = f"native (CCR configured but proxy not running — run `{cmd}` to start)"
         else:
@@ -799,9 +855,47 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
         mode = "native"
 
     print("quoin router status:")
-    print(f"  CCR installed:  {'yes' if installed else 'no'}")
-    print(f"  Config present: {'yes' if cfg_present else 'no'}  ({config_path})")
-    print(f"  Proxy running:  {'yes' if live else 'no'}  (127.0.0.1:3456)")
-    print(f"  API key set:    {'yes' if key_set else 'no'}  (OPENROUTER_API_KEY)")
-    print(f"  Active mode:    {mode}")
+    if v3_store:
+        # A live config.sqlite is presence evidence in its own right — CCR is
+        # the only thing that creates one — so a user whose PATH is missing
+        # npm's global bin is not told CCR is absent directly above a store
+        # path marked authoritative. The PATH fact is reported, not hidden.
+        installed_value = "yes" if on_path else "yes  (store present; `ccr` not on PATH)"
+        print(f"  CCR installed:   {installed_value}")
+        print(f"  CCR version:     {_status_version_line(version)}")
+        print(f"  Config store:    {store_path}  (authoritative for v3)")
+        if populated is None:
+            print(f"  Store populated: unknown  ({populated_detail})")
+        elif populated:
+            print("  Store populated: yes")
+        else:
+            print("  Store populated: no  (no providers, no API key)")
+        print(f"  Proxy running:   {'yes' if live else 'no'}  (127.0.0.1:3456)")
+        print(f"  API key set:     {'yes' if key_set else 'no'}  (OPENROUTER_API_KEY)")
+        print(f"  Active mode:     {mode}")
+    else:
+        if config_json_present and version.major == 3:
+            presence = f"no  ({config_path} exists but CCR v3 does not read it)"
+        else:
+            presence = f"{'yes' if config_json_present else 'no'}  ({config_path})"
+        print(f"  CCR installed:  {'yes' if on_path else 'no'}")
+        print(f"  CCR version:    {_status_version_line(version)}")
+        print(f"  Config present: {presence}")
+        print(f"  Proxy running:  {'yes' if live else 'no'}  (127.0.0.1:3456)")
+        print(f"  API key set:    {'yes' if key_set else 'no'}  (OPENROUTER_API_KEY)")
+        print(f"  Active mode:    {mode}")
+    if note:
+        print(f"  {note}")
+
+    # Every input to the report is derived here rather than threaded in: the
+    # store read above is the only one on this path, and `rebuilt` is False
+    # because a read-only report has rebuilt nothing.
+    for line in ccr_store.upgrade_loss_lines(
+        version.major,
+        config_json_present,
+        store_cfg,
+        ccr_store.v3_api_key_row_count(store_path),
+        rebuilt=False,
+    ):
+        print(line)
     return 0

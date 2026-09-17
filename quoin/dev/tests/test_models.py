@@ -33,7 +33,8 @@ from quoin.ccr_config import (  # noqa: E402
     ccr_config_path,
     write_config,
 )
-from quoin.router import DEFAULT_MODELS, quoin_models_path  # noqa: E402
+from quoin.router import DEFAULT_MODELS, ccr_store_dir, quoin_models_path  # noqa: E402
+from conftest import make_v3_store, store_value_snapshot  # noqa: E402
 from quoin.models import (  # noqa: E402
     FRIENDLY_ALIASES,
     KNOWN_SLUGS,
@@ -94,6 +95,39 @@ def _write_ccr_config(
     path.parent.mkdir(parents=True, exist_ok=True)
     write_config(path, cfg)
     return path
+
+
+def _v3_provider_blob(
+    api_key: str = "sk-or-SENTINEL-KEY",
+    models_list: list[str] | None = None,
+) -> dict[str, Any]:
+    """A v3 store blob carrying an openrouter provider, as CCR itself writes it."""
+    return {
+        "Providers": [
+            {
+                "name": "openrouter",
+                "api_base_url": "https://openrouter.ai/api/v1/chat/completions",
+                "api_key": api_key,
+                "models": models_list if models_list is not None else ["old/model"],
+                "transformer": {"use": ["openrouter"]},
+            }
+        ],
+    }
+
+
+def _seed_v3_store(
+    tmp_path: Path, blob: dict[str, Any] | None = None, *, wal: bool = False
+) -> Path:
+    """Create the store directory and a config.sqlite inside it."""
+    store_dir = ccr_store_dir(tmp_path)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    return make_v3_store(store_dir, blob if blob is not None else {}, wal=wal)
+
+
+def _read_v3_blob(tmp_path: Path) -> dict[str, Any]:
+    snapshot = store_value_snapshot(ccr_store_dir(tmp_path) / "config.sqlite")
+    assert snapshot is not None
+    return json.loads(snapshot[0])
 
 
 def _capture_output(fn, args, monkeypatch, *, ccr_live: bool = False) -> tuple[int, str]:
@@ -417,12 +451,19 @@ class TestCmdModelsShow:
         live: bool = False,
         cfg_present: bool = False,
         ccr_installed: bool = False,
+        v3_blob: dict[str, Any] | None = None,
+        v3_store: bool = False,
+        npm_major: int | None = None,
     ) -> tuple[int, str]:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: live)
         monkeypatch.setattr("shutil.which", lambda name: "/usr/bin/ccr" if (name == "ccr" and ccr_installed) else None)
 
         if cfg_present:
             _write_ccr_config(tmp_path)
+        if v3_store or v3_blob is not None:
+            _seed_v3_store(tmp_path, v3_blob)
+        if npm_major is not None:
+            monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
 
         args = _make_args(home=tmp_path)
         buf = io.StringIO()
@@ -477,16 +518,86 @@ class TestCmdModelsShow:
         for tier in TIER_KEYS:
             assert tier in out
 
+    def test_models_show_v2_names_the_v2_command(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """A v2 machine is told to run the command v2 actually has."""
+        _, out = self._run(monkeypatch, tmp_path, live=False, cfg_present=True)
+        assert "native (CCR configured, proxy down — run `ccr code`)" in out
+
+    def test_models_show_v3_names_the_v3_command_and_reports_configured(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """A populated v3 store is 'configured' and names the v3 command.
+
+        config.json presence cannot answer this on v3 — CCR no longer reads
+        that file — so the store is what the qualification keys on.
+        """
+        _, out = self._run(
+            monkeypatch, tmp_path, live=False, v3_blob=_v3_provider_blob()
+        )
+        assert "native (CCR configured, proxy down — run `ccr default-claude-code`)" in out
+        assert "no `code` subcommand" in out
+        assert "ccr code" not in out
+
+    def test_models_show_v3_empty_store_reports_native(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """An empty v3 store is not configured, so no qualification is claimed."""
+        _, out = self._run(monkeypatch, tmp_path, live=False, v3_store=True)
+        assert "CCR configured" not in out
+        assert "ccr code" not in out
+
+    def test_models_show_v3_populated_store_suppresses_install_hint(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """PATH can be missing npm's global bin; the store still proves setup."""
+        _, out = self._run(
+            monkeypatch,
+            tmp_path,
+            live=False,
+            ccr_installed=False,
+            v3_blob=_v3_provider_blob(),
+        )
+        assert "CCR not set up" not in out
+
+    def test_models_show_v3_empty_store_keeps_install_hint(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        _, out = self._run(
+            monkeypatch, tmp_path, live=False, ccr_installed=False, v3_store=True
+        )
+        assert "CCR not set up — run `quoin router setup`" in out
+
     def test_models_show_unknown_branch_has_no_dangling_parenthetical(
         self, monkeypatch, tmp_path: Path
     ) -> None:
-        # Site 4: no handler runs detection in this stage, so the mode string
-        # on the config-present/proxy-down path carries no command and no
-        # note — a parenthetical with nothing to say would be a hole in the
-        # sentence, so it is omitted entirely rather than left dangling.
-        _, out = self._run(monkeypatch, tmp_path, live=False, cfg_present=True)
+        # An unrecognised major has no command to name, so the parenthetical
+        # is omitted entirely rather than left as a hole in the sentence.
+        _, out = self._run(
+            monkeypatch, tmp_path, live=False, cfg_present=True, npm_major=5
+        )
         assert "native (CCR configured, proxy down)" in out
         assert "run `" not in out
+
+    def test_models_show_observes_stubbed_resolve_ccr_route(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """The module-qualified binding is the one stubbing seam (MAJ-6)."""
+        import quoin.router as router_mod
+
+        seen: list[object] = []
+
+        def fake_route(home=None, **kw):
+            seen.append(home)
+            return router_mod.CcrRoute(
+                router_mod.CcrVersion(3, "sqlite", "store:sqlite"), "v3", None
+            )
+
+        monkeypatch.setattr("quoin.router.resolve_ccr_route", fake_route)
+        _, out = self._run(monkeypatch, tmp_path, live=False, v3_blob=_v3_provider_blob())
+        assert seen == [tmp_path]
+        assert "ccr default-claude-code" in out
 
 
 # ── quoin models set ──────────────────────────────────────────────────────────
@@ -503,6 +614,9 @@ class TestCmdModelsSet:
         api_key: str = "sk-or-SENTINEL",
         extra_user_model: str | None = None,
         extra_router_keys: dict[str, str] | None = None,
+        v3_blob: dict[str, Any] | None = None,
+        v3_store: bool = False,
+        npm_major: int | None = None,
     ) -> tuple[int, str]:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
@@ -515,6 +629,10 @@ class TestCmdModelsSet:
                 extra_models=extra_models,
                 extra_router_keys=extra_router_keys,
             )
+        if v3_store or v3_blob is not None:
+            _seed_v3_store(tmp_path, v3_blob)
+        if npm_major is not None:
+            monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
 
         args = _make_args(home=tmp_path, tier=tier, model=model)
         buf = io.StringIO()
@@ -670,16 +788,113 @@ class TestCmdModelsSet:
         data = json.loads(quoin_models_path(home=tmp_path).read_text())
         assert data["opus"] == FRIENDLY_ALIASES["glm"]
 
-    def test_models_set_and_preset_print_no_v2_command(
+    def test_models_set_on_v2_names_the_v2_command(
         self, monkeypatch, tmp_path: Path
     ) -> None:
-        # Site 5: no handler runs detection in this stage, so the final
-        # "to use open models" line carries the unknown-branch decline note
-        # rather than a command that may not exist on this machine.
+        """The v2 store shape gets the v2 command and its qualification."""
         rc, out = self._run(monkeypatch, tmp_path, "opus", "x/model")
         assert rc == 0
+        assert "To use open models: `ccr code`" in out
+
+    def test_models_set_on_unrecognised_version_declines(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """An unrecognised major gets the decline note, not a command."""
+        rc, out = self._run(monkeypatch, tmp_path, "opus", "x/model", npm_major=5)
+        assert rc == 2
         assert "ccr code" not in out
-        assert UNKNOWN_LAUNCH_NOTE.split(";")[0] in out
+        assert f"quoin: models.json updated ({quoin_models_path(home=tmp_path)})." in out
+        assert "Detected:  v5" in out
+        assert "npm install -g @musistudio/claude-code-router@" in out
+        assert (
+            "quoin declined to write to CCR; nothing in your CCR configuration was changed."
+            in out
+        )
+
+    def test_models_set_on_v3_updates_provider_models(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, out = self._run(
+            monkeypatch,
+            tmp_path,
+            "opus",
+            "x/model",
+            with_ccr_config=False,
+            v3_blob=_v3_provider_blob(),
+        )
+        assert rc == 0
+        blob = _read_v3_blob(tmp_path)
+        provider = next(p for p in blob["Providers"] if p.get("name") == "openrouter")
+        assert "x/model" in provider["models"]
+        # The key is never read or rewritten by this path.
+        assert provider["api_key"] == "sk-or-SENTINEL-KEY"
+        assert blob["Router"]["builtInRules"]["claude-code"]["enabled"] is True
+        assert "default" not in blob["Router"]
+        assert "NON_INTERACTIVE_MODE" not in json.dumps(blob)
+        assert "NON_INTERACTIVE_MODE" not in blob.get("Router", {})
+        assert "ccr default-claude-code" in out
+        assert "no v3 equivalent" in out
+        assert not ccr_config_path(home=tmp_path).exists()
+
+    def test_models_set_on_v3_works_without_api_key_set(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """R-03 holds on v3: the mutator never reads the key."""
+        monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        rc, _ = self._run(
+            monkeypatch,
+            tmp_path,
+            "opus",
+            "x/model",
+            with_ccr_config=False,
+            v3_blob=_v3_provider_blob(),
+        )
+        assert rc == 0
+
+    def test_models_set_on_v3_without_provider_takes_early_return(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, out = self._run(
+            monkeypatch,
+            tmp_path,
+            "opus",
+            "x/model",
+            with_ccr_config=False,
+            v3_blob={"Providers": []},
+        )
+        assert rc == 0
+        assert "No openrouter provider in CCR config" in out
+        assert quoin_models_path(home=tmp_path).exists()
+        # Nothing reached the store: the mutator raised before any write.
+        snapshot = store_value_snapshot(ccr_store_dir(tmp_path) / "config.sqlite")
+        assert snapshot is not None
+        assert json.loads(snapshot[0]) == {"Providers": []}
+
+    def test_models_set_on_v3_store_absent_writes_models_json_and_returns_zero(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """The primary job succeeded, so the store-absent decline still exits 0."""
+        _write_ccr_config(tmp_path)
+        rc, out = self._run(
+            monkeypatch,
+            tmp_path,
+            "opus",
+            "x/model",
+            with_ccr_config=False,
+            npm_major=3,
+        )
+        assert rc == 0
+        assert f"quoin: models.json updated ({quoin_models_path(home=tmp_path)})." in out
+        assert "CCR v3 is installed" in out
+        assert "CCR v2" not in out
+        assert "Run `ccr start` once" in out
+        assert "Do not run `ccr -v` or `ccr version` first" in out
+        assert (
+            "quoin declined to write to CCR; nothing in your CCR configuration was changed."
+            in out
+        )
+        assert "Detected:" not in out
+        assert quoin_models_path(home=tmp_path).exists()
 
 
 # ── quoin models preset ───────────────────────────────────────────────────────
@@ -693,12 +908,19 @@ class TestCmdModelsPreset:
         *,
         with_ccr_config: bool = True,
         api_key: str = "sk-or-SENTINEL",
+        v3_blob: dict[str, Any] | None = None,
+        v3_store: bool = False,
+        npm_major: int | None = None,
     ) -> tuple[int, str]:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
 
         if with_ccr_config:
             _write_ccr_config(tmp_path, api_key=api_key)
+        if v3_store or v3_blob is not None:
+            _seed_v3_store(tmp_path, v3_blob)
+        if npm_major is not None:
+            monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
 
         args = _make_args(home=tmp_path, name=name)
         buf = io.StringIO()
@@ -773,17 +995,66 @@ class TestCmdModelsPreset:
         rc, _ = self._run(monkeypatch, tmp_path, "open")
         assert isinstance(rc, int)
 
-    def test_models_preset_prints_no_v2_command(
+    def test_models_preset_on_v2_names_the_v2_command(
         self, monkeypatch, tmp_path: Path
     ) -> None:
-        # Site 6. The `_write_ccr_config`-seeded fixture (with_ccr_config=True,
-        # the default) is required to reach the final print — set_provider_
+        # The `_write_ccr_config`-seeded fixture (with_ccr_config=True, the
+        # default) is required to reach the final print — set_provider_
         # models_inplace's early return at a bare-config fixture would make
-        # a "ccr code" absence assertion vacuous.
+        # the launch-line assertion vacuous.
         rc, out = self._run(monkeypatch, tmp_path, "open")
         assert rc == 0
+        assert "To use open models: `ccr code`" in out
+
+    def test_models_preset_on_unrecognised_version_declines(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, out = self._run(monkeypatch, tmp_path, "open", npm_major=5)
+        assert rc == 2
         assert "ccr code" not in out
-        assert UNKNOWN_LAUNCH_NOTE.split(";")[0] in out
+        assert (
+            "quoin: models.json updated with open defaults "
+            f"({quoin_models_path(home=tmp_path)})." in out
+        )
+        assert UNKNOWN_LAUNCH_NOTE.split(";")[0] not in out
+        assert "Detected:  v5" in out
+
+    def test_models_preset_on_v3_updates_provider_models(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, out = self._run(
+            monkeypatch,
+            tmp_path,
+            "open",
+            with_ccr_config=False,
+            v3_blob=_v3_provider_blob(),
+        )
+        assert rc == 0
+        blob = _read_v3_blob(tmp_path)
+        provider = next(p for p in blob["Providers"] if p.get("name") == "openrouter")
+        for slug in DEFAULT_MODELS.values():
+            assert slug in provider["models"]
+        assert provider["api_key"] == "sk-or-SENTINEL-KEY"
+        assert "default" not in blob["Router"]
+        assert "NON_INTERACTIVE_MODE" not in json.dumps(blob)
+        assert "NON_INTERACTIVE_MODE" not in blob.get("Router", {})
+        assert "ccr default-claude-code" in out
+        assert "no v3 equivalent" in out
+
+    def test_models_preset_on_v3_store_absent_returns_zero(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        _write_ccr_config(tmp_path)
+        rc, out = self._run(
+            monkeypatch, tmp_path, "open", with_ccr_config=False, npm_major=3
+        )
+        assert rc == 0
+        assert (
+            "quoin: models.json updated with open defaults "
+            f"({quoin_models_path(home=tmp_path)})." in out
+        )
+        assert "CCR v3 is installed" in out
+        assert "ccr code" not in out
 
 
 # ── quoin models reset ────────────────────────────────────────────────────────
@@ -796,11 +1067,17 @@ class TestCmdModelsReset:
         *,
         with_ccr_config: bool = True,
         native_flag: bool = False,
+        v3_store: bool = False,
+        npm_major: int | None = None,
     ) -> tuple[int, str]:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
 
         if with_ccr_config:
             _write_ccr_config(tmp_path)
+        if v3_store:
+            _seed_v3_store(tmp_path, {})
+        if npm_major is not None:
+            monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
 
         args = _make_args(home=tmp_path, native=native_flag)
         buf = io.StringIO()
@@ -884,10 +1161,10 @@ class TestCmdModelsReset:
     def test_models_reset_unknown_branch_reflows_switch_back(
         self, monkeypatch, tmp_path: Path
     ) -> None:
-        # Site 7: no handler runs detection in this stage, so the switch-back
-        # clause is dropped rather than left dangling on a command that may
-        # not exist, and the sentence re-flows to the committed two-clause form.
-        rc, out = self._run(monkeypatch, tmp_path)
+        # An unrecognised major has no command to name, so the switch-back
+        # clause is dropped rather than left dangling and the sentence
+        # re-flows to the committed two-clause form.
+        rc, out = self._run(monkeypatch, tmp_path, npm_major=5)
         assert rc == 0
         assert (
             "Your CCR config and model mapping are intact; "
@@ -895,6 +1172,22 @@ class TestCmdModelsReset:
         )
         assert "ccr code" not in out
         assert "intact —" not in out
+
+    def test_models_reset_on_v2_names_the_v2_command(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, out = self._run(monkeypatch, tmp_path)
+        assert rc == 0
+        assert "run `ccr code` to switch back" in out
+
+    def test_models_reset_on_v3_names_the_v3_command(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        rc, out = self._run(monkeypatch, tmp_path, v3_store=True)
+        assert rc == 0
+        assert "run `ccr default-claude-code` to switch back" in out
+        assert "no `code` subcommand" in out
+        assert "ccr code" not in out
 
     def test_returns_int(self, monkeypatch, tmp_path: Path) -> None:
         rc, _ = self._run(monkeypatch, tmp_path)
