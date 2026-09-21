@@ -315,6 +315,94 @@ def test_npm_global_prefix_none_when_npm_absent_without_spawning(monkeypatch) ->
     assert recorded == []
 
 
+def test_npm_global_prefix_fast_path_skips_spawn_when_package_present(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """F-15: the production-only fast path (never engaged under pytest —
+    see the marker-absence assertion below) must not spawn `npm prefix -g`
+    when npm's own binary location already resolves to an installed CCR
+    package."""
+    from quoin.router import _fast_npm_prefix_guess, _npm_global_prefix
+
+    prefix = tmp_path / "guessed_prefix"
+    npm_bin = prefix / "bin" / "npm"
+    npm_bin.parent.mkdir(parents=True)
+    npm_bin.write_text("#!/bin/sh\n")
+    _seed_npm_package(prefix, "3.1.0")
+
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0, stdout="/should-not-be-used\n")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: str(npm_bin) if cmd == "npm" else None,
+    )
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+    result = _npm_global_prefix()
+
+    assert result == str(prefix)
+    assert recorded == []
+    # The pure guess helper is exercised directly too, hermetically.
+    assert _fast_npm_prefix_guess(str(npm_bin)) == str(prefix)
+
+
+def test_npm_global_prefix_fast_path_never_engaged_under_pytest(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The same guessable layout as above, but with PYTEST_CURRENT_TEST
+    left in place (the normal case for every other test in this suite):
+    the fast path must not engage, and the real spawn must still happen —
+    a test that wants the spawn must always get it, never a guess read off
+    whatever CCR happens to be installed on the machine running the
+    suite."""
+    from quoin.router import _npm_global_prefix
+
+    prefix = tmp_path / "guessed_prefix"
+    npm_bin = prefix / "bin" / "npm"
+    npm_bin.parent.mkdir(parents=True)
+    npm_bin.write_text("#!/bin/sh\n")
+    _seed_npm_package(prefix, "3.1.0")
+
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0, stdout="/fake/prefix\n")
+
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: str(npm_bin) if cmd == "npm" else None,
+    )
+
+    with monkeypatch.context() as m:
+        m.setattr("quoin.router._npm_query_enabled", True)
+        result = _npm_global_prefix()
+
+    assert recorded, "the real spawn must still happen under pytest"
+    assert result == "/fake/prefix"
+
+
+def test_fast_npm_prefix_guess_non_bin_parent_is_the_prefix_itself(
+    tmp_path: Path,
+) -> None:
+    """The non-bin layout (e.g. npm.cmd sitting directly inside the global
+    prefix on Windows): the guess is the binary's own parent directory,
+    not its grandparent."""
+    from quoin.router import _fast_npm_prefix_guess
+
+    npm_bin = tmp_path / "nodejs" / "npm.cmd"
+    npm_bin.parent.mkdir(parents=True)
+    npm_bin.write_text("")
+
+    assert _fast_npm_prefix_guess(str(npm_bin)) == str(npm_bin.parent)
+
+
 def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
     """A wedged `npm prefix -g` degrades to None, not a raise — and it must
     actually carry a positive timeout kwarg, or a mutant that deletes

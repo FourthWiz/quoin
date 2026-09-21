@@ -103,6 +103,34 @@ def _scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k != "OPENROUTER_API_KEY"}
 
 
+def _fast_npm_prefix_guess(npm_path: str) -> str | None:
+    """Best-effort global npm prefix guessed from npm's own binary location.
+
+    npm ships at <prefix>/bin/npm on the standard POSIX layout and directly
+    inside <prefix> as npm.cmd on Windows; guessing from that avoids
+    spawning `npm prefix -g` (measured 0.6-1.2s) on the common case.
+
+    Deliberately does NOT resolve through symlinks: on most real installs
+    (Homebrew, nvm) `<prefix>/bin/npm` is itself a symlink to npm's own
+    `lib/node_modules/npm/bin/npm-cli.js`, and fully resolving it lands
+    inside npm's own package rather than at the prefix — the convention
+    this guess relies on is where the symlink sits, not where it points.
+    A hint only, never a source of truth — a custom npm `prefix` config or
+    a nonstandard layout can still make the guess wrong, so the caller
+    must always fall back to the real spawn when it doesn't pan out.
+    """
+    try:
+        candidate = pathlib.Path(npm_path)
+        if not candidate.is_absolute():
+            candidate = candidate.absolute()
+    except OSError:
+        return None
+    parent = candidate.parent
+    if parent.name == "bin":
+        return str(parent.parent)
+    return str(parent)
+
+
 def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
@@ -117,6 +145,18 @@ def _npm_global_prefix() -> str | None:      # seam A
         npm_path = shutil.which("npm")
         if npm_path is None:
             return None
+        # Fast path: skip the spawn below when the guess from npm's own
+        # binary location already resolves to a real, installed CCR
+        # package. Gated strictly on the absence of PYTEST_CURRENT_TEST
+        # (never merely on _npm_query_enabled) — a test that deliberately
+        # re-enables the flag to exercise the real spawn is asking for the
+        # spawn, not for whatever CCR happens to be installed on the
+        # machine running the suite, and this guess reads real disk state
+        # the same way no_real_ccr_store's rationale warns against.
+        if os.environ.get("PYTEST_CURRENT_TEST") is None:
+            guess = _fast_npm_prefix_guess(npm_path)
+            if guess is not None and _ccr_package_json(guess) is not None:
+                return guess
         # 10s, not 5s: now that npm_path resolves to the real npm.cmd on
         # Windows, this call actually reaches it, and npm.cmd plus
         # antivirus/Defender scanning routinely pushes a cold-start
@@ -677,9 +717,18 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return rc
+        # The install changed what quoin knows, so re-resolve rather than
+        # keep dispatching on the pre-install reading. The keyword says the
+        # one thing detection cannot see on a machine whose npm is
+        # unreadable: quoin just put this major there itself. Resolved once,
+        # here, above the presence check below — that check only needs to
+        # know whether npm's major was readable, which this same call
+        # already answers via route.npm_major, so the two no longer spawn
+        # npm separately.
+        route = resolve_ccr_route(home_override, assume_installed_major=CCR_PINNED_MAJOR)
         # Confirm presence directly rather than with a version query — see
         # the comment above on why `ccr -v` / `ccr version` are avoided.
-        if not (bool(shutil.which("ccr")) or _npm_major() is not None):
+        if not (bool(shutil.which("ccr")) or route.npm_major is not None):
             print(
                 "quoin: ccr was installed but is not on PATH.\n"
                 "Add npm's global bin directory to your PATH, then re-run.\n"
@@ -687,11 +736,6 @@ def _cmd_router_setup(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return 1
-        # The install changed what quoin knows, so re-resolve rather than
-        # keep dispatching on the pre-install reading. The keyword says the
-        # one thing detection cannot see on a machine whose npm is
-        # unreadable: quoin just put this major there itself.
-        route = resolve_ccr_route(home_override, assume_installed_major=CCR_PINNED_MAJOR)
         disp = _dispatch_installed(args, route, store_dir)
         if disp is not None:
             return disp
@@ -825,13 +869,15 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
     populated: bool | None = None
     populated_detail = ""
     store_cfg: dict[str, Any] = {}
+    store_read_ok = False
     if v3_store:
         # read_v3_config never raises: a malformed, locked or unreadable
         # store comes back as a status string, which becomes the "unknown"
         # rendering below rather than a traceback out of a read-only report.
         read = ccr_store.read_v3_config(store_path)
         store_cfg = read.config
-        if read.status == "ok":
+        store_read_ok = read.status == "ok"
+        if store_read_ok:
             populated = not ccr_store.v3_is_empty(read.config)
         else:
             populated_detail = read.detail
@@ -889,13 +935,26 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
 
     # Every input to the report is derived here rather than threaded in: the
     # store read above is the only one on this path, and `rebuilt` is False
-    # because a read-only report has rebuilt nothing.
-    for line in ccr_store.upgrade_loss_lines(
-        version.major,
-        config_json_present,
-        store_cfg,
-        ccr_store.v3_api_key_row_count(store_path),
-        rebuilt=False,
-    ):
-        print(line)
+    # because a read-only report has rebuilt nothing. Skipped entirely on a
+    # v3 store quoin could not read (malformed / unreadable / locked) — a
+    # store nobody actually read can't be reported empty. The api-key row
+    # count is itself only opened when the other two gating signals already
+    # hold, since a v3 machine with no leftover config.json can never fire
+    # the report and that second read-only open is otherwise wasted (and,
+    # under a live `ccr`, doubles the wait).
+    if not v3_store or store_read_ok:
+        api_key_rows = (
+            ccr_store.v3_api_key_row_count(store_path)
+            if version.major == 3 and config_json_present
+            else None
+        )
+        for line in ccr_store.upgrade_loss_lines(
+            version.major,
+            config_json_present,
+            store_cfg,
+            api_key_rows,
+            rebuilt=False,
+            store_absent=route.route == "v3-store-absent",
+        ):
+            print(line)
     return 0

@@ -2071,6 +2071,61 @@ class TestCmdRouterStatusV3:
         assert "re-run `quoin router setup` with OPENROUTER_API_KEY" in out
         assert "quoin has just rebuilt them" not in out
 
+    def test_malformed_store_with_leftover_json_suppresses_loss_report(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """F-02: a store quoin could not fully parse must not ALSO be
+        reported as an upgrade that lost the user's configuration — the
+        two claims ("unknown" and "lost") contradict each other, and the
+        second is a confident false claim about a store that may be fully
+        populated."""
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        path = store_dir / "config.sqlite"
+        con = sqlite3.connect(str(path))
+        con.execute(
+            "CREATE TABLE app_config (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        con.execute(
+            "INSERT INTO app_config VALUES ('default', '{not json', '2026-01-01 00:00:00')"
+        )
+        con.commit()
+        con.close()
+
+        out = self._run(monkeypatch, tmp_path, capsys, leftover_json=True)
+        assert "Store populated: unknown  (" in out
+        assert "v2 -> v3 upgrade that lost your configuration" not in out
+
+    def test_unreadable_store_with_leftover_json_suppresses_loss_report(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """F-02, the unreadable-store variant (genuine corruption, or a
+        rollback-journal store under lock — reproduced separately from the
+        malformed-JSON cell above)."""
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.sqlite").write_bytes(b"not a sqlite database, just bytes")
+
+        out = self._run(monkeypatch, tmp_path, capsys, leftover_json=True)
+        assert "Store populated: unknown  (" in out
+        assert "v2 -> v3 upgrade that lost your configuration" not in out
+
+    def test_store_absent_route_points_at_ccr_start_not_router_setup(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """F-03: on the leftover-config.json-with-no-store machine, status
+        and setup must agree on the next step — both point at `ccr start`
+        first, rather than status sending the user into a `quoin router
+        setup` that will just decline again on this exact machine."""
+        out = self._run(monkeypatch, tmp_path, capsys, leftover_json=True, npm_major=3)
+        assert "v2 -> v3 upgrade that lost your configuration" in out
+        assert "ccr start" in out
+
     def test_no_signal_machine_reads_not_detected(
         self, monkeypatch, tmp_path: Path, capsys
     ) -> None:
@@ -2184,3 +2239,58 @@ def test_genuine_v2_machine_keeps_the_v2_rendering(
     assert _cmd_models_show(argparse.Namespace(_home_override=tmp_path)) == 0
     show_out = capsys.readouterr().out
     assert "run `ccr code`" in show_out
+
+
+# ── F-20: npm spawn census, widened past router setup ─────────────────────────
+
+def test_npm_spawn_census_covers_status_and_models_surfaces(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The round-6 effective-version wiring added a `resolve_ccr_route`
+    call to five surfaces `router setup`'s own census guard never covered.
+    Pins the same one-read-per-invocation property there, so a future edit
+    reintroducing a duplicate spawn on any of them fails here rather than
+    only being caught by inspection."""
+    from quoin.models import (
+        _cmd_models_preset,
+        _cmd_models_reset,
+        _cmd_models_set,
+        _cmd_models_show,
+    )
+    from quoin.router import _cmd_router_status
+
+    write_config(
+        ccr_config_path(home=tmp_path),
+        {"Providers": [{"name": "openrouter", "models": []}], "Router": {}},
+    )
+
+    call_count = {"n": 0}
+
+    def _counting_npm_major():
+        call_count["n"] += 1
+        return 2
+
+    monkeypatch.setattr("quoin.router._npm_major", _counting_npm_major)
+    monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+    monkeypatch.setattr("quoin.router.probe_service", lambda **kw: False)
+    monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
+
+    surfaces = {
+        "router status": lambda: _cmd_router_status(_make_args(home=tmp_path)),
+        "models show": lambda: _cmd_models_show(
+            argparse.Namespace(_home_override=tmp_path)
+        ),
+        "models set": lambda: _cmd_models_set(
+            argparse.Namespace(_home_override=tmp_path, tier="opus", model="x/model")
+        ),
+        "models preset": lambda: _cmd_models_preset(
+            argparse.Namespace(_home_override=tmp_path, name="open")
+        ),
+        "models reset": lambda: _cmd_models_reset(
+            argparse.Namespace(_home_override=tmp_path)
+        ),
+    }
+    for label, call in surfaces.items():
+        call_count["n"] = 0
+        call()
+        assert call_count["n"] <= 1, f"{label} spawned npm more than once"
