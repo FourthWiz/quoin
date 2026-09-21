@@ -332,9 +332,8 @@ def launch_command_phrase(major: int | None) -> str:
 # V3_LAUNCH_NOTE carries above, for the same reason: several tests assert
 # that substring's absence from v3-path output.
 V3_ROUTING_GAP_NOTICE = (
-    "quoin wrote the OpenRouter provider, your model list, and the built-in "
-    "Claude Code route to CCR v3. The v2 `background`, `think`, and "
-    "`longContext` routes have no v3 equivalent, so quoin deliberately did "
-    "not translate them into rules that would only look equivalent — "
-    "configure those by hand in `ccr ui` if you need them."
+    "The v2 `background`, `think`, and `longContext` routes have no v3 "
+    "equivalent; quoin deliberately does not translate them into rules "
+    "that would only look equivalent — configure those by hand in `ccr ui` "
+    "if you need them."
 )

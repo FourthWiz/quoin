@@ -283,6 +283,43 @@ def test_lock_contention_raises_ccr_store_error_promptly(tmp_path):
         holder.close()
 
 
+def test_write_connect_error_is_wrapped_not_raw(tmp_path, monkeypatch):
+    # F-04: a connect-time sqlite3.Error must not escape past a handler
+    # that only catches CcrStoreError.
+    path = make_v3_store(tmp_path, {"Providers": [{"name": "p1"}]})
+    real_connect = sqlite3.connect
+
+    def flaky_connect(*args, **kwargs):
+        if "isolation_level" in kwargs:
+            raise sqlite3.OperationalError("simulated connect failure")
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr(ccr_store.sqlite3, "connect", flaky_connect)
+
+    def mutate(cfg):
+        cfg["Providers"] = []
+        return ["cleared"], []
+
+    with pytest.raises(ccr_store.CcrStoreError, match="simulated connect failure"):
+        ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path)
+
+
+def test_write_refuses_when_store_deleted_between_read_and_connect(tmp_path):
+    # F-04: re-checks path.exists() immediately before the write connect,
+    # so a store deleted after the read (but before the write) is refused
+    # rather than silently re-created empty by a bare connect() call.
+    path = make_v3_store(tmp_path, {"Providers": [{"name": "p1"}]})
+
+    def mutate(cfg):
+        path.unlink()
+        cfg["Providers"] = []
+        return ["cleared"], []
+
+    with pytest.raises(ccr_store.CcrStoreError, match="not found"):
+        ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path)
+    assert not path.exists()
+
+
 def test_updated_at_reuses_sqlite_style_shape(tmp_path):
     path = tmp_path / "config.sqlite"
     con = sqlite3.connect(str(path))
@@ -336,6 +373,19 @@ def test_v3_provider_names_skips_non_dicts_and_nameless():
     assert ccr_store.v3_provider_names(cfg) == ["openrouter"]
 
 
+def test_v3_provider_names_container_guard_non_list_int():
+    # F-01: a non-iterable Providers value must return empty, not raise.
+    assert ccr_store.v3_provider_names({"Providers": 5}) == []
+
+
+def test_v3_provider_names_container_guard_non_list_dict():
+    assert ccr_store.v3_provider_names({"Providers": {}}) == []
+
+
+def test_v3_provider_names_container_guard_absent_key():
+    assert ccr_store.v3_provider_names({}) == []
+
+
 def test_v3_is_empty_true_for_fresh_install_shape():
     assert ccr_store.v3_is_empty({"Providers": [], "APIKEY": ""}) is True
 
@@ -384,6 +434,31 @@ def test_upgrade_loss_lines_closing_clause_by_rebuilt():
     assert any("just rebuilt" in line for line in done)
 
 
+def test_upgrade_loss_lines_store_absent_points_at_ccr_start_first():
+    # F-03: on the store-absent route, the report must not send the user
+    # straight to `quoin router setup` — that command declines on this
+    # exact machine and tells them to run `ccr start` first. The report
+    # must give the same instruction, not a contradictory one.
+    lines = ccr_store.upgrade_loss_lines(
+        3, True, {"Providers": []}, 0, store_absent=True
+    )
+    assert any("ccr start" in line for line in lines)
+    joined = "\n".join(lines)
+    assert "ccr start" in joined.split("re-run `quoin router setup`")[0]
+
+
+def test_upgrade_loss_lines_rebuilt_wins_over_store_absent():
+    # rebuilt=True is only ever reached from a write that just succeeded —
+    # the store cannot be absent there, but the precedence is pinned anyway
+    # so a future caller error degrades to the correct clause rather than
+    # a nonsensical one.
+    lines = ccr_store.upgrade_loss_lines(
+        3, True, {"Providers": []}, 0, rebuilt=True, store_absent=True
+    )
+    assert any("just rebuilt" in line for line in lines)
+    assert not any("ccr start" in line for line in lines)
+
+
 def test_v3_api_key_row_count_none_when_absent(tmp_path):
     assert ccr_store.v3_api_key_row_count(tmp_path / "config.sqlite") is None
 
@@ -397,6 +472,39 @@ def test_v3_api_key_row_count_counts_rows(tmp_path):
     con.commit()
     con.close()
     assert ccr_store.v3_api_key_row_count(path) == 2
+
+
+def test_read_v3_config_pinned_timeout_not_default_five_seconds(tmp_path):
+    # F-14: the readers must not inherit sqlite3's 5s default busy timeout
+    # — they must match the writer's own pinned 2.0s, or a concurrent `ccr`
+    # process turns a read-only status check into an ~11s apparent hang.
+    path = make_v3_store(tmp_path, {"Providers": [{"name": "p1"}]})
+    holder = sqlite3.connect(str(path), isolation_level=None, timeout=0.5)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        started = time.monotonic()
+        result = ccr_store.read_v3_config(path)
+        elapsed = time.monotonic() - started
+        assert result.status == "unreadable"
+        assert elapsed < 3.0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
+
+
+def test_v3_api_key_row_count_pinned_timeout_not_default_five_seconds(tmp_path):
+    path = make_v3_store(tmp_path, {"Providers": [{"name": "p1"}]})
+    holder = sqlite3.connect(str(path), isolation_level=None, timeout=0.5)
+    holder.execute("BEGIN EXCLUSIVE")
+    try:
+        started = time.monotonic()
+        result = ccr_store.v3_api_key_row_count(path)
+        elapsed = time.monotonic() - started
+        assert result is None
+        assert elapsed < 3.0
+    finally:
+        holder.execute("ROLLBACK")
+        holder.close()
 
 
 # ── merge_built_in_claude_code_route / built_in_route_is_writable ──────────
@@ -480,3 +588,27 @@ def test_hermeticity_guard_allows_tmp_path(tmp_path):
     con = sqlite3.connect(str(path))
     con.close()
     assert path.exists()
+
+
+def test_hermeticity_guard_catches_keyword_only_connect():
+    # F-08: a keyword-only sqlite3.connect(database=...) must not bypass
+    # the guard just because args is empty.
+    target = Path.home() / ".claude-code-router" / "config.sqlite"
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        sqlite3.connect(database=str(target), uri=True)
+
+
+def test_hermeticity_guard_catches_mkdir_and_makedirs():
+    # F-09: os.mkdir / os.makedirs were unwrapped seams — a test that
+    # forgets its home override could create real directories under
+    # ~/.claude-code-router before the next (wrapped) seam aborts it. The
+    # real directory may already exist on a machine that actually runs
+    # CCR (this one does) — the guard's job is to block the write, not to
+    # assert anything about pre-existing state.
+    target_dir = Path.home() / ".claude-code-router"
+    leaf = target_dir / "quoin-hermeticity-guard-canary" / "leaf"
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        os.mkdir(str(leaf))
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        os.makedirs(str(leaf))
+    assert not leaf.parent.exists()

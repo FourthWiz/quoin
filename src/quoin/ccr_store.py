@@ -68,7 +68,7 @@ def read_v3_config(path: pathlib.Path) -> StoreRead:
         return StoreRead({}, "missing", "store file does not exist", "", "")
 
     try:
-        con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=2.0)
     except (sqlite3.DatabaseError, OSError) as exc:
         return StoreRead({}, "unreadable", f"could not open store: {exc}", "", "")
 
@@ -189,7 +189,7 @@ def update_v3_config(
 
     raw = read.raw
     cfg = read.config
-    before_canon = _canonical(json.loads(raw)) if raw else _canonical({})
+    before_canon = _canonical(cfg)
 
     changes, warnings = mutate(cfg)
 
@@ -208,7 +208,18 @@ def update_v3_config(
     updated_at = _format_updated_at(read.updated_at)
     payload = json.dumps(cfg, ensure_ascii=False)
 
-    con = sqlite3.connect(path, isolation_level=None, timeout=2.0)
+    # Re-checked here rather than trusted from the read above: `mutate` ran
+    # in between, and a store deleted in that window must be refused, not
+    # silently re-created empty by a bare connect() on a missing path.
+    if not path.exists():
+        raise CcrStoreError(f"CCR v3 store not found at {path}.")
+
+    try:
+        con = sqlite3.connect(path, isolation_level=None, timeout=2.0)
+    except sqlite3.Error as exc:
+        raise CcrStoreError(
+            f"failed to open CCR v3 store at {path}: {exc}"
+        ) from exc
     try:
         try:
             con.execute("BEGIN IMMEDIATE")
@@ -259,7 +270,10 @@ def v3_provider_names(cfg: dict[str, Any]) -> list[str]:
     disagree about what counts as a provider.
     """
     names: list[str] = []
-    for entry in cfg.get("Providers", []) or []:
+    providers = cfg.get("Providers")
+    if not isinstance(providers, list):
+        return names
+    for entry in providers:
         if isinstance(entry, dict):
             name = entry.get("name")
             if name:
@@ -285,6 +299,7 @@ def upgrade_loss_lines(
     api_key_rows: int | None,
     *,
     rebuilt: bool = False,
+    store_absent: bool = False,
 ) -> list[str]:
     """Lines warning that a v2 -> v3 upgrade silently discarded the old config.
 
@@ -300,6 +315,14 @@ def upgrade_loss_lines(
     `router status` and on a `--dry-run` `setup` where nothing was in fact
     written; True is correct on a `setup` run that just wrote, where the
     forward-looking instruction would be false by the time it is printed.
+
+    `store_absent` selects a third closing clause for the one machine shape
+    where a v3 package is detected but has never created a store at all —
+    `router status`'s leftover-config.json-with-no-config.sqlite machine.
+    `router setup` declines that exact machine with an instruction to run
+    `ccr start` first; sending the user straight to `quoin router setup`
+    here would just walk them into that same decline, so this clause gives
+    the same instruction `router setup` would.
     """
     if detected_major != 3:
         return []
@@ -311,6 +334,12 @@ def upgrade_loss_lines(
         return []
     if rebuilt:
         closing = "quoin has just rebuilt them from `models.json` and your exported key."
+    elif store_absent:
+        closing = (
+            "run `ccr start` once and stop it again to let CCR create its config "
+            "store, then re-run `quoin router setup` with OPENROUTER_API_KEY "
+            "exported to rebuild them."
+        )
     else:
         closing = (
             "re-run `quoin router setup` with OPENROUTER_API_KEY exported to rebuild them."
@@ -335,7 +364,7 @@ def v3_api_key_row_count(path: pathlib.Path) -> int | None:
     if not path.exists():
         return None
     try:
-        con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True)
+        con = sqlite3.connect(f"{path.as_uri()}?mode=ro", uri=True, timeout=2.0)
     except (sqlite3.DatabaseError, OSError):
         return None
     try:

@@ -102,8 +102,9 @@ def no_real_ccr_store(tmp_path_factory):
     real_sqlite_connect = sqlite3.connect
 
     def _guarded_sqlite_connect(*args, **kwargs):
-        if args:
-            _check(_target_path(args[0], kwargs))
+        target = args[0] if args else kwargs.get("database")
+        if target is not None:
+            _check(_target_path(target, kwargs))
         return real_sqlite_connect(*args, **kwargs)
 
     real_os_open = os.open
@@ -111,6 +112,18 @@ def no_real_ccr_store(tmp_path_factory):
     def _guarded_os_open(path, *args, **kwargs):
         _check(_target_path(path, {}))
         return real_os_open(path, *args, **kwargs)
+
+    real_os_mkdir = os.mkdir
+
+    def _guarded_os_mkdir(path, *args, **kwargs):
+        _check(_target_path(path, {}))
+        return real_os_mkdir(path, *args, **kwargs)
+
+    real_os_makedirs = os.makedirs
+
+    def _guarded_os_makedirs(name, *args, **kwargs):
+        _check(_target_path(name, {}))
+        return real_os_makedirs(name, *args, **kwargs)
 
     real_builtins_open = builtins.open
 
@@ -134,6 +147,8 @@ def no_real_ccr_store(tmp_path_factory):
 
     mp.setattr(sqlite3, "connect", _guarded_sqlite_connect)
     mp.setattr(os, "open", _guarded_os_open)
+    mp.setattr(os, "mkdir", _guarded_os_mkdir)
+    mp.setattr(os, "makedirs", _guarded_os_makedirs)
     mp.setattr(builtins, "open", _guarded_builtins_open)
     mp.setattr(io, "open", _guarded_io_open)
     mp.setattr(os, "replace", _guarded_os_replace)
