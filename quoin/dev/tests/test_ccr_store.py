@@ -283,6 +283,38 @@ def test_lock_contention_raises_ccr_store_error_promptly(tmp_path):
         holder.close()
 
 
+def test_write_refuses_non_finite_number_and_preserves_sidecar(tmp_path):
+    # F-10: json.loads accepts an overflowing literal (1e999 -> inf); the
+    # default json.dumps would then emit the bare Infinity token, which
+    # CCR's own JSON.parse rejects. Refuse the write instead, after the
+    # sidecar has already preserved the pre-write value.
+    path = tmp_path / "config.sqlite"
+    con = sqlite3.connect(str(path))
+    con.execute(
+        "CREATE TABLE app_config (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, "
+        "updated_at TEXT NOT NULL)"
+    )
+    con.execute(
+        "INSERT INTO app_config VALUES ('default', '{\"Providers\": []}', "
+        "'2026-01-01 00:00:00')"
+    )
+    con.commit()
+    con.close()
+    before = store_value_snapshot(path)
+
+    def mutate(cfg):
+        cfg["Weird"] = 1e999  # json.loads parses this to float("inf")
+        return ["added weird key"], []
+
+    with pytest.raises(ccr_store.CcrStoreError, match="non-finite"):
+        ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path)
+
+    assert store_value_snapshot(path) == before
+    sidecars = list(tmp_path.glob("config.sqlite.value-bak-*.json"))
+    assert len(sidecars) == 1
+    assert json.loads(sidecars[0].read_text(encoding="utf-8")) == {"Providers": []}
+
+
 def test_write_connect_error_is_wrapped_not_raw(tmp_path, monkeypatch):
     # F-04: a connect-time sqlite3.Error must not escape past a handler
     # that only catches CcrStoreError.
