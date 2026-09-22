@@ -131,6 +131,49 @@ def _fast_npm_prefix_guess(npm_path: str) -> str | None:
     return str(parent)
 
 
+def _npmrc_sets_prefix(npmrc: pathlib.Path) -> bool:
+    """True when `npmrc` holds a `prefix = ...` line (any surrounding blanks)."""
+    try:
+        with open(npmrc, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                stripped = line.strip()
+                if not stripped or stripped.startswith(("#", ";")):
+                    continue
+                key, sep, _ = stripped.partition("=")
+                if sep and key.strip() == "prefix":
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _npm_prefix_override_in_play(guess: str) -> bool:
+    """True when something could steer npm's global prefix away from `guess`.
+
+    npm resolves its prefix from (highest to lowest precedence) a
+    `--prefix` flag, the `npm_config_prefix` / `NPM_CONFIG_PREFIX`
+    environment variables, a `prefix=` line in `$HOME/.npmrc`, one in the
+    guessed prefix's own `etc/npmrc`, and only then the convention this
+    fast path's guess relies on — where npm's own binary happens to sit.
+    `npm config set prefix ...` (npm's documented remedy for a global
+    install permission error) writes exactly one of the `.npmrc` forms
+    above, which is the machine shape this check exists to catch: a
+    leftover CCR package sitting at the binary-adjacent prefix while npm
+    itself has been pointed somewhere else. Any override present makes the
+    guess untrustworthy, so the caller falls through to the real spawn
+    rather than trying to reproduce npm's full resolution order itself.
+    """
+    if os.environ.get("npm_config_prefix") or os.environ.get("NPM_CONFIG_PREFIX"):
+        return True
+    for npmrc in (
+        pathlib.Path.home() / ".npmrc",
+        pathlib.Path(guess) / "etc" / "npmrc",
+    ):
+        if _npmrc_sets_prefix(npmrc):
+            return True
+    return False
+
+
 def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
@@ -155,7 +198,11 @@ def _npm_global_prefix() -> str | None:      # seam A
         # the same way no_real_ccr_store's rationale warns against.
         if os.environ.get("PYTEST_CURRENT_TEST") is None:
             guess = _fast_npm_prefix_guess(npm_path)
-            if guess is not None and _ccr_package_json(guess) is not None:
+            if (
+                guess is not None
+                and _ccr_package_json(guess) is not None
+                and not _npm_prefix_override_in_play(guess)
+            ):
                 return guess
         # 10s, not 5s: now that npm_path resolves to the real npm.cmd on
         # Windows, this call actually reaches it, and npm.cmd plus
@@ -221,6 +268,25 @@ def _npm_major() -> int | None:              # seam C: the package reader both p
 _NPM_MAJOR_UNSET = object()  # sentinel: "caller did not precompute npm_major"
 
 
+def _sqlite_file_is_empty(path: pathlib.Path) -> bool:
+    """True when `config.sqlite` is a zero-byte file.
+
+    sqlite treats a zero-byte file as a valid empty database — the exact
+    shape a fresh, not-yet-written v3 store has the moment `ccr start`
+    first opens it, before writing anything. That makes a zero-byte file
+    genuinely ambiguous by content alone: it reads identically whether CCR
+    really created it or it is unrelated stray bytes. `detect_ccr` only
+    treats this as a reason to distrust the store's presence when something
+    else (a readable npm major that disagrees) contradicts it; on its own,
+    an empty file is left exactly where a real, freshly-initialised store
+    would be.
+    """
+    try:
+        return path.stat().st_size == 0
+    except OSError:
+        return True  # gone entirely carries no more evidence than empty
+
+
 def detect_ccr(
     home: pathlib.Path | None = None,
     npm_major: int | None | object = _NPM_MAJOR_UNSET,
@@ -234,7 +300,8 @@ def detect_ccr(
     before.
     """
     store_dir = ccr_store_dir(home)
-    sqlite = (store_dir / "config.sqlite").exists()
+    sqlite_path = store_dir / "config.sqlite"
+    sqlite = sqlite_path.exists()
     json_ = (store_dir / "config.json").exists()
 
     def _resolved_npm_major() -> int | None:
@@ -248,7 +315,14 @@ def detect_ccr(
         if major > CCR_KNOWN_MAJOR_MAX:
             # The two signals disagree upward: refuse to classify as v3.
             return CcrVersion(0, "sqlite", "store:sqlite-npm-capped")
-        return CcrVersion(3, "sqlite", "store:sqlite")
+        if major != 3 and _sqlite_file_is_empty(sqlite_path):
+            # npm gives a definite, in-range answer that is not v3, and the
+            # store carries nothing to weigh against it — fall through
+            # exactly as if config.sqlite did not exist, rather than
+            # letting an empty file outrank a real, disagreeing signal.
+            sqlite = False
+        else:
+            return CcrVersion(3, "sqlite", "store:sqlite")
 
     if json_:
         # No npm read here: the residual rule's antecedent is "the store says
@@ -317,6 +391,13 @@ def resolve_ccr_route(
     and still wins, so the assumption is one of last resort.
     """
     store_dir = ccr_store_dir(home)
+    # Deliberately bare existence, not detect_ccr's own empty-file question:
+    # this only decides whether the npm read below can be deferred to the
+    # stale-store question further down. Either way the same npm_major value
+    # ends up threaded into dispatch_store, so a zero-byte config.sqlite that
+    # detect_ccr falls through on (npm disagreeing) still resolves through
+    # the correct branch there — it costs one eager npm read instead of a
+    # deferred one, not a wrong answer.
     sqlite_present = (store_dir / "config.sqlite").exists()
     json_only = (store_dir / "config.json").exists() and not sqlite_present
     npm_major = _NPM_MAJOR_UNSET if json_only else _npm_major()

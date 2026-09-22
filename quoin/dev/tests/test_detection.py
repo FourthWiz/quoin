@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -38,11 +39,33 @@ from quoin.router import (  # noqa: E402
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _seed_store(tmp_path: Path, *, sqlite: bool = False, json_: bool = False) -> None:
+def _seed_store(
+    tmp_path: Path, *, sqlite: bool = False, json_: bool = False, sqlite_bytes: bytes | None = None
+) -> None:
+    """Seed `config.sqlite` and/or `config.json` under a synthetic home.
+
+    `sqlite=True` writes a real, non-empty, openable database — a zero-byte
+    file satisfies sqlite's own definition of a valid empty database, which
+    is exactly the ambiguity `_sqlite_file_is_empty` exists to resolve, so a
+    fixture meaning "a real v3 store is here" must not hand back one.
+    `sqlite_bytes` overrides that with arbitrary content, for tests that
+    want the zero-byte or corrupt-file cases on purpose.
+    """
     store_dir = tmp_path / ".claude-code-router"
     store_dir.mkdir(parents=True, exist_ok=True)
-    if sqlite:
-        (store_dir / "config.sqlite").write_bytes(b"")
+    if sqlite_bytes is not None:
+        (store_dir / "config.sqlite").write_bytes(sqlite_bytes)
+    elif sqlite:
+        path = store_dir / "config.sqlite"
+        con = sqlite3.connect(str(path))
+        try:
+            con.execute(
+                "CREATE TABLE app_config (key TEXT PRIMARY KEY, "
+                "value_json TEXT NOT NULL, updated_at TEXT NOT NULL)"
+            )
+            con.commit()
+        finally:
+            con.close()
     if json_:
         (store_dir / "config.json").write_text("{}", encoding="utf-8")
 
@@ -342,6 +365,13 @@ def test_npm_global_prefix_fast_path_skips_spawn_when_package_present(
         lambda cmd: str(npm_bin) if cmd == "npm" else None,
     )
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    # The override check reads real disk state (`$HOME/.npmrc`) and the
+    # environment — both pinned here so this test's result doesn't depend
+    # on whatever npm config happens to exist on the machine running the
+    # suite.
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
     result = _npm_global_prefix()
 
@@ -386,6 +416,184 @@ def test_npm_global_prefix_fast_path_never_engaged_under_pytest(
 
     assert recorded, "the real spawn must still happen under pytest"
     assert result == "/fake/prefix"
+
+
+def _enter_fast_path_production_mode(monkeypatch, tmp_path: Path) -> None:
+    """Common setup for the production-mode fast-path tests below: engages
+    the fast path (clears the pytest marker) and pins every input the
+    override check reads from real disk/environment state, so none of
+    these tests depends on whatever npm config the machine running the
+    suite happens to have."""
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
+
+
+def test_npm_global_prefix_fast_path_falls_back_when_no_package_at_guess(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The plain fallback cell: the marker is cleared (fast path
+    engaged) but no CCR package exists at the guessed prefix, so the guess
+    must not be returned — the real spawn must run exactly once, and its
+    result (not the guess) must win. Without this, a future edit that
+    dropped the package-present conjunct and returned the guess
+    unconditionally would pass the rest of the suite unnoticed."""
+    from quoin.router import _npm_global_prefix
+
+    guessed_prefix = tmp_path / "guessed_prefix"
+    npm_bin = guessed_prefix / "bin" / "npm"
+    npm_bin.parent.mkdir(parents=True)
+    npm_bin.write_text("#!/bin/sh\n")
+    # Deliberately no _seed_npm_package(guessed_prefix, ...) — no CCR
+    # package at the guessed location.
+
+    spawned_prefix = tmp_path / "spawned_prefix"
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0, stdout=f"{spawned_prefix}\n")
+
+    _enter_fast_path_production_mode(monkeypatch, tmp_path)
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: str(npm_bin) if cmd == "npm" else None,
+    )
+
+    result = _npm_global_prefix()
+
+    assert len(recorded) == 1
+    assert result == str(spawned_prefix)
+
+
+def test_npm_global_prefix_fast_path_falls_back_on_divergent_version(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The divergent-layout cell: the guessed prefix carries a *different*
+    CCR version than the one the real spawn would find — a leftover
+    package sitting where npm's binary happens to live, while npm itself
+    has been pointed elsewhere by a prefix override. The spawn must win,
+    not the stale guess."""
+    from quoin.router import _npm_global_prefix
+
+    guessed_prefix = tmp_path / "guessed_prefix"
+    npm_bin = guessed_prefix / "bin" / "npm"
+    npm_bin.parent.mkdir(parents=True)
+    npm_bin.write_text("#!/bin/sh\n")
+    _seed_npm_package(guessed_prefix, "2.0.0")  # stale, at the binary-adjacent prefix
+
+    spawned_prefix = tmp_path / "spawned_prefix"
+    _seed_npm_package(spawned_prefix, "3.1.0")  # the real, current install
+    recorded: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
+        return _FakeCompletedProcess(returncode=0, stdout=f"{spawned_prefix}\n")
+
+    _enter_fast_path_production_mode(monkeypatch, tmp_path)
+    # The override: a configured prefix means npm's real resolution can
+    # diverge from where its binary sits, which is exactly the machine
+    # shape this test recreates.
+    monkeypatch.setenv("npm_config_prefix", str(spawned_prefix))
+    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "quoin.router.shutil.which",
+        lambda cmd: str(npm_bin) if cmd == "npm" else None,
+    )
+
+    result = _npm_global_prefix()
+
+    assert len(recorded) == 1
+    assert result == str(spawned_prefix)
+    assert result != str(guessed_prefix)
+
+
+def test_npm_prefix_override_env_var_defeats_the_guess(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """`_npm_prefix_override_in_play` itself, for each environment-variable
+    spelling npm recognises."""
+    from quoin.router import _npm_prefix_override_in_play
+
+    guess = str(tmp_path / "guessed_prefix")
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
+
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+    assert _npm_prefix_override_in_play(guess) is False
+
+    with monkeypatch.context() as m:
+        m.setenv("npm_config_prefix", "/somewhere/else")
+        assert _npm_prefix_override_in_play(guess) is True
+
+    with monkeypatch.context() as m:
+        m.delenv("npm_config_prefix", raising=False)
+        m.setenv("NPM_CONFIG_PREFIX", "/somewhere/else")
+        assert _npm_prefix_override_in_play(guess) is True
+
+
+def test_npm_prefix_override_home_npmrc_defeats_the_guess(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A `prefix=` line in `$HOME/.npmrc` is npm's own documented remedy
+    for a global-install permission error — the exact machine shape this
+    override check exists for."""
+    from quoin.router import _npm_prefix_override_in_play
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".npmrc").write_text("prefix=/custom/npm/prefix\n", encoding="utf-8")
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+
+    guess = str(tmp_path / "guessed_prefix")
+    assert _npm_prefix_override_in_play(guess) is True
+
+
+def test_npm_prefix_override_guessed_prefix_etc_npmrc_defeats_the_guess(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The other `.npmrc` npm consults: one sitting inside the guessed
+    prefix's own `etc/` directory."""
+    from quoin.router import _npm_prefix_override_in_play
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+
+    guessed_prefix = tmp_path / "guessed_prefix"
+    (guessed_prefix / "etc").mkdir(parents=True)
+    (guessed_prefix / "etc" / "npmrc").write_text(
+        "prefix=/somewhere/else\n", encoding="utf-8"
+    )
+    assert _npm_prefix_override_in_play(str(guessed_prefix)) is True
+
+
+def test_npm_prefix_override_ignores_comments_and_other_keys(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A `.npmrc` that exists but sets no `prefix` (comments, unrelated
+    keys, a key merely containing "prefix") must not be mistaken for an
+    override."""
+    from quoin.router import _npm_prefix_override_in_play
+
+    fake_home = tmp_path / "fake_home"
+    fake_home.mkdir()
+    (fake_home / ".npmrc").write_text(
+        "# a comment mentioning prefix=/nope\n"
+        "registry=https://registry.npmjs.org/\n"
+        "some-other-prefix-like-key=value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(Path, "home", lambda: fake_home)
+    monkeypatch.delenv("npm_config_prefix", raising=False)
+    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
+
+    guess = str(tmp_path / "guessed_prefix")
+    assert _npm_prefix_override_in_play(guess) is False
 
 
 def test_fast_npm_prefix_guess_non_bin_parent_is_the_prefix_itself(
@@ -486,6 +694,80 @@ def test_sqlite_with_unreadable_npm_is_v3(monkeypatch, tmp_path: Path) -> None:
     alone is sufficient when npm cannot be read."""
     _seed_store(tmp_path, sqlite=True)
     monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 3
+    assert result.source == "store:sqlite"
+
+
+# ── zero-byte config.sqlite: ambiguous by content, resolved by npm ──────────
+
+def test_zero_byte_sqlite_alone_is_still_v3(monkeypatch, tmp_path: Path) -> None:
+    """With nothing to disagree with it (npm unreadable, the conftest
+    default), a zero-byte config.sqlite is left exactly where a real,
+    freshly-initialised store would be — the same boundary
+    test_sqlite_with_unreadable_npm_is_v3 above pins, stated for the
+    literal zero-byte shape rather than a seeded one."""
+    _seed_store(tmp_path, sqlite_bytes=b"")
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 3
+    assert result.source == "store:sqlite"
+
+
+def test_zero_byte_sqlite_with_matching_npm_is_still_v3(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """npm confirming major 3 is consistent with a real store that simply
+    has not been written to yet, so the empty file is trusted rather than
+    discarded."""
+    _seed_store(tmp_path, sqlite_bytes=b"")
+    monkeypatch.setattr("quoin.router._npm_major", lambda: 3)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 3
+    assert result.source == "store:sqlite"
+
+
+def test_zero_byte_sqlite_with_disagreeing_npm_falls_through_to_json(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """A zero-byte config.sqlite must not outrank a definite, disagreeing
+    npm reading. On a machine npm reports as major 2 with a leftover
+    config.json present, the empty sqlite file carries nothing to weigh
+    against that — detection must fall through exactly as if config.sqlite
+    did not exist, landing on the genuine v2 signal rather than reporting
+    a v2 -> v3 upgrade that never happened."""
+    _seed_store(tmp_path, sqlite_bytes=b"", json_=True)
+    monkeypatch.setattr("quoin.router._npm_major", lambda: 2)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 2
+    assert result.store == "json"
+    assert result.source == "store:json"
+
+
+def test_zero_byte_sqlite_with_disagreeing_npm_and_no_json_falls_through_to_npm(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Same disagreement, but with no config.json to fall through to
+    either — detection lands on the npm reading alone, as if config.sqlite
+    were entirely absent."""
+    _seed_store(tmp_path, sqlite_bytes=b"")
+    monkeypatch.setattr("quoin.router._npm_major", lambda: 2)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 2
+    assert result.store is None
+    assert result.source == "npm"
+
+
+def test_non_zero_but_corrupt_sqlite_still_outranks_npm(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The zero-byte ambiguity is specific to sqlite's own empty-database
+    semantics — a non-empty file that happens to be unreadable (corrupt, or
+    a real store a live `ccr` holds locked) is left to the existing
+    store-present-but-unreadable handling, not folded into this fallback.
+    Deliberately does not also gate on read status; see
+    `_sqlite_file_is_empty`'s docstring for why."""
+    _seed_store(tmp_path, sqlite_bytes=b"not a sqlite database, just bytes", json_=True)
+    monkeypatch.setattr("quoin.router._npm_major", lambda: 2)
     result = detect_ccr(home=tmp_path)
     assert result.major == 3
     assert result.source == "store:sqlite"
