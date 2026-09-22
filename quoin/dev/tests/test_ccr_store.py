@@ -662,3 +662,23 @@ def test_hermeticity_guard_catches_mkdir_and_makedirs():
     with pytest.raises(AssertionError, match="quoin test hermeticity"):
         os.makedirs(str(leaf))
     assert not leaf.parent.exists()
+
+
+def test_hermeticity_guard_catches_rename_rmdir_truncate(tmp_path):
+    # os.rename and os.truncate can move or zero the real store as
+    # destructively as deleting it; os.rmdir can remove its directory. All
+    # three were unwrapped seams.
+    real_target = Path.home() / ".claude-code-router" / "config.sqlite"
+    real_dir = Path.home() / ".claude-code-router"
+    harmless_src = tmp_path / "harmless.txt"
+    harmless_src.write_text("x")
+
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        os.rename(str(harmless_src), str(real_target))
+    assert harmless_src.exists()
+
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        os.rmdir(str(real_dir))
+
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        os.truncate(str(real_target), 0)

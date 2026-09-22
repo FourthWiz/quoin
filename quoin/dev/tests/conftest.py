@@ -168,6 +168,32 @@ def no_real_ccr_store(tmp_path_factory):
         _check(_target_path(path, {}))
         return real_shutil_rmtree(path, *args, **kwargs)
 
+    # os.rename is checked on its destination, mirroring os.replace above —
+    # a rename that moves the real store away is as destructive as deleting
+    # it. os.rmdir and os.truncate close the two remaining seams that would
+    # move or zero the store undetected (Path.rename routes through
+    # os.rename, Path.rmdir through os.rmdir).
+    real_os_rename = os.rename
+
+    def _guarded_os_rename(src, dst, *args, **kwargs):
+        _check(_target_path(dst, {}))
+        return real_os_rename(src, dst, *args, **kwargs)
+
+    real_os_rmdir = os.rmdir
+
+    def _guarded_os_rmdir(path, *args, **kwargs):
+        _check(_target_path(path, {}))
+        return real_os_rmdir(path, *args, **kwargs)
+
+    real_os_truncate = os.truncate
+
+    def _guarded_os_truncate(path, length, *args, **kwargs):
+        # An open file descriptor (an int) is not a path to resolve — the
+        # file it refers to was opened through an already-guarded seam.
+        if not isinstance(path, int):
+            _check(_target_path(path, {}))
+        return real_os_truncate(path, length, *args, **kwargs)
+
     mp.setattr(sqlite3, "connect", _guarded_sqlite_connect)
     mp.setattr(os, "open", _guarded_os_open)
     mp.setattr(os, "mkdir", _guarded_os_mkdir)
@@ -178,6 +204,9 @@ def no_real_ccr_store(tmp_path_factory):
     mp.setattr(os, "unlink", _guarded_os_unlink)
     mp.setattr(os, "remove", _guarded_os_remove)
     mp.setattr(shutil, "rmtree", _guarded_shutil_rmtree)
+    mp.setattr(os, "rename", _guarded_os_rename)
+    mp.setattr(os, "rmdir", _guarded_os_rmdir)
+    mp.setattr(os, "truncate", _guarded_os_truncate)
     try:
         yield
     finally:
