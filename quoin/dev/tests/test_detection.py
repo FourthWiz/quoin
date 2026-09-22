@@ -500,30 +500,51 @@ def test_non_zero_but_corrupt_sqlite_still_outranks_npm(
     assert result.source == "store:sqlite"
 
 
-def test_zero_byte_sqlite_with_npm_major_one_does_not_fall_through(
+def test_zero_byte_sqlite_with_npm_major_one_and_no_json_falls_through_to_npm(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """The fall-through is scoped to the one major a config.json store is
-    ever live for (2), not to any in-range major that disagrees with 3.
-    npm major 1 must be left on the ordinary v3-empty-store path rather
-    than falling through toward the store-absent decline, which would tell
-    the user no store exists while naming a directory that visibly
-    contains config.sqlite."""
+    """A CCR 1.x machine with a stray zero-byte config.sqlite and no
+    leftover config.json must fall through to the npm reading, landing on
+    the v2 route — the same cell a config.json-major-2 store already falls
+    through on. A guard narrowed to major == 2 only leaves this cell with
+    no arm that could object to a definite, in-range, disagreeing major-1
+    reading, so it dispatches a v3 store write the machine could never
+    read back."""
     _seed_store(tmp_path, sqlite_bytes=b"")
     monkeypatch.setattr("quoin.router._npm_major", lambda: 1)
     result = detect_ccr(home=tmp_path)
-    assert result.major == 3
-    assert result.store == "sqlite"
-    assert result.source == "store:sqlite"
+    assert result.major == 1
+    assert result.store is None
+    assert result.source == "npm"
+
+
+def test_zero_byte_sqlite_with_npm_major_one_and_json_falls_through_to_json(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """Same npm-major-1 machine, but with a leftover config.json: the
+    fall-through must land on the store-absent path (via the json arm,
+    dispatched as "v3-store-absent" by dispatch_store) rather than
+    reporting v3 and firing a false upgrade-loss notice."""
+    _seed_store(tmp_path, sqlite_bytes=b"", json_=True)
+    monkeypatch.setattr("quoin.router._npm_major", lambda: 1)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 2
+    assert result.store == "json"
+    assert result.source == "store:json"
 
 
 def test_zero_byte_sqlite_fallthrough_resolves_npm_major_once(
     monkeypatch, tmp_path: Path
 ) -> None:
-    """The disagreeing-npm-major-2 fall-through must not read npm twice: a
+    """The disagreeing-npm-major fall-through must not read npm twice: a
     default-argument caller resolves the major once in the sqlite branch
-    and the tail reuses that value rather than resolving it again."""
-    _seed_store(tmp_path, sqlite_bytes=b"", json_=True)
+    and the tail reuses that value rather than resolving it again. No
+    config.json here — the double read this test pins only happens on the
+    tail that runs when json_ is absent; seeding config.json returns from
+    the json arm before ever reaching that tail, so the read count is
+    satisfied whether or not the tail actually resolves the major only
+    once."""
+    _seed_store(tmp_path, sqlite_bytes=b"")
     calls = {"n": 0}
 
     def _counting_npm_major():
@@ -533,7 +554,8 @@ def test_zero_byte_sqlite_fallthrough_resolves_npm_major_once(
     monkeypatch.setattr("quoin.router._npm_major", _counting_npm_major)
     result = detect_ccr(home=tmp_path)
     assert result.major == 2
-    assert result.store == "json"
+    assert result.store is None
+    assert result.source == "npm"
     assert calls["n"] == 1
 
 
