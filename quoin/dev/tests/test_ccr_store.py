@@ -204,6 +204,23 @@ def test_dry_run_writes_nothing(tmp_path):
     assert list(tmp_path.glob("config.sqlite.value-bak-*.json")) == []
 
 
+def test_dry_run_refuses_a_write_the_real_run_would_refuse(tmp_path):
+    """Dry run must not report success for a write the real run would
+    refuse. The non-finite check is pure, so it is hoisted above the
+    dry-run return rather than living only on the write path below it."""
+    blob = {"Providers": [{"name": "p1"}]}
+    path = make_v3_store(tmp_path, blob)
+
+    def mutate(cfg):
+        cfg["Weird"] = 1e999  # json.loads parses this to float("inf")
+        return ["added weird key"], []
+
+    with pytest.raises(ccr_store.CcrStoreError, match="non-finite"):
+        ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path, dry_run=True)
+
+    assert list(tmp_path.glob("config.sqlite.value-bak-*.json")) == []
+
+
 def test_empty_store_write_has_no_sidecar_even_though_it_writes(tmp_path):
     """AC-24 empty-store cell: raw == '' means nothing to back up."""
     path = tmp_path / "config.sqlite"
@@ -283,11 +300,13 @@ def test_lock_contention_raises_ccr_store_error_promptly(tmp_path):
         holder.close()
 
 
-def test_write_refuses_non_finite_number_and_preserves_sidecar(tmp_path):
-    # F-10: json.loads accepts an overflowing literal (1e999 -> inf); the
+def test_write_refuses_non_finite_number_without_stranding_a_sidecar(tmp_path):
+    # json.loads accepts an overflowing literal (1e999 -> inf); the
     # default json.dumps would then emit the bare Infinity token, which
-    # CCR's own JSON.parse rejects. Refuse the write instead, after the
-    # sidecar has already preserved the pre-write value.
+    # CCR's own JSON.parse rejects. Refuse the write instead — and since
+    # the check runs before the backup sidecar would be written (it is
+    # pure, so hoisting it above --dry-run costs nothing), a refused write
+    # here leaves no key-bearing sidecar behind either.
     path = tmp_path / "config.sqlite"
     con = sqlite3.connect(str(path))
     con.execute(
@@ -311,8 +330,7 @@ def test_write_refuses_non_finite_number_and_preserves_sidecar(tmp_path):
 
     assert store_value_snapshot(path) == before
     sidecars = list(tmp_path.glob("config.sqlite.value-bak-*.json"))
-    assert len(sidecars) == 1
-    assert json.loads(sidecars[0].read_text(encoding="utf-8")) == {"Providers": []}
+    assert sidecars == []
 
 
 def test_write_connect_error_is_wrapped_not_raw(tmp_path, monkeypatch):

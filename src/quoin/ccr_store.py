@@ -197,6 +197,25 @@ def update_v3_config(
     if after_canon == before_canon:
         return WriteResult(None, changes, warnings, wrote=False)
 
+    # Hoisted above the dry-run return: this is pure (no side effects), and a
+    # dry run must not report success for a write the real run would refuse.
+    try:
+        # allow_nan=False: json.loads happily accepts an overflowing
+        # literal (1e999 -> inf) and the default json.dumps would then
+        # emit the bare token Infinity/NaN, which JavaScript's JSON.parse
+        # (what CCR itself uses to read this file back) rejects outright.
+        # Refuse the write rather than hand CCR a blob it cannot parse.
+        # Checked ahead of the backup sidecar write below on purpose: a
+        # refused write should not strand a key-bearing sidecar on disk
+        # either.
+        payload = json.dumps(cfg, ensure_ascii=False, allow_nan=False)
+    except ValueError as exc:
+        raise CcrStoreError(
+            f"CCR v3 store at {path} would be written with a non-finite "
+            f"number ({exc}); refusing to write a value CCR's own JSON "
+            "parser could not read back."
+        ) from exc
+
     if dry_run:
         return WriteResult(None, changes, warnings, wrote=False)
 
@@ -206,20 +225,6 @@ def update_v3_config(
         backup = None
 
     updated_at = _format_updated_at(read.updated_at)
-    try:
-        # allow_nan=False: json.loads happily accepts an overflowing
-        # literal (1e999 -> inf) and the default json.dumps would then
-        # emit the bare token Infinity/NaN, which JavaScript's JSON.parse
-        # (what CCR itself uses to read this file back) rejects outright.
-        # Refuse the write rather than hand CCR a blob it cannot parse —
-        # the sidecar above already preserves the pre-write value.
-        payload = json.dumps(cfg, ensure_ascii=False, allow_nan=False)
-    except ValueError as exc:
-        raise CcrStoreError(
-            f"CCR v3 store at {path} would be written with a non-finite "
-            f"number ({exc}); refusing to write a value CCR's own JSON "
-            "parser could not read back."
-        ) from exc
 
     # Re-checked here rather than trusted from the read above: `mutate` ran
     # in between, and a store deleted in that window must be refused, not
