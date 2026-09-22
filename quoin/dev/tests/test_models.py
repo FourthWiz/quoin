@@ -1285,6 +1285,11 @@ class TestCliWiring:
         monkeypatch.setattr("quoin.ccr_config.probe_service", lambda **kw: False)
         monkeypatch.setattr("shutil.which", lambda name: None)
         monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+        # The CLI entry point has no --home flag: every downstream lookup
+        # resolves home via pathlib.Path.home(), so without this the test's
+        # result depends on whatever CCR store the machine running the suite
+        # happens to have.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         from quoin.cli import main
 
@@ -1331,6 +1336,10 @@ class TestCliWiring:
             "quoin.ccr_config.ccr_config_path",
             lambda home=None: ccr_config_path(home=tmp_path),
         )
+        # detect_ccr/resolve_ccr_route still resolve home the normal way (no
+        # --home flag reaches them from argv), so without this the route
+        # depends on whatever CCR store the machine running the suite has.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         from quoin.cli import main
         rc = main(["models", "set", "haiku", "deepseek/deepseek-v4-flash"])
@@ -1351,6 +1360,8 @@ class TestCliWiring:
             "quoin.ccr_config.ccr_config_path",
             lambda home=None: ccr_config_path(home=tmp_path),
         )
+        # Same reason as test_quoin_models_set_wired above.
+        monkeypatch.setattr(Path, "home", lambda: tmp_path)
 
         from quoin.cli import main
         rc = main(["models", "preset", "open"])

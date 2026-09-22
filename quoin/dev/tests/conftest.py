@@ -14,6 +14,7 @@ import builtins
 import io
 import json
 import os
+import shutil
 import sqlite3
 import sys
 from pathlib import Path
@@ -145,6 +146,28 @@ def no_real_ccr_store(tmp_path_factory):
         _check(_target_path(dst, {}))
         return real_os_replace(src, dst, *args, **kwargs)
 
+    # Delete seams: no v3 store code calls any of these today, but the guard
+    # is meant to catch a stray test reaching the real config directory, not
+    # only production code — an unwrapped delete would let such a test wipe
+    # a user's real store undetected.
+    real_os_unlink = os.unlink
+
+    def _guarded_os_unlink(path, *args, **kwargs):
+        _check(_target_path(path, {}))
+        return real_os_unlink(path, *args, **kwargs)
+
+    real_os_remove = os.remove
+
+    def _guarded_os_remove(path, *args, **kwargs):
+        _check(_target_path(path, {}))
+        return real_os_remove(path, *args, **kwargs)
+
+    real_shutil_rmtree = shutil.rmtree
+
+    def _guarded_shutil_rmtree(path, *args, **kwargs):
+        _check(_target_path(path, {}))
+        return real_shutil_rmtree(path, *args, **kwargs)
+
     mp.setattr(sqlite3, "connect", _guarded_sqlite_connect)
     mp.setattr(os, "open", _guarded_os_open)
     mp.setattr(os, "mkdir", _guarded_os_mkdir)
@@ -152,6 +175,9 @@ def no_real_ccr_store(tmp_path_factory):
     mp.setattr(builtins, "open", _guarded_builtins_open)
     mp.setattr(io, "open", _guarded_io_open)
     mp.setattr(os, "replace", _guarded_os_replace)
+    mp.setattr(os, "unlink", _guarded_os_unlink)
+    mp.setattr(os, "remove", _guarded_os_remove)
+    mp.setattr(shutil, "rmtree", _guarded_shutil_rmtree)
     try:
         yield
     finally:

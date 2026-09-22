@@ -2139,6 +2139,29 @@ class TestCmdRouterStatusV3:
         out = self._run(monkeypatch, tmp_path, capsys, npm_major=9)
         assert "CCR version:    unrecognised (via npm-capped)" in out
 
+    def test_zero_byte_store_on_a_genuine_v2_machine_reads_v2(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """A zero-byte config.sqlite satisfies sqlite's own definition of a
+        valid empty database, so bare existence is not proof CCR ever
+        created a v3 store here. On a machine npm confirms is v2, with a
+        populated config.json, an unrelated zero-byte config.sqlite must
+        not flip the machine to v3 and report an upgrade loss that never
+        happened."""
+        from quoin.router import ccr_store_dir
+
+        store_dir = ccr_store_dir(tmp_path)
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.sqlite").write_bytes(b"")
+        write_config(
+            ccr_config_path(home=tmp_path),
+            {"Providers": [{"name": "openrouter", "models": ["a/b"]}], "Router": {}},
+        )
+        out = self._run(monkeypatch, tmp_path, capsys, npm_major=2)
+        assert "CCR version:    v2 (via store:json)" in out
+        assert "Config present: yes" in out
+        assert "v2 -> v3 upgrade that lost your configuration" not in out
+
 
 # ── The effective version, at each render site ────────────────────────────────
 
@@ -2294,3 +2317,48 @@ def test_npm_spawn_census_covers_status_and_models_surfaces(
         call_count["n"] = 0
         call()
         assert call_count["n"] <= 1, f"{label} spawned npm more than once"
+
+
+# ── Store-open census beside the npm one ───────────────────────────────────────
+
+def test_router_status_store_open_census(monkeypatch, tmp_path: Path) -> None:
+    """`router status` opens the v3 store once to render `Store populated:`,
+    and a second time — for `v3_api_key_row_count` — only when a leftover
+    `config.json` also makes the upgrade-loss report reachable. Pins the
+    laziness directly: re-hoisting the row count back to an eager
+    positional argument would restore the second open on the dominant
+    (no-leftover-`config.json`) shape with no test failing without this."""
+    import quoin.ccr_store as ccr_store
+    from quoin.router import ccr_store_dir
+
+    open_count = {"n": 0}
+    real_read = ccr_store.read_v3_config
+    real_row_count = ccr_store.v3_api_key_row_count
+
+    def _counting_read(path):
+        open_count["n"] += 1
+        return real_read(path)
+
+    def _counting_row_count(path):
+        open_count["n"] += 1
+        return real_row_count(path)
+
+    monkeypatch.setattr("quoin.router.ccr_store.read_v3_config", _counting_read)
+    monkeypatch.setattr("quoin.router.ccr_store.v3_api_key_row_count", _counting_row_count)
+    monkeypatch.setattr("quoin.router.shutil.which", lambda cmd: None)
+    monkeypatch.setattr("quoin.router.probe_service", lambda **kw: False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    # (a) a v3 home with no leftover config.json: one open.
+    store_dir_a = ccr_store_dir(tmp_path)
+    store_dir_a.mkdir(parents=True, exist_ok=True)
+    make_v3_store(store_dir_a, {})
+    open_count["n"] = 0
+    assert _cmd_router_status(_make_args(home=tmp_path)) == 0
+    assert open_count["n"] == 1
+
+    # (b) the same store, plus a leftover config.json: two opens.
+    (store_dir_a / "config.json").write_text("{}", encoding="utf-8")
+    open_count["n"] = 0
+    assert _cmd_router_status(_make_args(home=tmp_path)) == 0
+    assert open_count["n"] == 2
