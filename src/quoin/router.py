@@ -237,15 +237,21 @@ def detect_ccr(
         if major > CCR_KNOWN_MAJOR_MAX:
             # The two signals disagree upward: refuse to classify as v3.
             return CcrVersion(0, "sqlite", "store:sqlite-npm-capped")
-        if major == _CONFIG_JSON_STORE_MAJOR and _sqlite_file_is_empty(sqlite_path):
-            # npm gives a definite reading of the one major a config.json
-            # store is ever live for, and the store carries nothing to
-            # weigh against it — fall through exactly as if config.sqlite
-            # did not exist, rather than letting an empty file outrank a
-            # real, disagreeing signal. Scoped to that one major (not "any
-            # major that isn't 3"): a major this stage does not otherwise
-            # recognise as a live config.json source must not fall through
-            # into a decline that denies a store file physically present.
+        if major != CCR_KNOWN_MAJOR_MAX and _sqlite_file_is_empty(sqlite_path):
+            # npm gives a definite, in-range answer that is not v3, and the
+            # store carries nothing to weigh against it — fall through
+            # exactly as if config.sqlite did not exist, rather than
+            # letting an empty file outrank a real, disagreeing signal.
+            # Scoped to any in-range major that disagrees with v3, not
+            # only the one a config.json store is ever live for: a
+            # narrower guard here leaves a definite, disagreeing major
+            # with no arm that can object to it, since the store-shape
+            # branch above short-circuits before every major test except
+            # the cap — that machine would land on the v3 write path a
+            # store-absent decline should have named instead. A zero-byte
+            # store and a major this stage cannot recognise as live still
+            # fall through here; the decline that follows names the store
+            # explicitly rather than claiming it does not exist.
             sqlite = False
         else:
             return CcrVersion(3, "sqlite", "store:sqlite")
@@ -383,23 +389,46 @@ def _decline_store_absent(
     *,
     lead: str | None = None,
 ) -> None:
-    """Report that CCR v3 is installed but has not created its store yet.
+    """Report that CCR v3 has no usable store for quoin to merge into.
 
     Reads exactly one field off `version` — `major` — so no detection source
     string ever reaches this path's output; the detected version is not what
     this message is about, and no `Detected:` line is printed.
+
+    The store directory can hold a zero-byte `config.sqlite` on this path —
+    the detection fall-through that lands here treats an empty file as no
+    evidence, not as a store CCR has actually written to — and the message
+    says so explicitly instead of claiming no store exists.
     """
     if lead:
         print(lead)
-    print(
-        f"quoin: CCR v{version.major} is installed, but it has not created its "
-        "config store yet, so there is nothing for quoin to merge into."
-    )
+    sqlite_path = store_dir / "config.sqlite"
+    try:
+        stub_present = sqlite_path.stat().st_size == 0
+    except OSError:
+        stub_present = False
+    if stub_present:
+        print(
+            f"quoin: CCR v{version.major} is installed, and an empty "
+            f"{sqlite_path.name} already exists, but nothing has been "
+            "written into it yet, so there is nothing for quoin to merge into."
+        )
+    else:
+        print(
+            f"quoin: CCR v{version.major} is installed, but it has not created its "
+            "config store yet, so there is nothing for quoin to merge into."
+        )
     print(f"  Store directory: {store_dir}")
-    print(
-        "  Run `ccr start` once and stop it again to let CCR create the store, "
-        "then re-run `quoin router setup`."
-    )
+    if stub_present:
+        print(
+            "  Run `ccr start` once and stop it again to let CCR finish "
+            "writing the store, then re-run `quoin router setup`."
+        )
+    else:
+        print(
+            "  Run `ccr start` once and stop it again to let CCR create the store, "
+            "then re-run `quoin router setup`."
+        )
     print(
         "  Do not run `ccr -v` or `ccr version` first: on v3 a version query "
         "triggers migration and removes config.json from disk. The old bytes "
