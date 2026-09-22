@@ -103,77 +103,6 @@ def _scrubbed_env() -> dict[str, str]:
     return {k: v for k, v in os.environ.items() if k != "OPENROUTER_API_KEY"}
 
 
-def _fast_npm_prefix_guess(npm_path: str) -> str | None:
-    """Best-effort global npm prefix guessed from npm's own binary location.
-
-    npm ships at <prefix>/bin/npm on the standard POSIX layout and directly
-    inside <prefix> as npm.cmd on Windows; guessing from that avoids
-    spawning `npm prefix -g` (measured 0.6-1.2s) on the common case.
-
-    Deliberately does NOT resolve through symlinks: on most real installs
-    (Homebrew, nvm) `<prefix>/bin/npm` is itself a symlink to npm's own
-    `lib/node_modules/npm/bin/npm-cli.js`, and fully resolving it lands
-    inside npm's own package rather than at the prefix — the convention
-    this guess relies on is where the symlink sits, not where it points.
-    A hint only, never a source of truth — a custom npm `prefix` config or
-    a nonstandard layout can still make the guess wrong, so the caller
-    must always fall back to the real spawn when it doesn't pan out.
-    """
-    try:
-        candidate = pathlib.Path(npm_path)
-        if not candidate.is_absolute():
-            candidate = candidate.absolute()
-    except OSError:
-        return None
-    parent = candidate.parent
-    if parent.name == "bin":
-        return str(parent.parent)
-    return str(parent)
-
-
-def _npmrc_sets_prefix(npmrc: pathlib.Path) -> bool:
-    """True when `npmrc` holds a `prefix = ...` line (any surrounding blanks)."""
-    try:
-        with open(npmrc, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                stripped = line.strip()
-                if not stripped or stripped.startswith(("#", ";")):
-                    continue
-                key, sep, _ = stripped.partition("=")
-                if sep and key.strip() == "prefix":
-                    return True
-    except OSError:
-        return False
-    return False
-
-
-def _npm_prefix_override_in_play(guess: str) -> bool:
-    """True when something could steer npm's global prefix away from `guess`.
-
-    npm resolves its prefix from (highest to lowest precedence) a
-    `--prefix` flag, the `npm_config_prefix` / `NPM_CONFIG_PREFIX`
-    environment variables, a `prefix=` line in `$HOME/.npmrc`, one in the
-    guessed prefix's own `etc/npmrc`, and only then the convention this
-    fast path's guess relies on — where npm's own binary happens to sit.
-    `npm config set prefix ...` (npm's documented remedy for a global
-    install permission error) writes exactly one of the `.npmrc` forms
-    above, which is the machine shape this check exists to catch: a
-    leftover CCR package sitting at the binary-adjacent prefix while npm
-    itself has been pointed somewhere else. Any override present makes the
-    guess untrustworthy, so the caller falls through to the real spawn
-    rather than trying to reproduce npm's full resolution order itself.
-    """
-    if os.environ.get("npm_config_prefix") or os.environ.get("NPM_CONFIG_PREFIX"):
-        return True
-    for npmrc in (
-        pathlib.Path.home() / ".npmrc",
-        pathlib.Path(guess) / "etc" / "npmrc",
-    ):
-        if _npmrc_sets_prefix(npmrc):
-            return True
-    return False
-
-
 def _npm_global_prefix() -> str | None:      # seam A
     try:
         if not _npm_query_enabled and os.environ.get("PYTEST_CURRENT_TEST") is not None:
@@ -188,22 +117,6 @@ def _npm_global_prefix() -> str | None:      # seam A
         npm_path = shutil.which("npm")
         if npm_path is None:
             return None
-        # Fast path: skip the spawn below when the guess from npm's own
-        # binary location already resolves to a real, installed CCR
-        # package. Gated strictly on the absence of PYTEST_CURRENT_TEST
-        # (never merely on _npm_query_enabled) — a test that deliberately
-        # re-enables the flag to exercise the real spawn is asking for the
-        # spawn, not for whatever CCR happens to be installed on the
-        # machine running the suite, and this guess reads real disk state
-        # the same way no_real_ccr_store's rationale warns against.
-        if os.environ.get("PYTEST_CURRENT_TEST") is None:
-            guess = _fast_npm_prefix_guess(npm_path)
-            if (
-                guess is not None
-                and _ccr_package_json(guess) is not None
-                and not _npm_prefix_override_in_play(guess)
-            ):
-                return guess
         # 10s, not 5s: now that npm_path resolves to the real npm.cmd on
         # Windows, this call actually reaches it, and npm.cmd plus
         # antivirus/Defender scanning routinely pushes a cold-start
@@ -307,19 +220,32 @@ def detect_ccr(
     def _resolved_npm_major() -> int | None:
         return _npm_major() if npm_major is _NPM_MAJOR_UNSET else npm_major  # type: ignore[return-value]
 
+    # Resolved at most once: the sqlite branch below is the only place that
+    # needs an npm reading ahead of the tail, and threading its result
+    # through `major` (rather than letting the tail call
+    # `_resolved_npm_major()` again) means a default-argument caller never
+    # pays for two npm reads to answer one detection question.
+    major: int | None = None
+    major_resolved = False
+
     if sqlite:
         major = _resolved_npm_major()
+        major_resolved = True
         if major is None:
             # The store signal alone is sufficient when npm is unreadable.
             return CcrVersion(3, "sqlite", "store:sqlite")
         if major > CCR_KNOWN_MAJOR_MAX:
             # The two signals disagree upward: refuse to classify as v3.
             return CcrVersion(0, "sqlite", "store:sqlite-npm-capped")
-        if major != 3 and _sqlite_file_is_empty(sqlite_path):
-            # npm gives a definite, in-range answer that is not v3, and the
-            # store carries nothing to weigh against it — fall through
-            # exactly as if config.sqlite did not exist, rather than
-            # letting an empty file outrank a real, disagreeing signal.
+        if major == _CONFIG_JSON_STORE_MAJOR and _sqlite_file_is_empty(sqlite_path):
+            # npm gives a definite reading of the one major a config.json
+            # store is ever live for, and the store carries nothing to
+            # weigh against it — fall through exactly as if config.sqlite
+            # did not exist, rather than letting an empty file outrank a
+            # real, disagreeing signal. Scoped to that one major (not "any
+            # major that isn't 3"): a major this stage does not otherwise
+            # recognise as a live config.json source must not fall through
+            # into a decline that denies a store file physically present.
             sqlite = False
         else:
             return CcrVersion(3, "sqlite", "store:sqlite")
@@ -330,7 +256,8 @@ def detect_ccr(
         # can never satisfy.
         return CcrVersion(2, "json", "store:json")
 
-    major = _resolved_npm_major()
+    if not major_resolved:
+        major = _resolved_npm_major()
     if major is None:
         return CcrVersion(0, None, "none")
     if major > CCR_KNOWN_MAJOR_MAX:

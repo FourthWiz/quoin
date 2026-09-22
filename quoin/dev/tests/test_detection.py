@@ -338,279 +338,6 @@ def test_npm_global_prefix_none_when_npm_absent_without_spawning(monkeypatch) ->
     assert recorded == []
 
 
-def test_npm_global_prefix_fast_path_skips_spawn_when_package_present(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """F-15: the production-only fast path (never engaged under pytest —
-    see the marker-absence assertion below) must not spawn `npm prefix -g`
-    when npm's own binary location already resolves to an installed CCR
-    package."""
-    from quoin.router import _fast_npm_prefix_guess, _npm_global_prefix
-
-    prefix = tmp_path / "guessed_prefix"
-    npm_bin = prefix / "bin" / "npm"
-    npm_bin.parent.mkdir(parents=True)
-    npm_bin.write_text("#!/bin/sh\n")
-    _seed_npm_package(prefix, "3.1.0")
-
-    recorded: list[list[str]] = []
-
-    def fake_run(argv, **kwargs):
-        recorded.append(list(argv))
-        return _FakeCompletedProcess(returncode=0, stdout="/should-not-be-used\n")
-
-    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "quoin.router.shutil.which",
-        lambda cmd: str(npm_bin) if cmd == "npm" else None,
-    )
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    # The override check reads real disk state (`$HOME/.npmrc`) and the
-    # environment — both pinned here so this test's result doesn't depend
-    # on whatever npm config happens to exist on the machine running the
-    # suite.
-    monkeypatch.delenv("npm_config_prefix", raising=False)
-    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path)
-
-    result = _npm_global_prefix()
-
-    assert result == str(prefix)
-    assert recorded == []
-    # The pure guess helper is exercised directly too, hermetically.
-    assert _fast_npm_prefix_guess(str(npm_bin)) == str(prefix)
-
-
-def test_npm_global_prefix_fast_path_never_engaged_under_pytest(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """The same guessable layout as above, but with PYTEST_CURRENT_TEST
-    left in place (the normal case for every other test in this suite):
-    the fast path must not engage, and the real spawn must still happen —
-    a test that wants the spawn must always get it, never a guess read off
-    whatever CCR happens to be installed on the machine running the
-    suite."""
-    from quoin.router import _npm_global_prefix
-
-    prefix = tmp_path / "guessed_prefix"
-    npm_bin = prefix / "bin" / "npm"
-    npm_bin.parent.mkdir(parents=True)
-    npm_bin.write_text("#!/bin/sh\n")
-    _seed_npm_package(prefix, "3.1.0")
-
-    recorded: list[list[str]] = []
-
-    def fake_run(argv, **kwargs):
-        recorded.append(list(argv))
-        return _FakeCompletedProcess(returncode=0, stdout="/fake/prefix\n")
-
-    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "quoin.router.shutil.which",
-        lambda cmd: str(npm_bin) if cmd == "npm" else None,
-    )
-
-    with monkeypatch.context() as m:
-        m.setattr("quoin.router._npm_query_enabled", True)
-        result = _npm_global_prefix()
-
-    assert recorded, "the real spawn must still happen under pytest"
-    assert result == "/fake/prefix"
-
-
-def _enter_fast_path_production_mode(monkeypatch, tmp_path: Path) -> None:
-    """Common setup for the production-mode fast-path tests below: engages
-    the fast path (clears the pytest marker) and pins every input the
-    override check reads from real disk/environment state, so none of
-    these tests depends on whatever npm config the machine running the
-    suite happens to have."""
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.delenv("npm_config_prefix", raising=False)
-    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-
-
-def test_npm_global_prefix_fast_path_falls_back_when_no_package_at_guess(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """The plain fallback cell: the marker is cleared (fast path
-    engaged) but no CCR package exists at the guessed prefix, so the guess
-    must not be returned — the real spawn must run exactly once, and its
-    result (not the guess) must win. Without this, a future edit that
-    dropped the package-present conjunct and returned the guess
-    unconditionally would pass the rest of the suite unnoticed."""
-    from quoin.router import _npm_global_prefix
-
-    guessed_prefix = tmp_path / "guessed_prefix"
-    npm_bin = guessed_prefix / "bin" / "npm"
-    npm_bin.parent.mkdir(parents=True)
-    npm_bin.write_text("#!/bin/sh\n")
-    # Deliberately no _seed_npm_package(guessed_prefix, ...) — no CCR
-    # package at the guessed location.
-
-    spawned_prefix = tmp_path / "spawned_prefix"
-    recorded: list[list[str]] = []
-
-    def fake_run(argv, **kwargs):
-        recorded.append(list(argv))
-        return _FakeCompletedProcess(returncode=0, stdout=f"{spawned_prefix}\n")
-
-    _enter_fast_path_production_mode(monkeypatch, tmp_path)
-    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "quoin.router.shutil.which",
-        lambda cmd: str(npm_bin) if cmd == "npm" else None,
-    )
-
-    result = _npm_global_prefix()
-
-    assert len(recorded) == 1
-    assert result == str(spawned_prefix)
-
-
-def test_npm_global_prefix_fast_path_falls_back_on_divergent_version(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """The divergent-layout cell: the guessed prefix carries a *different*
-    CCR version than the one the real spawn would find — a leftover
-    package sitting where npm's binary happens to live, while npm itself
-    has been pointed elsewhere by a prefix override. The spawn must win,
-    not the stale guess."""
-    from quoin.router import _npm_global_prefix
-
-    guessed_prefix = tmp_path / "guessed_prefix"
-    npm_bin = guessed_prefix / "bin" / "npm"
-    npm_bin.parent.mkdir(parents=True)
-    npm_bin.write_text("#!/bin/sh\n")
-    _seed_npm_package(guessed_prefix, "2.0.0")  # stale, at the binary-adjacent prefix
-
-    spawned_prefix = tmp_path / "spawned_prefix"
-    _seed_npm_package(spawned_prefix, "3.1.0")  # the real, current install
-    recorded: list[list[str]] = []
-
-    def fake_run(argv, **kwargs):
-        recorded.append(list(argv))
-        return _FakeCompletedProcess(returncode=0, stdout=f"{spawned_prefix}\n")
-
-    _enter_fast_path_production_mode(monkeypatch, tmp_path)
-    # The override: a configured prefix means npm's real resolution can
-    # diverge from where its binary sits, which is exactly the machine
-    # shape this test recreates.
-    monkeypatch.setenv("npm_config_prefix", str(spawned_prefix))
-    monkeypatch.setattr("quoin.router.subprocess.run", fake_run)
-    monkeypatch.setattr(
-        "quoin.router.shutil.which",
-        lambda cmd: str(npm_bin) if cmd == "npm" else None,
-    )
-
-    result = _npm_global_prefix()
-
-    assert len(recorded) == 1
-    assert result == str(spawned_prefix)
-    assert result != str(guessed_prefix)
-
-
-def test_npm_prefix_override_env_var_defeats_the_guess(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """`_npm_prefix_override_in_play` itself, for each environment-variable
-    spelling npm recognises."""
-    from quoin.router import _npm_prefix_override_in_play
-
-    guess = str(tmp_path / "guessed_prefix")
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-
-    monkeypatch.delenv("npm_config_prefix", raising=False)
-    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
-    assert _npm_prefix_override_in_play(guess) is False
-
-    with monkeypatch.context() as m:
-        m.setenv("npm_config_prefix", "/somewhere/else")
-        assert _npm_prefix_override_in_play(guess) is True
-
-    with monkeypatch.context() as m:
-        m.delenv("npm_config_prefix", raising=False)
-        m.setenv("NPM_CONFIG_PREFIX", "/somewhere/else")
-        assert _npm_prefix_override_in_play(guess) is True
-
-
-def test_npm_prefix_override_home_npmrc_defeats_the_guess(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """A `prefix=` line in `$HOME/.npmrc` is npm's own documented remedy
-    for a global-install permission error — the exact machine shape this
-    override check exists for."""
-    from quoin.router import _npm_prefix_override_in_play
-
-    fake_home = tmp_path / "fake_home"
-    fake_home.mkdir()
-    (fake_home / ".npmrc").write_text("prefix=/custom/npm/prefix\n", encoding="utf-8")
-    monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.delenv("npm_config_prefix", raising=False)
-    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
-
-    guess = str(tmp_path / "guessed_prefix")
-    assert _npm_prefix_override_in_play(guess) is True
-
-
-def test_npm_prefix_override_guessed_prefix_etc_npmrc_defeats_the_guess(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """The other `.npmrc` npm consults: one sitting inside the guessed
-    prefix's own `etc/` directory."""
-    from quoin.router import _npm_prefix_override_in_play
-
-    monkeypatch.setattr(Path, "home", lambda: tmp_path / "fake_home")
-    monkeypatch.delenv("npm_config_prefix", raising=False)
-    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
-
-    guessed_prefix = tmp_path / "guessed_prefix"
-    (guessed_prefix / "etc").mkdir(parents=True)
-    (guessed_prefix / "etc" / "npmrc").write_text(
-        "prefix=/somewhere/else\n", encoding="utf-8"
-    )
-    assert _npm_prefix_override_in_play(str(guessed_prefix)) is True
-
-
-def test_npm_prefix_override_ignores_comments_and_other_keys(
-    monkeypatch, tmp_path: Path
-) -> None:
-    """A `.npmrc` that exists but sets no `prefix` (comments, unrelated
-    keys, a key merely containing "prefix") must not be mistaken for an
-    override."""
-    from quoin.router import _npm_prefix_override_in_play
-
-    fake_home = tmp_path / "fake_home"
-    fake_home.mkdir()
-    (fake_home / ".npmrc").write_text(
-        "# a comment mentioning prefix=/nope\n"
-        "registry=https://registry.npmjs.org/\n"
-        "some-other-prefix-like-key=value\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(Path, "home", lambda: fake_home)
-    monkeypatch.delenv("npm_config_prefix", raising=False)
-    monkeypatch.delenv("NPM_CONFIG_PREFIX", raising=False)
-
-    guess = str(tmp_path / "guessed_prefix")
-    assert _npm_prefix_override_in_play(guess) is False
-
-
-def test_fast_npm_prefix_guess_non_bin_parent_is_the_prefix_itself(
-    tmp_path: Path,
-) -> None:
-    """The non-bin layout (e.g. npm.cmd sitting directly inside the global
-    prefix on Windows): the guess is the binary's own parent directory,
-    not its grandparent."""
-    from quoin.router import _fast_npm_prefix_guess
-
-    npm_bin = tmp_path / "nodejs" / "npm.cmd"
-    npm_bin.parent.mkdir(parents=True)
-    npm_bin.write_text("")
-
-    assert _fast_npm_prefix_guess(str(npm_bin)) == str(npm_bin.parent)
-
-
 def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
     """A wedged `npm prefix -g` degrades to None, not a raise — and it must
     actually carry a positive timeout kwarg, or a mutant that deletes
@@ -771,6 +498,43 @@ def test_non_zero_but_corrupt_sqlite_still_outranks_npm(
     result = detect_ccr(home=tmp_path)
     assert result.major == 3
     assert result.source == "store:sqlite"
+
+
+def test_zero_byte_sqlite_with_npm_major_one_does_not_fall_through(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The fall-through is scoped to the one major a config.json store is
+    ever live for (2), not to any in-range major that disagrees with 3.
+    npm major 1 must be left on the ordinary v3-empty-store path rather
+    than falling through toward the store-absent decline, which would tell
+    the user no store exists while naming a directory that visibly
+    contains config.sqlite."""
+    _seed_store(tmp_path, sqlite_bytes=b"")
+    monkeypatch.setattr("quoin.router._npm_major", lambda: 1)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 3
+    assert result.store == "sqlite"
+    assert result.source == "store:sqlite"
+
+
+def test_zero_byte_sqlite_fallthrough_resolves_npm_major_once(
+    monkeypatch, tmp_path: Path
+) -> None:
+    """The disagreeing-npm-major-2 fall-through must not read npm twice: a
+    default-argument caller resolves the major once in the sqlite branch
+    and the tail reuses that value rather than resolving it again."""
+    _seed_store(tmp_path, sqlite_bytes=b"", json_=True)
+    calls = {"n": 0}
+
+    def _counting_npm_major():
+        calls["n"] += 1
+        return 2
+
+    monkeypatch.setattr("quoin.router._npm_major", _counting_npm_major)
+    result = detect_ccr(home=tmp_path)
+    assert result.major == 2
+    assert result.store == "json"
+    assert calls["n"] == 1
 
 
 # ── (c) package.json parser ─────────────────────────────────────────────────
