@@ -1140,6 +1140,13 @@ class TestDoctorCcrParity:
         from quoin.cli import main as _cli_main
 
         monkeypatch.setattr(_pathlib.Path, "home", lambda: tmp_path)
+        # Pinned so the rendered "installed"/"not installed" token — and
+        # whether the CCR probe block runs at all — never depends on
+        # whether `ccr` happens to be on the machine running the suite.
+        monkeypatch.setattr(
+            "quoin.cli.shutil.which",
+            lambda name: "/usr/local/bin/ccr" if name == "ccr" else None,
+        )
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             try:
@@ -1182,18 +1189,40 @@ class TestDoctorCcrParity:
         self, monkeypatch, tmp_path: Path
     ) -> None:
         """R-08: for every machine that has a store, doctor and `router
-        status` render the same major via the same helper."""
-        from conftest import make_v3_store  # noqa: PLC0415
-        from quoin import router as _router  # noqa: PLC0415
+        status` render the same major, off each command's own rendered
+        stdout — not off a re-evaluated expression that could drift from
+        what either command actually prints."""
+        import argparse
+        import contextlib
+        import io
+
+        from quoin.router import _cmd_router_status
 
         store_dir = tmp_path / ".claude-code-router"
         store_dir.mkdir(parents=True, exist_ok=True)
-        make_v3_store(store_dir, {})
-        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+        # Leftover config.json beside a newer (major 3) npm package: the
+        # exact cell where the raw detection (major 2, from the stale file)
+        # and the npm-corrected reading (major 3) disagree.
+        (store_dir / "config.json").write_text("{}")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 3)
 
-        out = self._run_doctor(monkeypatch, tmp_path)
-        status_line = _router._status_version_line(_router.detect_ccr(home=tmp_path))
-        assert f"version {status_line}" in out
+        doctor_out = self._run_doctor(monkeypatch, tmp_path)
+        doctor_match = re.search(r"version (.+?), config ", doctor_out)
+        assert doctor_match, f"doctor output missing a version clause: {doctor_out!r}"
+        doctor_token = doctor_match.group(1)
+
+        status_buf = io.StringIO()
+        with contextlib.redirect_stdout(status_buf):
+            _cmd_router_status(argparse.Namespace(_home_override=tmp_path))
+        status_out = status_buf.getvalue()
+        status_match = re.search(r"CCR version:\s*(.+)", status_out)
+        assert status_match, f"router status output missing a version line: {status_out!r}"
+        status_token = status_match.group(1).strip()
+
+        assert doctor_token == status_token
+        # Pin the actual value on this cell so a future change that makes
+        # both sides agree on the WRONG major still fails this test.
+        assert status_token == "v3 (via npm)"
 
 
 # ── CANONICAL_SKILLS filesystem parity ───────────────────────────────────────

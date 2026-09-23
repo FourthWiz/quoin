@@ -239,7 +239,7 @@ def detect_ccr(
         major_resolved = True
         if major is None:
             # The store signal alone is sufficient when npm is unreadable.
-            return CcrVersion(3, "sqlite", "store:sqlite")
+            return CcrVersion(_SQLITE_STORE_MAJOR, "sqlite", "store:sqlite")
         if major > CCR_KNOWN_MAJOR_MAX:
             # The two signals disagree upward: refuse to classify as v3.
             return CcrVersion(0, "sqlite", "store:sqlite-npm-capped")
@@ -260,7 +260,7 @@ def detect_ccr(
             # explicitly rather than claiming it does not exist.
             sqlite = False
         else:
-            return CcrVersion(3, "sqlite", "store:sqlite")
+            return CcrVersion(_SQLITE_STORE_MAJOR, "sqlite", "store:sqlite")
 
     if json_:
         # No npm read here: the residual rule's antecedent is "the store says
@@ -870,14 +870,33 @@ def _status_version_line(version: CcrVersion) -> str:
     major test would match both and order would silently decide which one
     won. "not detected" is `source == "none"` and nothing else; a capped
     source is the only thing that reads "unrecognised".
+
+    Shared by both `ccr_version_line`'s callers (`quoin doctor` and
+    `quoin router status`): `quoin router status` prints this directly under
+    its own `CCR installed: no` line, where a "(via …)" suffix on "not
+    detected" would contradict it; `quoin doctor` folds the same value into
+    its single-line CCR summary instead.
     """
     if version.source == "none":
-        # No suffix: a "(via …)" clause here would contradict the
-        # `CCR installed: no` line printed directly above it.
         return "not detected"
     if version.source.endswith("npm-capped"):
         return f"unrecognised (via {version.source})"
     return f"v{version.major} (via {version.source})"
+
+
+def ccr_version_line(home: pathlib.Path | None = None, *, route: CcrRoute | None = None) -> str:
+    """The CCR version text rendered by both `quoin doctor` and `router status`.
+
+    Resolves the route once (`resolve_ccr_route`), corrects it for a leftover
+    legacy store beside a newer npm package (`_effective_version`), and
+    renders the result (`_status_version_line`) — the one path both callers
+    go through, so they can never disagree on the major again. Pass `route`
+    when the caller already resolved one (avoids a second npm read);
+    otherwise a fresh route is resolved for `home`.
+    """
+    if route is None:
+        route = resolve_ccr_route(home)
+    return _status_version_line(_effective_version(route))
 
 
 def _cmd_router_status(args: argparse.Namespace) -> int:
@@ -949,7 +968,7 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
         # path marked authoritative. The PATH fact is reported, not hidden.
         installed_value = "yes" if on_path else "yes  (store present; `ccr` not on PATH)"
         print(f"  CCR installed:   {installed_value}")
-        print(f"  CCR version:     {_status_version_line(version)}")
+        print(f"  CCR version:     {ccr_version_line(route=route)}")
         print(f"  Config store:    {store_path}  (authoritative for v3)")
         if populated is None:
             print(f"  Store populated: unknown  ({populated_detail})")
@@ -966,7 +985,7 @@ def _cmd_router_status(args: argparse.Namespace) -> int:
         else:
             presence = f"{'yes' if config_json_present else 'no'}  ({config_path})"
         print(f"  CCR installed:  {'yes' if on_path else 'no'}")
-        print(f"  CCR version:    {_status_version_line(version)}")
+        print(f"  CCR version:    {ccr_version_line(route=route)}")
         print(f"  Config present: {presence}")
         print(f"  Proxy running:  {'yes' if live else 'no'}  (127.0.0.1:3456)")
         print(f"  API key set:    {'yes' if key_set else 'no'}  (OPENROUTER_API_KEY)")

@@ -6,6 +6,7 @@ import importlib.resources
 import os
 import pathlib
 import runpy
+import shutil
 import sys
 import textwrap
 from typing import Optional
@@ -547,7 +548,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         return _cmd_codex_doctor(args)
 
     from quoin import installer
-    import shutil
 
     errors: list[str] = []
     warnings: list[str] = []
@@ -728,7 +728,6 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         # A direct PATH check, not a version query: `ccr -v`/`ccr version`
         # misreport a healthy v3 install as absent.
         ccr_installed = bool(shutil.which("ccr"))
-        version = _router.detect_ccr()
         ccr_cfg = _ccr.ccr_config_path().exists() or _ccr.ccr_store_path().exists()
         ccr_live = _ccr.probe_service()
         if ccr_installed or ccr_cfg:
@@ -736,7 +735,7 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
             print(
                 f"  {'✓' if ccr_installed else '·'} claude-code-router: "
                 f"{'installed' if ccr_installed else 'not installed'}, "
-                f"version {_router._status_version_line(version)}, "
+                f"version {_router.ccr_version_line()}, "
                 f"config {'present' if ccr_cfg else 'absent'}, "
                 f"proxy {'running' if ccr_live else 'stopped'} → {mode}"
             )
