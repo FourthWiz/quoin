@@ -1869,7 +1869,9 @@ class TestSetupV3Writes:
         rc = _run_setup_on_store(monkeypatch, tmp_path)
         out = capsys.readouterr().out
         assert rc == 0
-        blob = json.loads(store_value_snapshot(path)[0])
+        snap = store_value_snapshot(path)
+        assert snap is not None
+        blob = json.loads(snap[0])
         provider = next(p for p in blob["Providers"] if p.get("name") == "openrouter")
         assert provider["api_key"] == "sk-or-KEY"
         assert blob["Router"]["builtInRules"]["claude-code"]["enabled"] is True
@@ -1894,7 +1896,9 @@ class TestSetupV3Writes:
         con.close()
         rc = _run_setup_on_store(monkeypatch, tmp_path)
         assert rc == 0
-        blob = json.loads(store_value_snapshot(path)[0])
+        snap = store_value_snapshot(path)
+        assert snap is not None
+        blob = json.loads(snap[0])
         assert any(p.get("name") == "openrouter" for p in blob["Providers"])
 
     def test_re_run_is_idempotent(self, monkeypatch, tmp_path: Path) -> None:

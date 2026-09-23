@@ -135,6 +135,7 @@ def test_backup_created_mode_0600_and_reread_verified(tmp_path):
         return ["cleared"], []
 
     result = ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path)
+    assert result.backup is not None
     mode = stat.S_IMODE(result.backup.stat().st_mode)
     assert mode == 0o600
 
@@ -391,6 +392,7 @@ def test_updated_at_reuses_sqlite_style_shape(tmp_path):
 
     ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path)
     snap = store_value_snapshot(path)
+    assert snap is not None
     assert ccr_store._SQLITE_TS_RE.match(snap[1])
 
 
@@ -413,6 +415,7 @@ def test_updated_at_falls_back_to_iso_ms_on_unrecognised_shape(tmp_path):
 
     ccr_store.update_v3_config(path, mutate, backup_dir=tmp_path)
     snap = store_value_snapshot(path)
+    assert snap is not None
     assert ccr_store._ISO_MS_RE.match(snap[1])
 
 

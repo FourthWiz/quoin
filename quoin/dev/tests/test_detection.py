@@ -20,6 +20,7 @@ import sqlite3
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -341,14 +342,14 @@ def test_npm_global_prefix_none_when_npm_absent_without_spawning(monkeypatch) ->
 def test_npm_global_prefix_none_on_timeout(monkeypatch) -> None:
     """A wedged `npm prefix -g` degrades to None, not a raise — and it must
     actually carry a positive timeout kwarg, or a mutant that deletes
-    `timeout=5` from the call site would still pass this test."""
+    `timeout=10` from the call site would still pass this test."""
     from quoin.router import _npm_global_prefix
 
     recorded_timeouts: list[object] = []
 
     def hanging_run(argv, **kwargs):
         recorded_timeouts.append(kwargs.get("timeout"))
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=cast("float", kwargs.get("timeout")))
 
     monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
     with monkeypatch.context() as m:
@@ -721,7 +722,7 @@ def test_node_major_none_on_timeout(monkeypatch) -> None:
 
     def hanging_run(argv, **kwargs):
         recorded_timeouts.append(kwargs.get("timeout"))
-        raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout"))
+        raise subprocess.TimeoutExpired(cmd=argv, timeout=cast("float", kwargs.get("timeout")))
 
     monkeypatch.setattr("quoin.router.subprocess.run", hanging_run)
     assert _node_major() is None
