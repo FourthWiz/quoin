@@ -67,6 +67,12 @@ CCR_VERSION_CONSTRAINT = f"@{CCR_PINNED_VERSION}"
 # through.
 _CONFIG_JSON_STORE_MAJOR = 2
 
+# The only npm major a `config.sqlite` store is ever a live artifact for.
+# Kept separate from CCR_KNOWN_MAJOR_MAX for the same reason as
+# _CONFIG_JSON_STORE_MAJOR above: bumping the recognised ceiling must never
+# silently change which major the empty-store fall-through guard trusts.
+_SQLITE_STORE_MAJOR = 3
+
 MIN_NODE_MAJOR = 22
 
 
@@ -237,7 +243,7 @@ def detect_ccr(
         if major > CCR_KNOWN_MAJOR_MAX:
             # The two signals disagree upward: refuse to classify as v3.
             return CcrVersion(0, "sqlite", "store:sqlite-npm-capped")
-        if major != CCR_KNOWN_MAJOR_MAX and _sqlite_file_is_empty(sqlite_path):
+        if major != _SQLITE_STORE_MAJOR and _sqlite_file_is_empty(sqlite_path):
             # npm gives a definite, in-range answer that is not v3, and the
             # store carries nothing to weigh against it — fall through
             # exactly as if config.sqlite did not exist, rather than
@@ -397,8 +403,13 @@ def _decline_store_absent(
 
     The store directory can hold a zero-byte `config.sqlite` on this path —
     the detection fall-through that lands here treats an empty file as no
-    evidence, not as a store CCR has actually written to — and the message
-    says so explicitly instead of claiming no store exists.
+    evidence, not as a store CCR has actually written to. A zero-byte file
+    reaching this decline is always stray, never a pending v3 store: the one
+    machine shape where it could be pending routes to the v3 write path
+    before this decline is ever reached, so the message names it as stray
+    rather than "not yet written". The remediation is the same either way —
+    a fresh `ccr start` recreates the store from nothing — so one sentence
+    now covers both branches.
     """
     if lead:
         print(lead)
@@ -409,9 +420,8 @@ def _decline_store_absent(
         stub_present = False
     if stub_present:
         print(
-            f"quoin: CCR v{version.major} is installed, and an empty "
-            f"{sqlite_path.name} already exists, but nothing has been "
-            "written into it yet, so there is nothing for quoin to merge into."
+            f"quoin: CCR v{version.major} is installed, and a stray, empty "
+            f"{sqlite_path.name} exists, so there is nothing for quoin to merge into."
         )
     else:
         print(
@@ -419,16 +429,10 @@ def _decline_store_absent(
             "config store yet, so there is nothing for quoin to merge into."
         )
     print(f"  Store directory: {store_dir}")
-    if stub_present:
-        print(
-            "  Run `ccr start` once and stop it again to let CCR finish "
-            "writing the store, then re-run `quoin router setup`."
-        )
-    else:
-        print(
-            "  Run `ccr start` once and stop it again to let CCR create the store, "
-            "then re-run `quoin router setup`."
-        )
+    print(
+        "  Run `ccr start` once and stop it again to let CCR create the store, "
+        "then re-run `quoin router setup`."
+    )
     print(
         "  Do not run `ccr -v` or `ccr version` first: on v3 a version query "
         "triggers migration and removes config.json from disk. The old bytes "

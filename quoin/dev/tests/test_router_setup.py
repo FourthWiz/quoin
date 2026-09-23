@@ -1642,6 +1642,34 @@ def test_dispatch_store_table_covers_the_whole_cross_product() -> None:
     assert set(_DETECTED_BY_CELL) == expected
 
 
+# ── Empty-sqlite reachability: major 3 always wins, never store-absent ────────
+
+@pytest.mark.parametrize(
+    "npm_major, json_present",
+    [(None, False), (None, True), (3, False), (3, True)],
+)
+def test_empty_sqlite_at_major_3_always_dispatches_v3(
+    monkeypatch, tmp_path: Path, npm_major, json_present
+) -> None:
+    """Reachability pin for `_decline_store_absent`: a zero-byte
+    `config.sqlite` whose npm major is unreadable or 3 never reaches the
+    store-absent decline — `dispatch_store` routes every such cell to "v3"
+    unconditionally on `major`, because the store == "sqlite" test runs
+    before any major-keyed test. A future reordering that let major == 3
+    reach the decline would fail this table first."""
+    from quoin.router import ccr_store_dir, detect_ccr, dispatch_store
+
+    store_dir = ccr_store_dir(tmp_path)
+    store_dir.mkdir(parents=True, exist_ok=True)
+    (store_dir / "config.sqlite").touch()
+    if json_present:
+        (store_dir / "config.json").write_text("{}")
+    monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
+
+    detected = detect_ccr(home=tmp_path, npm_major=npm_major)
+    assert dispatch_store(detected, npm_major) == "v3"
+
+
 # ── resolve_ccr_route: the assume_installed_major surface ─────────────────────
 
 class TestAssumeInstalledMajor:
@@ -1711,6 +1739,7 @@ class TestPostInstallRedispatch:
         *,
         npm_after: int | None = None,
         seed_json: bool = False,
+        seed_empty_sqlite: bool = False,
     ) -> tuple[int, int]:
         from quoin.router import ccr_store_dir
 
@@ -1736,10 +1765,13 @@ class TestPostInstallRedispatch:
             "quoin.router._npm_major",
             lambda: npm_after if state["installed"] else None,
         )
-        if seed_json:
+        if seed_json or seed_empty_sqlite:
             store_dir = ccr_store_dir(tmp_path)
             store_dir.mkdir(parents=True, exist_ok=True)
-            (store_dir / "config.json").write_text("{}")
+            if seed_json:
+                (store_dir / "config.json").write_text("{}")
+            if seed_empty_sqlite:
+                (store_dir / "config.sqlite").touch()
 
         rc = _cmd_router_setup(_make_args(home=tmp_path))
         return rc, state["calls"]
@@ -1773,6 +1805,29 @@ class TestPostInstallRedispatch:
         assert rc == 2
         assert "it has not created its config store yet" in out
         assert ccr_config_path(home=tmp_path).read_text() == "{}"
+
+    def test_stray_empty_sqlite_with_leftover_json_declines_as_stray(
+        self, monkeypatch, tmp_path: Path, capsys
+    ) -> None:
+        """The one reachable stub_present cell: a zero-byte config.sqlite
+        beside a leftover config.json, with npm reporting major 1. Renders
+        the stray wording (not "not yet written"), declines, and leaves
+        both pre-existing files byte-unchanged."""
+        from quoin.router import ccr_store_dir
+
+        rc, calls = self._run(
+            monkeypatch, tmp_path, npm_after=1, seed_json=True, seed_empty_sqlite=True
+        )
+        out = capsys.readouterr().out
+        assert calls == 1
+        assert rc == 2
+        assert "stray, empty config.sqlite exists" in out
+        assert "not yet written" not in out
+        assert "nothing has been written into it yet" not in out
+        assert_no_secret_in(out, "sk-or-SENTINEL")
+        store_dir = ccr_store_dir(tmp_path)
+        assert (store_dir / "config.json").read_text() == "{}"
+        assert (store_dir / "config.sqlite").stat().st_size == 0
 
     def test_already_installed_line_is_absent_after_a_real_install(
         self, monkeypatch, tmp_path: Path, capsys
