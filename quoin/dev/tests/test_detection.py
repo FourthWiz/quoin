@@ -22,6 +22,8 @@ import sys
 from pathlib import Path
 from typing import cast
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
@@ -558,6 +560,60 @@ def test_zero_byte_sqlite_fallthrough_resolves_npm_major_once(
     assert result.store is None
     assert result.source == "npm"
     assert calls["n"] == 1
+
+
+# ── D-06: the zero-byte rule, both halves, over the full eight-cell table ─────
+
+_ZERO_BYTE_TABLE: dict[tuple[int | None, bool], tuple[CcrVersion, str]] = {
+    (None, False): (CcrVersion(3, "sqlite", "store:sqlite"), "v3"),
+    (None, True): (CcrVersion(3, "sqlite", "store:sqlite"), "v3"),
+    (1, False): (CcrVersion(1, None, "npm"), "v2"),
+    (1, True): (CcrVersion(2, "json", "store:json"), "v3-store-absent"),
+    (2, False): (CcrVersion(2, None, "npm"), "v2"),
+    (2, True): (CcrVersion(2, "json", "store:json"), "v2"),
+    (3, False): (CcrVersion(3, "sqlite", "store:sqlite"), "v3"),
+    (3, True): (CcrVersion(3, "sqlite", "store:sqlite"), "v3"),
+}
+
+
+@pytest.mark.parametrize("cell", list(_ZERO_BYTE_TABLE))
+def test_zero_byte_sqlite_table_pins_detection_and_dispatch(
+    monkeypatch, tmp_path: Path, cell: tuple[int | None, bool]
+) -> None:
+    """D-06, both halves at once: for every (npm major, config.json
+    present) cell with a zero-byte config.sqlite on disk, pin the exact
+    `detect_ccr` tuple *and* the `dispatch_store` route it produces. The
+    four npm-1/npm-2 cells distrust the empty file and fall through; the
+    four npm-None/npm-3 cells trust it and stay v3."""
+    from quoin.router import dispatch_store
+
+    npm_major, json_present = cell
+    expected_version, expected_route = _ZERO_BYTE_TABLE[cell]
+    _seed_store(tmp_path, sqlite_bytes=b"", json_=json_present)
+    monkeypatch.setattr("quoin.router._npm_major", lambda: npm_major)
+
+    result = detect_ccr(home=tmp_path, npm_major=npm_major)
+    assert result == expected_version
+    assert dispatch_store(result, npm_major) == expected_route
+
+
+def test_zero_byte_table_covers_all_eight_cells() -> None:
+    """The count is derived from the enumeration, never asserted beside it."""
+    expected = {(npm, json_) for npm in (None, 1, 2, 3) for json_ in (False, True)}
+    assert set(_ZERO_BYTE_TABLE) == expected
+
+
+def test_sqlite_file_is_empty_docstring_states_the_rule() -> None:
+    """A future docstring edit that contradicts D-06 must redden here
+    rather than drift silently — the mechanism whose absence let this one
+    rule drift for three consecutive rounds. Normalized because both
+    load-bearing clauses span a line break in the source."""
+    from quoin.router import _sqlite_file_is_empty
+
+    doc = _sqlite_file_is_empty.__doc__ or ""
+    normalized = " ".join(doc.split())
+    assert "only treats this as a reason to distrust the store's presence" in normalized
+    assert "left exactly where a real, freshly-initialised store would be" in normalized
 
 
 # ── (c) package.json parser ─────────────────────────────────────────────────
