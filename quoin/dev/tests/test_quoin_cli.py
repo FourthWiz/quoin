@@ -1126,6 +1126,76 @@ def test_wrapper_diagnoses_stale_plus_broken_src():
         assert result.returncode != 0 or "wrapper logic error" in result.stderr or result.returncode == 0
 
 
+# ── T-09: doctor/router status major parity ──────────────────────────────────
+
+class TestDoctorCcrParity:
+    """doctor's CCR probe must render the detected major, not just
+    'config absent'/'present', and must agree with `router status` on it."""
+
+    def _run_doctor(self, monkeypatch, tmp_path: Path) -> str:
+        import contextlib
+        import io
+        import pathlib as _pathlib
+
+        from quoin.cli import main as _cli_main
+
+        monkeypatch.setattr(_pathlib.Path, "home", lambda: tmp_path)
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                _cli_main(["doctor"])
+            except SystemExit:
+                pass
+        return buf.getvalue()
+
+    def test_v3_store_no_longer_reports_config_absent(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        from conftest import make_v3_store  # noqa: PLC0415
+
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        make_v3_store(store_dir, {})
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        assert "config absent" not in out
+        assert "config present" in out
+        assert "version v3 (via store:sqlite)" in out
+
+    def test_v2_config_reports_v2(self, monkeypatch, tmp_path: Path) -> None:
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.json").write_text("{}")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        assert "version v2 (via store:json)" in out
+
+    def test_not_detected_stays_not_detected(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        assert "version not detected" in out
+
+    def test_doctor_and_router_status_agree_on_major(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """R-08: for every machine that has a store, doctor and `router
+        status` render the same major via the same helper."""
+        from conftest import make_v3_store  # noqa: PLC0415
+        from quoin import router as _router  # noqa: PLC0415
+
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        make_v3_store(store_dir, {})
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        status_line = _router._status_version_line(_router.detect_ccr(home=tmp_path))
+        assert f"version {status_line}" in out
+
+
 # ── CANONICAL_SKILLS filesystem parity ───────────────────────────────────────
 
 def test_canonical_skills_matches_filesystem():
