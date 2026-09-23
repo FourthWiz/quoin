@@ -195,7 +195,7 @@ _DOC_SURFACES = [
 ]
 
 
-def test_readme_names_both_paths():
+def test_doc_surfaces_name_both_paths():
     """Generalised (AC-41) from README.md-only to all three surfaces: each
     names a v3 invocation and carries a not-yet-routing clause near it, so
     a surface cannot silently claim the v3 profile routes models before

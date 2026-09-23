@@ -44,8 +44,13 @@ def _tracked_files_mentioning_ccr_code() -> list[str]:
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
-        check=True,
+        timeout=30,
     )
+    # `git grep` exits 1, not 0, when the pattern matches zero files — that
+    # is a legitimate (if surprising) sweep result, not a command failure,
+    # so it must not error the test before the assertions below get a
+    # chance to report it.
+    assert out.returncode in (0, 1), f"git grep exited {out.returncode}: {out.stderr}"
     return sorted(out.stdout.splitlines())
 
 
@@ -219,5 +224,14 @@ def test_pinned_changelog_entry_occurs_exactly_once_byte_identical(anchor: str) 
 def test_v3_entry_exists_under_unreleased_added_naming_config_sqlite() -> None:
     section_lines, _ = _changelog_unreleased_section()
     added_idx = next(i for i, ln in enumerate(section_lines) if ln.strip() == "### Added")
-    added_block = "".join(section_lines[added_idx:])
+    # Bounded at the next "### " subsection header, not the end of the whole
+    # Unreleased section — which holds several unrelated "### Added"/"###
+    # Fixed" blocks below this one, any of which could contain the literal
+    # string and make the assertion pass regardless of what this specific
+    # entry says.
+    added_end = next(
+        (i for i in range(added_idx + 1, len(section_lines)) if section_lines[i].startswith("### ")),
+        len(section_lines),
+    )
+    added_block = "".join(section_lines[added_idx:added_end])
     assert "config.sqlite" in added_block

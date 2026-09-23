@@ -1815,6 +1815,7 @@ class TestPostInstallRedispatch:
         both pre-existing files byte-unchanged."""
         from quoin.router import ccr_store_dir
 
+        monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-SENTINEL")
         rc, calls = self._run(
             monkeypatch, tmp_path, npm_after=1, seed_json=True, seed_empty_sqlite=True
         )
