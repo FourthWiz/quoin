@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import builtins
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -187,15 +188,53 @@ def test_three_doc_surfaces_agree_with_helper():
         assert v3_cmd in text, f"{path} missing v3 command {v3_cmd!r}"
 
 
-def test_readme_names_both_paths():
-    text = _read(REPO_ROOT / "README.md")
-    assert V2_LAUNCH_COMMAND in text
-    assert V3_LAUNCH_COMMAND in text
+_DOC_SURFACES = [
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "quoin" / "CLAUDE.md",
+    REPO_ROOT / "quoin" / "memory" / "workflow-catalog.md",
+]
 
-    idx = text.index(V3_LAUNCH_COMMAND)
-    window = text[max(0, idx - 500): idx + 500]
-    assert "configure its models" in window
-    assert "routes nothing" in window  # does not claim it routes
+
+def test_readme_names_both_paths():
+    """Generalised (AC-41) from README.md-only to all three surfaces: each
+    names a v3 invocation and carries a not-yet-routing clause near it, so
+    a surface cannot silently claim the v3 profile routes models before
+    they are configured."""
+    for path in _DOC_SURFACES:
+        text = _read(path)
+        assert V2_LAUNCH_COMMAND in text, f"{path} missing v2 command"
+        assert V3_LAUNCH_COMMAND in text, f"{path} missing v3 command"
+
+        idx = text.index(V3_LAUNCH_COMMAND)
+        window = text[max(0, idx - 500): idx + 500]
+        assert "configure its models" in window, f"{path}: no configure-its-models clause nearby"
+        assert "routes nothing" in window, f"{path}: does not deny routing nearby"  # no overclaim
+
+
+# Known non-profile subcommands: every documented `ccr <word>` invocation
+# other than the profile itself. Pinned as a tuple, not derived, so a new
+# subcommand must be a conscious addition here.
+_KNOWN_NON_PROFILE_SUBCOMMANDS = ("code", "start", "ui", "version")
+
+
+def test_no_surface_names_a_different_profile_near_a_v3_invocation():
+    """AC-41's first clause, proven negatively (round-2 MAJ-3: a literal
+    'names V3_PROFILE_NAME' substring check cannot independently fail,
+    since V3_PROFILE_NAME is itself a substring of the already-asserted
+    V3_LAUNCH_COMMAND). Candidate set: every `ccr <word>` invocation
+    documented across the three surfaces, minus the known non-profile
+    subcommands. Every remaining candidate must equal V3_LAUNCH_COMMAND —
+    a surface naming `ccr some-other-profile` would leave a remainder that
+    fails this equality."""
+    pattern = re.compile(r"`ccr [a-z][a-z0-9-]+`")
+    candidates: set[str] = set()
+    for path in _DOC_SURFACES:
+        candidates |= set(pattern.findall(_read(path)))
+
+    non_profile = {f"`ccr {cmd}`" for cmd in _KNOWN_NON_PROFILE_SUBCOMMANDS}
+    remainder = candidates - non_profile
+    assert remainder, "candidate set must be non-empty — the assertion needs a real failure mode"
+    assert remainder == {f"`{V3_LAUNCH_COMMAND}`"}
 
 
 def test_catalog_is_generated_from_claude_md():
