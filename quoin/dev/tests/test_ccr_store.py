@@ -735,3 +735,20 @@ def test_hermeticity_guard_catches_symlink_and_link(tmp_path):
     with pytest.raises(AssertionError, match="quoin test hermeticity"):
         os.link(str(source), str(canary_target))
     assert not canary_target.exists()
+
+
+def test_hermeticity_guard_catches_hard_link_from_the_real_store(tmp_path):
+    # os.link dereferences its source to a real inode — unlike os.symlink,
+    # whose target need not exist — so a hard link *from* the real store is
+    # a read path into it, not just a write path onto it. Only the
+    # destination was checked before; the source argument went unguarded.
+    # Probes a canary source path so a regression here leaves a droppable
+    # stray, never a real config.sqlite.
+    canary_source = (
+        Path.home() / ".claude-code-router" / "quoin-hermeticity-guard-canary" / "config.sqlite"
+    )
+    dest = tmp_path / "hard-linked-from-store.sqlite"
+
+    with pytest.raises(AssertionError, match="quoin test hermeticity"):
+        os.link(str(canary_source), str(dest))
+    assert not dest.exists()

@@ -208,8 +208,10 @@ def no_real_ccr_store(tmp_path_factory):
     # config.json / config.sqlite existing at that path, so either call
     # can change what quoin classifies and, for a symlink, what it reads
     # and writes through afterwards. Only the destination — the link
-    # being created — needs checking; the source argument is just the
-    # link target and need not exist.
+    # being created — needs checking for a symlink; the source argument is
+    # just the link target and need not exist. A hard link is different:
+    # its source is dereferenced to a real inode, so the source also needs
+    # checking there.
     real_os_symlink = os.symlink
 
     def _guarded_os_symlink(src, dst, *args, **kwargs):
@@ -219,6 +221,7 @@ def no_real_ccr_store(tmp_path_factory):
     real_os_link = os.link
 
     def _guarded_os_link(src, dst, *args, **kwargs):
+        _check(_target_path(src, {}))
         _check(_target_path(dst, {}))
         return real_os_link(src, dst, *args, **kwargs)
 
