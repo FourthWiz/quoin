@@ -115,14 +115,25 @@ SNAPSHOT_CARRIERS = 30
 
 
 def _variant_of(line: str) -> str | None:
-    """Glyph token of a `^## §0...` heading line, longest-match first."""
+    """Glyph token of a `^## §0...` heading line.
+
+    Deliberately NOT filtered against the seven known tokens (R4/T-05 shape
+    d): the token is whatever whitespace-delimited word follows `## ` and
+    starts with `§0`, discovered generically, so an eighth variant this
+    module has never seen is captured as its own distinct token rather than
+    silently returning None and vanishing from DISCOVERED_VARIANTS. A fixed
+    allow-list here would make test_declared_variant_set_is_exactly_seven
+    blind to exactly the case it exists to catch.
+    """
     if not line.startswith("## §0"):
         return None
     body = line[3:].strip()
-    for tok in ("§0‴", "§0″", "§0'", "§0’", "§0a", "§0b", "§0c", "§0"):
-        if body.startswith(tok + " ") or body == tok:
-            return "§0'" if tok == "§0’" else tok
-    return None
+    if not body:
+        return None
+    tok = body.split(None, 1)[0]
+    if not tok.startswith("§0"):
+        return None
+    return "§0'" if tok == "§0’" else tok
 
 
 def _next_h2(lines: list[str], i: int) -> int:
@@ -381,7 +392,19 @@ def test_overhang_total_matches_snapshot():
 # (per-family, declared set, blankness) are what actually discriminates.
 # The hand-written bucket is NEVER defined as census-minus-generated.
 
-def test_partition_disjoint_and_covers_census():
+def _compute_partition():
+    """Bucket every census line into generated / hand-written / overhang,
+    purely from the LIVE scan (no fixed constants), and assert disjointness
+    along the way. Returns (generated_lines, handwritten_lines, overhang_lines).
+
+    Deliberately dynamic (R3-MAJ-1 honest-scoping): a hand-written block that
+    is cleanly removed (T-05 mutation c) moves generated/handwritten totals
+    and CENSUS_LINES together, so this structural check stays green on that
+    mutation — only the declared six-block SET assertion (which names the
+    missing pair) is supposed to red there. Comparing against FIXED snapshot
+    numbers is the separate, explicitly-informational job of
+    test_census_snapshot_reproduces_state.
+    """
     generated_lines = 0
     handwritten_lines = 0
     overhang_lines = sum(len(v) for v in _OVERHANGS.values())
@@ -399,12 +422,8 @@ def test_partition_disjoint_and_covers_census():
             )
             gen_end = (marker_i + 1) if marker_i is not None else end
             span = range(start, gen_end)
-        elif variant in ("§0'", "§0″", "§0‴"):
-            span = range(start, end)
-        elif variant == "§0c" and skill in ORACLE_FAMILY["§0c"]:
-            span = range(start, end)
         else:
-            span = range(start, end)  # §0a, §0b, hand-written §0c
+            span = range(start, end)  # §0'/§0″/§0‴ in full; §0a/§0b/§0c likewise
 
         is_handwritten = (skill, variant) in DECLARED_HANDWRITTEN_BLOCKS
         for i in span:
@@ -416,10 +435,13 @@ def test_partition_disjoint_and_covers_census():
         else:
             generated_lines += len(span)
 
-    assert generated_lines == SNAPSHOT_GENERATED_LINES
-    assert handwritten_lines == DECLARED_HANDWRITTEN_TOTAL_LINES
+    return generated_lines, handwritten_lines, overhang_lines
+
+
+def test_partition_disjoint_and_covers_census():
+    generated_lines, handwritten_lines, overhang_lines = _compute_partition()
     total = generated_lines + handwritten_lines + overhang_lines
-    assert total == CENSUS_LINES == SNAPSHOT_CENSUS_LINES, (
+    assert total == CENSUS_LINES, (
         f"partition sum {generated_lines} + {handwritten_lines} + {overhang_lines} "
         f"= {total} != census {CENSUS_LINES}"
     )
@@ -428,8 +450,21 @@ def test_partition_disjoint_and_covers_census():
 def test_census_snapshot_reproduces_state():
     """Informational snapshot — a maintainer legitimately tightening the
     generator template updates these numbers alongside, without touching the
-    load-bearing assertions above."""
-    assert CORPUS_LINES == SNAPSHOT_CORPUS_LINES
+    load-bearing assertions above (this test is NOT one of them; see the
+    module docstring's load-bearing list).
+
+    CORPUS_LINES (whole-file line totals) is reported in the module docstring
+    but deliberately NOT asserted here: it moves under any hand-written prose
+    edit anywhere in the corpus, generated span or not, so asserting it would
+    red on the T-05 shape (a) prose-deletion mutation even though that shape
+    is supposed to move only SHARE_CEILINGS['status'] (found during the T-05
+    mutation exercise, mutation-demo.md mutation (a); corrected in place
+    rather than carried as a residual, since the fix is a same-file,
+    same-commit test-only change touching nothing under adapters/claude/).
+    """
+    generated_lines, handwritten_lines, _overhang = _compute_partition()
+    assert generated_lines == SNAPSHOT_GENERATED_LINES
+    assert handwritten_lines == DECLARED_HANDWRITTEN_TOTAL_LINES
     assert CENSUS_LINES == SNAPSHOT_CENSUS_LINES
     assert len(CENSUS_CARRIERS) == SNAPSHOT_CARRIERS
     assert VARIANT_COUNTS == {
