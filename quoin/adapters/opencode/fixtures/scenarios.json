@@ -1,0 +1,984 @@
+{
+  "scenarios": {
+    "auth_401": {
+      "description": "Invalid credential, any step.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "invalid_api_key",
+              "message": "Invalid API key"
+            }
+          },
+          "status": 401,
+          "stream": "auto"
+        }
+      ]
+    },
+    "context_overflow": {
+      "description": "Prompt exceeds the declared context window.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "context_length_exceeded",
+              "message": "This model's maximum context length is exceeded"
+            }
+          },
+          "status": 400,
+          "stream": "auto"
+        }
+      ]
+    },
+    "default_ok": {
+      "description": "Shape-matched good path driving a full qualified probe run (steps 1-3).",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "stream": false,
+            "tools": false
+          },
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "match": {
+            "stream": false,
+            "tools": true
+          },
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 1,
+          "expect": {
+            "tool_call_id": "call_1"
+          },
+          "finish_reason": "stop",
+          "match": {
+            "stream": false
+          },
+          "message": {
+            "content": "Tool responded with: {{last_tool_content}}",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "chunks": [
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "",
+                    "name": "quoin_probe_echo"
+                  },
+                  "id": "call_1",
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"text\": \"Grüße, 世"
+                  },
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "界 \\ud83d"
+                  },
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "\\ude42 — \\"
+                  },
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}"
+                  },
+                  "index": 0
+                }
+              ]
+            }
+          ],
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "match": {
+            "stream": true,
+            "tools": true
+          },
+          "split_writes": true,
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "chunks": [
+            {
+              "content": "Tool responded with: {{last_tool_content}}"
+            }
+          ],
+          "depth": 1,
+          "expect": {
+            "tool_call_id": "call_1"
+          },
+          "finish_reason": "stop",
+          "match": {
+            "stream": true
+          },
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "chunk_delay_ms": 50,
+          "chunks": [
+            {
+              "content": "chunk 0 "
+            },
+            {
+              "content": "chunk 1 "
+            },
+            {
+              "content": "chunk 2 "
+            },
+            {
+              "content": "chunk 3 "
+            },
+            {
+              "content": "chunk 4 "
+            },
+            {
+              "content": "chunk 5 "
+            },
+            {
+              "content": "chunk 6 "
+            },
+            {
+              "content": "chunk 7 "
+            },
+            {
+              "content": "chunk 8 "
+            },
+            {
+              "content": "chunk 9 "
+            },
+            {
+              "content": "chunk 10 "
+            },
+            {
+              "content": "chunk 11 "
+            },
+            {
+              "content": "chunk 12 "
+            },
+            {
+              "content": "chunk 13 "
+            },
+            {
+              "content": "chunk 14 "
+            },
+            {
+              "content": "chunk 15 "
+            },
+            {
+              "content": "chunk 16 "
+            },
+            {
+              "content": "chunk 17 "
+            },
+            {
+              "content": "chunk 18 "
+            },
+            {
+              "content": "chunk 19 "
+            }
+          ],
+          "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "stream": true,
+            "tools": false
+          },
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "echo_secret_in_error": {
+      "description": "Hostile 401 that echoes the received Authorization header verbatim.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "invalid_api_key",
+              "message": "Rejected credential: {{echoed_credential}}"
+            }
+          },
+          "echo_auth": "header",
+          "status": 401,
+          "stream": "auto"
+        }
+      ]
+    },
+    "echo_secret_straddle": {
+      "description": "Hostile 401 whose echoed token straddles the 300-character clip() cut.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "invalid_api_key",
+              "message": "{{echoed_credential}}"
+            }
+          },
+          "echo_auth": "token",
+          "echo_pad": 280,
+          "status": 401,
+          "stream": "auto"
+        }
+      ]
+    },
+    "forbidden_403": {
+      "description": "Credential lacks access, any step.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "forbidden",
+              "message": "Access denied for this model"
+            }
+          },
+          "status": 403,
+          "stream": "auto"
+        }
+      ]
+    },
+    "invalid_json_200": {
+      "description": "200 response whose body is not JSON.",
+      "turns": [
+        {
+          "body_text": "not json at all",
+          "status": 200,
+          "stream": "auto"
+        }
+      ]
+    },
+    "long_stream": {
+      "description": "Many delayed content chunks, for cancellation.",
+      "turns": [
+        {
+          "chunk_delay_ms": 50,
+          "chunks": [
+            {
+              "content": "chunk 0 "
+            },
+            {
+              "content": "chunk 1 "
+            },
+            {
+              "content": "chunk 2 "
+            },
+            {
+              "content": "chunk 3 "
+            },
+            {
+              "content": "chunk 4 "
+            },
+            {
+              "content": "chunk 5 "
+            },
+            {
+              "content": "chunk 6 "
+            },
+            {
+              "content": "chunk 7 "
+            },
+            {
+              "content": "chunk 8 "
+            },
+            {
+              "content": "chunk 9 "
+            },
+            {
+              "content": "chunk 10 "
+            },
+            {
+              "content": "chunk 11 "
+            },
+            {
+              "content": "chunk 12 "
+            },
+            {
+              "content": "chunk 13 "
+            },
+            {
+              "content": "chunk 14 "
+            },
+            {
+              "content": "chunk 15 "
+            },
+            {
+              "content": "chunk 16 "
+            },
+            {
+              "content": "chunk 17 "
+            },
+            {
+              "content": "chunk 18 "
+            },
+            {
+              "content": "chunk 19 "
+            }
+          ],
+          "finish_reason": "stop",
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "model_not_found_400": {
+      "description": "400 whose body names a missing model.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "model_not_found",
+              "message": "The model `example-model` does not exist"
+            }
+          },
+          "status": 400,
+          "stream": "auto"
+        }
+      ]
+    },
+    "not_found_404": {
+      "description": "Plain 404 before any request has succeeded.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "not_found",
+              "message": "Not Found"
+            }
+          },
+          "status": 404,
+          "stream": "auto"
+        }
+      ]
+    },
+    "prose_tool_call": {
+      "description": "Model writes tool instructions as prose instead of a structured call.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "stop",
+          "message": {
+            "content": "I would call quoin_probe_echo now.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "rate_limited_429": {
+      "description": "Rate limited with a Retry-After header, any step.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "rate_limited",
+              "message": "Too many requests"
+            }
+          },
+          "headers": {
+            "Retry-After": "7"
+          },
+          "status": 429,
+          "stream": "auto"
+        }
+      ]
+    },
+    "redirect_302": {
+      "description": "Cross-host redirect; must never be followed.",
+      "turns": [
+        {
+          "body": {},
+          "headers": {
+            "Location": "https://sso.example.invalid/login?next=%2F"
+          },
+          "status": 302,
+          "stream": "auto"
+        }
+      ]
+    },
+    "server_error_500": {
+      "description": "Generic server error, any step.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "internal_error",
+              "message": "Internal server error"
+            }
+          },
+          "status": 500,
+          "stream": "auto"
+        }
+      ]
+    },
+    "server_error_503": {
+      "description": "Service unavailable, any step.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": "unavailable",
+              "message": "Service unavailable"
+            }
+          },
+          "status": 503,
+          "stream": "auto"
+        }
+      ]
+    },
+    "stream_stall": {
+      "description": "One chunk, then a long stall (exceeds a short probe timeout after headers).",
+      "turns": [
+        {
+          "chunks": [
+            {
+              "content": "first chunk"
+            }
+          ],
+          "finish_reason": "stop",
+          "stall_after_chunks_ms": 5000,
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "stream_truncated": {
+      "description": "Stream closes mid-flight, no finish_reason, no [DONE].",
+      "turns": [
+        {
+          "chunks": [
+            {
+              "content": "partial"
+            },
+            {
+              "content": " answer"
+            }
+          ],
+          "status": 200,
+          "stream": true,
+          "truncate_after_chunks": 2
+        }
+      ]
+    },
+    "text_ok": {
+      "description": "Single non-stream text reply, no tools.",
+      "turns": [
+        {
+          "finish_reason": "stop",
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_args_malformed": {
+      "description": "Non-stream tool call whose arguments are not valid JSON.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{not valid json",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_bad",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_args_malformed_stream": {
+      "description": "Streamed tool call whose reassembled arguments are not valid JSON.",
+      "turns": [
+        {
+          "chunks": [
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{not",
+                    "name": "quoin_probe_echo"
+                  },
+                  "id": "call_bad",
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": " valid json"
+                  },
+                  "index": 0
+                }
+              ]
+            }
+          ],
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_call_correlation": {
+      "description": "Depth-1 turn requires the round-tripped tool_call_id via expect.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_corr_1",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 1,
+          "expect": {
+            "tool_call_id": "call_corr_1"
+          },
+          "finish_reason": "stop",
+          "message": {
+            "content": "Tool responded with: {{last_tool_content}}",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_call_id_mismatch": {
+      "description": "Depth-1 turn expects a different tool_call_id than the one issued at depth 0.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_a",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 1,
+          "expect": {
+            "tool_call_id": "call_b"
+          },
+          "finish_reason": "stop",
+          "message": {
+            "content": "Tool responded with: {{last_tool_content}}",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_call_missing_id": {
+      "description": "Tool call with an empty id.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_call_ok": {
+      "description": "Two-turn non-stream tool round trip.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 1,
+          "finish_reason": "stop",
+          "message": {
+            "content": "Tool responded with: {{last_tool_content}}",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_call_stream_fragments": {
+      "description": "Two-turn streamed tool round trip with a fragmented arguments string.",
+      "turns": [
+        {
+          "chunks": [
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "",
+                    "name": "quoin_probe_echo"
+                  },
+                  "id": "call_1",
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "{\"text\": \"Grüße, 世"
+                  },
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "界 \\ud83d"
+                  },
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "\\ude42 — \\"
+                  },
+                  "index": 0
+                }
+              ]
+            },
+            {
+              "tool_calls": [
+                {
+                  "function": {
+                    "arguments": "\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}"
+                  },
+                  "index": 0
+                }
+              ]
+            }
+          ],
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "split_writes": true,
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "chunks": [
+            {
+              "content": "Tool responded with: {{last_tool_content}}"
+            }
+          ],
+          "depth": 1,
+          "finish_reason": "stop",
+          "status": 200,
+          "stream": true,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        }
+      ]
+    },
+    "tool_result_404": {
+      "description": "Depth-0 valid tool call, then a 404 on the tool-result request.",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "body": {
+            "error": {
+              "code": "not_found",
+              "message": "Not Found"
+            }
+          },
+          "depth": 1,
+          "status": 404,
+          "stream": false
+        }
+      ]
+    },
+    "tools_unsupported_404": {
+      "description": "One match-less 404 turn, steered onto a specific step via extra_headers, modelled on an OpenRouter-style tool-support rejection.",
+      "turns": [
+        {
+          "body": {
+            "error": {
+              "code": 404,
+              "message": "No endpoints found that support tool use."
+            }
+          },
+          "status": 404,
+          "stream": "auto"
+        }
+      ]
+    },
+    "usage_omitted": {
+      "description": "Non-stream text reply with usage omitted (step 1 only).",
+      "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "stop",
+          "message": {
+            "content": "Hello.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": null
+        }
+      ]
+    }
+  },
+  "schema_version": 1
+}
