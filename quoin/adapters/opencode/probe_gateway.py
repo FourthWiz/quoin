@@ -228,9 +228,13 @@ def redact(text: str, secrets_tuple) -> str:
     for form in secrets_tuple:
         if form:
             out = out.replace(form, "<redacted>")
-    out = re.sub(r"Authorization:\s*\S.*", "Authorization: <redacted>", out)
-    out = re.sub(r"Bearer\s+\S+", "Bearer <redacted>", out)
-    out = re.sub(r"(?i)(api[_-]?key|token)=[^&\s\"]+", r"\1=<redacted>", out)
+    # Stop at whitespace AND at JSON/HTTP delimiters (quote, brace, bracket,
+    # comma) so a credential embedded in a JSON string value or a header
+    # line does not swallow the surrounding syntax when it isn't followed
+    # by whitespace (e.g. `..."Bearer <token>"}}` with no space before `"`).
+    out = re.sub(r'Authorization:[^\r\n"]*', "Authorization: <redacted>", out)
+    out = re.sub(r'Bearer\s+[^\s"\'}\],]+', "Bearer <redacted>", out)
+    out = re.sub(r'(?i)(api[_-]?key|token)=[^&\s"\'}\],]+', r"\1=<redacted>", out)
     return out
 
 
@@ -927,6 +931,7 @@ def build_capability_record(report: ProbeReport) -> dict:
                 "next_action": diag.next_action,
                 "http_status": diag.http_status,
                 "retry_after_seconds": diag.retry_after_seconds,
+                "detail": diag.detail,
             }
             diagnostics_out.append(diag_dict)
         steps_out.append(
@@ -970,6 +975,19 @@ def write_record(record: dict, path: str, secrets_tuple) -> bool:
     try:
         text = json.dumps(record, indent=2, sort_keys=True, ensure_ascii=False)
         text = redact(text, secrets_tuple)
+        try:
+            json.loads(text)
+        except ValueError:
+            # Redaction must never corrupt the JSON it is protecting; if a
+            # pattern ever clips into structural syntax, fall back to a
+            # minimal, still-redacted record rather than ship broken JSON.
+            safe = {
+                "schema": record.get("schema", RECORD_SCHEMA),
+                "schema_version": record.get("schema_version", 1),
+                "verdict": record.get("verdict"),
+                "diagnostics_note": "diagnostics omitted: redaction produced invalid JSON",
+            }
+            text = redact(json.dumps(safe, indent=2, sort_keys=True, ensure_ascii=False), secrets_tuple)
         tmp_path = path + ".tmp"
         with open(tmp_path, "w", encoding="utf-8") as fh:
             fh.write(text)
@@ -1002,7 +1020,10 @@ def execute(config: ProbeConfig, env: dict, extra_headers=None, now=None, nonce_
     for entry in report.steps:
         if entry["diagnostic"] is not None:
             diag = entry["diagnostic"]
-            _emit(sys.stderr, "probe: %s: %s Next: %s" % (diag.code, diag.message, diag.next_action), secrets_tuple)
+            line = "probe: %s: %s Next: %s" % (diag.code, diag.message, diag.next_action)
+            if diag.detail:
+                line += " (%s)" % (diag.detail,)
+            _emit(sys.stderr, line, secrets_tuple)
 
     record = build_capability_record(report)
     if config.output:
