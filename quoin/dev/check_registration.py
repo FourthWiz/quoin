@@ -788,7 +788,7 @@ KNOWN_DEFERRED_ROSTERS: dict = {
         "files it names in the same test, and no other file duplicates it."
     ),
     "SHARE_CEILINGS@test_section0_provenance_guard.py": (
-        "prompt-audit-anthropic-skills stage-5 T-03 per-file §0-family share "
+        "per-file §0-family share "
         "ceiling roster: all 32 adapter skill names, used only to key the "
         "SHARE_CEILINGS dict for per-file percentage-share assertions "
         "(measured §0-family line share + a flat headroom). Same shape as "
@@ -798,7 +798,7 @@ KNOWN_DEFERRED_ROSTERS: dict = {
         "file — not a candidate for RG-TESTROSTER cross-file agreement."
     ),
     "DENSITY_EXCLUDED_BELOW_FLOOR@test_section0_provenance_guard.py": (
-        "prompt-audit-anthropic-skills stage-5 T-06 pressure-density roster: "
+        "pressure-density roster: "
         "the 18 manifest-33 files measuring below DENSITY_MATERIALITY_FLOOR "
         "(5 caps tokens), the complement of the DENSITY_CEILINGS dict's 15 "
         "keys. No skills.json field distinguishes 'below the density "

@@ -87,43 +87,42 @@ SECTION0_SKILLS = [
 # authorized marker/residual/slim exceptions above are one-time, 2026-08-02
 # only — do not hand-raise a ceiling to "fix" a future failure).
 CEILINGS = {
-    "skill:capture_insight": 13196,  # S-4: post-description-trim 11996 * 1.10, monotonic vs prior 13396  S-5 ratchet: CANDIDATE-no-op (measured 11996 B, candidate 13196 B == prior ceiling 13196 B; unchanged).
-    "skill:checkpoint": 77492,  # S-4: post-description-trim 70447 * 1.10, monotonic vs prior 77901  S-5 ratchet: HOLD (measured 72815 B, candidate 80097 B > prior ceiling 77492 B; unchanged).
-    "skill:cleanup": 19157,  # S-4: post-description-trim 17415 * 1.10, monotonic vs prior 19388  S-5 ratchet: HOLD (measured 19107 B, candidate 21018 B > prior ceiling 19157 B; unchanged).
-    "skill:continue_work": 16019,  # S-4: post-description-trim 14562 * 1.10, monotonic vs prior 16077  S-5 ratchet: CANDIDATE-no-op (measured 14562 B, candidate 16019 B == prior ceiling 16019 B; unchanged).
-    "skill:cost_snapshot": 22204,  # S-4: HELD (D-12 monotonic) — candidate 20209*1.10=22230 > prior; file grew since 2026-08-02 derivation  S-5 ratchet: HOLD (measured 20209 B, candidate 22230 B > prior ceiling 22204 B; unchanged).
-    "skill:end_of_day": 49834,  # S-4: post-description-trim 45303 * 1.10, monotonic vs prior 50058  S-5 ratchet: CANDIDATE-no-op (measured 45303 B, candidate 49834 B == prior ceiling 49834 B; unchanged).
-    "skill:end_of_task": 55541,  # S-4: post-description-trim 50491 * 1.10, monotonic vs prior 55771  S-5 ratchet: HOLD (measured 53393 B, candidate 58733 B > prior ceiling 55541 B; unchanged).
-    "skill:expand": 20921,  # S-4: post-description-trim 19019 * 1.10, monotonic vs prior 21229  S-5 ratchet: CANDIDATE-no-op (measured 19019 B, candidate 20921 B == prior ceiling 20921 B; unchanged).
-    "skill:gate": 61580,  # S-4: post-description-trim 55981 * 1.10, monotonic vs prior 62430  S-5 ratchet: HOLD (measured 59458 B, candidate 65404 B > prior ceiling 61580 B; unchanged).
-    "skill:implement": 54414,  # S-4: post-description-trim 49467 * 1.10, monotonic vs prior 54715  S-5 ratchet: HOLD (measured 52096 B, candidate 57306 B > prior ceiling 54414 B; unchanged).
-    "skill:next_steps": 12998,  # R: post-slim 11914 * 1.10  S-5 ratchet: APPLY (measured 11816 B, candidate 12998 B <= prior ceiling 13106 B; only strict decrease in the whole task).
-    "skill:pr": 20850,  # ratchet: check-4 pathspec-narrowing fix grew the file  S-5 ratchet: HOLD (measured 20818 B, candidate 22900 B > prior ceiling 20850 B; unchanged).
+    "skill:capture_insight": 13196,  # post-description-trim 11996 * 1.10, monotonic vs prior 13396 Re-checked, no change (measured 11996 B, candidate 13196 B == prior ceiling 13196 B; unchanged).
+    "skill:checkpoint": 77492,  # post-description-trim 70447 * 1.10, monotonic vs prior 77901 Re-checked and held (measured 72815 B, candidate 80097 B > prior ceiling 77492 B; unchanged).
+    "skill:cleanup": 19157,  # post-description-trim 17415 * 1.10, monotonic vs prior 19388 Re-checked and held (measured 19107 B, candidate 21018 B > prior ceiling 19157 B; unchanged).
+    "skill:continue_work": 16019,  # post-description-trim 14562 * 1.10, monotonic vs prior 16077 Re-checked, no change (measured 14562 B, candidate 16019 B == prior ceiling 16019 B; unchanged).
+    "skill:cost_snapshot": 22204,  # held (this ratchet only ever tightens, never loosens) — candidate 20209*1.10=22230 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 20209 B, candidate 22230 B > prior ceiling 22204 B; unchanged).
+    "skill:end_of_day": 49834,  # post-description-trim 45303 * 1.10, monotonic vs prior 50058 Re-checked, no change (measured 45303 B, candidate 49834 B == prior ceiling 49834 B; unchanged).
+    "skill:end_of_task": 55541,  # post-description-trim 50491 * 1.10, monotonic vs prior 55771 Re-checked and held (measured 53393 B, candidate 58733 B > prior ceiling 55541 B; unchanged).
+    "skill:expand": 20921,  # post-description-trim 19019 * 1.10, monotonic vs prior 21229 Re-checked, no change (measured 19019 B, candidate 20921 B == prior ceiling 20921 B; unchanged).
+    "skill:gate": 61580,  # post-description-trim 55981 * 1.10, monotonic vs prior 62430 Re-checked and held (measured 59458 B, candidate 65404 B > prior ceiling 61580 B; unchanged).
+    "skill:implement": 54414,  # post-description-trim 49467 * 1.10, monotonic vs prior 54715 Re-checked and held (measured 52096 B, candidate 57306 B > prior ceiling 54414 B; unchanged).
+    "skill:next_steps": 12998,  # post-slim 11914 * 1.10 Re-checked and applied (measured 11816 B, candidate 12998 B <= prior ceiling 13106 B; only strict decrease in the whole task).
+    "skill:pr": 20850,  # ratchet: a pathspec-narrowing fix grew the file since it was last tightened Re-checked and held (measured 20818 B, candidate 22900 B > prior ceiling 20850 B; unchanged).
     # to 20784 (untracked-entry exclusion, script/judge file union, untrusted-
     # candidate-text note); 20371 no longer holds headroom for that fix
-    "skill:revise-fast": 29330,  # S-4: post-description-trim 26663 * 1.10, monotonic vs prior 29521  S-5 ratchet: CANDIDATE-no-op (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
-    "skill:rollback": 23984,  # S-4: post-description-trim 21803 * 1.10, monotonic vs prior 24247  S-5 ratchet: CANDIDATE-no-op (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
-    "skill:sleep": 27739,  # S-4: HELD (D-12 monotonic) — candidate 25252*1.10=27778 > prior; file grew since 2026-08-02 derivation  S-5 ratchet: HOLD (measured 25252 B, candidate 27778 B > prior ceiling 27739 B; unchanged).
-    "skill:start_of_day": 28944,  # S-4: post-description-trim 26312 * 1.10, monotonic vs prior 29155  S-5 ratchet: CANDIDATE-no-op (measured 26312 B, candidate 28944 B == prior ceiling 28944 B; unchanged).
-    "skill:status": 9841,  # R: post-slim 8946 * 1.10  S-5 ratchet: CANDIDATE-no-op (measured 8946 B, candidate 9841 B == prior ceiling 9841 B; unchanged).
-    "skill:triage": 34356,  # S-4: post-description-trim 31232 * 1.10, monotonic vs prior 34422  S-5 ratchet: CANDIDATE-no-op (measured 31232 B, candidate 34356 B == prior ceiling 34356 B; unchanged).
-    "skill:weekly_review": 18633,  # S-4: post-description-trim 16939 * 1.10, monotonic vs prior 18803  S-5 ratchet: CANDIDATE-no-op (measured 16939 B, candidate 18633 B == prior ceiling 18633 B; unchanged).
-    "skill:workspace": 18958,  # S-4: post-description-trim 17234 * 1.10, monotonic vs prior 19239  S-5 ratchet: CANDIDATE-no-op (measured 17234 B, candidate 18958 B == prior ceiling 18958 B; unchanged).
-    "claude_md": 40726,  # T-12 ratchet: post-slim 37023 * 1.10
-    # S-5 ratchet (T-11): measured 39256 B, candidate 39256*1.10=43182 B > prior
-    # ceiling 40726 B -> HOLD. Net effect zero; recorded anyway per D-06 (a
-    # surface with a recorded no-op decision differs from one nobody examined).
+    "skill:revise-fast": 29330,  # post-description-trim 26663 * 1.10, monotonic vs prior 29521 Re-checked, no change (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
+    "skill:rollback": 23984,  # post-description-trim 21803 * 1.10, monotonic vs prior 24247 Re-checked, no change (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
+    "skill:sleep": 27739,  # held (this ratchet only ever tightens, never loosens) — candidate 25252*1.10=27778 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 25252 B, candidate 27778 B > prior ceiling 27739 B; unchanged).
+    "skill:start_of_day": 28944,  # post-description-trim 26312 * 1.10, monotonic vs prior 29155 Re-checked, no change (measured 26312 B, candidate 28944 B == prior ceiling 28944 B; unchanged).
+    "skill:status": 9841,  # post-slim 8946 * 1.10 Re-checked, no change (measured 8946 B, candidate 9841 B == prior ceiling 9841 B; unchanged).
+    "skill:triage": 34356,  # post-description-trim 31232 * 1.10, monotonic vs prior 34422 Re-checked, no change (measured 31232 B, candidate 34356 B == prior ceiling 34356 B; unchanged).
+    "skill:weekly_review": 18633,  # post-description-trim 16939 * 1.10, monotonic vs prior 18803 Re-checked, no change (measured 16939 B, candidate 18633 B == prior ceiling 18633 B; unchanged).
+    "skill:workspace": 18958,  # post-description-trim 17234 * 1.10, monotonic vs prior 19239 Re-checked, no change (measured 17234 B, candidate 18958 B == prior ceiling 18958 B; unchanged).
+    "claude_md": 40726,  # ratchet: post-slim 37023 * 1.10
+    # Re-checked: measured 39256 B, candidate 39256*1.10=43182 B > prior
+    # ceiling 40726 B -> held. Net effect zero; recorded anyway, since a
+    # surface with a recorded no-op decision differs from one nobody examined.
 
-    # IVG-164 stage 1 T-12: _target_path returns the repo SOURCE file for the
-    # "claude_md" key (QUOIN_DIR / "CLAUDE.md" — T-02 DOES change it, +59 B;
-    # this is not the deployed-file ceiling round 1's plan text once assumed).
-    # claude_md_slim ratchets the new generated CLAUDE.slim.md the same way:
-    # measured post-generation size 9,161 B (T-04, well-formed blank-line
-    # model) * 1.10 rounded up.
-    "claude_md_slim": 10078,  # R: post-generation 9161 * 1.10 rounded up
-    # S-5 ratchet (T-11): measured 9161 B, candidate 9161*1.10=10078 B (rounded
-    # up) == prior ceiling 10078 B -> CANDIDATE, but a no-op. Net effect zero;
-    # recorded anyway per D-06.
+    # _target_path returns the repo SOURCE file for the "claude_md" key
+    # (QUOIN_DIR / "CLAUDE.md" — this DOES change with edits to that file,
+    # not the deployed-file copy some earlier note once assumed).
+    # claude_md_slim ratchets the generated CLAUDE.slim.md the same way:
+    # measured post-generation size 9,161 B (well-formed blank-line model)
+    # * 1.10 rounded up.
+    "claude_md_slim": 10078,  # post-generation 9161 * 1.10 rounded up
+    # Re-checked: measured 9161 B, candidate 9161*1.10=10078 B (rounded up)
+    # == prior ceiling 10078 B -> unchanged. Net effect zero; recorded anyway.
 }
 
 
