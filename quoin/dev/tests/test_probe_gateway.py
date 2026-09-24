@@ -47,15 +47,21 @@ def _nonce_factory():
     return _next
 
 
-def _run(server, model, tmp_path, extra_headers=None, active_error_checks=(), declared_context_limit=None, capsys=None):
+def _run(server, model, tmp_path, extra_headers=None, active_error_checks=(), declared_context_limit=None, capsys=None, timeout=2.0):
+    return _run_against_url(server.base_url, model, tmp_path, extra_headers=extra_headers,
+                             active_error_checks=active_error_checks, declared_context_limit=declared_context_limit,
+                             timeout=timeout)
+
+
+def _run_against_url(base_url, model, tmp_path, extra_headers=None, active_error_checks=(), declared_context_limit=None, timeout=2.0):
     out = str(tmp_path / "record.json")
     config = probe.ProbeConfig(
-        base_url=server.base_url,
+        base_url=base_url,
         model=model,
         credential_env="QUOIN_PROBE_TEST_KEY",
         provider="fake",
         output=out,
-        timeout=2.0,
+        timeout=timeout,
         active_error_checks=tuple(active_error_checks),
         declared_context_limit=declared_context_limit,
     )
@@ -92,6 +98,24 @@ def test_usage_omitted_on_step1_gives_unknown_not_unsupported(tmp_path, server):
     code, record = _run(server, "default_ok", tmp_path, extra_headers={"step1": {"X-Fake-Scenario": "usage_omitted"}})
     assert code == 0
     assert record["capabilities"]["usage_reporting"]["status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "model,expected_capability",
+    [
+        ("auth_401", "text_generation"),
+        ("rate_limited_429", "text_generation"),
+        ("server_error_503", "text_generation"),
+    ],
+)
+def test_inconclusive_failure_gives_unknown_not_unsupported(tmp_path, server, model, expected_capability):
+    # A 401/429/5xx on step 1 means the step could not run, not that the
+    # gateway lacks the capability — a maintainer must never read this as
+    # evidence against the gateway (see field_status).
+    code, record = _run(server, model, tmp_path)
+    assert code == 2
+    assert record["capabilities"][expected_capability]["status"] == "unknown"
+    assert record["capabilities"][expected_capability]["status"] != "unsupported"
 
 
 @pytest.mark.parametrize(
@@ -159,6 +183,70 @@ def test_tool_result_404_steered_step2(tmp_path, server):
     assert code == 1
     diag_codes = [d["code"] for d in record["diagnostics"]]
     assert "tool_result_rejected" in diag_codes
+
+
+def test_stream_truncated_gives_stream_interrupted(tmp_path, server, capsys):
+    code, record = _run(server, "default_ok", tmp_path, extra_headers={"step3": {"X-Fake-Scenario": "stream_truncated"}})
+    assert code == 1
+    diag_codes = [d["code"] for d in record["diagnostics"]]
+    assert "stream_interrupted" in diag_codes
+    captured = capsys.readouterr()
+    assert helpers.SEEDED_SECRET not in captured.out
+    assert helpers.SEEDED_SECRET not in captured.err
+
+
+def test_stream_stall_gives_stream_interrupted_not_timeout(tmp_path, server, capsys):
+    code, record = _run(
+        server, "default_ok", tmp_path,
+        extra_headers={"step3": {"X-Fake-Scenario": "stream_stall"}},
+        timeout=0.5,
+    )
+    assert code == 1
+    diag_codes = [d["code"] for d in record["diagnostics"]]
+    assert "stream_interrupted" in diag_codes
+    assert "timeout" not in diag_codes
+    captured = capsys.readouterr()
+    assert helpers.SEEDED_SECRET not in captured.out
+    assert helpers.SEEDED_SECRET not in captured.err
+
+
+def test_connection_refused_gives_connection_failed(tmp_path, capsys):
+    port = helpers.bind_closed_port()
+    code, record = _run_against_url("http://127.0.0.1:%d/v1" % (port,), "any_model", tmp_path)
+    assert code == 2
+    diag_codes = [d["code"] for d in record["diagnostics"]]
+    assert "connection_failed" in diag_codes
+    captured = capsys.readouterr()
+    assert helpers.SEEDED_SECRET not in captured.out
+    assert helpers.SEEDED_SECRET not in captured.err
+
+
+def test_tls_handshake_failure_gives_tls_failed(tmp_path, capsys):
+    listener = helpers.start_tls_failure_listener()
+    try:
+        code, record = _run_against_url("https://127.0.0.1:%d/v1" % (listener.port,), "any_model", tmp_path, timeout=2.0)
+    finally:
+        listener.stop()
+    assert code == 2
+    diag_codes = [d["code"] for d in record["diagnostics"]]
+    assert "tls_failed" in diag_codes
+    captured = capsys.readouterr()
+    assert helpers.SEEDED_SECRET not in captured.out
+    assert helpers.SEEDED_SECRET not in captured.err
+
+
+def test_accept_and_hang_gives_timeout(tmp_path, capsys):
+    listener = helpers.start_hang_listener()
+    try:
+        code, record = _run_against_url("http://127.0.0.1:%d/v1" % (listener.port,), "any_model", tmp_path, timeout=0.5)
+    finally:
+        listener.stop()
+    assert code == 2
+    diag_codes = [d["code"] for d in record["diagnostics"]]
+    assert "timeout" in diag_codes
+    captured = capsys.readouterr()
+    assert helpers.SEEDED_SECRET not in captured.out
+    assert helpers.SEEDED_SECRET not in captured.err
 
 
 def test_echo_secret_in_error_never_leaks(tmp_path, server, capsys):
@@ -231,9 +319,46 @@ def test_matches_model_not_found_table():
     assert probe.matches_model_not_found(Err(message="Unknown model"))
     assert probe.matches_model_not_found(Err(message="The model 'x/y:z' does not exist"))
     assert probe.matches_model_not_found(Err(message="no such model"))
+    assert probe.matches_model_not_found(Err(message="model `openrouter/x-y:z` not found"))
     assert not probe.matches_model_not_found(Err(message="model X: tool_choice auto not supported"))
     assert not probe.matches_model_not_found(Err(message="model does not support tools"))
     assert not probe.matches_model_not_found(Err(message="tools not available for this model"))
+
+
+def test_classification_non_http_reply_before_headers():
+    import http.client
+
+    for exc in (http.client.BadStatusLine("garbage"), http.client.LineTooLong("status line")):
+        diag = probe.classify_exception(
+            exc, after_headers=False, is_tool_result_request=False, has_tools=False,
+            step1_passed=False, now=NOW, secrets_tuple=(),
+        )
+        assert diag.code == "connection_failed"
+        assert diag.detail == "non_http_reply"
+
+
+def test_classification_plain_value_error_after_headers():
+    diag = probe.classify_exception(
+        ValueError("malformed chunk"), after_headers=True, is_tool_result_request=False, has_tools=True,
+        step1_passed=True, now=NOW, secrets_tuple=(),
+    )
+    assert diag.code == "invalid_response"
+
+
+def test_classification_socket_timeout_before_and_after_headers():
+    import socket as _socket
+
+    before = probe.classify_exception(
+        _socket.timeout("timed out"), after_headers=False, is_tool_result_request=False, has_tools=False,
+        step1_passed=False, now=NOW, secrets_tuple=(),
+    )
+    assert before.code == "timeout"
+
+    after = probe.classify_exception(
+        _socket.timeout("timed out"), after_headers=True, is_tool_result_request=False, has_tools=True,
+        step1_passed=True, now=NOW, secrets_tuple=(),
+    )
+    assert after.code == "stream_interrupted"
 
 
 def test_parse_retry_after_variants():
@@ -284,15 +409,40 @@ def test_read_error_body_redacts_json_and_non_json(monkeypatch):
     assert helpers.SEEDED_SECRET not in info2.message
 
 
-def test_config_missing_env_var(server, tmp_path):
+def test_config_missing_env_var(server, tmp_path, capsys):
+    out = tmp_path / "r.json"
     code = probe.main(
         argv=[
             "--base-url", server.base_url, "--model", "text_ok", "--credential-env", "QUOIN_MISSING_VAR",
-            "--provider", "fake", "--output", str(tmp_path / "r.json"), "--timeout", "2",
+            "--provider", "fake", "--output", str(out), "--timeout", "2",
         ],
         env={},
     )
     assert code == 2
+    captured = capsys.readouterr()
+    # A config refusal must never disappear as a silent exit 2 — the user
+    # needs to see why the run was refused and which variable is at fault.
+    assert "config_error" in captured.err
+    assert "QUOIN_MISSING_VAR" in captured.err
+    record = json.loads(out.read_text())
+    assert record["verdict"]["status"] == "could_not_run"
+    assert record["diagnostics"][0]["code"] == "config_error"
+
+
+def test_config_bad_base_url_surfaces_diagnostic(tmp_path, capsys):
+    out = tmp_path / "r.json"
+    code = probe.main(
+        argv=[
+            "--base-url", "ftp://example.invalid/v1", "--model", "m", "--credential-env", "QUOIN_PROBE_TEST_KEY",
+            "--provider", "fake", "--output", str(out), "--timeout", "2",
+        ],
+        env={"QUOIN_PROBE_TEST_KEY": helpers.SEEDED_SECRET},
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "config_error" in captured.err
+    record = json.loads(out.read_text())
+    assert record["diagnostics"][0]["code"] == "config_error"
 
 
 def test_config_userinfo_in_url_rejected(tmp_path):
@@ -311,6 +461,33 @@ def test_config_http_non_loopback_rejected():
 
 def test_endpoint_identity_drops_query_and_fragment():
     assert probe.endpoint_identity("https://host:9443/v1/chat?api_key=abc#frag") == "https://host:9443/v1/chat"
+
+
+def test_redact_stops_before_json_escaped_quote():
+    # A token immediately followed by a JSON-escaped closing quote (`\"`)
+    # must not have the backslash swallowed into the redaction — doing so
+    # would leave the quote unescaped and corrupt the surrounding JSON.
+    secret = helpers.SEEDED_SECRET
+    payload = json.dumps({"d": 'x "Authorization: Bearer %s" z' % (secret,)})
+    redacted = probe.redact(payload, (secret,))
+    json.loads(redacted)  # must still parse
+    assert secret not in redacted
+
+
+def test_write_record_survives_escaped_quote_after_bearer(tmp_path):
+    secret = helpers.SEEDED_SECRET
+    record = {
+        "schema": probe.RECORD_SCHEMA,
+        "schema_version": 1,
+        "verdict": {"status": "could_not_run", "summary": 'x "Authorization: Bearer %s" z' % (secret,), "blocking_step": None},
+        "diagnostics": [],
+    }
+    out = str(tmp_path / "record.json")
+    assert probe.write_record(record, out, (secret,)) is True
+    text = open(out, "r", encoding="utf-8").read()
+    json.loads(text)  # must still be valid JSON, not the minimal fallback
+    assert "diagnostics_note" not in text
+    assert secret not in text
 
 
 def test_redact_covers_repr_and_str():
@@ -341,19 +518,100 @@ def test_use_env_proxy_true_routes_through_env_proxy(tmp_path, server, monkeypat
     assert record["diagnostics"][0]["code"] == "connection_failed"
 
 
+def _step1_checks(record):
+    for step in record["steps"]:
+        if step["name"] == "auth_and_text":
+            return step["checks"]
+    raise AssertionError("auth_and_text step missing from record")
+
+
 def test_step4_invalid_token_live_check(tmp_path, server):
     code, record = _run(server, "default_ok", tmp_path, active_error_checks=("invalid-token",))
     assert code == 0
+    checks = {c["name"]: c for c in _step1_checks(record)}
+    assert checks["invalid_token"]["ran_live"] is True
+    assert checks["invalid_token"]["result"] == "pass"
+    assert checks["context_overflow"]["ran_live"] is False
+
+
+_CONTEXT_OVERFLOW_STEP4_HEADERS = {"step4_context_overflow": {"X-Fake-Scenario": "context_overflow"}}
 
 
 def test_step4_context_overflow_live_check(tmp_path, server):
     code, record = _run(
         server, "default_ok", tmp_path,
-        extra_headers=None,
+        extra_headers=_CONTEXT_OVERFLOW_STEP4_HEADERS,
         active_error_checks=("context-overflow",),
         declared_context_limit=1000,
     )
     assert code == 0
+    checks = {c["name"]: c for c in _step1_checks(record)}
+    assert checks["context_overflow"]["ran_live"] is True
+    assert checks["context_overflow"]["result"] == "pass"
+    assert checks["invalid_token"]["ran_live"] is False
+
+
+def test_step4_both_checks_together(tmp_path, server):
+    code, record = _run(
+        server, "default_ok", tmp_path,
+        extra_headers=_CONTEXT_OVERFLOW_STEP4_HEADERS,
+        active_error_checks=("invalid-token", "context-overflow"),
+        declared_context_limit=1000,
+    )
+    assert code == 0
+    checks = {c["name"]: c for c in _step1_checks(record)}
+    assert checks["invalid_token"]["ran_live"] is True
+    assert checks["context_overflow"]["ran_live"] is True
+
+
+def test_step4_without_active_checks_is_classifier_only(tmp_path, server):
+    code, record = _run(server, "default_ok", tmp_path)
+    assert code == 0
+    checks = {c["name"]: c for c in _step1_checks(record)}
+    assert checks["invalid_token"]["ran_live"] is False
+    assert checks["context_overflow"]["ran_live"] is False
+
+
+def _make_report(steps, observations=None, step4=None, verdict="qualified", blocking_step=None):
+    config = probe.ProbeConfig(base_url="https://example.invalid/v1", model="m", credential_env="X", provider="p")
+    ctx = probe.ProbeContext(
+        config=config, secret=probe._Secret("s"), secrets=("s",), opener=None,
+        now=NOW, nonce_factory=lambda: "nonce", observations=observations or [],
+    )
+    ctx.step4 = step4 if step4 is not None else {"invalid_token": None, "context_overflow": None}
+    return probe.ProbeReport(context=ctx, steps=steps, verdict=verdict, blocking_step=blocking_step)
+
+
+def test_build_capability_record_folds_step4_checks_into_step1():
+    steps = [
+        {"step": 1, "name": "auth_and_text", "result": "pass", "diagnostic": None},
+        {"step": 2, "name": "tool_round_trip", "result": "pass", "diagnostic": None},
+        {"step": 3, "name": "streaming", "result": "pass", "diagnostic": None},
+    ]
+    report = _make_report(steps, step4={"invalid_token": {"ran_live": True, "result": "pass"}, "context_overflow": None})
+    record = probe.build_capability_record(report)
+    checks = {c["name"]: c for c in _step1_checks(record)}
+    assert checks["invalid_token"] == {"name": "invalid_token", "ran_live": True, "result": "pass"}
+    assert checks["context_overflow"]["ran_live"] is False
+    assert checks["context_overflow"]["result"] == "not_run"
+
+
+def test_build_capability_record_folds_observations_into_matching_step():
+    steps = [
+        {"step": 1, "name": "auth_and_text", "result": "pass", "diagnostic": None},
+        {"step": 2, "name": "tool_round_trip", "result": "warn", "diagnostic": None},
+        {"step": 3, "name": "streaming", "result": "pass", "diagnostic": None},
+    ]
+    observations = [
+        {"step": 2, "code": "argument_fidelity_mismatch", "result": "warn", "detail": '{"text": "wrong"}'},
+        {"step": 3, "code": "nonce_miss", "detail": "some answer"},
+    ]
+    report = _make_report(steps, observations=observations)
+    record = probe.build_capability_record(report)
+    step2_checks = next(s["checks"] for s in record["steps"] if s["name"] == "tool_round_trip")
+    step3_checks = next(s["checks"] for s in record["steps"] if s["name"] == "streaming")
+    assert step2_checks == [{"name": "argument_fidelity_mismatch", "result": "warn", "detail": '{"text": "wrong"}'}]
+    assert step3_checks == [{"name": "nonce_miss", "result": "warn", "detail": "some answer"}]
 
 
 def test_fidelity_coupling_with_fixtures():
@@ -457,6 +715,27 @@ def test_subprocess_echo_secret_exit_2_and_redacted(server, tmp_path):
     assert helpers.SEEDED_SECRET not in result.stdout
     assert helpers.SEEDED_SECRET not in result.stderr
     assert helpers.SEEDED_SECRET not in out.read_text()
+
+
+def test_catch_all_prints_exception_type_only_never_the_message(tmp_path, capsys, monkeypatch):
+    secret = helpers.SEEDED_SECRET
+
+    def _boom(config, env, extra_headers=None, now=None, nonce_factory=None):
+        raise RuntimeError("unexpected failure leaking %s" % (secret,))
+
+    monkeypatch.setattr(probe, "execute", _boom)
+    code = probe.main(
+        argv=[
+            "--base-url", "https://example.invalid/v1", "--model", "m", "--credential-env", "QUOIN_PROBE_TEST_KEY",
+            "--provider", "fake", "--output", str(tmp_path / "r.json"), "--timeout", "2",
+        ],
+        env={"QUOIN_PROBE_TEST_KEY": secret},
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    assert secret not in captured.err
+    assert "RuntimeError" in captured.err
+    assert "unexpected failure leaking" not in captured.err
 
 
 def test_stage1_clean_content_over_shipped_files():
