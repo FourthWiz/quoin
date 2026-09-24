@@ -255,10 +255,16 @@ def test_parse_retry_after_type_error_path(monkeypatch):
 @pytest.mark.parametrize("secret", [helpers.SEEDED_SECRET, helpers.SEEDED_SECRET_ESCAPED])
 @pytest.mark.parametrize("pad", [280, 290, 295, 299])
 def test_clip_redacts_before_cutting_for_every_secret_form(secret, pad):
-    for form in helpers.secret_forms(secret):
+    all_forms = tuple(helpers.secret_forms(secret))
+    for form in all_forms:
         text = ("X" * pad) + form
-        clipped = probe.clip(text, (secret,), 300)
-        assert secret not in clipped
+        clipped = probe.clip(text, all_forms, 300)
+        # No substring of length >= 8 of the raw secret may survive, whether
+        # or not the whole secret straddles the cut (a partial prefix
+        # leaking is exactly what redact-before-cut is meant to prevent).
+        for length in range(8, len(secret) + 1):
+            for start in range(0, len(secret) - length + 1):
+                assert secret[start : start + length] not in clipped
 
 
 def test_read_error_body_redacts_json_and_non_json(monkeypatch):
