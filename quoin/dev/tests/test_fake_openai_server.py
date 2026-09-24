@@ -144,6 +144,7 @@ def test_expected_token_mismatch_records_false(server):
     with pytest.raises(urllib.error.HTTPError) as excinfo:
         urllib.request.urlopen(req, timeout=5)
     assert excinfo.value.code == 401
+    excinfo.value.close()
     record = server.snapshot_requests()[-1]
     assert record["auth_matches_expected"] is False
     assert helpers.SEEDED_SECRET not in repr(record)

@@ -131,8 +131,8 @@ def start_tls_failure_listener():
     """Accept one connection and write a fixed non-TLS banner, then close.
 
     The client's TLS handshake fails deterministically with ssl.SSLError,
-    because classification keys on the exception type, not message text
-    (D-14) — no certificate generation is needed.
+    because classification keys on the exception type, not message text —
+    no certificate generation is needed.
     """
 
     def _on_accept(conn, _stop_event):

@@ -68,7 +68,8 @@ def _run_against_url(base_url, model, tmp_path, extra_headers=None, active_error
     )
     env = {"QUOIN_PROBE_TEST_KEY": secret if secret is not None else helpers.SEEDED_SECRET}
     code = probe.execute(config, env, extra_headers=extra_headers, now=NOW, nonce_factory=_nonce_factory())
-    record = json.loads(open(out, "r", encoding="utf-8").read())
+    with open(out, "r", encoding="utf-8") as fh:
+        record = json.loads(fh.read())
     return code, record
 
 
@@ -445,6 +446,20 @@ def test_read_error_body_redacts_json_and_non_json(monkeypatch):
     assert helpers.SEEDED_SECRET not in info2.message
 
 
+def _assert_config_error_record_shape(record, provider, model):
+    # The stage-2 template indexes record["key"] and record["capabilities"]
+    # unconditionally, so a config-error record needs the same shape as a
+    # normal one: a populated key, all nine capabilities present (as
+    # "unknown", since nothing ran), and three explicitly skipped steps —
+    # never a minimal record with only verdict/diagnostics.
+    assert record["key"]["provider"] == provider
+    assert record["key"]["model_id"] == model
+    for field in probe.CAPABILITY_FIELDS:
+        assert record["capabilities"][field]["status"] == "unknown"
+    assert [s["name"] for s in record["steps"]] == ["auth_and_text", "tool_round_trip", "streaming"]
+    assert all(s["result"] == "skipped" for s in record["steps"])
+
+
 def test_config_missing_env_var(server, tmp_path, capsys):
     out = tmp_path / "r.json"
     code = probe.main(
@@ -463,6 +478,7 @@ def test_config_missing_env_var(server, tmp_path, capsys):
     record = json.loads(out.read_text())
     assert record["verdict"]["status"] == "could_not_run"
     assert record["diagnostics"][0]["code"] == "config_error"
+    _assert_config_error_record_shape(record, "fake", "text_ok")
 
 
 def test_config_bad_base_url_surfaces_diagnostic(tmp_path, capsys):
@@ -479,6 +495,41 @@ def test_config_bad_base_url_surfaces_diagnostic(tmp_path, capsys):
     assert "config_error" in captured.err
     record = json.loads(out.read_text())
     assert record["diagnostics"][0]["code"] == "config_error"
+    _assert_config_error_record_shape(record, "fake", "m")
+
+
+def test_unwritable_output_on_qualified_run_reports_config_error(tmp_path, server, capsys):
+    out = tmp_path / "missing-dir" / "r.json"
+    config = probe.ProbeConfig(
+        base_url=server.base_url, model="default_ok", credential_env="QUOIN_PROBE_TEST_KEY",
+        provider="fake", output=str(out), timeout=2.0,
+    )
+    code = probe.execute(
+        config, {"QUOIN_PROBE_TEST_KEY": helpers.SEEDED_SECRET}, now=NOW, nonce_factory=_nonce_factory(),
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    # A qualified run that cannot persist its record is the only artifact
+    # stage 2 consumes, so it must not also print a success verdict.
+    assert "qualified" not in captured.out
+    assert "config_error" in captured.err
+    assert "cannot write --output" in captured.err
+    assert not out.exists()
+
+
+def test_unwritable_output_on_config_error_also_reports_write_failure(tmp_path, capsys):
+    out = tmp_path / "missing-dir" / "r.json"
+    code = probe.main(
+        argv=[
+            "--base-url", "ftp://example.invalid/v1", "--model", "m", "--credential-env", "QUOIN_PROBE_TEST_KEY",
+            "--provider", "fake", "--output", str(out), "--timeout", "2",
+        ],
+        env={"QUOIN_PROBE_TEST_KEY": helpers.SEEDED_SECRET},
+    )
+    assert code == 2
+    captured = capsys.readouterr()
+    assert "cannot write --output" in captured.err
+    assert not out.exists()
 
 
 def test_config_userinfo_in_url_rejected(tmp_path):
@@ -698,6 +749,17 @@ def test_redact_stops_before_json_escaped_quote():
     assert secret not in redacted
 
 
+def test_redact_stops_before_json_escaped_quote_for_token_param():
+    # Same straddle risk as the Bearer case, but for the `token=`/`api_key=`
+    # pattern: a value immediately followed by a JSON-escaped closing quote
+    # must not have the backslash swallowed into the redaction.
+    secret = helpers.SEEDED_SECRET
+    payload = json.dumps({"d": 'x "token=%s" z' % (secret,)})
+    redacted = probe.redact(payload, (secret,))
+    json.loads(redacted)  # must still parse
+    assert secret not in redacted
+
+
 def test_write_record_survives_escaped_quote_after_bearer(tmp_path):
     secret = helpers.SEEDED_SECRET
     record = {
@@ -712,6 +774,23 @@ def test_write_record_survives_escaped_quote_after_bearer(tmp_path):
     json.loads(text)  # must still be valid JSON, not the minimal fallback
     assert "diagnostics_note" not in text
     assert secret not in text
+
+
+def test_write_record_returns_false_on_lone_surrogate_instead_of_crashing(tmp_path):
+    # A lone surrogate from a gateway error body (e.g. an unpaired \udXXX
+    # escape) raises UnicodeEncodeError from the UTF-8 file write, not
+    # OSError. write_record must report this as a failed write rather than
+    # let the exception escape and turn the whole run into an unhandled
+    # crash with no record and no verdict line.
+    record = {
+        "schema": probe.RECORD_SCHEMA,
+        "schema_version": 1,
+        "verdict": {"status": "could_not_run", "summary": "\ud800", "blocking_step": None},
+        "diagnostics": [],
+    }
+    out = str(tmp_path / "record.json")
+    assert probe.write_record(record, out, ()) is False
+    assert not os.path.exists(out)
 
 
 def test_redact_covers_repr_and_str():
@@ -815,9 +894,10 @@ def test_build_capability_record_folds_step4_checks_into_step1():
     report = _make_report(steps, step4={"invalid_token": {"ran_live": True, "result": "pass"}, "context_overflow": None})
     record = probe.build_capability_record(report)
     checks = {c["name"]: c for c in _step1_checks(record)}
-    assert checks["invalid_token"] == {"name": "invalid_token", "ran_live": True, "result": "pass"}
+    assert checks["invalid_token"] == {"name": "invalid_token", "ran_live": True, "result": "pass", "detail": None}
     assert checks["context_overflow"]["ran_live"] is False
-    assert checks["context_overflow"]["result"] == "not_run"
+    assert checks["context_overflow"]["result"] == "classifier_only"
+    assert checks["context_overflow"]["detail"] == "not enabled via --active-error-checks"
 
 
 def test_build_capability_record_folds_observations_into_matching_step():
@@ -828,14 +908,14 @@ def test_build_capability_record_folds_observations_into_matching_step():
     ]
     observations = [
         {"step": 2, "code": "argument_fidelity_mismatch", "result": "warn", "detail": '{"text": "wrong"}'},
-        {"step": 3, "code": "nonce_miss", "detail": "some answer"},
+        {"step": 3, "code": "nonce_miss", "result": "fail", "detail": "some answer"},
     ]
     report = _make_report(steps, observations=observations)
     record = probe.build_capability_record(report)
     step2_checks = next(s["checks"] for s in record["steps"] if s["name"] == "tool_round_trip")
     step3_checks = next(s["checks"] for s in record["steps"] if s["name"] == "streaming")
     assert step2_checks == [{"name": "argument_fidelity_mismatch", "result": "warn", "detail": '{"text": "wrong"}'}]
-    assert step3_checks == [{"name": "nonce_miss", "result": "warn", "detail": "some answer"}]
+    assert step3_checks == [{"name": "nonce_miss", "result": "fail", "detail": "some answer"}]
 
 
 def test_fidelity_coupling_with_fixtures():
