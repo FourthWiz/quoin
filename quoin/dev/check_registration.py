@@ -787,6 +787,28 @@ KNOWN_DEFERRED_ROSTERS: dict = {
         "backs it, it is read directly against the five adapter SKILL.md "
         "files it names in the same test, and no other file duplicates it."
     ),
+    "SHARE_CEILINGS@test_section0_provenance_guard.py": (
+        "prompt-audit-anthropic-skills stage-5 T-03 per-file §0-family share "
+        "ceiling roster: all 32 adapter skill names, used only to key the "
+        "SHARE_CEILINGS dict for per-file percentage-share assertions "
+        "(measured §0-family line share + a flat headroom). Same shape as "
+        "SECTION0_SKILLS@test_footprint_ceilings.py above — no skills.json "
+        "field distinguishes it, editorial, single-file, self-guarded by "
+        "test_share_ceilings_key_set_matches_adapter_skills in the same "
+        "file — not a candidate for RG-TESTROSTER cross-file agreement."
+    ),
+    "DENSITY_EXCLUDED_BELOW_FLOOR@test_section0_provenance_guard.py": (
+        "prompt-audit-anthropic-skills stage-5 T-06 pressure-density roster: "
+        "the 18 manifest-33 files measuring below DENSITY_MATERIALITY_FLOOR "
+        "(5 caps tokens), the complement of the DENSITY_CEILINGS dict's 15 "
+        "keys. No skills.json field distinguishes 'below the density "
+        "materiality floor', editorial, single-file, self-guarded by "
+        "test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly "
+        "in the same file — not a candidate for RG-TESTROSTER cross-file "
+        "agreement. (DENSITY_CEILINGS itself is not discovered by this "
+        "census: it also carries the non-skill key 'claude_md', so it fails "
+        "the census's members-subset-of-CANONICAL_SKILLS filter.)"
+    ),
 }
 
 _ALLCAPS_RE = None  # populated lazily to avoid import cost at module load
