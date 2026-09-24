@@ -757,6 +757,34 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/README.md",
         "quoin/dev/tests/test_probe_gateway.py",
     ),
+    (
+        "quoin/adapters/opencode/compatibility.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/decisions.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/README.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/README.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/README.md",
+        "quoin/dev/tests/test_runtime_portability_docs.py",
+    ),
+    (
+        "quoin/docs/runtime-portability-status.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/docs/runtime-portability-status.md",
+        "quoin/dev/tests/test_runtime_portability_docs.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

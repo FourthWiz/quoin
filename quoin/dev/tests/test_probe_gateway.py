@@ -529,6 +529,7 @@ def test_unwritable_output_on_config_error_also_reports_write_failure(tmp_path, 
     assert code == 2
     captured = capsys.readouterr()
     assert "cannot write --output" in captured.err
+    assert "config_error" in captured.err
     assert not out.exists()
 
 
@@ -968,7 +969,9 @@ def test_affected_tests_self_check():
         },
         "quoin/adapters/opencode/probe_gateway.py": {"test_probe_gateway.py"},
         "quoin/adapters/opencode/fake_openai_server.py": {"test_fake_openai_server.py"},
-        "quoin/adapters/opencode/README.md": {"test_probe_gateway.py"},
+        "quoin/adapters/opencode/README.md": {"test_probe_gateway.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/compatibility.md": {"test_opencode_docs.py"},
+        "quoin/adapters/opencode/decisions.md": {"test_opencode_docs.py"},
         "pyproject.toml": {"test_probe_gateway.py"},
     }
     for path, expected in per_file_expected.items():
@@ -977,6 +980,47 @@ def test_affected_tests_self_check():
         assert not ignored, (path, ignored)
         selector_names = {os.path.basename(s) for s in selectors}
         assert expected <= selector_names, (path, expected, selector_names)
+
+    # Every file actually shipped under the opencode adapter tree must have a
+    # selector row for itself — a fixed dict here (unlike the tree walk this
+    # asserts against) would silently stay green after a new file is added
+    # with no row, so the check walks the real tree instead of trusting the
+    # dict above to be exhaustive.
+    tracked = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "quoin/adapters/opencode"],
+        cwd=str(repo_root), capture_output=True, text=True, timeout=10, check=True,
+    ).stdout.splitlines()
+    tracked = [p for p in tracked if p]
+    if not tracked:
+        for p in (repo_root / "quoin" / "adapters" / "opencode").rglob("*"):
+            if p.is_dir():
+                continue
+            rel = p.relative_to(repo_root).as_posix()
+            parts = rel.split("/")
+            if any(part.startswith(".") for part in parts) or "__pycache__" in parts:
+                continue
+            tracked.append(rel)
+    assert tracked, "no shipped files found under quoin/adapters/opencode"
+    for path in tracked:
+        assert path in per_file_expected, (
+            "%s is shipped but has no selector row in per_file_expected" % path
+        )
+
+
+def test_shared_docs_select_both_opencode_and_portability_tests():
+    repo_root = helpers.OPENCODE_DIR.parent.parent.parent
+    sys.path.insert(0, str(helpers.OPENCODE_DIR.parent.parent / "core" / "scripts"))
+    import affected_tests  # type: ignore
+
+    for path in ("quoin/adapters/README.md", "quoin/docs/runtime-portability-status.md"):
+        selectors, unmatched, ignored = affected_tests.map_changed_to_tests([path], repo_root)
+        assert not unmatched, (path, unmatched)
+        assert not ignored, (path, ignored)
+        selector_names = {os.path.basename(s) for s in selectors}
+        assert {"test_opencode_docs.py", "test_runtime_portability_docs.py"} <= selector_names, (
+            path,
+            selector_names,
+        )
 
 
 def test_subprocess_default_ok_exit_0(server, tmp_path):
