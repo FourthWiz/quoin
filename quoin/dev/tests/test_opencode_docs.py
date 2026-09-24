@@ -172,7 +172,7 @@ def _versioned_docs_ok(evidence, pinned_major):
 
 def _command_span_ok(evidence, pinned_tuple):
     version_str = "%d.%d.%d" % pinned_tuple
-    if version_str not in evidence:
+    if not re.search(r"(?<![\d.])" + re.escape(version_str) + r"(?![\d.])", evidence):
         return False
     return re.search(r"`opencode [^`]+`", evidence) is not None
 
@@ -184,7 +184,7 @@ def claim_row_ok(status, evidence, pinned_tuple, owner, repo):
             or _versioned_docs_ok(evidence, pinned_tuple[0])
             or _command_span_ok(evidence, pinned_tuple)
         )
-    return bool(re.match(r"^unverified\s*(—|-)\s*\S", status))
+    return bool(re.match(r"^unverified\s*(?:—|\s-\s)\s*\S", status))
 
 
 def _opencode_status_section():

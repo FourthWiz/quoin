@@ -986,11 +986,14 @@ def test_affected_tests_self_check():
     # asserts against) would silently stay green after a new file is added
     # with no row, so the check walks the real tree instead of trusting the
     # dict above to be exhaustive.
-    tracked = subprocess.run(
-        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "quoin/adapters/opencode"],
-        cwd=str(repo_root), capture_output=True, text=True, timeout=10, check=True,
-    ).stdout.splitlines()
-    tracked = [p for p in tracked if p]
+    try:
+        tracked = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "quoin/adapters/opencode"],
+            cwd=str(repo_root), capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.splitlines()
+        tracked = [p for p in tracked if p]
+    except (subprocess.CalledProcessError, OSError, subprocess.TimeoutExpired):
+        tracked = []
     if not tracked:
         for p in (repo_root / "quoin" / "adapters" / "opencode").rglob("*"):
             if p.is_dir():
