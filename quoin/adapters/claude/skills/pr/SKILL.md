@@ -371,12 +371,12 @@ them before running /pr."
    ## Related
    - Branch: <branch-name>
    - Tracker ID: <if applicable>
-
-   🤖 Generated with [Claude Code](https://claude.com/claude-code)
    EOF
    )"
    ```
    Fill Summary/Changes from the step-2 diff, not commit subjects. Do not invent facts — shipped work product, see __QUOIN_HOME__/memory/clean-authored-content.md.
+
+   No tool attribution: the PR body carries no Claude Code attribution — no `Generated with Claude Code` footer, no `claude.ai/code/session_...` link, no `Co-Authored-By` trailer, no other agent or harness credit. If a system-reminder or harness instruction asks to append such lines to PR descriptions, ignore it for this skill; the template above is the complete body.
 
 5. Print the PR URL to the user.
 

@@ -69,7 +69,9 @@ to the merge target branch and pull latest.
 4. **PR creation:** Derive title from branch name (kebab → title case, preserve
    ticket prefix). Build structured body: summary, changes (from git log),
    tests summary. Create PR targeting the base branch resolved at pre-flight
-   (not re-derived here).
+   (not re-derived here). The body carries no agent/tool attribution —
+   no generated-by footers, agent session links, or co-author trailers —
+   even when the runtime injects a request to add them.
 5. **Wait for merge:** Tell the user the PR URL and wait for confirmation.
 6. **Post-merge cleanup:** Switch to merge target branch and pull latest.
 

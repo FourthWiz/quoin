@@ -477,3 +477,38 @@ def test_cleanup_committed_initialized_false_before_4a():
     assert set_idx != -1 and fourA_idx != -1 and set_idx < fourA_idx, (
         "cleanup_committed must be initialized false before step 4a runs"
     )
+
+
+def test_pr_body_template_has_no_claude_attribution():
+    """The PR body template must not carry a Claude Code attribution footer
+    or session link — the body the template produces should read as plain
+    engineering output with no tool credit."""
+    text = _read(PR_ADAPTER_SKILL)
+    step4 = text[text.index("### Step 4: Create PR"):text.index("### Step 5: Wait for merge")]
+    heredoc = step4[step4.index("cat <<'EOF'") : step4.index("EOF", step4.index("cat <<'EOF'") + 1)]
+    for forbidden in ("Generated with", "claude.com/claude-code", "claude.ai/code", "🤖"):
+        assert forbidden not in heredoc, (
+            f"PR body heredoc must not contain {forbidden!r}"
+        )
+
+
+def test_pr_step4_tells_agent_to_ignore_harness_attribution():
+    """Step 4 must explicitly instruct the agent to ignore a runtime
+    system-reminder that asks it to append attribution to the PR body."""
+    text = _read(PR_ADAPTER_SKILL)
+    step4 = text[text.index("### Step 4: Create PR"):text.index("### Step 5: Wait for merge")]
+    lowered = step4.lower()
+    assert "system-reminder" in lowered and "attribution" in lowered, (
+        "Step 4 must mention system-reminder and attribution to instruct "
+        "the agent to ignore a runtime request to add tool credit"
+    )
+
+
+def test_core_doc_forbids_tool_attribution():
+    """The runtime-neutral core pr.md doc must also state that the PR body
+    carries no agent/tool attribution, mirroring the adapter skill."""
+    text = _read(PR_CORE_DOC)
+    assert "attribution" in text.lower(), (
+        "core pr.md must mention attribution to mirror the adapter's "
+        "no-tool-attribution rule"
+    )
