@@ -41,6 +41,7 @@ this alongside, without touching the partition assertions above):
 """
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -635,3 +636,122 @@ def test_start_of_day_ceiling_is_span_based_not_heading_based():
         "this test."
     )
     assert abs(SHARE_CEILINGS["start_of_day"] - 32.2506) < 0.001
+
+
+# ═══════════ T-06: in-domain caps-density metric and per-file ceilings ══════
+# Architecture decision five's pressure-density metric, completed here:
+# per-file ceilings over the DOMAIN COMPLEMENT of the generated spans above
+# (so a generated block's own dispatch-machinery prose — which legitimately
+# uses MUST/NEVER/CRITICAL — never counts against a skill's hand-written
+# density), gated by a materiality floor so a near-zero-count file does not
+# get a ceiling that one legitimate new constraint blows through.
+#
+# Corpus-level result (arch open question one, D-05): "domination" means the
+# top two files hold >=50% of in-domain caps tokens. Measured on all four
+# report surfaces (manifest-33 corpus slice, the 57-file primary domain, the
+# 39-file secondary domain, and their union) — 28.34%, 29.62%, 16.31%,
+# 13.03% — every one well under 50%. Not dominated; the per-file half ships.
+# Full corpus-level figures for all four surfaces: pressure-density.md.
+
+CAPS_PATTERNS = [
+    ("MUST", r"MUST(?! NOT)"), ("ALWAYS", r"ALWAYS"), ("NEVER", r"NEVER"),
+    ("CRITICAL", r"CRITICAL"), ("MUST NOT", r"MUST NOT"), ("REQUIRED", r"REQUIRED"),
+    ("DO NOT", r"DO NOT"), ("IMPORTANT", r"IMPORTANT"),
+]
+
+DENSITY_MATERIALITY_FLOOR = 5  # caps tokens; below this, ratcheting is brittle (D-12)
+
+CLAUDE_MD = ADAPTER_DIR.parent.parent.parent / "CLAUDE.md"
+
+# 15 files at or above the materiality floor (measured, manifest-33 domain).
+# Ratchet-down-only from this first-measured baseline (mirrors the byte
+# ceilings' own "provisional = current size" starting convention).
+DENSITY_CEILINGS: dict[str, int] = {
+    "gate": 34,
+    "review": 19,
+    "run": 18,
+    "critic": 14,
+    "thorough_plan": 10,
+    "checkpoint": 9,
+    "architect": 8,
+    "security_review": 8,
+    "end_of_task": 7,
+    "revise": 7,
+    "revise-fast": 7,
+    "end_of_day": 6,
+    "plan": 6,
+    "implement": 5,
+    "claude_md": 5,
+}
+
+# The 18 excluded files, named explicitly (never silently absent from the
+# module) — every one measures below DENSITY_MATERIALITY_FLOOR.
+DENSITY_EXCLUDED_BELOW_FLOOR = {
+    "cleanup", "specify", "start_of_day", "discover", "enrich", "expand",
+    "init_workflow", "rollback", "workspace", "cost_snapshot", "sleep",
+    "capture_insight", "continue_work", "next_steps", "pr", "status",
+    "triage", "weekly_review",
+}
+
+
+def _in_domain_text(skill: str | None) -> str:
+    """Text of a manifest-33 member with its OWN generated §0-family spans
+    (if any) excised, mirroring derive/density_domains.py's gen_spans()."""
+    path = CLAUDE_MD if skill is None else ADAPTER_DIR / skill / "SKILL.md"
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    if skill is None:
+        return "".join(lines)  # CLAUDE.md carries no §0-family spans
+    drop: set[int] = set()
+    plain_lines = [l.rstrip("\n") for l in lines]
+    for sk, variant, start, end in _CENSUS_BLOCKS:
+        if sk != skill:
+            continue
+        if variant == "§0":
+            marker_i = next((i for i in range(start, end) if SECTION0_END_MARKER in plain_lines[i]), None)
+            span_end = (marker_i + 1) if marker_i is not None else end
+        else:
+            span_end = end
+        drop.update(range(start, span_end))
+    return "".join(l for i, l in enumerate(lines) if i not in drop)
+
+
+def _in_domain_caps_count(skill: str | None) -> int:
+    text = _in_domain_text(skill)
+    return sum(len(re.findall(pattern, text)) for _, pattern in CAPS_PATTERNS)
+
+
+MANIFEST_33 = sorted(p.parent.name for p in ADAPTER_FILES) + ["claude_md"]
+
+
+def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
+    covered = set(DENSITY_CEILINGS) | DENSITY_EXCLUDED_BELOW_FLOOR
+    assert covered == set(MANIFEST_33), (
+        f"DENSITY_CEILINGS + DENSITY_EXCLUDED_BELOW_FLOOR != the 33-file manifest "
+        f"(sym-diff {sorted(covered ^ set(MANIFEST_33))}) — every manifest-33 file "
+        "must be named in exactly one of the two sets, never silently absent."
+    )
+    assert len(DENSITY_CEILINGS) == 15
+    assert len(DENSITY_EXCLUDED_BELOW_FLOOR) == 18
+    assert sum(DENSITY_CEILINGS.values()) == 163
+
+
+def test_excluded_files_are_genuinely_below_materiality_floor():
+    for skill in DENSITY_EXCLUDED_BELOW_FLOOR:
+        count = _in_domain_caps_count(None if skill == "claude_md" else skill)
+        assert count < DENSITY_MATERIALITY_FLOOR, (
+            f"{skill} measures {count} in-domain caps tokens, which is >= the "
+            f"materiality floor ({DENSITY_MATERIALITY_FLOOR}) — it should have a "
+            "ceiling in DENSITY_CEILINGS instead of being excluded"
+        )
+
+
+@pytest.mark.parametrize("skill", sorted(DENSITY_CEILINGS))
+def test_file_within_density_ceiling(skill):
+    count = _in_domain_caps_count(None if skill == "claude_md" else skill)
+    ceiling = DENSITY_CEILINGS[skill]
+    assert count <= ceiling, (
+        f"{skill}'s in-domain caps-token count is {count}, exceeds ratchet-down-only "
+        f"ceiling {ceiling}. If a new MUST/NEVER/CRITICAL/etc. is a deliberate, "
+        "reviewed addition, re-seed DENSITY_CEILINGS[skill] to the new count in the "
+        "same hunk as the prose change — never relax the ceiling ahead of a change."
+    )
