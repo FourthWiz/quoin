@@ -395,7 +395,7 @@ def test_affected_tests_self_check():
 
     repo_root = helpers.OPENCODE_DIR.parent.parent.parent
 
-    # Each shipped file, checked in isolation (D-04): every one of them must
+    # Each shipped file, checked in isolation: every one of them must
     # select at least one opencode test on its own, with nothing unmatched
     # or ignored, so a change to just that file is never test-blind.
     per_file_expected = {
