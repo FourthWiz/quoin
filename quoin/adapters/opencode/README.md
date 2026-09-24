@@ -44,7 +44,9 @@ Other flags:
 - `--declared-context-limit` / `--declared-output-limit` — record a limit you
   already know from the gateway's documentation. These are recorded as
   declared, not observed — the probe does not verify them.
-- `--timeout` — per-request timeout in seconds (default 30).
+- `--timeout` — per-request timeout in seconds (default 30). For a streamed
+  response, this is one total budget for the whole stream, not a per-chunk
+  timeout.
 - `--active-error-checks` — optional, comma-separated (`invalid-token`,
   `context-overflow`). See the caution below before enabling these.
 

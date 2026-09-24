@@ -220,6 +220,18 @@ def endpoint_identity(url: str) -> str:
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
 
 
+def _safe_endpoint_identity(url: str):
+    # A config-error record may be built from a base URL that failed
+    # validation for a reason endpoint_identity cannot itself parse around
+    # (for example a non-numeric port, which raises ValueError on access).
+    # The record must still be written, so fall back to a null endpoint
+    # rather than losing the whole record to this one field.
+    try:
+        return endpoint_identity(url)
+    except Exception:
+        return None
+
+
 def redact_location(value: str) -> str:
     return endpoint_identity(value)
 
@@ -243,7 +255,7 @@ def redact(text: str, secrets_tuple) -> str:
     # consuming the backslash would leave the closing quote unescaped).
     out = re.sub(r'Authorization:[^\r\n"\\]*', "Authorization: <redacted>", out)
     out = re.sub(r'Bearer\s+[^\s"\'}\],\\]+', "Bearer <redacted>", out)
-    out = re.sub(r'(?i)(api[_-]?key|token)=[^&\s"\'}\],]+', r"\1=<redacted>", out)
+    out = re.sub(r'(?i)(api[_-]?key|token)=[^&\s"\'}\],\\]+', r"\1=<redacted>", out)
     return out
 
 
@@ -396,6 +408,8 @@ def classify_exception(
 ) -> Diagnostic:
     if isinstance(exc, urllib.error.HTTPError) and 300 <= exc.code < 400:
         location = exc.headers.get("Location") if exc.headers else None
+        with contextlib.suppress(Exception):
+            exc.close()
         return _make_diagnostic(
             "redirected", step=step, http_status=exc.code,
             detail=redact_location(location) if location else None,
@@ -720,7 +734,7 @@ def run_tool_round_trip(ctx: ProbeContext, stream: bool, step_key: str) -> StepR
     normalized_answer = " ".join(answer.split()).lower()
     normalized_nonce = " ".join(nonce.split()).lower()
     if normalized_nonce not in normalized_answer:
-        ctx.observations.append({"step": step, "code": "nonce_miss", "detail": clip(answer, ctx.secrets, 300)})
+        ctx.observations.append({"step": step, "code": "nonce_miss", "result": "fail", "detail": clip(answer, ctx.secrets, 300)})
         return StepResult("fail", diagnostic=_make_diagnostic("tool_result_ignored", step=step))
 
     return StepResult(
@@ -937,8 +951,8 @@ def run_step4(ctx: ProbeContext, config: ProbeConfig, env: dict) -> None:
         bad_secret = _Secret("quoin-probe-invalid-token")
         payload = {"model": config.model, "messages": [{"role": "user", "content": "hello"}], "stream": False}
         try:
-            _post(ctx.opener, config, bad_secret, payload, _extra(ctx, "step4_invalid_token"), stream=False)
-            passed = False
+            with _post(ctx.opener, config, bad_secret, payload, _extra(ctx, "step4_invalid_token"), stream=False):
+                passed = False
         except Exception as exc:
             diag = classify_exception(
                 exc, after_headers=False, is_tool_result_request=False, has_tools=False,
@@ -951,8 +965,8 @@ def run_step4(ctx: ProbeContext, config: ProbeConfig, env: dict) -> None:
         filler_len = min(4 * limit + 1024, 8 * 1024 * 1024)
         payload = {"model": config.model, "messages": [{"role": "user", "content": "x" * filler_len}], "stream": False}
         try:
-            _post(ctx.opener, config, ctx.secret, payload, _extra(ctx, "step4_context_overflow"), stream=False)
-            passed = False
+            with _post(ctx.opener, config, ctx.secret, payload, _extra(ctx, "step4_context_overflow"), stream=False):
+                passed = False
         except Exception as exc:
             diag = classify_exception(
                 exc, after_headers=False, is_tool_result_request=False, has_tools=False,
@@ -962,9 +976,16 @@ def run_step4(ctx: ProbeContext, config: ProbeConfig, env: dict) -> None:
         ctx.step4["context_overflow"] = {"ran_live": True, "result": "pass" if passed else "fail"}
 
 
-def build_capability_record(report: ProbeReport) -> dict:
-    config = report.context.config if report.context else None
-    now = report.context.now if report.context else datetime.datetime.now(datetime.timezone.utc)
+def build_capability_record(report: ProbeReport, config: ProbeConfig = None, now=None) -> dict:
+    # A report with no context (a config error, before any request is made)
+    # carries no config/now of its own; the caller passes the ProbeConfig
+    # and the run's `now` through explicitly so a config-error record still
+    # gets a real key section instead of an all-None one.
+    if report.context is not None:
+        config = report.context.config
+        now = report.context.now
+    else:
+        now = now or datetime.datetime.now(datetime.timezone.utc)
 
     def field_status(names):
         for entry in report.steps:
@@ -1048,7 +1069,8 @@ def build_capability_record(report: ProbeReport) -> dict:
                     {
                         "name": check_name,
                         "ran_live": bool(entry is not None),
-                        "result": entry["result"] if entry is not None else "not_run",
+                        "result": entry["result"] if entry is not None else "classifier_only",
+                        "detail": None if entry is not None else "not enabled via --active-error-checks",
                     }
                 )
 
@@ -1077,7 +1099,7 @@ def build_capability_record(report: ProbeReport) -> dict:
         "key": {
             "provider": config.provider if config else None,
             "model_id": config.model if config else None,
-            "endpoint": endpoint_identity(config.base_url) if config else None,
+            "endpoint": _safe_endpoint_identity(config.base_url) if config else None,
             "runtime": {"name": "opencode", "version": config.runtime_version if config else "unknown"},
             "probe_date": now.date().isoformat(),
         },
@@ -1132,7 +1154,13 @@ def write_record(record: dict, path: str, secrets_tuple) -> bool:
         os.replace(tmp_path, path)
         tmp_path = None
         return True
-    except OSError:
+    except (OSError, ValueError):
+        # A lone surrogate in a redacted error body (for example from an
+        # unpaired \udXXX escape in a gateway's JSON) raises
+        # UnicodeEncodeError, a ValueError subclass, from fh.write() rather
+        # than an OSError. Treat it the same as a write failure — the
+        # temp file cleanup below still runs, and the caller falls back to
+        # reporting no record rather than crashing the whole probe run.
         return False
     finally:
         if fd is not None:
@@ -1143,6 +1171,11 @@ def write_record(record: dict, path: str, secrets_tuple) -> bool:
                 os.remove(tmp_path)
 
 
+def _emit_unwritable_output_diagnostic(output_path: str, secrets_tuple) -> None:
+    diag = _make_diagnostic("config_error", message="cannot write --output %s" % (output_path,))
+    _emit(sys.stderr, "probe: %s: %s Next: %s" % (diag.code, diag.message, diag.next_action), secrets_tuple)
+
+
 def execute(config: ProbeConfig, env: dict, extra_headers=None, now=None, nonce_factory=None) -> int:
     secrets_tuple = ()
     try:
@@ -1151,13 +1184,29 @@ def execute(config: ProbeConfig, env: dict, extra_headers=None, now=None, nonce_
         diag = _make_diagnostic("config_error", message=str(exc))
         _emit(sys.stderr, "probe: %s: %s Next: %s" % (diag.code, diag.message, diag.next_action), secrets_tuple)
         if config.output:
-            record = {
-                "schema": RECORD_SCHEMA,
-                "schema_version": 1,
-                "verdict": {"status": "could_not_run", "summary": diag.message, "blocking_step": None},
-                "diagnostics": [{"code": diag.code, "message": diag.message, "next_action": diag.next_action}],
-            }
-            write_record(record, config.output, secrets_tuple)
+            # Steps never ran, so the record's key/capabilities must still be
+            # built from the config the user passed in, with all three steps
+            # marked skipped rather than reported as pass/fail/unknown.
+            skipped_steps = [
+                {"step": 1, "name": "auth_and_text", "result": "skipped", "diagnostic": None},
+                {"step": 2, "name": "tool_round_trip", "result": "skipped", "diagnostic": None},
+                {"step": 3, "name": "streaming", "result": "skipped", "diagnostic": None},
+            ]
+            config_error_report = ProbeReport(context=None, steps=skipped_steps, verdict="could_not_run", blocking_step=None)
+            record = build_capability_record(config_error_report, config=config, now=now)
+            record["verdict"]["summary"] = diag.message
+            record["diagnostics"].append(
+                {
+                    "code": diag.code,
+                    "message": diag.message,
+                    "next_action": diag.next_action,
+                    "http_status": None,
+                    "retry_after_seconds": None,
+                    "detail": None,
+                }
+            )
+            if not write_record(record, config.output, secrets_tuple):
+                _emit_unwritable_output_diagnostic(config.output, secrets_tuple)
         return EXIT_COULD_NOT_RUN
 
     if report.context is not None:
@@ -1173,7 +1222,12 @@ def execute(config: ProbeConfig, env: dict, extra_headers=None, now=None, nonce_
 
     record = build_capability_record(report)
     if config.output:
-        write_record(record, config.output, secrets_tuple)
+        if not write_record(record, config.output, secrets_tuple):
+            # The record is the only artifact a stage-2 consumer sees; a run
+            # that could not persist it must not also claim success on
+            # stdout, so report it as could-not-run instead.
+            _emit_unwritable_output_diagnostic(config.output, secrets_tuple)
+            return EXIT_COULD_NOT_RUN
 
     print(redact(report.verdict, secrets_tuple))
 
