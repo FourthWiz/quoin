@@ -60,6 +60,7 @@ class FakeProviderServer:
         default_scenario="default_ok",
         expected_token=None,
         host="127.0.0.1",
+        port=0,
     ):
         if host not in ("127.0.0.1", "localhost"):
             raise ValueError("FakeProviderServer only binds 127.0.0.1 or localhost, got %r" % (host,))
@@ -71,6 +72,7 @@ class FakeProviderServer:
         self._default_scenario = default_scenario
         self._expected_token = expected_token
         self._host = host
+        self._port = port
         self._lock = threading.Lock()
         self._requests = []
         self._httpd = None
@@ -92,7 +94,7 @@ class FakeProviderServer:
             def do_POST(self):
                 server._handle(self, "POST")
 
-        httpd = ThreadingHTTPServer((self._host, 0), Handler)
+        httpd = ThreadingHTTPServer((self._host, self._port), Handler)
         httpd.daemon_threads = True
         self._httpd = httpd
         thread = threading.Thread(target=httpd.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
@@ -136,7 +138,13 @@ class FakeProviderServer:
     def scenario_names(self) -> list:
         return sorted(self._scenarios.keys())
 
-    def _record(self, method, path, scenario, turn_index, body, headers, outcome):
+    # Above this many raw request bytes, the request log stores only the
+    # size, not the parsed body — the largest bodies here are the step-4
+    # context-overflow provocation (up to 8 MiB), and keeping that in the
+    # log means every snapshot_requests() deep-copies it right back out.
+    _MAX_RECORDED_BODY_BYTES = 64 * 1024
+
+    def _record(self, method, path, scenario, turn_index, body, headers, outcome, body_size=None):
         auth_value = None
         recorded_headers = {}
         for key, value in headers.items():
@@ -149,6 +157,10 @@ class FakeProviderServer:
         auth_matches_expected = None
         if self._expected_token is not None:
             auth_matches_expected = auth_value == ("Bearer " + self._expected_token)
+        if body_size is not None and body_size > self._MAX_RECORDED_BODY_BYTES:
+            stored_body = {"_truncated": True, "_size_bytes": body_size}
+        else:
+            stored_body = body
         with self._lock:
             self._requests.append(
                 {
@@ -156,7 +168,7 @@ class FakeProviderServer:
                     "path": path,
                     "scenario": scenario,
                     "turn_index": turn_index,
-                    "body": body,
+                    "body": stored_body,
                     "headers": recorded_headers,
                     "auth_present": auth_present,
                     "auth_matches_expected": auth_matches_expected,
@@ -198,11 +210,11 @@ class FakeProviderServer:
             else:
                 scenario_name = self._default_scenario
         if scenario_name not in self._scenarios:
-            self._record(method, path, scenario_name, None, request_body, headers, "ok")
+            self._record(method, path, scenario_name, None, request_body, headers, "ok", body_size=len(raw_body))
             self._write_json(handler, 400, {"error": {"code": "unknown_scenario"}})
             return
 
-        auth_value = self._record(method, path, scenario_name, None, request_body, headers, "ok")
+        auth_value = self._record(method, path, scenario_name, None, request_body, headers, "ok", body_size=len(raw_body))
         if self._expected_token is not None and auth_value != ("Bearer " + self._expected_token):
             self._write_json(handler, 401, {"error": {"code": "invalid_api_key", "message": "Invalid API key"}})
             return
@@ -296,7 +308,11 @@ class FakeProviderServer:
             if turn.get("match") is not None:
                 continue
             if turn_depth <= depth:
-                if best is None or turn_depth > best[1].get("depth", best[0]):
+                # `>=`, not `>`: among match-less turns tied at the same
+                # depth, the last one declared in the scenario wins, per
+                # the fallback rule (a later turn is meant to override an
+                # earlier default at the same depth, not lose to it).
+                if best is None or turn_depth >= best[1].get("depth", best[0]):
                     best = (idx, turn)
         if best is not None:
             return best
@@ -359,8 +375,19 @@ class FakeProviderServer:
                     }
                     handler.wfile.write(b"data: " + json.dumps(finish_envelope, ensure_ascii=False).encode("utf-8") + b"\n\n")
                     if turn.get("usage") is not None:
-                        usage_envelope = dict(finish_envelope)
-                        usage_envelope["usage"] = turn["usage"]
+                        # Real APIs send the trailing usage chunk with an
+                        # empty choices array and no finish_reason of its
+                        # own — finish_reason was already delivered above,
+                        # and repeating it here on a non-empty choice would
+                        # misrepresent the stream shape to the probe.
+                        usage_envelope = {
+                            "id": "chatcmpl-fake",
+                            "object": "chat.completion.chunk",
+                            "created": 0,
+                            "model": scenario_name,
+                            "choices": [],
+                            "usage": turn["usage"],
+                        }
                         handler.wfile.write(b"data: " + json.dumps(usage_envelope, ensure_ascii=False).encode("utf-8") + b"\n\n")
                     handler.wfile.write(b"data: [DONE]\n\n")
                     handler.wfile.flush()
@@ -442,6 +469,7 @@ def main(argv=None) -> int:
     server = FakeProviderServer(
         scenarios_path=args.scenarios_file,
         default_scenario=args.scenario,
+        port=args.port,
     )
     server.start()
     print(server.base_url)

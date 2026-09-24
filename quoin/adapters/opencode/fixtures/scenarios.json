@@ -105,6 +105,7 @@
         {
           "chunks": [
             {
+              "role": "assistant",
               "tool_calls": [
                 {
                   "function": {
@@ -112,7 +113,8 @@
                     "name": "quoin_probe_echo"
                   },
                   "id": "call_1",
-                  "index": 0
+                  "index": 0,
+                  "type": "function"
                 }
               ]
             },
@@ -701,6 +703,7 @@
         {
           "chunks": [
             {
+              "role": "assistant",
               "tool_calls": [
                 {
                   "function": {
@@ -708,7 +711,8 @@
                     "name": "quoin_probe_echo"
                   },
                   "id": "call_bad",
-                  "index": 0
+                  "index": 0,
+                  "type": "function"
                 }
               ]
             },
@@ -979,6 +983,7 @@
         {
           "chunks": [
             {
+              "role": "assistant",
               "tool_calls": [
                 {
                   "function": {
@@ -986,7 +991,8 @@
                     "name": "quoin_probe_echo"
                   },
                   "id": "call_1",
-                  "index": 0
+                  "index": 0,
+                  "type": "function"
                 }
               ]
             },
