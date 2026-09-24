@@ -1,4 +1,4 @@
-# OpenCode adapter (M0 qualification)
+# OpenCode adapter (qualification)
 
 This directory holds the tools used to decide whether a gateway and model are
 usable as an OpenCode agent backend, before any runtime integration exists.
@@ -44,14 +44,22 @@ Other flags:
 - `--declared-context-limit` / `--declared-output-limit` — record a limit you
   already know from the gateway's documentation. These are recorded as
   declared, not observed — the probe does not verify them.
-- `--timeout` — per-request timeout in seconds (default 30). For a streamed
-  response, this is one total budget for the whole stream, not a per-chunk
-  timeout.
+- `--timeout` — per-request timeout in seconds (default 30). Each request
+  phase — waiting for response headers, then reading the body or stream —
+  gets its own budget of `--timeout` seconds, so one request can take up to
+  about twice `--timeout` in the worst case. Every individual read also
+  carries a socket timeout, so a connection that goes silent mid-response is
+  never waited on indefinitely.
 - `--active-error-checks` — optional, comma-separated (`invalid-token`,
   `context-overflow`). See the caution below before enabling these.
 
 The probe never follows redirects, never retries a failed request, and never
 falls back to a different endpoint or model.
+
+**Caution:** `--base-url` must not carry a credential or tenant token in its
+path (userinfo, query strings and URL fragments are already dropped or
+rejected). The endpoint path is recorded in the capability record exactly as
+given, so anything sensitive placed there ends up on disk.
 
 ## Exit codes
 
@@ -69,6 +77,10 @@ tool-calling support, so none of them are reported as "not qualified" — a
 maintainer deciding whether to invest in an integration needs to be able to
 tell "this gateway doesn't support tools" apart from "I couldn't even reach
 it".
+
+On exit 2, the diagnostic is written to stderr and nothing is printed on
+stdout; a script driving this tool should key off the exit code or the
+written record's verdict status, not stdout content.
 
 ## Live error provocations (`--active-error-checks`)
 
@@ -97,6 +109,14 @@ parameters that some gateways reject outright — sending them would turn an
 untested feature into a false failure. The record is written whenever the
 output path is writable, on every exit code, and is redacted before being
 written to disk.
+
+## Status documents
+
+- `compatibility.md` — which upstream OpenCode release this adapter is
+  qualified against, and the per-claim verification status of that release's
+  documented behavior.
+- `decisions.md` — configuration choices that only a maintainer can make,
+  plus the empty template a real probe run's record gets pasted into.
 
 ## Using the fake server
 
