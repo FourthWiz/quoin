@@ -671,17 +671,23 @@ def run_tool_round_trip(ctx: ProbeContext, stream: bool, step_key: str) -> StepR
         ctx.observations.append({"step": step, "code": "nonce_miss", "detail": clip(answer, ctx.secrets, 300)})
         return StepResult("fail", diagnostic=_make_diagnostic("tool_result_ignored", step=step))
 
-    if stream:
-        cancel_result = _run_cancellation_check(ctx, step)
-        if cancel_result.result != "pass":
-            return cancel_result
-
     return StepResult(
         "pass" if fidelity_ok else "warn",
         tool_call_id=tool_call_id,
         arguments=arguments,
         fidelity_ok=fidelity_ok,
     )
+
+
+def run_step3(ctx: ProbeContext) -> StepResult:
+    """Streamed tool round trip, then the cancellation sub-check (once, not per iteration)."""
+    result = run_tool_round_trip(ctx, stream=True, step_key="step3")
+    if result.result == "fail":
+        return result
+    cancel_result = _run_cancellation_check(ctx, 3)
+    if cancel_result.result != "pass":
+        return cancel_result
+    return result
 
 
 def tool_calls_present(name) -> bool:
@@ -810,7 +816,7 @@ def run_probe(config: ProbeConfig, env: dict, now=None, nonce_factory=None, extr
     step_defs = [
         (1, "auth_and_text", lambda: run_step1(ctx)),
         (2, "tool_round_trip", lambda: run_tool_round_trip(ctx, stream=False, step_key="step2")),
-        (3, "streaming", lambda: run_tool_round_trip(ctx, stream=True, step_key="step3")),
+        (3, "streaming", lambda: run_step3(ctx)),
     ]
     steps = []
     blocking_step = None
