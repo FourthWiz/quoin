@@ -23,7 +23,9 @@ import sys
 from typing import Any
 
 import quoin.ccr_config as ccr_config
-from quoin.router import DEFAULT_MODELS, _verify_ccr, quoin_models_path
+import quoin.ccr_store as ccr_store
+import quoin.router as router
+from quoin.router import DEFAULT_MODELS, quoin_models_path
 
 # ── Module-level constants ─────────────────────────────────────────────────────
 
@@ -31,24 +33,31 @@ TIER_KEYS = ("haiku", "sonnet", "opus")
 
 # Friendly aliases: short name → OpenRouter slug.
 # These are the "blessed" open-model mappings shipped with quoin.
+# Derived from DEFAULT_MODELS by tier so the two tables cannot drift apart —
+# the alias→tier mapping below (flash→haiku, pro→sonnet, glm→opus) is the
+# only literal content; the slugs themselves always track the tier defaults.
 FRIENDLY_ALIASES: dict[str, str] = {
-    "flash": "deepseek/deepseek-v4-flash",
-    "pro": "deepseek/deepseek-v4-pro",
-    "glm": "z-ai/glm-5.2",
+    "flash": DEFAULT_MODELS["haiku"],
+    "pro": DEFAULT_MODELS["sonnet"],
+    "glm": DEFAULT_MODELS["opus"],
 }
 
 # Hand-curated slug allowlist — ADVISORY ONLY.
 # Expected to drift stale as OpenRouter evolves.
 # Unknown-but-plausible slugs (containing '/') are accepted with a warning;
 # only obviously-malformed input is rejected.
-# Verified August 2026.
+# Verified September 2026. Additive only — superseded slugs stay so a user
+# who pinned one keeps validating with origin "user" and no advisory warning.
 KNOWN_SLUGS: frozenset[str] = frozenset(
     {
-        "deepseek/deepseek-v4-flash",
-        "deepseek/deepseek-v4-pro",
+        "z-ai/glm-5.3-flash",           # blessed haiku default
+        "deepseek/deepseek-v4.1-flash",  # blessed sonnet default
+        "z-ai/glm-5.3",                  # blessed opus default
+        "deepseek/deepseek-v4-flash",    # superseded haiku default
+        "deepseek/deepseek-v4-pro",      # superseded sonnet default
         "deepseek/deepseek-v4-flash-0731",
         "z-ai/glm-5.1",
-        "z-ai/glm-5.2",
+        "z-ai/glm-5.2",                  # superseded opus default
         # A small extra set for user convenience.
         "anthropic/claude-3.5-sonnet",
         "anthropic/claude-3-haiku",
@@ -274,6 +283,85 @@ def set_provider_models_inplace(
     return True
 
 
+class _NoOpenrouterProvider(Exception):
+    """The store carries no openrouter provider, so there is nothing to update.
+
+    Deliberately not a CcrStoreError subclass: the handler catches both, and
+    an inheritance relation between them would make the order of the two
+    `except` arms load-bearing for no reason. Raised out of the mutator and
+    through update_v3_config untouched, which leaves the store unopened.
+    """
+
+
+def _v3_store_populated(home: pathlib.Path | None) -> bool:
+    """True when the v3 store carries a provider or an API key.
+
+    The one spelling of this question in this module. A missing, malformed or
+    locked store answers False rather than raising — on this surface the
+    consequence is the plain `native` wording, not a traceback.
+    """
+    read = ccr_store.read_v3_config(ccr_config.ccr_store_path(home=home))
+    return read.status == "ok" and not ccr_store.v3_is_empty(read.config)
+
+
+def _launch_line(major: int | None) -> str:
+    """The trailing "To use open models" line, or the unknown-version note."""
+    phrase = ccr_config.launch_command_phrase(major)
+    if phrase:
+        return f"\nTo use open models: {phrase}"
+    _cmd, note = ccr_config.launch_guidance(major)
+    return f"\n{note}"
+
+
+def _apply_models_to_v3_store(
+    models: dict[str, str],
+    route: router.CcrRoute,
+    store_dir: pathlib.Path,
+    home: pathlib.Path | None,
+    *,
+    summary_head: list[str],
+    no_provider_message: str,
+) -> int:
+    """Merge the tier models into the v3 store and report what changed.
+
+    Shared by `models set` and `models preset`: the two differ only in the
+    lines they lead with and in the wording of the no-provider early return.
+    """
+    def mutate(cfg: dict[str, Any]) -> tuple[list[str], list[str]]:
+        if not set_provider_models_inplace(cfg, list(models.values())):
+            raise _NoOpenrouterProvider
+        return ccr_store.merge_built_in_claude_code_route(cfg)
+
+    try:
+        result = ccr_store.update_v3_config(
+            ccr_config.ccr_store_path(home=home),
+            mutate,
+            backup_dir=store_dir,
+        )
+    except _NoOpenrouterProvider:
+        print(no_provider_message)
+        return 0
+    except ccr_store.CcrStoreError as exc:
+        print(f"quoin: {exc}", file=sys.stderr)
+        return 1
+
+    for line in summary_head:
+        print(line)
+    for change in result.changes:
+        print(f"  + {change}")
+    if result.backup:
+        print(f"  Backed up existing store value to: {result.backup}")
+    elif result.wrote:
+        print("  no backup needed — the store had no existing configuration blob")
+    for warning in result.warnings:
+        print(f"  ⚠ {warning}")
+
+    print(_launch_line(router._effective_version(route).major))
+    print("")
+    print(ccr_config.V3_ROUTING_GAP_NOTICE)
+    return 0
+
+
 # ── Command handlers ───────────────────────────────────────────────────────────
 
 def _cmd_models_show(args: argparse.Namespace) -> int:
@@ -296,21 +384,36 @@ def _cmd_models_show(args: argparse.Namespace) -> int:
 
     live = ccr_config.probe_service()
     cfg_path = ccr_config.ccr_config_path(home=home_override)
-    cfg_present = cfg_path.exists()
+    # One resolution for this handler, threaded to the launch clause below.
+    route = router.resolve_ccr_route(home=home_override)
+    major = router._effective_version(route).major
+    # On a v3 machine config.json is a leftover CCR no longer reads, so file
+    # presence cannot answer "is CCR configured" there — the store can, and a
+    # configured v3 user gets the same qualification a v2 user gets.
+    configured = _v3_store_populated(home_override) if major == 3 else cfg_path.exists()
 
-    if live and cfg_present:
+    note = ""
+    if live and configured:
         mode = "open via CCR (proxy running)"
-    elif cfg_present and not live:
-        mode = "native (CCR configured, proxy down — run `ccr code`)"
+    elif configured and not live:
+        cmd, note = ccr_config.launch_guidance(major)
+        if cmd:
+            mode = f"native (CCR configured, proxy down — run `{cmd}`)"
+        else:
+            mode = "native (CCR configured, proxy down)"
     else:
         mode = "native"
 
     print(f"  active mode: {mode}")
+    if note:
+        print(f"  {note}")
 
     # Additive install hint — only in the else branch AND CCR is not installed.
-    # ccr_installed mirrors router.py:209 exactly.
-    if not cfg_present:
-        ccr_installed = _verify_ccr() or bool(shutil.which("ccr"))
+    # ccr_installed mirrors router.py's own PATH-only presence check; a
+    # version query would misreport a healthy v3 install as absent, so this
+    # stays a direct `which` check rather than shelling out to `ccr`.
+    if not configured:
+        ccr_installed = bool(shutil.which("ccr"))
         if not ccr_installed:
             print(
                 "  CCR not set up — run `quoin router setup` to enable open-model routing."
@@ -354,6 +457,37 @@ def _cmd_models_set(args: argparse.Namespace) -> int:
     models[tier] = slug
     models_path = write_models(models, home=home_override)
 
+    # models.json is written either way; what follows is the CCR half, and
+    # which store shape serves it is resolved exactly once per handler.
+    route = router.resolve_ccr_route(home=home_override)
+    store_dir = router.ccr_store_dir(home_override)
+    ev = router._effective_version(route)
+    lead = f"quoin: models.json updated ({models_path})."
+    if route.route == "unknown":
+        router._decline_unknown(ev, lead=lead)
+        return 2
+    if route.route == "v3-store-absent":
+        # The primary job is done and the CCR half is explained, so this is
+        # the same success the no-CCR-config path below already reports.
+        router._decline_store_absent(ev, store_dir, lead=lead)
+        return 0
+    if route.route == "v3":
+        return _apply_models_to_v3_store(
+            models,
+            route,
+            store_dir,
+            home_override,
+            summary_head=[
+                "quoin models set — changes:",
+                f"  {tier}: {DEFAULT_MODELS.get(tier, '(none)')} → {slug}",
+                f"  models.json: {models_path}",
+            ],
+            no_provider_message=(
+                f"quoin: models.json updated ({models_path}).\n"
+                "No openrouter provider in CCR config — run `quoin router setup` to apply."
+            ),
+        )
+
     # Re-author CCR Router keys if a CCR config exists.
     config_path = ccr_config.ccr_config_path(home=home_override)
     if not config_path.exists():
@@ -387,7 +521,7 @@ def _cmd_models_set(args: argparse.Namespace) -> int:
         print(f"  Backed up CCR config to: {backup}")
     for warning in rk_warnings:
         print(f"  ⚠ {warning}")
-    print("\nTo use open models: ccr code")
+    print(_launch_line(ev.major))
     return 0
 
 
@@ -411,6 +545,35 @@ def _cmd_models_preset(args: argparse.Namespace) -> int:
 
     models = dict(DEFAULT_MODELS)
     models_path = write_models(models, home=home_override)
+
+    # models.json is written either way; what follows is the CCR half, and
+    # which store shape serves it is resolved exactly once per handler.
+    route = router.resolve_ccr_route(home=home_override)
+    store_dir = router.ccr_store_dir(home_override)
+    ev = router._effective_version(route)
+    lead = f"quoin: models.json updated with open defaults ({models_path})."
+    if route.route == "unknown":
+        router._decline_unknown(ev, lead=lead)
+        return 2
+    if route.route == "v3-store-absent":
+        router._decline_store_absent(ev, store_dir, lead=lead)
+        return 0
+    if route.route == "v3":
+        return _apply_models_to_v3_store(
+            models,
+            route,
+            store_dir,
+            home_override,
+            summary_head=(
+                ["quoin models preset open — applied:"]
+                + [f"  {tier:<8} {models[tier]}" for tier in TIER_KEYS]
+                + [f"  models.json: {models_path}"]
+            ),
+            no_provider_message=(
+                f"quoin: models.json updated with open defaults ({models_path}).\n"
+                "No openrouter provider in CCR config — run `quoin router setup` to apply."
+            ),
+        )
 
     # Re-author CCR Router keys if a CCR config exists.
     config_path = ccr_config.ccr_config_path(home=home_override)
@@ -446,7 +609,7 @@ def _cmd_models_preset(args: argparse.Namespace) -> int:
         print(f"  Backed up CCR config to: {backup}")
     for warning in rk_warnings:
         print(f"  ⚠ {warning}")
-    print("\nTo use open models: ccr code")
+    print(_launch_line(ev.major))
     return 0
 
 
@@ -471,9 +634,23 @@ def _cmd_models_reset(args: argparse.Namespace) -> int:
     backup = ccr_config.backup_config(config_path)
 
     print(f"quoin: Backed up CCR config to: {backup}")
+    # This handler holds no route of its own, so it resolves one here and
+    # names the command the installed CCR actually has.
+    route = router.resolve_ccr_route(home=home_override)
+    cmd, note = ccr_config.launch_guidance(router._effective_version(route).major)
+    if cmd:
+        switch_back = (
+            f"Your CCR config and model mapping are intact — run `{cmd}` to switch back "
+            "to open models; `quoin models` shows your current mapping."
+        )
+    else:
+        switch_back = (
+            "Your CCR config and model mapping are intact; "
+            "`quoin models` shows your current mapping."
+        )
     print(
-        "To use native Anthropic models, launch `claude` directly.\n"
-        "Your CCR config and model mapping are intact — run `ccr code` to switch back "
-        "to open models; `quoin models` shows your current mapping."
+        "To use native Anthropic models, launch `claude` directly.\n" + switch_back
     )
+    if cmd and note:
+        print(note)
     return 0

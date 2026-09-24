@@ -30,6 +30,16 @@ def ccr_config_path(home: pathlib.Path | None = None) -> pathlib.Path:
     return base / ".claude-code-router" / "config.json"
 
 
+def ccr_store_path(home: pathlib.Path | None = None) -> pathlib.Path:
+    """Return the v3 CCR store path (~/.claude-code-router/config.sqlite).
+
+    Path arithmetic only — this helper never reads, opens, or creates the
+    database. Pass `home` to override the home directory (for tests).
+    """
+    base = home if home is not None else pathlib.Path.home()
+    return base / ".claude-code-router" / "config.sqlite"
+
+
 # ── Secret handling ────────────────────────────────────────────────────────────
 
 def read_openrouter_key() -> str:
@@ -117,6 +127,27 @@ def write_config(path: pathlib.Path, cfg: dict[str, Any]) -> None:
 
 # ── Merge helpers ──────────────────────────────────────────────────────────────
 
+# Router keys quoin owns. Callers that write a different store must apply the
+# same ownership rule; kept here so the two paths cannot drift apart.
+OWNED_KEYS: frozenset[str] = frozenset({"default", "background", "think", "longContext"})
+
+# The provider prefix a Router value must carry for quoin to consider the key
+# its own. `models.build_router_map` writes exactly this prefix.
+OPENROUTER_PREFIX = "openrouter,"
+
+
+def owned_key_is_writable(existing_val: Any) -> bool:
+    """Return True if quoin may set an owned Router key over `existing_val`.
+
+    True when the key is absent (None) or already points at quoin's openrouter
+    provider. False means the key belongs to something else: preserve it and
+    warn — never overwrite.
+    """
+    if existing_val is None:
+        return True
+    return isinstance(existing_val, str) and existing_val.startswith(OPENROUTER_PREFIX)
+
+
 def merge_openrouter_provider(
     cfg: dict[str, Any],
     key: str,
@@ -186,7 +217,6 @@ def merge_router_keys(
         )
         cfg["Router"] = {}
 
-    OWNED_KEYS = {"default", "background", "think", "longContext"}
     changes: list[str] = []
     warnings: list[str] = []
 
@@ -194,12 +224,13 @@ def merge_router_keys(
         if key not in OWNED_KEYS:
             continue
         existing_val = cfg["Router"].get(key)
-        if existing_val is None:
+        if owned_key_is_writable(existing_val):
+            was_absent = existing_val is None
             cfg["Router"][key] = value
-            changes.append(f"Router.{key}: set to {value!r}")
-        elif isinstance(existing_val, str) and existing_val.startswith("openrouter,"):
-            cfg["Router"][key] = value
-            changes.append(f"Router.{key}: updated to {value!r}")
+            changes.append(
+                f"Router.{key}: set to {value!r}" if was_absent
+                else f"Router.{key}: updated to {value!r}"
+            )
         else:
             warnings.append(
                 f"Router.{key} points at {existing_val!r} (not openrouter); preserved — not overwritten."
@@ -225,3 +256,84 @@ def probe_service(
             return True
     except OSError:
         return False
+
+
+# ── Launch guidance ────────────────────────────────────────────────────────────
+
+V2_LAUNCH_COMMAND = "ccr code"
+V3_LAUNCH_COMMAND = "ccr default-claude-code"
+V3_PROFILE_NAME = "default-claude-code"
+
+# The note text is a constant, not an inline literal, so the doc-surface
+# agreement test and every call site read the same string.
+#
+# The note must NOT contain the literal substring "ccr code": callers assert
+# that substring's absence from the guidance output on the unknown/v3 path,
+# and a note carrying it would make those assertions unsatisfiable.
+V3_LAUNCH_NOTE = (
+    "v3 has no `code` subcommand; the "
+    f"{V3_PROFILE_NAME} profile exists but routes nothing until you configure its models in `ccr ui`."
+)
+UNKNOWN_LAUNCH_NOTE = (
+    "your claude-code-router version could not be identified; "
+    "launch it yourself rather than following quoin's guidance."
+)
+
+
+def launch_guidance(major: int | None) -> tuple[str, str]:
+    """Return (command, note) describing how to launch open-model routing.
+
+    `major` is a detected CCR major: 2, 3, or 0 for unknown. `None` is passed by
+    callers that have no detection result in hand and yields the same decline
+    branch as 0. The command is the string a doc surface or handler should name;
+    the note is a short trailing explanation, empty when the command needs no
+    qualification.
+    """
+    if major == 3:
+        return V3_LAUNCH_COMMAND, V3_LAUNCH_NOTE
+    if major == 2:
+        return V2_LAUNCH_COMMAND, ""
+    return "", UNKNOWN_LAUNCH_NOTE
+
+
+# The clause that qualifies `ccr code` wherever it is rendered. Kept as its
+# own constant, reachable only through launch_command_phrase's major == 2
+# arm, so a v3 caller can never be handed the v2 command by accident.
+V2_LAUNCH_CLAUSE = "auto-starts the proxy; quoin skills work normally"
+
+
+def launch_command_phrase(major: int | None) -> str:
+    """One rendered clause: the command plus the qualification that command needs.
+
+    Callers pass the *effective* detected CCR major, not a raw
+    `route.version.major` — on a leftover-config.json machine those two
+    differ, and passing the raw one would offer `ccr code` to a v3 user.
+    Returns "" for any major this function does not recognise; callers fall
+    back to UNKNOWN_LAUNCH_NOTE in that case.
+    """
+    if major == 2:
+        return f"`{V2_LAUNCH_COMMAND}` ({V2_LAUNCH_CLAUSE})"
+    if major == 3:
+        return f"`{V3_LAUNCH_COMMAND}` — {V3_LAUNCH_NOTE}"
+    return ""
+
+
+# ── Version-boundary notice (v3 upgrade groundwork) ────────────────────────────
+
+# v3 has no equivalent of the v2 `background`, `think`, and `longContext`
+# Router keys — those route to distinct models under v2's key-per-tier map,
+# and v3 has no matching concept. quoin writes the provider, the model list,
+# and the built-in Claude Code route, and deliberately does not translate
+# the three lost routes into rules that would only look equivalent. Printed
+# unconditionally on every v3 write path, including --dry-run, so a v3 user
+# always sees it rather than only on a detected upgrade.
+#
+# Must NOT contain the literal substring "ccr code" — the same constraint
+# V3_LAUNCH_NOTE carries above, for the same reason: several tests assert
+# that substring's absence from v3-path output.
+V3_ROUTING_GAP_NOTICE = (
+    "The v2 `background`, `think`, and `longContext` routes have no v3 "
+    "equivalent; quoin deliberately does not translate them into rules "
+    "that would only look equivalent — configure those by hand in `ccr ui` "
+    "if you need them."
+)

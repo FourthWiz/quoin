@@ -1126,6 +1126,105 @@ def test_wrapper_diagnoses_stale_plus_broken_src():
         assert result.returncode != 0 or "wrapper logic error" in result.stderr or result.returncode == 0
 
 
+# ── T-09: doctor/router status major parity ──────────────────────────────────
+
+class TestDoctorCcrParity:
+    """doctor's CCR probe must render the detected major, not just
+    'config absent'/'present', and must agree with `router status` on it."""
+
+    def _run_doctor(self, monkeypatch, tmp_path: Path) -> str:
+        import contextlib
+        import io
+        import pathlib as _pathlib
+
+        from quoin.cli import main as _cli_main
+
+        monkeypatch.setattr(_pathlib.Path, "home", lambda: tmp_path)
+        # Pinned so the rendered "installed"/"not installed" token — and
+        # whether the CCR probe block runs at all — never depends on
+        # whether `ccr` happens to be on the machine running the suite.
+        monkeypatch.setattr(
+            "quoin.cli.shutil.which",
+            lambda name: "/usr/local/bin/ccr" if name == "ccr" else None,
+        )
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                _cli_main(["doctor"])
+            except SystemExit:
+                pass
+        return buf.getvalue()
+
+    def test_v3_store_no_longer_reports_config_absent(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        from conftest import make_v3_store  # noqa: PLC0415
+
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        make_v3_store(store_dir, {})
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        assert "config absent" not in out
+        assert "config present" in out
+        assert "version v3 (via store:sqlite)" in out
+
+    def test_v2_config_reports_v2(self, monkeypatch, tmp_path: Path) -> None:
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        (store_dir / "config.json").write_text("{}")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        assert "version v2 (via store:json)" in out
+
+    def test_not_detected_stays_not_detected(self, monkeypatch, tmp_path: Path) -> None:
+        monkeypatch.setattr("quoin.router._npm_major", lambda: None)
+
+        out = self._run_doctor(monkeypatch, tmp_path)
+        assert "version not detected" in out
+
+    def test_doctor_and_router_status_agree_on_major(
+        self, monkeypatch, tmp_path: Path
+    ) -> None:
+        """R-08: for every machine that has a store, doctor and `router
+        status` render the same major, off each command's own rendered
+        stdout — not off a re-evaluated expression that could drift from
+        what either command actually prints."""
+        import argparse
+        import contextlib
+        import io
+
+        from quoin.router import _cmd_router_status
+
+        store_dir = tmp_path / ".claude-code-router"
+        store_dir.mkdir(parents=True, exist_ok=True)
+        # Leftover config.json beside a newer (major 3) npm package: the
+        # exact cell where the raw detection (major 2, from the stale file)
+        # and the npm-corrected reading (major 3) disagree.
+        (store_dir / "config.json").write_text("{}")
+        monkeypatch.setattr("quoin.router._npm_major", lambda: 3)
+
+        doctor_out = self._run_doctor(monkeypatch, tmp_path)
+        doctor_match = re.search(r"version (.+?), config ", doctor_out)
+        assert doctor_match, f"doctor output missing a version clause: {doctor_out!r}"
+        doctor_token = doctor_match.group(1)
+
+        status_buf = io.StringIO()
+        with contextlib.redirect_stdout(status_buf):
+            _cmd_router_status(argparse.Namespace(_home_override=tmp_path))
+        status_out = status_buf.getvalue()
+        status_match = re.search(r"CCR version:\s*(.+)", status_out)
+        assert status_match, f"router status output missing a version line: {status_out!r}"
+        status_token = status_match.group(1).strip()
+
+        assert doctor_token == status_token
+        # Pin the actual value on this cell so a future change that makes
+        # both sides agree on the WRONG major still fails this test.
+        assert status_token == "v3 (via npm)"
+
+
 # ── CANONICAL_SKILLS filesystem parity ───────────────────────────────────────
 
 def test_canonical_skills_matches_filesystem():

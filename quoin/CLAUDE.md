@@ -4,15 +4,15 @@
 
 Two launch modes exist for quoin users running claude-code-router (CCR):
 
-- **Open models via CCR:** `ccr code` — auto-starts the local proxy and launches the
-  real `claude` binary in your terminal. Quoin's slash commands and skills work normally
-  (the proxy uses `stdio: "inherit"`, preserving the interactive PTY).
-- **Native Anthropic:** `claude` — launches Claude Code directly with your Anthropic key.
+- **Open models via CCR (v2):** `ccr code` — auto-starts the local proxy and launches `claude`.
+  Quoin's skills work normally (the proxy uses `stdio: "inherit"`, preserving the PTY).
+- **Open models via CCR (v3):** `ccr default-claude-code` — v3 has no `code` subcommand; the
+  profile exists but routes nothing until you configure its models in `ccr ui`.
+- **Native Anthropic:** `claude` — launch Claude Code directly with your Anthropic key.
 
-**Sanity-check:** inside a `ccr code` session, type `/help`. The quoin skill list should
-resolve. If it doesn't, run `quoin router status` and check proxy liveness.
-The Claude Code header model (e.g. "Sonnet 4.6") stays unchanged — CCR routes
-transparently at the HTTP layer, so the UI never sees the substitution.
+**Sanity-check:** inside an open-model session, type `/help`. The quoin skill list should
+resolve. If it doesn't, run `quoin router status` and check liveness.
+The header model stays unchanged — CCR routes below the UI.
 
 Setup: `export OPENROUTER_API_KEY=sk-or-... && quoin router setup`
 

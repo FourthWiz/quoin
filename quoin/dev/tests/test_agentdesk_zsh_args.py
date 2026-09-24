@@ -561,11 +561,15 @@ def test_agentdesk_unknown_token_error_includes_status(tmp_path: Path) -> None:
 # ============================================================
 
 def test_agentdesk_ccr_pane_cmd(tmp_path: Path) -> None:
-    """_agentdesk_pane_cmd ccr → contains 'ccr code' and 'command -v ccr' and fallback."""
+    """_agentdesk_pane_cmd ccr → branches on the store shape, keeping both guards."""
     result = _run_zsh_fn("_agentdesk_pane_cmd ccr", tmp_path)
     assert result.returncode == 0
     cmd = result.stdout
     assert "ccr code" in cmd, f"pane cmd missing 'ccr code': {cmd!r}"
+    assert "ccr default-claude-code" in cmd, (
+        f"pane cmd missing 'ccr default-claude-code': {cmd!r}"
+    )
+    assert "config.sqlite" in cmd, f"pane cmd missing the store-shape guard: {cmd!r}"
     assert "command -v ccr" in cmd, f"pane cmd missing 'command -v ccr' guard: {cmd!r}"
     assert "ccr not found" in cmd, f"pane cmd missing 'ccr not found' fallback: {cmd!r}"
 
@@ -580,9 +584,13 @@ def test_agentdesk_ccr_pane_name(tmp_path: Path) -> None:
 
 
 def test_agentdesk_ccr_token_valid(tmp_path: Path) -> None:
-    """ccr token → generates valid KDL with 'ccr code' command and correct pane name."""
+    """ccr token → valid KDL carrying both launch commands and the pane name."""
     kdl = _gen_layout("ccr", tmp_path)
     assert "ccr code" in kdl, f"KDL missing 'ccr code': {kdl[:400]}"
+    assert "ccr default-claude-code" in kdl, (
+        f"KDL missing 'ccr default-claude-code': {kdl[:400]}"
+    )
+    assert "config.sqlite" in kdl, f"KDL missing the store-shape guard: {kdl[:400]}"
     assert 'pane name="CCR (OpenRouter)"' in kdl, (
         f"KDL missing pane name 'CCR (OpenRouter)': {kdl[:400]}"
     )
