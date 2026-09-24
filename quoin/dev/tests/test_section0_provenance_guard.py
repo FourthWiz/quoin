@@ -7,13 +7,13 @@ roster-vs-corpus equalities that back it, so a roster edit that is not
 reflected in the corpus (or vice versa) reds here rather than surfacing later
 as silent drift.
 
-The independent oracle (D-15): every family is discovered from CORPUS TEXT
+The independent oracle: every family is discovered from CORPUS TEXT
 ALONE — a marker or an exact heading-line match — never from a roster and
 never from a renderer call keyed by roster membership. That is what makes a
 roster-only edit and a corpus-only edit both observable: each moves only one
 side of the corresponding equality.
 
-Per-family, not union (R4-CRIT-1): the five rosters encode 53 (skill, roster)
+Per-family, not union: the five rosters encode 53 (skill, roster)
 membership facts, but only 9 of them (all in SECTION0) are unique to any one
 roster — POLLUTION, MINTIER, MINTIER_SONNET and ZC contribute zero unique
 members each. A union-based assertion can therefore observe at most 9 of 53
@@ -47,9 +47,8 @@ from pathlib import Path
 
 import pytest
 
-# Mirrors test_inject_pollution_dispatch.py:27-34 exactly (R4-MIN-3 citation
-# correction: _TESTS_DIR is defined at :29, _SCRIPTS_DIR at :30, the
-# `import ... as generator` at :34 — not 31-36 as round 3 cited).
+# Mirrors test_inject_pollution_dispatch.py:27-34 exactly: _TESTS_DIR is
+# defined at :29, _SCRIPTS_DIR at :30, the `import ... as generator` at :34.
 _TESTS_DIR = Path(__file__).parent
 _SCRIPTS_DIR = _TESTS_DIR.parent.parent / "scripts"
 if str(_SCRIPTS_DIR) not in sys.path:
@@ -90,9 +89,9 @@ DECLARED_VARIANT_SET = {"§0", "§0'", "§0a", "§0b", "§0c", "§0″", "§0‴
 # The six hand-written blocks, discovered by heading (§0a/§0b have no
 # renderer at all; §0c is hand-written iff it fails the ZC_BLOCKS content
 # match). Declared here with their line counts so a deletion or a silent
-# prose expansion reds by name (R4-MIN-6). Per architecture line 231, these
-# six get the same same-hunk re-seed waiver the share ceilings get
-# (Procedure E) if a legitimate prose tightening moves a count.
+# prose expansion reds by name. A legitimate prose tightening inside one of
+# these six blocks may re-seed its line count in the same commit as the
+# edit — the same allowance the share ceilings below get.
 DECLARED_HANDWRITTEN_BLOCKS = {
     ("implement", "§0a"): 73,
     ("implement", "§0b"): 53,
@@ -118,8 +117,8 @@ SNAPSHOT_CARRIERS = 30
 def _variant_of(line: str) -> str | None:
     """Glyph token of a `^## §0...` heading line.
 
-    Deliberately NOT filtered against the seven known tokens (R4/T-05 shape
-    d): the token is whatever whitespace-delimited word follows `## ` and
+    Deliberately NOT filtered against the seven known tokens: the token is
+    whatever whitespace-delimited word follows `## ` and
     starts with `§0`, discovered generically, so an eighth variant this
     module has never seen is captured as its own distinct token rather than
     silently returning None and vanishing from DISCOVERED_VARIANTS. A fixed
@@ -229,7 +228,7 @@ def test_declared_variant_set_is_exactly_seven():
 
 
 # ═══════════════════ Per-family carrier assertions (load-bearing) ═══════════
-# Each asserted SEPARATELY with its own message (R4-CRIT-1) — a single union
+# Each asserted SEPARATELY with its own message — a single union
 # assertion does not satisfy this. Every one of the 53 (skill, roster)
 # membership facts moves exactly one side of exactly one of these five.
 
@@ -317,15 +316,20 @@ def test_declared_handwritten_blocks_present_with_line_counts():
     for pair, expected_lines in DECLARED_HANDWRITTEN_BLOCKS.items():
         assert discovered[pair] == expected_lines, (
             f"{pair[0]} {pair[1]} block is {discovered[pair]} lines, expected "
-            f"{expected_lines}. Per architecture line 231, a same-hunk prose "
-            "tightening of exactly this block re-seeds this constant "
-            "(Procedure E waiver) — an unrelated growth does not."
+            f"{expected_lines}. A same-hunk prose tightening of exactly this "
+            "block may re-seed this constant to the new count — an "
+            "unrelated growth elsewhere does not."
         )
-    assert sum(DECLARED_HANDWRITTEN_BLOCKS.values()) == DECLARED_HANDWRITTEN_TOTAL_LINES
+    assert sum(DECLARED_HANDWRITTEN_BLOCKS.values()) == DECLARED_HANDWRITTEN_TOTAL_LINES, (
+        f"sum of DECLARED_HANDWRITTEN_BLOCKS is {sum(DECLARED_HANDWRITTEN_BLOCKS.values())}, "
+        f"expected DECLARED_HANDWRITTEN_TOTAL_LINES={DECLARED_HANDWRITTEN_TOTAL_LINES}. "
+        "Re-sum DECLARED_HANDWRITTEN_BLOCKS.values() and update this constant in the "
+        "same hunk as any individual block's re-seed above."
+    )
 
 
 # ═══════════════════════════ Span / overhang assertions ═════════════════════
-# Asserted by CONTENT, not only by count (R3-MAJ-1, R3-MIN-1): a carrier
+# Asserted by CONTENT, not only by count: a carrier
 # whose overhang silently turns into prose must not pass just because the
 # line count stayed at 1.
 
@@ -386,8 +390,8 @@ def test_overhang_total_matches_snapshot():
 
 
 # ══════════════════════════════ Partition ════════════════════════════════
-# Disjointness, coverage and the cardinality sum. Honestly scoped (R3-MAJ-1):
-# these catch an unclaimed heading or a double-claimed line, but on the
+# Disjointness, coverage and the cardinality sum. Honestly scoped: these
+# catch an unclaimed heading or a double-claimed line, but on the
 # 80-line overhang term the buckets are positionally implied by the census
 # slicers, so this alone cannot discriminate there — the assertions above
 # (per-family, declared set, blankness) are what actually discriminates.
@@ -398,10 +402,10 @@ def _compute_partition():
     purely from the LIVE scan (no fixed constants), and assert disjointness
     along the way. Returns (generated_lines, handwritten_lines, overhang_lines).
 
-    Deliberately dynamic (R3-MAJ-1 honest-scoping): a hand-written block that
-    is cleanly removed (T-05 mutation c) moves generated/handwritten totals
+    Deliberately dynamic: a hand-written block that
+    is cleanly removed moves generated/handwritten totals
     and CENSUS_LINES together, so this structural check stays green on that
-    mutation — only the declared six-block SET assertion (which names the
+    removal — only the declared six-block SET assertion (which names the
     missing pair) is supposed to red there. Comparing against FIXED snapshot
     numbers is the separate, explicitly-informational job of
     test_census_snapshot_reproduces_state.
@@ -457,31 +461,52 @@ def test_census_snapshot_reproduces_state():
     CORPUS_LINES (whole-file line totals) is reported in the module docstring
     but deliberately NOT asserted here: it moves under any hand-written prose
     edit anywhere in the corpus, generated span or not, so asserting it would
-    red on the T-05 shape (a) prose-deletion mutation even though that shape
-    is supposed to move only SHARE_CEILINGS['status'] (found during the T-05
-    mutation exercise, mutation-demo.md mutation (a); corrected in place
-    rather than carried as a residual, since the fix is a same-file,
-    same-commit test-only change touching nothing under adapters/claude/).
+    red on a single hand-written-prose deletion in a carrier that is only
+    supposed to move that carrier's own SHARE_CEILINGS entry.
+
+    Re-seed procedure: when this test reds after a deliberate, reviewed
+    corpus edit, re-run the corpus scan (import this module and read
+    CENSUS_LINES / CENSUS_CARRIERS / VARIANT_COUNTS / _compute_partition()
+    fresh) and update the matching SNAPSHOT_* constant or literal dict below
+    in the same commit as the edit — this is informational, not one of the
+    module's load-bearing assertions (see module docstring).
     """
     generated_lines, handwritten_lines, _overhang = _compute_partition()
-    assert generated_lines == SNAPSHOT_GENERATED_LINES
-    assert handwritten_lines == DECLARED_HANDWRITTEN_TOTAL_LINES
-    assert CENSUS_LINES == SNAPSHOT_CENSUS_LINES
-    assert len(CENSUS_CARRIERS) == SNAPSHOT_CARRIERS
+    assert generated_lines == SNAPSHOT_GENERATED_LINES, (
+        f"generated_lines={generated_lines} != SNAPSHOT_GENERATED_LINES="
+        f"{SNAPSHOT_GENERATED_LINES} — re-seed SNAPSHOT_GENERATED_LINES per the "
+        "re-seed procedure above."
+    )
+    assert handwritten_lines == DECLARED_HANDWRITTEN_TOTAL_LINES, (
+        f"handwritten_lines={handwritten_lines} != DECLARED_HANDWRITTEN_TOTAL_LINES="
+        f"{DECLARED_HANDWRITTEN_TOTAL_LINES} — re-derive from DECLARED_HANDWRITTEN_BLOCKS "
+        "and update that constant per the re-seed procedure above."
+    )
+    assert CENSUS_LINES == SNAPSHOT_CENSUS_LINES, (
+        f"CENSUS_LINES={CENSUS_LINES} != SNAPSHOT_CENSUS_LINES={SNAPSHOT_CENSUS_LINES} "
+        "— re-seed SNAPSHOT_CENSUS_LINES per the re-seed procedure above."
+    )
+    assert len(CENSUS_CARRIERS) == SNAPSHOT_CARRIERS, (
+        f"{len(CENSUS_CARRIERS)} carrier skills found != SNAPSHOT_CARRIERS="
+        f"{SNAPSHOT_CARRIERS} — re-seed SNAPSHOT_CARRIERS per the re-seed procedure above."
+    )
     assert VARIANT_COUNTS == {
         "§0": 20, "§0'": 10, "§0a": 1, "§0b": 2, "§0c": 5, "§0″": 10, "§0‴": 11,
-    }
+    }, (
+        f"VARIANT_COUNTS={VARIANT_COUNTS} no longer matches the recorded per-variant "
+        "block counts — re-seed the literal dict above per the re-seed procedure above."
+    )
 
 
-# ═══════════════════ Renderer-call safety (R4-MIN-7) ════════════════════════
-# The round-3 oracle caught bare Exception and returned None on any renderer
-# failure, which made "renderer raised" indistinguishable from "skill is not
-# a carrier". This module makes exactly one renderer call per file (the §0c
-# content check above, via generator.ZC_BLOCKS values pasted directly — no
-# renderer call at all is needed for that check), so there is nothing here
-# that swallows an exception. This test pins that the two roster-gated
-# renderers actually raise on a non-member, rather than silently returning
-# an empty/falsy value that a broad except could hide.
+# ═══════════════════ Renderer-call safety ════════════════════════════════
+# An earlier version of this oracle caught bare Exception and returned None
+# on any renderer failure, which made "renderer raised" indistinguishable
+# from "skill is not a carrier". This module makes no renderer calls for
+# carrier discovery at all — the §0c content check above compares against
+# generator.ZC_BLOCKS values pasted directly, not a renderer call — so there
+# is nothing here that swallows an exception. This test instead pins that
+# the two roster-gated renderers actually raise on a non-member, rather than
+# silently returning an empty/falsy value that a broad except could hide.
 
 @pytest.mark.parametrize(
     "render_fn_name", ["render_pollution_block", "render_zc_block"]
@@ -492,7 +517,7 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
         fn("nosuchskill_xyz")
 
 
-# ═══════════════════════════ T-03: per-file share ceilings ══════════════════
+# ═══════════════════════════ Per-file share ceilings ═════════════════════════
 # ceiling = measured_share + SHARE_HEADROOM_PP, where SHARE_HEADROOM_PP is an
 # ABSOLUTE PERCENTAGE-POINT headroom (not a multiplier — shares near 0% and
 # near 70% behave very differently under the same multiplier).
@@ -502,7 +527,7 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 # 0.2009 pp residual slack. The 10-line figure is a CHOSEN design parameter,
 # not a measurement.
 #
-# Growth side (R3-MIN-2 — the same headroom is a blind spot upward): the
+# Growth side (the same headroom is a blind spot upward): the
 # same 5.00 pp lets a carrier's GENERATED span grow before this guard fires
 # — 25 lines at `cleanup` (binding), 74 at `checkpoint` (loosest). Generated-
 # span growth is caught by test_generator_fidelity.py's byte-compare and by
@@ -514,8 +539,7 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 # added — their zero is asserted, not merely unobserved. Note: the roster
 # union is 30 of 32 adapter skills, so this zero carve-out and the "carriers
 # equal the oracle set, size 30" assertion above are the SAME FACT from two
-# directions, not two independent confirmations (mirrors D-11's 186+1/418+7
-# cross-check note).
+# directions, not two independent confirmations.
 #
 # Waiver / re-ratchet procedure: the numerator (generated span) is
 # generator-owned and the denominator (file length) is skill-owned, so
@@ -558,8 +582,8 @@ SHARE_CEILINGS: dict[str, float] = {
     "sleep": 29.0343,
     "specify": 44.8625,
     "start_of_day": 32.2506,  # span-based (27.2506%) + 5.00pp — NEVER the
-                              # heading-based 42.09% figure the round-1 census
-                              # over-captured
+                              # heading-based 42.09% figure an earlier
+                              # census over-captured
     "status": 73.6275,
     "thorough_plan": 0.0,
     "triage": 34.1667,
@@ -638,20 +662,19 @@ def test_start_of_day_ceiling_is_span_based_not_heading_based():
     assert abs(SHARE_CEILINGS["start_of_day"] - 32.2506) < 0.001
 
 
-# ═══════════ T-06: in-domain caps-density metric and per-file ceilings ══════
-# Architecture decision five's pressure-density metric, completed here:
-# per-file ceilings over the DOMAIN COMPLEMENT of the generated spans above
-# (so a generated block's own dispatch-machinery prose — which legitimately
-# uses MUST/NEVER/CRITICAL — never counts against a skill's hand-written
-# density), gated by a materiality floor so a near-zero-count file does not
-# get a ceiling that one legitimate new constraint blows through.
+# ═══════════ In-domain caps-density metric and per-file ceilings ═══════════
+# A pressure-density metric: per-file ceilings over the DOMAIN COMPLEMENT of
+# the generated spans above (so a generated block's own dispatch-machinery
+# prose — which legitimately uses MUST/NEVER/CRITICAL — never counts against
+# a skill's hand-written density), gated by a materiality floor so a
+# near-zero-count file does not get a ceiling that one legitimate new
+# constraint blows through.
 #
-# Corpus-level result (arch open question one, D-05): "domination" means the
-# top two files hold >=50% of in-domain caps tokens. Measured on all four
-# report surfaces (manifest-33 corpus slice, the 57-file primary domain, the
-# 39-file secondary domain, and their union) — 28.34%, 29.62%, 16.31%,
-# 13.03% — every one well under 50%. Not dominated; the per-file half ships.
-# Full corpus-level figures for all four surfaces: pressure-density.md.
+# Corpus-level result: "domination" means the top two files hold >=50% of
+# in-domain caps tokens. Measured on all four report surfaces (manifest-33
+# corpus slice, the 57-file primary domain, the 39-file secondary domain,
+# and their union) — 28.34%, 29.62%, 16.31%, 13.03% — every one well under
+# 50%. Not dominated; the per-file half ships.
 
 CAPS_PATTERNS = [
     ("MUST", r"MUST(?! NOT)"), ("ALWAYS", r"ALWAYS"), ("NEVER", r"NEVER"),
@@ -659,7 +682,7 @@ CAPS_PATTERNS = [
     ("DO NOT", r"DO NOT"), ("IMPORTANT", r"IMPORTANT"),
 ]
 
-DENSITY_MATERIALITY_FLOOR = 5  # caps tokens; below this, ratcheting is brittle (D-12)
+DENSITY_MATERIALITY_FLOOR = 5  # caps tokens; below this, ratcheting is brittle
 
 CLAUDE_MD = ADAPTER_DIR.parent.parent.parent / "CLAUDE.md"
 
@@ -695,8 +718,14 @@ DENSITY_EXCLUDED_BELOW_FLOOR = {
 
 
 def _in_domain_text(skill: str | None) -> str:
-    """Text of a manifest-33 member with its OWN generated §0-family spans
-    (if any) excised, mirroring derive/density_domains.py's gen_spans()."""
+    """Text of a manifest-33 member with its OWN generator-backed §0-family
+    spans excised, mirroring derive/density_domains.py's gen_spans() —
+    which drops a span only when the skill carries it on a generator
+    roster. A block declared in DECLARED_HANDWRITTEN_BLOCKS shares a
+    heading token with a generated family (§0a/§0b have no generator at
+    all; a hand-written §0c fails the ZC_BLOCKS content match) but is not
+    itself generator output, so it must stay in the domain and get
+    measured like any other hand-written prose."""
     path = CLAUDE_MD if skill is None else ADAPTER_DIR / skill / "SKILL.md"
     lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
     if skill is None:
@@ -706,6 +735,8 @@ def _in_domain_text(skill: str | None) -> str:
     for sk, variant, start, end in _CENSUS_BLOCKS:
         if sk != skill:
             continue
+        if (sk, variant) in DECLARED_HANDWRITTEN_BLOCKS:
+            continue  # hand-written, not generator-backed — keep in domain
         if variant == "§0":
             marker_i = next((i for i in range(start, end) if SECTION0_END_MARKER in plain_lines[i]), None)
             span_end = (marker_i + 1) if marker_i is not None else end
@@ -730,9 +761,24 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
         f"(sym-diff {sorted(covered ^ set(MANIFEST_33))}) — every manifest-33 file "
         "must be named in exactly one of the two sets, never silently absent."
     )
-    assert len(DENSITY_CEILINGS) == 15
-    assert len(DENSITY_EXCLUDED_BELOW_FLOOR) == 18
-    assert sum(DENSITY_CEILINGS.values()) == 163
+    assert len(DENSITY_CEILINGS) == 15, (
+        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 15. If a "
+        "skill's in-domain caps count crossed DENSITY_MATERIALITY_FLOOR, move it "
+        "between DENSITY_CEILINGS and DENSITY_EXCLUDED_BELOW_FLOOR and update both "
+        "this count and the one below to match."
+    )
+    assert len(DENSITY_EXCLUDED_BELOW_FLOOR) == 18, (
+        f"DENSITY_EXCLUDED_BELOW_FLOOR has {len(DENSITY_EXCLUDED_BELOW_FLOOR)} "
+        "entries, expected 18. If a skill's in-domain caps count crossed "
+        "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
+        "this count and the one above to match."
+    )
+    assert sum(DENSITY_CEILINGS.values()) == 163, (
+        f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
+        "163. A per-file ceiling was re-seeded without updating this checksum — "
+        "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
+        "hunk as the ceiling change."
+    )
 
 
 def test_excluded_files_are_genuinely_below_materiality_floor():
