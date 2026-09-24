@@ -44,12 +44,10 @@ Other flags:
 - `--declared-context-limit` / `--declared-output-limit` — record a limit you
   already know from the gateway's documentation. These are recorded as
   declared, not observed — the probe does not verify them.
-- `--timeout` — per-request timeout in seconds (default 30). Each request
-  phase — waiting for response headers, then reading the body or stream —
-  gets its own budget of `--timeout` seconds, so one request can take up to
-  about twice `--timeout` in the worst case. Every individual read also
-  carries a socket timeout, so a connection that goes silent mid-response is
-  never waited on indefinitely.
+- `--timeout` — per-request timeout in seconds (default 30). The streaming
+  phase has a total budget of `--timeout` seconds; header and non-stream body
+  reads carry a per-read socket timeout instead, so a connection that goes
+  silent mid-response is never waited on indefinitely.
 - `--active-error-checks` — optional, comma-separated (`invalid-token`,
   `context-overflow`). See the caution below before enabling these.
 
@@ -78,9 +76,10 @@ maintainer deciding whether to invest in an integration needs to be able to
 tell "this gateway doesn't support tools" apart from "I couldn't even reach
 it".
 
-On exit 2, the diagnostic is written to stderr and nothing is printed on
-stdout; a script driving this tool should key off the exit code or the
-written record's verdict status, not stdout content.
+On exit 2, the diagnostic goes to stderr; stdout carries at most the
+one-word verdict `could_not_run` (nothing at all on a configuration error or
+an unwritable `--output`). A script driving this tool should key off the
+exit code or the written record's verdict status, not stdout content.
 
 ## Live error provocations (`--active-error-checks`)
 

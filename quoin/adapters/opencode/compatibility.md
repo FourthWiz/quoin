@@ -16,7 +16,8 @@ A claim is `verified` only when backed by at least one of:
 - a tag-pinned GitHub artifact — a `blob`, `tree`, or `releases/tag` URL at the pinned
   tag or an earlier tag on the same release line;
 - a docs page from a docs tree that is versioned for the pinned release line;
-- a local run of the pinned binary, with the exact command shown in backticks.
+- a local run of the pinned binary, with the exact command shown in backticks,
+  naming the pinned version.
 
 A claim resting only on unversioned documentation is `unverified — documentation not
 version-pinned`. Every row must carry a `Status` cell of exactly `verified` or
@@ -59,7 +60,7 @@ Evidence for the choice, applying the pin criteria in order:
 |---|---|---|
 | Providers | `provider` (singular map) | `providers` (plural map) |
 | Provider auth/URL | `provider.<id>.options.apiKey` / `.baseURL` | not confirmed under this key path |
-| Custom provider package | `provider.<id>.npm` | `providers.<id>.package` (per architecture reference; not independently re-verified this round) |
+| Custom provider package | `provider.<id>.npm` | `providers.<id>.package` (not verified against 2.0.x source) |
 | MCP servers | flat `mcp.<name>` | `mcp.servers.<name>` |
 | Plugins | `plugin` (singular list) | `plugins` (plural list) |
 
@@ -104,7 +105,7 @@ qualified against.
 | Claim | Status | Evidence | Note |
 |---|---|---|---|
 | A self-hosted OpenAI-compatible chat-completions endpoint is configured under `provider.<id>` with `npm: "@ai-sdk/openai-compatible"`, `options.baseURL`, and `options.apiKey`. | verified | `github.com/anomalyco/opencode/blob/v1.18.32/packages/web/src/content/docs/providers.mdx` (`npm` field description, repeated worked examples) | This is the V1 shape (`provider`, singular) — see Release lines above. |
-| An endpoint implementing the OpenAI Responses API (`/v1/responses`) instead of chat completions uses the `@ai-sdk/openai` package rather than `@ai-sdk/openai-compatible`. | unverified — documentation not version-pinned | live page `opencode.ai/docs/providers` (rendered, unversioned) | The tag-pinned `providers.mdx` source was not re-checked line-by-line for this specific Responses-API distinction within this round; only the flat-completions `@ai-sdk/openai-compatible` claim above was confirmed against the pinned source text. |
+| An endpoint implementing the OpenAI Responses API (`/v1/responses`) instead of chat completions uses the `@ai-sdk/openai` package rather than `@ai-sdk/openai-compatible`. | verified | `github.com/anomalyco/opencode/blob/v1.18.32/packages/web/src/content/docs/providers.mdx` (line 2617: "If your provider/model uses `/v1/responses`, use `@ai-sdk/openai`") | |
 
 ## Models and variants
 
