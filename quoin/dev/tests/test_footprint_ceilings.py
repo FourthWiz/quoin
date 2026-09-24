@@ -110,6 +110,9 @@ CEILINGS = {
     "skill:weekly_review": 18633,  # S-4: post-description-trim 16939 * 1.10, monotonic vs prior 18803  S-5 ratchet: CANDIDATE-no-op (measured 16939 B, candidate 18633 B == prior ceiling 18633 B; unchanged).
     "skill:workspace": 18958,  # S-4: post-description-trim 17234 * 1.10, monotonic vs prior 19239  S-5 ratchet: CANDIDATE-no-op (measured 17234 B, candidate 18958 B == prior ceiling 18958 B; unchanged).
     "claude_md": 40726,  # T-12 ratchet: post-slim 37023 * 1.10
+    # S-5 ratchet (T-11): measured 39256 B, candidate 39256*1.10=43182 B > prior
+    # ceiling 40726 B -> HOLD. Net effect zero; recorded anyway per D-06 (a
+    # surface with a recorded no-op decision differs from one nobody examined).
 
     # IVG-164 stage 1 T-12: _target_path returns the repo SOURCE file for the
     # "claude_md" key (QUOIN_DIR / "CLAUDE.md" — T-02 DOES change it, +59 B;
@@ -118,6 +121,9 @@ CEILINGS = {
     # measured post-generation size 9,161 B (T-04, well-formed blank-line
     # model) * 1.10 rounded up.
     "claude_md_slim": 10078,  # R: post-generation 9161 * 1.10 rounded up
+    # S-5 ratchet (T-11): measured 9161 B, candidate 9161*1.10=10078 B (rounded
+    # up) == prior ceiling 10078 B -> CANDIDATE, but a no-op. Net effect zero;
+    # recorded anyway per D-06.
 }
 
 
