@@ -229,11 +229,13 @@ def redact(text: str, secrets_tuple) -> str:
         if form:
             out = out.replace(form, "<redacted>")
     # Stop at whitespace AND at JSON/HTTP delimiters (quote, brace, bracket,
-    # comma) so a credential embedded in a JSON string value or a header
-    # line does not swallow the surrounding syntax when it isn't followed
-    # by whitespace (e.g. `..."Bearer <token>"}}` with no space before `"`).
-    out = re.sub(r'Authorization:[^\r\n"]*', "Authorization: <redacted>", out)
-    out = re.sub(r'Bearer\s+[^\s"\'}\],]+', "Bearer <redacted>", out)
+    # comma, backslash) so a credential embedded in a JSON string value or a
+    # header line does not swallow the surrounding syntax when it isn't
+    # followed by whitespace (e.g. `..."Bearer <token>"}}` with no space
+    # before `"`, or a JSON-escaped `\"` right after the token, where
+    # consuming the backslash would leave the closing quote unescaped).
+    out = re.sub(r'Authorization:[^\r\n"\\]*', "Authorization: <redacted>", out)
+    out = re.sub(r'Bearer\s+[^\s"\'}\],\\]+', "Bearer <redacted>", out)
     out = re.sub(r'(?i)(api[_-]?key|token)=[^&\s"\'}\],]+', r"\1=<redacted>", out)
     return out
 
@@ -810,12 +812,10 @@ class ProbeReport:
 
 
 def run_probe(config: ProbeConfig, env: dict, now=None, nonce_factory=None, extra_headers=None) -> ProbeReport:
-    try:
-        ctx = make_context(config, env, now=now, nonce_factory=nonce_factory, extra_headers=extra_headers)
-    except ProbeConfigError as exc:
-        diag = _make_diagnostic("config_error", message=str(exc))
-        steps = [{"step": s, "name": n, "result": "skipped", "diagnostic": None} for s, n in enumerate(("auth_and_text", "tool_round_trip", "streaming"), start=1)]
-        return ProbeReport(context=None, steps=steps, verdict="could_not_run", blocking_step=None)
+    # ProbeConfigError propagates to execute(), which already builds the
+    # config_error diagnostic, prints it to stderr and writes it to the
+    # record — a config refusal must never disappear as a silent exit 2.
+    ctx = make_context(config, env, now=now, nonce_factory=nonce_factory, extra_headers=extra_headers)
 
     step_defs = [
         (1, "auth_and_text", lambda: run_step1(ctx)),
@@ -887,13 +887,23 @@ def build_capability_record(report: ProbeReport) -> dict:
     config = report.context.config if report.context else None
     now = report.context.now if report.context else datetime.datetime.now(datetime.timezone.utc)
 
-    def field_status(names, unsupported_from=None):
+    def field_status(names):
         for entry in report.steps:
             if entry["name"] in names:
                 if entry["result"] in ("pass", "warn"):
                     return {"status": "supported", "source": "observed", "value": None, "detail": entry["result"]}
                 if entry["result"] == "fail":
-                    return {"status": "unsupported", "source": "observed", "value": None, "detail": entry["diagnostic"].code if entry["diagnostic"] else None}
+                    diag = entry["diagnostic"]
+                    code = diag.code if diag else None
+                    # A failure only tells us the field is unsupported when the
+                    # diagnostic's exit class is EXIT_NOT_QUALIFIED (a genuine
+                    # protocol incompatibility). Anything else — auth, rate
+                    # limit, server error, connection trouble — means the step
+                    # could not run, not that the capability is absent, so the
+                    # field stays unknown rather than becoming a false negative.
+                    if diag is not None and diag.exit_class == EXIT_NOT_QUALIFIED:
+                        return {"status": "unsupported", "source": "observed", "value": None, "detail": code}
+                    return {"status": "unknown", "source": "not_tested", "value": None, "detail": code}
         return {"status": "unknown", "source": "not_tested", "value": None, "detail": None}
 
     capabilities = {}
@@ -943,6 +953,40 @@ def build_capability_record(report: ProbeReport) -> dict:
                 "diagnostic": diag_dict,
             }
         )
+
+    # Fold step-4 live/classifier-only checks into step 1's checks (both
+    # `invalid-token` and `context-overflow` are plain non-tool completion
+    # requests, the same shape as auth_and_text) so the record says which
+    # step-4 checks ran live, per the architecture's step-4 rule.
+    step4 = report.context.step4 if report.context is not None else None
+    if step4 is not None:
+        for step_out in steps_out:
+            if step_out["name"] != "auth_and_text":
+                continue
+            for check_name in ("invalid_token", "context_overflow"):
+                entry = step4.get(check_name)
+                step_out["checks"].append(
+                    {
+                        "name": check_name,
+                        "ran_live": bool(entry is not None),
+                        "result": entry["result"] if entry is not None else "not_run",
+                    }
+                )
+
+    # Fold observations recorded during the run (argument-fidelity mismatches,
+    # nonce misses) into the matching step's checks so a `warn` step carries
+    # its evidence in the record instead of only the exit code.
+    observations = report.context.observations if report.context is not None else []
+    for obs in observations:
+        for step_out in steps_out:
+            if step_out["step"] == obs.get("step"):
+                step_out["checks"].append(
+                    {
+                        "name": obs.get("code"),
+                        "result": obs.get("result", "warn"),
+                        "detail": obs.get("detail"),
+                    }
+                )
 
     summary = "agent execution qualified" if report.verdict == "qualified" else (
         "not qualified: %s" % (report.steps[report.blocking_step - 1]["name"],) if report.blocking_step else report.verdict
@@ -1085,7 +1129,15 @@ def main(argv=None, env=None) -> int:
     except (KeyboardInterrupt, SystemExit):
         raise
     except BaseException as exc:  # noqa: BLE001 - last-resort catch-all, never a bare traceback
-        _emit(sys.stderr, "probe: config_error: unexpected failure: %s Next: check the arguments and retry" % (exc,), ())
+        # The exception message itself is untrusted here: it may embed the
+        # secret (e.g. a urllib error that echoes the request URL or a
+        # header). Print only the exception's type name, never str(exc).
+        _emit(
+            sys.stderr,
+            "probe: config_error: unexpected failure: %s Next: check the arguments and retry"
+            % (type(exc).__name__,),
+            (),
+        )
         return EXIT_COULD_NOT_RUN
 
 
