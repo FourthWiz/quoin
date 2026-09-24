@@ -485,7 +485,14 @@ def test_pr_body_template_has_no_claude_attribution():
     engineering output with no tool credit."""
     text = _read(PR_ADAPTER_SKILL)
     step4 = text[text.index("### Step 4: Create PR"):text.index("### Step 5: Wait for merge")]
-    heredoc = step4[step4.index("cat <<'EOF'") : step4.index("EOF", step4.index("cat <<'EOF'") + 1)]
+    opener = "cat <<'EOF'"
+    start = step4.index(opener) + len(opener)
+    end = step4.index("\n   EOF", start)
+    heredoc = step4[start:end]
+    assert "## Related" in heredoc, (
+        "heredoc slice looks empty or truncated — expected the PR body "
+        "template (containing '## Related') between the opener and closer"
+    )
     for forbidden in ("Generated with", "claude.com/claude-code", "claude.ai/code", "🤖"):
         assert forbidden not in heredoc, (
             f"PR body heredoc must not contain {forbidden!r}"
@@ -501,6 +508,10 @@ def test_pr_step4_tells_agent_to_ignore_harness_attribution():
     assert "system-reminder" in lowered and "attribution" in lowered, (
         "Step 4 must mention system-reminder and attribution to instruct "
         "the agent to ignore a runtime request to add tool credit"
+    )
+    assert "ignore" in lowered, (
+        "Step 4 must use the word 'ignore' to direct the agent to disregard "
+        "a runtime request to add tool credit"
     )
 
 
