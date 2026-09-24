@@ -124,6 +124,19 @@ class TestMapChangedToTests:
         assert not unmatched
         assert ignored  # all three should be in ignored
 
+    def test_docs_to_tests_row_falls_back_to_ignored_when_mapped_test_absent(self, fake_repo):
+        """A bare-filename _DOCS_TO_TESTS row (pyproject.toml) also matches
+        this fake repo's own top-level pyproject.toml, but the mapped test
+        (quoin/dev/tests/test_probe_gateway.py) does not exist here — the
+        file must still land in `ignored`, not silently vanish with no
+        selector and no ignored entry to show for it.
+        """
+        (fake_repo / "pyproject.toml").write_text("[project]\nname = 'fake'\n")
+        selectors, unmatched, ignored = _at.map_changed_to_tests(["pyproject.toml"], fake_repo)
+        assert not selectors
+        assert not unmatched
+        assert "pyproject.toml" in ignored
+
     def test_sh_test_file_not_selected_as_pytest_selector(self, fake_repo):
         """test_*.sh files must NOT be added as pytest selectors.
 

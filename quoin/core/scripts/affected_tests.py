@@ -742,8 +742,13 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/fixtures/scenarios.json",
         "quoin/dev/tests/test_probe_gateway_tool_loop.py",
     ),
-    # Suffix match also catches a nested pyproject.toml; harmless, since the
-    # test this maps to is offline and cheap.
+    # Bare filename match: this row also matches any project's own
+    # top-level pyproject.toml once this script is deployed there, since
+    # the allowlist is a flat suffix match with no directory-prefix rule
+    # (see the module note below). That is safe: a match only takes the
+    # file out of "ignored" when the mapped test path actually exists on
+    # disk (see the mapped_any check below), so in a project without this
+    # test file the row simply does not fire.
     (
         "pyproject.toml",
         "quoin/dev/tests/test_probe_gateway.py",
@@ -1359,9 +1364,16 @@ def map_changed_to_tests(
             for src_suffix, test_rel in _DOCS_TO_TESTS:
                 if posix == src_suffix or posix.endswith("/" + src_suffix):
                     test_path = repo_root / test_rel
+                    # A row only takes the file out of "ignored" when its
+                    # mapped test actually exists here — a bare-filename
+                    # row (e.g. "pyproject.toml") also matches an unrelated
+                    # project's own top-level file once this script is
+                    # deployed there, and that file must still land in
+                    # "ignored" rather than silently vanish with no
+                    # selector to show for it.
                     if test_path.exists():
                         selectors.add(str(test_path))
-                    mapped_any = True
+                        mapped_any = True
             if mapped_any:
                 continue
             # Generic non-.py file → ignored
