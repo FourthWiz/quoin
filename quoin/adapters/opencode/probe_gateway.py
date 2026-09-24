@@ -446,7 +446,7 @@ def classify_exception(
                 detail = "http_404_tools_unavailable" if status == 404 else "http_405_tools_unavailable"
                 return _make_diagnostic("tool_call_missing", step=step, http_status=status, detail=detail)
         elif status in (400, 422) and matches_model_not_found(err_info):
-            pass  # falls through to rows below, per D-03
+            pass  # not-found handling only applies before step 1 passes; fall through
 
     if status >= 500:
         return _make_diagnostic("server_error", step=step, http_status=status, detail=err_info.message)
@@ -1063,7 +1063,7 @@ def main(argv=None, env=None) -> int:
         return execute(config, effective_env)
     except (KeyboardInterrupt, SystemExit):
         raise
-    except BaseException as exc:  # noqa: BLE001 - top-level catch-all per D-11 layer 5
+    except BaseException as exc:  # noqa: BLE001 - last-resort catch-all, never a bare traceback
         _emit(sys.stderr, "probe: config_error: unexpected failure: %s Next: check the arguments and retry" % (exc,), ())
         return EXIT_COULD_NOT_RUN
 

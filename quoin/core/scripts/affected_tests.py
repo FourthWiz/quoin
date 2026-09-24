@@ -727,6 +727,31 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/memory/lifecycle-guide.md",
         "quoin/dev/tests/test_lifecycle_guide_same_session_docs.py",
     ),
+    # Every new non-Python file under the opencode adapter tree needs a row
+    # here in the same change; the self-check test in test_probe_gateway.py
+    # enforces that rule.
+    (
+        "quoin/adapters/opencode/fixtures/scenarios.json",
+        "quoin/dev/tests/test_fake_openai_server.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/scenarios.json",
+        "quoin/dev/tests/test_probe_gateway.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/scenarios.json",
+        "quoin/dev/tests/test_probe_gateway_tool_loop.py",
+    ),
+    # Suffix match also catches a nested pyproject.toml; harmless, since the
+    # test this maps to is offline and cheap.
+    (
+        "pyproject.toml",
+        "quoin/dev/tests/test_probe_gateway.py",
+    ),
+    (
+        "quoin/adapters/opencode/README.md",
+        "quoin/dev/tests/test_probe_gateway.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

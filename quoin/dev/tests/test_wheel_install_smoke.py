@@ -168,6 +168,27 @@ def test_wheel_contents_include_codex_cli_assets(built_wheel):
         assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"
 
 
+@_requires_build
+def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
+    """Wheel installs must include the opencode M0 qualification assets."""
+    with zipfile.ZipFile(built_wheel) as whl:
+        names = whl.namelist()
+
+    required = [
+        "quoin/data/adapters/opencode/probe_gateway.py",
+        "quoin/data/adapters/opencode/fake_openai_server.py",
+        "quoin/data/adapters/opencode/fixtures/scenarios.json",
+        "quoin/data/adapters/opencode/README.md",
+    ]
+    for path in required:
+        assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"
+
+    assert not any(
+        "adapters/opencode/" in name and (name.endswith("__pycache__") or "__pycache__/" in name or name.endswith(".pyc"))
+        for name in names
+    )
+
+
 def test_pyproject_force_include_line_for_claude_slim_md():
     """pyproject.toml must wire quoin/CLAUDE.slim.md into the wheel (T-06).
 
