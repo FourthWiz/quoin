@@ -584,7 +584,28 @@
       "turns": [
         {
           "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "tools": false
+          },
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 0,
           "finish_reason": "tool_calls",
+          "match": {
+            "tools": true
+          },
           "message": {
             "content": null,
             "role": "assistant",
@@ -610,8 +631,73 @@
       ]
     },
     "tool_args_malformed_stream": {
-      "description": "Streamed tool call whose reassembled arguments are not valid JSON.",
+      "description": "Step 2 passes with a valid tool call; step 3's streamed reassembly is not valid JSON.",
       "turns": [
+        {
+          "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "tools": false
+          },
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 0,
+          "finish_reason": "tool_calls",
+          "match": {
+            "stream": false,
+            "tools": true
+          },
+          "message": {
+            "content": null,
+            "role": "assistant",
+            "tool_calls": [
+              {
+                "function": {
+                  "arguments": "{\"text\": \"Grüße, 世界 \\ud83d\\ude42 — \\\"quoted\\\" back\\\\slash\\nsecond line\", \"note\": \"\"}",
+                  "name": "quoin_probe_echo"
+                },
+                "id": "call_1",
+                "type": "function"
+              }
+            ]
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 1,
+          "finish_reason": "stop",
+          "match": {
+            "stream": false
+          },
+          "message": {
+            "content": "Tool responded with: {{last_tool_content}}",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
         {
           "chunks": [
             {
@@ -639,6 +725,10 @@
           ],
           "depth": 0,
           "finish_reason": "tool_calls",
+          "match": {
+            "stream": true,
+            "tools": true
+          },
           "status": 200,
           "stream": true,
           "usage": {
@@ -654,7 +744,28 @@
       "turns": [
         {
           "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "tools": false
+          },
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 0,
           "finish_reason": "tool_calls",
+          "match": {
+            "tools": true
+          },
           "message": {
             "content": null,
             "role": "assistant",
@@ -702,7 +813,28 @@
       "turns": [
         {
           "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "tools": false
+          },
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 0,
           "finish_reason": "tool_calls",
+          "match": {
+            "tools": true
+          },
           "message": {
             "content": null,
             "role": "assistant",
@@ -750,7 +882,28 @@
       "turns": [
         {
           "depth": 0,
+          "finish_reason": "stop",
+          "match": {
+            "tools": false
+          },
+          "message": {
+            "content": "Hello from fake provider.",
+            "role": "assistant"
+          },
+          "status": 200,
+          "stream": false,
+          "usage": {
+            "completion_tokens": 5,
+            "prompt_tokens": 10,
+            "total_tokens": 15
+          }
+        },
+        {
+          "depth": 0,
           "finish_reason": "tool_calls",
+          "match": {
+            "tools": true
+          },
           "message": {
             "content": null,
             "role": "assistant",
