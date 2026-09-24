@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import datetime
 import http.client
 import json
@@ -10,6 +11,8 @@ import secrets
 import socket
 import ssl
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -193,6 +196,10 @@ def validate_config(config: ProbeConfig) -> None:
         raise ProbeConfigError("base URL scheme must be http or https")
     if "@" in (parts.netloc or ""):
         raise ProbeConfigError("base URL must not contain embedded credentials")
+    if parts.query:
+        raise ProbeConfigError("base URL must not contain a query string")
+    if parts.fragment:
+        raise ProbeConfigError("base URL must not contain a fragment")
     if parts.scheme == "http" and parts.hostname not in ("127.0.0.1", "localhost", "::1"):
         raise ProbeConfigError("http:// is only accepted for loopback hosts; use https://")
     if config.timeout is None or config.timeout <= 0:
@@ -421,6 +428,13 @@ def classify_exception(
     if isinstance(exc, OSError) and not isinstance(exc, urllib.error.HTTPError) and not after_headers:
         return _make_diagnostic("connection_failed", step=step, detail=clip(str(exc), secrets_tuple, 300))
 
+    # Any other transport-level OSError once headers were already received
+    # (a dropped connection mid-body that isn't one of the specific types
+    # above) is a stream interruption, not a malformed response — the
+    # protocol was already talking chat-completions, the wire just broke.
+    if isinstance(exc, OSError) and not isinstance(exc, urllib.error.HTTPError) and after_headers:
+        return _make_diagnostic("stream_interrupted", step=step, detail=clip(str(exc), secrets_tuple, 300))
+
     if not isinstance(exc, urllib.error.HTTPError):
         detail = "non_http_reply" if not after_headers else "invalid_response"
         code = "connection_failed" if not after_headers else "invalid_response"
@@ -428,6 +442,8 @@ def classify_exception(
 
     status = exc.code
     err_info = read_error_body(exc, secrets_tuple)
+    with contextlib.suppress(Exception):
+        exc.close()
 
     if status == 401:
         return _make_diagnostic("auth_invalid", step=step, http_status=status, detail=err_info.message)
@@ -526,6 +542,33 @@ def _extra(ctx: ProbeContext, key: str) -> dict:
     return ctx.extra_headers.get(key) or {}
 
 
+_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
+
+
+class _ResponseTooLarge(Exception):
+    pass
+
+
+def _read_capped(resp, limit: int = _MAX_RESPONSE_BYTES) -> bytes:
+    """Read a whole success-path response body with a byte cap.
+
+    An oversized or endless body must not be read into memory in full; once
+    the cap is filled the response is treated as invalid, not consumed
+    further.
+    """
+    chunks = []
+    total = 0
+    while True:
+        chunk = resp.read(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > limit:
+            raise _ResponseTooLarge("response body exceeded %d bytes" % (limit,))
+    return b"".join(chunks)
+
+
 def run_step1(ctx: ProbeContext) -> StepResult:
     payload = {
         "model": ctx.config.model,
@@ -541,7 +584,8 @@ def run_step1(ctx: ProbeContext) -> StepResult:
         )
         return StepResult("fail", diagnostic=diag)
     try:
-        raw = resp.read()
+        with resp:
+            raw = _read_capped(resp)
         body = json.loads(raw.decode("utf-8"))
         content = body["choices"][0]["message"]["content"]
         if not content:
@@ -601,19 +645,20 @@ def run_tool_round_trip(ctx: ProbeContext, stream: bool, step_key: str) -> StepR
         return StepResult("fail", diagnostic=diag)
 
     try:
-        if stream:
-            tool_call_id, name, args_text, finish_ok = _parse_sse_tool_call(resp1, ctx.config.timeout)
-        else:
-            raw = resp1.read()
-            body = json.loads(raw.decode("utf-8"))
-            message = body["choices"][0]["message"]
-            tool_calls = message.get("tool_calls")
-            if not tool_calls:
-                return StepResult("fail", diagnostic=_make_diagnostic("tool_call_missing", step=step))
-            call = tool_calls[0]
-            tool_call_id = call.get("id")
-            name = call.get("function", {}).get("name")
-            args_text = call.get("function", {}).get("arguments")
+        with resp1:
+            if stream:
+                tool_call_id, name, args_text, finish_ok = _parse_sse_tool_call(resp1, ctx.config.timeout)
+            else:
+                raw = _read_capped(resp1)
+                body = json.loads(raw.decode("utf-8"))
+                message = body["choices"][0]["message"]
+                tool_calls = message.get("tool_calls")
+                if not tool_calls:
+                    return StepResult("fail", diagnostic=_make_diagnostic("tool_call_missing", step=step))
+                call = tool_calls[0]
+                tool_call_id = call.get("id")
+                name = call.get("function", {}).get("name")
+                args_text = call.get("function", {}).get("arguments")
     except _StreamInterrupted:
         return StepResult("fail", diagnostic=_make_diagnostic("stream_interrupted", step=step))
     except Exception as exc:
@@ -656,12 +701,13 @@ def run_tool_round_trip(ctx: ProbeContext, stream: bool, step_key: str) -> StepR
         return StepResult("fail", diagnostic=diag)
 
     try:
-        if stream:
-            answer = _parse_sse_text(resp2, ctx.config.timeout)
-        else:
-            raw2 = resp2.read()
-            body2 = json.loads(raw2.decode("utf-8"))
-            answer = body2["choices"][0]["message"].get("content") or ""
+        with resp2:
+            if stream:
+                answer = _parse_sse_text(resp2, ctx.config.timeout)
+            else:
+                raw2 = _read_capped(resp2)
+                body2 = json.loads(raw2.decode("utf-8"))
+                answer = body2["choices"][0]["message"].get("content") or ""
     except _StreamInterrupted:
         return StepResult("fail", diagnostic=_make_diagnostic("stream_interrupted", step=step))
     except Exception as exc:
@@ -717,7 +763,13 @@ def _parse_sse_tool_call(resp, timeout):
             env = json.loads(line)
         except ValueError:
             raise ValueError("invalid SSE data line")
-        choice = env["choices"][0]
+        choices = env.get("choices")
+        if not choices:
+            # A trailing usage-only chunk carries an empty choices array
+            # (real APIs send usage this way, with no delta of its own);
+            # there is nothing to fold into the tool call from it.
+            continue
+        choice = choices[0]
         delta = choice.get("delta", {})
         if delta.get("content"):
             content_parts.append(delta["content"])
@@ -750,7 +802,10 @@ def _parse_sse_text(resp, timeout):
             done = True
             break
         env = json.loads(line)
-        choice = env["choices"][0]
+        choices = env.get("choices")
+        if not choices:
+            continue
+        choice = choices[0]
         delta = choice.get("delta", {})
         if delta.get("content"):
             content_parts.append(delta["content"])
@@ -761,10 +816,29 @@ def _parse_sse_text(resp, timeout):
     return "".join(content_parts)
 
 
+_SSE_MAX_LINE_BYTES = 1 << 20  # 1 MiB
+
+
 def _sse_lines(resp, timeout):
-    resp.fp.raw._sock.settimeout(timeout) if hasattr(resp, "fp") and hasattr(resp.fp, "raw") else None
+    """Yield `data:` payloads from an SSE response under a single deadline.
+
+    `timeout` is a total budget for the whole stream, not a per-read grace
+    period: the socket timeout is recomputed before every readline() from
+    the time remaining until the deadline, so a server that dribbles bytes
+    just fast enough to dodge any one read's timeout cannot keep the probe
+    waiting past --timeout in aggregate. Each line is also capped at
+    `_SSE_MAX_LINE_BYTES` so an unterminated line cannot grow without bound.
+    """
+    sock = resp.fp.raw._sock if hasattr(resp, "fp") and hasattr(resp.fp, "raw") else None
+    deadline = time.monotonic() + timeout if timeout is not None else None
     while True:
-        raw_line = resp.readline()
+        if deadline is not None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise socket.timeout("SSE stream exceeded the total --timeout budget")
+            if sock is not None:
+                sock.settimeout(remaining)
+        raw_line = resp.readline(_SSE_MAX_LINE_BYTES)
         if not raw_line:
             return
         line = raw_line.decode("utf-8", errors="replace").rstrip("\r\n")
@@ -780,24 +854,29 @@ def _run_cancellation_check(ctx: ProbeContext, step: int) -> StepResult:
         "messages": [{"role": "user", "content": "Count slowly to a large number."}],
         "stream": True,
     }
-    start = ctx.now
-    import time as _time
-
-    t0 = _time.monotonic()
+    t0 = time.monotonic()
     try:
         resp = _post(ctx.opener, ctx.config, ctx.secret, payload, _extra(ctx, "step3_cancel"), stream=True)
-        first_line = None
-        for line in _sse_lines(resp, ctx.config.timeout):
-            first_line = line
-            break
-        resp.close()
     except Exception as exc:
         diag = classify_exception(
             exc, after_headers=False, is_tool_result_request=False, has_tools=False,
             step1_passed=ctx.step1_passed, now=ctx.now, secrets_tuple=ctx.secrets, step=step,
         )
         return StepResult("fail", diagnostic=diag)
-    elapsed = _time.monotonic() - t0
+    try:
+        with resp:
+            for _line in _sse_lines(resp, ctx.config.timeout):
+                break
+    except Exception as exc:
+        # Headers were already received by the time we get here (the _post
+        # above succeeded) — a failure reading the first SSE line is a
+        # stream-phase problem, not a connection-establishment one.
+        diag = classify_exception(
+            exc, after_headers=True, is_tool_result_request=False, has_tools=False,
+            step1_passed=ctx.step1_passed, now=ctx.now, secrets_tuple=ctx.secrets, step=step,
+        )
+        return StepResult("fail", diagnostic=diag)
+    elapsed = time.monotonic() - t0
     if elapsed >= ctx.config.timeout:
         return StepResult("fail", diagnostic=_make_diagnostic("cancellation_unclean", step=step))
     return StepResult("pass")
@@ -1032,13 +1111,36 @@ def write_record(record: dict, path: str, secrets_tuple) -> bool:
                 "diagnostics_note": "diagnostics omitted: redaction produced invalid JSON",
             }
             text = redact(json.dumps(safe, indent=2, sort_keys=True, ensure_ascii=False), secrets_tuple)
-        tmp_path = path + ".tmp"
-        with open(tmp_path, "w", encoding="utf-8") as fh:
+    except Exception:
+        # Building the text is pure computation (no I/O); any failure here
+        # is not an OSError, but it must not escape as an unhandled crash
+        # in what is meant to be a best-effort write.
+        return False
+
+    directory = os.path.dirname(path) or "."
+    fd = None
+    tmp_path = None
+    try:
+        # mkstemp both picks an unpredictable name and opens it with
+        # O_CREAT | O_EXCL, so it can never be tricked into following a
+        # pre-existing symlink at the target path the way a fixed
+        # `path + ".tmp"` name could.
+        fd, tmp_path = tempfile.mkstemp(prefix=".probe-record-", suffix=".tmp", dir=directory)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fd = None  # ownership passed to the file object
             fh.write(text)
         os.replace(tmp_path, path)
+        tmp_path = None
         return True
     except OSError:
         return False
+    finally:
+        if fd is not None:
+            with contextlib.suppress(OSError):
+                os.close(fd)
+        if tmp_path is not None:
+            with contextlib.suppress(OSError):
+                os.remove(tmp_path)
 
 
 def execute(config: ProbeConfig, env: dict, extra_headers=None, now=None, nonce_factory=None) -> int:
