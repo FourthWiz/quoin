@@ -388,20 +388,27 @@ def test_affected_tests_self_check():
     import affected_tests  # type: ignore
 
     repo_root = helpers.OPENCODE_DIR.parent.parent.parent
-    selectors, unmatched, ignored = affected_tests.map_changed_to_tests(
-        [
-            "quoin/adapters/opencode/fixtures/scenarios.json",
-            "quoin/adapters/opencode/probe_gateway.py",
-            "quoin/adapters/opencode/fake_openai_server.py",
-            "quoin/adapters/opencode/README.md",
-        ],
-        repo_root,
-    )
-    assert not unmatched
-    selector_names = {os.path.basename(s) for s in selectors}
-    assert "test_probe_gateway_tool_loop.py" in selector_names
-    assert "test_fake_openai_server.py" in selector_names
-    assert "test_probe_gateway.py" in selector_names
+
+    # Each shipped file, checked in isolation (D-04): every one of them must
+    # select at least one opencode test on its own, with nothing unmatched
+    # or ignored, so a change to just that file is never test-blind.
+    per_file_expected = {
+        "quoin/adapters/opencode/fixtures/scenarios.json": {
+            "test_fake_openai_server.py",
+            "test_probe_gateway.py",
+            "test_probe_gateway_tool_loop.py",
+        },
+        "quoin/adapters/opencode/probe_gateway.py": {"test_probe_gateway.py"},
+        "quoin/adapters/opencode/fake_openai_server.py": {"test_fake_openai_server.py"},
+        "quoin/adapters/opencode/README.md": {"test_probe_gateway.py"},
+        "pyproject.toml": {"test_probe_gateway.py"},
+    }
+    for path, expected in per_file_expected.items():
+        selectors, unmatched, ignored = affected_tests.map_changed_to_tests([path], repo_root)
+        assert not unmatched, (path, unmatched)
+        assert not ignored, (path, ignored)
+        selector_names = {os.path.basename(s) for s in selectors}
+        assert expected <= selector_names, (path, expected, selector_names)
 
 
 def test_subprocess_default_ok_exit_0(server, tmp_path):
