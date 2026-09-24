@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -53,7 +54,7 @@ def _run(server, model, tmp_path, extra_headers=None, active_error_checks=(), de
                              timeout=timeout)
 
 
-def _run_against_url(base_url, model, tmp_path, extra_headers=None, active_error_checks=(), declared_context_limit=None, timeout=2.0):
+def _run_against_url(base_url, model, tmp_path, extra_headers=None, active_error_checks=(), declared_context_limit=None, timeout=2.0, secret=None):
     out = str(tmp_path / "record.json")
     config = probe.ProbeConfig(
         base_url=base_url,
@@ -65,7 +66,7 @@ def _run_against_url(base_url, model, tmp_path, extra_headers=None, active_error
         active_error_checks=tuple(active_error_checks),
         declared_context_limit=declared_context_limit,
     )
-    env = {"QUOIN_PROBE_TEST_KEY": helpers.SEEDED_SECRET}
+    env = {"QUOIN_PROBE_TEST_KEY": secret if secret is not None else helpers.SEEDED_SECRET}
     code = probe.execute(config, env, extra_headers=extra_headers, now=NOW, nonce_factory=_nonce_factory())
     record = json.loads(open(out, "r", encoding="utf-8").read())
     return code, record
@@ -270,6 +271,41 @@ def test_echo_secret_straddle_never_leaks(tmp_path, server, capsys):
             assert helpers.SEEDED_SECRET[start : start + length] not in combined
 
 
+def test_echo_secret_escaped_against_untrusted_server_never_leaks(tmp_path, capsys):
+    # The main `server` fixture rejects any wrong credential outright (a
+    # generic 401 before the scenario's own turn ever runs), so the
+    # escaped-secret form is never actually echoed back through it. A
+    # second server with no expected_token accepts any credential and lets
+    # echo_secret_in_error's echo_auth turn run for real.
+    untrusted = fake_server.FakeProviderServer(expected_token=None)
+    untrusted.start()
+    try:
+        secret = helpers.SEEDED_SECRET_ESCAPED
+        code, record = _run_against_url(untrusted.base_url, "echo_secret_in_error", tmp_path, secret=secret)
+    finally:
+        untrusted.stop()
+    captured = capsys.readouterr()
+    combined = captured.out + captured.err + json.dumps(record) + repr(untrusted.snapshot_requests())
+    for form in helpers.secret_forms(secret):
+        assert form not in combined
+
+
+def test_forced_exception_in_step_is_redacted_no_traceback(tmp_path, server, capsys, monkeypatch):
+    secret = helpers.SEEDED_SECRET
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom while calling %s" % (secret,))
+
+    monkeypatch.setattr(probe, "_post", _boom)
+    code, record = _run(server, "default_ok", tmp_path)
+    assert code == 2
+    captured = capsys.readouterr()
+    assert secret not in captured.out
+    assert secret not in captured.err
+    assert "Traceback" not in captured.err
+    assert secret not in json.dumps(record)
+
+
 def test_registry_pairwise_distinct():
     messages = [v[0] for v in probe.DIAGNOSTICS.values()]
     next_actions = [v[1] for v in probe.DIAGNOSTICS.values()]
@@ -461,6 +497,194 @@ def test_config_http_non_loopback_rejected():
 
 def test_endpoint_identity_drops_query_and_fragment():
     assert probe.endpoint_identity("https://host:9443/v1/chat?api_key=abc#frag") == "https://host:9443/v1/chat"
+
+
+def test_config_query_and_fragment_in_base_url_rejected():
+    for url in ("https://example.invalid/v1?api_key=abc", "https://example.invalid/v1#frag"):
+        config = probe.ProbeConfig(base_url=url, model="m", credential_env="X", provider="p")
+        with pytest.raises(probe.ProbeConfigError):
+            probe.validate_config(config)
+
+
+def test_write_record_does_not_follow_symlink_and_leaves_no_tmp(tmp_path):
+    canary = tmp_path / "canary.json"
+    canary.write_text("do not touch")
+    target = tmp_path / "record.json"
+    target.symlink_to(canary)
+    record = {
+        "schema": probe.RECORD_SCHEMA, "schema_version": 1,
+        "verdict": {"status": "qualified", "summary": "x", "blocking_step": None},
+        "diagnostics": [],
+    }
+    assert probe.write_record(record, str(target), ()) is True
+    # os.replace() on a symlink path replaces the symlink entry itself, so
+    # the file it used to point at is untouched.
+    assert canary.read_text() == "do not touch"
+    assert not target.is_symlink()
+    written = json.loads(target.read_text())
+    assert written["verdict"]["status"] == "qualified"
+    leftover = [p.name for p in tmp_path.iterdir() if p.name.startswith(".probe-record-")]
+    assert not leftover
+
+
+def test_read_capped_raises_when_limit_exceeded():
+    class _Resp:
+        def __init__(self, total_len):
+            self._remaining = total_len
+
+        def read(self, n):
+            if self._remaining <= 0:
+                return b""
+            chunk = b"x" * min(n, self._remaining)
+            self._remaining -= len(chunk)
+            return chunk
+
+    assert probe._read_capped(_Resp(100), limit=1000) == b"x" * 100
+    with pytest.raises(probe._ResponseTooLarge):
+        probe._read_capped(_Resp(2000), limit=1000)
+
+
+def test_classify_exception_response_too_large_is_invalid_response():
+    diag = probe.classify_exception(
+        probe._ResponseTooLarge("too big"), after_headers=True, is_tool_result_request=False, has_tools=False,
+        step1_passed=True, now=NOW, secrets_tuple=(),
+    )
+    assert diag.code == "invalid_response"
+
+
+def test_classify_exception_closes_http_error(monkeypatch):
+    closed = {"v": False}
+    err = _http_error(401, b'{"error":{"code":"invalid_api_key"}}')
+    real_close = err.close
+
+    def _tracking_close():
+        closed["v"] = True
+        real_close()
+
+    err.close = _tracking_close
+    probe.classify_exception(
+        err, after_headers=False, is_tool_result_request=False, has_tools=False,
+        step1_passed=True, now=NOW, secrets_tuple=(),
+    )
+    assert closed["v"] is True
+
+
+def test_classification_generic_oserror_after_headers_is_stream_interrupted():
+    diag = probe.classify_exception(
+        ConnectionAbortedError("aborted mid-body"), after_headers=True, is_tool_result_request=False, has_tools=True,
+        step1_passed=True, now=NOW, secrets_tuple=(),
+    )
+    assert diag.code == "stream_interrupted"
+
+
+class _TrackingResp:
+    def __init__(self, body):
+        self._body = body
+        self._read = False
+        self.closed = False
+
+    def read(self, n=-1):
+        if self._read:
+            return b""
+        self._read = True
+        return self._body
+
+    def close(self):
+        self.closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        self.close()
+        return False
+
+
+def test_run_step1_closes_response_on_success(monkeypatch):
+    body = json.dumps({"choices": [{"message": {"content": "hi"}}], "usage": None}).encode()
+    resp = _TrackingResp(body)
+    monkeypatch.setattr(probe, "_post", lambda *a, **k: resp)
+    ctx = _make_report([]).context
+    result = probe.run_step1(ctx)
+    assert result.result == "pass"
+    assert resp.closed is True
+
+
+def test_run_step1_closes_response_on_parse_failure(monkeypatch):
+    resp = _TrackingResp(b"not json")
+    monkeypatch.setattr(probe, "_post", lambda *a, **k: resp)
+    ctx = _make_report([]).context
+    result = probe.run_step1(ctx)
+    assert result.result == "fail"
+    assert resp.closed is True
+
+
+def test_cancellation_check_read_phase_exception_uses_after_headers_true(monkeypatch):
+    class _StallResp:
+        fp = None
+
+        def close(self):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc_info):
+            self.close()
+            return False
+
+    def _fake_post(*args, **kwargs):
+        return _StallResp()
+
+    def _fake_sse_lines(resp, timeout):
+        raise socket.timeout("stalled before first line")
+        yield  # pragma: no cover - unreachable; keeps this a generator function
+
+    monkeypatch.setattr(probe, "_post", _fake_post)
+    monkeypatch.setattr(probe, "_sse_lines", _fake_sse_lines)
+    ctx = _make_report([]).context
+    result = probe._run_cancellation_check(ctx, 3)
+    assert result.result == "fail"
+    # after_headers=True is what turns a bare socket.timeout into
+    # stream_interrupted rather than timeout (classify_exception's rule);
+    # this is the read-phase/connect-phase split the cancellation check
+    # itself must respect.
+    assert result.diagnostic.code == "stream_interrupted"
+
+
+def test_sse_lines_enforces_total_deadline_not_per_read(monkeypatch):
+    class _Sock:
+        def settimeout(self, value):
+            pass
+
+    class _Raw:
+        _sock = _Sock()
+
+    class _Fp:
+        raw = _Raw()
+
+    class _FakeResp:
+        fp = _Fp()
+
+        def __init__(self, lines):
+            self._lines = list(lines)
+
+        def readline(self, limit=None):
+            if not self._lines:
+                return b""
+            return self._lines.pop(0)
+
+    line = b'data: {"choices":[{"index":0,"delta":{},"finish_reason":null}]}\n'
+    resp = _FakeResp([line] * 5)
+    # 1 call to establish the deadline, then one per loop iteration: budget
+    # is 1.0s and each simulated iteration costs 0.3s, so the 4th iteration
+    # (t=1.2) is past the deadline even though no single read ever waited
+    # anywhere near the full 1.0s timeout on its own.
+    times = iter([0.0, 0.3, 0.6, 0.9, 1.2])
+    monkeypatch.setattr(probe.time, "monotonic", lambda: next(times))
+    with pytest.raises(socket.timeout):
+        for _ in probe._sse_lines(resp, 1.0):
+            pass
 
 
 def test_redact_stops_before_json_escaped_quote():

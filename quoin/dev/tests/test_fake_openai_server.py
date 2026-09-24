@@ -201,6 +201,8 @@ def test_stream_framing_reassembles_split_writes(server):
     args = ""
     for l in lines:
         env = json.loads(l[6:])
+        if not env.get("choices"):
+            continue  # the trailing usage chunk carries an empty choices array
         for tc in env["choices"][0]["delta"].get("tool_calls", []):
             args += tc.get("function", {}).get("arguments", "")
     parsed = json.loads(args)
@@ -210,6 +212,77 @@ def test_stream_framing_reassembles_split_writes(server):
     assert offsets
     for offset in offsets:
         assert raw[offset] & 0xC0 == 0x80
+
+
+def test_streamed_tool_call_opening_delta_has_role_and_type(server):
+    tools = [{"type": "function", "function": {"name": "quoin_probe_echo", "parameters": {}}}]
+    data = json.dumps(
+        {"model": "tool_call_stream_fragments", "messages": [{"role": "user", "content": "go"}], "tools": tools, "stream": True}
+    ).encode()
+    req = urllib.request.Request(server.base_url + "/chat/completions", data=data, headers={"Content-Type": "application/json", "Authorization": "Bearer " + helpers.SEEDED_SECRET})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        raw = resp.read()
+    lines = [l for l in raw.split(b"\n\n") if l.startswith(b"data: ") and l != b"data: [DONE]"]
+    opening = json.loads(lines[0][6:])
+    delta = opening["choices"][0]["delta"]
+    assert delta.get("role") == "assistant"
+    assert delta["tool_calls"][0].get("type") == "function"
+
+
+def test_trailing_usage_chunk_has_empty_choices_no_finish_reason(server):
+    data = json.dumps({"model": "long_stream", "messages": [{"role": "user", "content": "go"}], "stream": True}).encode()
+    req = urllib.request.Request(server.base_url + "/chat/completions", data=data, headers={"Content-Type": "application/json", "Authorization": "Bearer " + helpers.SEEDED_SECRET})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        raw = resp.read()
+    lines = [l for l in raw.split(b"\n\n") if l.startswith(b"data: ") and l != b"data: [DONE]"]
+    usage_envelopes = [json.loads(l[6:]) for l in lines if b'"usage"' in l]
+    assert usage_envelopes
+    usage_chunk = usage_envelopes[-1]
+    assert usage_chunk["choices"] == []
+    assert "usage" in usage_chunk
+
+
+def test_large_request_body_recorded_as_size_not_full_copy(server):
+    big_content = "x" * (fake_server.FakeProviderServer._MAX_RECORDED_BODY_BYTES + 1024)
+    data = json.dumps({"model": "text_ok", "messages": [{"role": "user", "content": big_content}]}).encode()
+    req = urllib.request.Request(
+        server.base_url + "/chat/completions", data=data,
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + helpers.SEEDED_SECRET},
+    )
+    urllib.request.urlopen(req, timeout=5).read()
+    record = server.snapshot_requests()[-1]
+    assert record["body"].get("_truncated") is True
+    assert record["body"]["_size_bytes"] == len(data)
+
+
+def test_fake_server_honors_port_flag():
+    port = helpers.bind_closed_port()
+    srv = fake_server.FakeProviderServer(port=port)
+    try:
+        srv.start()
+        assert srv.port == port
+    finally:
+        srv.stop()
+
+
+def test_fallback_tiebreak_last_equal_depth_wins():
+    # Two match-less turns tied at the same depth; a query depth deeper
+    # than both (so neither is an exact match) must fall back to the LAST
+    # declared turn at the shared max depth, not the first.
+    doc = {
+        "schema_version": 1,
+        "scenarios": {
+            "tie": {
+                "turns": [
+                    {"depth": 0, "message": {"content": "first"}, "status": 200},
+                    {"depth": 0, "message": {"content": "second"}, "status": 200},
+                ]
+            }
+        },
+    }
+    srv = fake_server.FakeProviderServer(scenarios=doc)
+    idx, turn = srv._select_turn(doc["scenarios"]["tie"]["turns"], depth=1, has_tools=False, wants_stream=False)
+    assert turn["message"]["content"] == "second"
 
 
 def test_stream_truncated_has_no_finish_or_done(server):
