@@ -12,7 +12,7 @@ You are the `/sleep` memory consolidation skill. You scan recent daily insights 
 
 ## §0 Model dispatch (FIRST STEP — execute before anything else)
 
-This skill is declared `model: haiku`. If the executing agent is running on a model
+This skill is declared `model: sonnet`. If the executing agent is running on a model
 strictly more expensive than the declared tier, you MUST self-dispatch before doing the
 skill's actual work.
 
@@ -24,7 +24,7 @@ Detection:
       * Counter form `[no-redispatch:N]` where N is a positive integer ≥ 2: ABORT (see "Abort rule" below).
       * Counter form `[no-redispatch:1]` is reserved and treated as bare `[no-redispatch]` for forward-compatibility; do not emit it.
   - If current_tier > declared_tier AND prompt does NOT start with any `[no-redispatch]` form:
-      Dispatch reason: cost-guardrail handoff. dispatched-tier: haiku.
+      Dispatch reason: cost-guardrail handoff. dispatched-tier: sonnet.
 <!-- §0-1m-decide-begin -->
 Pre-dispatch 1M check (IVG-90 Layer 1+2):
   - Run: python3 __QUOIN_HOME__/scripts/dispatch_config.py --decide --tier <declared_tier> --verbose
@@ -40,8 +40,8 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
       Continue to the Agent dispatch call below (today's path — fail-OPEN).
 <!-- §0-1m-decide-end -->
       Spawn an Agent subagent with the following arguments:
-        model: "haiku"
-        description: "sleep dispatched at haiku tier"
+        model: "sonnet"
+        description: "sleep dispatched at sonnet tier"
         prompt: "[no-redispatch]\n<original user input verbatim>"
       Wait for the subagent.
 <!-- §0-1m-cachewrite-begin -->
@@ -122,6 +122,60 @@ Fail-graceful path with error-class triage (per architecture I-01):
 <!-- §0-worktree-fallback-end -->
 Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §0c.
 <!-- §0-end -->
+
+## §0‴ Minimum-tier guard (execute after §0 — before any §0-sidecar block and the skill body)
+This skill is declared model: "sonnet". If the executing agent is running on a model
+strictly CHEAPER than sonnet, it silently up-dispatches to a Sonnet subagent (mirrors §0 down-dispatch).
+
+<!-- §0tripleprime-begin -->
+Detection:
+  - Read your current model from system context ("powered by the model named X").
+  - Tier order: haiku < sonnet < opus. declared_tier = sonnet.
+  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
+    (silent skip — no advisory; this is explicit opt-out behavior by design).
+  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
+  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
+  - Recursion: counter form `[no-redispatch:N]` (N≥2) never reaches this block — §0 (earlier in this file) aborts on N≥2 before any §0‴ tool call.
+
+On fire (happy path — silent up-dispatch):
+  spawn an Agent subagent:
+    model: "sonnet"
+    description: "sleep — min-tier up-dispatch"
+    prompt: "[no-redispatch]\n<original user input verbatim>"
+  Wait for the subagent. Return its output as your final response. STOP.
+
+Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
+description wording for every branch below: memory/dispatch-guide.md §0‴ verbose reference
+("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
+
+  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
+    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0‴ dispatch-failure or
+    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
+    — skip the 1M-credit-class and generic branches below entirely. Print
+    `[quoin-mintier-autonomous: §0‴ dispatch failed; proceeding fail-OPEN at current tier]` and
+    proceed to skill body (treat as bare [no-redispatch]).
+
+  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
+      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
+      §0‴ verbose reference):
+        Option 1:
+          label: "Abort — I'll switch with /model first"
+        Option 2:
+          label: "Proceed in-session at parent tier"
+      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
+      switch with /model and re-invoke /sleep]` and STOP.
+      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on sonnet up-dispatch;
+      proceeding in-session at parent tier — run /model to switch to standard context]`
+      and proceed to skill body (treat as bare [no-redispatch]).
+
+  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
+        Option 1:
+          label: "Abort — run from a Sonnet session"
+        Option 2:
+          label: "Proceed at current tier (under-powered)"
+      On Option 1: print `[quoin-mintier: aborted; re-invoke /sleep from a Sonnet session]` and STOP.
+      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
+<!-- §0tripleprime-end -->
 
 ## §0c Pidfile lifecycle (FIRST STEP after §0 dispatch)
 
