@@ -1,4 +1,4 @@
-"""OpenCode M1a generator tests.
+"""The pure OpenCode generator's tests.
 
 Grown task by task as the pure generator (`generate.py`), its helper
 modules (`frontmatter.py`, `scripts.py`) and their supporting data
@@ -18,10 +18,6 @@ import pytest
 
 from quoin.opencode_adapter import frontmatter, generate, names, scripts
 
-# Mirrors generate.ARTIFACT_ROOT, added when the generator module lands;
-# a later task replaces this literal with that import directly.
-_ARTIFACT_ROOT = ".workflow_artifacts"
-
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_DIR = REPO_ROOT / "quoin"
 
@@ -34,7 +30,7 @@ def test_frontmatter_round_trip_preserves_key_order_and_special_keys():
         "name": "quoin-plan",
         "*": "deny",
         "quoin-*": "allow",
-        "%s/*" % _ARTIFACT_ROOT: "allow",
+        "%s/*" % generate.ARTIFACT_ROOT: "allow",
         "quotes and \\backslash\\": 'has "quotes" and \\backslashes\\',
         "metadata": {
             "canonical_id": "plan",
@@ -1720,3 +1716,50 @@ def test_generator_version_pin_forces_a_schema_bump_on_output_change():
     # GENERATOR_SCHEMA_VERSION, which moves every real digest in turn.
     assert generate.GENERATOR_SCHEMA_VERSION == 1
     assert digest == "64d75414a3cbeeab0d9992fda9fbf6be6ca18bf779e5ff1b703243e02f4fa727"
+
+
+# --- T-10: core-input routing and source sweep ---
+
+
+def _import_affected_tests():
+    import sys
+
+    scripts_dir = SOURCE_DIR / "core" / "scripts"
+    if str(scripts_dir) not in sys.path:
+        sys.path.insert(0, str(scripts_dir))
+    import affected_tests  # type: ignore
+
+    return affected_tests
+
+
+def test_bundle_contracts_select_the_generator_test():
+    affected_tests = _import_affected_tests()
+    manifest_data = _load_real_manifest()
+    for row in _supported_rows(manifest_data):
+        changed = ["quoin/core/skills/%s.md" % row["id"]]
+        selectors, unmatched, ignored = affected_tests.map_changed_to_tests(changed, REPO_ROOT)
+        assert not unmatched, (row["id"], unmatched)
+        assert not ignored, (row["id"], ignored)
+        assert any(Path(s).name == "test_opencode_generate.py" for s in selectors), row["id"]
+
+
+def test_rules_md_selects_the_generator_test():
+    affected_tests = _import_affected_tests()
+    selectors, unmatched, ignored = affected_tests.map_changed_to_tests(
+        ["quoin/core/workflow/rules.md"], REPO_ROOT
+    )
+    assert not unmatched
+    assert not ignored
+    assert any(Path(s).name == "test_opencode_generate.py" for s in selectors)
+
+
+def test_self_swept_for_forbidden_and_model_id_patterns():
+    from test_opencode_docs import _FORBIDDEN_PATTERNS, _model_id_denylist
+
+    text = Path(__file__).read_text(encoding="utf-8")
+    for pattern in _FORBIDDEN_PATTERNS:
+        match = pattern.search(text)
+        assert match is None, "%s matched %r" % (pattern.pattern, match)
+    for pattern in _model_id_denylist():
+        match = pattern.search(text)
+        assert match is None, "%s matched %r" % (pattern.pattern, match)

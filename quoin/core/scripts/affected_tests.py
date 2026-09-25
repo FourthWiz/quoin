@@ -877,6 +877,61 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/templates/instructions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),
+    # The generator reads rules.md, skills.json and every supported bundle
+    # contract at render time (`generate.load_inputs`), so an edit to any of
+    # them needs to select the generator's own test file too.
+    (
+        "quoin/core/workflow/rules.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/workflow/skills.json",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/architect.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/checkpoint.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/continue_work.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/critic.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/discover.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/end_of_task.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/gate.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/implement.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/plan.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/review.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/thorough_plan.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):
