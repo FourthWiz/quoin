@@ -1450,3 +1450,273 @@ def test_forbidden_patterns_and_model_ids_over_every_rendered_file():
         for pattern in model_id_patterns:
             match = pattern.search(text)
             assert match is None, "%s matched %r in %s" % (pattern.pattern, match, relpath)
+
+
+# --- T-09: determinism and dependency-exact digests ---
+
+
+def _digest_map(files):
+    return {k: rf.source_digest for k, rf in files.items()}
+
+
+def _content_map(files):
+    return {k: rf.content for k, rf in files.items()}
+
+
+def _changed_keys(before, after):
+    return sorted(k for k in before if before.get(k) != after.get(k))
+
+
+def test_render_from_a_full_copy_matches_the_worktree_render(tmp_path):
+    import shutil
+
+    copy_dir = tmp_path / "quoin"
+    shutil.copytree(SOURCE_DIR, copy_dir)
+    files_worktree = generate.render_source_dir(SOURCE_DIR)
+    files_copy = generate.render_source_dir(copy_dir)
+    assert files_worktree.keys() == files_copy.keys()
+    for k in files_worktree:
+        assert files_worktree[k].content == files_copy[k].content, k
+        assert files_worktree[k].source_digest == files_copy[k].source_digest, k
+        text = files_copy[k].content.decode("utf-8")
+        assert str(copy_dir) not in text, k
+        assert str(Path.home()) not in text, k
+
+
+def test_dependency_exact_bundle_contract_edit_changes_only_that_skill():
+    inputs = _mutated_inputs()
+    before = generate.render(inputs)
+
+    edited = dict(inputs.contracts)
+    edited["plan"] = edited["plan"].replace(
+        "## Purpose\n", "## Purpose\nThis sentence exists only for a dependency-exactness test.\n", 1
+    )
+    inputs_after = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=inputs.overlays,
+        templates=inputs.templates,
+        contracts=edited,
+        rules=inputs.rules,
+    )
+    after = generate.render(inputs_after)
+
+    changed = _changed_keys(_digest_map(before), _digest_map(after))
+    assert changed == [".opencode/skills/quoin-plan/SKILL.md"]
+    assert changed == _changed_keys(_content_map(before), _content_map(after))
+
+
+def test_dependency_exact_rules_edit_changes_only_the_instructions_document():
+    inputs = _mutated_inputs()
+    before = generate.render(inputs)
+
+    inputs_after = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=inputs.overlays,
+        templates=inputs.templates,
+        contracts=inputs.contracts,
+        rules=inputs.rules + "\n\nExtra rule prose for the dependency-exactness test.\n",
+    )
+    after = generate.render(inputs_after)
+
+    changed = _changed_keys(_digest_map(before), _digest_map(after))
+    assert changed == [generate.INSTRUCTIONS_PATH]
+    assert changed == _changed_keys(_content_map(before), _content_map(after))
+
+
+def test_dependency_exact_command_template_edit_changes_only_the_commands():
+    inputs = _mutated_inputs()
+    before = generate.render(inputs)
+
+    templates_after = dict(inputs.templates)
+    templates_after["command"] = "A dependency-exactness marker.\n\n" + templates_after["command"]
+    inputs_after = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=inputs.overlays,
+        templates=templates_after,
+        contracts=inputs.contracts,
+        rules=inputs.rules,
+    )
+    after = generate.render(inputs_after)
+
+    changed = set(_changed_keys(_digest_map(before), _digest_map(after)))
+    expected = {k for k in before if k.startswith(".opencode/commands/")}
+    assert changed == expected
+    assert changed == set(_changed_keys(_content_map(before), _content_map(after)))
+
+
+def test_dependency_exact_agent_template_edit_changes_only_the_agents():
+    inputs = _mutated_inputs()
+    before = generate.render(inputs)
+
+    templates_after = dict(inputs.templates)
+    templates_after["agent"] = "A dependency-exactness marker.\n\n" + templates_after["agent"]
+    inputs_after = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=inputs.overlays,
+        templates=templates_after,
+        contracts=inputs.contracts,
+        rules=inputs.rules,
+    )
+    after = generate.render(inputs_after)
+
+    changed = set(_changed_keys(_digest_map(before), _digest_map(after)))
+    expected = {k for k in before if k.startswith(".opencode/agents/")}
+    assert changed == expected
+    assert changed == set(_changed_keys(_content_map(before), _content_map(after)))
+
+
+def test_dependency_exact_role_prompt_edit_changes_only_that_agent():
+    inputs = _mutated_inputs()
+    before = generate.render(inputs)
+
+    overlays_after = json.loads(json.dumps(inputs.overlays))
+    overlays_after["roles"]["gate"]["prompt"].append("An extra paragraph for the dependency-exactness test.")
+    inputs_after = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=overlays_after,
+        templates=inputs.templates,
+        contracts=inputs.contracts,
+        rules=inputs.rules,
+    )
+    after = generate.render(inputs_after)
+
+    changed = _changed_keys(_digest_map(before), _digest_map(after))
+    assert changed == [".opencode/agents/quoin-gate.md"]
+    assert changed == _changed_keys(_content_map(before), _content_map(after))
+
+
+def test_dependency_exact_entry_notes_edit_changes_only_that_skill():
+    inputs = _mutated_inputs()
+    before = generate.render(inputs)
+
+    overlays_after = json.loads(json.dumps(inputs.overlays))
+    overlays_after["entries"]["plan"]["notes"].append("An extra note for the dependency-exactness test.")
+    inputs_after = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=overlays_after,
+        templates=inputs.templates,
+        contracts=inputs.contracts,
+        rules=inputs.rules,
+    )
+    after = generate.render(inputs_after)
+
+    changed = _changed_keys(_digest_map(before), _digest_map(after))
+    assert changed == [".opencode/skills/quoin-plan/SKILL.md"]
+    assert changed == _changed_keys(_content_map(before), _content_map(after))
+
+
+def test_dependency_exact_non_bundle_contract_edit_changes_nothing(tmp_path):
+    import shutil
+
+    copy_dir = tmp_path / "quoin"
+    shutil.copytree(SOURCE_DIR, copy_dir)
+    before = generate.render_source_dir(copy_dir)
+
+    sleep_path = copy_dir / "core" / "skills" / "sleep.md"
+    assert sleep_path.exists()
+    sleep_path.write_text(sleep_path.read_text() + "\nExtra prose for the dependency-exactness test.\n")
+
+    after = generate.render_source_dir(copy_dir)
+    assert _digest_map(before) == _digest_map(after)
+    assert _content_map(before) == _content_map(after)
+
+
+def test_dependency_exact_new_catalog_id_mentioned_in_a_contract_changes_only_that_skill():
+    inputs = _mutated_inputs()
+    marker = "zzz-synthetic-marker"
+
+    contracts = dict(inputs.contracts)
+    contracts["plan"] = contracts["plan"].replace("## Purpose\n", "## Purpose\nSee /%s for detail.\n" % marker, 1)
+
+    before_inputs = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=inputs.overlays,
+        templates=inputs.templates,
+        contracts=contracts,
+        rules=inputs.rules,
+    )
+    before = generate.render(before_inputs)
+
+    catalog_after = list(inputs.catalog) + [{"name": marker}]
+    after_inputs = generate.GeneratorInputs(
+        catalog=catalog_after,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=inputs.overlays,
+        templates=inputs.templates,
+        contracts=contracts,
+        rules=inputs.rules,
+    )
+    after = generate.render(after_inputs)
+
+    changed = _changed_keys(_digest_map(before), _digest_map(after))
+    assert changed == [".opencode/skills/quoin-plan/SKILL.md"]
+    assert changed == _changed_keys(_content_map(before), _content_map(after))
+
+
+def test_generator_version_pin_forces_a_schema_bump_on_output_change():
+    import hashlib
+
+    templates = {
+        "command": "Command body. {{SKILL_NAME}} {{TITLE}} {{COMMAND_NOTE}} $ARGUMENTS\n",
+        "skill": "Skill body. {{SKILL_NAME}} {{COMMAND_NAME}} {{ROLE_AGENT}} {{CANONICAL_ID}} {{CONTRACT}} {{NOTES}}\n",
+        "agent": "Agent body. {{ROLE_PROMPT}} {{DELEGATION}}\n",
+        "instructions": (
+            "Instructions. {{COMMAND_LIST}} {{ARTIFACT_ROOT}} {{ROLE_TABLE}} "
+            "{{LIMITS}} {{UNAVAILABLE_LIST}} {{CORE_RULES}}\n"
+        ),
+    }
+    contract = (
+        "## Purpose\nDo the thing.\n\n"
+        "## When to use\nWhen needed.\n\n"
+        "## Inputs\nNone.\n\n"
+        "## Output\nA result.\n\n"
+        "## Behavior contract\nBehaves.\n"
+    )
+    overlays = {
+        "entries": {
+            "sample": {
+                "description": "A sample entry for the version-pin test.",
+                "command_note": "",
+                "extra_sections": [],
+                "notes": ["A note."],
+                "rewrites": [],
+            }
+        },
+        "roles": {"gate": {"description": "Sample role.", "prompt": ["Sample prompt."]}},
+    }
+    manifest_data = {
+        "catalog_entries": [{"id": "sample", "status": "supported", "opencode": {"agent_role": "gate"}}],
+        "roles": {"gate": {"mode": "primary", "summary": "Sample role summary."}},
+    }
+    inputs = generate.GeneratorInputs(
+        catalog=[{"name": "sample"}],
+        manifest=manifest_data,
+        pinned_version="0.0.0",
+        overlays=overlays,
+        templates=templates,
+        contracts={"sample": contract},
+        rules="## Section\nSome rule text.\n",
+    )
+    files = generate.render(inputs)
+    combined = b"".join(b"%s\0%s\0" % (k.encode("utf-8"), files[k].content) for k in sorted(files))
+    digest = hashlib.sha256(combined).hexdigest()
+    # Pinned under GENERATOR_SCHEMA_VERSION 1. A renderer change that alters
+    # rendered bytes for these same inputs must update this hash and bump
+    # GENERATOR_SCHEMA_VERSION, which moves every real digest in turn.
+    assert generate.GENERATOR_SCHEMA_VERSION == 1
+    assert digest == "64d75414a3cbeeab0d9992fda9fbf6be6ca18bf779e5ff1b703243e02f4fa727"
