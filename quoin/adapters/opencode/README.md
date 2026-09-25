@@ -155,10 +155,11 @@ per namespace (commands, skills, agents), since OpenCode keeps those as
 separate maps. The canonical id — the one used everywhere else in Quoin —
 always stays in the manifest row, never in the generated name itself.
 
-Run the drift check with:
+Run the drift check with (from a repo checkout, `quoin` is not installed, so
+`src` must be on `PYTHONPATH`):
 
 ```
-python3 -m quoin.opencode_adapter check-manifest --source-dir quoin
+PYTHONPATH=src python3 -m quoin.opencode_adapter check-manifest --source-dir quoin
 ```
 
 ## Using the fake server

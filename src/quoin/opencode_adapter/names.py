@@ -35,7 +35,7 @@ def role_agent_name(role: str) -> str:
 
 def name_error(name: str) -> Optional[str]:
     """Return None when `name` is a valid OpenCode-facing name, else a message."""
-    if not NAME_RE.match(name):
+    if not NAME_RE.fullmatch(name):
         return "name '%s' does not match the required pattern %s" % (name, NAME_RE.pattern)
     if not (1 <= len(name) <= MAX_NAME_LEN):
         return "name '%s' is %d characters, outside the allowed range 1..%d" % (

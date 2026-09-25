@@ -59,6 +59,10 @@ def test_name_error_accepts_boundary_length():
     assert names.name_error(exactly_64) is None
 
 
+def test_name_error_rejects_trailing_newline():
+    assert names.name_error("quoin-abc\n") is not None
+
+
 def test_find_collisions_names_both_sources():
     messages = names.find_collisions(
         "command",
@@ -104,7 +108,7 @@ def test_check_unique_raises_naming_both_sources():
         raise AssertionError("expected NameCollisionError")
 
 
-# --- T-03: drift check against the real tree and synthetic cases ---
+# --- drift check against the real tree and synthetic cases ---
 
 
 def _copy_source_tree(tmp_path):
@@ -225,6 +229,15 @@ def test_drift_duplicate_row_id(tmp_path):
     _write_manifest_dict(dest, data)
     errs = manifest.check_source_dir(dest)
     assert any("duplicate row id" in e and first["id"] in e for e in errs), errs
+
+
+def test_drift_row_missing_id_reports_error_not_traceback(tmp_path):
+    dest = _copy_source_tree(tmp_path)
+    data = _load_manifest_dict(dest)
+    del data["catalog_entries"][0]["id"]
+    _write_manifest_dict(dest, data)
+    errs = manifest.check_source_dir(dest)
+    assert any("non-string 'id'" in e for e in errs), errs
 
 
 def test_drift_empty_reason(tmp_path):
@@ -417,7 +430,7 @@ def test_missing_compat_file_raises_manifest_load_error(tmp_path):
     assert raised
 
 
-# --- T-04: `python -m quoin.opencode_adapter check-manifest` CLI ---
+# --- `python -m quoin.opencode_adapter check-manifest` CLI ---
 
 
 def test_cli_real_tree_exits_0_from_repo_root():
@@ -471,7 +484,7 @@ def test_main_usage_error_raises_system_exit_2():
         raise AssertionError("expected SystemExit(2) for an unrecognized option")
 
 
-# --- T-05: third CI step in adapter-check.yml ---
+# --- third CI step in adapter-check.yml ---
 
 
 def test_adapter_check_workflow_step_order_and_command_matches_manifest():
@@ -488,7 +501,7 @@ def test_adapter_check_workflow_step_order_and_command_matches_manifest():
     assert run_lines[2] == expected_command
 
 
-# --- T-07: README support-classification section ---
+# --- README support-classification section ---
 
 
 def test_readme_support_classification_section():
@@ -509,7 +522,7 @@ def test_readme_support_classification_section():
         assert ("`%s`" % milestone) in section, milestone
 
 
-# --- T-08: clean-content sweep of the new src tree and this test file ---
+# --- clean-content sweep of the new src tree and this test file ---
 
 
 def test_src_and_self_swept_for_forbidden_and_model_id_patterns():

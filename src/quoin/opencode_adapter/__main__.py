@@ -32,8 +32,8 @@ def _resolve_check_source_dir(explicit: Optional[str]) -> Path:
     if explicit is not None:
         return Path(explicit).resolve()
     # Lazily imported: this is the only caller in this module that needs the
-    # CLI's own wheel/editable resolution, and importing quoin.cli eagerly
-    # would pull in its heavier dependency surface for every invocation.
+    # CLI's own wheel/editable resolution, and every other check-manifest
+    # invocation (the common case) should not have to import quoin.cli at all.
     from quoin.cli import _resolve_source_dir
 
     return _resolve_source_dir(None)

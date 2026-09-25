@@ -56,9 +56,11 @@ def load_json(path: Path):
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ManifestLoadError("cannot read %s: %s" % (path, exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise ManifestLoadError("cannot decode %s as UTF-8: %s" % (path, exc)) from exc
     try:
         return json.loads(text)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise ManifestLoadError("invalid JSON in %s: %s" % (path, exc)) from exc
 
 
@@ -117,8 +119,13 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
         errs.append("milestones must be a non-empty list")
         milestones = []
     else:
-        if len(set(milestones)) != len(milestones):
-            errs.append("milestones contains duplicate entries")
+        try:
+            has_duplicates = len(set(milestones)) != len(milestones)
+        except TypeError:
+            errs.append("milestones contains an unhashable entry")
+        else:
+            if has_duplicates:
+                errs.append("milestones contains duplicate entries")
         if "none" not in milestones:
             errs.append("milestones must include 'none'")
 
@@ -161,16 +168,34 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
                 % (limit_key, limit_val.get("enforcement"), ENFORCEMENT_LABELS)
             )
 
-    catalog_ids = [entry.get("name") for entry in catalog]
+    catalog_ids = []
+    catalog_by_id = {}
+    for entry in catalog:
+        if not isinstance(entry, dict):
+            errs.append("catalog contains a non-object entry")
+            continue
+        name = entry.get("name")
+        if not isinstance(name, str):
+            errs.append("catalog entry has a non-string 'name': %r" % (name,))
+            continue
+        catalog_ids.append(name)
+        catalog_by_id[name] = entry
     catalog_id_set = set(catalog_ids)
-    catalog_by_id = {entry.get("name"): entry for entry in catalog}
 
     rows = manifest.get("catalog_entries")
     if not isinstance(rows, list):
         errs.append("catalog_entries must be a list")
         rows = []
 
-    row_ids = [row.get("id") for row in rows if isinstance(row, dict)]
+    row_ids = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        rid = row.get("id")
+        if not isinstance(rid, str):
+            errs.append("catalog_entries row has a non-string 'id': %r" % (rid,))
+            continue
+        row_ids.append(rid)
     seen = set()
     dup_ids = set()
     for rid in row_ids:
@@ -212,7 +237,9 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
 
         catalog_entry = catalog_by_id.get(rid)
         if catalog_entry is not None:
-            row_catalog = row.get("catalog") or {}
+            row_catalog = row.get("catalog")
+            if not isinstance(row_catalog, dict):
+                row_catalog = {}
             for flag in ("user_facing", "spawn_target"):
                 if row_catalog.get(flag) != catalog_entry.get(flag):
                     errs.append(
