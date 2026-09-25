@@ -1,7 +1,7 @@
 ---
 name: sleep
 description: "Memory consolidation: scans daily insights and session files, promotes patterns to lessons-learned.md, soft-forgets stale entries to forgotten/. Use for: /sleep [--dry-run] [--restore <pattern>] [--purge]; auto-invoked by /end_of_day as its final step."
-model: haiku
+model: sonnet
 ---
 
 # Sleep

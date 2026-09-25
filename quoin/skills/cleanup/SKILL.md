@@ -1,7 +1,7 @@
 ---
 name: cleanup
 description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run]; auto-fires from /checkpoint unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
-model: haiku
+model: sonnet
 ---
 
 # Cleanup (deprecated stub)

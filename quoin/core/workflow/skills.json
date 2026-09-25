@@ -33,7 +33,7 @@
       "phase": "cleanup",
       "effort": "low",
       "user_facing": true,
-      "claude_model": "haiku",
+      "claude_model": "sonnet",
       "section_0": true,
       "spawn_target": false
     },
@@ -213,7 +213,7 @@
       "phase": "sleep",
       "effort": "low",
       "user_facing": true,
-      "claude_model": "haiku",
+      "claude_model": "sonnet",
       "section_0": true,
       "spawn_target": false
     },
