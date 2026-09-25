@@ -798,6 +798,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_opencode_docs.py",
     ),
     (
+        "quoin/adapters/opencode/compatibility.md",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
         "quoin/adapters/opencode/decisions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),

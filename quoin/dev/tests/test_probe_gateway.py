@@ -971,7 +971,7 @@ def test_affected_tests_self_check():
         "quoin/adapters/opencode/probe_gateway.py": {"test_probe_gateway.py"},
         "quoin/adapters/opencode/fake_openai_server.py": {"test_fake_openai_server.py"},
         "quoin/adapters/opencode/README.md": {"test_probe_gateway.py", "test_opencode_docs.py"},
-        "quoin/adapters/opencode/compatibility.md": {"test_opencode_docs.py"},
+        "quoin/adapters/opencode/compatibility.md": {"test_opencode_docs.py", "test_opencode_manifest.py"},
         "quoin/adapters/opencode/decisions.md": {"test_opencode_docs.py"},
         "pyproject.toml": {"test_probe_gateway.py"},
     }
