@@ -1,13 +1,14 @@
 """
 Drift-detection tests for the §0‴ Minimum-tier guard (Sonnet tier) block (IVG-117).
 
-The 10 Sonnet-declared cheap-tier skills (checkpoint, continue_work, end_of_day,
-end_of_task, expand, gate, implement, pr, revise-fast, rollback) carry a
-`## §0‴ Minimum-tier guard ...` block. These tests verify structural correctness
-of that block, mirroring test_mintier_guard.py's structure for the Opus §0″ block.
+The 13 Sonnet-declared cheap-tier skills (checkpoint, cleanup, continue_work,
+end_of_day, end_of_task, expand, gate, implement, pr, revise-fast, rollback,
+sleep, workspace) carry a `## §0‴ Minimum-tier guard ...` block. These tests
+verify structural correctness of that block, mirroring test_mintier_guard.py's
+structure for the Opus §0″ block.
 
 §0‴ anchors on SECTION0_HEADING (the hand-authored §0 block, always present in
-these 10 files) rather than on §0'/§0″ (which only exist on the disjoint Opus-10
+these 13 files) rather than on §0'/§0″ (which only exist on the disjoint Opus-10
 target set). Zero edits to the existing Opus template/constants (D-07) — the 10
 deployed Opus files and test_mintier_guard.py remain byte-frozen.
 
@@ -57,6 +58,7 @@ _MINTIER_BLOCK_BODY: str = _ipd._MINTIER_BLOCK_BODY
 
 SONNET_MINTIER_SKILLS = [
     "checkpoint",
+    "cleanup",
     "continue_work",
     "end_of_day",
     "end_of_task",
@@ -66,6 +68,7 @@ SONNET_MINTIER_SKILLS = [
     "pr",
     "revise-fast",
     "rollback",
+    "sleep",
     "workspace",
 ]
 

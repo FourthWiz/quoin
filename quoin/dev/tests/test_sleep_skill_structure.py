@@ -1,8 +1,8 @@
 """
 Structural invariant tests for quoin/skills/sleep/SKILL.md.
 
-Nine tests verifying that the /sleep SKILL.md satisfies the Stage 3
-structural contracts: Haiku tier declaration, §0 and §0c preamble
+Ten tests verifying that the /sleep SKILL.md satisfies the Stage 3
+structural contracts: Sonnet tier declaration, §0/§0‴/§0c preamble
 presence and ordering, pidfile_acquire/release call sites,
 write-restriction prose, dry-run no-write prose, and deployed-copy sync.
 
@@ -37,9 +37,9 @@ def _line_index(lines: list[str], fragment: str) -> int | None:
     return None
 
 
-# ── 1. Frontmatter declares model: haiku ─────────────────────────────────────
+# ── 1. Frontmatter declares model: sonnet ────────────────────────────────────
 
-def test_model_declared_haiku():
+def test_model_declared_sonnet():
     text = _text()
     # Frontmatter block is between the first two '---' lines.
     lines = text.splitlines()
@@ -47,8 +47,8 @@ def test_model_declared_haiku():
     end_idx = next((i for i, ln in enumerate(lines[1:], 1) if ln.strip() == "---"), None)
     assert end_idx is not None, "SKILL.md frontmatter closing '---' not found"
     frontmatter = "\n".join(lines[1:end_idx])
-    assert "model: haiku" in frontmatter, (
-        f"sleep/SKILL.md frontmatter does not declare 'model: haiku'. "
+    assert "model: sonnet" in frontmatter, (
+        f"sleep/SKILL.md frontmatter does not declare 'model: sonnet'. "
         f"Frontmatter content:\n{frontmatter}"
     )
 
@@ -84,6 +84,22 @@ def test_sec0c_after_sec0():
     assert sec0c_idx > sec0_idx, (
         f"sleep/SKILL.md: §0c (line {sec0c_idx+1}) must appear AFTER §0 (line {sec0_idx+1}). "
         "Per architecture: §0 (model tier) fires first, §0c (pidfile) fires second."
+    )
+
+
+# ── 4b. §0‴ Minimum-tier guard sits strictly between §0 and §0c ──────────────
+
+def test_sec0tripleprime_between_sec0_and_sec0c():
+    lines = _lines()
+    sec0_idx = _line_index(lines, "## §0 Model dispatch")
+    sec0tp_idx = _line_index(lines, "## §0‴ Minimum-tier guard")
+    sec0c_idx = _line_index(lines, "## §0c Pidfile lifecycle")
+    assert sec0_idx is not None, "sleep/SKILL.md missing '## §0 Model dispatch'"
+    assert sec0tp_idx is not None, "sleep/SKILL.md missing '## §0‴ Minimum-tier guard'"
+    assert sec0c_idx is not None, "sleep/SKILL.md missing '## §0c Pidfile lifecycle'"
+    assert sec0_idx < sec0tp_idx < sec0c_idx, (
+        f"sleep/SKILL.md: expected order §0 (line {sec0_idx+1}) < §0‴ "
+        f"(line {sec0tp_idx+1}) < §0c (line {sec0c_idx+1})."
     )
 
 
@@ -136,10 +152,11 @@ def test_deployed_copy_sync():
 
 def run_tests():
     tests = [
-        test_model_declared_haiku,
+        test_model_declared_sonnet,
         test_sec0_present,
         test_sec0c_present,
         test_sec0c_after_sec0,
+        test_sec0tripleprime_between_sec0_and_sec0c,
         test_pidfile_acquire_sleep,
         test_pidfile_release_sleep,
         test_write_target_restriction_present,
