@@ -60,7 +60,7 @@ def load_json(path: Path):
         raise ManifestLoadError("cannot decode %s as UTF-8: %s" % (path, exc)) from exc
     try:
         return json.loads(text)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
         raise ManifestLoadError("invalid JSON in %s: %s" % (path, exc)) from exc
 
 
@@ -86,6 +86,8 @@ def read_pinned_version(source_dir) -> str:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise ManifestLoadError("cannot read %s: %s" % (path, exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise ManifestLoadError("cannot decode %s as UTF-8: %s" % (path, exc)) from exc
     section_match = _PINNED_SECTION_RE.search(text)
     if not section_match:
         raise ManifestLoadError("%s has no '## Pinned release' section" % path)
@@ -222,6 +224,8 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
             errs.append("catalog_entries contains a non-object row")
             continue
         rid = row.get("id")
+        if not isinstance(rid, str):
+            continue
         status = row.get("status")
         if status not in STATUSES:
             errs.append("row '%s' has status %r, expected one of %s" % (rid, status, STATUSES))
@@ -266,7 +270,7 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
                         "row '%s' opencode.skill is %r, expected %r" % (rid, opencode.get("skill"), expected_name)
                     )
                 agent_role = opencode.get("agent_role")
-                if agent_role not in role_names:
+                if not isinstance(agent_role, str) or agent_role not in role_names:
                     errs.append("row '%s' opencode.agent_role %r is not a declared role" % (rid, agent_role))
                 command_pairs.append((expected_name, rid))
                 skill_pairs.append((expected_name, rid))

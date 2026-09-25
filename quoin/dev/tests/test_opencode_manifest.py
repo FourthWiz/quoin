@@ -240,6 +240,16 @@ def test_drift_row_missing_id_reports_error_not_traceback(tmp_path):
     assert any("non-string 'id'" in e for e in errs), errs
 
 
+def test_drift_supported_row_int_id_reports_error_not_traceback(tmp_path):
+    dest = _copy_source_tree(tmp_path)
+    data = _load_manifest_dict(dest)
+    row = next(r for r in data["catalog_entries"] if r["status"] == "supported")
+    row["id"] = 12345
+    _write_manifest_dict(dest, data)
+    errs = manifest.check_source_dir(dest)
+    assert any("non-string 'id': 12345" in e for e in errs), errs
+
+
 def test_drift_empty_reason(tmp_path):
     dest = _copy_source_tree(tmp_path)
     data = _load_manifest_dict(dest)
@@ -422,6 +432,17 @@ def test_drift_invalid_role_name():
 def test_missing_compat_file_raises_manifest_load_error(tmp_path):
     dest = _copy_source_tree(tmp_path)
     (dest / "adapters" / "opencode" / "compatibility.md").unlink()
+    raised = False
+    try:
+        manifest.check_source_dir(dest)
+    except manifest.ManifestLoadError:
+        raised = True
+    assert raised
+
+
+def test_non_utf8_compat_file_raises_manifest_load_error_not_traceback(tmp_path):
+    dest = _copy_source_tree(tmp_path)
+    (dest / "adapters" / "opencode" / "compatibility.md").write_bytes(b"## Pinned release\n\xff\xfe not utf-8\n")
     raised = False
     try:
         manifest.check_source_dir(dest)
