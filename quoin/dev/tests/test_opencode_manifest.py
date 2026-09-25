@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -485,3 +486,24 @@ def test_adapter_check_workflow_step_order_and_command_matches_manifest():
     manifest_data = manifest.load_manifest(SOURCE_DIR)
     expected_command = manifest_data["validation"]["commands"][0]
     assert run_lines[2] == expected_command
+
+
+# --- T-07: README support-classification section ---
+
+
+def test_readme_support_classification_section():
+    readme_path = REPO_ROOT / "quoin" / "adapters" / "opencode" / "README.md"
+    text = readme_path.read_text(encoding="utf-8")
+    heading = "## Support classification"
+    start = text.index(heading)
+    rest = text[start:]
+    next_heading = re.search(r"\n## ", rest[len(heading):])
+    section = rest[: len(heading) + next_heading.start()] if next_heading else rest
+    assert section.startswith(heading)
+    assert section.strip() != heading.strip()
+
+    data = manifest.load_manifest(SOURCE_DIR)
+    for status in manifest.STATUSES:
+        assert ("`%s`" % status) in section, status
+    for milestone in data["milestones"]:
+        assert ("`%s`" % milestone) in section, milestone

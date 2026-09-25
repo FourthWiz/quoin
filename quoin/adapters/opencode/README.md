@@ -14,6 +14,9 @@ step only.
   without a real gateway or API credentials.
 - `fixtures/scenarios.json` — the data-only catalogue of request/response
   shapes the fake server plays back.
+- `feature-manifest.json` — the classified catalogue of every Quoin skill,
+  with a support status, a target milestone, and the OpenCode asset names
+  generated for it. See "Support classification" below.
 
 ## Running the probe
 
@@ -116,6 +119,47 @@ written to disk.
   documented behavior.
 - `decisions.md` — configuration choices that only a maintainer can make,
   plus the empty template a real probe run's record gets pasted into.
+
+## Support classification
+
+`feature-manifest.json` classifies every Quoin skill into one of three
+statuses:
+
+- `supported` — an OpenCode command and skill are generated for it; the
+  generated pair is statically valid for the pinned release and
+  offline-smoked, but not yet qualified against a live OpenCode run.
+- `documentation-only` — the skill has a portable contract but no OpenCode
+  asset is generated for it yet; it is listed as not yet available.
+- `unsupported` — the skill depends on Claude-only mechanics that have no
+  OpenCode equivalent.
+
+`live_runtime_evidence` and `evidence` are `false`/empty for every row
+today. A later change flips `live_runtime_evidence` to `true` and fills
+`evidence` in once a row has been exercised against a real OpenCode run.
+
+Each row also names a target milestone, in plain terms:
+
+- `adapter-foundation` — the generator, install, doctor, and runtime
+  configuration this adapter ships.
+- `workflow-execution` — the runtime driver and live end-to-end workflow
+  runs.
+- `work-context` — profile isolation and read-only work integrations.
+- `controlled-writes` — approved external writes.
+- `release-hardening` — remaining catalog coverage, benchmarks, and release
+  qualification.
+- `none` — no OpenCode support is planned for this skill.
+
+Naming rule: an OpenCode-facing name is `quoin-` plus the skill's id, with
+every underscore turned into a hyphen. Names are checked for uniqueness
+per namespace (commands, skills, agents), since OpenCode keeps those as
+separate maps. The canonical id — the one used everywhere else in Quoin —
+always stays in the manifest row, never in the generated name itself.
+
+Run the drift check with:
+
+```
+python3 -m quoin.opencode_adapter check-manifest --source-dir quoin
+```
 
 ## Using the fake server
 
