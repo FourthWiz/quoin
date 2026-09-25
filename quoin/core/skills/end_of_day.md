@@ -9,8 +9,9 @@ At the end of a working session, consolidate all of today's session-state files
 into a single daily-cache file under `.workflow_artifacts/memory/daily/<date>.md`,
 promote eligible insights into the lessons-learned file, prune lessons-learned when
 oversized, write a resume cookie, and flip `end_of_day_due: no` on processed
-session-state files. The skill never makes commits, never edits source files, and
-never invokes another workflow phase.
+session-state files. The skill never makes commits and never edits source files.
+It never auto-invokes another workflow phase, except that as its final step it
+invokes the `sleep` memory-consolidation skill (see Behavior contract).
 
 ## When to use
 

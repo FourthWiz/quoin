@@ -18,6 +18,13 @@ SKILL_FILE="quoin/adapters/claude/skills/end_of_day/SKILL.md"
 PASS=0
 FAIL=0
 
+# All four sub-tests assert on Step 6 specifically (the /sleep dispatch), so
+# each grep is scoped to just that region rather than the whole file — a
+# file-wide grep for a string like 'model: "sonnet"' or '[no-redispatch]'
+# would also match unrelated §0/§0‴ dispatch-preamble blocks and pass even
+# if Step 6 itself regressed.
+STEP6="$(sed -n '/^### Step 6/,/^## Important behaviors/p' "$SKILL_FILE")"
+
 # ---------------------------------------------------------------------------
 # test_skip_sleep_flag
 # ---------------------------------------------------------------------------
@@ -25,18 +32,18 @@ test_skip_sleep_flag() {
   local name="test_skip_sleep_flag"
   local ok=true
 
-  grep -q 'skip-sleep' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: --skip-sleep not found in end_of_day SKILL.md"
+  grep -q 'skip-sleep' <<<"$STEP6" || {
+    echo "FAIL: ${name}: --skip-sleep not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 
-  grep -q 'Skipping /sleep' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: 'Skipping /sleep' skip message not found in end_of_day SKILL.md"
+  grep -q 'Skipping /sleep' <<<"$STEP6" || {
+    echo "FAIL: ${name}: 'Skipping /sleep' skip message not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 
-  grep -q 'Step 6' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: 'Step 6' not found in end_of_day SKILL.md"
+  grep -q 'Step 6' <<<"$STEP6" || {
+    echo "FAIL: ${name}: 'Step 6' not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 
@@ -55,13 +62,13 @@ test_sleep_failure_no_rollback() {
   local name="test_sleep_failure_no_rollback"
   local ok=true
 
-  grep -q 'quoin-S-3: /sleep invocation failed' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: '[quoin-S-3: /sleep invocation failed' not found in end_of_day SKILL.md"
+  grep -q 'quoin-S-3: /sleep invocation failed' <<<"$STEP6" || {
+    echo "FAIL: ${name}: '[quoin-S-3: /sleep invocation failed' not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 
-  grep -q 'DO NOT roll back' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: 'DO NOT roll back' instruction not found in end_of_day SKILL.md"
+  grep -q 'DO NOT roll back' <<<"$STEP6" || {
+    echo "FAIL: ${name}: 'DO NOT roll back' instruction not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 
@@ -81,8 +88,8 @@ test_default_chain_fires() {
   local ok=true
 
   # The [no-redispatch] sentinel must appear inside Step 6 (the /sleep subagent dispatch prompt)
-  grep -q '\[no-redispatch\]' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: '[no-redispatch]' sentinel not found in end_of_day SKILL.md"
+  grep -q '\[no-redispatch\]' <<<"$STEP6" || {
+    echo "FAIL: ${name}: '[no-redispatch]' sentinel not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 
@@ -105,10 +112,11 @@ test_step_6_dispatch_tier() {
   local ok=true
 
   # The Step 6 /sleep subagent dispatch must declare model: "sonnet" (/sleep
-  # moved to Sonnet tier in IVG-263; a stale haiku dispatch would run it
-  # under-powered, and [no-redispatch] suppresses /sleep's own min-tier guard).
-  grep -q 'model: "sonnet"' "$SKILL_FILE" || {
-    echo "FAIL: ${name}: 'model: \"sonnet\"' not found in end_of_day SKILL.md"
+  # was moved to Sonnet tier, and [no-redispatch] suppresses /sleep's own
+  # min-tier guard, so the parent's dispatch choice here is load-bearing —
+  # a stale haiku dispatch would run it under-powered).
+  grep -q 'model: "sonnet"' <<<"$STEP6" || {
+    echo "FAIL: ${name}: 'model: \"sonnet\"' not found in Step 6 of end_of_day SKILL.md"
     ok=false
   }
 

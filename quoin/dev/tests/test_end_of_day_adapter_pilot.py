@@ -264,9 +264,11 @@ def test_install_fresh_clone_lists_end_of_day_in_migrated_skills():
 def test_adapter_step_6_invokes_sleep():
     """Regression guard: adapter Step 6 must chain into /sleep after the Step 5 report.
 
-    Guards against a repeat of the Phase 16 migration drop (Step 6 was dropped
-    when the body moved from the legacy stub to the adapter file and survived
-    only in git history).
+    Guards against Step 6 being dropped again during a future edit. The adapter
+    file at quoin/adapters/claude/skills/end_of_day/SKILL.md is the active one;
+    the legacy stub under quoin/skills/end_of_day/ is not read at runtime, so a
+    change made only there would not take effect and Step 6 could silently go
+    missing from the file that actually runs.
     """
     text = _adapter_skill("end_of_day").read_text(encoding="utf-8")
 
@@ -301,8 +303,8 @@ def test_sleep_chaining_sh_passes():
     Runs quoin/dev/tests/test_sleep_chaining.sh via subprocess so a future
     edit that silently breaks the adapter chaining (or repoints the shell
     test at the wrong file) cannot pass CI unnoticed — the shell test alone
-    is not wired into pytest and can rot silently, which is exactly how the
-    Phase 16 regression went undetected.
+    is not wired into pytest and can rot silently, which is exactly how an
+    earlier drop of Step 6 went undetected.
     """
     repo_root = PKG_DIR.parent
     script = repo_root / "quoin" / "dev" / "tests" / "test_sleep_chaining.sh"
