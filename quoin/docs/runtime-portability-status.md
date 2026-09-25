@@ -104,6 +104,17 @@ Status: repo-local setup/readiness only; no verified global install target.
   generator, readiness, and optional smoke scripts; they do not add global Codex
   install behavior.
 
+## OpenCode
+
+Status: qualification in progress; no runtime integration.
+
+- Gateway qualification tooling lives in `quoin/adapters/opencode/` (probe and
+  offline fake provider).
+- Pinned release and claim status in `quoin/adapters/opencode/compatibility.md`.
+- Open maintainer decisions in `quoin/adapters/opencode/decisions.md`.
+- There is no OpenCode installer, no generated OpenCode assets, and no global
+  OpenCode path assumed.
+
 ## Portable Core
 
 Status: partially extracted.

@@ -727,6 +727,64 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/memory/lifecycle-guide.md",
         "quoin/dev/tests/test_lifecycle_guide_same_session_docs.py",
     ),
+    # Every new non-Python file under the opencode adapter tree needs a row
+    # here in the same change; the self-check test in test_probe_gateway.py
+    # enforces that rule.
+    (
+        "quoin/adapters/opencode/fixtures/scenarios.json",
+        "quoin/dev/tests/test_fake_openai_server.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/scenarios.json",
+        "quoin/dev/tests/test_probe_gateway.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/scenarios.json",
+        "quoin/dev/tests/test_probe_gateway_tool_loop.py",
+    ),
+    # Bare filename match: this row also matches any project's own
+    # top-level pyproject.toml once this script is deployed there, since
+    # the allowlist is a flat suffix match with no directory-prefix rule
+    # (see the module note below). That is safe: a match only takes the
+    # file out of "ignored" when the mapped test path actually exists on
+    # disk (see the mapped_any check below), so in a project without this
+    # test file the row simply does not fire.
+    (
+        "pyproject.toml",
+        "quoin/dev/tests/test_probe_gateway.py",
+    ),
+    (
+        "quoin/adapters/opencode/README.md",
+        "quoin/dev/tests/test_probe_gateway.py",
+    ),
+    (
+        "quoin/adapters/opencode/compatibility.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/decisions.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/README.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/README.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/README.md",
+        "quoin/dev/tests/test_runtime_portability_docs.py",
+    ),
+    (
+        "quoin/docs/runtime-portability-status.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/docs/runtime-portability-status.md",
+        "quoin/dev/tests/test_runtime_portability_docs.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):
@@ -1334,9 +1392,16 @@ def map_changed_to_tests(
             for src_suffix, test_rel in _DOCS_TO_TESTS:
                 if posix == src_suffix or posix.endswith("/" + src_suffix):
                     test_path = repo_root / test_rel
+                    # A row only takes the file out of "ignored" when its
+                    # mapped test actually exists here — a bare-filename
+                    # row (e.g. "pyproject.toml") also matches an unrelated
+                    # project's own top-level file once this script is
+                    # deployed there, and that file must still land in
+                    # "ignored" rather than silently vanish with no
+                    # selector to show for it.
                     if test_path.exists():
                         selectors.add(str(test_path))
-                    mapped_any = True
+                        mapped_any = True
             if mapped_any:
                 continue
             # Generic non-.py file → ignored
