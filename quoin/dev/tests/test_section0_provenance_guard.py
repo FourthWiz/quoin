@@ -530,7 +530,9 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 #
 # Growth side (the same headroom is a blind spot upward): the
 # same 5.00 pp lets a carrier's GENERATED span grow before this guard fires
-# — 25 lines at `cleanup` (binding), 74 at `checkpoint` (loosest). Generated-
+# — 25 lines at `next_steps` (binding), 74 at `checkpoint` (loosest);
+# re-derived after IVG-263 moved cleanup/sleep to Sonnet (cleanup was
+# previously binding at 25, now 35 after its own share re-seed). Generated-
 # span growth is caught by test_generator_fidelity.py's byte-compare and by
 # the byte ceilings in test_footprint_ceilings.py, NOT by this share guard.
 # That asymmetry is a recorded decision, not an oversight.
