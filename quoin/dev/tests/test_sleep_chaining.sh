@@ -2,7 +2,7 @@
 # test_sleep_chaining.sh — static text checks verifying /end_of_day → /sleep chaining.
 #
 # All tests are grep checks against quoin/skills/end_of_day/SKILL.md.
-# Runtime verification (actual Haiku subagent firing) is T-16 Sub-task B manual smoke.
+# Runtime verification (actual sleep subagent firing) is T-16 Sub-task B manual smoke.
 #
 # Usage:
 #   bash quoin/dev/tests/test_sleep_chaining.sh
@@ -84,7 +84,7 @@ test_default_chain_fires() {
     ok=false
   }
 
-  # NOTE: runtime verification that the Haiku subagent actually fires is manual
+  # NOTE: runtime verification that the sleep subagent actually fires is manual
   # and is covered in T-16 Sub-task B smoke.
 
   if $ok; then
