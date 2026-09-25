@@ -774,6 +774,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/fixtures/scenarios.json",
         "quoin/dev/tests/test_probe_gateway_tool_loop.py",
     ),
+    (
+        ".github/workflows/adapter-check.yml",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
     # Bare filename match: this row also matches any project's own
     # top-level pyproject.toml once this script is deployed there, since
     # the allowlist is a flat suffix match with no directory-prefix rule

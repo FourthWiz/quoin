@@ -21,3 +21,6 @@ jobs:
 
       - name: Run registration roster check
         run: python3 quoin/dev/check_registration.py
+
+      - name: Run OpenCode manifest drift check
+        run: PYTHONPATH=src python3 -m quoin.opencode_adapter check-manifest --source-dir quoin
