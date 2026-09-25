@@ -9,15 +9,20 @@ which the registration roster census would otherwise pick up).
 """
 from __future__ import annotations
 
+import ast
 import json
+from pathlib import Path
 
 import pytest
 
-from quoin.opencode_adapter import frontmatter
+from quoin.opencode_adapter import frontmatter, scripts
 
 # Mirrors generate.ARTIFACT_ROOT, added when the generator module lands;
 # a later task replaces this literal with that import directly.
 _ARTIFACT_ROOT = ".workflow_artifacts"
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+SOURCE_DIR = REPO_ROOT / "quoin"
 
 
 # --- frontmatter: emit/parse round trip ---
@@ -198,3 +203,134 @@ def test_frontmatter_round_trips_with_json_module_for_scalar_fidelity():
     text = frontmatter.emit(fields)
     parsed, _ = frontmatter.parse(text)
     assert parsed == fields
+
+
+# --- scripts: allowlist resolution ---
+
+
+def test_script_path_resolves_every_allowlisted_name_to_an_existing_file():
+    for name in scripts.ALLOWED_SCRIPTS:
+        path = scripts.script_path(SOURCE_DIR, name)
+        assert path.is_file(), path
+
+
+def test_script_path_rejects_unknown_name():
+    with pytest.raises(ValueError):
+        scripts.script_path(SOURCE_DIR, "evil")
+
+
+def _has_main_guard(tree: ast.Module) -> bool:
+    for node in tree.body:
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        if not (isinstance(test, ast.Compare) and len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)):
+            continue
+        left, right = test.left, test.comparators[0]
+        names = {n for n in (left, right) if isinstance(n, ast.Name)}
+        constants = {n.value for n in (left, right) if isinstance(n, ast.Constant)}
+        if any(n.id == "__name__" for n in names) and "__main__" in constants:
+            return True
+    return False
+
+
+def test_every_allowlisted_script_has_a_top_level_main_guard():
+    for name in scripts.ALLOWED_SCRIPTS:
+        path = scripts.script_path(SOURCE_DIR, name)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        assert _has_main_guard(tree), "%s has no top-level __main__ guard" % name
+
+
+# --- scripts: AST write census ---
+
+_WRITE_ATTR_NAMES = {"rename", "unlink", "write_text", "write_bytes", "mkdir", "makedirs", "rmtree", "move"}
+_WRITE_MODE_CHARS = set("wax+")
+
+
+def _mode_indicates_write(mode_node) -> bool:
+    if isinstance(mode_node, ast.Constant) and isinstance(mode_node.value, str):
+        return any(ch in mode_node.value for ch in _WRITE_MODE_CHARS)
+    return True  # a non-literal mode is treated as a write
+
+
+def _tree_has_write_call(tree: ast.Module) -> bool:
+    found = False
+
+    class _Visitor(ast.NodeVisitor):
+        def visit_Call(self, node: ast.Call) -> None:
+            nonlocal found
+            func = node.func
+            is_open_builtin = isinstance(func, ast.Name) and func.id == "open"
+            is_open_attr = isinstance(func, ast.Attribute) and func.attr == "open"
+            if is_open_builtin or is_open_attr:
+                mode_node = None
+                for kw in node.keywords:
+                    if kw.arg == "mode":
+                        mode_node = kw.value
+                if mode_node is None:
+                    idx = 1 if is_open_builtin else 0
+                    if len(node.args) > idx:
+                        mode_node = node.args[idx]
+                if mode_node is not None and _mode_indicates_write(mode_node):
+                    found = True
+            elif isinstance(func, ast.Attribute):
+                if isinstance(func.value, ast.Name) and func.value.id == "os" and func.attr in ("replace", "remove"):
+                    found = True
+                elif isinstance(func.value, ast.Name) and func.value.id == "shutil":
+                    found = True
+                elif func.attr in _WRITE_ATTR_NAMES:
+                    found = True
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    return found
+
+
+def test_write_census_flags_exactly_the_write_capable_scripts():
+    flagged = []
+    for name in scripts.ALLOWED_SCRIPTS:
+        path = scripts.script_path(SOURCE_DIR, name)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if _tree_has_write_call(tree):
+            flagged.append(name)
+    assert set(flagged) == set(scripts.WRITE_CAPABLE_SCRIPTS)
+
+
+def test_write_census_ignores_write_calls_mentioned_only_in_a_docstring():
+    source = '''
+"""This script never calls os.replace(a, b) or shutil.move(a, b), it only talks about it."""
+
+
+def f():
+    return 1
+'''
+    tree = ast.parse(source)
+    assert _tree_has_write_call(tree) is False
+
+
+def test_write_census_open_with_no_mode_counts_as_a_read():
+    tree = ast.parse("open('x')")
+    assert _tree_has_write_call(tree) is False
+
+
+def test_write_census_flags_open_with_write_mode():
+    tree = ast.parse("open('x', 'w')")
+    assert _tree_has_write_call(tree) is True
+
+
+# --- scripts: referenced_scripts ---
+
+
+def test_referenced_scripts_finds_names_in_prose():
+    text = "Run `quoin opencode script path_resolve --task t` to resolve the path."
+    assert scripts.referenced_scripts(text) == ["path_resolve"]
+
+
+def test_referenced_scripts_is_sorted_and_unique():
+    text = "quoin opencode script validate_artifact x, then quoin opencode script path_resolve y, then quoin opencode script path_resolve z again."
+    assert scripts.referenced_scripts(text) == ["path_resolve", "validate_artifact"]
+
+
+def test_referenced_scripts_ignores_near_misses():
+    text = "quoin opencode scripts x and quoin opencode script * are not real references."
+    assert scripts.referenced_scripts(text) == []
