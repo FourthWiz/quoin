@@ -742,7 +742,7 @@ def test_check_task_graph_flags_a_target_whose_mode_is_primary(monkeypatch):
     assert any("planner" in e and "primary" in e for e in errors)
 
 
-# --- T-07: generator core (inputs, sections, rendering, digests, collisions) ---
+# --- generator core: inputs, sections, rendering, digests, collisions ---
 
 
 def _load_real_manifest():
@@ -1010,7 +1010,7 @@ def test_script_coverage_every_referenced_script_is_in_the_bound_roles_allowlist
             assert ref in generate.ROLE_SCRIPTS.get(role, ()), (k, role, ref)
 
 
-# determinism and digest shape (T-09 fuller coverage lands separately; this is a smoke check)
+# determinism and digest shape (fuller coverage lands separately below; this is a smoke check)
 
 
 def test_double_render_is_byte_identical():
@@ -1218,7 +1218,7 @@ def test_load_inputs_on_temp_copy_with_drifting_manifest_raises_with_drift_messa
     assert "mode" in str(exc_info.value)
 
 
-# --- T-08: check_rendered on the real tree ---
+# --- check_rendered on the real tree ---
 
 
 def test_check_rendered_of_real_render_is_empty():
@@ -1234,7 +1234,7 @@ def test_claude_token_inside_instructions_legacy_section_is_accepted():
     assert not any(generate.INSTRUCTIONS_PATH in f for f in findings)
 
 
-# --- T-08: injected hazards, each through overlays in a temp copy ---
+# --- injected hazards, each through overlays in a temp copy ---
 
 
 def _copy_source_tree(tmp_path):
@@ -1357,14 +1357,14 @@ def test_injected_map_value_on_an_action_only_permission_key_raises(monkeypatch)
 def test_injected_invalid_agent_mode_raises():
     # "implementer" is never a Task target and never a Task source, so this
     # reaches check_rendered's own mode check instead of tripping
-    # check_task_graph (T-05) first.
+    # the delegation-graph check first.
     inputs = _mutated_inputs()
     inputs.manifest["roles"]["implementer"]["mode"] = "sub"
     with pytest.raises(generate.GenerationError, match="mode 'sub'"):
         generate.render(inputs)
 
 
-# --- T-08: residue test over rendered skills (test-only, stricter than check_rendered) ---
+# --- residue test over rendered skills (test-only, stricter than check_rendered) ---
 
 
 def test_residue_over_rendered_skills():
@@ -1448,7 +1448,7 @@ def test_forbidden_patterns_and_model_ids_over_every_rendered_file():
             assert match is None, "%s matched %r in %s" % (pattern.pattern, match, relpath)
 
 
-# --- T-09: determinism and dependency-exact digests ---
+# --- determinism and dependency-exact digests ---
 
 
 def _digest_map(files):
@@ -1718,7 +1718,7 @@ def test_generator_version_pin_forces_a_schema_bump_on_output_change():
     assert digest == "64d75414a3cbeeab0d9992fda9fbf6be6ca18bf779e5ff1b703243e02f4fa727"
 
 
-# --- T-10: core-input routing and source sweep ---
+# --- core-input routing and source sweep ---
 
 
 def _import_affected_tests():

@@ -61,9 +61,9 @@ ROLE_SCRIPTS: Dict[str, tuple] = {
 
 # The last two keys of every shell map (last-match-wins), so a redirected,
 # heredoc or process-substitution statement is asked about even when its
-# command is an allowed script (D-03, R-13): OpenCode matches a shell
-# permission pattern against the whole statement text, redirections
-# included, and never path-checks a redirection target
+# command is an allowed script: OpenCode matches a shell permission pattern
+# against the whole statement text, redirections included, and never
+# path-checks a redirection target
 # (`packages/opencode/src/tool/shell.ts` L99, L119-121).
 REDIRECT_RULE = {"*>*": "ask", "*<*": "ask"}
 
@@ -190,8 +190,8 @@ def check_task_graph(roles_by_name: Dict[str, dict]) -> List[str]:
     `subagent` or `all` and whose own `task` rule denies further
     delegation, so depth never exceeds 1; every role with an allowed edge
     must itself be `primary`, because a role that can be a Task target
-    cannot also be a source (D-01). Returns offender-naming messages, empty
-    when the graph is clean.
+    cannot also be a source. Returns offender-naming messages, empty when
+    the graph is clean.
     """
     agent_to_role = {names.role_agent_name(role): role for role in roles_by_name}
     errors: List[str] = []
