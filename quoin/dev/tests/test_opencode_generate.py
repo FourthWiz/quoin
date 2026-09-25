@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from quoin.opencode_adapter import frontmatter, scripts
+from quoin.opencode_adapter import frontmatter, generate, scripts
 
 # Mirrors generate.ARTIFACT_ROOT, added when the generator module lands;
 # a later task replaces this literal with that import directly.
@@ -334,3 +334,412 @@ def test_referenced_scripts_is_sorted_and_unique():
 def test_referenced_scripts_ignores_near_misses():
     text = "quoin opencode scripts x and quoin opencode script * are not real references."
     assert scripts.referenced_scripts(text) == []
+
+
+# --- generate: role permission maps and the delegation graph ---
+#
+# A small last-match permission evaluator, local to this test module, mirrors
+# OpenCode's own wildcard matcher and evaluator closely enough to exercise
+# `generate.role_permissions`: `Wildcard.match` turns `*` into `.*`
+# (packages/core/src/util/wildcard.ts), a trailing " *" on a shell pattern
+# makes the argument tail (including the separating space) optional
+# (BashArity.prefix, packages/opencode/src/permission/arity.ts L1-9), and
+# `Permission.evaluate` is last-match-wins over an ordered ruleset followed
+# by the approved list (packages/opencode/src/permission/index.ts L28-37,
+# L67-73, L186-198). It layers built-in defaults (agent.ts L119-136), then
+# the role's own map, then an optional approved list, mirroring the "empty
+# user config" middle layer the plan describes.
+
+_ALL_ROLES = ("coordinator", "investigator", "architect", "planner", "implementer", "critic", "reviewer", "gate")
+_SHELL_ROLES = ("architect", "planner", "gate", "coordinator", "implementer", "investigator")
+
+_BUILTIN_DEFAULTS = {
+    "*": "allow",
+    "doom_loop": "ask",
+    "external_directory": "ask",
+    "question": "deny",
+    "plan_enter": "deny",
+    "plan_exit": "deny",
+    "read": {"*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "allow"},
+}
+
+
+def _wildcard_regex(pattern: str):
+    import re
+
+    if pattern.endswith(" *"):
+        head = pattern[:-2]
+        body = re.escape(head).replace(r"\*", ".*")
+        return re.compile(r"^%s( .*)?$" % body)
+    body = re.escape(pattern).replace(r"\*", ".*")
+    return re.compile(r"^%s$" % body)
+
+
+def _evaluate_ruleset(rule, text):
+    if isinstance(rule, str):
+        return rule
+    action = None
+    for pattern, value in rule.items():
+        if _wildcard_regex(pattern).match(text):
+            action = value
+    return action
+
+
+def evaluate(role, permission_type, text, approved=None):
+    perms = generate.role_permissions(role)
+    if permission_type in perms:
+        action = _evaluate_ruleset(perms[permission_type], text)
+        if action is None:
+            action = _evaluate_ruleset(_BUILTIN_DEFAULTS.get(permission_type, _BUILTIN_DEFAULTS["*"]), text)
+    elif "*" in perms:
+        action = _evaluate_ruleset(perms["*"], text)
+    else:
+        action = _evaluate_ruleset(_BUILTIN_DEFAULTS.get(permission_type, _BUILTIN_DEFAULTS["*"]), text)
+    for a_type, a_pattern, a_action in approved or ():
+        if a_type == permission_type and _wildcard_regex(a_pattern).match(text):
+            action = a_action
+    return action
+
+
+def _is_hidden(role, permission_type):
+    """Mirrors `Permission.disabled` (permission/index.ts L204-214): a tool
+    is hidden when the LAST rule for its permission type — in the role's own
+    ruleset, falling back to the role's own catch-all `"*"` entry when the
+    type is absent — has the literal pattern `"*"` and action `deny`. A bare
+    action string behaves as a single `"*"`-pattern rule."""
+    perms = generate.role_permissions(role)
+    rule = perms.get(permission_type)
+    if rule is None:
+        rule = perms.get("*")
+    if rule is None:
+        return False
+    if isinstance(rule, str):
+        return rule == "deny"
+    last_pattern = next(reversed(rule))
+    return last_pattern == "*" and rule[last_pattern] == "deny"
+
+
+def test_read_only_roles_deny_write_shell_task_and_network_by_default():
+    for role in ("critic", "reviewer"):
+        for permission_type in ("edit", "bash", "task", "webfetch", "websearch", "todowrite", "an_invented_mcp_tool"):
+            assert evaluate(role, permission_type, "anything") == "deny", (role, permission_type)
+        assert evaluate(role, "read", "src/a.py") == "allow"
+        assert evaluate(role, "read", ".env") == "ask"
+        assert evaluate(role, "skill", "quoin-plan") == "allow"
+        assert evaluate(role, "skill", "plan") == "deny"
+        perms = generate.role_permissions(role)
+        assert list(perms.keys())[0] == "*"
+        assert perms["*"] == "deny"
+
+
+def test_artifact_root_roles_edit_and_bash_evaluation():
+    for role in ("architect", "planner", "gate", "investigator"):
+        assert evaluate(role, "edit", "src/a.py") == "deny"
+        assert evaluate(role, "edit", "%s/t/plan.md" % generate.ARTIFACT_ROOT) == "allow"
+        assert evaluate(role, "edit", "sub/%s/t/plan.md" % generate.ARTIFACT_ROOT) == "allow"
+        assert evaluate(role, "bash", "quoin opencode script path_resolve --task t") == "allow"
+        assert evaluate(role, "bash", "rm -rf build") == "ask"
+
+
+def test_coordinator_edit_asks_by_default_and_allows_artifact_paths():
+    assert evaluate("coordinator", "edit", "src/a.py") == "ask"
+    assert evaluate("coordinator", "edit", "%s/t/plan.md" % generate.ARTIFACT_ROOT) == "allow"
+    assert evaluate("coordinator", "edit", "sub/%s/t/plan.md" % generate.ARTIFACT_ROOT) == "allow"
+
+
+def test_implementer_emits_no_edit_key_at_all():
+    assert "edit" not in generate.role_permissions("implementer")
+
+
+def test_role_scripts_names_are_all_allowlisted():
+    for role_scripts in generate.ROLE_SCRIPTS.values():
+        for name in role_scripts:
+            assert name in scripts.ALLOWED_SCRIPTS, name
+
+
+def test_write_capable_scripts_scoped_to_the_investigator_only():
+    for role, role_scripts in generate.ROLE_SCRIPTS.items():
+        for name in role_scripts:
+            if name in scripts.WRITE_CAPABLE_SCRIPTS:
+                assert role == "investigator", (role, name)
+
+
+def test_script_scoping_matches_the_role_scripts_table():
+    for role in _SHELL_ROLES:
+        for name in scripts.ALLOWED_SCRIPTS:
+            text = "quoin opencode script %s --x" % name
+            expected = "allow" if name in generate.ROLE_SCRIPTS.get(role, ()) else "ask"
+            assert evaluate(role, "bash", text) == expected, (role, name)
+
+
+def test_no_role_bash_map_contains_an_argument_wide_script_allow():
+    for role in _SHELL_ROLES:
+        rule = generate.role_permissions(role)["bash"]
+        assert "quoin opencode script *" not in rule
+
+
+_REDIRECTION_FORMS = (
+    "> src/app.py",
+    ">> src/app.py",
+    "2>&1",
+    "2>/dev/null",
+    "&> out.txt",
+    ">| out.txt",
+    "< .env",
+    "<<EOF",
+)
+
+
+def test_redirection_after_an_allowed_script_still_asks():
+    base = "quoin opencode script path_resolve --task t"
+    for role in _SHELL_ROLES:
+        assert evaluate(role, "bash", base) == "allow", role
+        for suffix in _REDIRECTION_FORMS:
+            text = "%s %s" % (base, suffix)
+            assert evaluate(role, "bash", text) == "ask", (role, suffix)
+
+
+def test_shell_map_last_two_keys_are_the_redirect_rules():
+    for role in _SHELL_ROLES:
+        rule = generate.role_permissions(role)["bash"]
+        keys = list(rule.keys())
+        assert keys[-2:] == ["*>*", "*<*"], (role, keys)
+        assert rule["*>*"] == "ask"
+        assert rule["*<*"] == "ask"
+
+
+def test_no_role_emits_a_broad_allow_for_write_shell_task_or_network_permissions():
+    watched_types = (
+        "*",
+        "edit",
+        "bash",
+        "task",
+        "webfetch",
+        "websearch",
+        "external_directory",
+        "todowrite",
+        "question",
+        "doom_loop",
+    )
+    for role in _ALL_ROLES:
+        perms = generate.role_permissions(role)
+        for permission_type in watched_types:
+            rule = perms.get(permission_type)
+            if rule is None:
+                continue
+            if isinstance(rule, str):
+                assert rule != "allow", "%s/%s emits a bare allow" % (role, permission_type)
+            else:
+                assert rule.get("*") != "allow", "%s/%s emits an allow at '*'" % (role, permission_type)
+
+
+def _posture_tuples(role):
+    """(role, permission_type, pattern, action) triples for every entry of
+    `role_permissions(role)` whose action is `allow` or `ask`. A bare-string
+    rule is treated as a single `"*"`-pattern entry."""
+    tuples = []
+    for permission_type, rule in generate.role_permissions(role).items():
+        if isinstance(rule, str):
+            if rule in ("allow", "ask"):
+                tuples.append((role, permission_type, "*", rule))
+            continue
+        for pattern, action in rule.items():
+            if action in ("allow", "ask"):
+                tuples.append((role, permission_type, pattern, action))
+    return tuples
+
+
+def test_posture_pin_full_allow_and_ask_set():
+    expected = set()
+    for role in ("critic", "reviewer"):
+        expected |= {
+            (role, "read", "*", "allow"),
+            (role, "read", "*.env", "ask"),
+            (role, "read", "*.env.*", "ask"),
+            (role, "read", "*.env.example", "allow"),
+            (role, "glob", "*", "allow"),
+            (role, "grep", "*", "allow"),
+            (role, "lsp", "*", "allow"),
+            (role, "skill", "quoin-*", "allow"),
+        }
+
+    expected |= {
+        ("investigator", "edit", "%s/*" % generate.ARTIFACT_ROOT, "allow"),
+        ("investigator", "edit", "*/%s/*" % generate.ARTIFACT_ROOT, "allow"),
+        ("investigator", "bash", "*", "ask"),
+        ("investigator", "bash", "quoin opencode script generate_discovery_map *", "allow"),
+        ("investigator", "bash", "quoin opencode script path_resolve *", "allow"),
+        ("investigator", "bash", "*>*", "ask"),
+        ("investigator", "bash", "*<*", "ask"),
+        ("investigator", "skill", "quoin-*", "allow"),
+    }
+
+    for role in ("architect", "planner"):
+        expected |= {
+            (role, "edit", "%s/*" % generate.ARTIFACT_ROOT, "allow"),
+            (role, "edit", "*/%s/*" % generate.ARTIFACT_ROOT, "allow"),
+            (role, "bash", "*", "ask"),
+            (role, "bash", "quoin opencode script path_resolve *", "allow"),
+            (role, "bash", "quoin opencode script validate_artifact *", "allow"),
+            (role, "bash", "*>*", "ask"),
+            (role, "bash", "*<*", "ask"),
+            (role, "task", "quoin-investigator", "allow"),
+            (role, "task", "quoin-critic", "allow"),
+            (role, "skill", "quoin-*", "allow"),
+        }
+
+    expected |= {
+        ("gate", "edit", "%s/*" % generate.ARTIFACT_ROOT, "allow"),
+        ("gate", "edit", "*/%s/*" % generate.ARTIFACT_ROOT, "allow"),
+        ("gate", "bash", "*", "ask"),
+        ("gate", "bash", "quoin opencode script path_resolve *", "allow"),
+        ("gate", "bash", "quoin opencode script validate_artifact *", "allow"),
+        ("gate", "bash", "*>*", "ask"),
+        ("gate", "bash", "*<*", "ask"),
+        ("gate", "skill", "quoin-*", "allow"),
+    }
+
+    expected |= {
+        ("coordinator", "edit", "*", "ask"),
+        ("coordinator", "edit", "%s/*" % generate.ARTIFACT_ROOT, "allow"),
+        ("coordinator", "edit", "*/%s/*" % generate.ARTIFACT_ROOT, "allow"),
+        ("coordinator", "bash", "*", "ask"),
+        ("coordinator", "bash", "quoin opencode script checkpoint_picker *", "allow"),
+        ("coordinator", "bash", "quoin opencode script classify_critic_issues *", "allow"),
+        ("coordinator", "bash", "quoin opencode script handoff_validate *", "allow"),
+        ("coordinator", "bash", "quoin opencode script path_resolve *", "allow"),
+        ("coordinator", "bash", "quoin opencode script validate_artifact *", "allow"),
+        ("coordinator", "bash", "*>*", "ask"),
+        ("coordinator", "bash", "*<*", "ask"),
+        ("coordinator", "task", "quoin-investigator", "allow"),
+        ("coordinator", "task", "quoin-critic", "allow"),
+        ("coordinator", "task", "quoin-reviewer", "allow"),
+        ("coordinator", "skill", "quoin-*", "allow"),
+    }
+
+    expected |= {
+        ("implementer", "bash", "*", "ask"),
+        ("implementer", "bash", "quoin opencode script path_resolve *", "allow"),
+        ("implementer", "bash", "quoin opencode script validate_artifact *", "allow"),
+        ("implementer", "bash", "*>*", "ask"),
+        ("implementer", "bash", "*<*", "ask"),
+        ("implementer", "skill", "quoin-*", "allow"),
+    }
+
+    actual = set()
+    for role in _ALL_ROLES:
+        actual |= set(_posture_tuples(role))
+
+    assert actual == expected
+
+
+def test_evaluator_mirrors_the_full_builtin_default_set():
+    assert evaluate("architect", "*", "anything") == "allow"
+    assert evaluate("architect", "doom_loop", "anything") == "ask"
+    assert evaluate("architect", "external_directory", "/tmp/x") == "ask"
+    assert evaluate("architect", "plan_enter", "anything") == "deny"
+    assert evaluate("architect", "plan_exit", "anything") == "deny"
+    assert evaluate("architect", "read", ".env") == "ask"
+    assert evaluate("architect", "read", ".env.example") == "allow"
+    for role in _ALL_ROLES:
+        assert evaluate(role, "question", "anything") == "deny", role
+
+
+def test_guard_rail_pin_an_always_approval_outranks_the_role_map():
+    approved = [("edit", "*", "allow")]
+    assert evaluate("architect", "edit", "src/a.py", approved=approved) == "allow"
+
+    approved = [("bash", "python3 *", "allow")]
+    assert evaluate("planner", "bash", "python3 -c x > src/a.py", approved=approved) == "allow"
+
+
+def test_permission_disabled_mirror_hides_only_the_documented_tools():
+    for role in ("critic", "reviewer"):
+        assert _is_hidden(role, "edit")
+        assert _is_hidden(role, "bash")
+        assert _is_hidden(role, "task")
+    for role in ("investigator", "gate", "implementer"):
+        assert _is_hidden(role, "task")
+    for role in ("architect", "planner", "coordinator"):
+        assert not _is_hidden(role, "task")
+    for role in ("architect", "planner", "gate", "investigator", "coordinator"):
+        assert not _is_hidden(role, "edit")
+    for role in _SHELL_ROLES:
+        assert not _is_hidden(role, "bash")
+    assert not _is_hidden("implementer", "edit")
+
+
+def test_check_task_graph_is_empty_for_the_real_roles():
+    roles_by_name = {
+        "coordinator": {"mode": "primary"},
+        "investigator": {"mode": "all"},
+        "architect": {"mode": "primary"},
+        "planner": {"mode": "primary"},
+        "implementer": {"mode": "primary"},
+        "critic": {"mode": "subagent"},
+        "reviewer": {"mode": "subagent"},
+        "gate": {"mode": "primary"},
+    }
+    assert generate.check_task_graph(roles_by_name) == []
+
+
+def test_check_task_graph_flags_an_edge_from_a_non_primary_source(monkeypatch):
+    real = generate.role_permissions
+
+    def fake(role):
+        perms = real(role)
+        if role == "investigator":
+            perms = dict(perms)
+            perms["task"] = {"*": "deny", "quoin-critic": "allow"}
+        return perms
+
+    monkeypatch.setattr(generate, "role_permissions", fake)
+    roles_by_name = {
+        "investigator": {"mode": "all"},
+        "critic": {"mode": "subagent"},
+    }
+    errors = generate.check_task_graph(roles_by_name)
+    assert any("investigator" in e and "critic" in e for e in errors)
+
+
+def test_check_task_graph_flags_an_unknown_target(monkeypatch):
+    real = generate.role_permissions
+
+    def fake(role):
+        perms = real(role)
+        if role == "architect":
+            perms = dict(perms)
+            perms["task"] = dict(perms["task"])
+            perms["task"]["quoin-ghost"] = "allow"
+        return perms
+
+    monkeypatch.setattr(generate, "role_permissions", fake)
+    roles_by_name = {
+        "architect": {"mode": "primary"},
+        "critic": {"mode": "subagent"},
+        "investigator": {"mode": "all"},
+    }
+    errors = generate.check_task_graph(roles_by_name)
+    assert any("quoin-ghost" in e for e in errors)
+
+
+def test_check_task_graph_flags_a_target_whose_mode_is_primary(monkeypatch):
+    real = generate.role_permissions
+
+    def fake(role):
+        perms = real(role)
+        if role == "architect":
+            perms = dict(perms)
+            perms["task"] = dict(perms["task"])
+            perms["task"]["quoin-planner"] = "allow"
+        return perms
+
+    monkeypatch.setattr(generate, "role_permissions", fake)
+    roles_by_name = {
+        "architect": {"mode": "primary"},
+        "planner": {"mode": "primary"},
+        "critic": {"mode": "subagent"},
+        "investigator": {"mode": "all"},
+    }
+    errors = generate.check_task_graph(roles_by_name)
+    assert any("planner" in e and "primary" in e for e in errors)
