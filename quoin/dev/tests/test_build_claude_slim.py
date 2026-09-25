@@ -128,7 +128,7 @@ def test_classification_table_matches_plan_table():
     keep_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_KEEP_HEADINGS)
     drop_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_DROP_HEADINGS)
     assert keep_bytes == 7371, keep_bytes
-    assert drop_bytes == 31885, drop_bytes  # moved by the v3-aware open-model routing section edit
+    assert drop_bytes == 31926, drop_bytes  # IVG-263 tier-table edit (sleep/cleanup to Sonnet)
 
 
 def test_classification_table_is_bijective_with_source_headings():
