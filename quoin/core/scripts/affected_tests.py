@@ -833,6 +833,50 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/core/workflow/skills.json",
         "quoin/dev/tests/test_opencode_manifest.py",
     ),
+    (
+        "quoin/adapters/opencode/feature-manifest.json",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/overlays.json",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/overlays.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/command.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/command.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/skill.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/skill.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/agent.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/agent.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/instructions.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/instructions.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

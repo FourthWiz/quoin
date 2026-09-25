@@ -1,0 +1,243 @@
+{
+  "entries": {
+    "architect": {
+      "command_note": "",
+      "description": "Deep architectural analysis and stage decomposition for a task, run by the architect role.",
+      "extra_sections": [],
+      "notes": [],
+      "rewrites": []
+    },
+    "checkpoint": {
+      "command_note": "",
+      "description": "Saves a session-restore sentinel so a fresh session can pick up where the last one left off.",
+      "extra_sections": [
+        "Save modes"
+      ],
+      "notes": [
+        "Cleanup does not run before a checkpoint save; there is no cleanup skill in OpenCode.",
+        "The skill writes its own `recent-sessions.md` entry rather than relying on a hook."
+      ],
+      "rewrites": [
+        {
+          "from": "- Auto-fires as the first sub-step of `/cleanup` (default-on; `--no-cleanup` to suppress).\n",
+          "section": "When to use",
+          "to": ""
+        },
+        {
+          "from": "`checkpoint_picker.py`",
+          "section": "Output",
+          "to": "`quoin opencode script checkpoint_picker`"
+        },
+        {
+          "from": "- Auto-cleanup: unless `--no-cleanup` is passed, invoke the cleanup skill as the\n  first sub-step to trash stale sentinels before writing new ones.\n",
+          "section": "Behavior contract",
+          "to": "- Auto-cleanup is not available in OpenCode: there is no cleanup skill to invoke, so stale sentinels are left for the user to clear manually.\n"
+        }
+      ]
+    },
+    "continue_work": {
+      "command_note": "",
+      "description": "Revives context from a prior session by presenting a session picker and the last checkpoint summary.",
+      "extra_sections": [],
+      "notes": [
+        "There is no hook-written session index or Claude transcript in OpenCode.",
+        "Resume from the session-state file and the checkpoint handoff, never from a transcript."
+      ],
+      "rewrites": [
+        {
+          "from": "(written\n  by hooks and `/checkpoint`).",
+          "section": "Inputs",
+          "to": "(written by `/checkpoint`)."
+        },
+        {
+          "from": "- Session JSONL files for the sessions listed in `recent-sessions.md` (to extract last\n  checkpoint summary and recent messages).\n",
+          "section": "Inputs",
+          "to": "- Session-state files under `{{ARTIFACT_ROOT}}/memory/sessions/` for the sessions listed in `recent-sessions.md` (to extract last checkpoint summary and recent messages).\n"
+        },
+        {
+          "from": "- Tolerate missing JSONL: if a session JSONL file is missing, show a degraded summary\n  from the session-state `.md` file instead.\n",
+          "section": "Behavior contract",
+          "to": "- Tolerate a missing session-state file: if one is missing, show a degraded summary from `recent-sessions.md` and the checkpoint handoff alone.\n"
+        }
+      ]
+    },
+    "critic": {
+      "command_note": "The coordinator delegates to the quoin-critic subagent through the task tool and persists the returned findings.",
+      "description": "Critiques a plan for gaps, risks and integration issues, run with no write and no shell access.",
+      "extra_sections": [],
+      "notes": [
+        "The read-only subagent returns its findings as its final message; the calling role writes the artifact.",
+        "Tests run only in the calling role, never in the read-only subagent.",
+        "Running critic in this adapter is a separate context, not model diversity."
+      ],
+      "rewrites": [
+        {
+          "from": "`classify_critic_issues.py`",
+          "section": "Output",
+          "to": "`quoin opencode script classify_critic_issues`"
+        },
+        {
+          "from": "The runtime adapter is responsible for spawning a\n  fresh agent; the mechanism is adapter-specific.",
+          "section": "Behavior contract",
+          "to": "The coordinator delegates to the quoin-critic subagent through the task tool, which OpenCode always starts with a fresh context."
+        }
+      ]
+    },
+    "discover": {
+      "command_note": "",
+      "description": "Scans every repo in the project and saves an inventory, architecture overview and dependency map.",
+      "extra_sections": [
+        "Discovery map (optional structured output)"
+      ],
+      "notes": [],
+      "rewrites": [
+        {
+          "from": "`quoin/scripts/generate_discovery_map.py`",
+          "section": "Discovery map (optional structured output)",
+          "to": "`quoin opencode script generate_discovery_map`"
+        }
+      ]
+    },
+    "end_of_task": {
+      "command_note": "",
+      "description": "Finalizes a reviewed task: commits remaining changes, pushes the branch and captures lessons learned.",
+      "extra_sections": [],
+      "notes": [
+        "This skill is never started without an explicit user command."
+      ],
+      "rewrites": []
+    },
+    "gate": {
+      "command_note": "The coordinator repeats the failed-check rule when relaying gate results.",
+      "description": "Runs an automated quality gate and requires explicit human approval before the next phase.",
+      "extra_sections": [
+        "Gate levels",
+        "Gate checkpoints"
+      ],
+      "notes": [
+        "Run validators with quoin opencode script validate_artifact and quoin opencode script path_resolve.",
+        "A missing, failing or unrunnable validator is a failed check, never a reason to approve on judgment.",
+        "A validator warning that PyYAML is not installed means the frontmatter check did not run; report the result as partial, not as a pass."
+      ],
+      "rewrites": [
+        {
+          "from": "Recovery: use the canonical safe reset-to-origin recipe at\n  `memory/branch-recovery.md` (deployed Tier-1 memory file) — move\n  mis-placed commits to a feature branch first, then run the recipe.\n",
+          "section": "Behavior contract",
+          "to": "Recovery: move the mis-placed commits onto a feature branch first, then reset the protected branch to match its upstream.\n"
+        }
+      ]
+    },
+    "implement": {
+      "command_note": "",
+      "description": "Turns a converged plan into working code and tests, run by the implementer role.",
+      "extra_sections": [
+        "Branch hygiene",
+        "Plan-deviation handling",
+        "Automated verify-fix loop"
+      ],
+      "notes": [
+        "This skill is never started without an explicit user command."
+      ],
+      "rewrites": [
+        {
+          "from": "If task commits have already landed on a protected branch and need to be recovered, the canonical safe reset-to-origin recipe is at `memory/branch-recovery.md` (deployed Tier-1 memory file).",
+          "section": "Branch hygiene",
+          "to": "If task commits have already landed on a protected branch and need to be recovered, move them onto a feature branch first, then reset the protected branch to match its upstream."
+        }
+      ]
+    },
+    "plan": {
+      "command_note": "",
+      "description": "Creates a detailed, implementation-ready plan for a development task, run by the planner role.",
+      "extra_sections": [],
+      "notes": [],
+      "rewrites": []
+    },
+    "review": {
+      "command_note": "The coordinator delegates to the quoin-reviewer subagent through the task tool and persists the returned findings.",
+      "description": "Verifies an implementation against the plan for quality, correctness and integration safety.",
+      "extra_sections": [],
+      "notes": [
+        "The read-only subagent returns its findings as its final message; the calling role writes the artifact.",
+        "Tests run only in the calling role, never in the read-only subagent.",
+        "Running review in this adapter is a separate context, not model diversity."
+      ],
+      "rewrites": []
+    },
+    "thorough_plan": {
+      "command_note": "",
+      "description": "Triages a task by size and orchestrates the matching plan-critic-revise convergence loop.",
+      "extra_sections": [],
+      "notes": [],
+      "rewrites": [
+        {
+          "from": "The skill also spawns the gate skill (via the adapter's mechanism) after\nconvergence, and updates a session-state file under\n`{{ARTIFACT_ROOT}}/memory/sessions/`.\n",
+          "section": "Behavior contract",
+          "to": "After convergence, the user runs `/quoin-gate`, and the skill updates a session-state file under\n`{{ARTIFACT_ROOT}}/memory/sessions/`.\n"
+        },
+        {
+          "from": "- The skill MUST NOT produce plan content itself. It invokes the planning\n  skill, the critic skill, and the revision skill as coordinated agents.\n",
+          "section": "Behavior contract",
+          "to": "- The skill MUST NOT produce plan content itself. The planner plans and revises in this session; each critique runs in a fresh quoin-critic subagent.\n"
+        }
+      ]
+    }
+  },
+  "roles": {
+    "architect": {
+      "description": "Writes architecture artifacts for a task.",
+      "prompt": [
+        "You are the Quoin architect. You produce the task's architecture document and stage decomposition, editing only inside {{ARTIFACT_ROOT}}.",
+        "You ask for approvals and choices in chat, because the question tool is denied to every Quoin role."
+      ]
+    },
+    "coordinator": {
+      "description": "Runs write-capable commands and persists findings returned by critic and reviewer subagents.",
+      "prompt": [
+        "You are the Quoin coordinator. You run the review, critic, checkpoint, continue-work and end-of-task workflows and you are the only role that persists findings returned by the quoin-critic and quoin-reviewer subagents into an artifact.",
+        "You ask for approvals and choices in chat, because the question tool is denied to every Quoin role.",
+        "Edits outside {{ARTIFACT_ROOT}} prompt for confirmation; prefer editing only inside it."
+      ]
+    },
+    "critic": {
+      "description": "Critiques a plan with no write and no shell access.",
+      "prompt": [
+        "You are the Quoin critic. You cannot write files or run shell commands. You read the plan and the codebase and return your complete findings as your final message; you never write the critique artifact yourself."
+      ]
+    },
+    "gate": {
+      "description": "Runs deterministic validators and enforces the quality gate.",
+      "prompt": [
+        "You are the Quoin gate. You run the deterministic validators named in your notes and report their results plainly; you cannot override missing evidence with judgment.",
+        "You ask for approvals and choices in chat, because the question tool is denied to every Quoin role."
+      ]
+    },
+    "implementer": {
+      "description": "Edits within the project to implement a converged plan.",
+      "prompt": [
+        "You are the Quoin implementer. You edit source files anywhere in the project to turn a converged plan into working code and tests, but you never commit on a protected branch.",
+        "You never start implementation or finalize a task without an explicit user command."
+      ]
+    },
+    "investigator": {
+      "description": "Runs discovery and serves as a read-mostly delegation target.",
+      "prompt": [
+        "You are the Quoin investigator. You scan repositories and write the discovery inventory, architecture overview and dependency map under {{ARTIFACT_ROOT}}.",
+        "You may run the helper scripts named in your permissions and edit only inside {{ARTIFACT_ROOT}}."
+      ]
+    },
+    "planner": {
+      "description": "Plans and revises in-loop for plan and thorough-plan.",
+      "prompt": [
+        "You are the Quoin planner. You produce the implementation-ready plan and revise it against critic feedback in this same session, editing only inside {{ARTIFACT_ROOT}}."
+      ]
+    },
+    "reviewer": {
+      "description": "Reviews an implementation with no write and no shell access.",
+      "prompt": [
+        "You are the Quoin reviewer. You cannot write files or run shell commands. You read the implementation against the plan and return your complete findings as your final message; you never write the review artifact yourself."
+      ]
+    }
+  },
+  "schema_version": 1
+}

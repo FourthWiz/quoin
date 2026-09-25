@@ -962,7 +962,19 @@ def test_affected_tests_self_check():
     # select at least one opencode test on its own, with nothing unmatched
     # or ignored, so a change to just that file is never test-blind.
     per_file_expected = {
-        "quoin/adapters/opencode/feature-manifest.json": {"test_opencode_manifest.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/feature-manifest.json": {
+            "test_opencode_manifest.py",
+            "test_opencode_docs.py",
+            "test_opencode_generate.py",
+        },
+        "quoin/adapters/opencode/overlays.json": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/command.md": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/skill.md": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/agent.md": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/instructions.md": {
+            "test_opencode_generate.py",
+            "test_opencode_docs.py",
+        },
         "quoin/adapters/opencode/fixtures/scenarios.json": {
             "test_fake_openai_server.py",
             "test_probe_gateway.py",

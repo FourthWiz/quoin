@@ -28,7 +28,28 @@
       "description": "Portable workflow rules source for the generated instruction document"
     }
   ],
-  "generated_outputs": [],
+  "generated_outputs": [
+    {
+      "path": ".opencode/commands/quoin-*.md",
+      "description": "One command per supported skill, binding to its role's agent"
+    },
+    {
+      "path": ".opencode/skills/quoin-*/SKILL.md",
+      "description": "One skill per supported entry, assembled from its bundle contract and overlay"
+    },
+    {
+      "path": ".opencode/agents/quoin-*.md",
+      "description": "One agent per Quoin role, carrying its permission map and prompt"
+    },
+    {
+      "path": ".opencode/quoin/instructions.md",
+      "description": "The rendered instruction document OpenCode loads project-wide"
+    },
+    {
+      "path": ".opencode/opencode.jsonc",
+      "description": "The generated config file pointing OpenCode at the instruction document"
+    }
+  ],
   "unsupported_outputs": [
     {
       "name": "global OpenCode install",
@@ -50,7 +71,8 @@
   "validation": {
     "commands": [
       "PYTHONPATH=src python3 -m quoin.opencode_adapter check-manifest --source-dir quoin",
-      "python3 -m pytest quoin/dev/tests/test_opencode_manifest.py"
+      "python3 -m pytest quoin/dev/tests/test_opencode_manifest.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_generate.py"
     ],
     "notes": "Run from the repository root."
   },
@@ -68,8 +90,8 @@
       "summary": "Runs write-capable commands and persists findings returned by critic and reviewer subagents"
     },
     "investigator": {
-      "mode": "subagent",
-      "summary": "Performs read-mostly discovery for the coordinator"
+      "mode": "all",
+      "summary": "Runs discovery and serves as a read-mostly delegation target"
     },
     "architect": {
       "mode": "primary",
