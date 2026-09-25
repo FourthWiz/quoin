@@ -258,7 +258,7 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
                 errs.append(
                     "row '%s' is supported but assets is %r, expected %s" % (rid, assets, SUPPORTED_ASSETS)
                 )
-            if isinstance(opencode, dict) and rid is not None:
+            if isinstance(opencode, dict):
                 expected_name = names.normalize(rid)
                 if opencode.get("command") != expected_name:
                     errs.append(

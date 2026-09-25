@@ -7,6 +7,7 @@ roster census would otherwise pick up and require registering.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import re
@@ -494,6 +495,18 @@ def test_main_in_process_returns_0_1_2_for_the_three_cases(tmp_path):
     assert opencode_main(["check-manifest", "--source-dir", str(dest)]) == 1
 
     assert opencode_main(["check-manifest", "--source-dir", "/no/such/opencode/source/dir"]) == 2
+
+
+def test_main_nested_manifest_recursion_error_exits_2_with_stderr_message(monkeypatch):
+    def _raise_recursion(*args, **kwargs):
+        raise RecursionError("too deep")
+
+    monkeypatch.setattr(manifest, "check_manifest", _raise_recursion)
+    stderr = io.StringIO()
+    monkeypatch.setattr(sys, "stderr", stderr)
+    code = opencode_main(["check-manifest", "--source-dir", str(SOURCE_DIR)])
+    assert code == 2
+    assert "nested too deeply" in stderr.getvalue()
 
 
 def test_main_usage_error_raises_system_exit_2():

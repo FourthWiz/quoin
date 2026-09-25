@@ -59,7 +59,11 @@ def _run_check_manifest(source_dir_arg: Optional[str]) -> int:
         print("opencode manifest: %s" % exc, file=sys.stderr)
         return 2
 
-    errors = _manifest.check_manifest(data, catalog, pinned_version)
+    try:
+        errors = _manifest.check_manifest(data, catalog, pinned_version)
+    except RecursionError:
+        print("opencode manifest: manifest is nested too deeply to check", file=sys.stderr)
+        return 2
     if errors:
         for err in errors:
             print("opencode manifest: %s" % err, file=sys.stderr)
@@ -68,6 +72,8 @@ def _run_check_manifest(source_dir_arg: Optional[str]) -> int:
     rows = data.get("catalog_entries", [])
     counts = {}
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         counts[row.get("status")] = counts.get(row.get("status"), 0) + 1
     per_status = ", ".join("%s=%d" % (status, counts.get(status, 0)) for status in _manifest.STATUSES)
     print("opencode manifest: no drift (%d rows: %s)" % (len(rows), per_status))
