@@ -2,7 +2,7 @@
 Structural invariant tests for quoin/skills/cleanup/SKILL.md.
 
 Tests verifying that the /cleanup SKILL.md satisfies the structural
-contracts: Haiku tier declaration, §0 and §0c preamble presence and
+contracts: Sonnet tier declaration, §0/§0‴/§0c preamble presence and
 ordering, pidfile_acquire/release call sites, write-restriction prose,
 sentinel families, current-session preservation with UUID-before-age
 ordering, UUID-unavailable fail-safe, and recovery instruction safety.
@@ -39,17 +39,17 @@ def _line_index(lines: list[str], fragment: str) -> int | None:
     return None
 
 
-# ── 1. Frontmatter declares model: haiku ─────────────────────────────────────
+# ── 1. Frontmatter declares model: sonnet ────────────────────────────────────
 
-def test_model_declared_haiku():
+def test_model_declared_sonnet():
     text = _text()
     lines = text.splitlines()
     assert lines[0].strip() == "---", "SKILL.md does not start with YAML frontmatter '---'"
     end_idx = next((i for i, ln in enumerate(lines[1:], 1) if ln.strip() == "---"), None)
     assert end_idx is not None, "SKILL.md frontmatter closing '---' not found"
     frontmatter = "\n".join(lines[1:end_idx])
-    assert "model: haiku" in frontmatter, (
-        f"cleanup/SKILL.md frontmatter does not declare 'model: haiku'. "
+    assert "model: sonnet" in frontmatter, (
+        f"cleanup/SKILL.md frontmatter does not declare 'model: sonnet'. "
         f"Frontmatter content:\n{frontmatter}"
     )
 
@@ -102,6 +102,22 @@ def test_sec0c_after_sec0():
     assert sec0c_idx is not None, "cleanup/SKILL.md missing '## §0c Pidfile lifecycle'"
     assert sec0c_idx > sec0_idx, (
         f"cleanup/SKILL.md: §0c (line {sec0c_idx+1}) must appear AFTER §0 (line {sec0_idx+1})."
+    )
+
+
+# ── 5b. §0‴ Minimum-tier guard sits strictly between §0 and §0c ──────────────
+
+def test_sec0tripleprime_between_sec0_and_sec0c():
+    lines = _lines()
+    sec0_idx = _line_index(lines, "## §0 Model dispatch")
+    sec0tp_idx = _line_index(lines, "## §0‴ Minimum-tier guard")
+    sec0c_idx = _line_index(lines, "## §0c Pidfile lifecycle")
+    assert sec0_idx is not None, "cleanup/SKILL.md missing '## §0 Model dispatch'"
+    assert sec0tp_idx is not None, "cleanup/SKILL.md missing '## §0‴ Minimum-tier guard'"
+    assert sec0c_idx is not None, "cleanup/SKILL.md missing '## §0c Pidfile lifecycle'"
+    assert sec0_idx < sec0tp_idx < sec0c_idx, (
+        f"cleanup/SKILL.md: expected order §0 (line {sec0_idx+1}) < §0‴ "
+        f"(line {sec0tp_idx+1}) < §0c (line {sec0c_idx+1})."
     )
 
 

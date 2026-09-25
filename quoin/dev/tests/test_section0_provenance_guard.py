@@ -13,11 +13,12 @@ never from a renderer call keyed by roster membership. That is what makes a
 roster-only edit and a corpus-only edit both observable: each moves only one
 side of the corresponding equality.
 
-Per-family, not union: the five rosters encode 53 (skill, roster)
-membership facts, but only 9 of them (all in SECTION0) are unique to any one
-roster — POLLUTION, MINTIER, MINTIER_SONNET and ZC contribute zero unique
-members each. A union-based assertion can therefore observe at most 9 of 53
-facts; asserting each family against its own roster observes all 53.
+Per-family, not union: the five rosters encode 55 (skill, roster)
+membership facts, but only 7 of them (capture_insight, cost_snapshot,
+next_steps, start_of_day, status, triage, weekly_review — all in SECTION0
+and no other roster) are unique to any one roster. A union-based assertion
+can therefore observe at most 7 of 55 facts; asserting each family against
+its own roster observes all 55.
 
 Load-bearing assertions (a future maintainer should not "simplify" these):
   - the five per-family carrier equalities (oracle vs SECTION0/POLLUTION/
@@ -35,7 +36,7 @@ snapshot) is a cheap extra check, not the mechanism that discriminates.
 
 Snapshot (informational; a maintainer updating the generator template updates
 this alongside, without touching the partition assertions above):
-  corpus_lines=15367, census_lines=4544, generated=4215, handwritten=249,
+  corpus_lines=15475, census_lines=4652, generated=4323, handwritten=249,
   overhang=61 (start_of_day) + 19 (blank, one per other §0 carrier) = 80,
   carriers=30, variants=7, declared hand-written blocks=6.
 """
@@ -107,9 +108,9 @@ START_OF_DAY_FIRST_NONBLANK = "### Step 1a: Resume from cookie"
 START_OF_DAY_FIRST_NONBLANK_LINE_1BASED = 126
 
 # Informational snapshot (see module docstring) — not the totality contract.
-SNAPSHOT_CORPUS_LINES = 15367
-SNAPSHOT_CENSUS_LINES = 4544
-SNAPSHOT_GENERATED_LINES = 4215
+SNAPSHOT_CORPUS_LINES = 15475
+SNAPSHOT_CENSUS_LINES = 4652
+SNAPSHOT_GENERATED_LINES = 4323
 SNAPSHOT_OVERHANG_LINES = 80  # 61 (start_of_day tail) + 19 (one blank line each)
 SNAPSHOT_CARRIERS = 30
 
@@ -229,7 +230,7 @@ def test_declared_variant_set_is_exactly_seven():
 
 # ═══════════════════ Per-family carrier assertions (load-bearing) ═══════════
 # Each asserted SEPARATELY with its own message — a single union
-# assertion does not satisfy this. Every one of the 53 (skill, roster)
+# assertion does not satisfy this. Every one of the 55 (skill, roster)
 # membership facts moves exactly one side of exactly one of these five.
 
 def test_oracle_section0_matches_roster():
@@ -285,8 +286,8 @@ def test_zc_two_separators_agree():
 def test_union_equality_cheap_extra_check():
     """NOT the load-bearing assertion — kept only as a cheap extra check.
 
-    A union-based comparison observes at most 9 of the 53 (skill, roster)
-    membership facts (all 9 unique to SECTION0; POLLUTION/MINTIER/
+    A union-based comparison observes at most 7 of the 55 (skill, roster)
+    membership facts (all 7 unique to SECTION0; POLLUTION/MINTIER/
     MINTIER_SONNET/ZC contribute zero unique members each), so it cannot by
     itself detect most single-member roster drops. The five per-family
     assertions above are what carries the claim.
@@ -491,7 +492,7 @@ def test_census_snapshot_reproduces_state():
         f"{SNAPSHOT_CARRIERS} — re-seed SNAPSHOT_CARRIERS per the re-seed procedure above."
     )
     assert VARIANT_COUNTS == {
-        "§0": 20, "§0'": 10, "§0a": 1, "§0b": 2, "§0c": 5, "§0″": 10, "§0‴": 11,
+        "§0": 20, "§0'": 10, "§0a": 1, "§0b": 2, "§0c": 5, "§0″": 10, "§0‴": 13,
     }, (
         f"VARIANT_COUNTS={VARIANT_COUNTS} no longer matches the recorded per-variant "
         "block counts — re-seed the literal dict above per the re-seed procedure above."
@@ -529,7 +530,9 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 #
 # Growth side (the same headroom is a blind spot upward): the
 # same 5.00 pp lets a carrier's GENERATED span grow before this guard fires
-# — 25 lines at `cleanup` (binding), 74 at `checkpoint` (loosest). Generated-
+# — 25 lines at `next_steps` (binding), 74 at `checkpoint` (loosest);
+# re-derived after IVG-263 moved cleanup/sleep to Sonnet (cleanup was
+# previously binding at 25, now 35 after its own share re-seed). Generated-
 # span growth is caught by test_generator_fidelity.py's byte-compare and by
 # the byte ceilings in test_footprint_ceilings.py, NOT by this share guard.
 # That asymmetry is a recorded decision, not an oversight.
@@ -558,7 +561,10 @@ SHARE_CEILINGS: dict[str, float] = {
     "architect": 25.0608,
     "capture_insight": 63.0311,
     "checkpoint": 18.8218,
-    "cleanup": 40.8362,
+    "cleanup": 50.8213,  # re-seeded (IVG-263): tier move to Sonnet adds the
+                         # §0‴ Minimum-tier guard block, raising the
+                         # generator-owned share
+
     "continue_work": 56.2903,
     "cost_snapshot": 43.0952,
     "critic": 38.5277,
@@ -579,7 +585,10 @@ SHARE_CEILINGS: dict[str, float] = {
     "rollback": 54.2857,
     "run": 0.0,
     "security_review": 46.0714,
-    "sleep": 29.0343,
+    "sleep": 36.9231,  # re-seeded (IVG-263): tier move to Sonnet adds the
+                       # §0‴ Minimum-tier guard block, raising the
+                       # generator-owned share
+
     "specify": 44.8625,
     "start_of_day": 32.2506,  # span-based (27.2506%) + 5.00pp — NEVER the
                               # heading-based 42.09% figure an earlier

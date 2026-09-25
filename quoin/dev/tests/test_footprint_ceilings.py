@@ -85,11 +85,16 @@ SECTION0_SKILLS = [
 # the SOURCE OF TRUTH for §0 content going forward; a failure here after this
 # point means a file genuinely grew and needs to shrink back down (the
 # authorized marker/residual/slim exceptions above are one-time, 2026-08-02
-# only — do not hand-raise a ceiling to "fix" a future failure).
+# only — do not hand-raise a ceiling to "fix" a future failure). A second
+# one-time shift applies to skill:cleanup and skill:sleep only (IVG-263,
+# 2026-09-25): moving both skills to Sonnet tier added the generator-owned
+# §0‴ Minimum-tier guard block plus the §0 tier words, measured exactly as
+# +3386 B / +3381 B respectively — same discipline as above, not a future
+# precedent.
 CEILINGS = {
     "skill:capture_insight": 13196,  # post-description-trim 11996 * 1.10, monotonic vs prior 13396 Re-checked, no change (measured 11996 B, candidate 13196 B == prior ceiling 13196 B; unchanged).
     "skill:checkpoint": 77492,  # post-description-trim 70447 * 1.10, monotonic vs prior 77901 Re-checked and held (measured 72815 B, candidate 80097 B > prior ceiling 77492 B; unchanged).
-    "skill:cleanup": 19157,  # post-description-trim 17415 * 1.10, monotonic vs prior 19388 Re-checked and held (measured 19107 B, candidate 21018 B > prior ceiling 19157 B; unchanged).
+    "skill:cleanup": 22543,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3386 B measured; headroom unchanged.
     "skill:continue_work": 16019,  # post-description-trim 14562 * 1.10, monotonic vs prior 16077 Re-checked, no change (measured 14562 B, candidate 16019 B == prior ceiling 16019 B; unchanged).
     "skill:cost_snapshot": 22204,  # held (this ratchet only ever tightens, never loosens) — candidate 20209*1.10=22230 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 20209 B, candidate 22230 B > prior ceiling 22204 B; unchanged).
     "skill:end_of_day": 49834,  # post-description-trim 45303 * 1.10, monotonic vs prior 50058 Re-checked, no change (measured 45303 B, candidate 49834 B == prior ceiling 49834 B; unchanged).
@@ -101,7 +106,7 @@ CEILINGS = {
     "skill:pr": 21122,  # raised 20850 -> 21122 (measured) for the Step 4 no-tool-attribution instruction; zero headroom.
     "skill:revise-fast": 29330,  # post-description-trim 26663 * 1.10, monotonic vs prior 29521 Re-checked, no change (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
     "skill:rollback": 23984,  # post-description-trim 21803 * 1.10, monotonic vs prior 24247 Re-checked, no change (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
-    "skill:sleep": 27739,  # held (this ratchet only ever tightens, never loosens) — candidate 25252*1.10=27778 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 25252 B, candidate 27778 B > prior ceiling 27739 B; unchanged).
+    "skill:sleep": 31120,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3381 B measured; headroom unchanged.
     "skill:start_of_day": 28944,  # post-description-trim 26312 * 1.10, monotonic vs prior 29155 Re-checked, no change (measured 26312 B, candidate 28944 B == prior ceiling 28944 B; unchanged).
     "skill:status": 9841,  # post-slim 8946 * 1.10 Re-checked, no change (measured 8946 B, candidate 9841 B == prior ceiling 9841 B; unchanged).
     "skill:triage": 34356,  # post-description-trim 31232 * 1.10, monotonic vs prior 34422 Re-checked, no change (measured 31232 B, candidate 34356 B == prior ceiling 34356 B; unchanged).
