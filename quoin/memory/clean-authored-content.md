@@ -30,6 +30,7 @@ gate verdicts.
 
 PR descriptions are shipped work product in the same sense as commit messages. Summaries,
 change lists, and testing notes describe the code, not the planning process behind it.
+They also carry no tool or agent attribution footers or agent session links.
 
 ## Opportunistic cleanup
 

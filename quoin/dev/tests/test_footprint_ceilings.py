@@ -98,9 +98,7 @@ CEILINGS = {
     "skill:gate": 61580,  # post-description-trim 55981 * 1.10, monotonic vs prior 62430 Re-checked and held (measured 59458 B, candidate 65404 B > prior ceiling 61580 B; unchanged).
     "skill:implement": 54414,  # post-description-trim 49467 * 1.10, monotonic vs prior 54715 Re-checked and held (measured 52096 B, candidate 57306 B > prior ceiling 54414 B; unchanged).
     "skill:next_steps": 12998,  # post-slim 11914 * 1.10 Re-checked and applied (measured 11816 B, candidate 12998 B <= prior ceiling 13106 B; only strict decrease in the whole task).
-    "skill:pr": 20850,  # ratchet: a pathspec-narrowing fix grew the file since it was last tightened Re-checked and held (measured 20818 B, candidate 22900 B > prior ceiling 20850 B; unchanged).
-    # to 20784 (untracked-entry exclusion, script/judge file union, untrusted-
-    # candidate-text note); 20371 no longer holds headroom for that fix
+    "skill:pr": 21122,  # raised 20850 -> 21122 (measured) for the Step 4 no-tool-attribution instruction; zero headroom.
     "skill:revise-fast": 29330,  # post-description-trim 26663 * 1.10, monotonic vs prior 29521 Re-checked, no change (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
     "skill:rollback": 23984,  # post-description-trim 21803 * 1.10, monotonic vs prior 24247 Re-checked, no change (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
     "skill:sleep": 27739,  # held (this ratchet only ever tightens, never loosens) — candidate 25252*1.10=27778 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 25252 B, candidate 27778 B > prior ceiling 27739 B; unchanged).
