@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from quoin.opencode_adapter import frontmatter, manifest, names
+from quoin.opencode_adapter import frontmatter, manifest, names, scripts
 
 # The directory Quoin's own workflow artifacts live under, relative to a
 # project root. Templates and overlays never spell this literal; they use
@@ -683,15 +683,214 @@ def render_config(parts: dict) -> str:
     return _finalize_text(header + body)
 
 
+_FRONTMATTER_ALLOWED_KEYS: Dict[str, frozenset] = {
+    "command": frozenset(("description", "agent")),
+    "skill": frozenset(("name", "description", "metadata")),
+    "agent": frozenset(("description", "mode", "permission")),
+}
+_FRONTMATTER_KINDS = frozenset(_FRONTMATTER_ALLOWED_KEYS)
+
+_AGENT_MODES = frozenset(("subagent", "primary", "all"))
+_PERMISSION_ACTIONS = frozenset(("ask", "allow", "deny"))
+_ACTION_ONLY_PERMISSION_KEYS = frozenset(("todowrite", "question", "webfetch", "websearch", "doom_loop"))
+
+# Mirrors OpenCode's own extraction regexes so a rendered file never carries
+# a pattern the runtime would execute, substitute or resolve at command
+# time (`packages/opencode/src/config/markdown.ts`
+# `SHELL_REGEX = /!\`([^\`]+)\`/g`, `FILE_REGEX = /(?<![\w\`])@(...)/g`).
+_SHELL_EXPANSION_RE = re.compile(r"!`[^`]+`")
+_FILE_REFERENCE_RE = re.compile(r"(?<![\w`])@\S")
+_DOLLAR_DIGIT_RE = re.compile(r"\$\d")
+
+# Built from an escape, never the raw glyph, so a section-sign-plus-digit
+# pattern here never itself matches the stage-1 source sweep.
+_SECTION_SIGN = "§"
+_SECTION_DIGIT_RE = re.compile(_SECTION_SIGN + r"\d")
+
+_CLAUDE_TIER_WORDS = ("haiku", "sonnet", "opus")
+_MODEL_LINE_RE = re.compile(
+    r"^\s*model:.*\b(%s)\b" % "|".join(_CLAUDE_TIER_WORDS), re.IGNORECASE | re.MULTILINE
+)
+
+_CLAUDE_HOME_PATTERNS = ("~/.claude", "$HOME/.claude", ".claude/")
+
+_DISPATCH_SENTINEL = "[no-redispatch]"
+_ASK_USER_QUESTION = "AskUserQuestion"
+
+
+def _model_id_patterns() -> List["re.Pattern"]:
+    # Assembled from split literals, mirroring `test_opencode_docs.py`'s own
+    # `_model_id_denylist`, so this module's own source text never contains
+    # one of these ids whole (keeps the stage-1 source sweep green).
+    raw = (
+        "gpt" + "-4o",
+        r"\bgpt-[0-9]",
+        r"o[1-9]-(mini" + r"|preview)",
+        r"claude-(3|opus|sonnet|" + r"haiku)",
+        "qwen" + r"[0-9]",
+        "gemini-" + r"[0-9]",
+        r"llama-?" + r"[0-9]",
+        r"deepseek-(v|r|" + r"coder)",
+        r"mistral-(large|small|" + r"medium)",
+        r"kimi-k" + r"[0-9]",
+        r"glm-" + r"[0-9]",
+    )
+    return [re.compile(p, re.IGNORECASE) for p in raw]
+
+
+def _check_frontmatter_keys(relpath: str, kind: str, fields: dict) -> List[str]:
+    allowed = _FRONTMATTER_ALLOWED_KEYS[kind]
+    extra = sorted(set(fields) - allowed)
+    if extra:
+        return ["%s: frontmatter has unexpected key(s): %s" % (relpath, ", ".join(extra))]
+    return []
+
+
+def _check_permission_value(relpath: str, perm_type: str, value: object) -> List[str]:
+    findings: List[str] = []
+    if isinstance(value, str):
+        if value not in _PERMISSION_ACTIONS:
+            findings.append(
+                "%s: permission %r has action %r, expected one of %s"
+                % (relpath, perm_type, value, sorted(_PERMISSION_ACTIONS))
+            )
+        return findings
+    if isinstance(value, dict):
+        if perm_type in _ACTION_ONLY_PERMISSION_KEYS:
+            findings.append("%s: permission %r may not be a map (Action-only key)" % (relpath, perm_type))
+            return findings
+        if not value:
+            findings.append("%s: permission %r is an empty map" % (relpath, perm_type))
+            return findings
+        for pattern, action in value.items():
+            if not isinstance(pattern, str) or not isinstance(action, str) or action not in _PERMISSION_ACTIONS:
+                findings.append(
+                    "%s: permission %r pattern %r has invalid action %r"
+                    % (relpath, perm_type, pattern, action)
+                )
+        return findings
+    findings.append("%s: permission %r has a value of type %s, expected str or map" % (relpath, perm_type, type(value).__name__))
+    return findings
+
+
+def _check_agent_frontmatter_values(relpath: str, fields: dict) -> List[str]:
+    findings: List[str] = []
+    mode = fields.get("mode")
+    if mode not in _AGENT_MODES:
+        findings.append("%s: agent mode %r not in %s" % (relpath, mode, sorted(_AGENT_MODES)))
+    permission = fields.get("permission")
+    if not isinstance(permission, dict):
+        findings.append("%s: agent 'permission' must be a map" % relpath)
+    else:
+        for perm_type, value in permission.items():
+            findings.extend(_check_permission_value(relpath, perm_type, value))
+    return findings
+
+
+def _check_command_frontmatter_values(relpath: str, fields: dict) -> List[str]:
+    findings: List[str] = []
+    if not isinstance(fields.get("description"), str):
+        findings.append("%s: command 'description' must be a string" % relpath)
+    if not isinstance(fields.get("agent"), str):
+        findings.append("%s: command 'agent' must be a string" % relpath)
+    return findings
+
+
+def _check_command_body(relpath: str, body: str) -> List[str]:
+    findings: List[str] = []
+    count = body.count("$ARGUMENTS")
+    if count != 1:
+        findings.append("%s: command body has %d occurrences of $ARGUMENTS, expected exactly 1" % (relpath, count))
+    if _DOLLAR_DIGIT_RE.search(body):
+        findings.append("%s: command body contains a $<digit> positional placeholder" % relpath)
+    if _SHELL_EXPANSION_RE.search(body):
+        findings.append("%s: command body contains a shell-expansion pattern" % relpath)
+    if _FILE_REFERENCE_RE.search(body):
+        findings.append("%s: command body contains an @ file reference" % relpath)
+    return findings
+
+
+def _check_universal_hazards(relpath: str, kind: str, text: str) -> List[str]:
+    findings: List[str] = []
+    if _SHELL_EXPANSION_RE.search(text):
+        findings.append("%s: contains a shell-expansion pattern" % relpath)
+    if _ASK_USER_QUESTION in text:
+        findings.append("%s: contains %s" % (relpath, _ASK_USER_QUESTION))
+    if _DISPATCH_SENTINEL in text:
+        findings.append("%s: contains the %s sentinel" % (relpath, _DISPATCH_SENTINEL))
+    if _SECTION_DIGIT_RE.search(text):
+        findings.append("%s: contains a section-sign-plus-digit token" % relpath)
+    if _MODEL_LINE_RE.search(text):
+        findings.append("%s: contains a model: line naming a Claude tier" % relpath)
+    for pattern in _model_id_patterns():
+        if pattern.search(text):
+            findings.append("%s: contains a real model id (%s)" % (relpath, pattern.pattern))
+    if kind != "instructions":
+        for token in _CLAUDE_HOME_PATTERNS:
+            if token in text:
+                findings.append("%s: contains a Claude home path (%s)" % (relpath, token))
+    return findings
+
+
+def _check_script_references(relpath: str, text: str) -> List[str]:
+    findings: List[str] = []
+    for name in scripts.referenced_scripts(text):
+        if name not in scripts.ALLOWED_SCRIPTS:
+            findings.append("%s: references unknown helper script '%s'" % (relpath, name))
+    return findings
+
+
 def check_rendered(files: Dict[str, RenderedFile]) -> List[str]:
     """Forbidden-output check over a rendered file set.
 
-    Filled in fully by a later task (frontmatter-key allowlists, agent
-    value checks, command-body hazards, and the shared model-id and
-    section-sign denylists). `render` already calls this hook so the later
-    task only has to fill the body in, not wire it up.
+    Called by `render` (which raises `GenerationError` naming every
+    finding when this is non-empty) and public for the later offline
+    smoke. Findings name the relpath and the rule:
+
+    - every command, skill and agent file carries frontmatter that
+      `frontmatter.parse` accepts, restricted to its kind's key allowlist
+      (no `model`, `variant`, `temperature`, `options`, `tools`, `hooks`
+      or `subtask` key can appear, because none of those is in any
+      allowlist);
+    - agent frontmatter values are checked because a bad one fails the
+      whole OpenCode config load for the instance: `mode` is one of
+      `subagent`/`primary`/`all`; `permission` is a map whose values are
+      each an action or a non-empty map from pattern to action, and the
+      Action-only keys never carry a map;
+    - command bodies carry exactly one `$ARGUMENTS`, no `$<digit>`
+      positional placeholder, no shell-expansion pattern and no `@` file
+      reference;
+    - every rendered file is checked for shell-expansion patterns,
+      `AskUserQuestion`, the `[no-redispatch]` sentinel, a section sign
+      followed by a digit, a `model:` line naming a Claude tier, a real
+      model id, and a Claude home path (the instruction document is
+      exempt from the last one, because it names those paths as legacy
+      discovery locations by design);
+    - every `quoin opencode script <name>` reference in any file names an
+      entry of `scripts.ALLOWED_SCRIPTS`.
     """
-    return []
+    findings: List[str] = []
+    for relpath in sorted(files):
+        rf = files[relpath]
+        text = rf.content.decode("utf-8")
+
+        if rf.kind in _FRONTMATTER_KINDS:
+            try:
+                fields, body = frontmatter.parse(text)
+            except frontmatter.FrontmatterError as exc:
+                findings.append("%s: frontmatter did not parse: %s" % (relpath, exc))
+            else:
+                findings.extend(_check_frontmatter_keys(relpath, rf.kind, fields))
+                if rf.kind == "agent":
+                    findings.extend(_check_agent_frontmatter_values(relpath, fields))
+                elif rf.kind == "command":
+                    findings.extend(_check_command_frontmatter_values(relpath, fields))
+                    findings.extend(_check_command_body(relpath, body))
+
+        findings.extend(_check_universal_hazards(relpath, rf.kind, text))
+        findings.extend(_check_script_references(relpath, text))
+
+    return findings
 
 
 def render(inputs: GeneratorInputs) -> Dict[str, RenderedFile]:

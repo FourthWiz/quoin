@@ -15,7 +15,7 @@
       ],
       "notes": [
         "Cleanup does not run before a checkpoint save; there is no cleanup skill in OpenCode.",
-        "The skill writes its own `recent-sessions.md` entry rather than relying on a hook."
+        "The skill writes its own `recent-sessions.md` entry directly, without any automated background process."
       ],
       "rewrites": [
         {
@@ -40,7 +40,7 @@
       "description": "Revives context from a prior session by presenting a session picker and the last checkpoint summary.",
       "extra_sections": [],
       "notes": [
-        "There is no hook-written session index or Claude transcript in OpenCode.",
+        "There is no automated session index or Claude transcript in OpenCode.",
         "Resume from the session-state file and the checkpoint handoff, never from a transcript."
       ],
       "rewrites": [
@@ -162,7 +162,13 @@
         "Tests run only in the calling role, never in the read-only subagent.",
         "Running review in this adapter is a separate context, not model diversity."
       ],
-      "rewrites": []
+      "rewrites": [
+        {
+          "from": "include a pointer to the\n  canonical safe reset-to-origin recovery recipe at `memory/branch-recovery.md`\n  (deployed Tier-1 memory file).",
+          "section": "Behavior contract",
+          "to": "include a plain instruction: move the mis-placed commits onto a feature branch first, then reset the protected branch to match its upstream."
+        }
+      ]
     },
     "thorough_plan": {
       "command_note": "",

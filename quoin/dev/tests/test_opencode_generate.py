@@ -1220,3 +1220,233 @@ def test_load_inputs_on_temp_copy_with_drifting_manifest_raises_with_drift_messa
     with pytest.raises(generate.GenerationError) as exc_info:
         generate.load_inputs(copy_dir)
     assert "mode" in str(exc_info.value)
+
+
+# --- T-08: check_rendered on the real tree ---
+
+
+def test_check_rendered_of_real_render_is_empty():
+    files = generate.render_source_dir(SOURCE_DIR)
+    assert generate.check_rendered(files) == []
+
+
+def test_claude_token_inside_instructions_legacy_section_is_accepted():
+    files = generate.render_source_dir(SOURCE_DIR)
+    instr = files[generate.INSTRUCTIONS_PATH].content.decode("utf-8")
+    assert ".claude" in instr
+    findings = generate.check_rendered(files)
+    assert not any(generate.INSTRUCTIONS_PATH in f for f in findings)
+
+
+# --- T-08: injected hazards, each through overlays in a temp copy ---
+
+
+def _copy_source_tree(tmp_path):
+    import shutil
+
+    copy_dir = tmp_path / "quoin"
+    shutil.copytree(SOURCE_DIR, copy_dir)
+    return copy_dir
+
+
+def _read_overlays(copy_dir):
+    path = copy_dir / "adapters" / "opencode" / "overlays.json"
+    return path, json.loads(path.read_text())
+
+
+def _write_overlays(path, data):
+    path.write_text(json.dumps(data))
+
+
+def test_injected_ask_user_question_in_a_note_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["notes"].append("Never call AskUserQuestion from here.")
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="AskUserQuestion"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_model_line_in_a_role_prompt_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["roles"]["architect"]["prompt"].append("model: sonnet")
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="Claude tier"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_shell_expansion_in_a_command_note_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["command_note"] += " Run !`ls` first."
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="shell-expansion"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_dollar_digit_in_a_command_note_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["command_note"] += " see $2 for detail."
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match=r"\$<digit>"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_file_reference_in_a_command_note_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["command_note"] += " see @src/x for detail."
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="@ file reference"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_section_sign_plus_digit_in_a_note_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["notes"].append("see " + "§" + "1 for detail.")
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="section-sign"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_claude_dir_in_a_skill_note_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["notes"].append("legacy config also lives under .claude/skills.")
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="Claude home path"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_unlisted_script_reference_raises(tmp_path):
+    copy_dir = _copy_source_tree(tmp_path)
+    path, data = _read_overlays(copy_dir)
+    data["entries"]["plan"]["notes"].append("Run quoin opencode script evil first.")
+    _write_overlays(path, data)
+    with pytest.raises(generate.GenerationError, match="evil"):
+        generate.render_source_dir(copy_dir)
+
+
+def test_injected_bad_permission_action_raises(monkeypatch):
+    original = generate.role_permissions
+
+    def fake(role):
+        result = original(role)
+        if role == "architect":
+            result["edit"] = "allowed"
+        return result
+
+    monkeypatch.setattr(generate, "role_permissions", fake)
+    with pytest.raises(generate.GenerationError, match="architect"):
+        generate.render_source_dir(SOURCE_DIR)
+
+
+def test_injected_map_value_on_an_action_only_permission_key_raises(monkeypatch):
+    original = generate.role_permissions
+
+    def fake(role):
+        result = original(role)
+        if role == "gate":
+            result["webfetch"] = {"*": "allow"}
+        return result
+
+    monkeypatch.setattr(generate, "role_permissions", fake)
+    with pytest.raises(generate.GenerationError, match="webfetch"):
+        generate.render_source_dir(SOURCE_DIR)
+
+
+def test_injected_invalid_agent_mode_raises():
+    # "implementer" is never a Task target and never a Task source, so this
+    # reaches check_rendered's own mode check instead of tripping
+    # check_task_graph (T-05) first.
+    inputs = _mutated_inputs()
+    inputs.manifest["roles"]["implementer"]["mode"] = "sub"
+    with pytest.raises(generate.GenerationError, match="mode 'sub'"):
+        generate.render(inputs)
+
+
+# --- T-08: residue test over rendered skills (test-only, stricter than check_rendered) ---
+
+
+def test_residue_over_rendered_skills():
+    files = generate.render_source_dir(SOURCE_DIR)
+    inputs = generate.load_inputs(SOURCE_DIR)
+    catalog_ids = {c["name"] for c in inputs.catalog if isinstance(c, dict) and isinstance(c.get("name"), str)}
+    slash_re = generate._slash_translate_pattern(catalog_ids)
+    command_names = {k.split("/")[-1][:-3] for k in files if k.startswith(".opencode/commands/")}
+    quoin_token_re = re.compile(r"/(quoin-[a-z0-9-]+)")
+    tier_word_re = re.compile(r"\b(haiku|sonnet|opus)\b", re.IGNORECASE)
+    script_py_names = tuple("%s.py" % n for n in scripts.ALLOWED_SCRIPTS)
+
+    for relpath, rf in files.items():
+        if rf.kind != "skill":
+            continue
+        text = rf.content.decode("utf-8")
+        assert "JSONL" not in text, relpath
+        assert not re.search(r"\bhooks?\b", text, re.IGNORECASE), relpath
+        assert not tier_word_re.search(text), relpath
+        for script_name in script_py_names:
+            assert script_name not in text, (relpath, script_name)
+        assert "branch-recovery.md" not in text, relpath
+        untranslated = slash_re.search(text)
+        assert untranslated is None, (relpath, untranslated)
+        for m in quoin_token_re.finditer(text):
+            assert m.group(1) in command_names, (relpath, m.group(0))
+
+
+def test_gate_skill_contains_script_forms_and_check_rules():
+    files = generate.render_source_dir(SOURCE_DIR)
+    gate = files[".opencode/skills/quoin-gate/SKILL.md"].content.decode("utf-8")
+    assert "quoin opencode script validate_artifact" in gate
+    assert "quoin opencode script path_resolve" in gate
+    assert "a failed check" in gate
+    assert "partial, not as a pass" in gate
+
+
+def test_review_and_critic_skills_state_calling_role_persists_findings():
+    files = generate.render_source_dir(SOURCE_DIR)
+    for name in ("quoin-review", "quoin-critic"):
+        text = files[".opencode/skills/%s/SKILL.md" % name].content.decode("utf-8")
+        assert "the calling role writes the artifact" in text
+
+
+def test_every_referenced_script_resolves_under_the_source_dir():
+    files = generate.render_source_dir(SOURCE_DIR)
+    for relpath, rf in files.items():
+        text = rf.content.decode("utf-8")
+        for name in scripts.referenced_scripts(text):
+            path = scripts.script_path(SOURCE_DIR, name)
+            assert path.exists(), (relpath, name, path)
+
+
+def test_no_script_reference_line_pairs_with_a_redirection_character():
+    files = generate.render_source_dir(SOURCE_DIR)
+    placeholder_re = re.compile(r"<[^<>]+>")
+    for relpath, rf in files.items():
+        text = rf.content.decode("utf-8")
+        for line in text.splitlines():
+            if "quoin opencode script" not in line:
+                continue
+            stripped = placeholder_re.sub("", line)
+            assert ">" not in stripped and "<" not in stripped, (relpath, line)
+
+
+def test_forbidden_patterns_and_model_ids_over_every_rendered_file():
+    from test_opencode_docs import _FORBIDDEN_PATTERNS, _model_id_denylist
+
+    files = generate.render_source_dir(SOURCE_DIR)
+    model_id_patterns = _model_id_denylist()
+    artifact_root_pattern = next(p for p in _FORBIDDEN_PATTERNS if "artifacts" in p.pattern)
+    for relpath, rf in files.items():
+        text = rf.content.decode("utf-8")
+        for pattern in _FORBIDDEN_PATTERNS:
+            if pattern is artifact_root_pattern:
+                continue
+            match = pattern.search(text)
+            assert match is None, "%s matched %r in %s" % (pattern.pattern, match, relpath)
+        for pattern in model_id_patterns:
+            match = pattern.search(text)
+            assert match is None, "%s matched %r in %s" % (pattern.pattern, match, relpath)
