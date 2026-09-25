@@ -11,11 +11,12 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
 
-from quoin.opencode_adapter import frontmatter, generate, scripts
+from quoin.opencode_adapter import frontmatter, generate, names, scripts
 
 # Mirrors generate.ARTIFACT_ROOT, added when the generator module lands;
 # a later task replaces this literal with that import directly.
@@ -743,3 +744,479 @@ def test_check_task_graph_flags_a_target_whose_mode_is_primary(monkeypatch):
     }
     errors = generate.check_task_graph(roles_by_name)
     assert any("planner" in e and "primary" in e for e in errors)
+
+
+# --- T-07: generator core (inputs, sections, rendering, digests, collisions) ---
+
+
+def _load_real_manifest():
+    return json.loads((SOURCE_DIR / "adapters" / "opencode" / "feature-manifest.json").read_text())
+
+
+def _supported_rows(manifest_data):
+    return sorted(
+        (row for row in manifest_data["catalog_entries"] if row["status"] == "supported"),
+        key=lambda r: r["id"],
+    )
+
+
+# extract_sections
+
+
+def test_extract_sections_splits_on_h2_outside_fences_and_keeps_h3_inside_parent():
+    md = (
+        "# Title\nlead-in prose ignored\n\n"
+        "## First\nbody one\n### sub\nsub body\n\n"
+        "## Second\n```\n## not a heading\n```\nbody two\n"
+    )
+    sections = generate.extract_sections(md)
+    headings = [h for h, _ in sections]
+    assert headings == ["First", "Second"]
+    assert "### sub" in dict(sections)["First"]
+    assert "## not a heading" in dict(sections)["Second"]
+
+
+def test_extract_sections_on_real_contract_matches_grep_headings():
+    text = (SOURCE_DIR / "core" / "skills" / "plan.md").read_text()
+    sections = generate.extract_sections(text)
+    headings = [h for h, _ in sections]
+    assert headings == [
+        "Purpose",
+        "When to use",
+        "Inputs",
+        "Output",
+        "Behavior contract",
+        "Out of scope",
+        "v3-format detection rule",
+        "Notes",
+    ]
+
+
+# load_inputs on the real tree
+
+
+def test_load_inputs_on_the_real_tree_succeeds():
+    inputs = generate.load_inputs(SOURCE_DIR)
+    assert inputs.pinned_version
+    assert set(inputs.templates) == {"command", "skill", "agent", "instructions"}
+    manifest_data = _load_real_manifest()
+    supported_ids = {row["id"] for row in _supported_rows(manifest_data)}
+    assert set(inputs.contracts) == supported_ids
+
+
+def test_load_inputs_raises_generation_error_on_drifting_manifest(tmp_path):
+    import shutil
+
+    copy_dir = tmp_path / "quoin"
+    shutil.copytree(SOURCE_DIR, copy_dir)
+    manifest_path = copy_dir / "adapters" / "opencode" / "feature-manifest.json"
+    data = json.loads(manifest_path.read_text())
+    data["schema_version"] = 999
+    manifest_path.write_text(json.dumps(data))
+    with pytest.raises(generate.GenerationError, match="manifest drift"):
+        generate.load_inputs(copy_dir)
+
+
+# render() on the real tree: file set, path families, bindings
+
+
+def test_render_source_dir_renders_exactly_32_files_with_no_run_command():
+    files = generate.render_source_dir(SOURCE_DIR)
+    manifest_data = _load_real_manifest()
+    supported = _supported_rows(manifest_data)
+    expected_names = sorted(generate.names.normalize(row["id"]) for row in supported)
+
+    command_paths = sorted(k for k in files if k.startswith(".opencode/commands/"))
+    skill_paths = sorted(k for k in files if k.startswith(".opencode/skills/"))
+    agent_paths = sorted(k for k in files if k.startswith(".opencode/agents/"))
+
+    assert command_paths == [".opencode/commands/%s.md" % n for n in expected_names]
+    assert skill_paths == [".opencode/skills/%s/SKILL.md" % n for n in expected_names]
+    assert len(agent_paths) == len(manifest_data["roles"])
+    assert len(files) == 32
+    assert not any("quoin-run" in k for k in files)
+
+
+def test_render_command_agent_binding_matches_manifest_rows():
+    files = generate.render_source_dir(SOURCE_DIR)
+    manifest_data = _load_real_manifest()
+    for row in _supported_rows(manifest_data):
+        name = generate.names.normalize(row["id"])
+        expected_agent = "quoin-%s" % row["opencode"]["agent_role"]
+        content = files[".opencode/commands/%s.md" % name].content.decode("utf-8")
+        fm, _ = frontmatter.parse(content)
+        assert fm["agent"] == expected_agent, row["id"]
+
+    discover_row = next(r for r in manifest_data["catalog_entries"] if r["id"] == "discover")
+    assert discover_row["opencode"]["agent_role"] == "investigator"
+    investigator_agent = files[".opencode/agents/quoin-investigator.md"].content.decode("utf-8")
+    fm, _ = frontmatter.parse(investigator_agent)
+    assert fm["mode"] == "all"
+
+    for skill_id in ("review", "critic"):
+        row = next(r for r in manifest_data["catalog_entries"] if r["id"] == skill_id)
+        assert row["opencode"]["agent_role"] == "coordinator"
+
+
+def test_skill_names_equal_command_names_and_pass_name_error():
+    files = generate.render_source_dir(SOURCE_DIR)
+    command_names = {k.split("/")[-1][:-3] for k in files if k.startswith(".opencode/commands/")}
+    skill_dirs = {k.split("/")[2] for k in files if k.startswith(".opencode/skills/")}
+    assert command_names == skill_dirs
+    for name in skill_dirs:
+        assert generate.names.name_error(name) is None
+        content = files[".opencode/skills/%s/SKILL.md" % name].content.decode("utf-8")
+        fm, _ = frontmatter.parse(content)
+        assert 1 <= len(fm["description"]) <= 1024
+
+
+def test_rendered_path_families_equal_manifest_generated_outputs():
+    files = generate.render_source_dir(SOURCE_DIR)
+    manifest_data = _load_real_manifest()
+    families = {row["path"] for row in manifest_data["generated_outputs"]}
+    assert families == {
+        ".opencode/commands/quoin-*.md",
+        ".opencode/skills/quoin-*/SKILL.md",
+        ".opencode/agents/quoin-*.md",
+        ".opencode/quoin/instructions.md",
+        ".opencode/opencode.jsonc",
+    }
+    assert any(k.startswith(".opencode/commands/") for k in files)
+    assert any(k.startswith(".opencode/skills/") and k.endswith("/SKILL.md") for k in files)
+    assert any(k.startswith(".opencode/agents/") for k in files)
+    assert ".opencode/quoin/instructions.md" in files
+    assert ".opencode/opencode.jsonc" in files
+
+
+def test_config_file_parses_to_exactly_two_keys_and_names_a_rendered_file():
+    files = generate.render_source_dir(SOURCE_DIR)
+    cfg = files[".opencode/opencode.jsonc"].content.decode("utf-8")
+    stripped = "\n".join(line for line in cfg.split("\n") if not line.strip().startswith("//"))
+    obj = json.loads(stripped)
+    assert set(obj) == {"$schema", "instructions"}
+    assert obj["instructions"] == [generate.INSTRUCTIONS_PATH]
+    assert generate.INSTRUCTIONS_PATH in files
+
+
+# instruction document content
+
+
+def test_instruction_document_contains_required_content():
+    files = generate.render_source_dir(SOURCE_DIR)
+    manifest_data = _load_real_manifest()
+    instr = files[generate.INSTRUCTIONS_PATH].content.decode("utf-8")
+
+    for row in _supported_rows(manifest_data):
+        assert "/%s" % generate.names.normalize(row["id"]) in instr
+    assert "/quoin-implement" in instr and "explicit user command" in instr
+
+    for row in manifest_data["catalog_entries"]:
+        if row["status"] != "supported":
+            assert row["id"] in instr, row["id"]
+
+    for role in manifest_data["roles"]:
+        assert role in instr, role
+
+    assert "enforced-natively" in instr
+    assert "declared-not-enforced" in instr
+    assert "separate context" in instr
+
+    perm_match = re.search(r"## Permissions\n(.*?)(\n## |\Z)", instr, re.S)
+    assert perm_match, "no Permissions section found"
+    perm_body = perm_match.group(1)
+    for phrase in ('any prompt, in any agent', 'not a security boundary', 'until OpenCode restarts', 'answer "once"'):
+        assert phrase in perm_body, phrase
+    assert "for the rest of the session" not in instr
+    assert perm_body.count("boundary") == perm_body.count("not a security boundary")
+    assert "model diversity" not in instr
+
+    legacy_sections = dict(generate.extract_sections(instr))
+    assert "Legacy discovery" in legacy_sections
+    non_legacy = "\n".join(b for h, b in legacy_sections.items() if h != "Legacy discovery")
+    assert ".claude" not in non_legacy
+    assert ".claude" in legacy_sections["Legacy discovery"]
+
+
+# slash translation: unit cases
+
+
+def test_slash_translation_unit_cases():
+    catalog_ids = {"architect", "plan", "revise", "revise-fast", "critic", "end_of_day", "gate", "review"}
+    supported = {"architect", "plan", "critic", "gate", "review"}
+
+    def translate(text):
+        return generate._translate_slashes(text, catalog_ids, supported)
+
+    unchanged = [
+        "See /architecture.md for details.",
+        "Read `<task_dir>/critic-response-*.md`.",
+        "See `<task-name>/gate-{phase}-{date}`.",
+        "Open /plan.md now.",
+        "Check /review/x path.",
+    ]
+    for text in unchanged:
+        got, dropped = translate(text)
+        assert got == text, text
+        assert dropped == []
+
+    got, dropped = translate("Use /revise-fast here, not /revise.")
+    assert got == "Use revise-fast here, not revise."
+    assert dropped == ["revise", "revise-fast"]
+
+    got, dropped = translate("End with /plan.")
+    assert got == "End with /quoin-plan."
+    assert dropped == []
+
+    got, dropped = translate("Backtick `/plan` form.")
+    assert got == "Backtick `/quoin-plan` form."
+    assert dropped == []
+
+    got, dropped = translate("A non-bundle /end_of_day reference.")
+    assert got == "A non-bundle end_of_day reference."
+    assert dropped == ["end_of_day"]
+
+    got, dropped = translate("No non-bundle ids here at all.")
+    assert dropped == []
+
+
+def test_slash_translation_on_the_real_tree():
+    files = generate.render_source_dir(SOURCE_DIR)
+    arch = files[".opencode/skills/quoin-architect/SKILL.md"].content.decode("utf-8")
+    critic = files[".opencode/skills/quoin-critic/SKILL.md"].content.decode("utf-8")
+    gate = files[".opencode/skills/quoin-gate/SKILL.md"].content.decode("utf-8")
+    assert "architecture.md" in arch
+    assert "critic-response-" in critic
+    assert "gate-" in gate
+
+    command_names = {k.split("/")[-1][:-3] for k in files if k.startswith(".opencode/commands/")}
+    quoin_token_re = re.compile(r"/(quoin-[a-z0-9-]+)")
+    for k, rf in files.items():
+        if not k.endswith("SKILL.md"):
+            continue
+        text = rf.content.decode("utf-8")
+        assert "quoin-architecture" not in text
+        assert "quoin-critic-response" not in text
+        assert "quoin-gate-" not in text
+        for m in quoin_token_re.finditer(text):
+            assert m.group(1) in command_names, (k, m.group(0))
+
+
+def test_script_coverage_every_referenced_script_is_in_the_bound_roles_allowlist():
+    files = generate.render_source_dir(SOURCE_DIR)
+    manifest_data = _load_real_manifest()
+    role_by_id = {row["id"]: row["opencode"]["agent_role"] for row in _supported_rows(manifest_data)}
+    for k, rf in files.items():
+        if rf.kind != "skill":
+            continue
+        role = role_by_id[rf.source_id]
+        text = rf.content.decode("utf-8")
+        for ref in scripts.referenced_scripts(text):
+            assert ref in generate.ROLE_SCRIPTS.get(role, ()), (k, role, ref)
+
+
+# determinism and digest shape (T-09 fuller coverage lands separately; this is a smoke check)
+
+
+def test_double_render_is_byte_identical():
+    files_a = generate.render_source_dir(SOURCE_DIR)
+    files_b = generate.render_source_dir(SOURCE_DIR)
+    assert files_a.keys() == files_b.keys()
+    for k in files_a:
+        assert files_a[k].content == files_b[k].content, k
+        assert files_a[k].source_digest == files_b[k].source_digest, k
+
+
+def test_every_rendered_file_is_utf8_lf_only_with_one_trailing_newline():
+    files = generate.render_source_dir(SOURCE_DIR)
+    for k, rf in files.items():
+        text = rf.content.decode("utf-8")
+        assert "\r" not in text, k
+        assert text.endswith("\n") and not text.endswith("\n\n"), k
+        assert re.match(r"^sha256:[0-9a-f]{64}$", rf.source_digest), k
+
+
+def test_skill_frontmatter_metadata_matches_its_record():
+    files = generate.render_source_dir(SOURCE_DIR)
+    for k, rf in files.items():
+        if rf.kind != "skill":
+            continue
+        text = rf.content.decode("utf-8")
+        fm, _ = frontmatter.parse(text)
+        assert fm["metadata"]["source_digest"] == rf.source_digest, k
+        assert fm["metadata"]["canonical_id"] == rf.source_id, k
+        assert fm["metadata"]["generator"] == "quoin"
+
+
+# injected collision
+
+
+def test_injected_collision_raises_name_collision_error():
+    inputs = generate.load_inputs(SOURCE_DIR)
+    manifest_data = json.loads(json.dumps(inputs.manifest))  # deep copy
+    extra_row = {
+        "id": "end-of-task",
+        "status": "supported",
+        "reason": "synthetic collision fixture for the injected-collision test",
+        "target_milestone": manifest_data["catalog_entries"][0]["target_milestone"],
+        "catalog": {"user_facing": True, "spawn_target": False},
+        "assets": ["command", "skill"],
+        "opencode": {
+            "command": "quoin-end-of-task",
+            "skill": "quoin-end-of-task",
+            "agent_role": "coordinator",
+        },
+        "live_runtime_evidence": False,
+        "evidence": [],
+    }
+    manifest_data["catalog_entries"] = sorted(
+        manifest_data["catalog_entries"] + [extra_row], key=lambda r: r["id"]
+    )
+
+    overlays = json.loads(json.dumps(inputs.overlays))
+    overlays["entries"]["end-of-task"] = json.loads(json.dumps(overlays["entries"]["end_of_task"]))
+
+    contracts = dict(inputs.contracts)
+    contracts["end-of-task"] = inputs.contracts["end_of_task"]
+
+    mutated = generate.GeneratorInputs(
+        catalog=inputs.catalog,
+        manifest=manifest_data,
+        pinned_version=inputs.pinned_version,
+        overlays=overlays,
+        templates=inputs.templates,
+        contracts=contracts,
+        rules=inputs.rules,
+    )
+    with pytest.raises(names.NameCollisionError) as exc_info:
+        generate.render(mutated)
+    message = str(exc_info.value)
+    assert "end_of_task" in message
+    assert "end-of-task" in message
+
+
+# overlay drift
+
+
+def _mutated_inputs(**overrides):
+    inputs = generate.load_inputs(SOURCE_DIR)
+    kwargs = dict(
+        catalog=inputs.catalog,
+        manifest=inputs.manifest,
+        pinned_version=inputs.pinned_version,
+        overlays=json.loads(json.dumps(inputs.overlays)),
+        templates=dict(inputs.templates),
+        contracts=dict(inputs.contracts),
+        rules=inputs.rules,
+    )
+    kwargs.update(overrides)
+    return generate.GeneratorInputs(**kwargs)
+
+
+def test_overlay_drift_missing_entry_raises():
+    inputs = _mutated_inputs()
+    del inputs.overlays["entries"]["plan"]
+    with pytest.raises(generate.GenerationError, match="missing entries"):
+        generate._validate_overlays(inputs, sorted(inputs.overlays["entries"]) + ["plan"])
+
+
+def test_overlay_drift_extra_entry_raises():
+    inputs = _mutated_inputs()
+    inputs.overlays["entries"]["bogus"] = dict(inputs.overlays["entries"]["plan"])
+    supported_ids = [k for k in inputs.overlays["entries"] if k != "bogus"]
+    with pytest.raises(generate.GenerationError, match="unknown entries"):
+        generate._validate_overlays(inputs, supported_ids)
+
+
+def test_overlay_drift_unknown_placeholder_token_raises():
+    inputs = _mutated_inputs()
+    inputs.overlays["entries"]["plan"]["description"] += " {{BOGUS_TOKEN}}"
+    supported_ids = list(inputs.overlays["entries"])
+    with pytest.raises(generate.GenerationError, match="unknown placeholder token"):
+        generate._validate_overlays(inputs, supported_ids)
+
+
+def test_overlay_drift_rewrite_from_absent_raises():
+    manifest_data = _load_real_manifest()
+    supported_ids = [row["id"] for row in _supported_rows(manifest_data)]
+    contract_text = "## Purpose\nbody\n\n## When to use\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Behavior contract\nx\n"
+    overlay_entry = {
+        "description": "test entry",
+        "command_note": "",
+        "extra_sections": [],
+        "notes": [],
+        "rewrites": [{"section": "Purpose", "from": "not present anywhere", "to": "replacement"}],
+    }
+    with pytest.raises(generate.GenerationError, match="occur exactly once"):
+        generate._assemble_contract("plan", contract_text, overlay_entry, {"plan"}, {"plan"})
+
+
+def test_overlay_drift_rewrite_from_occurs_twice_raises():
+    contract_text = "## Purpose\ndup dup\n\n## When to use\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Behavior contract\nx\n"
+    overlay_entry = {
+        "description": "test entry",
+        "command_note": "",
+        "extra_sections": [],
+        "notes": [],
+        "rewrites": [{"section": "Purpose", "from": "dup", "to": "one"}],
+    }
+    with pytest.raises(generate.GenerationError, match="occur exactly once"):
+        generate._assemble_contract("plan", contract_text, overlay_entry, {"plan"}, {"plan"})
+
+
+def test_overlay_drift_unknown_extra_section_raises():
+    contract_text = "## Purpose\nbody\n\n## When to use\nx\n\n## Inputs\nx\n\n## Output\nx\n\n## Behavior contract\nx\n"
+    overlay_entry = {
+        "description": "test entry",
+        "command_note": "",
+        "extra_sections": ["Nonexistent Section"],
+        "notes": [],
+        "rewrites": [],
+    }
+    with pytest.raises(generate.GenerationError, match="missing required section"):
+        generate._assemble_contract("plan", contract_text, overlay_entry, {"plan"}, {"plan"})
+
+
+def test_overlay_drift_contract_missing_behavior_contract_raises():
+    contract_text = "## Purpose\nbody\n\n## When to use\nx\n\n## Inputs\nx\n\n## Output\nx\n"
+    overlay_entry = {
+        "description": "test entry",
+        "command_note": "",
+        "extra_sections": [],
+        "notes": [],
+        "rewrites": [],
+    }
+    with pytest.raises(generate.GenerationError, match="Behavior contract"):
+        generate._assemble_contract("plan", contract_text, overlay_entry, {"plan"}, {"plan"})
+
+
+def test_overlay_drift_template_missing_required_placeholder_raises():
+    templates = {
+        "command": "# {{TITLE}}\n{{COMMAND_NOTE}}\n",  # missing {{SKILL_NAME}}
+        "skill": generate.load_inputs(SOURCE_DIR).templates["skill"],
+        "agent": generate.load_inputs(SOURCE_DIR).templates["agent"],
+        "instructions": generate.load_inputs(SOURCE_DIR).templates["instructions"],
+    }
+    with pytest.raises(generate.GenerationError, match="missing required placeholder"):
+        generate._validate_templates(templates)
+
+
+def test_overlay_drift_template_unknown_placeholder_raises():
+    base = generate.load_inputs(SOURCE_DIR).templates
+    templates = dict(base)
+    templates["command"] = base["command"] + "\n{{MYSTERY_TOKEN}}\n"
+    with pytest.raises(generate.GenerationError, match="unknown placeholder"):
+        generate._validate_templates(templates)
+
+
+def test_load_inputs_on_temp_copy_with_drifting_manifest_raises_with_drift_message(tmp_path):
+    import shutil
+
+    copy_dir = tmp_path / "quoin"
+    shutil.copytree(SOURCE_DIR, copy_dir)
+    manifest_path = copy_dir / "adapters" / "opencode" / "feature-manifest.json"
+    data = json.loads(manifest_path.read_text())
+    data["roles"]["architect"]["mode"] = "bogus-mode"
+    manifest_path.write_text(json.dumps(data))
+    with pytest.raises(generate.GenerationError) as exc_info:
+        generate.load_inputs(copy_dir)
+    assert "mode" in str(exc_info.value)

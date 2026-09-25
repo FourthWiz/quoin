@@ -122,7 +122,7 @@
       "rewrites": [
         {
           "from": "Recovery: use the canonical safe reset-to-origin recipe at\n  `memory/branch-recovery.md` (deployed Tier-1 memory file) — move\n  mis-placed commits to a feature branch first, then run the recipe.\n",
-          "section": "Behavior contract",
+          "section": "Gate levels",
           "to": "Recovery: move the mis-placed commits onto a feature branch first, then reset the protected branch to match its upstream.\n"
         }
       ]
@@ -172,7 +172,7 @@
       "rewrites": [
         {
           "from": "The skill also spawns the gate skill (via the adapter's mechanism) after\nconvergence, and updates a session-state file under\n`{{ARTIFACT_ROOT}}/memory/sessions/`.\n",
-          "section": "Behavior contract",
+          "section": "Output",
           "to": "After convergence, the user runs `/quoin-gate`, and the skill updates a session-state file under\n`{{ARTIFACT_ROOT}}/memory/sessions/`.\n"
         },
         {

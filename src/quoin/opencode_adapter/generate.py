@@ -14,9 +14,14 @@ follows in later tasks.
 """
 from __future__ import annotations
 
-from typing import Dict, List
+import hashlib
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
-from quoin.opencode_adapter import names
+from quoin.opencode_adapter import frontmatter, manifest, names
 
 # The directory Quoin's own workflow artifacts live under, relative to a
 # project root. Templates and overlays never spell this literal; they use
@@ -216,3 +221,684 @@ def check_task_graph(roles_by_name: Dict[str, dict]) -> List[str]:
                     % (role, target_agent, target_role)
                 )
     return errors
+
+
+# --- Generator core: inputs, sections, rendering, digests, collisions ---
+#
+# GENERATOR_SCHEMA_VERSION is bumped whenever a renderer's output changes
+# for unchanged `parts` — that bump is the only thing that may move every
+# digest at once. Every `parts_*` dict below carries it, so a code change
+# that is not accompanied by a version bump is caught by the byte-hash pin
+# test.
+
+GENERATOR_SCHEMA_VERSION = 1
+INSTRUCTIONS_PATH = ".opencode/quoin/instructions.md"
+CONFIG_PATH = ".opencode/opencode.jsonc"
+DEFAULT_SECTIONS = ("Purpose", "When to use", "Inputs", "Output", "Behavior contract")
+
+_TEMPLATE_NAMES = ("command", "skill", "agent", "instructions")
+
+_REQUIRED_TEMPLATE_PLACEHOLDERS = {
+    "command": frozenset(("SKILL_NAME", "TITLE", "COMMAND_NOTE")),
+    "skill": frozenset(("SKILL_NAME", "COMMAND_NAME", "ROLE_AGENT", "CANONICAL_ID", "CONTRACT", "NOTES")),
+    "agent": frozenset(("ROLE_PROMPT", "DELEGATION")),
+    "instructions": frozenset(
+        ("COMMAND_LIST", "ARTIFACT_ROOT", "ROLE_TABLE", "LIMITS", "UNAVAILABLE_LIST", "CORE_RULES")
+    ),
+}
+
+_PLACEHOLDER_TOKEN_RE = re.compile(r"\{\{[A-Za-z_]+\}\}")
+_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{\{([A-Z_]+)\}\}")
+
+
+class GenerationError(ValueError):
+    pass
+
+
+@dataclass
+class GeneratorInputs:
+    catalog: List[dict]
+    manifest: dict
+    pinned_version: str
+    overlays: dict
+    templates: Dict[str, str]
+    contracts: Dict[str, str]
+    rules: str
+
+
+@dataclass(frozen=True)
+class RenderedFile:
+    relpath: str
+    content: bytes
+    kind: str
+    source_id: Optional[str]
+    source_digest: str
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise GenerationError("cannot read %s: %s" % (path, exc)) from exc
+    except UnicodeDecodeError as exc:
+        raise GenerationError("cannot decode %s as UTF-8: %s" % (path, exc)) from exc
+
+
+def _read_json(path: Path):
+    text = _read_text(path)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise GenerationError("invalid JSON in %s: %s" % (path, exc)) from exc
+
+
+def _expand_artifact_root(text: str) -> str:
+    return text.replace("{{ARTIFACT_ROOT}}", ARTIFACT_ROOT)
+
+
+def _check_placeholder_tokens(label: str, text: str) -> None:
+    for token in _PLACEHOLDER_TOKEN_RE.findall(text):
+        if token != "{{ARTIFACT_ROOT}}":
+            raise GenerationError("%s: unknown placeholder token %s" % (label, token))
+
+
+def _validate_overlays(inputs: "GeneratorInputs", supported_ids: List[str]) -> None:
+    overlays = inputs.overlays
+    entries = overlays.get("entries") if isinstance(overlays, dict) else None
+    if not isinstance(entries, dict):
+        raise GenerationError("overlays.json 'entries' must be an object")
+
+    entry_ids = set(entries)
+    expected_ids = set(supported_ids)
+    missing = sorted(expected_ids - entry_ids)
+    extra = sorted(entry_ids - expected_ids)
+    if missing:
+        raise GenerationError("overlays.json is missing entries for: %s" % ", ".join(missing))
+    if extra:
+        raise GenerationError("overlays.json has unknown entries: %s" % ", ".join(extra))
+
+    for eid, entry in entries.items():
+        if not isinstance(entry, dict):
+            raise GenerationError("overlays entry %r must be an object" % eid)
+        description = entry.get("description")
+        if not isinstance(description, str) or not description:
+            raise GenerationError("overlays entry %r: 'description' must be a non-empty string" % eid)
+        _check_placeholder_tokens("overlays entry %r description" % eid, description)
+
+        command_note = entry.get("command_note")
+        if not isinstance(command_note, str):
+            raise GenerationError("overlays entry %r: 'command_note' must be a string" % eid)
+        _check_placeholder_tokens("overlays entry %r command_note" % eid, command_note)
+
+        extra_sections = entry.get("extra_sections")
+        if not isinstance(extra_sections, list) or not all(isinstance(s, str) for s in extra_sections):
+            raise GenerationError("overlays entry %r: 'extra_sections' must be a list of strings" % eid)
+
+        notes = entry.get("notes")
+        if not isinstance(notes, list) or not all(isinstance(n, str) for n in notes):
+            raise GenerationError("overlays entry %r: 'notes' must be a list of strings" % eid)
+        for note in notes:
+            _check_placeholder_tokens("overlays entry %r notes" % eid, note)
+
+        rewrites = entry.get("rewrites")
+        if not isinstance(rewrites, list):
+            raise GenerationError("overlays entry %r: 'rewrites' must be a list" % eid)
+        for rw in rewrites:
+            if not isinstance(rw, dict) or not all(k in rw for k in ("section", "from", "to")):
+                raise GenerationError("overlays entry %r has a malformed rewrite" % eid)
+            if not all(isinstance(rw[k], str) for k in ("section", "from", "to")):
+                raise GenerationError("overlays entry %r rewrite fields must be strings" % eid)
+            _check_placeholder_tokens("overlays entry %r rewrite 'from'" % eid, rw["from"])
+            _check_placeholder_tokens("overlays entry %r rewrite 'to'" % eid, rw["to"])
+
+    roles = overlays.get("roles")
+    if not isinstance(roles, dict):
+        raise GenerationError("overlays.json 'roles' must be an object")
+    role_names = set(inputs.manifest.get("roles") or {})
+    role_keys = set(roles)
+    missing_roles = sorted(role_names - role_keys)
+    extra_roles = sorted(role_keys - role_names)
+    if missing_roles:
+        raise GenerationError("overlays.json is missing roles for: %s" % ", ".join(missing_roles))
+    if extra_roles:
+        raise GenerationError("overlays.json has unknown roles: %s" % ", ".join(extra_roles))
+
+    for rname, rdef in roles.items():
+        if not isinstance(rdef, dict):
+            raise GenerationError("overlays role %r must be an object" % rname)
+        description = rdef.get("description")
+        if not isinstance(description, str) or not description:
+            raise GenerationError("overlays role %r: 'description' must be a non-empty string" % rname)
+        _check_placeholder_tokens("overlays role %r description" % rname, description)
+        prompt = rdef.get("prompt")
+        if not isinstance(prompt, list) or not prompt or not all(isinstance(p, str) for p in prompt):
+            raise GenerationError("overlays role %r: 'prompt' must be a non-empty list of strings" % rname)
+        for para in prompt:
+            _check_placeholder_tokens("overlays role %r prompt" % rname, para)
+
+
+def _validate_templates(templates: Dict[str, str]) -> None:
+    for kind, required in _REQUIRED_TEMPLATE_PLACEHOLDERS.items():
+        text = templates.get(kind)
+        if text is None:
+            raise GenerationError("templates is missing the %r template" % kind)
+        present = set(_TEMPLATE_PLACEHOLDER_RE.findall(text))
+        missing = sorted(required - present)
+        unknown = sorted(present - required)
+        if missing:
+            raise GenerationError(
+                "template %r is missing required placeholder(s): %s" % (kind, ", ".join(missing))
+            )
+        if unknown:
+            raise GenerationError("template %r has unknown placeholder(s): %s" % (kind, ", ".join(unknown)))
+
+
+def load_inputs(source_dir) -> GeneratorInputs:
+    """Read every portable input the generator needs from `source_dir`.
+
+    Runs `manifest.check_manifest` and raises `GenerationError` listing
+    every finding when it is non-empty, so generation never proceeds on an
+    unclassified or drifting manifest. Validates the overlay shape (entry
+    ids equal the supported catalog ids, role keys equal the manifest
+    roles, field types) and the template placeholder sets before
+    returning.
+    """
+    source_dir = Path(source_dir)
+
+    try:
+        catalog = manifest.load_catalog(source_dir)
+        manifest_data = manifest.load_manifest(source_dir)
+        pinned_version = manifest.read_pinned_version(source_dir)
+    except manifest.ManifestLoadError as exc:
+        raise GenerationError(str(exc)) from exc
+
+    findings = manifest.check_manifest(manifest_data, catalog, pinned_version)
+    if findings:
+        raise GenerationError("manifest drift: " + "; ".join(findings))
+
+    overlays_dir = source_dir / "adapters" / "opencode"
+    overlays = _read_json(overlays_dir / "overlays.json")
+    templates = {kind: _read_text(overlays_dir / "templates" / ("%s.md" % kind)) for kind in _TEMPLATE_NAMES}
+
+    supported_ids = sorted(
+        row["id"]
+        for row in manifest_data.get("catalog_entries", [])
+        if isinstance(row, dict) and row.get("status") == "supported" and isinstance(row.get("id"), str)
+    )
+    contracts = {}
+    for cid in supported_ids:
+        contracts[cid] = _read_text(source_dir / "core" / "skills" / ("%s.md" % cid))
+
+    rules = _read_text(source_dir / "core" / "workflow" / "rules.md")
+
+    inputs = GeneratorInputs(
+        catalog=catalog,
+        manifest=manifest_data,
+        pinned_version=pinned_version,
+        overlays=overlays,
+        templates=templates,
+        contracts=contracts,
+        rules=rules,
+    )
+    _validate_overlays(inputs, supported_ids)
+    _validate_templates(templates)
+    return inputs
+
+
+def extract_sections(markdown: str) -> List[Tuple[str, str]]:
+    """Split `markdown` on `## ` headings outside fenced code blocks.
+
+    A line starting with three backticks or three tildes toggles the
+    fence. `###` subsections stay inside their parent's body. Returns
+    `(heading, body)` pairs in document order; text before the first `##`
+    heading is discarded (the H1 and any lead-in prose).
+    """
+    lines = markdown.split("\n")
+    sections: List[Tuple[str, str]] = []
+    heading: Optional[str] = None
+    body: List[str] = []
+    in_fence = False
+    fence_marker = ""
+    for line in lines:
+        stripped = line.strip()
+        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
+            in_fence = True
+            fence_marker = stripped[:3]
+            body.append(line)
+            continue
+        if in_fence:
+            if stripped.startswith(fence_marker):
+                in_fence = False
+            body.append(line)
+            continue
+        if line.startswith("## ") and not line.startswith("### "):
+            if heading is not None:
+                sections.append((heading, "\n".join(body)))
+            heading = line[3:].strip()
+            body = []
+        else:
+            body.append(line)
+    if heading is not None:
+        sections.append((heading, "\n".join(body)))
+    return sections
+
+
+def _demote_headings_outside_fences(text: str) -> str:
+    """Drop the H1 and add one `#` to every other heading outside fences."""
+    lines = text.split("\n")
+    out: List[str] = []
+    in_fence = False
+    fence_marker = ""
+    seen_h1 = False
+    for line in lines:
+        stripped = line.strip()
+        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
+            in_fence = True
+            fence_marker = stripped[:3]
+            out.append(line)
+            continue
+        if in_fence:
+            if stripped.startswith(fence_marker):
+                in_fence = False
+            out.append(line)
+            continue
+        if line.startswith("#"):
+            if line.startswith("# ") and not line.startswith("## ") and not seen_h1:
+                seen_h1 = True
+                continue
+            line = "#" + line
+        out.append(line)
+    return "\n".join(out)
+
+
+def _slash_translate_pattern(catalog_ids) -> "re.Pattern":
+    ids_sorted = sorted(catalog_ids, key=len, reverse=True)
+    alternation = "|".join(re.escape(cid) for cid in ids_sorted)
+    return re.compile(r"(?<![\w./-])/(%s)(?![\w/-]|\.\w)" % alternation)
+
+
+def _translate_slashes(text: str, catalog_id_set, supported_id_set) -> Tuple[str, List[str]]:
+    """Translate `/id` references to `/quoin-<name>` for supported ids and
+    drop the leading slash for every other catalog id. Returns the
+    translated text and the sorted list of non-bundle ids whose slash was
+    dropped."""
+    pattern = _slash_translate_pattern(catalog_id_set)
+    dropped = set()
+
+    def _sub(m: "re.Match") -> str:
+        cid = m.group(1)
+        if cid in supported_id_set:
+            return "/" + names.normalize(cid)
+        dropped.add(cid)
+        return cid
+
+    translated = pattern.sub(_sub, text)
+    return translated, sorted(dropped)
+
+
+def _render_notes(notes: List[str], dropped: List[str]) -> str:
+    all_notes = list(notes)
+    if dropped:
+        plural = len(dropped) > 1
+        all_notes.append(
+            "This step also references %s, which %s not available as %s in OpenCode."
+            % (
+                ", ".join(dropped),
+                "are" if plural else "is",
+                "Quoin workflow steps" if plural else "a Quoin workflow step",
+            )
+        )
+    if not all_notes:
+        return "- (none)"
+    return "\n".join("- %s" % note for note in all_notes)
+
+
+def _assemble_contract(
+    entry_id: str, contract_text: str, overlay_entry: dict, catalog_id_set, supported_id_set
+) -> Tuple[str, List[str]]:
+    wanted = set(DEFAULT_SECTIONS) | set(overlay_entry["extra_sections"])
+    sections = extract_sections(contract_text)
+    bodies = {}
+    for heading, body in sections:
+        bodies.setdefault(heading, body)
+
+    missing = sorted(h for h in wanted if h not in bodies)
+    if missing:
+        raise GenerationError(
+            "contract %r is missing required section(s): %s" % (entry_id, ", ".join(missing))
+        )
+
+    for rw in overlay_entry["rewrites"]:
+        section = rw["section"]
+        if section not in bodies:
+            raise GenerationError("entry %r rewrite section %r not found in its contract" % (entry_id, section))
+        frm = _expand_artifact_root(rw["from"])
+        to = _expand_artifact_root(rw["to"])
+        body = bodies[section]
+        count = body.count(frm)
+        if count != 1:
+            raise GenerationError(
+                "entry %r rewrite in section %r: 'from' text starting %r must occur exactly once in "
+                "the source contract, found %d" % (entry_id, section, frm[:60], count)
+            )
+        bodies[section] = body.replace(frm, to, 1)
+
+    ordered_headings = [h for h, _ in sections if h in wanted]
+    joined = "\n".join("## %s\n%s" % (h, bodies[h]) for h in ordered_headings)
+    contract_text_assembled = joined.strip("\n") + "\n"
+
+    translated, dropped = _translate_slashes(contract_text_assembled, catalog_id_set, supported_id_set)
+    return translated, dropped
+
+
+def _finalize_text(text: str) -> str:
+    if "\r" in text:
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.rstrip("\n") + "\n"
+
+
+def _substitute(template_text: str, mapping: Dict[str, str]) -> str:
+    result = template_text
+    for key, value in mapping.items():
+        result = result.replace("{{%s}}" % key, value)
+    return result
+
+
+def _digest(parts: dict) -> str:
+    encoded = json.dumps(parts, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def render_command(parts: dict) -> str:
+    body = _substitute(
+        parts["template_command"],
+        {"SKILL_NAME": parts["name"], "TITLE": parts["title"], "COMMAND_NOTE": parts["command_note"]},
+    )
+    fm = frontmatter.emit({"description": parts["description"], "agent": parts["agent"]})
+    return _finalize_text(fm + body)
+
+
+def render_skill(parts: dict, digest_value: str) -> str:
+    body = _substitute(
+        parts["template_skill"],
+        {
+            "SKILL_NAME": parts["name"],
+            "COMMAND_NAME": parts["command"],
+            "ROLE_AGENT": parts["agent"],
+            "CANONICAL_ID": parts["id"],
+            "CONTRACT": parts["contract_text"],
+            "NOTES": parts["notes"],
+        },
+    )
+    fm = frontmatter.emit(
+        {
+            "name": parts["name"],
+            "description": parts["description"],
+            "metadata": {
+                "canonical_id": parts["id"],
+                "source_digest": digest_value,
+                "generator": "quoin",
+            },
+        }
+    )
+    return _finalize_text(fm + body)
+
+
+def render_agent(parts: dict) -> str:
+    targets = parts["targets"]
+    delegation = (
+        "This role may delegate to: %s." % ", ".join(targets)
+        if targets
+        else "This role may not delegate to any other role."
+    )
+    body = _substitute(parts["template_agent"], {"ROLE_PROMPT": parts["prompt"], "DELEGATION": delegation})
+    fm = frontmatter.emit(
+        {"description": parts["description"], "mode": parts["mode"], "permission": parts["permission"]}
+    )
+    return _finalize_text(fm + body)
+
+
+def render_instructions(parts: dict) -> str:
+    body = _substitute(
+        parts["template_instructions"],
+        {
+            "COMMAND_LIST": parts["command_list"],
+            "ARTIFACT_ROOT": parts["root"],
+            "ROLE_TABLE": parts["role_table"],
+            "LIMITS": parts["limits"],
+            "UNAVAILABLE_LIST": parts["unavailable_list"],
+            "CORE_RULES": parts["core_rules"],
+        },
+    )
+    return _finalize_text(body)
+
+
+def render_config(parts: dict) -> str:
+    header = (
+        "// Quoin owns this file, remove it with `quoin opencode uninstall`.\n"
+        "// Keep your own settings in `.opencode/opencode.json` or `opencode.json`.\n"
+    )
+    obj = {"$schema": "https://opencode.ai/config.json", "instructions": [parts["instructions_path"]]}
+    body = json.dumps(obj, indent=2) + "\n"
+    return _finalize_text(header + body)
+
+
+def check_rendered(files: Dict[str, RenderedFile]) -> List[str]:
+    """Forbidden-output check over a rendered file set.
+
+    Filled in fully by a later task (frontmatter-key allowlists, agent
+    value checks, command-body hazards, and the shared model-id and
+    section-sign denylists). `render` already calls this hook so the later
+    task only has to fill the body in, not wire it up.
+    """
+    return []
+
+
+def render(inputs: GeneratorInputs) -> Dict[str, RenderedFile]:
+    manifest_roles = inputs.manifest.get("roles") or {}
+    supported_rows = sorted(
+        (
+            row
+            for row in inputs.manifest.get("catalog_entries", [])
+            if isinstance(row, dict) and row.get("status") == "supported"
+        ),
+        key=lambda row: row["id"],
+    )
+
+    command_pairs = [(names.normalize(row["id"]), row["id"]) for row in supported_rows]
+    skill_pairs = list(command_pairs)
+    agent_pairs = [(names.role_agent_name(role), role) for role in manifest_roles]
+
+    names.check_unique("command", command_pairs)
+    names.check_unique("skill", skill_pairs)
+    names.check_unique("agent", agent_pairs)
+
+    all_names = (
+        [n for n, _ in command_pairs] + [n for n, _ in skill_pairs] + [n for n, _ in agent_pairs]
+    )
+    for candidate in all_names:
+        err = names.name_error(candidate)
+        if err:
+            raise GenerationError(err)
+
+    graph_errors = check_task_graph(manifest_roles)
+    if graph_errors:
+        raise GenerationError("; ".join(graph_errors))
+
+    catalog_id_set = {c["name"] for c in inputs.catalog if isinstance(c, dict) and isinstance(c.get("name"), str)}
+    supported_id_set = {row["id"] for row in supported_rows}
+
+    files: Dict[str, RenderedFile] = {}
+
+    for row in supported_rows:
+        cid = row["id"]
+        name = names.normalize(cid)
+        opencode = row["opencode"]
+        role = opencode["agent_role"]
+        agent = names.role_agent_name(role)
+        overlay_entry = inputs.overlays["entries"][cid]
+        description = _expand_artifact_root(overlay_entry["description"])
+        command_note = _expand_artifact_root(overlay_entry["command_note"])
+
+        parts_c = {
+            "kind": "command",
+            "id": cid,
+            "name": name,
+            "agent": agent,
+            "title": name,
+            "description": description,
+            "command_note": command_note,
+            "template_command": inputs.templates["command"],
+            "version": GENERATOR_SCHEMA_VERSION,
+            "schema": ["description", "agent"],
+        }
+        command_digest = _digest(parts_c)
+        command_relpath = ".opencode/commands/%s.md" % name
+        files[command_relpath] = RenderedFile(
+            relpath=command_relpath,
+            content=render_command(parts_c).encode("utf-8"),
+            kind="command",
+            source_id=cid,
+            source_digest=command_digest,
+        )
+
+        contract_text, dropped = _assemble_contract(
+            cid, inputs.contracts[cid], overlay_entry, catalog_id_set, supported_id_set
+        )
+        notes_text = _render_notes([_expand_artifact_root(n) for n in overlay_entry["notes"]], dropped)
+
+        parts_s = {
+            "kind": "skill",
+            "id": cid,
+            "name": name,
+            "command": name,
+            "agent": agent,
+            "description": description,
+            "contract_text": contract_text,
+            "notes": notes_text,
+            "template_skill": inputs.templates["skill"],
+            "version": GENERATOR_SCHEMA_VERSION,
+            "schema": ["name", "description", "metadata"],
+        }
+        skill_digest = _digest(parts_s)
+        skill_relpath = ".opencode/skills/%s/SKILL.md" % name
+        files[skill_relpath] = RenderedFile(
+            relpath=skill_relpath,
+            content=render_skill(parts_s, skill_digest).encode("utf-8"),
+            kind="skill",
+            source_id=cid,
+            source_digest=skill_digest,
+        )
+
+    for role, role_def in manifest_roles.items():
+        agent = names.role_agent_name(role)
+        mode = role_def.get("mode") if isinstance(role_def, dict) else None
+        role_overlay = inputs.overlays["roles"][role]
+        description = _expand_artifact_root(role_overlay["description"])
+        prompt_text = "\n\n".join(_expand_artifact_root(p) for p in role_overlay["prompt"])
+        permission = role_permissions(role)
+        targets = task_targets(role)
+
+        parts_a = {
+            "kind": "agent",
+            "role": role,
+            "mode": mode,
+            "description": description,
+            "prompt": prompt_text,
+            "permission": permission,
+            "targets": targets,
+            "template_agent": inputs.templates["agent"],
+            "version": GENERATOR_SCHEMA_VERSION,
+            "schema": ["description", "mode", "permission"],
+        }
+        agent_digest = _digest(parts_a)
+        agent_relpath = ".opencode/agents/%s.md" % agent
+        files[agent_relpath] = RenderedFile(
+            relpath=agent_relpath,
+            content=render_agent(parts_a).encode("utf-8"),
+            kind="agent",
+            source_id=role,
+            source_digest=agent_digest,
+        )
+
+    command_list = "\n".join(
+        "- `/%s` — %s" % (names.normalize(row["id"]), _expand_artifact_root(inputs.overlays["entries"][row["id"]]["description"]))
+        for row in supported_rows
+    )
+    unavailable_rows = sorted(
+        (
+            row
+            for row in inputs.manifest.get("catalog_entries", [])
+            if isinstance(row, dict) and row.get("status") != "supported"
+        ),
+        key=lambda row: row["id"],
+    )
+    unavailable_list = "\n".join(
+        "- `%s` (%s): %s" % (row["id"], row.get("status"), row.get("reason")) for row in unavailable_rows
+    )
+    role_table_lines = ["| Role | Mode | Summary |", "| --- | --- | --- |"]
+    for role in sorted(manifest_roles):
+        role_def = manifest_roles[role]
+        role_table_lines.append(
+            "| %s | %s | %s |" % (role, role_def.get("mode"), role_def.get("summary"))
+        )
+    role_table = "\n".join(role_table_lines)
+
+    limits = inputs.manifest.get("limits") or {}
+    limits_lines = []
+    for key in sorted(limits):
+        val = limits[key]
+        if not isinstance(val, dict):
+            continue
+        enforcement = val.get("enforcement")
+        note = val.get("note", "")
+        limits_lines.append("- %s: %s — %s" % (key, enforcement, note))
+    limits_text = "\n".join(limits_lines)
+
+    core_rules = _demote_headings_outside_fences(inputs.rules)
+
+    parts_i = {
+        "kind": "instructions",
+        "command_list": command_list,
+        "unavailable_list": unavailable_list,
+        "role_table": role_table,
+        "limits": limits_text,
+        "root": ARTIFACT_ROOT,
+        "core_rules": core_rules,
+        "template_instructions": inputs.templates["instructions"],
+        "version": GENERATOR_SCHEMA_VERSION,
+        "schema": ["instructions"],
+    }
+    instructions_digest = _digest(parts_i)
+    files[INSTRUCTIONS_PATH] = RenderedFile(
+        relpath=INSTRUCTIONS_PATH,
+        content=render_instructions(parts_i).encode("utf-8"),
+        kind="instructions",
+        source_id=None,
+        source_digest=instructions_digest,
+    )
+
+    parts_k = {
+        "kind": "config",
+        "instructions_path": INSTRUCTIONS_PATH,
+        "version": GENERATOR_SCHEMA_VERSION,
+        "schema": ["$schema", "instructions"],
+    }
+    config_digest = _digest(parts_k)
+    files[CONFIG_PATH] = RenderedFile(
+        relpath=CONFIG_PATH,
+        content=render_config(parts_k).encode("utf-8"),
+        kind="config",
+        source_id=None,
+        source_digest=config_digest,
+    )
+
+    findings = check_rendered(files)
+    if findings:
+        raise GenerationError("; ".join(findings))
+
+    return dict(sorted(files.items()))
+
+
+def render_source_dir(source_dir) -> Dict[str, RenderedFile]:
+    return render(load_inputs(source_dir))
