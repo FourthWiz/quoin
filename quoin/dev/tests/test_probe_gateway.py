@@ -978,6 +978,8 @@ def test_affected_tests_self_check():
         "quoin/adapters/opencode/compatibility.md": {"test_opencode_docs.py", "test_opencode_manifest.py"},
         "quoin/adapters/opencode/decisions.md": {"test_opencode_docs.py"},
         "pyproject.toml": {"test_probe_gateway.py"},
+        "quoin/core/workflow/skills.json": {"test_opencode_manifest.py"},
+        ".github/workflows/adapter-check.yml": {"test_opencode_manifest.py"},
     }
     for path, expected in per_file_expected.items():
         selectors, unmatched, ignored = affected_tests.map_changed_to_tests([path], repo_root)

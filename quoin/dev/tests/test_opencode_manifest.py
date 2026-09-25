@@ -507,3 +507,35 @@ def test_readme_support_classification_section():
         assert ("`%s`" % status) in section, status
     for milestone in data["milestones"]:
         assert ("`%s`" % milestone) in section, milestone
+
+
+# --- T-08: clean-content sweep of the new src tree and this test file ---
+
+
+def test_src_and_self_swept_for_forbidden_and_model_id_patterns():
+    from test_opencode_docs import _FORBIDDEN_PATTERNS, _model_id_denylist
+
+    model_id_patterns = _model_id_denylist()
+    src_dir = REPO_ROOT / "src" / "quoin" / "opencode_adapter"
+    artifact_root_pattern = next(p for p in _FORBIDDEN_PATTERNS if "artifacts" in p.pattern)
+
+    py_files = sorted(src_dir.glob("*.py"))
+    assert py_files, "expected at least one module under %s" % src_dir
+    for py_path in py_files:
+        text = py_path.read_text(encoding="utf-8")
+        for pattern in _FORBIDDEN_PATTERNS:
+            if pattern is artifact_root_pattern:
+                continue
+            match = pattern.search(text)
+            assert match is None, "%s matched %r in %s" % (pattern.pattern, match, py_path)
+        for pattern in model_id_patterns:
+            match = pattern.search(text)
+            assert match is None, "%s matched %r in %s" % (pattern.pattern, match, py_path)
+
+    self_text = Path(__file__).read_text(encoding="utf-8")
+    for pattern in _FORBIDDEN_PATTERNS:
+        match = pattern.search(self_text)
+        assert match is None, "%s matched %r in test_opencode_manifest.py" % (pattern.pattern, match)
+    for pattern in model_id_patterns:
+        match = pattern.search(self_text)
+        assert match is None, "%s matched %r in test_opencode_manifest.py" % (pattern.pattern, match)

@@ -829,6 +829,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/docs/runtime-portability-status.md",
         "quoin/dev/tests/test_runtime_portability_docs.py",
     ),
+    (
+        "quoin/core/workflow/skills.json",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):
