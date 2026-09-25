@@ -8,13 +8,35 @@ roster census would otherwise pick up and require registering.
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 from quoin.opencode_adapter import manifest, names
+from quoin.opencode_adapter.__main__ import main as opencode_main
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_DIR = REPO_ROOT / "quoin"
+SRC_DIR = REPO_ROOT / "src"
+
+
+def _subprocess_env():
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(SRC_DIR)
+    return env
+
+
+def _run_check_manifest_cli(*extra_args, cwd=REPO_ROOT):
+    return subprocess.run(
+        [sys.executable, "-m", "quoin.opencode_adapter", "check-manifest", *extra_args],
+        cwd=str(cwd),
+        env=_subprocess_env(),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
 
 
 def test_normalize_swaps_underscore_for_hyphen():
@@ -392,3 +414,57 @@ def test_missing_compat_file_raises_manifest_load_error(tmp_path):
     except manifest.ManifestLoadError:
         raised = True
     assert raised
+
+
+# --- T-04: `python -m quoin.opencode_adapter check-manifest` CLI ---
+
+
+def test_cli_real_tree_exits_0_from_repo_root():
+    result = _run_check_manifest_cli("--source-dir", "quoin")
+    assert result.returncode == 0, result.stderr
+    assert "32" in result.stdout
+
+
+def test_cli_broken_temp_copy_exits_1_with_offender_id_on_stderr(tmp_path):
+    dest = _copy_source_tree(tmp_path)
+    data = _load_manifest_dict(dest)
+    row = next(r for r in data["catalog_entries"] if r["id"] == "architect")
+    row["reason"] = ""
+    _write_manifest_dict(dest, data)
+    result = _run_check_manifest_cli("--source-dir", str(dest))
+    assert result.returncode == 1
+    assert "architect" in result.stderr
+
+
+def test_cli_missing_directory_exits_2():
+    result = _run_check_manifest_cli("--source-dir", "/no/such/opencode/source/dir")
+    assert result.returncode == 2
+    assert result.stderr.strip()
+
+
+def test_cli_omitted_source_dir_exits_0_via_default_resolution():
+    result = _run_check_manifest_cli()
+    assert result.returncode == 0, result.stderr
+    assert "32" in result.stdout
+
+
+def test_main_in_process_returns_0_1_2_for_the_three_cases(tmp_path):
+    assert opencode_main(["check-manifest", "--source-dir", str(SOURCE_DIR)]) == 0
+
+    dest = _copy_source_tree(tmp_path)
+    data = _load_manifest_dict(dest)
+    row = next(r for r in data["catalog_entries"] if r["id"] == "architect")
+    row["reason"] = ""
+    _write_manifest_dict(dest, data)
+    assert opencode_main(["check-manifest", "--source-dir", str(dest)]) == 1
+
+    assert opencode_main(["check-manifest", "--source-dir", "/no/such/opencode/source/dir"]) == 2
+
+
+def test_main_usage_error_raises_system_exit_2():
+    try:
+        opencode_main(["check-manifest", "--not-a-real-flag"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("expected SystemExit(2) for an unrecognized option")
