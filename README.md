@@ -244,7 +244,7 @@ workflow intent through natural-language phase requests and repo-local docs.
 | `/end_of_task` | Sonnet | Pushes branch, captures lessons, and finalizes task state |
 | `/checkpoint` | Sonnet | Save/restore session context mid-session; writes pending-restore sentinel |
 | `/continue_work` | Sonnet | Resume context from a prior session using the recent-sessions index |
-| `/sleep` | Haiku | Memory consolidation: promotes insights to lessons-learned, archives stale entries |
+| `/sleep` | Sonnet | Memory consolidation: promotes insights to lessons-learned, archives stale entries |
 
 ### Utilities
 
@@ -257,7 +257,7 @@ workflow intent through natural-language phase requests and repo-local docs.
 | `/capture_insight` | Haiku | Logs a pattern or discovery to daily insights |
 | `/expand <path>` | Sonnet | Re-renders a terse workflow artifact in readable English |
 | `/status` | Haiku | Renders the workflow pipeline graph with the active phase marked (read-only) |
-| `/cleanup` | Haiku | Trash-moves stale sentinels and old checkpoints into recoverable archive |
+| `/cleanup` | Sonnet | Trash-moves stale sentinels and old checkpoints into recoverable archive |
 | `/next-steps` | Haiku | Append-only queue for future work items (`add` / `list` / `done N`) |
 
 ## Open-model routing (opt-in)

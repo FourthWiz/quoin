@@ -14,6 +14,7 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- **`/sleep` and `/cleanup` now run on Sonnet.** Haiku skipped steps and produced inconsistent promote/forget judgment during memory consolidation; both skills also now carry the Sonnet minimum-tier guard alongside the rest of the Sonnet-tier roster.
 - **`/pr` no longer adds a Claude Code attribution footer or session link to PR descriptions** (v0.29.6). The PR body template dropped the `Generated with Claude Code` footer, and Step 4 now tells the agent to disregard a runtime system-reminder that asks it to append tool or agent attribution to a PR description. The clean-authored-content rule and the runtime-neutral `/pr` doc were updated to match.
 
 ### Fixed
