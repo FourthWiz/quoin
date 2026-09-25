@@ -641,9 +641,21 @@ Tell the user:
 - What the daily cache recommends for tomorrow
 - Remind them to run `/start_of_day` when they resume
 
+### Step 6: Invoke /sleep (memory consolidation)
+
+After Step 5 completes and the user has been shown the report, check for `--skip-sleep` flag:
+- If `--skip-sleep` was passed in the invocation: print "Skipping /sleep (--skip-sleep passed). Run /sleep standalone to consolidate memory." and stop.
+- Otherwise: spawn a Sonnet Agent subagent:
+    model: "sonnet"
+    description: "sleep — memory consolidation after end_of_day"
+    prompt: "[no-redispatch]\n/sleep\ncontext:\n- daily briefing: .workflow_artifacts/memory/daily/<today>.md\n- lessons: .workflow_artifacts/memory/lessons-learned.md\n- forgotten: .workflow_artifacts/memory/forgotten/\n- scan window: <QUOIN_SLEEP_SCAN_WINDOW_DAYS or 30> days"
+  Wait for the subagent. Print the subagent's output inline.
+  If the subagent fails (tool error, dispatch unavailable): print "[quoin-S-3: /sleep invocation failed; daily briefing is durable; run /sleep standalone to retry]" and exit 0. DO NOT roll back the daily briefing — /sleep is the LAST step and the briefing is already written.
+
 ## Important behaviors
 
 - **Capture decisions.** The hardest thing to remember across days isn't *what* you were doing — it's *why* you made certain choices. Always capture decision rationale.
 - **Be specific about resumption points.** "Continue implementing" is useless. "Continue with Task 4 (add retry logic to payment.service.ts:processRefund), branch `feat/payment-retry`, tests for Tasks 1-3 passing" is useful.
 - **Don't overwrite previous sessions.** If there's already a session file for this task today (from an earlier session), update it rather than replacing it — preserve the history of what was done earlier.
 - **Git log captures logic, not just files.** "Modified 3 files" tells you nothing. "Added exponential backoff to payment retries because Stripe recommends it for idempotent requests" tells you everything.
+- **--skip-sleep flag.** Pass `--skip-sleep` to `/end_of_day` to suppress the automatic Step 6 `/sleep` invocation. Use this when memory consolidation is not needed (e.g., brief sessions, first-run calibration, or when running `/sleep` standalone later).

@@ -1,18 +1,20 @@
 #!/usr/bin/env bash
 # test_sleep_chaining.sh — static text checks verifying /end_of_day → /sleep chaining.
 #
-# All tests are grep checks against quoin/skills/end_of_day/SKILL.md.
+# All tests are grep checks against quoin/adapters/claude/skills/end_of_day/SKILL.md
+# (the active Claude adapter file; quoin/skills/end_of_day/SKILL.md is a deprecated,
+# behavior-free stub since the Phase 16 adapter migration).
 # Runtime verification (actual sleep subagent firing) is T-16 Sub-task B manual smoke.
 #
 # Usage:
 #   bash quoin/dev/tests/test_sleep_chaining.sh
 # Exit:
-#   0 — all 3 sub-tests pass
+#   0 — all 4 sub-tests pass
 #   1 — one or more sub-tests failed
 
 set -e
 
-SKILL_FILE="quoin/skills/end_of_day/SKILL.md"
+SKILL_FILE="quoin/adapters/claude/skills/end_of_day/SKILL.md"
 PASS=0
 FAIL=0
 
@@ -96,15 +98,39 @@ test_default_chain_fires() {
 }
 
 # ---------------------------------------------------------------------------
+# test_step_6_dispatch_tier
+# ---------------------------------------------------------------------------
+test_step_6_dispatch_tier() {
+  local name="test_step_6_dispatch_tier"
+  local ok=true
+
+  # The Step 6 /sleep subagent dispatch must declare model: "sonnet" (/sleep
+  # moved to Sonnet tier in IVG-263; a stale haiku dispatch would run it
+  # under-powered, and [no-redispatch] suppresses /sleep's own min-tier guard).
+  grep -q 'model: "sonnet"' "$SKILL_FILE" || {
+    echo "FAIL: ${name}: 'model: \"sonnet\"' not found in end_of_day SKILL.md"
+    ok=false
+  }
+
+  if $ok; then
+    echo "PASS: ${name}"
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-echo "Running 3 sub-tests from test_sleep_chaining.sh"
+echo "Running 4 sub-tests from test_sleep_chaining.sh"
 echo "SKILL_FILE: ${SKILL_FILE}"
 echo ""
 
 test_skip_sleep_flag
 test_sleep_failure_no_rollback
 test_default_chain_fires
+test_step_6_dispatch_tier
 
 echo ""
 echo "Results: ${PASS} passed, ${FAIL} failed"
