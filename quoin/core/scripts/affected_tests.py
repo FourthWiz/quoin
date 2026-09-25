@@ -755,6 +755,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # here in the same change; the self-check test in test_probe_gateway.py
     # enforces that rule.
     (
+        "quoin/adapters/opencode/feature-manifest.json",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
+        "quoin/adapters/opencode/feature-manifest.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
         "quoin/adapters/opencode/fixtures/scenarios.json",
         "quoin/dev/tests/test_fake_openai_server.py",
     ),
