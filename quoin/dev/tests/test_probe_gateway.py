@@ -980,6 +980,10 @@ def test_affected_tests_self_check():
             "test_probe_gateway.py",
             "test_probe_gateway_tool_loop.py",
         },
+        "quoin/adapters/opencode/fixtures/install-cases.json": {
+            "test_opencode_install.py",
+            "test_opencode_docs.py",
+        },
         "quoin/adapters/opencode/probe_gateway.py": {"test_probe_gateway.py"},
         "quoin/adapters/opencode/fake_openai_server.py": {"test_fake_openai_server.py"},
         "quoin/adapters/opencode/README.md": {

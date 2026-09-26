@@ -981,3 +981,241 @@ def test_cli_help_texts_mention_opencode():
         )
         assert result.returncode == 0
         assert "opencode" in result.stdout.lower()
+
+
+# --- end-to-end acceptance through the real CLI -----------------------------
+#
+# Each case below drives `python -m quoin` as a subprocess against a fresh
+# temp project root, materialized from the shared install-cases fixture.
+# This exercises the installer the way a person actually runs it: real
+# argv parsing, real filesystem writes, real exit codes.
+
+INSTALL_CASES_PATH = SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "install-cases.json"
+
+
+def _load_install_cases():
+    return json.loads(INSTALL_CASES_PATH.read_text(encoding="utf-8"))["cases"]
+
+
+def _materialize_case(root: Path, case_name: str) -> None:
+    case = _load_install_cases()[case_name]
+    for relpath, text in case["files"].items():
+        relpath = relpath.replace("{{ARTIFACT_ROOT}}", generate.ARTIFACT_ROOT)
+        path = root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+
+def _snapshot(root: Path):
+    return {
+        str(p.relative_to(root)): p.read_bytes()
+        for p in root.rglob("*")
+        if p.is_file()
+    }
+
+
+def _run_quoin_cli(args, cwd):
+    import subprocess
+    import sys
+
+    env = dict(os.environ, PYTHONPATH=str(SOURCE_DIR.parent / "src"))
+    return subprocess.run(
+        [sys.executable, "-m", "quoin", *args],
+        cwd=str(cwd), capture_output=True, text=True, env=env, timeout=60,
+    )
+
+
+def _cli_install(root, extra=()):
+    return _run_quoin_cli(
+        ["install", "--runtime", "opencode", "--project-root", str(root),
+         "--source-dir", str(SOURCE_DIR), *extra],
+        cwd=root,
+    )
+
+
+def _cli_uninstall(root, extra=()):
+    return _run_quoin_cli(
+        ["opencode", "uninstall", "--project-root", str(root), *extra],
+        cwd=root,
+    )
+
+
+def test_double_install_is_byte_identical_and_check_matches_state(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _materialize_case(root, "clean")
+
+    clean_snapshot = _snapshot(root)
+    check_on_clean = _cli_install(root, extra=["--check"])
+    assert check_on_clean.returncode == 1
+    assert _snapshot(root) == clean_snapshot
+
+    first = _cli_install(root)
+    assert first.returncode == 0
+    snapshot_after_first = _snapshot(root)
+    assert snapshot_after_first != clean_snapshot
+
+    second = _cli_install(root)
+    assert second.returncode == 0
+    assert _snapshot(root) == snapshot_after_first
+
+    check_on_installed = _cli_install(root, extra=["--check"])
+    assert check_on_installed.returncode == 0
+    assert _snapshot(root) == snapshot_after_first
+
+
+def test_unowned_command_file_is_a_conflict_that_writes_nothing(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _materialize_case(root, "unowned-command")
+    before = _snapshot(root)
+
+    result = _cli_install(root)
+
+    assert result.returncode == 3
+    assert ".opencode/commands/quoin-plan.md" in result.stderr
+    assert "not owned by Quoin" in result.stderr
+    assert _snapshot(root) == before
+
+
+def test_conflicting_jsonc_names_the_remediation_path(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _materialize_case(root, "conflicting-jsonc")
+    before = _snapshot(root)
+
+    result = _cli_install(root)
+
+    assert result.returncode == 3
+    assert ".opencode/opencode.jsonc" in result.stderr
+    assert ".opencode/opencode.json" in result.stderr
+    assert _snapshot(root) == before
+
+
+def test_editing_an_owned_file_after_install_is_a_conflict(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _materialize_case(root, "clean")
+    assert _cli_install(root).returncode == 0
+
+    target = root / ".opencode" / "quoin" / "instructions.md"
+    assert target.is_file()
+    target.write_bytes(target.read_bytes() + b"\ntampered by a test\n")
+    tampered_snapshot = _snapshot(root)
+
+    result = _cli_install(root)
+
+    assert result.returncode == 3
+    assert "owned file modified since install" in result.stderr
+    assert _snapshot(root) == tampered_snapshot
+
+
+def test_codex_agents_md_and_user_configs_survive_install_and_uninstall(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _materialize_case(root, "codex-agents-md")
+    _materialize_case(root, "user-configs")
+    agents_before = (root / "AGENTS.md").read_bytes()
+    root_config_before = (root / "opencode.json").read_bytes()
+    nested_config_before = (root / ".opencode" / "opencode.json").read_bytes()
+
+    assert _cli_install(root).returncode == 0
+    assert (root / "AGENTS.md").read_bytes() == agents_before
+    assert (root / "opencode.json").read_bytes() == root_config_before
+    assert (root / ".opencode" / "opencode.json").read_bytes() == nested_config_before
+
+    assert _cli_uninstall(root).returncode == 0
+    assert (root / "AGENTS.md").read_bytes() == agents_before
+    assert (root / "opencode.json").read_bytes() == root_config_before
+    assert (root / ".opencode" / "opencode.json").read_bytes() == nested_config_before
+
+
+def test_uninstall_keeps_an_edited_file_and_leaves_workflow_and_env_untouched(tmp_path):
+    root = tmp_path / "proj"
+    root.mkdir()
+    _materialize_case(root, "workflow-and-secrets")
+    assert _cli_install(root).returncode == 0
+
+    skill_files = sorted((root / ".opencode" / "skills").rglob("SKILL.md"))
+    assert skill_files
+    edited = skill_files[0]
+    edited_bytes = edited.read_bytes() + b"\nmy own note\n"
+    edited.write_bytes(edited_bytes)
+
+    workflow_path = root / generate.ARTIFACT_ROOT / "memory" / "lessons-learned.md"
+    task_path = root / generate.ARTIFACT_ROOT / "demo-task" / "notes.md"
+    env_path = root / ".env"
+    workflow_before = workflow_path.read_bytes()
+    task_before = task_path.read_bytes()
+    env_before = env_path.read_bytes()
+
+    snapshot_before_dry_run = _snapshot(root)
+    dry_run = _cli_uninstall(root, extra=["--dry-run"])
+    assert dry_run.returncode == 4
+    assert _snapshot(root) == snapshot_before_dry_run
+
+    result = _cli_uninstall(root)
+
+    assert result.returncode == 4
+    assert edited.read_bytes() == edited_bytes
+    remaining_generated = [
+        p for p in (root / ".opencode").rglob("*")
+        if p.is_file() and p != edited
+    ]
+    assert remaining_generated == []
+    assert workflow_path.read_bytes() == workflow_before
+    assert task_path.read_bytes() == task_before
+    assert env_path.read_bytes() == env_before
+
+
+def _reinstall_source_subset(dest: Path) -> None:
+    import shutil
+
+    for rel in ("adapters/opencode", "core/workflow", "core/skills", "core/scripts"):
+        shutil.copytree(SOURCE_DIR / rel, dest / rel)
+    (dest / "memory").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        SOURCE_DIR / "memory" / "format-kit.sections.json",
+        dest / "memory" / "format-kit.sections.json",
+    )
+    (dest / "skills").mkdir(parents=True, exist_ok=True)  # required by --source-dir resolution
+
+
+def test_reinstall_after_a_skill_edit_updates_only_that_skill_and_metadata(tmp_path):
+    source = tmp_path / "source"
+    _reinstall_source_subset(source)
+    root = tmp_path / "proj"
+    root.mkdir()
+
+    def install(extra=()):
+        return _run_quoin_cli(
+            ["install", "--runtime", "opencode", "--project-root", str(root),
+             "--source-dir", str(source), *extra],
+            cwd=root,
+        )
+
+    assert install().returncode == 0
+
+    plan_md = source / "core" / "skills" / "plan.md"
+    lines = plan_md.read_text(encoding="utf-8").splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        if line.strip() == "## Purpose":
+            lines.insert(i + 1, "\nOne more sentence added only for this test.\n")
+            break
+    else:
+        raise AssertionError("core/skills/plan.md has no ## Purpose section")
+    plan_md.write_text("".join(lines), encoding="utf-8")
+
+    check = install(extra=["--check"])
+    assert check.returncode == 1
+    action_lines = [l for l in check.stdout.splitlines() if not l.startswith("summary:")]
+    parsed = [tuple(l.split(None, 1)) for l in action_lines]
+    metadata_action = next(rest for action, rest in parsed if action == "metadata")
+    assert metadata_action == "update"
+    file_changes = [(action, rest) for action, rest in parsed if action != "metadata" and action != "unchanged"]
+    assert file_changes == [("update", ".opencode/skills/quoin-plan/SKILL.md")]
+
+    reinstall = install()
+    assert reinstall.returncode == 0
+    updated = (root / ".opencode" / "skills" / "quoin-plan" / "SKILL.md").read_text(encoding="utf-8")
+    assert "One more sentence added only for this test." in updated

@@ -775,6 +775,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_probe_gateway_tool_loop.py",
     ),
     (
+        "quoin/adapters/opencode/fixtures/install-cases.json",
+        "quoin/dev/tests/test_opencode_install.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/install-cases.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
         ".github/workflows/adapter-check.yml",
         "quoin/dev/tests/test_opencode_manifest.py",
     ),

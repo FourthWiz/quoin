@@ -19,8 +19,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional, Sequence
 
-from quoin.opencode_adapter import generate
-from quoin.opencode_adapter.install import METADATA_RELPATH
+from quoin.opencode_adapter import generate, install
 
 ALLOWED_SCRIPTS = (
     "checkpoint_picker",
@@ -85,7 +84,7 @@ def find_project_root(start) -> Optional[Path]:
     current = Path(start).resolve()
     candidates = [current] + list(current.parents)
     for candidate in candidates:
-        meta_path = candidate / METADATA_RELPATH
+        meta_path = candidate / install.METADATA_RELPATH
         if os.path.isfile(str(meta_path)) and not os.path.islink(str(meta_path)):
             return candidate
     return None
