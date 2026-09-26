@@ -657,3 +657,175 @@ def run_install(project_root, source_dir, profile, check, out, err,
     for line in format_plan(plan):
         print(line, file=out)
     return 0
+
+
+# --- uninstall ---
+
+REASON_MODIFIED_SINCE_INSTALL = "modified since install"
+REASON_LEFT_IN_PLACE = "not a regular file, left in place"
+
+UNINSTALL_ACTIONS = ("delete", "keep", "forget")
+
+
+@dataclass
+class UninstallAction:
+    relpath: str
+    action: str
+    reason: Optional[str] = None
+    # Set only for "delete": run_uninstall re-checks this against the file's
+    # current bytes immediately before unlinking.
+    expected_sha256: Optional[str] = None
+
+
+@dataclass
+class UninstallPlan:
+    actions: List[UninstallAction]
+    dirs_to_prune: List[str]
+    metadata_action: str  # "delete" or "rewrite"
+    desired_metadata: Optional[bytes]
+    kept: bool
+
+
+def plan_uninstall(root, meta: Metadata) -> UninstallPlan:
+    """Compute what uninstall would do. Never writes anything.
+
+    Per owned path (sorted): missing files are forgotten, an unmodified
+    regular file is deleted, and anything else (modified, a symlink, a
+    non-regular target, or a symlinked/non-directory parent) is kept in
+    place. Directory pruning candidates are the recorded `created_dirs`
+    (excluding `.quoin`, which `run_uninstall` handles alongside the
+    metadata file itself): a candidate prunes when its predicted post-apply
+    contents, after removing the deletes and any already-pruned child
+    directories, are empty.
+    """
+    actions: List[UninstallAction] = []
+    kept_owned: Dict[str, dict] = {}
+    for relpath in sorted(meta.owned):
+        record = meta.owned[relpath]
+        st = inspect_path(root, relpath)
+        if st.state == "missing":
+            actions.append(UninstallAction(relpath, "forget"))
+        elif st.state == "regular":
+            if _sha256_hex(st.data) == record["sha256"]:
+                actions.append(UninstallAction(relpath, "delete", expected_sha256=record["sha256"]))
+            else:
+                actions.append(UninstallAction(relpath, "keep", REASON_MODIFIED_SINCE_INSTALL))
+                kept_owned[relpath] = record
+        else:  # symlink, not-regular, symlinked-parent, parent-not-dir
+            actions.append(UninstallAction(relpath, "keep", REASON_LEFT_IN_PLACE))
+            kept_owned[relpath] = record
+
+    kept = bool(kept_owned)
+    deleted = {a.relpath for a in actions if a.action == "delete"}
+
+    dirs_to_prune: List[str] = []
+    for d in sorted(meta.created_dirs, key=_deepest_first_key):
+        if d == ".quoin" or not _dir_exists_now(root, d):
+            continue
+        try:
+            entries = os.listdir(str(Path(root) / d))
+        except OSError:
+            continue
+        post = {"%s/%s" % (d, e) for e in entries}
+        post -= deleted
+        post -= set(dirs_to_prune)
+        if not post:
+            dirs_to_prune.append(d)
+
+    if kept:
+        metadata_action = "rewrite"
+        new_created_dirs = [d for d in meta.created_dirs if d not in dirs_to_prune]
+        desired_metadata: Optional[bytes] = serialize_metadata(
+            Metadata(
+                quoin_version=meta.quoin_version,
+                opencode_version=meta.opencode_version,
+                profile=meta.profile,
+                owned=kept_owned,
+                created_dirs=new_created_dirs,
+            )
+        )
+    else:
+        metadata_action = "delete"
+        desired_metadata = None
+
+    return UninstallPlan(
+        actions=sorted(actions, key=lambda a: a.relpath),
+        dirs_to_prune=dirs_to_prune,
+        metadata_action=metadata_action,
+        desired_metadata=desired_metadata,
+        kept=kept,
+    )
+
+
+def _print_uninstall_plan(plan: UninstallPlan, out) -> None:
+    counts: Dict[str, int] = {}
+    for action in plan.actions:
+        counts[action.action] = counts.get(action.action, 0) + 1
+        line = "%-9s %s" % (action.action, action.relpath)
+        if action.reason:
+            line += " (%s)" % action.reason
+        print(line, file=out)
+    print("%-9s %s" % ("metadata", plan.metadata_action), file=out)
+    summary = ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items()))
+    print("summary: %s (metadata %s)" % (summary, plan.metadata_action), file=out)
+
+
+def run_uninstall(project_root, dry_run, out, err) -> int:
+    """Remove everything Quoin owns under `project_root`.
+
+    A path left in place (modified since install, or replaced by anything
+    other than a regular file) is never touched or followed; uninstall
+    returns 4 and the metadata is rewritten to record only what remains.
+    `--dry-run` computes and prints the same plan and writes nothing,
+    returning the code the real run would return.
+    """
+    root = Path(project_root)
+    try:
+        meta = load_metadata(root)
+    except InstallError as exc:
+        print("opencode uninstall: %s" % exc, file=err)
+        return exc.exit_code
+
+    if meta is None:
+        print("opencode uninstall: nothing installed", file=out)
+        return 0
+
+    plan = plan_uninstall(root, meta)
+    _print_uninstall_plan(plan, out)
+
+    if not dry_run:
+        for action in plan.actions:
+            if action.action != "delete":
+                continue
+            target = root / action.relpath
+            st = _lstat_or(target, "missing")
+            if st is None or stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                continue
+            try:
+                current_bytes = target.read_bytes()
+            except OSError:
+                continue
+            if _sha256_hex(current_bytes) != action.expected_sha256:
+                continue
+            os.unlink(str(target))
+
+        for d in plan.dirs_to_prune:
+            try:
+                os.rmdir(str(root / d))
+            except OSError:
+                pass
+
+        if plan.metadata_action == "delete":
+            try:
+                os.unlink(str(root / METADATA_RELPATH))
+            except OSError:
+                pass
+            if ".quoin" in meta.created_dirs:
+                try:
+                    os.rmdir(str(root / ".quoin"))
+                except OSError:
+                    pass
+        else:
+            atomic_write(root / METADATA_RELPATH, plan.desired_metadata)
+
+    return 4 if plan.kept else 0

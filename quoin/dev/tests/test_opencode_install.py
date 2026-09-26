@@ -756,3 +756,134 @@ def test_files_outside_the_five_families_are_untouched(tmp_path: Path):
     assert code == 0
     for relpath, data in before.items():
         assert (tmp_path / relpath).read_bytes() == data
+
+
+# --- plan_uninstall / run_uninstall ---
+
+
+def _uninstall(project_root, dry_run=False):
+    out, err = io.StringIO(), io.StringIO()
+    code = install.run_uninstall(project_root, dry_run, out, err)
+    return code, out.getvalue(), err.getvalue()
+
+
+def test_uninstall_round_trip_keeps_edited_file_and_removes_the_rest(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    edited = tmp_path / ".opencode" / "commands" / "quoin-plan.md"
+    edited_bytes = edited.read_bytes() + b"\nextra line\n"
+    edited.write_bytes(edited_bytes)
+
+    (tmp_path / generate.ARTIFACT_ROOT).mkdir()
+    (tmp_path / generate.ARTIFACT_ROOT / "memory.md").write_bytes(b"artifacts")
+    (tmp_path / "AGENTS.md").write_bytes(b"agents doc")
+    (tmp_path / ".env").write_bytes(b"SECRET=1")
+    (tmp_path / ".opencode" / "opencode.json").write_bytes(b'{"theme": "dark"}')
+    untouched = {
+        generate.ARTIFACT_ROOT + "/memory.md": b"artifacts",
+        "AGENTS.md": b"agents doc",
+        ".env": b"SECRET=1",
+        ".opencode/opencode.json": b'{"theme": "dark"}',
+    }
+
+    code, out, _ = _uninstall(tmp_path)
+    assert code == 4
+    assert "keep" in out
+    assert edited.read_bytes() == edited_bytes
+    assert not (tmp_path / ".opencode" / "agents" / "quoin-plan.md").exists()
+    assert not (tmp_path / ".opencode" / "skills" / "quoin-plan").exists()
+    assert (tmp_path / ".opencode" / "commands").is_dir()
+    assert (tmp_path / ".opencode").is_dir()
+    for relpath, data in untouched.items():
+        assert (tmp_path / relpath).read_bytes() == data
+    meta = install.load_metadata(tmp_path)
+    assert list(meta.owned) == [".opencode/commands/quoin-plan.md"]
+
+
+def test_uninstall_reinstall_after_kept_edit_conflicts(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    edited = tmp_path / ".opencode" / "commands" / "quoin-plan.md"
+    edited.write_bytes(edited.read_bytes() + b"\nextra\n")
+    _uninstall(tmp_path)
+
+    code, _, err = _run(tmp_path, rendered=rendered)
+    assert code == 3
+    assert install.REASON_OWNED_MODIFIED in err
+    assert ".opencode/commands/quoin-plan.md" in err
+
+
+def test_uninstall_clean_removes_metadata_and_quoin_dir(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    code, _, _ = _uninstall(tmp_path)
+    assert code == 0
+    assert not (tmp_path / ".quoin").exists()
+    assert not (tmp_path / ".opencode").exists()
+
+
+def test_uninstall_clean_leaves_dir_holding_a_file_opencode_itself_wrote(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    (tmp_path / ".opencode" / ".gitignore").write_bytes(b"node_modules\n")
+
+    code, _, _ = _uninstall(tmp_path)
+    assert code == 0
+    assert (tmp_path / ".opencode").is_dir()
+    assert (tmp_path / ".opencode" / ".gitignore").read_bytes() == b"node_modules\n"
+    assert not (tmp_path / ".opencode" / "commands").exists()
+    assert not (tmp_path / ".quoin").exists()
+
+
+def test_uninstall_dry_run_writes_nothing_and_returns_the_kept_code(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    edited = tmp_path / ".opencode" / "commands" / "quoin-plan.md"
+    edited.write_bytes(edited.read_bytes() + b"\nextra\n")
+    before = _snapshot(tmp_path)
+
+    code, out, _ = _uninstall(tmp_path, dry_run=True)
+    assert code == 4
+    assert _snapshot(tmp_path) == before
+    assert "keep" in out
+
+
+def test_uninstall_dry_run_clean_case_writes_nothing_and_returns_0(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    before = _snapshot(tmp_path)
+
+    code, _, _ = _uninstall(tmp_path, dry_run=True)
+    assert code == 0
+    assert _snapshot(tmp_path) == before
+
+
+def test_uninstall_tampered_metadata_owned_path_outside_families_returns_2(tmp_path: Path):
+    for bad_path in ("src/app.py", "../x.md"):
+        obj = _base_metadata_obj(owned={bad_path: _owned_record()})
+        _write_metadata_json(tmp_path, obj)
+        code, _, _ = _uninstall(tmp_path)
+        assert code == 2
+        assert (tmp_path / install.METADATA_RELPATH).exists()
+
+
+def test_uninstall_keeps_a_symlinked_owned_path_without_following_it(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    target = tmp_path.parent / "outside-target.txt"
+    target.write_bytes(b"do not touch")
+    owned_path = tmp_path / ".opencode" / "commands" / "quoin-plan.md"
+    owned_path.unlink()
+    owned_path.symlink_to(target)
+
+    code, out, _ = _uninstall(tmp_path)
+    assert code == 4
+    assert owned_path.is_symlink()
+    assert target.read_bytes() == b"do not touch"
+    assert install.REASON_LEFT_IN_PLACE in out
+
+
+def test_uninstall_with_no_metadata_returns_0_and_says_nothing_installed(tmp_path: Path):
+    code, out, _ = _uninstall(tmp_path)
+    assert code == 0
+    assert "nothing installed" in out
