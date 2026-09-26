@@ -8,6 +8,7 @@ tree it started from.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -15,9 +16,9 @@ import secrets
 import stat
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
-from quoin.opencode_adapter import names
+from quoin.opencode_adapter import generate, names
 
 METADATA_RELPATH = ".quoin/opencode-install.json"
 METADATA_SCHEMA_VERSION = 1
@@ -274,3 +275,233 @@ def atomic_write(path, data: bytes) -> None:
         pass
     finally:
         os.close(dir_fd)
+
+
+# --- planner (no writes) ---
+
+REASON_PARENT_NOT_REAL_DIR = "a parent directory is a symlink or not a directory"
+REASON_TARGET_NOT_REGULAR = "target is a symlink or not a regular file"
+REASON_UNOWNED_EXISTS = "exists, not owned by Quoin"
+REASON_OWNED_MODIFIED = "owned file modified since install"
+REASON_STALE_MODIFIED = "stale owned file modified"
+REASON_OWNED_MISSING_RECREATED = "owned file missing, recreated"
+REASON_ADOPTED = "identical bytes, now owned"
+
+ACTIONS = ("create", "update", "unchanged", "adopt", "delete", "forget", "conflict")
+
+
+@dataclass
+class Action:
+    relpath: str
+    action: str
+    reason: Optional[str] = None
+
+
+@dataclass
+class Plan:
+    actions: List[Action]
+    metadata_action: str
+    desired_metadata: bytes
+    dirs_to_create: List[str]
+    dirs_to_prune: List[str]
+    conflicts: List[Action] = field(default_factory=list)
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _ancestors(relpath: str):
+    """Yield every creatable-family ancestor directory of `relpath`, deepest first."""
+    parts = relpath.split("/")
+    for i in range(len(parts) - 1, 0, -1):
+        candidate = "/".join(parts[:i])
+        if CREATABLE_DIRS_RE.fullmatch(candidate):
+            yield candidate
+
+
+def _dir_depth(relpath: str) -> int:
+    return relpath.count("/")
+
+
+def _deepest_first_key(relpath: str):
+    return (-_dir_depth(relpath), relpath)
+
+
+def _shallowest_first_key(relpath: str):
+    return (_dir_depth(relpath), relpath)
+
+
+def _dir_of(relpath: str) -> str:
+    return relpath.rsplit("/", 1)[0] if "/" in relpath else ""
+
+
+def _dir_exists_now(root, relpath: str) -> bool:
+    """True when `relpath` and every parent up to `root` are real directories.
+
+    A symlink anywhere in the chain, or any non-directory component, counts
+    as not existing (this module never treats a symlinked or shadowed path
+    as an existing directory).
+    """
+    current = Path(root)
+    for part in relpath.split("/"):
+        current = current / part
+        st = _lstat_or(current, "missing")
+        if st is None or stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+            return False
+    return True
+
+
+def _compute_dirs_to_create(root, create_targets: List[str]) -> Set[str]:
+    dirs: Set[str] = set()
+    for relpath in create_targets:
+        for ancestor in _ancestors(relpath):
+            if not _dir_exists_now(root, ancestor):
+                dirs.add(ancestor)
+    if not _dir_exists_now(root, ".quoin"):
+        dirs.add(".quoin")
+    return dirs
+
+
+def _plan_created_dirs(root, rendered: Dict[str, "generate.RenderedFile"], recorded: List[str],
+                        actions: List[Action], dirs_to_create: Set[str]):
+    """Predict which creatable directories survive apply, and which are pruned.
+
+    A candidate directory is recorded in the desired metadata's
+    `created_dirs` when it is already recorded, is one this apply creates,
+    or exists now unrecorded and holds nothing but Quoin's own files and
+    Quoin directories (the case that lets a rerun after an interrupted
+    first install pick up the directories that run made). A recorded
+    candidate whose predicted post-apply contents are empty is pruned
+    instead of re-recorded.
+    """
+    cands: Set[str] = set(recorded) | {".quoin"}
+    for relpath in rendered:
+        cands.update(_ancestors(relpath))
+
+    gone = {a.relpath for a in actions if a.action in ("delete", "forget")}
+    create_targets = {a.relpath for a in actions if a.action == "create"}
+    adds: Set[str] = create_targets | set(dirs_to_create) | {METADATA_RELPATH}
+
+    created: Set[str] = set()
+    prune: List[str] = []
+    for d in sorted(cands, key=_deepest_first_key):
+        exists_now = _dir_exists_now(root, d)
+        if not exists_now and d not in dirs_to_create:
+            continue
+        entries: List[str] = []
+        if exists_now:
+            try:
+                entries = os.listdir(str(Path(root) / d))
+            except OSError:
+                entries = []
+        post: Set[str] = {"%s/%s" % (d, e) for e in entries}
+        post -= gone
+        post -= set(prune)
+        post |= {a for a in adds if _dir_of(a) == d}
+        if d in recorded and not post:
+            prune.append(d)
+            continue
+        only_quoin = all((x in rendered) or (x == METADATA_RELPATH) or (x in created) for x in post)
+        if d in recorded or d in dirs_to_create or (exists_now and only_quoin):
+            created.add(d)
+    return created, prune
+
+
+def plan_install(root, rendered: Dict[str, "generate.RenderedFile"], meta: Optional[Metadata],
+                  quoin_version: str, opencode_version: str, profile: Optional[str]) -> Plan:
+    """Compute the full set of file and metadata actions. Never writes anything."""
+    owned = meta.owned if meta else {}
+    actions: List[Action] = []
+    for relpath in sorted(set(rendered) | set(owned)):
+        if not OWNED_PATH_RE.fullmatch(relpath):
+            raise InstallError("rendered path %r is outside the generated families" % (relpath,), 2)
+        st = inspect_path(root, relpath)
+        if st.state in ("symlinked-parent", "parent-not-dir"):
+            actions.append(Action(relpath, "conflict", REASON_PARENT_NOT_REAL_DIR))
+            continue
+        if st.state in ("symlink", "not-regular"):
+            actions.append(Action(relpath, "conflict", REASON_TARGET_NOT_REGULAR))
+            continue
+        cur = st.data if st.state == "regular" else None
+        if relpath in rendered:
+            want = rendered[relpath].content
+            if cur is None:
+                reason = REASON_OWNED_MISSING_RECREATED if relpath in owned else None
+                actions.append(Action(relpath, "create", reason))
+            elif cur == want:
+                if relpath in owned:
+                    actions.append(Action(relpath, "unchanged"))
+                else:
+                    actions.append(Action(relpath, "adopt", REASON_ADOPTED))
+            elif relpath not in owned:
+                actions.append(Action(relpath, "conflict", REASON_UNOWNED_EXISTS))
+            elif _sha256_hex(cur) != owned[relpath]["sha256"]:
+                actions.append(Action(relpath, "conflict", REASON_OWNED_MODIFIED))
+            else:
+                actions.append(Action(relpath, "update"))
+        else:
+            if cur is None:
+                actions.append(Action(relpath, "forget"))
+            elif _sha256_hex(cur) == owned[relpath]["sha256"]:
+                actions.append(Action(relpath, "delete"))
+            else:
+                actions.append(Action(relpath, "conflict", REASON_STALE_MODIFIED))
+
+    conflicts = [a for a in actions if a.action == "conflict"]
+
+    create_targets = [a.relpath for a in actions if a.action == "create"]
+    dirs_to_create = _compute_dirs_to_create(root, create_targets)
+
+    new_owned = {
+        relpath: {
+            "sha256": _sha256_hex(rendered[relpath].content),
+            "source_digest": rendered[relpath].source_digest,
+            "kind": rendered[relpath].kind,
+            "id": rendered[relpath].source_id,
+        }
+        for relpath in rendered
+    }
+
+    recorded = list(meta.created_dirs) if meta else []
+    created_dirs, dirs_to_prune = _plan_created_dirs(root, rendered, recorded, actions, dirs_to_create)
+
+    resolved_profile = profile if profile is not None else (meta.profile if meta else None)
+
+    desired_meta_obj = Metadata(
+        quoin_version=quoin_version,
+        opencode_version=opencode_version,
+        profile=resolved_profile,
+        owned=new_owned,
+        created_dirs=list(created_dirs),
+    )
+    desired_metadata = serialize_metadata(desired_meta_obj)
+
+    meta_state = inspect_path(root, METADATA_RELPATH)
+    current_metadata_bytes = meta_state.data if meta_state.state == "regular" else None
+    metadata_action = "unchanged" if desired_metadata == current_metadata_bytes else "update"
+
+    return Plan(
+        actions=sorted(actions, key=lambda a: a.relpath),
+        metadata_action=metadata_action,
+        desired_metadata=desired_metadata,
+        dirs_to_create=sorted(dirs_to_create, key=_shallowest_first_key),
+        dirs_to_prune=sorted(dirs_to_prune, key=_deepest_first_key),
+        conflicts=conflicts,
+    )
+
+
+def format_plan(plan: Plan) -> List[str]:
+    """One deterministic line per file action, a metadata line, then a summary line."""
+    lines: List[str] = []
+    counts: Dict[str, int] = {}
+    for action in plan.actions:
+        counts[action.action] = counts.get(action.action, 0) + 1
+        line = "%-9s %s" % (action.action, action.relpath)
+        if action.reason and action.action in ("conflict", "adopt", "create"):
+            line += " (%s)" % action.reason
+        lines.append(line)
+    lines.append("%-9s %s" % ("metadata", plan.metadata_action))
+    summary = ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items()))
+    lines.append("summary: %s (metadata %s)" % (summary, plan.metadata_action))
+    return lines

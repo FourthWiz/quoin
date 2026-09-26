@@ -16,10 +16,53 @@ from pathlib import Path
 
 import pytest
 
-from quoin.opencode_adapter import install
+from quoin.opencode_adapter import generate, install
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_DIR = REPO_ROOT / "quoin"
+
+
+def _rendered(relpath, content, kind="skill", source_id="plan", source_digest="sha256:abc"):
+    return generate.RenderedFile(
+        relpath=relpath,
+        content=content if isinstance(content, bytes) else content.encode("utf-8"),
+        kind=kind,
+        source_id=source_id,
+        source_digest=source_digest,
+    )
+
+
+def _owned_meta(owned=None, created_dirs=None, profile=None, quoin_version="0.1.0", opencode_version="1.18.32"):
+    return install.Metadata(
+        quoin_version=quoin_version,
+        opencode_version=opencode_version,
+        profile=profile,
+        owned=owned or {},
+        created_dirs=created_dirs or [],
+    )
+
+
+def _materialize(root: Path, plan: "install.Plan", rendered) -> None:
+    """Test-only helper: apply a plan's predicted post-state directly to disk."""
+    for d in sorted(plan.dirs_to_create, key=lambda p: p.count("/")):
+        (root / d).mkdir(parents=True, exist_ok=True)
+    for action in plan.actions:
+        if action.action in ("create", "update"):
+            path = root / action.relpath
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(rendered[action.relpath].content)
+        elif action.action in ("delete", "forget"):
+            path = root / action.relpath
+            if path.exists():
+                path.unlink()
+    for d in plan.dirs_to_prune:
+        try:
+            (root / d).rmdir()
+        except OSError:
+            pass
+    meta_path = root / install.METADATA_RELPATH
+    meta_path.parent.mkdir(parents=True, exist_ok=True)
+    meta_path.write_bytes(plan.desired_metadata)
 
 
 def _owned_record(sha256="a" * 64, source_digest="sha256:deadbeef", kind="skill", id_="plan"):
@@ -257,3 +300,242 @@ def test_atomic_write_respects_process_umask(tmp_path: Path):
         assert mode == (0o666 & ~0o022)
     finally:
         os.umask(old_umask)
+
+
+# --- plan_install: clean root ---
+
+
+def test_plan_install_on_clean_root_creates_every_file(tmp_path: Path):
+    rendered = {
+        ".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "cmd", kind="command"),
+        ".opencode/agents/quoin-plan.md": _rendered(".opencode/agents/quoin-plan.md", "agent", kind="agent"),
+        ".opencode/skills/quoin-plan/SKILL.md": _rendered(".opencode/skills/quoin-plan/SKILL.md", "skill"),
+        ".opencode/quoin/instructions.md": _rendered(
+            ".opencode/quoin/instructions.md", "inst", kind="instructions", source_id=None
+        ),
+        ".opencode/opencode.jsonc": _rendered(".opencode/opencode.jsonc", "{}", kind="config", source_id=None),
+    }
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    assert {a.action for a in plan.actions} == {"create"}
+    assert len(plan.actions) == 5
+    assert plan.metadata_action == "update"
+    assert set(plan.dirs_to_create) == {
+        ".opencode",
+        ".opencode/agents",
+        ".opencode/commands",
+        ".opencode/quoin",
+        ".opencode/skills",
+        ".opencode/skills/quoin-plan",
+        ".quoin",
+    }
+
+
+def test_plan_install_identical_unowned_bytes_are_adopted(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"same")
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "same")}
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    action = plan.actions[0]
+    assert action.action == "adopt"
+    assert action.reason == install.REASON_ADOPTED
+
+
+def test_plan_install_different_unowned_bytes_is_a_conflict(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"different")
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "wanted")}
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    action = plan.actions[0]
+    assert action.action == "conflict"
+    assert action.reason == install.REASON_UNOWNED_EXISTS
+    assert plan.conflicts == [action]
+
+
+def test_plan_install_owned_modified_since_install_is_a_conflict(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"edited-by-user")
+    owned = {".opencode/commands/quoin-plan.md": _owned_record(sha256=install._sha256_hex(b"original"))}
+    meta = _owned_meta(owned=owned)
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "wanted")}
+    plan = install.plan_install(tmp_path, rendered, meta, "0.1.0", "1.18.32", None)
+    action = plan.actions[0]
+    assert action.action == "conflict"
+    assert action.reason == install.REASON_OWNED_MODIFIED
+
+
+def test_plan_install_owned_unmodified_desired_bytes_differ_is_update(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"original")
+    owned = {".opencode/commands/quoin-plan.md": _owned_record(sha256=install._sha256_hex(b"original"))}
+    meta = _owned_meta(owned=owned)
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "new-content")}
+    plan = install.plan_install(tmp_path, rendered, meta, "0.1.0", "1.18.32", None)
+    assert plan.actions[0].action == "update"
+
+
+def test_plan_install_owned_and_missing_is_recreated(tmp_path: Path):
+    owned = {".opencode/commands/quoin-plan.md": _owned_record(sha256=install._sha256_hex(b"original"))}
+    meta = _owned_meta(owned=owned)
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "original")}
+    plan = install.plan_install(tmp_path, rendered, meta, "0.1.0", "1.18.32", None)
+    action = plan.actions[0]
+    assert action.action == "create"
+    assert action.reason == install.REASON_OWNED_MISSING_RECREATED
+
+
+def test_plan_install_stale_owned_file_handling(tmp_path: Path):
+    # unmodified stale file -> delete
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-old.md").write_bytes(b"stale")
+    owned = {".opencode/commands/quoin-old.md": _owned_record(sha256=install._sha256_hex(b"stale"))}
+    meta = _owned_meta(owned=owned)
+    plan = install.plan_install(tmp_path, {}, meta, "0.1.0", "1.18.32", None)
+    assert plan.actions[0].action == "delete"
+
+    # modified stale file -> conflict
+    (tmp_path / ".opencode" / "commands" / "quoin-old.md").write_bytes(b"user-edited")
+    plan2 = install.plan_install(tmp_path, {}, meta, "0.1.0", "1.18.32", None)
+    assert plan2.actions[0].action == "conflict"
+    assert plan2.actions[0].reason == install.REASON_STALE_MODIFIED
+
+    # missing stale file -> forget
+    (tmp_path / ".opencode" / "commands" / "quoin-old.md").unlink()
+    plan3 = install.plan_install(tmp_path, {}, meta, "0.1.0", "1.18.32", None)
+    assert plan3.actions[0].action == "forget"
+
+
+def test_plan_install_symlink_and_bad_parent_are_conflicts(tmp_path: Path):
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "wanted")}
+
+    # symlink at the target
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    real = tmp_path / "elsewhere.md"
+    real.write_bytes(b"x")
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").symlink_to(real)
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    assert plan.actions[0].action == "conflict"
+    assert plan.actions[0].reason == install.REASON_TARGET_NOT_REGULAR
+
+    # directory at the target
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").unlink()
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").mkdir()
+    plan2 = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    assert plan2.actions[0].action == "conflict"
+    assert plan2.actions[0].reason == install.REASON_TARGET_NOT_REGULAR
+
+    # symlinked parent
+    tmp_path2 = tmp_path / "case2"
+    tmp_path2.mkdir()
+    real_dir = tmp_path2 / "realcommands"
+    real_dir.mkdir()
+    (tmp_path2 / ".opencode").mkdir()
+    (tmp_path2 / ".opencode" / "commands").symlink_to(real_dir, target_is_directory=True)
+    plan3 = install.plan_install(tmp_path2, rendered, None, "0.1.0", "1.18.32", None)
+    assert plan3.actions[0].action == "conflict"
+    assert plan3.actions[0].reason == install.REASON_PARENT_NOT_REAL_DIR
+
+    # parent that is a file
+    tmp_path3 = tmp_path / "case3"
+    tmp_path3.mkdir()
+    (tmp_path3 / ".opencode").mkdir()
+    (tmp_path3 / ".opencode" / "commands").write_bytes(b"not a dir")
+    plan4 = install.plan_install(tmp_path3, rendered, None, "0.1.0", "1.18.32", None)
+    assert plan4.actions[0].action == "conflict"
+    assert plan4.actions[0].reason == install.REASON_PARENT_NOT_REAL_DIR
+
+
+def test_plan_install_metadata_only_change_leaves_files_unchanged(tmp_path: Path):
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "content")}
+    plan1 = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    _materialize(tmp_path, plan1, rendered)
+
+    plan2 = install.plan_install(tmp_path, rendered, install.load_metadata(tmp_path), "0.2.0", "1.18.32", None)
+    assert all(a.action == "unchanged" for a in plan2.actions)
+    assert plan2.metadata_action == "update"
+
+
+def test_plan_install_repeat_plan_is_fully_unchanged(tmp_path: Path):
+    rendered = {
+        ".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "content"),
+        ".opencode/skills/quoin-plan/SKILL.md": _rendered(".opencode/skills/quoin-plan/SKILL.md", "skill body"),
+    }
+    plan1 = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    _materialize(tmp_path, plan1, rendered)
+
+    meta = install.load_metadata(tmp_path)
+    plan2 = install.plan_install(tmp_path, rendered, meta, "0.1.0", "1.18.32", None)
+    assert all(a.action == "unchanged" for a in plan2.actions)
+    assert plan2.metadata_action == "unchanged"
+    assert plan2.dirs_to_prune == []
+
+
+def test_plan_install_prunes_stale_skill_dir_when_only_file_is_stale(tmp_path: Path):
+    rendered_v1 = {".opencode/skills/quoin-old/SKILL.md": _rendered(".opencode/skills/quoin-old/SKILL.md", "body")}
+    plan1 = install.plan_install(tmp_path, rendered_v1, None, "0.1.0", "1.18.32", None)
+    _materialize(tmp_path, plan1, rendered_v1)
+    meta = install.load_metadata(tmp_path)
+
+    plan2 = install.plan_install(tmp_path, {}, meta, "0.1.0", "1.18.32", None)
+    file_action = [a for a in plan2.actions if a.relpath == ".opencode/skills/quoin-old/SKILL.md"][0]
+    assert file_action.action == "delete"
+    assert ".opencode/skills/quoin-old" in plan2.dirs_to_prune
+    obj = json.loads(plan2.desired_metadata.decode("utf-8"))
+    assert ".opencode/skills/quoin-old" not in obj["created_dirs"]
+
+
+def test_plan_install_does_not_prune_dir_with_a_user_file_added(tmp_path: Path):
+    rendered_v1 = {".opencode/skills/quoin-old/SKILL.md": _rendered(".opencode/skills/quoin-old/SKILL.md", "body")}
+    plan1 = install.plan_install(tmp_path, rendered_v1, None, "0.1.0", "1.18.32", None)
+    _materialize(tmp_path, plan1, rendered_v1)
+    meta = install.load_metadata(tmp_path)
+    (tmp_path / ".opencode" / "skills" / "quoin-old" / "notes.txt").write_bytes(b"user file")
+
+    plan2 = install.plan_install(tmp_path, {}, meta, "0.1.0", "1.18.32", None)
+    assert ".opencode/skills/quoin-old" not in plan2.dirs_to_prune
+    obj = json.loads(plan2.desired_metadata.decode("utf-8"))
+    assert ".opencode/skills/quoin-old" in obj["created_dirs"]
+
+
+def test_plan_install_records_unrecorded_dirs_after_interrupted_install(tmp_path: Path):
+    # Simulate a first install interrupted after files were written but
+    # before metadata was: the directories exist, hold only rendered
+    # paths, and are unrecorded (no metadata at all).
+    (tmp_path / ".opencode" / "agents").mkdir(parents=True)
+    (tmp_path / ".opencode" / "agents" / "quoin-plan.md").write_bytes(b"agent body")
+    rendered = {".opencode/agents/quoin-plan.md": _rendered(".opencode/agents/quoin-plan.md", "agent body")}
+
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    obj = json.loads(plan.desired_metadata.decode("utf-8"))
+    assert ".opencode" in obj["created_dirs"]
+    assert ".opencode/agents" in obj["created_dirs"]
+
+
+def test_plan_install_does_not_record_unrecorded_dir_holding_a_user_file(tmp_path: Path):
+    (tmp_path / ".opencode" / "agents").mkdir(parents=True)
+    (tmp_path / ".opencode" / "agents" / "quoin-plan.md").write_bytes(b"agent body")
+    (tmp_path / ".opencode" / "user-thing.json").write_bytes(b"{}")
+    rendered = {".opencode/agents/quoin-plan.md": _rendered(".opencode/agents/quoin-plan.md", "agent body")}
+
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    obj = json.loads(plan.desired_metadata.decode("utf-8"))
+    assert ".opencode" not in obj["created_dirs"]
+    assert ".opencode/agents" in obj["created_dirs"]
+
+
+def test_plan_install_never_writes_anything(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"content")
+    before = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    rendered = {".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "different")}
+    install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    after = sorted(str(p.relative_to(tmp_path)) for p in tmp_path.rglob("*"))
+    assert before == after
+    assert (tmp_path / ".opencode" / "commands" / "quoin-plan.md").read_bytes() == b"content"
+
+
+def test_plan_install_against_real_generator_output_is_fully_creates(tmp_path: Path):
+    rendered = generate.render_source_dir(SOURCE_DIR)
+    plan = install.plan_install(tmp_path, rendered, None, "0.1.0", "1.18.32", None)
+    assert len(plan.actions) == len(rendered)
+    assert {a.action for a in plan.actions} == {"create"}
+    assert plan.metadata_action == "update"
