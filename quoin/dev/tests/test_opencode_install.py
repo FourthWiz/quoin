@@ -887,3 +887,97 @@ def test_uninstall_with_no_metadata_returns_0_and_says_nothing_installed(tmp_pat
     code, out, _ = _uninstall(tmp_path)
     assert code == 0
     assert "nothing installed" in out
+
+
+# --- CLI wiring (src/quoin/cli.py) ---
+
+import quoin.cli as cli_mod
+
+
+def test_cli_install_runtime_opencode_dispatches_run_install_with_parsed_values(monkeypatch):
+    calls = []
+
+    def _fake_run_install(project_root, source_dir, profile, check, out, err, **kwargs):
+        calls.append((project_root, profile, check))
+        return 0
+
+    monkeypatch.setattr(install, "run_install", _fake_run_install)
+    code = cli_mod.main([
+        "install", "--runtime", "opencode",
+        "--project-root", "/tmp/some-project",
+        "--profile", "demo",
+        "--check",
+        "--source-dir", str(SOURCE_DIR),
+    ])
+    assert code == 0
+    assert calls == [("/tmp/some-project", "demo", True)]
+
+
+def test_cli_install_profile_flag_rejected_for_non_opencode_runtimes():
+    for runtime in ("claude", "codex"):
+        with pytest.raises(SystemExit) as exc_info:
+            cli_mod.main(["install", "--runtime", runtime, "--profile", "x"])
+        assert exc_info.value.code == 2
+
+
+def test_cli_install_scope_project_mutex_with_opencode():
+    from quoin.cli import _cmd_install
+
+    class _Args:
+        scope = "project"
+        runtime = "opencode"
+        profile = None
+        check = False
+
+    with pytest.raises(SystemExit) as exc_info:
+        _cmd_install(_Args())
+    assert exc_info.value.code == 2
+
+
+def test_cli_opencode_uninstall_dispatches_run_uninstall_with_parsed_values(monkeypatch):
+    calls = []
+
+    def _fake_run_uninstall(project_root, dry_run, out, err):
+        calls.append((project_root, dry_run))
+        return 0
+
+    monkeypatch.setattr(install, "run_uninstall", _fake_run_uninstall)
+    code = cli_mod.main([
+        "opencode", "uninstall", "--project-root", "/tmp/some-project", "--dry-run",
+    ])
+    assert code == 0
+    assert calls == [("/tmp/some-project", True)]
+
+
+def test_cli_opencode_script_dispatches_scripts_run_with_parsed_values(monkeypatch):
+    from quoin.opencode_adapter import scripts as scripts_mod
+
+    calls = []
+
+    def _fake_run(name, argv, source_dir, **kwargs):
+        calls.append((name, argv))
+        return 0
+
+    monkeypatch.setattr(scripts_mod, "run", _fake_run)
+    code = cli_mod.main([
+        "opencode", "script", "--source-dir", str(SOURCE_DIR),
+        "path_resolve", "--task", "t",
+    ])
+    assert code == 0
+    assert calls == [("path_resolve", ["--task", "t"])]
+
+
+def test_cli_help_texts_mention_opencode():
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[3]
+    src = repo / "src"
+    env = dict(os.environ, PYTHONPATH=str(src))
+    for argv in (["opencode", "--help"], ["install", "--help"]):
+        result = subprocess.run(
+            [sys.executable, "-m", "quoin", *argv],
+            capture_output=True, text=True, env=env, timeout=30,
+        )
+        assert result.returncode == 0
+        assert "opencode" in result.stdout.lower()

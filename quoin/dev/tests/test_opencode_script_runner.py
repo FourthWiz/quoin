@@ -6,17 +6,18 @@ the working directory with `monkeypatch.chdir` into a temporary project, and
 the module-level fixture below asserts the repository's own discovery map is
 never touched, so no test can write into this repository.
 
-CLI wiring (`quoin opencode script ...` as a real subcommand) lands in a
-later task; the pipe/redirect tests here invoke `scripts.run` directly in a
-subprocess instead of going through the `quoin` executable, which still
-exercises real OS-level fd behavior (the property under test) without a
-forward dependency on that later task.
+The pipe/redirect tests here invoke `scripts.run` directly in a subprocess
+instead of going through the `quoin` executable, which still exercises real
+OS-level fd behavior (the property under test) without depending on the CLI
+argument-parsing path (covered separately by the CLI-level dispatch tests
+and the help-text assertion below).
 """
 from __future__ import annotations
 
 import argparse
 import io
 import json
+import os
 import stat as stat_module
 import subprocess
 import sys
@@ -181,6 +182,17 @@ def test_subprocess_stdout_redirected_to_a_file_refuses_and_leaves_it_emptied(tm
     assert proc.returncode == 2
     assert b"refusing to run" in proc.stderr
     assert target.read_text() == ""
+
+
+def test_cli_opencode_script_help_mentions_opencode():
+    proc = subprocess.run(
+        [sys.executable, "-m", "quoin", "opencode", "script", "--help"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={**os.environ, "PYTHONPATH": str(SRC_DIR)},
+    )
+    assert proc.returncode == 0
+    assert b"opencode" in proc.stdout.lower()
 
 
 # --- every allowlisted script runs with --help ---
