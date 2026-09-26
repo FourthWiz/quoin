@@ -9,8 +9,9 @@ At the end of a working session, consolidate all of today's session-state files
 into a single daily-cache file under `.workflow_artifacts/memory/daily/<date>.md`,
 promote eligible insights into the lessons-learned file, prune lessons-learned when
 oversized, write a resume cookie, and flip `end_of_day_due: no` on processed
-session-state files. The skill never makes commits, never edits source files, and
-never invokes another workflow phase.
+session-state files. The skill never makes commits and never edits source files.
+It never auto-invokes another workflow phase, except that as its final step it
+invokes the `sleep` memory-consolidation skill (see Behavior contract).
 
 ## When to use
 
@@ -31,6 +32,8 @@ never invokes another workflow phase.
   session counts and fallback_fires aggregation).
 - The optional resume cookie target path at `.workflow_artifacts/memory/resume-cookie.md`.
 - Current version-control state across project repos (recent commits per repo).
+- Flags: `--skip-sleep` — suppresses the final-step `sleep` memory-consolidation
+  invocation described in the Behavior contract below.
 
 ## Output
 
@@ -119,7 +122,11 @@ never invokes another workflow phase.
 - `fallback_fires` aggregation across today's session-state files MUST appear in the
   daily cache when the day total > 0.
 - The skill MUST NOT push, commit, or modify source files.
-- The skill MUST NOT auto-invoke another workflow phase.
+- The skill MUST NOT auto-invoke another workflow phase, with one exception: as its final
+  step, after the report has been shown to the user, the skill invokes the `sleep`
+  memory-consolidation skill unless the `--skip-sleep` flag was passed. A consolidation
+  failure MUST NOT roll back the daily cache — the cache is already durably written by
+  the time this step runs.
 - Cost-ledger writes by this skill itself are conditional: only when a task context is
   unambiguously named by the user or unambiguously implied by an active session-state file.
 

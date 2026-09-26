@@ -41,8 +41,10 @@ by `/end_of_day` as its final step; also usable standalone.
 - Dry-run is safe: `--dry-run` MUST make no filesystem changes.
 - Subcommands: `--restore <pattern>` (copy from forgotten/ back to scratchpad),
   `--purge --older-than 90d` (delete old forgotten entries permanently),
-  `--escalate` (re-present middle-band entries for promotion decision),
-  `--skip-sleep` (skip the consolidation step, only run post-processing).
+  `--escalate` (re-present middle-band entries for promotion decision).
+- `--skip-sleep` is not a subcommand of this skill — it is a flag on the end-of-day
+  skill. This skill is auto-invoked by the end-of-day skill as its final step; passing
+  `--skip-sleep` to that skill's invocation opts out of the auto-invocation.
 
 ## Out of scope
 

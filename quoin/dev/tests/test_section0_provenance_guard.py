@@ -710,7 +710,7 @@ DENSITY_CEILINGS: dict[str, int] = {
     "end_of_task": 7,
     "revise": 7,
     "revise-fast": 7,
-    "end_of_day": 6,
+    "end_of_day": 7,
     "plan": 6,
     "implement": 5,
     "claude_md": 5,
@@ -782,9 +782,9 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
         "this count and the one above to match."
     )
-    assert sum(DENSITY_CEILINGS.values()) == 163, (
+    assert sum(DENSITY_CEILINGS.values()) == 164, (
         f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
-        "163. A per-file ceiling was re-seeded without updating this checksum — "
+        "164. A per-file ceiling was re-seeded without updating this checksum — "
         "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
         "hunk as the ceiling change."
     )

@@ -8,6 +8,7 @@ Skill parameters: (skill_name, expected_model, has_section_0)
   - end_of_day: sonnet, §0 present (cheap-tier — self-dispatches to Sonnet)
 """
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -257,4 +258,66 @@ def test_install_fresh_clone_lists_end_of_day_in_migrated_skills():
     assert '"end_of_day"' in tuple_region, (
         'test_install_fresh_clone.py MIGRATED_SKILLS tuple must include "end_of_day" '
         "(T-07 edit). The entry was reverted — restore it."
+    )
+
+
+def test_adapter_step_6_invokes_sleep():
+    """Regression guard: adapter Step 6 must chain into /sleep after the Step 5 report.
+
+    Guards against Step 6 being dropped again during a future edit. The adapter
+    file at quoin/adapters/claude/skills/end_of_day/SKILL.md is the active one;
+    the legacy stub under quoin/skills/end_of_day/ is not read at runtime, so a
+    change made only there would not take effect and Step 6 could silently go
+    missing from the file that actually runs.
+    """
+    text = _adapter_skill("end_of_day").read_text(encoding="utf-8")
+
+    step_5_idx = text.find("### Step 5: Report to user")
+    step_6_idx = text.find("### Step 6: Invoke /sleep (memory consolidation)")
+    assert step_5_idx != -1, "end_of_day adapter must contain the Step 5 heading"
+    assert step_6_idx != -1, "end_of_day adapter must contain the Step 6 heading"
+    assert step_6_idx > step_5_idx, (
+        "Step 6 (invoke /sleep) must come after Step 5 (report to user) in the "
+        "end_of_day adapter"
+    )
+
+    step_6_section = text[step_6_idx:]
+    required_tokens = (
+        "--skip-sleep",
+        "Skipping /sleep",
+        "[no-redispatch]",
+        "/sleep",
+        "quoin-S-3: /sleep invocation failed",
+        "DO NOT roll back",
+        'model: "sonnet"',
+    )
+    missing = [t for t in required_tokens if t not in step_6_section]
+    assert not missing, (
+        f"end_of_day adapter Step 6 section is missing required tokens: {missing}"
+    )
+
+
+def test_sleep_chaining_sh_passes():
+    """Regression guard: the shell regression test itself must exit 0.
+
+    Runs quoin/dev/tests/test_sleep_chaining.sh via subprocess so a future
+    edit that silently breaks the adapter chaining (or repoints the shell
+    test at the wrong file) cannot pass CI unnoticed — the shell test alone
+    is not wired into pytest and can rot silently, which is exactly how an
+    earlier drop of Step 6 went undetected.
+    """
+    repo_root = PKG_DIR.parent
+    script = repo_root / "quoin" / "dev" / "tests" / "test_sleep_chaining.sh"
+    assert script.is_file(), f"Missing shell test: {script}"
+
+    result = subprocess.run(
+        ["bash", "quoin/dev/tests/test_sleep_chaining.sh"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (
+        f"test_sleep_chaining.sh exited {result.returncode}.\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
     )
