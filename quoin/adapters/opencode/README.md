@@ -18,6 +18,70 @@ step only.
   with a support status, a target milestone, and the OpenCode asset names
   generated for it. See "Support classification" below.
 
+## Install, check and uninstall
+
+Three commands manage a project's repo-local `.opencode/` scaffold:
+
+- `quoin install --runtime opencode --project-root <path> [--profile <label>] [--check]` —
+  renders the scaffold from the source tree and writes it under `<path>`. `--check`
+  prints the plan and writes nothing.
+- `quoin opencode uninstall --project-root <path> [--dry-run]` — removes everything
+  Quoin owns under that project. `--dry-run` prints the plan and writes nothing.
+- `quoin opencode script <name> [args...]` — runs one allowlisted Quoin script
+  against the current project, without a full install. This command is a
+  deliberate addition to the spec's CLI surface: the allowlist and its
+  refusal behavior are described below.
+
+A plan line names one of these actions for each file: `create` (new), `update`
+(owned, content differs), `unchanged` (owned, content matches), `adopt` (an
+existing file byte-identical to what Quoin would generate becomes owned —
+a deliberate narrowing of "any existing unowned path is a conflict", chosen
+so a clean re-render of an unmodified project never conflicts with itself),
+`delete` (owned file removed because it's no longer generated), `forget`
+(an owned file already missing is dropped from the metadata without an
+error), and `conflict` (an existing path the installer cannot safely take
+over — nothing is written when any conflict is present).
+
+Ownership metadata lives at `.quoin/opencode-install.json`. It's plain JSON,
+safe to commit, and should be committed together with the generated files
+or not at all — committing one without the other leaves a teammate's `.quoin`
+directory out of sync with what's actually on disk. An existing directory
+that ends up holding only files and directories Quoin generated is recorded
+as Quoin's own, the same as a directory Quoin created outright, and is
+removed on uninstall once it's empty.
+
+Exit codes:
+
+| Command | Code | Meaning |
+|---|---|---|
+| install | 0 | done, or already up to date |
+| install | 1 | `--check` found changes pending |
+| install | 2 | usage, metadata or generation error, or an apply was interrupted |
+| install | 3 | one or more conflicts; nothing was written |
+| uninstall | 0 | done, or nothing was installed |
+| uninstall | 2 | usage or metadata error |
+| uninstall | 4 | done, but one or more owned files had been modified and were left in place; the metadata still lists them, so a later install will conflict on those paths |
+| script | (script's own) | the allowlisted script's own exit code |
+| script | 1 | the script raised `SystemExit` with a non-integer value |
+| script | 2 | an unknown script name, or the runner refused to run it |
+
+`--dry-run` and `--check` return the same code the real run would return.
+
+`quoin opencode script` only runs the small set of Quoin scripts a Quoin role
+is allowed to call directly (see the generated instructions document for the
+current allowlist). One of them, `generate_discovery_map`, writes a file; its
+output is confined to the artifact root of the installed project, the same
+root the generated permission rules edit inside. The runner also refuses to
+run at all when its own standard output or standard error is a regular file,
+so the script's output never lands in that file — but the shell still
+creates or empties the target before the runner starts, and a redirection of
+any other file descriptor (such as `3>`) is never seen by the refusal check
+at all; a hard kill between the shell opening the target and the refusal
+firing can leave it truncated. Passing `--` on the command line is not a
+transparent pass-through to the script either: the outer command-line parser
+consumes that `--` itself, and the arguments after it still reach the
+script and are still checked by the runner's own parser.
+
 ## Running the probe
 
 ```

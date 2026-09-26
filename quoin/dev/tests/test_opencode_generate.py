@@ -512,27 +512,25 @@ def test_group_subshell_loop_and_list_wrapped_redirection_bypasses_the_ask_rule(
     evaluates for it is the bare command text with no redirection in it at
     all. The `*>*`/`*<*` ask rules can only fire on a pattern that contains a
     redirection character, so they never see these forms, and the allowed
-    script's output reaches the redirection target with no prompt. This pins
-    today's behavior (an allow) so a future runner-level fix (refusing to run
-    when its own stdout or stderr is a regular file) is a deliberate, visible
-    change, not a silent one.
+    script's output reaches the redirection target with no prompt. The
+    pattern stays `allow` by design: closing this gap is the runner's job,
+    not the permission map's -- `scripts.run` refuses to run at all when
+    its own stdout or stderr is a regular file.
     """
     base = "quoin opencode script path_resolve --task t"
-    bypass_forms = (
-        # `{ quoin opencode script path_resolve --task t; } > src/app.py` — parent `compound_statement`
-        base,
-        # `( quoin opencode script path_resolve --task t ) > src/app.py` — parent `subshell`
-        base,
-        # `for x in y; do quoin opencode script path_resolve --task t; done > src/app.py` — parent `do_group`
-        base,
-        # `true && quoin opencode script path_resolve --task t > src/app.py` — parent `list`
-        base,
-    )
+    # `{ quoin opencode script path_resolve --task t; } > src/app.py` (parent `compound_statement`),
+    # `( quoin opencode script path_resolve --task t ) > src/app.py` (parent `subshell`),
+    # `for x in y; do quoin opencode script path_resolve --task t; done > src/app.py` (parent `do_group`),
+    # and `quoin opencode script path_resolve --task t && quoin opencode script path_resolve --task t
+    # > src/app.py` (parent `list`) all give the wrapped command a parent node other than
+    # `redirected_statement`, so the pattern OpenCode evaluates for each is the bare command text
+    # above, with no redirection in it at all -- one assertion below covers all four, since each
+    # reduces to that same bare pattern. The parse was checked against tree-sitter-bash 0.25.0, the
+    # version OpenCode v1.18.32 pins (`packages/opencode/package.json` L143 in the clone).
     for role in _SHELL_ROLES:
-        for pattern_text in bypass_forms:
-            assert evaluate(role, "bash", pattern_text) == "allow", (role, pattern_text)
-        # the direct form — the same command, redirected on itself with no
-        # wrapping construct — keeps its `redirected_statement` parent and
+        assert evaluate(role, "bash", base) == "allow", role
+        # the direct form -- the same command, redirected on itself with no
+        # wrapping construct -- keeps its `redirected_statement` parent and
         # still asks.
         assert evaluate(role, "bash", "%s > src/app.py" % base) == "ask", role
 
@@ -970,7 +968,10 @@ def test_instruction_document_contains_required_content():
     perm_match = re.search(r"## Permissions\n(.*?)(\n## |\Z)", instr, re.S)
     assert perm_match, "no Permissions section found"
     perm_body = perm_match.group(1)
-    for phrase in ('any prompt, in any agent', 'not a security boundary', 'until OpenCode restarts', 'answer "once"'):
+    for phrase in (
+        'any prompt, in any agent', 'not a security boundary', 'until OpenCode restarts', 'answer "once"',
+        'creates or empties', '3>', 'written directly on', 'MCP or plugin tool',
+    ):
         assert phrase in perm_body, phrase
     assert "for the rest of the session" not in instr
     assert perm_body.count("boundary") == perm_body.count("not a security boundary")

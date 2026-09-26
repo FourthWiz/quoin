@@ -1057,7 +1057,10 @@ def render(inputs: GeneratorInputs) -> Dict[str, RenderedFile]:
         limits_lines.append("- %s: %s — %s" % (key, enforcement, note))
     limits_text = "\n".join(limits_lines)
 
-    core_rules = _demote_headings_outside_fences(inputs.rules)
+    # Dropping the H1 in _demote_headings_outside_fences leaves the blank
+    # line that used to separate it from the body; strip that so the
+    # template's own blank line after "## Core workflow rules" isn't doubled.
+    core_rules = _demote_headings_outside_fences(inputs.rules).lstrip("\n")
 
     parts_i = {
         "kind": "instructions",
