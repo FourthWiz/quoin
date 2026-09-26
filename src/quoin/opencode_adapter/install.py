@@ -8,6 +8,7 @@ tree it started from.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -18,7 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from quoin.opencode_adapter import generate, names
+from quoin.opencode_adapter import generate, manifest, names
 
 METADATA_RELPATH = ".quoin/opencode-install.json"
 METADATA_SCHEMA_VERSION = 1
@@ -295,6 +296,10 @@ class Action:
     relpath: str
     action: str
     reason: Optional[str] = None
+    # Set only for "delete": apply re-checks this against the file's current
+    # bytes immediately before unlinking, so a file that changed between plan
+    # and apply is left alone instead of removed.
+    expected_sha256: Optional[str] = None
 
 
 @dataclass
@@ -444,7 +449,7 @@ def plan_install(root, rendered: Dict[str, "generate.RenderedFile"], meta: Optio
             if cur is None:
                 actions.append(Action(relpath, "forget"))
             elif _sha256_hex(cur) == owned[relpath]["sha256"]:
-                actions.append(Action(relpath, "delete"))
+                actions.append(Action(relpath, "delete", expected_sha256=owned[relpath]["sha256"]))
             else:
                 actions.append(Action(relpath, "conflict", REASON_STALE_MODIFIED))
 
@@ -505,3 +510,150 @@ def format_plan(plan: Plan) -> List[str]:
     summary = ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items()))
     lines.append("summary: %s (metadata %s)" % (summary, plan.metadata_action))
     return lines
+
+
+# --- apply, check and run_install ---
+
+
+def apply_install(root, plan: Plan, rendered: Dict[str, "generate.RenderedFile"]) -> None:
+    """Apply `plan` to `root`. Never called when `plan.conflicts` is non-empty.
+
+    Order: file writes, then deletes, then the planner's predicted directory
+    prunes, then `.quoin` and the metadata (written last, and only when
+    `metadata_action == "update"`). An `OSError` partway through leaves a
+    tree the next `run_install` call converges from (unowned survivors are
+    adopted, owned-but-missing files are forgotten, and the created-dir rule
+    re-records directories this run already made).
+    """
+    root = Path(root)
+    for d in sorted((d for d in plan.dirs_to_create if d != ".quoin"), key=_shallowest_first_key):
+        target = root / d
+        if not target.exists():
+            os.mkdir(str(target))
+
+    for action in sorted((a for a in plan.actions if a.action in ("create", "update")), key=lambda a: a.relpath):
+        atomic_write(root / action.relpath, rendered[action.relpath].content)
+
+    for action in sorted((a for a in plan.actions if a.action == "delete"), key=lambda a: a.relpath):
+        target = root / action.relpath
+        st = _lstat_or(target, "missing")
+        if st is None or stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+            continue
+        if action.expected_sha256 is not None:
+            try:
+                current_bytes = target.read_bytes()
+            except OSError:
+                continue
+            if _sha256_hex(current_bytes) != action.expected_sha256:
+                continue
+        os.unlink(str(target))
+
+    for d in plan.dirs_to_prune:
+        try:
+            os.rmdir(str(root / d))
+        except OSError:
+            pass
+
+    if plan.metadata_action == "update":
+        if ".quoin" in plan.dirs_to_create:
+            quoin_dir = root / ".quoin"
+            if not quoin_dir.exists():
+                os.mkdir(str(quoin_dir))
+        atomic_write(root / METADATA_RELPATH, plan.desired_metadata)
+
+
+def _remediation_for(reason: Optional[str], is_config_jsonc: bool) -> str:
+    if reason == REASON_UNOWNED_EXISTS:
+        if is_config_jsonc:
+            return (
+                "an unowned .opencode/opencode.jsonc: move those settings into "
+                ".opencode/opencode.json or the project opencode.json, which OpenCode "
+                "merges the same way, then re-run install."
+            )
+        return "an unowned file: move or rename it, then re-run install."
+    if reason in (REASON_OWNED_MODIFIED, REASON_STALE_MODIFIED):
+        return (
+            "a modified owned file: keep a copy, delete it, and re-run install (it "
+            "recreates the file), or keep it and run `quoin opencode uninstall`."
+        )
+    if reason == REASON_TARGET_NOT_REGULAR:
+        return "a symlink or non-regular target: replace it with a regular file or remove it."
+    if reason == REASON_PARENT_NOT_REAL_DIR:
+        return (
+            "a parent directory that is a symlink or not a directory: make it a real "
+            "directory, or install into a different project root."
+        )
+    return "see the adapter README for how to resolve this conflict."  # pragma: no cover - exhaustive above
+
+
+def _print_conflicts_and_remediation(plan: Plan, err) -> None:
+    for action in plan.conflicts:
+        print("%-9s %s (%s)" % (action.action, action.relpath, action.reason), file=err)
+    printed: Set[tuple] = set()
+    for action in plan.conflicts:
+        is_config_jsonc = action.relpath == generate.CONFIG_PATH
+        key = (action.reason, is_config_jsonc)
+        if key in printed:
+            continue
+        printed.add(key)
+        print("remediation: %s" % _remediation_for(action.reason, is_config_jsonc), file=err)
+
+
+def run_install(project_root, source_dir, profile, check, out, err,
+                 rendered: Optional[Dict[str, "generate.RenderedFile"]] = None,
+                 quoin_version: Optional[str] = None, opencode_version: Optional[str] = None) -> int:
+    root = Path(project_root)
+    if not root.is_dir():
+        print("opencode install: project root %s is not a directory" % root, file=err)
+        return 2
+
+    if profile is not None and not PROFILE_RE.fullmatch(profile):
+        print("opencode install: profile %r is not a valid profile label" % (profile,), file=err)
+        return 2
+
+    if quoin_version is None:
+        from quoin import __about__
+
+        quoin_version = __about__.__version__
+
+    try:
+        if opencode_version is None:
+            opencode_version = manifest.read_pinned_version(source_dir)
+        if rendered is None:
+            rendered = generate.render_source_dir(source_dir)
+    except (generate.GenerationError, manifest.ManifestLoadError) as exc:
+        print("opencode install: generation failed: %s" % exc, file=err)
+        return 2
+
+    try:
+        meta = load_metadata(root)
+    except InstallError as exc:
+        print("opencode install: %s" % exc, file=err)
+        return exc.exit_code
+
+    plan = plan_install(root, rendered, meta, quoin_version, opencode_version, profile)
+
+    if plan.conflicts:
+        _print_conflicts_and_remediation(plan, err)
+        return 3
+
+    if check:
+        for line in format_plan(plan):
+            print(line, file=out)
+        all_unchanged = plan.metadata_action == "unchanged" and all(a.action == "unchanged" for a in plan.actions)
+        return 0 if all_unchanged else 1
+
+    try:
+        apply_install(root, plan, rendered)
+    except OSError as exc:
+        where = exc.filename or "?"
+        problem = errno.errorcode.get(exc.errno, str(exc.errno)) if exc.errno else str(exc)
+        print(
+            "opencode install: interrupted: %s on %s; re-run install to finish" % (problem, where),
+            file=err,
+        )
+        return 2
+
+    for line in format_plan(plan):
+        print(line, file=out)
+    return 0

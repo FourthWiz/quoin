@@ -16,6 +16,8 @@ from pathlib import Path
 
 import pytest
 
+import io
+
 from quoin.opencode_adapter import generate, install
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -539,3 +541,218 @@ def test_plan_install_against_real_generator_output_is_fully_creates(tmp_path: P
     assert len(plan.actions) == len(rendered)
     assert {a.action for a in plan.actions} == {"create"}
     assert plan.metadata_action == "update"
+
+
+# --- apply_install / run_install ---
+
+
+def _small_rendered():
+    return {
+        ".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "command body", kind="command"),
+        ".opencode/agents/quoin-plan.md": _rendered(".opencode/agents/quoin-plan.md", "agent body", kind="agent"),
+        ".opencode/skills/quoin-plan/SKILL.md": _rendered(".opencode/skills/quoin-plan/SKILL.md", "skill body"),
+    }
+
+
+def _run(project_root, rendered=None, profile=None, check=False, quoin_version="0.1.0", opencode_version="1.18.32"):
+    out, err = io.StringIO(), io.StringIO()
+    code = install.run_install(
+        project_root, SOURCE_DIR, profile, check, out, err,
+        rendered=rendered, quoin_version=quoin_version, opencode_version=opencode_version,
+    )
+    return code, out.getvalue(), err.getvalue()
+
+
+def _snapshot(root: Path):
+    entries = {}
+    for p in sorted(root.rglob("*")):
+        rel = str(p.relative_to(root))
+        if p.is_dir():
+            entries[rel] = None
+        elif p.is_file() and not p.is_symlink():
+            entries[rel] = p.read_bytes()
+    return entries
+
+
+def test_install_twice_is_byte_identical_and_second_plan_is_all_unchanged(tmp_path: Path):
+    rendered = _small_rendered()
+    code1, out1, _ = _run(tmp_path, rendered=rendered)
+    assert code1 == 0
+    snapshot_after_first = _snapshot(tmp_path)
+
+    code2, out2, _ = _run(tmp_path, rendered=rendered)
+    assert code2 == 0
+    assert _snapshot(tmp_path) == snapshot_after_first
+    body_lines = [l for l in out2.splitlines() if not l.startswith("summary")]
+    assert all(l.split()[0] in ("unchanged", "metadata") for l in body_lines)
+    assert "metadata  unchanged" in out2
+
+
+def test_install_write_ordering_metadata_last(tmp_path: Path, monkeypatch):
+    rendered = _small_rendered()
+    calls = []
+    original = install.atomic_write
+
+    def _spy(path, data):
+        calls.append(str(path))
+        original(path, data)
+
+    monkeypatch.setattr(install, "atomic_write", _spy)
+    code, _, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+    assert calls[-1].endswith(install.METADATA_RELPATH)
+    assert (tmp_path / ".quoin").is_dir()
+
+
+def test_check_returns_1_on_clean_root_and_0_on_installed_root(tmp_path: Path):
+    rendered = _small_rendered()
+    before = _snapshot(tmp_path)
+    code, _, _ = _run(tmp_path, rendered=rendered, check=True)
+    assert code == 1
+    assert _snapshot(tmp_path) == before
+    assert not (tmp_path / ".opencode").exists()
+    assert not (tmp_path / ".quoin").exists()
+
+    install_code, _, _ = _run(tmp_path, rendered=rendered)
+    assert install_code == 0
+    installed_snapshot = _snapshot(tmp_path)
+    check_code, _, _ = _run(tmp_path, rendered=rendered, check=True)
+    assert check_code == 0
+    assert _snapshot(tmp_path) == installed_snapshot
+
+
+def test_conflicts_return_3_and_list_path_and_reason_leave_tree_unchanged(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"user file")
+    rendered = _small_rendered()
+    before = _snapshot(tmp_path)
+    code, _, err = _run(tmp_path, rendered=rendered)
+    assert code == 3
+    assert ".opencode/commands/quoin-plan.md" in err
+    assert install.REASON_UNOWNED_EXISTS in err
+    assert _snapshot(tmp_path) == before
+
+
+def test_two_conflicts_at_once_are_both_listed(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"user file")
+    (tmp_path / ".opencode" / "agents").mkdir(parents=True)
+    (tmp_path / ".opencode" / "agents" / "quoin-plan.md").write_bytes(b"another user file")
+    rendered = _small_rendered()
+    code, _, err = _run(tmp_path, rendered=rendered)
+    assert code == 3
+    assert ".opencode/commands/quoin-plan.md" in err
+    assert ".opencode/agents/quoin-plan.md" in err
+
+
+def test_conflict_under_check_returns_3_not_1(tmp_path: Path):
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(b"user file")
+    rendered = _small_rendered()
+    code, _, _ = _run(tmp_path, rendered=rendered, check=True)
+    assert code == 3
+
+
+def test_metadata_only_change_reinstall_prints_metadata_update(tmp_path: Path, monkeypatch):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered, quoin_version="0.1.0")
+
+    check_code, check_out, _ = _run(tmp_path, rendered=rendered, quoin_version="0.0.0-test", check=True)
+    assert check_code == 1
+    assert "metadata  update" in check_out
+
+    calls = []
+    original = install.atomic_write
+
+    def _spy(path, data):
+        calls.append(str(path))
+        original(path, data)
+
+    monkeypatch.setattr(install, "atomic_write", _spy)
+    code, out, _ = _run(tmp_path, rendered=rendered, quoin_version="0.0.0-test")
+    assert code == 0
+    assert "metadata  update" in out
+    assert len(calls) == 1
+    assert calls[0].endswith(install.METADATA_RELPATH)
+
+
+def test_crash_recovery_converges_to_a_clean_install(tmp_path: Path, monkeypatch, tmp_path_factory):
+    rendered = _small_rendered()
+    calls = {"n": 0}
+    original = install.atomic_write
+
+    def _flaky(path, data):
+        calls["n"] += 1
+        if calls["n"] == 3:
+            raise OSError(5, "injected crash")
+        original(path, data)
+
+    monkeypatch.setattr(install, "atomic_write", _flaky)
+    code, _, _ = _run(tmp_path, rendered=rendered)
+    assert code == 2
+    monkeypatch.setattr(install, "atomic_write", original)
+
+    rerun_code, _, _ = _run(tmp_path, rendered=rendered)
+    assert rerun_code == 0
+
+    clean_root = tmp_path_factory.mktemp("clean")
+    clean_code, _, _ = _run(clean_root, rendered=rendered)
+    assert clean_code == 0
+    assert _snapshot(tmp_path) == _snapshot(clean_root)
+
+    check_code, _, _ = _run(tmp_path, rendered=rendered, check=True)
+    assert check_code == 0
+
+
+def test_stale_owned_file_delete_and_prune_then_idempotent(tmp_path: Path, monkeypatch):
+    rendered_v1 = {".opencode/skills/quoin-old/SKILL.md": _rendered(".opencode/skills/quoin-old/SKILL.md", "body")}
+    _run(tmp_path, rendered=rendered_v1)
+
+    calls = []
+    original = install.atomic_write
+
+    def _spy(path, data):
+        calls.append(str(path))
+        original(path, data)
+
+    monkeypatch.setattr(install, "atomic_write", _spy)
+    code, _, _ = _run(tmp_path, rendered={})
+    assert code == 0
+    assert not (tmp_path / ".opencode" / "skills" / "quoin-old").exists()
+
+    check_code, check_out, _ = _run(tmp_path, rendered={}, check=True)
+    assert check_code == 0
+    assert all("unchanged" in l or l.startswith("summary") for l in check_out.splitlines() if l.strip())
+
+    calls.clear()
+    reinstall_code, _, _ = _run(tmp_path, rendered={})
+    assert reinstall_code == 0
+    assert calls == []
+
+
+def test_owned_file_deleted_by_user_is_recreated_with_reason(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").unlink()
+
+    code, out, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+    assert install.REASON_OWNED_MISSING_RECREATED in out
+
+
+def test_files_outside_the_five_families_are_untouched(tmp_path: Path):
+    (tmp_path / generate.ARTIFACT_ROOT).mkdir()
+    (tmp_path / generate.ARTIFACT_ROOT / "memory.md").write_bytes(b"artifacts")
+    (tmp_path / "AGENTS.md").write_bytes(b"agents doc")
+    (tmp_path / ".env").write_bytes(b"SECRET=1")
+
+    rendered = _small_rendered()
+    before = {
+        generate.ARTIFACT_ROOT + "/memory.md": (tmp_path / generate.ARTIFACT_ROOT / "memory.md").read_bytes(),
+        "AGENTS.md": (tmp_path / "AGENTS.md").read_bytes(),
+        ".env": (tmp_path / ".env").read_bytes(),
+    }
+    code, _, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+    for relpath, data in before.items():
+        assert (tmp_path / relpath).read_bytes() == data
