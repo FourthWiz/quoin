@@ -58,6 +58,11 @@
           "from": "- Tolerate missing JSONL: if a session JSONL file is missing, show a degraded summary\n  from the session-state `.md` file instead.\n",
           "section": "Behavior contract",
           "to": "- Tolerate a missing session-state file: if one is missing, show a degraded summary from `recent-sessions.md` and the checkpoint handoff alone.\n"
+        },
+        {
+          "from": "- Paths-not-content: reference session files by path; read only enough to extract\n  checkpoint summaries and the last ~10 messages.\n",
+          "section": "Behavior contract",
+          "to": "- Paths-not-content: reference session files by path; read only enough to extract the checkpoint summaries, since there is no message transcript to sample.\n"
         }
       ]
     },
@@ -72,9 +77,9 @@
       ],
       "rewrites": [
         {
-          "from": "`classify_critic_issues.py`",
+          "from": "(verify exact set against\n`classify_critic_issues.py` before writing)",
           "section": "Output",
-          "to": "`quoin opencode script classify_critic_issues`"
+          "to": "(the calling role verifies the exact set with `quoin opencode script classify_critic_issues`, since the critic has no shell)"
         },
         {
           "from": "The runtime adapter is responsible for spawning a\n  fresh agent; the mechanism is adapter-specific.",
@@ -174,7 +179,9 @@
       "command_note": "",
       "description": "Triages a task by size and orchestrates the matching plan-critic-revise convergence loop.",
       "extra_sections": [],
-      "notes": [],
+      "notes": [
+        "The planner saves each critique the quoin-critic subagent returns as the critic-response file; the subagent never writes it itself."
+      ],
       "rewrites": [
         {
           "from": "The skill also spawns the gate skill (via the adapter's mechanism) after\nconvergence, and updates a session-state file under\n`{{ARTIFACT_ROOT}}/memory/sessions/`.\n",
@@ -235,7 +242,8 @@
     "planner": {
       "description": "Plans and revises in-loop for plan and thorough-plan.",
       "prompt": [
-        "You are the Quoin planner. You produce the implementation-ready plan and revise it against critic feedback in this same session, editing only inside {{ARTIFACT_ROOT}}."
+        "You are the Quoin planner. You produce the implementation-ready plan and revise it against critic feedback in this same session, editing only inside {{ARTIFACT_ROOT}}.",
+        "You save each critique the quoin-critic subagent returns as the critic-response file before revising against it."
       ]
     },
     "reviewer": {

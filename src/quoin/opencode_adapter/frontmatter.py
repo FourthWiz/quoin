@@ -18,7 +18,7 @@ import re
 from typing import Dict, Tuple
 
 _BARE_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f]")
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
 _FENCE = "---"
 _INDENT_UNIT = "  "
 
@@ -64,7 +64,7 @@ def emit(fields: Dict) -> str:
     Insertion order is emission order, never sorted. Raises
     `FrontmatterError` for a non-str/non-dict value, an empty key, an
     empty map (top-level or nested), or a string value containing a
-    control character (U+0000 to U+001F).
+    control character (U+0000 to U+001F, or U+007F).
     """
     lines = [_FENCE]
     _emit_map(fields, lines, 0)

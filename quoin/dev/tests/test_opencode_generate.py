@@ -112,6 +112,11 @@ def test_frontmatter_emit_rejects_non_str_non_dict_value():
 def test_frontmatter_emit_rejects_control_characters_in_value():
     with pytest.raises(frontmatter.FrontmatterError):
         frontmatter.emit({"a": "bad\x01char"})
+    with pytest.raises(frontmatter.FrontmatterError):
+        # U+007F (DEL) is outside the \x00-\x1f range the regex used to check;
+        # json.dumps(ensure_ascii=True) emits it raw, and js-yaml rejects a raw
+        # DEL as non-printable, so it must be caught here too.
+        frontmatter.emit({"a": "bad\x7fchar"})
 
 
 # --- frontmatter: parse rejects ---
@@ -496,6 +501,42 @@ def test_redirection_after_an_allowed_script_still_asks():
             assert evaluate(role, "bash", text) == "ask", (role, suffix)
 
 
+def test_group_subshell_loop_and_list_wrapped_redirection_bypasses_the_ask_rule():
+    """Documented gap: OpenCode's `source()` includes the redirection text in
+    the matched permission pattern only when the redirected command's direct
+    parent node is
+    `redirected_statement` (`packages/opencode/src/tool/shell.ts` L119-121).
+    Wrapping the same command in a `{ }` group, a `( )` subshell, a `for`
+    loop or an `&&` list gives it a different parent node (`compound_statement`,
+    `subshell`, `do_group` or `list`), so the pattern OpenCode actually
+    evaluates for it is the bare command text with no redirection in it at
+    all. The `*>*`/`*<*` ask rules can only fire on a pattern that contains a
+    redirection character, so they never see these forms, and the allowed
+    script's output reaches the redirection target with no prompt. This pins
+    today's behavior (an allow) so a future runner-level fix (refusing to run
+    when its own stdout or stderr is a regular file) is a deliberate, visible
+    change, not a silent one.
+    """
+    base = "quoin opencode script path_resolve --task t"
+    bypass_forms = (
+        # `{ quoin opencode script path_resolve --task t; } > src/app.py` — parent `compound_statement`
+        base,
+        # `( quoin opencode script path_resolve --task t ) > src/app.py` — parent `subshell`
+        base,
+        # `for x in y; do quoin opencode script path_resolve --task t; done > src/app.py` — parent `do_group`
+        base,
+        # `true && quoin opencode script path_resolve --task t > src/app.py` — parent `list`
+        base,
+    )
+    for role in _SHELL_ROLES:
+        for pattern_text in bypass_forms:
+            assert evaluate(role, "bash", pattern_text) == "allow", (role, pattern_text)
+        # the direct form — the same command, redirected on itself with no
+        # wrapping construct — keeps its `redirected_statement` parent and
+        # still asks.
+        assert evaluate(role, "bash", "%s > src/app.py" % base) == "ask", role
+
+
 def test_shell_map_last_two_keys_are_the_redirect_rules():
     for role in _SHELL_ROLES:
         rule = generate.role_permissions(role)["bash"]
@@ -811,6 +852,15 @@ def test_load_inputs_raises_generation_error_on_drifting_manifest(tmp_path):
     manifest_path.write_text(json.dumps(data))
     with pytest.raises(generate.GenerationError, match="manifest drift"):
         generate.load_inputs(copy_dir)
+
+
+def test_load_inputs_wraps_recursion_error_from_check_manifest(monkeypatch):
+    def _raise_recursion(*args, **kwargs):
+        raise RecursionError("too deep")
+
+    monkeypatch.setattr(generate.manifest, "check_manifest", _raise_recursion)
+    with pytest.raises(generate.GenerationError, match="nested too deeply"):
+        generate.load_inputs(SOURCE_DIR)
 
 
 # render() on the real tree: file set, path families, bindings
