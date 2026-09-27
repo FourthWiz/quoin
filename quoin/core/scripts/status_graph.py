@@ -179,7 +179,7 @@ def _max_artifact_mtime(task_dir: Path) -> float:
     return max(mtimes, default=0.0)
 
 
-_EXCLUDED_NAMES = frozenset({"memory", "cache", "finalized", "security-review"})
+_EXCLUDED_NAMES = frozenset({"memory", "cache", "finalized", "security-review", "trash"})
 
 
 def pick_active_task(root: Path) -> Optional[Path]:

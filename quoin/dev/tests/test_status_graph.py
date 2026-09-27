@@ -291,6 +291,17 @@ class TestPickActiveTask:
         # pick_active_task excludes "finalized" by name
         assert pick_active_task(tmp_path) is None
 
+    def test_excludes_trash_dir(self, tmp_path):
+        """IVG-262: newest-mtime trash/ dir must never be picked as the active task."""
+        make_task(tmp_path, "old-task", ["current-plan.md"])
+        trash = tmp_path / ".workflow_artifacts" / "trash" / "2026-09-27" / "old-task"
+        trash.mkdir(parents=True)
+        import time; time.sleep(0.02)  # ensure trash/ has the newest mtime
+        (trash / "current-plan.md").write_text("data\n")
+        result = pick_active_task(tmp_path)
+        assert result is not None
+        assert result.name == "old-task"
+
     def test_excludes_security_review_dir_even_with_newest_mtime(self, tmp_path):
         """IVG-128 D-07/MIN-3: the standalone security-review dir must never be
         mistaken for the active task, even when it has the most recent mtime
