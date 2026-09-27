@@ -348,6 +348,127 @@ def test_output_confinement_refuses_a_symlinked_dest_tmp(tmp_path, monkeypatch):
     assert not (artifact_dir / "discovery-map.json").exists()
 
 
+def test_output_confinement_refuses_a_symlinked_default_destination_chain(tmp_path, monkeypatch):
+    """Regression for the confinement bypass: the DEFAULT (no --output)
+    destination name is itself a symlink to a file inside the root, and its
+    `.tmp` sibling is separately a symlink pointing outside the project.
+
+    Before the fix, the runner resolved the destination with
+    `os.path.realpath` before appending `.tmp`, so it checked
+    `inner.json.tmp` (a name that never existed) while the script actually
+    opened the real `discovery-map.json.tmp` symlink and followed it
+    outside the project.
+    """
+    project = _make_project(tmp_path / "proj")
+    artifact_dir = project / generate.ARTIFACT_ROOT
+    artifact_dir.mkdir(parents=True)
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_text("do not touch")
+    (artifact_dir / "inner.json").write_text("{}")
+    (artifact_dir / "discovery-map.json").symlink_to(artifact_dir / "inner.json")
+    (artifact_dir / "discovery-map.json.tmp").symlink_to(outside_target)
+    monkeypatch.chdir(project)
+
+    code, _, _ = _run("generate_discovery_map", [])
+    assert code == 2
+    assert outside_target.read_text() == "do not touch"
+    assert (artifact_dir / "inner.json").read_text() == "{}"
+
+
+def test_output_confinement_refuses_a_symlinked_default_destination_chain_subprocess(tmp_path):
+    """Same repro as above, through a real subprocess so the script's own
+    `open()` call is exercised exactly as a shell-launched run would see it."""
+    project = _make_project(tmp_path / "proj")
+    artifact_dir = project / generate.ARTIFACT_ROOT
+    artifact_dir.mkdir(parents=True)
+    outside_target = tmp_path / "outside.json"
+    outside_target.write_text("do not touch")
+    (artifact_dir / "inner.json").write_text("{}")
+    (artifact_dir / "discovery-map.json").symlink_to(artifact_dir / "inner.json")
+    (artifact_dir / "discovery-map.json.tmp").symlink_to(outside_target)
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _subprocess_code("generate_discovery_map", [])],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(project),
+    )
+    assert proc.returncode == 2
+    assert outside_target.read_text() == "do not touch"
+
+
+def test_output_confinement_refuses_a_symlinked_artifact_root(tmp_path, monkeypatch):
+    """Regression: the project's artifact root itself is a symlink to a
+    directory outside the project. `os.path.realpath` on both sides of the
+    old check followed this symlink and confirmed the write was "inside"
+    whatever the symlink pointed at, rather than refusing outright."""
+    project = _make_project(tmp_path / "proj")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (project / generate.ARTIFACT_ROOT).symlink_to(victim, target_is_directory=True)
+    monkeypatch.chdir(project)
+
+    code, _, _ = _run(
+        "generate_discovery_map",
+        ["--output", "%s/important.json" % generate.ARTIFACT_ROOT, "--quiet"],
+    )
+    assert code == 2
+    assert not (victim / "important.json").exists()
+
+
+def test_output_confinement_refuses_a_symlinked_artifact_root_subprocess(tmp_path):
+    project = _make_project(tmp_path / "proj")
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (project / generate.ARTIFACT_ROOT).symlink_to(victim, target_is_directory=True)
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _subprocess_code(
+                "generate_discovery_map",
+                ["--output", "%s/important.json" % generate.ARTIFACT_ROOT, "--quiet"],
+            ),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(project),
+    )
+    assert proc.returncode == 2
+    assert not (victim / "important.json").exists()
+
+
+def test_output_confinement_refuses_dest_equal_to_the_artifact_root(tmp_path, monkeypatch):
+    """`--output <artifact root>` must not be accepted: its `.tmp` sibling
+    would land beside, not inside, the artifact root."""
+    project = _make_project(tmp_path / "proj")
+    (project / generate.ARTIFACT_ROOT).mkdir()
+    monkeypatch.chdir(project)
+
+    code, _, _ = _run("generate_discovery_map", ["--output", generate.ARTIFACT_ROOT, "--quiet"])
+    assert code == 2
+    assert not Path(str(project / generate.ARTIFACT_ROOT) + ".tmp").exists()
+
+
+def test_output_confinement_refuses_dest_equal_to_the_artifact_root_subprocess(tmp_path):
+    project = _make_project(tmp_path / "proj")
+    (project / generate.ARTIFACT_ROOT).mkdir()
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _subprocess_code("generate_discovery_map", ["--output", generate.ARTIFACT_ROOT, "--quiet"]),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(project),
+    )
+    assert proc.returncode == 2
+    assert not Path(str(project / generate.ARTIFACT_ROOT) + ".tmp").exists()
+
+
 def test_output_confinement_refuses_when_no_project_is_found(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     code, _, err = _run("generate_discovery_map", [])

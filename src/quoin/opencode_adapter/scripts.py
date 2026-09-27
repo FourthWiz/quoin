@@ -128,6 +128,13 @@ def discovery_map_output(argv: Sequence[str], cwd) -> Optional[Path]:
     unambiguous way the script's own parser would: a literal `--`, an
     unrecognized or abbreviated (`allow_abbrev=False`) token, or any other
     parse error.
+
+    The returned path is lexically normalized (`os.path.normpath`) but
+    deliberately NOT resolved against the filesystem: `os.path.realpath`
+    would silently follow a symlink planted at any component, including the
+    final one, which is exactly the input `_confined_write_path` and the
+    caller's own `--output` injection need to see untouched in order to
+    catch it instead.
     """
     argv = list(argv)
     if "--" in argv:
@@ -151,7 +158,37 @@ def discovery_map_output(argv: Sequence[str], cwd) -> Optional[Path]:
         root = namespace.project_root if namespace.project_root is not None else cwd
         root = os.path.join(cwd, root)
         effective = os.path.join(root, generate.ARTIFACT_ROOT, "discovery-map.json")
-    return Path(os.path.realpath(effective))
+    return Path(os.path.normpath(effective))
+
+
+def _confined_write_path(project_root: str, dest: str) -> bool:
+    """True iff `dest` sits strictly inside `project_root`'s artifact root,
+    with no symlinked path component between the two.
+
+    Never calls `realpath`: instead it walks each path component from
+    `project_root` down to `dest` with `os.lstat` (mirroring
+    `install.inspect_path`'s technique), so a symlink anywhere in the chain
+    — including the artifact-root directory itself — is refused rather than
+    followed. `dest == artifact_root` is refused too, since its `.tmp`
+    sibling would land beside, not inside, the artifact root.
+    """
+    project_root = os.path.normpath(project_root)
+    artifact_root = os.path.normpath(os.path.join(project_root, generate.ARTIFACT_ROOT))
+    dest = os.path.normpath(dest)
+    prefix = artifact_root + os.sep
+    if dest == artifact_root or not dest.startswith(prefix):
+        return False
+
+    current = project_root
+    for part in os.path.relpath(dest, project_root).split(os.sep):
+        current = os.path.join(current, part)
+        try:
+            st = os.lstat(current)
+        except OSError:
+            continue
+        if stat.S_ISLNK(st.st_mode):
+            return False
+    return True
 
 
 def run(name, argv, source_dir, out=sys.stdout, err=sys.stderr, fstat=os.fstat) -> int:
@@ -195,23 +232,26 @@ def run(name, argv, source_dir, out=sys.stdout, err=sys.stderr, fstat=os.fstat) 
             print("quoin opencode script: %s" % exc, file=err)
             return 2
         if dest is not None:
-            artifact_root = os.path.realpath(os.path.join(str(root), generate.ARTIFACT_ROOT))
-            try:
-                inside = os.path.commonpath([str(dest), artifact_root]) == artifact_root
-            except ValueError:
-                inside = False
-            if not inside:
+            if not _confined_write_path(str(root), str(dest)):
                 print(
-                    "quoin opencode script: refusing to run: %s is outside the artifact root" % dest,
+                    "quoin opencode script: refusing to run: %s is outside the artifact root, "
+                    "or reaches it through a symlinked path component" % dest,
                     file=err,
                 )
                 return 2
-            if os.path.islink(str(dest) + ".tmp"):
+            dest_tmp = str(dest) + ".tmp"
+            if os.path.lexists(dest_tmp):
                 print(
-                    "quoin opencode script: refusing to run: %s.tmp already exists as a symlink" % dest,
+                    "quoin opencode script: refusing to run: %s already exists" % dest_tmp,
                     file=err,
                 )
                 return 2
+            # Pass the exact, already-checked destination through explicitly
+            # rather than letting the script re-derive its own default: that
+            # default is built from an unresolved project_root/output join,
+            # which can disagree with the path just confined above (the
+            # runner and the script must open the same file).
+            argv = argv + ["--output", str(dest)]
 
     if name == "validate_artifact":
         sidecar = Path(source_dir) / "memory" / "format-kit.sections.json"
