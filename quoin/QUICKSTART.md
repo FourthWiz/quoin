@@ -26,7 +26,7 @@
 | `/continue_work` | Resume context from a prior session using recent-sessions index |
 | `/pr` | Full pull-request lifecycle after /end_of_task: version bump, push, create, wait, switch |
 | `/sleep` | Memory consolidation; promotes insights to lessons-learned, archives stale entries |
-| `/cleanup` | Trash-move stale sentinels/old checkpoints; auto-runs in /checkpoint |
+| `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs in /checkpoint |
 | `/next-steps` | Append-only queue for future work items (`add` / `list` / `done N`) |
 | `/run` | End-to-end pipeline: discover → architect → plan → implement → review → end_of_task |
 | `/cost_snapshot` | Shows today's cost, project lifetime cost, and per-task breakdown |

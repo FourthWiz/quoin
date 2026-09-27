@@ -42,7 +42,7 @@ Runtime portability note: shared workflow semantics are being extracted under `q
   This rule is REQUIRED even when `/gate` will also render a summary — the skill's inline chat summary and the gate's `## For human` echo are complementary (the skill summary describes the step's work; the gate echo renders the stored artifact summary). Do NOT rely on the user reading terse artifacts — restate the substance in plain English in the chat. `/run` already satisfies this via its Checkpoint A–D summaries; the per-skill summaries additionally cover **standalone invocation** (skill run directly, not under `/run`).
 
 ### Workflow conventions
-- **Never place stage plans into `.workflow_artifacts/finalized/` until `/end_of_task` is explicitly run.** Plans stay in their working location until the user triggers finalization.
+- **Never place stage plans into `.workflow_artifacts/finalized/` until `/end_of_task` is explicitly run.**
 
 ## Project structure
 
@@ -90,7 +90,7 @@ Skills resolve the artifact path via `quoin/scripts/path_resolve.py`. Resolution
 
 ### Archiving completed work
 
-`/end_of_task` moves the task folder into `.workflow_artifacts/finalized/` (sub-task → `<parent>/finalized/`; top-level task → `finalized/<task>/`). **IMPORTANT: Never move to `finalized/` during planning or implementation** — only when `/end_of_task` is explicitly invoked.
+`/end_of_task` moves the task folder into `.workflow_artifacts/finalized/` (sub-task → `<parent>/finalized/`; top-level task → `finalized/<task>/`). **IMPORTANT: Never move to `finalized/` during planning or implementation** — only via `/end_of_task`, or `/cleanup` after per-task confirm.
 
 ## Workflow sequence
 
@@ -408,7 +408,7 @@ Four skills handle session lifecycle at different granularities (v3 lifecycle se
 - `/checkpoint` — general-purpose state-save. Three save modes: `--mode restore` (default), `--mode load-as-reference`, `--mode mid-agent`. `/checkpoint --restore` re-hydrates in a fresh session.
 - `/end_of_day` — rolls up daily session state into `.workflow_artifacts/memory/daily/<date>.md`; touches `lessons-learned.md` if insights promoted; auto-invokes `/sleep`.
 - `/sleep` — Scans daily insights + session files (30-day window); three-bucket decisions (Promote/Soft-Forget/deferred). Writes ONLY to `lessons-learned.md` + `forgotten/`.
-- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`. Auto-fires as the first sub-block of `/checkpoint` Step 1.5.
+- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`; standalone runs also offer confirmed task-folder archive. Auto-fires as the first sub-block of `/checkpoint` Step 1.5.
 
 Full subcommand contracts, mode auto-detection rules, restore-picker logic, and env knobs: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
 

@@ -10,7 +10,7 @@
 - **Always start each new task on a fresh branch.** Commit current work, switch to main, fetch latest, then create the new branch. This is now ENFORCED, not just advisory: `/implement` runs a branch-hygiene precheck at dispatch entry (prompts if on a protected branch), `/gate` FAILS if task commits land on a protected branch (commits ahead of upstream on main/master), and `/review` flags it as a diff-independent backstop. See `branch_hygiene.py`.
 
 ### Workflow conventions
-- **Never place stage plans into `.workflow_artifacts/finalized/` until `/end_of_task` is explicitly run.** Plans stay in their working location until the user triggers finalization.
+- **Never place stage plans into `.workflow_artifacts/finalized/` until `/end_of_task` is explicitly run.**
 
 ## Project structure
 
@@ -31,7 +31,7 @@ When running parallel tasks, each gets its own subfolder. Never mix artifacts fr
 
 ### Archiving completed work
 
-`/end_of_task` moves the task folder into `.workflow_artifacts/finalized/` (sub-task → `<parent>/finalized/`; top-level task → `finalized/<task>/`). **IMPORTANT: Never move to `finalized/` during planning or implementation** — only when `/end_of_task` is explicitly invoked.
+`/end_of_task` moves the task folder into `.workflow_artifacts/finalized/` (sub-task → `<parent>/finalized/`; top-level task → `finalized/<task>/`). **IMPORTANT: Never move to `finalized/` during planning or implementation** — only via `/end_of_task`, or `/cleanup` after per-task confirm.
 
 ## Workflow sequence
 
