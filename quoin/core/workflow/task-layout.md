@@ -60,4 +60,4 @@ Existing mixed or legacy layouts are not auto-migrated.
 
 ## Finalization
 
-Completed work moves to a `finalized/` folder only during explicit task finalization. Planning and implementation must keep active work in the active task folder; the one exception is `/cleanup`'s task bookkeeping pass, which may archive a task folder after explicit per-task confirmation.
+Completed work moves to a `finalized/` folder only during explicit task finalization. Planning and implementation must keep active work in the active task folder; the one exception is the cleanup skill's task bookkeeping pass, which may archive a task folder after explicit per-task confirmation.

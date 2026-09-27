@@ -217,9 +217,16 @@ def test_core_cleanup_doc_names_buckets_and_flags():
 
 
 def test_claude_md_rules_and_task_layout_mention_cleanup_exception():
-    for path in (CLAUDE_MD, RULES_MD, TASK_LAYOUT_MD):
+    # CLAUDE.md is the Claude adapter file, so the slash form is expected there.
+    claude_text = _text(CLAUDE_MD)
+    assert "/cleanup" in claude_text, "CLAUDE.md does not mention /cleanup in its finalization rule text"
+    # rules.md and task-layout.md are runtime-neutral core/workflow docs and must
+    # never use Claude Code slash-command syntax (test_core_workflow_portability_tokens.py);
+    # they name the skill bare instead.
+    for path in (RULES_MD, TASK_LAYOUT_MD):
         text = _text(path)
-        assert "/cleanup" in text, f"{path} does not mention /cleanup in its finalization rule text"
+        assert "cleanup" in text.lower(), f"{path} does not mention the cleanup skill in its finalization rule text"
+        assert "/cleanup" not in text, f"{path} must not use the /cleanup slash-command form (core/workflow is runtime-neutral)"
 
 
 def test_readme_utilities_row_mentions_task_folder_bookkeeping():
