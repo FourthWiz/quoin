@@ -249,8 +249,12 @@ def test_eot_abort_is_nearly_done(tmp_path):
 
 
 def test_eot_missing_commit_hash_no_marker_is_nearly_done(tmp_path):
+    # Phase is review-gated (like the "done" fixtures) so this actually
+    # exercises the commit_hash/marker gate: without either, EOT is
+    # "incomplete", not "complete" -> nearly-done, never done.
     task_dir = _mk(tmp_path, "nomark1", files={
         "current-plan.md": "x",
+        "gate-post-review-2026-09-01.md": "x",
         "eot-preflights.json": json.dumps({"archive_type": "feature"}),
     })
     _touch_all(task_dir, NOW - 2 * DAY)
