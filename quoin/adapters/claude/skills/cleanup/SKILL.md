@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run]; auto-fires from /checkpoint unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
+description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run] [--no-tasks]; auto-fires from /checkpoint unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
 model: sonnet
 ---
 
@@ -207,11 +207,11 @@ Use `--dry-run` first to preview what would be trashed without making any moves.
 
 ## Core procedure
 
-(Standalone run — always executes for standalone invocations. When auto-fired from `/checkpoint` Step 1.47, the same procedure runs inline with high-util/panic/mid-agent skip guards applied first.)
+(Standalone run — always executes for standalone invocations. When auto-fired from `/checkpoint` Step 1.47, checkpoint runs its own inline copy (steps 1–6 equivalent) with high-util/panic/mid-agent skip guards applied first.)
 
-**Step 1. Resolve MEMORY_DIR:** `<cwd>/.workflow_artifacts/memory`. If the directory does not exist, emit `[cleanup] no memory dir; nothing to do` and exit 0.
+**Step 1. Resolve MEMORY_DIR:** `<cwd>/.workflow_artifacts/memory`. If the directory does not exist, emit `[cleanup] no memory dir; nothing to do` and skip to `## Task bookkeeping pass`.
 
-**Step 2. Source helpers:** `. __QUOIN_HOME__/hooks/_lib.sh` (provides `trash_move`). If the file is missing or sourcing fails: emit one-line warning `[cleanup] _lib.sh unavailable; cannot trash-move — exiting without changes` and exit 0 (fail-OPEN).
+**Step 2. Source helpers:** `. __QUOIN_HOME__/hooks/_lib.sh` (provides `trash_move`). If the file is missing or sourcing fails: emit one-line warning `[cleanup] _lib.sh unavailable; cannot trash-move — skipping sentinel sweeps` and skip to `## Task bookkeeping pass` (fail-OPEN).
 
 **Step 3. Acquire current/freshest session UUID** (same procedure as checkpoint Step 1.1):
 - Priority 1: harness-provided system-context UUID.
@@ -236,12 +236,12 @@ find "${MEMORY_DIR}/checkpoints" -maxdepth 1 -name '*.md' ! -name '*.tmp' \
 For each candidate: `trash_move "<path>" "$MEMORY_DIR"`.
 (No UUID protection needed: the 30d age window already excludes the just-written checkpoint and any same-day or recent checkpoints.)
 
-**Step 5b. Session temp-file sweep (IVG-137 T-06, data hygiene).** Crashed Class-A-writer leftovers: the session-state atomic-write mechanism (`implement`/`end_of_day`/etc.) composes a body to `<session-path>.body.tmp`, validates it, then atomically renames to `<session-path>`. A process that crashes or is interrupted mid-write leaves the `.body.tmp` (or a bare `.tmp`) file behind. These are NOT selected by any real reader (`select_unprocessed_sessions.py`'s `file_pattern` is anchored `\.md$`, so `.body.tmp`/`.tmp` files are already excluded from selection today) but they pollute manual `ls`/`grep end_of_day_due: yes` inspection of `sessions/`. Find candidates:
+**Step 5b. Session temp-file sweep (IVG-137 T-06, data hygiene).** (rationale: memory/lifecycle-guide.md) Find candidates:
 ```sh
 find "${MEMORY_DIR}/sessions" -maxdepth 1 \( -name '*.body.tmp' -o -name '*.tmp' \) \
   -mtime "+${QUOIN_CLEANUP_SENTINEL_WINDOW:-1}" -print0
 ```
-Reuses the same `QUOIN_CLEANUP_SENTINEL_WINDOW` (default 1 day) age threshold as the sentinel sweep — a legitimate write completes (write → validate → rename) in well under a second, so any survivor older than the window is a crash artifact, never an in-flight write. For each candidate: `trash_move "<path>" "$MEMORY_DIR"`. **Never** matches a real `*.md` session file (the glob is `*.body.tmp` / `*.tmp` only) — no UUID protection needed since these files have no "current session" concept (a session's own live write is always fresher than the age window).
+For each candidate: `trash_move "<path>" "$MEMORY_DIR"`. **Never** matches a real `*.md` session file (the glob is `*.body.tmp` / `*.tmp` only) — no UUID protection needed since these files have no "current session" concept (a session's own live write is always fresher than the age window).
 
 **Step 5c. Run-state sweep (IVG-258 T-13, task-keyed resumability records).** Two globs,
 two windows: the record/notes pair swept on the same 30-day window as checkpoints, and
@@ -254,13 +254,8 @@ find "$MEMORY_DIR" -maxdepth 1 \
 find "$MEMORY_DIR" -maxdepth 1 -name 'run-state-*.json.*.tmp' \
   -mtime "+${QUOIN_CLEANUP_SENTINEL_WINDOW:-1}" -print0
 ```
-For each candidate: `trash_move "<path>" "$MEMORY_DIR"`. Age-only — no UUID protection and
-no `active` guard: the record and its notes file are swept INDEPENDENTLY of each other and
-of whatever `active` says, so a record kept alive by ongoing boundary writes may outlive
-notes that stopped being appended, and vice versa. That is deliberate — pairing them would
-require reading the record to sweep it, which this age-only design forbids. The consequence
-is that a swept record's `notes_path` may point at a file that no longer resolves; every
-reader already tolerates that (T-04, T-11 tier 4).
+For each candidate: `trash_move "<path>" "$MEMORY_DIR"`. Age-only — no UUID protection
+(rationale: memory/lifecycle-guide.md).
 
 **Step 6. Emit summary:**
 - If any files were trashed: `[cleanup] trashed <S> sentinel(s) -> .workflow_artifacts/memory/, <T> session temp-file(s) -> .workflow_artifacts/memory/sessions/, <C> checkpoint(s) -> .workflow_artifacts/memory/checkpoints/, <R> run-state file(s) -> .workflow_artifacts/memory/ (recover via: mv .workflow_artifacts/memory/trash/<date>/<file> <original-dir>)`. NOTE: do NOT say "recoverable via /sleep --restore" — `/sleep --restore` only searches `forgotten/` text entries, not `trash/` files.
@@ -268,11 +263,20 @@ reader already tolerates that (T-04, T-11 tier 4).
 
 If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
-**Step 7. Cost tracking (conditional):** append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `cleanup` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md` — IF task context is active (a `.workflow_artifacts/<task>/cost-ledger.md` exists at cwd). Skip if no task context (per Q-02: no ledger write when no task).
+**Step 7. Cost tracking (conditional, runs from `## Task bookkeeping pass`'s final step; not under `--dry-run`):** append your session to `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `cleanup` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md` — IF task context is active (a `.workflow_artifacts/<task>/cost-ledger.md` exists at cwd). Skip if no task context (per Q-02: no ledger write when no task).
 
 <!-- quoin:ledger-self-write -->
 
-**Step 8.** `pidfile_release cleanup`.
+**Step 8.** Released at the end of `## Task bookkeeping pass`'s final step, always (`--dry-run` included).
+
+## Task bookkeeping pass (standalone only)
+
+Runs after Core procedure Step 8 on a standalone `/cleanup`. Core procedure only ever runs standalone; `/checkpoint` Step 1.47 never reaches this pass — it carries its own separate inline restatement of Core procedure steps 1–7 instead (see checkpoint SKILL.md Step 1.47). `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
+
+1. `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format table`; print verbatim. Missing script: `[cleanup] task_bookkeeping.py unavailable; skipping task pass`. Non-zero exit: print its stderr line, go to step 4.
+2. `--dry-run`, `[no-interactive]`, `[autonomous]`, or no `AskUserQuestion`: print `[cleanup] task bookkeeping: report-only (<reason>); no folders moved`; when `<reason>` is the no-`AskUserQuestion` case (dispatched subagent), also print `to act on these rows, run: [no-redispatch] /cleanup`. Go to step 4.
+3. Else follow `__QUOIN_HOME__/memory/cleanup-task-bookkeeping.md` (report-only if missing): per-task confirmation, moves only via its `apply` command, print `/pr` or `/end_of_task …` for the user — never invoke them.
+4. Step 7 (not under `--dry-run`; skip any folder moved above), then `pidfile_release cleanup` (always — `--dry-run` included).
 
 ## --dry-run
 
@@ -280,24 +284,9 @@ When `/cleanup --dry-run` is invoked:
 
 1. Run steps 1–3 (resolve MEMORY_DIR, source helpers, acquire UUID).
 2. Run the sentinel, session temp-file, checkpoint, and run-state enumeration (steps 4–5c `find` commands) but make NO trash-moves.
-3. Print the would-trash list:
-   ```
-   [cleanup --dry-run] would trash:
-     SENTINELS (<S>):
-       - <path>
-       ...
-     SESSION TEMP FILES (<T>):
-       - <path>
-       ...
-     CHECKPOINTS (<C>):
-       - <path>
-       ...
-     RUN STATE (<R>):
-       - <path>
-       ...
-   ```
-   If zero candidates: `[cleanup --dry-run] nothing stale to clean (no moves would be made)`.
+3. Print the would-trash list (`[cleanup --dry-run] would trash:` then per-bucket headers SENTINELS / SESSION TEMP FILES / CHECKPOINTS / RUN STATE, each followed by its candidate paths; full example: memory/lifecycle-guide.md). If zero candidates: `[cleanup --dry-run] nothing stale to clean (no moves would be made)`.
 4. **Makes NO writes** — no trash-moves, no cost-ledger row.
+5. Task bookkeeping pass: table only, no prompts, no moves; release still happens.
 
 To preview what `/checkpoint` auto-fire would trash without running a full save: use `--no-cleanup` to suppress auto-fire, then run `/cleanup --dry-run` standalone.
 
@@ -323,15 +312,7 @@ Canonical machine-readable source: `hooks/_lib.sh:sentinel_globs()` — sessions
 
 ## Relationship to /sleep --purge --sentinels
 
-`/cleanup` and `/sleep --purge --sentinels` both target the same 9 sentinel families (byte-identical literal lists) but are NOT the same operation:
-
-| Dimension | /cleanup | /sleep --purge --sentinels |
-|---|---|---|
-| Delete mechanism | `trash_move` (recoverable, to `trash/<date>/`) | `rm -f` (permanent delete) |
-| Selection logic | keep-freshest (UUID skip) + age (`QUOIN_CLEANUP_SENTINEL_WINDOW`, default 1d) | age-only (`--older-than Nd`, explicit argument required) |
-| Current session | always preserved (UUID-suffix skip BEFORE age check) | no special protection |
-| Auto-fire | yes (from `/checkpoint` Step 1.47, default-on) | no (requires explicit invocation) |
-| Recovery | `mv .workflow_artifacts/memory/trash/<date>/<file> .workflow_artifacts/memory/` | not recoverable |
+`/cleanup` and `/sleep --purge --sentinels` both target the same 9 sentinel families (byte-identical literal lists) but are NOT the same operation (comparison table: memory/lifecycle-guide.md).
 
 The task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13) is `/cleanup`-only:
 it is not a sentinel family, does not appear in `sentinel_globs()`, and `/sleep --purge
@@ -343,5 +324,7 @@ Use `/sleep --purge --sentinels --older-than Nd` for explicit permanent purge of
 ## Write-target / delete-target restriction
 
 **/cleanup ONLY trash-moves files under `.workflow_artifacts/memory/` matching the 9 sentinel families listed above, `sessions/*.body.tmp` / `sessions/*.tmp` (IVG-137 T-06), `checkpoints/*.md`, or the task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13); it never touches `lessons-learned.md`, `forgotten/`, or any real `*.md` session file.**
+
+Exception: the standalone task bookkeeping pass moves whole task folders, only through `task_bookkeeping.py apply` and only after per-task confirmation, into `.workflow_artifacts/finalized/` or `.workflow_artifacts/trash/<date>/`.
 
 Any other trash-move or write is a bug.
