@@ -9,8 +9,8 @@ for the exact steps, wording, and decision-gate markers.
 Sorts `.workflow_artifacts/` task folders into five buckets — done, abandoned,
 nearly-done, in-progress, not-a-task — using `task_bookkeeping.py classify`,
 then offers to archive or trash the ones that are safe to move. Every move
-goes through `task_bookkeeping.py apply`, one task at a time, only after the
-person confirms that specific task.
+goes through the classifier's move subcommand, one task at a time, only
+after the person confirms that specific task.
 
 ## Inputs
 
@@ -24,8 +24,9 @@ Read from `task_bookkeeping.py classify --format json`:
   `skip` and are never prompted).
 - `rows[].next_commands` — the `/pr` / `/end_of_task …` lines to print, both
   as an option label and in the final summary.
-- `rows[].fingerprint` — passed back to `apply --expect` so a stale prompt
-  can never move a folder that changed after `classify` ran.
+- `rows[].fingerprint` — passed back as the `--expect` value when a move is
+  confirmed, so a stale prompt can never move a folder that changed after
+  `classify` ran.
 - `gh.status` — informational only; never gates whether the pass runs.
 
 ## Report-only conditions and exact message

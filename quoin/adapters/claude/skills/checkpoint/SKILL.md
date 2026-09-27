@@ -395,6 +395,8 @@ On skip: emit one-line `[checkpoint] cleanup skipped (<reason>)` and proceed to 
 6. Emit: `[checkpoint] cleanup: trashed <S> sentinel(s) -> ${_PROJECT_ROOT}/.workflow_artifacts/memory/, <C> checkpoint(s) -> ${_PROJECT_ROOT}/.workflow_artifacts/memory/checkpoints/ (recover: mv ${_PROJECT_ROOT}/.workflow_artifacts/memory/trash/<date>/<file> <original-dir>)`. Or `[checkpoint] cleanup: nothing stale to clean` if zero. Do NOT say "recoverable via /sleep --restore" — `/sleep --restore` only reads `forgotten/` text entries, not `trash/` files.
 7. No ledger row here (the outer `/checkpoint` Step 4 records the session).
 
+The `/cleanup` task bookkeeping pass is never run here; it is standalone-only.
+
 **CRITICAL invariant:** Step 1.47 runs BEFORE Step 2 writes the new checkpoint file. The about-to-be-written checkpoint cannot be in scope for cleanup. The current session's sentinels are UUID-protected.
 
 **Sub-step A reuse:** The existing sub-step A util_bps compute in Step 1.5 may reuse the value set by Step 1.47 (same variable); or re-source independently — both are acceptable.
