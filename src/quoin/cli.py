@@ -572,7 +572,30 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
     return _run_codex_script(script, server_argv)
 
 
+def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
+    source_dir = _resolve_source_dir(args.source_dir)
+    from quoin.opencode_adapter import doctor
+
+    return doctor.run_doctor(
+        args.project_root,
+        source_dir,
+        args.smoke,
+        args.json,
+        sys.stdout,
+        sys.stderr,
+    )
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
+    if getattr(args, "json", False) and args.runtime != "opencode":
+        _abort("quoin: --json is only valid with --runtime opencode")
+
+    scope: str = getattr(args, "scope", None) or "user"
+    if scope.startswith("project") and args.runtime == "opencode":
+        _abort("quoin: --scope project is only valid with --runtime claude")
+
+    if args.runtime == "opencode":
+        return _cmd_opencode_doctor(args)
     if args.runtime == "codex":
         return _cmd_codex_doctor(args)
 
@@ -1002,7 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     doctor_p.add_argument(
         "--runtime",
-        choices=("claude", "codex"),
+        choices=("claude", "codex", "opencode"),
         default="claude",
         help="Runtime to check; defaults to claude.",
     )
@@ -1012,23 +1035,36 @@ def main(argv: list[str] | None = None) -> int:
         metavar="user|project[:DIR]",
         help=(
             "Installation scope to check. 'user' (default) checks ~/.claude/. "
-            "'project' checks <CWD>/.claude/. 'project:/path' checks /path/.claude/."
+            "'project' checks <CWD>/.claude/. 'project:/path' checks /path/.claude/. "
+            "Only valid with --runtime claude."
         ),
     )
     doctor_p.add_argument(
         "--project-root",
         default=".",
-        help="Project root for Codex readiness checks; defaults to the current directory.",
+        help=(
+            "Project root for Codex readiness checks or the OpenCode adapter's "
+            "install/census checks; defaults to the current directory."
+        ),
     )
     doctor_p.add_argument(
         "--source-dir",
         metavar="PATH",
-        help="Override quoin data source directory for Codex adapter scripts.",
+        help="Override quoin data source directory for Codex/OpenCode adapter scripts.",
     )
     doctor_p.add_argument(
         "--smoke",
         action="store_true",
-        help="For --runtime codex, also run the deterministic repo-local smoke check.",
+        help=(
+            "For --runtime codex, also run the deterministic repo-local smoke check. "
+            "For --runtime opencode, run only the offline render/smoke checks "
+            "(skip host checks that depend on this machine's install state)."
+        ),
+    )
+    doctor_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Only valid with --runtime opencode: print a machine-readable report.",
     )
 
     codex_p = sub.add_parser(

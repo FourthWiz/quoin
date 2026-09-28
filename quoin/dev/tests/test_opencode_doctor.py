@@ -288,3 +288,164 @@ def test_display_path_sibling_with_shared_prefix_does_not_match():
 def test_display_path_trailing_slash_and_dotdot_still_match():
     roots = [("/t/ocd/", "$OPENCODE_CONFIG_DIR")]
     assert doctor.display_path("/t/ocd/../ocd/opencode.json", roots) == "$OPENCODE_CONFIG_DIR/opencode.json"
+
+
+# --- CLI wiring (quoin doctor --runtime opencode) -----------------------
+
+
+def test_cli_smoke_project_root_exits_0(tmp_path, capsys):
+    from quoin import cli
+
+    code = cli.main(
+        [
+            "doctor",
+            "--runtime",
+            "opencode",
+            "--smoke",
+            "--project-root",
+            str(tmp_path),
+            "--source-dir",
+            str(SOURCE_DIR),
+        ]
+    )
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "opencode doctor: healthy" in out
+
+
+def test_cli_smoke_json_parses_with_four_top_keys(tmp_path, capsys):
+    from quoin import cli
+
+    code = cli.main(
+        [
+            "doctor",
+            "--runtime",
+            "opencode",
+            "--smoke",
+            "--json",
+            "--project-root",
+            str(tmp_path),
+            "--source-dir",
+            str(SOURCE_DIR),
+        ]
+    )
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload.keys()) == {"schema_version", "runtime", "status", "findings"}
+    assert payload["runtime"] == "opencode"
+    assert payload["status"] == "healthy"
+
+
+def test_cli_json_with_codex_runtime_exits_2():
+    from quoin import cli
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["doctor", "--runtime", "codex", "--json"])
+    assert exc_info.value.code == 2
+
+
+def test_cli_json_with_default_claude_runtime_exits_2():
+    from quoin import cli
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["doctor", "--json"])
+    assert exc_info.value.code == 2
+
+
+def test_cli_scope_project_with_opencode_runtime_exits_2():
+    from quoin import cli
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["doctor", "--runtime", "opencode", "--scope", "project"])
+    assert exc_info.value.code == 2
+
+
+def test_cli_codex_doctor_and_bare_help_unaffected(tmp_path, capsys):
+    """Existing --runtime codex and --help behavior is unchanged by the
+    opencode wiring (own assertions kept minimal; test_quoin_cli.py owns
+    the full codex-doctor and --help suites)."""
+    from quoin import cli
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli.main(["doctor", "--help"])
+    assert exc_info.value.code == 0
+
+    code = cli.main(["doctor", "--runtime", "codex", "--project-root", str(REPO_ROOT)])
+    assert code == 0
+
+
+def test_cli_end_to_end_install_then_edit_then_doctor_json_reports_owned_modified(
+    tmp_path, monkeypatch, capsys
+):
+    """install --runtime opencode into a fixture, edit one owned file, then
+    doctor --runtime opencode --json (through quoin.cli.main) reports the
+    edit as one owned-modified finding, status warnings, exit code 4."""
+    import shutil as _shutil
+
+    import _opencode_helpers as helpers
+
+    from quoin import cli
+
+    home = tmp_path / "home"
+    home.mkdir()
+    project = tmp_path / "proj"
+    project.mkdir()
+    (project / ".git").mkdir()
+    source_dir = helpers.copy_source_subset(tmp_path / "src")
+
+    monkeypatch.setattr(Path, "home", lambda: home)
+    monkeypatch.setattr(_shutil, "which", lambda _name: None)
+    monkeypatch.setenv("HOME", str(home))
+    for var in (
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "OPENCODE_CONFIG_DIR",
+        "OPENCODE_CONFIG",
+        "OPENCODE_CONFIG_CONTENT",
+        "OPENCODE_DISABLE_CLAUDE_CODE",
+        "OPENCODE_DISABLE_CLAUDE_CODE_PROMPT",
+        "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS",
+        "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+        "OPENCODE_DISABLE_PROJECT_CONFIG",
+    ):
+        monkeypatch.delenv(var, raising=False)
+
+    install_code = cli.main(
+        [
+            "install",
+            "--runtime",
+            "opencode",
+            "--project-root",
+            str(project),
+            "--source-dir",
+            str(source_dir),
+        ]
+    )
+    assert install_code == 0
+    capsys.readouterr()  # discard the install command's stdout
+
+    command_files = sorted((project / ".opencode" / "commands").glob("quoin-*.md"))
+    assert command_files, "expected at least one installed command to edit"
+    target = command_files[0]
+    target.write_text(target.read_text(encoding="utf-8") + "\nedited\n", encoding="utf-8")
+
+    code = cli.main(
+        [
+            "doctor",
+            "--runtime",
+            "opencode",
+            "--json",
+            "--project-root",
+            str(project),
+            "--source-dir",
+            str(source_dir),
+        ]
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 4
+    assert payload["status"] == "warnings"
+    owned_modified = [f for f in payload["findings"] if f["id"] == "owned-modified"]
+    assert len(owned_modified) == 1
+    assert owned_modified[0]["path"].endswith(target.name)
