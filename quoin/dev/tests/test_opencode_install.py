@@ -593,9 +593,9 @@ def test_install_write_ordering_metadata_last(tmp_path: Path, monkeypatch):
     calls = []
     original = install.atomic_write
 
-    def _spy(path, data):
+    def _spy(path, data, sync_dir=True):
         calls.append(str(path))
-        original(path, data)
+        original(path, data, sync_dir=sync_dir)
 
     monkeypatch.setattr(install, "atomic_write", _spy)
     code, _, _ = _run(tmp_path, rendered=rendered)
@@ -664,9 +664,9 @@ def test_metadata_only_change_reinstall_prints_metadata_update(tmp_path: Path, m
     calls = []
     original = install.atomic_write
 
-    def _spy(path, data):
+    def _spy(path, data, sync_dir=True):
         calls.append(str(path))
-        original(path, data)
+        original(path, data, sync_dir=sync_dir)
 
     monkeypatch.setattr(install, "atomic_write", _spy)
     code, out, _ = _run(tmp_path, rendered=rendered, quoin_version="0.0.0-test")
@@ -681,11 +681,11 @@ def test_crash_recovery_converges_to_a_clean_install(tmp_path: Path, monkeypatch
     calls = {"n": 0}
     original = install.atomic_write
 
-    def _flaky(path, data):
+    def _flaky(path, data, sync_dir=True):
         calls["n"] += 1
         if calls["n"] == 3:
             raise OSError(5, "injected crash")
-        original(path, data)
+        original(path, data, sync_dir=sync_dir)
 
     monkeypatch.setattr(install, "atomic_write", _flaky)
     code, _, _ = _run(tmp_path, rendered=rendered)
@@ -711,9 +711,9 @@ def test_stale_owned_file_delete_and_prune_then_idempotent(tmp_path: Path, monke
     calls = []
     original = install.atomic_write
 
-    def _spy(path, data):
+    def _spy(path, data, sync_dir=True):
         calls.append(str(path))
-        original(path, data)
+        original(path, data, sync_dir=sync_dir)
 
     monkeypatch.setattr(install, "atomic_write", _spy)
     code, _, _ = _run(tmp_path, rendered={})
@@ -756,6 +756,209 @@ def test_files_outside_the_five_families_are_untouched(tmp_path: Path):
     assert code == 0
     for relpath, data in before.items():
         assert (tmp_path / relpath).read_bytes() == data
+
+
+# --- install/uninstall error hardening ---
+
+
+def test_run_install_returns_2_with_no_traceback_when_plan_install_raises(tmp_path: Path, monkeypatch):
+    rendered = _small_rendered()
+
+    def _boom(root, relpath):
+        raise install.InstallError("cannot stat %s: injected" % relpath, 2)
+
+    monkeypatch.setattr(install, "inspect_path", _boom)
+    code, _, err = _run(tmp_path, rendered=rendered)
+    assert code == 2
+    assert "opencode install:" in err
+    assert "injected" in err
+    assert "Traceback" not in err
+
+
+def test_run_uninstall_returns_2_with_no_traceback_when_plan_uninstall_raises(tmp_path: Path, monkeypatch):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+
+    def _boom(root, relpath):
+        raise install.InstallError("cannot stat %s: injected" % relpath, 2)
+
+    monkeypatch.setattr(install, "inspect_path", _boom)
+    code, out, err = _uninstall(tmp_path)
+    assert code == 2
+    assert "opencode uninstall:" in err
+    assert "injected" in err
+    assert "Traceback" not in err
+    assert out == ""
+
+
+def test_run_uninstall_on_nonexistent_root_returns_2(tmp_path: Path):
+    missing = tmp_path / "does-not-exist"
+    code, _, err = _uninstall(missing)
+    assert code == 2
+    assert "project root" in err
+    assert str(missing) in err
+    assert "is not a directory" in err
+
+
+def test_run_uninstall_interrupted_unlink_returns_2_with_the_install_shaped_message(tmp_path: Path, monkeypatch):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+
+    original_unlink = os.unlink
+
+    def _flaky_unlink(path, *a, **kw):
+        if str(path).endswith("quoin-plan.md"):
+            raise OSError(13, "Permission denied")
+        return original_unlink(path, *a, **kw)
+
+    monkeypatch.setattr(os, "unlink", _flaky_unlink)
+    code, _, err = _uninstall(tmp_path)
+    assert code == 2
+    assert "opencode uninstall: interrupted:" in err
+    assert "re-run uninstall to finish" in err
+    assert "Traceback" not in err
+
+
+def _leftover_snapshot_ignoring_temp(root: Path):
+    entries = _snapshot(root)
+    return {k: v for k, v in entries.items() if not install.TEMP_NAME_RE.fullmatch(Path(k).name)}
+
+
+def test_check_lists_a_planted_temp_leftover_as_sweep_and_counts_as_a_change(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    clean_snapshot = _snapshot(tmp_path)
+
+    leftover = tmp_path / ".opencode" / "agents" / ".quoin-tmp-0123456789abcdef"
+    leftover.write_bytes(b"debris")
+
+    check_code, check_out, _ = _run(tmp_path, rendered=rendered, check=True)
+    assert check_code == 1
+    assert "sweep     .opencode/agents/.quoin-tmp-0123456789abcdef" in check_out
+
+    install_code, install_out, _ = _run(tmp_path, rendered=rendered)
+    assert install_code == 0
+    assert "sweep     .opencode/agents/.quoin-tmp-0123456789abcdef" in install_out
+    assert not leftover.exists()
+    assert _snapshot(tmp_path) == clean_snapshot
+
+
+def test_temp_leftover_swept_by_install_is_removed_in_the_metadata_directories_created_dirs_too(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    (tmp_path / ".opencode" / "agents" / ".quoin-tmp-0123456789abcdef").write_bytes(b"debris")
+    _run(tmp_path, rendered=rendered)
+
+    uninstall_code, _, _ = _uninstall(tmp_path)
+    assert uninstall_code == 0
+    assert not (tmp_path / ".opencode").exists()
+    assert not (tmp_path / ".quoin").exists()
+
+
+def test_interrupted_first_install_with_leftover_temp_file_converges_and_records_the_directory(tmp_path: Path):
+    rendered = _small_rendered()
+    (tmp_path / ".opencode" / "agents").mkdir(parents=True)
+    (tmp_path / ".opencode" / "agents" / ".quoin-tmp-fedcba9876543210").write_bytes(b"interrupted write")
+    (tmp_path / ".opencode" / "commands").mkdir(parents=True)
+    (tmp_path / ".opencode" / "commands" / "quoin-plan.md").write_bytes(
+        rendered[".opencode/commands/quoin-plan.md"].content
+    )
+
+    code, out, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+    assert "sweep     .opencode/agents/.quoin-tmp-fedcba9876543210" in out
+    assert not (tmp_path / ".opencode" / "agents" / ".quoin-tmp-fedcba9876543210").exists()
+
+    meta = install.load_metadata(tmp_path)
+    assert ".opencode/agents" in meta.created_dirs
+
+    check_code, _, _ = _run(tmp_path, rendered=rendered, check=True)
+    assert check_code == 0
+
+    uninstall_code, _, _ = _uninstall(tmp_path)
+    assert uninstall_code == 0
+    assert not (tmp_path / ".opencode").exists()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="symlinks need elevated privileges on Windows")
+def test_temp_named_symlink_is_planned_as_a_sweep_but_never_unlinked(tmp_path: Path):
+    # The planner matches by name only; only `apply_install` checks the
+    # type before unlinking, so a temp-named symlink is still listed but
+    # is left in place (and still followed by nothing, per the never-
+    # follow-a-symlink rule this module keeps everywhere else).
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    real_target = tmp_path / "elsewhere.txt"
+    real_target.write_bytes(b"target")
+    symlinked_leftover = tmp_path / ".opencode" / "agents" / ".quoin-tmp-0123456789abcdef"
+    symlinked_leftover.symlink_to(real_target)
+
+    code, out, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+    assert "sweep     .opencode/agents/.quoin-tmp-0123456789abcdef" in out
+    assert symlinked_leftover.is_symlink()
+    assert real_target.exists()
+    assert real_target.read_bytes() == b"target"
+
+
+def test_a_non_temp_shaped_name_is_never_swept(tmp_path: Path):
+    rendered = _small_rendered()
+    _run(tmp_path, rendered=rendered)
+    lookalike = tmp_path / ".opencode" / "agents" / ".quoin-tmp-0123456789abcdef.bak"
+    lookalike.write_bytes(b"not debris")
+
+    code, out, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+    assert "sweep" not in out
+    assert lookalike.exists()
+
+
+def test_first_install_fsyncs_each_distinct_directory_once_before_the_metadata_write(tmp_path: Path, monkeypatch):
+    # Two commands share .opencode/commands/, so a per-file directory fsync
+    # would be 4 (2 commands + 1 agent + 1 skill); a per-directory fsync is 3
+    # (commands/, agents/, skills/quoin-plan/) plus .quoin for the metadata.
+    rendered = {
+        ".opencode/commands/quoin-plan.md": _rendered(".opencode/commands/quoin-plan.md", "plan body", kind="command"),
+        ".opencode/commands/quoin-review.md": _rendered(
+            ".opencode/commands/quoin-review.md", "review body", kind="command"
+        ),
+        ".opencode/agents/quoin-plan.md": _rendered(".opencode/agents/quoin-plan.md", "agent body", kind="agent"),
+        ".opencode/skills/quoin-plan/SKILL.md": _rendered(".opencode/skills/quoin-plan/SKILL.md", "skill body"),
+    }
+
+    dir_fsync_calls = []
+    original_dir_fsync = install._fsync_dir_best_effort
+
+    def _tracking_dir_fsync(dir_path):
+        dir_fsync_calls.append(str(dir_path))
+        original_dir_fsync(dir_path)
+
+    write_order = []
+    original_atomic_write = install.atomic_write
+
+    def _tracking_atomic_write(path, data, sync_dir=True):
+        write_order.append(str(path))
+        original_atomic_write(path, data, sync_dir=sync_dir)
+
+    monkeypatch.setattr(install, "_fsync_dir_best_effort", _tracking_dir_fsync)
+    monkeypatch.setattr(install, "atomic_write", _tracking_atomic_write)
+    code, _, _ = _run(tmp_path, rendered=rendered)
+    assert code == 0
+
+    # Every file write happens strictly before the metadata file's own
+    # atomic_write (which comes last and carries its own directory fsync).
+    metadata_write_index = next(i for i, p in enumerate(write_order) if p.endswith(install.METADATA_RELPATH))
+    assert metadata_write_index == len(write_order) - 1
+
+    # Three deferred directory fsyncs (one per distinct directory a file
+    # landed in, not one per file — commands/ holds two files and is
+    # fsynced once), all recorded before the metadata write's own directory
+    # fsync (.quoin), which is the fourth and last call.
+    assert len(dir_fsync_calls) == 4
+    deferred = dir_fsync_calls[:3]
+    assert len(set(deferred)) == 3
+    assert all(d.endswith((".opencode/commands", ".opencode/agents", ".opencode/skills/quoin-plan")) for d in deferred)
+    assert dir_fsync_calls[3].endswith(".quoin")
 
 
 # --- plan_uninstall / run_uninstall ---

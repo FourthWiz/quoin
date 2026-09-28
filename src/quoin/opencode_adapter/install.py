@@ -55,6 +55,11 @@ KINDS = ("agent", "command", "config", "instructions", "skill")
 PROFILE_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,62}")
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
+# Full-match on a directory entry's basename: the temp-file shape `atomic_write`
+# creates and renames away from. A file left with this name (an interrupted
+# write, before the rename lands) is Quoin's own debris and safe to sweep.
+TEMP_NAME_RE = re.compile(r"\.quoin-tmp-[0-9a-f]{16}")
+
 _METADATA_KEYS = frozenset(
     {"schema_version", "quoin_version", "opencode_version", "profile", "owned", "created_dirs"}
 )
@@ -242,13 +247,34 @@ def inspect_path(root, relpath: str) -> PathState:
     return PathState("regular", data)
 
 
-def atomic_write(path, data: bytes) -> None:
+def _fsync_dir_best_effort(dir_path) -> None:
+    """Open and fsync `dir_path`, tolerating any failure (directory fsync is
+    a durability best-effort, never a correctness requirement: the file
+    content itself is already fsynced and renamed into place)."""
+    try:
+        dir_fd = os.open(str(dir_path), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(dir_fd)
+    except OSError:
+        pass
+    finally:
+        os.close(dir_fd)
+
+
+def atomic_write(path, data: bytes, sync_dir: bool = True) -> None:
     """Write ``data`` to ``path`` via a same-directory temp file and ``os.replace``.
 
     Uses ``O_CREAT | O_EXCL`` (not ``tempfile.mkstemp``) so the process umask
     applies to the written file's mode instead of ``mkstemp``'s fixed 0600.
     On any exception the temp file is unlinked (if it exists) before
     re-raising; nothing is left behind on a failed write.
+
+    ``sync_dir`` fsyncs `path`'s parent directory once this call returns
+    (best-effort). Pass ``False`` when the caller will fsync the same
+    directory itself after several writes into it, so a directory holding
+    many new files is fsynced once instead of once per file.
     """
     path = Path(path)
     tmp_path = path.parent / (".quoin-tmp-%s" % secrets.token_hex(8))
@@ -266,16 +292,8 @@ def atomic_write(path, data: bytes) -> None:
             pass
         raise
 
-    try:
-        dir_fd = os.open(str(path.parent), os.O_RDONLY)
-    except OSError:
-        return
-    try:
-        os.fsync(dir_fd)
-    except OSError:
-        pass
-    finally:
-        os.close(dir_fd)
+    if sync_dir:
+        _fsync_dir_best_effort(path.parent)
 
 
 # --- planner (no writes) ---
@@ -310,6 +328,11 @@ class Plan:
     dirs_to_create: List[str]
     dirs_to_prune: List[str]
     conflicts: List[Action] = field(default_factory=list)
+    # Leftover `.quoin-tmp-*` regular files found inside a candidate created
+    # directory during planning (an earlier interrupted `atomic_write` that
+    # never reached its `os.replace`). `apply_install` sweeps these before
+    # pruning; a non-empty list also counts as a change under `--check`.
+    temp_leftovers: List[str] = field(default_factory=list)
 
 
 def _sha256_hex(data: bytes) -> str:
@@ -379,6 +402,14 @@ def _plan_created_dirs(root, rendered: Dict[str, "generate.RenderedFile"], recor
     first install pick up the directories that run made). A recorded
     candidate whose predicted post-apply contents are empty is pruned
     instead of re-recorded.
+
+    A directory entry whose basename matches `TEMP_NAME_RE` is an earlier
+    interrupted write's debris, never a user's or OpenCode's own file. It is
+    collected into the returned `temp_leftovers` (sorted) and left out of
+    `post` entirely — it never counts against a directory being emptied
+    (prune-eligible) or against a directory holding only Quoin's own files
+    (created-eligible); `apply_install` sweeps it before those directories
+    are pruned.
     """
     cands: Set[str] = set(recorded) | {".quoin"}
     for relpath in rendered:
@@ -390,6 +421,7 @@ def _plan_created_dirs(root, rendered: Dict[str, "generate.RenderedFile"], recor
 
     created: Set[str] = set()
     prune: List[str] = []
+    temp_leftovers: List[str] = []
     for d in sorted(cands, key=_deepest_first_key):
         exists_now = _dir_exists_now(root, d)
         if not exists_now and d not in dirs_to_create:
@@ -400,7 +432,9 @@ def _plan_created_dirs(root, rendered: Dict[str, "generate.RenderedFile"], recor
                 entries = os.listdir(str(Path(root) / d))
             except OSError:
                 entries = []
-        post: Set[str] = {"%s/%s" % (d, e) for e in entries}
+        leftovers_here = sorted(e for e in entries if TEMP_NAME_RE.fullmatch(e))
+        temp_leftovers.extend("%s/%s" % (d, e) for e in leftovers_here)
+        post: Set[str] = {"%s/%s" % (d, e) for e in entries if not TEMP_NAME_RE.fullmatch(e)}
         post -= gone
         post -= set(prune)
         post |= {a for a in adds if _dir_of(a) == d}
@@ -410,7 +444,7 @@ def _plan_created_dirs(root, rendered: Dict[str, "generate.RenderedFile"], recor
         only_quoin = all((x in rendered) or (x == METADATA_RELPATH) or (x in created) for x in post)
         if d in recorded or d in dirs_to_create or (exists_now and only_quoin):
             created.add(d)
-    return created, prune
+    return created, prune, sorted(temp_leftovers)
 
 
 def plan_install(root, rendered: Dict[str, "generate.RenderedFile"], meta: Optional[Metadata],
@@ -469,7 +503,7 @@ def plan_install(root, rendered: Dict[str, "generate.RenderedFile"], meta: Optio
     }
 
     recorded = list(meta.created_dirs) if meta else []
-    created_dirs, dirs_to_prune = _plan_created_dirs(root, rendered, recorded, actions, dirs_to_create)
+    created_dirs, dirs_to_prune, temp_leftovers = _plan_created_dirs(root, rendered, recorded, actions, dirs_to_create)
 
     resolved_profile = profile if profile is not None else (meta.profile if meta else None)
 
@@ -493,11 +527,12 @@ def plan_install(root, rendered: Dict[str, "generate.RenderedFile"], meta: Optio
         dirs_to_create=sorted(dirs_to_create, key=_shallowest_first_key),
         dirs_to_prune=sorted(dirs_to_prune, key=_deepest_first_key),
         conflicts=conflicts,
+        temp_leftovers=temp_leftovers,
     )
 
 
 def format_plan(plan: Plan) -> List[str]:
-    """One deterministic line per file action, a metadata line, then a summary line."""
+    """One deterministic line per file action, sweep lines, a metadata line, then a summary line."""
     lines: List[str] = []
     counts: Dict[str, int] = {}
     for action in plan.actions:
@@ -506,6 +541,9 @@ def format_plan(plan: Plan) -> List[str]:
         if action.reason and action.action in ("conflict", "adopt", "create"):
             line += " (%s)" % action.reason
         lines.append(line)
+    for relpath in plan.temp_leftovers:
+        counts["sweep"] = counts.get("sweep", 0) + 1
+        lines.append("%-9s %s" % ("sweep", relpath))
     lines.append("%-9s %s" % ("metadata", plan.metadata_action))
     summary = ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items()))
     lines.append("summary: %s (metadata %s)" % (summary, plan.metadata_action))
@@ -518,12 +556,15 @@ def format_plan(plan: Plan) -> List[str]:
 def apply_install(root, plan: Plan, rendered: Dict[str, "generate.RenderedFile"]) -> None:
     """Apply `plan` to `root`. Never called when `plan.conflicts` is non-empty.
 
-    Order: file writes, then deletes, then the planner's predicted directory
-    prunes, then `.quoin` and the metadata (written last, and only when
-    `metadata_action == "update"`). An `OSError` partway through leaves a
-    tree the next `run_install` call converges from (unowned survivors are
-    adopted, owned-but-missing files are forgotten, and the created-dir rule
-    re-records directories this run already made).
+    Order: file writes (each fsynced itself, directory fsync deferred), then
+    deletes, then the temp-debris sweep, then the planner's predicted
+    directory prunes, then the deferred directory fsyncs, then `.quoin` and
+    the metadata (written last, and only when `metadata_action == "update"`,
+    with its own directory fsync so the metadata write is never lost even if
+    it is the only write this apply makes). An `OSError` partway through
+    leaves a tree the next `run_install` call converges from (unowned
+    survivors are adopted, owned-but-missing files are forgotten, and the
+    created-dir rule re-records directories this run already made).
     """
     root = Path(root)
     for d in sorted((d for d in plan.dirs_to_create if d != ".quoin"), key=_shallowest_first_key):
@@ -531,8 +572,11 @@ def apply_install(root, plan: Plan, rendered: Dict[str, "generate.RenderedFile"]
         if not target.exists():
             os.mkdir(str(target))
 
+    touched_dirs: Set[str] = set()
     for action in sorted((a for a in plan.actions if a.action in ("create", "update")), key=lambda a: a.relpath):
-        atomic_write(root / action.relpath, rendered[action.relpath].content)
+        target = root / action.relpath
+        atomic_write(target, rendered[action.relpath].content, sync_dir=False)
+        touched_dirs.add(str(target.parent))
 
     for action in sorted((a for a in plan.actions if a.action == "delete"), key=lambda a: a.relpath):
         target = root / action.relpath
@@ -548,11 +592,31 @@ def apply_install(root, plan: Plan, rendered: Dict[str, "generate.RenderedFile"]
                 continue
         os.unlink(str(target))
 
+    # Sweep Quoin's own leftover temp files before computing prunes, so an
+    # earlier interrupted write's debris never blocks its directory from
+    # being pruned. Only a regular file is unlinked; a symlink or directory
+    # sharing the temp-name shape is left alone and still blocks its
+    # directory (this module never removes anything it cannot positively
+    # identify as its own).
+    #
+    # Concurrent-install edge (not handled): a sweep can remove another
+    # process's in-flight temp file before that process's `os.replace` runs.
+    # That process then takes the "interrupted, re-run" exit below. Two
+    # installs into one project at once are not supported.
+    for relpath in plan.temp_leftovers:
+        target = root / relpath
+        st = _lstat_or(target, "missing")
+        if st is not None and stat.S_ISREG(st.st_mode):
+            os.unlink(str(target))
+
     for d in plan.dirs_to_prune:
         try:
             os.rmdir(str(root / d))
         except OSError:
             pass
+
+    for dir_path in sorted(touched_dirs):
+        _fsync_dir_best_effort(dir_path)
 
     if plan.metadata_action == "update":
         if ".quoin" in plan.dirs_to_create:
@@ -631,7 +695,11 @@ def run_install(project_root, source_dir, profile, check, out, err,
         print("opencode install: %s" % exc, file=err)
         return exc.exit_code
 
-    plan = plan_install(root, rendered, meta, quoin_version, opencode_version, profile)
+    try:
+        plan = plan_install(root, rendered, meta, quoin_version, opencode_version, profile)
+    except InstallError as exc:
+        print("opencode install: %s" % exc, file=err)
+        return exc.exit_code
 
     if plan.conflicts:
         _print_conflicts_and_remediation(plan, err)
@@ -640,7 +708,11 @@ def run_install(project_root, source_dir, profile, check, out, err,
     if check:
         for line in format_plan(plan):
             print(line, file=out)
-        all_unchanged = plan.metadata_action == "unchanged" and all(a.action == "unchanged" for a in plan.actions)
+        all_unchanged = (
+            plan.metadata_action == "unchanged"
+            and all(a.action == "unchanged" for a in plan.actions)
+            and not plan.temp_leftovers
+        )
         return 0 if all_unchanged else 1
 
     try:
@@ -684,6 +756,10 @@ class UninstallPlan:
     metadata_action: str  # "delete" or "rewrite"
     desired_metadata: Optional[bytes]
     kept: bool
+    # Leftover `.quoin-tmp-*` regular files found inside a recorded
+    # `created_dirs` entry. `run_uninstall` sweeps these the same way
+    # `apply_install` does, before computing prunes.
+    temp_leftovers: List[str] = field(default_factory=list)
 
 
 def plan_uninstall(root, meta: Metadata) -> UninstallPlan:
@@ -719,6 +795,7 @@ def plan_uninstall(root, meta: Metadata) -> UninstallPlan:
     deleted = {a.relpath for a in actions if a.action == "delete"}
 
     dirs_to_prune: List[str] = []
+    temp_leftovers: List[str] = []
     for d in sorted(meta.created_dirs, key=_deepest_first_key):
         if d == ".quoin" or not _dir_exists_now(root, d):
             continue
@@ -726,11 +803,14 @@ def plan_uninstall(root, meta: Metadata) -> UninstallPlan:
             entries = os.listdir(str(Path(root) / d))
         except OSError:
             continue
-        post = {"%s/%s" % (d, e) for e in entries}
+        leftovers_here = sorted(e for e in entries if TEMP_NAME_RE.fullmatch(e))
+        temp_leftovers.extend("%s/%s" % (d, e) for e in leftovers_here)
+        post = {"%s/%s" % (d, e) for e in entries if not TEMP_NAME_RE.fullmatch(e)}
         post -= deleted
         post -= set(dirs_to_prune)
         if not post:
             dirs_to_prune.append(d)
+    temp_leftovers = sorted(temp_leftovers)
 
     if kept:
         metadata_action = "rewrite"
@@ -754,6 +834,7 @@ def plan_uninstall(root, meta: Metadata) -> UninstallPlan:
         metadata_action=metadata_action,
         desired_metadata=desired_metadata,
         kept=kept,
+        temp_leftovers=temp_leftovers,
     )
 
 
@@ -765,6 +846,9 @@ def _print_uninstall_plan(plan: UninstallPlan, out) -> None:
         if action.reason:
             line += " (%s)" % action.reason
         print(line, file=out)
+    for relpath in plan.temp_leftovers:
+        counts["sweep"] = counts.get("sweep", 0) + 1
+        print("%-9s %s" % ("sweep", relpath), file=out)
     print("%-9s %s" % ("metadata", plan.metadata_action), file=out)
     summary = ", ".join("%s=%d" % (k, v) for k, v in sorted(counts.items()))
     print("summary: %s (metadata %s)" % (summary, plan.metadata_action), file=out)
@@ -780,6 +864,10 @@ def run_uninstall(project_root, dry_run, out, err) -> int:
     returning the code the real run would return.
     """
     root = Path(project_root)
+    if not root.is_dir():
+        print("opencode uninstall: project root %s is not a directory" % root, file=err)
+        return 2
+
     try:
         meta = load_metadata(root)
     except InstallError as exc:
@@ -790,42 +878,64 @@ def run_uninstall(project_root, dry_run, out, err) -> int:
         print("opencode uninstall: nothing installed", file=out)
         return 0
 
-    plan = plan_uninstall(root, meta)
+    try:
+        plan = plan_uninstall(root, meta)
+    except InstallError as exc:
+        print("opencode uninstall: %s" % exc, file=err)
+        return exc.exit_code
+
     _print_uninstall_plan(plan, out)
 
     if not dry_run:
-        for action in plan.actions:
-            if action.action != "delete":
-                continue
-            target = root / action.relpath
-            st = _lstat_or(target, "missing")
-            if st is None or stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
-                continue
-            try:
-                current_bytes = target.read_bytes()
-            except OSError:
-                continue
-            if _sha256_hex(current_bytes) != action.expected_sha256:
-                continue
-            os.unlink(str(target))
-
-        for d in plan.dirs_to_prune:
-            try:
-                os.rmdir(str(root / d))
-            except OSError:
-                pass
-
-        if plan.metadata_action == "delete":
-            try:
-                os.unlink(str(root / METADATA_RELPATH))
-            except OSError:
-                pass
-            if ".quoin" in meta.created_dirs:
+        try:
+            for action in plan.actions:
+                if action.action != "delete":
+                    continue
+                target = root / action.relpath
+                st = _lstat_or(target, "missing")
+                if st is None or stat.S_ISLNK(st.st_mode) or not stat.S_ISREG(st.st_mode):
+                    continue
                 try:
-                    os.rmdir(str(root / ".quoin"))
+                    current_bytes = target.read_bytes()
+                except OSError:
+                    continue
+                if _sha256_hex(current_bytes) != action.expected_sha256:
+                    continue
+                os.unlink(str(target))
+
+            # Sweep leftover Quoin temp files before pruning, same rule and
+            # same concurrent-install caveat as `apply_install`.
+            for relpath in plan.temp_leftovers:
+                target = root / relpath
+                st = _lstat_or(target, "missing")
+                if st is not None and stat.S_ISREG(st.st_mode):
+                    os.unlink(str(target))
+
+            for d in plan.dirs_to_prune:
+                try:
+                    os.rmdir(str(root / d))
                 except OSError:
                     pass
-        else:
-            atomic_write(root / METADATA_RELPATH, plan.desired_metadata)
+
+            if plan.metadata_action == "delete":
+                try:
+                    os.unlink(str(root / METADATA_RELPATH))
+                except OSError:
+                    pass
+                if ".quoin" in meta.created_dirs:
+                    try:
+                        os.rmdir(str(root / ".quoin"))
+                    except OSError:
+                        pass
+            else:
+                atomic_write(root / METADATA_RELPATH, plan.desired_metadata)
+        except OSError as exc:
+            where = exc.filename or "?"
+            problem = errno.errorcode.get(exc.errno, str(exc.errno)) if exc.errno else str(exc)
+            print(
+                "opencode uninstall: interrupted: %s on %s; re-run uninstall to finish" % (problem, where),
+                file=err,
+            )
+            return 2
 
     return 4 if plan.kept else 0
