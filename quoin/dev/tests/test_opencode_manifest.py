@@ -518,17 +518,20 @@ def test_main_usage_error_raises_system_exit_2():
         raise AssertionError("expected SystemExit(2) for an unrecognized option")
 
 
-# --- third CI step in adapter-check.yml ---
+# --- third and fourth CI steps in adapter-check.yml ---
 
 
 def test_adapter_check_workflow_step_order_and_command_matches_manifest():
     workflow_path = REPO_ROOT / ".github" / "workflows" / "adapter-check.yml"
     text = workflow_path.read_text(encoding="utf-8")
+    assert re.search(r"^permissions:\s*$", text, re.MULTILINE), text
+    assert re.search(r"^\s*contents:\s*read\s*$", text, re.MULTILINE), text
     run_lines = [line.strip()[len("run: "):] for line in text.splitlines() if line.strip().startswith("run:")]
-    assert len(run_lines) == 3, run_lines
+    assert len(run_lines) == 4, run_lines
     assert "validate_adapter_drift.py" in run_lines[0], run_lines
     assert "check_registration.py" in run_lines[1], run_lines
     assert "quoin.opencode_adapter check-manifest" in run_lines[2], run_lines
+    assert "quoin doctor --runtime opencode --smoke" in run_lines[3], run_lines
 
     manifest_data = manifest.load_manifest(SOURCE_DIR)
     expected_command = manifest_data["validation"]["commands"][0]
