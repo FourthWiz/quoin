@@ -288,6 +288,33 @@ def test_find_project_root_returns_none_when_absent(tmp_path):
     assert scripts.find_project_root(tmp_path) is None
 
 
+def test_find_project_root_skips_a_symlinked_quoin_dir(tmp_path, monkeypatch):
+    real_project = _make_project(tmp_path / "real")
+    fake_project = tmp_path / "fake"
+    fake_project.mkdir()
+    (fake_project / ".quoin").symlink_to(real_project / ".quoin", target_is_directory=True)
+    monkeypatch.chdir(fake_project)
+    code, _, err = _run("generate_discovery_map", [])
+    assert code == 2
+    assert "run from inside a project" in err
+
+
+def test_find_project_root_skips_a_symlinked_quoin_dir_subprocess(tmp_path):
+    real_project = _make_project(tmp_path / "real")
+    fake_project = tmp_path / "fake"
+    fake_project.mkdir()
+    (fake_project / ".quoin").symlink_to(real_project / ".quoin", target_is_directory=True)
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _subprocess_code("generate_discovery_map", [])],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(fake_project),
+    )
+    assert proc.returncode == 2
+    assert b"run from inside a project" in proc.stderr
+
+
 # --- output confinement (generate_discovery_map) ---
 
 
@@ -302,9 +329,11 @@ def test_output_confinement_default_output_lands_inside_the_artifact_root(tmp_pa
 def test_output_confinement_relative_output_inside_the_root_is_allowed(tmp_path, monkeypatch):
     project = _make_project(tmp_path / "proj")
     monkeypatch.chdir(project)
-    code, _, err = _run("generate_discovery_map", ["--output", "%s/y.json" % generate.ARTIFACT_ROOT])
+    code, _, err = _run(
+        "generate_discovery_map", ["--output", "%s/nested/discovery-map.json" % generate.ARTIFACT_ROOT]
+    )
     assert code == 0, err
-    assert (project / generate.ARTIFACT_ROOT / "y.json").is_file()
+    assert (project / generate.ARTIFACT_ROOT / "nested" / "discovery-map.json").is_file()
 
 
 def test_output_confinement_stdout_flag_is_allowed_and_writes_no_file(tmp_path, monkeypatch):
@@ -313,6 +342,68 @@ def test_output_confinement_stdout_flag_is_allowed_and_writes_no_file(tmp_path, 
     code, _, err = _run("generate_discovery_map", ["--stdout"])
     assert code == 0, err
     assert not (project / generate.ARTIFACT_ROOT).exists()
+
+
+def test_output_confinement_refuses_a_basename_other_than_discovery_map_json(tmp_path, monkeypatch):
+    project = _make_project(tmp_path / "proj")
+    (project / generate.ARTIFACT_ROOT).mkdir(parents=True)
+    target = project / generate.ARTIFACT_ROOT / "memory" / "lessons-learned.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("keep me")
+    monkeypatch.chdir(project)
+
+    code, _, err = _run(
+        "generate_discovery_map",
+        ["-o", str(target), "--quiet"],
+    )
+    assert code == 2
+    assert "may only write discovery-map.json" in err
+    assert target.read_text() == "keep me"
+
+
+def test_output_confinement_refuses_a_basename_other_than_discovery_map_json_subprocess(tmp_path):
+    project = _make_project(tmp_path / "proj")
+    (project / generate.ARTIFACT_ROOT).mkdir(parents=True)
+    target = project / generate.ARTIFACT_ROOT / "memory" / "lessons-learned.md"
+    target.parent.mkdir(parents=True)
+    target.write_text("keep me")
+
+    proc = subprocess.run(
+        [sys.executable, "-c", _subprocess_code("generate_discovery_map", ["-o", str(target), "--quiet"])],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(project),
+    )
+    assert proc.returncode == 2
+    assert b"may only write discovery-map.json" in proc.stderr
+    assert target.read_text() == "keep me"
+
+
+def test_output_confinement_allows_a_subdirectory_named_discovery_map_json(tmp_path, monkeypatch):
+    project = _make_project(tmp_path / "proj")
+    monkeypatch.chdir(project)
+    code, _, err = _run(
+        "generate_discovery_map",
+        ["-o", "%s/sub/discovery-map.json" % generate.ARTIFACT_ROOT],
+    )
+    assert code == 0, err
+    assert (project / generate.ARTIFACT_ROOT / "sub" / "discovery-map.json").is_file()
+
+
+def test_output_confinement_allows_a_subdirectory_named_discovery_map_json_subprocess(tmp_path):
+    project = _make_project(tmp_path / "proj")
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            _subprocess_code("generate_discovery_map", ["-o", "%s/sub/discovery-map.json" % generate.ARTIFACT_ROOT]),
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=str(project),
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert (project / generate.ARTIFACT_ROOT / "sub" / "discovery-map.json").is_file()
 
 
 @pytest.mark.parametrize(

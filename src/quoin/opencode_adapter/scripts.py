@@ -80,13 +80,31 @@ def unsafe_output_fds(fstat=os.fstat) -> List[int]:
 
 
 def find_project_root(start) -> Optional[Path]:
-    """Nearest ancestor of `start` (inclusive) holding a regular file at METADATA_RELPATH."""
+    """Nearest ancestor of `start` (inclusive) whose `.quoin` is a real
+    directory (not a symlink) holding a regular metadata file at
+    METADATA_RELPATH (not a symlink), matching `install.load_metadata`'s
+    own validation. A symlinked `.quoin` is skipped, not resolved through:
+    the walk continues to the next ancestor rather than crediting a
+    project it merely points at.
+    """
     current = Path(start).resolve()
     candidates = [current] + list(current.parents)
     for candidate in candidates:
+        quoin_dir = candidate / ".quoin"
+        try:
+            dir_st = os.lstat(str(quoin_dir))
+        except OSError:
+            continue
+        if stat.S_ISLNK(dir_st.st_mode) or not stat.S_ISDIR(dir_st.st_mode):
+            continue
         meta_path = candidate / install.METADATA_RELPATH
-        if os.path.isfile(str(meta_path)) and not os.path.islink(str(meta_path)):
-            return candidate
+        try:
+            file_st = os.lstat(str(meta_path))
+        except OSError:
+            continue
+        if stat.S_ISLNK(file_st.st_mode) or not stat.S_ISREG(file_st.st_mode):
+            continue
+        return candidate
     return None
 
 
@@ -236,6 +254,13 @@ def run(name, argv, source_dir, out=sys.stdout, err=sys.stderr, fstat=os.fstat) 
                 print(
                     "quoin opencode script: refusing to run: %s is outside the artifact root, "
                     "or reaches it through a symlinked path component" % dest,
+                    file=err,
+                )
+                return 2
+            if os.path.basename(str(dest)) != "discovery-map.json":
+                print(
+                    "quoin opencode script: refusing to run: generate_discovery_map may only "
+                    "write discovery-map.json inside the artifact root",
                     file=err,
                 )
                 return 2
