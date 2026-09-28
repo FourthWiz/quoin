@@ -838,6 +838,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_runtime_portability_docs.py",
     ),
     (
+        "quoin/docs/runtime-parity-matrix.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/docs/runtime-parity-matrix.md",
+        "quoin/dev/tests/test_runtime_portability_docs.py",
+    ),
+    (
         "quoin/core/workflow/skills.json",
         "quoin/dev/tests/test_opencode_manifest.py",
     ),
