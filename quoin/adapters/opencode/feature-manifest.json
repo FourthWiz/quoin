@@ -2,8 +2,8 @@
   "schema_version": 2,
   "feature_name": "opencode-project-assets",
   "adapter": "opencode",
-  "status": "catalog-classified",
-  "description": "Catalog manifest classifying all 32 portable Quoin workflow skills for the OpenCode adapter, with per-entry support status, generated-name mapping and a drift check against the portable catalog.",
+  "status": "generated-offline-verified",
+  "description": "Catalog manifest classifying all 32 portable Quoin workflow skills for the OpenCode adapter, with per-entry support status, generated-name mapping and a drift check against the portable catalog. The generator, installer and doctor for the supported entries are implemented and offline-verified; live runtime evidence is not yet collected.",
   "opencode_version": "1.18.32",
   "entrypoints": [
     {
@@ -35,6 +35,15 @@
       "path": "quoin opencode script",
       "args": [
         "<name> [args...]"
+      ]
+    },
+    {
+      "type": "cli",
+      "path": "quoin doctor --runtime opencode",
+      "args": [
+        "--project-root <path>",
+        "--smoke",
+        "--json"
       ]
     }
   ],
@@ -98,7 +107,12 @@
       "python3 -m pytest quoin/dev/tests/test_opencode_manifest.py",
       "python3 -m pytest quoin/dev/tests/test_opencode_generate.py",
       "python3 -m pytest quoin/dev/tests/test_opencode_install.py",
-      "python3 -m pytest quoin/dev/tests/test_opencode_script_runner.py"
+      "python3 -m pytest quoin/dev/tests/test_opencode_script_runner.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_doctor.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_doctor_host.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_doctor_census.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_import_order.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_binary_contract.py"
     ],
     "notes": "Run from the repository root."
   },
