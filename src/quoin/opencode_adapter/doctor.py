@@ -92,6 +92,15 @@ MESSAGES: Dict[str, str] = {
     "opencode-binary-absent": "the opencode binary was not found on PATH",
     "opencode-version": "the opencode binary reports version %(version)s (pinned %(expected)s)",
     "opencode-version-unknown": "the opencode binary's version could not be determined",
+    "census-unverified": "%(count)s SKILL.md file(s) could not have their name read with certainty and were left out of the duplicate and legacy checks",
+    "skill-duplicate": "the skill '%(name)s' is defined by more than one file: %(names)s",
+    "skill-duplicate-unnamed": "a skill name is defined by more than one file: %(names)s",
+    "quoin-skill-outside-project": "a skill named '%(name)s' was found outside the project's own .opencode/skills directory",
+    "legacy-claude-skills": "%(count)s SKILL.md file(s) under the legacy Claude Code skills location have a name OpenCode may also load",
+    "skills-url-not-scanned": "%(count)s skills.urls entry(ies) are configured; this doctor does not fetch or scan them",
+    "skills-path-missing": "skills.paths[%(number)s] in %(path)s names a directory that does not exist",
+    "census-truncated": "the skill census stopped early after reaching its file or directory visit cap (%(count)s file(s) counted)",
+    "permission-loosened": "a config file's user permission narrows the following tools, but a generated role allows them while it runs: %(names)s",
 }
 
 _REMEDIATIONS: Dict[str, str] = {
@@ -112,6 +121,11 @@ _REMEDIATIONS: Dict[str, str] = {
     "config-env-set": "OPENCODE_CONFIG_CONTENT, when set, is not inspected",
     "quoin-not-on-path": "install quoin and confirm it is on PATH",
     "opencode-binary-absent": "install the opencode binary to run host checks against it",
+    "census-unverified": "read each file by hand to see whether OpenCode is likely to load it",
+    "quoin-skill-outside-project": "a skill named this may shadow or be shadowed by the project's own generated skill; move it or rename it",
+    "legacy-claude-skills": "set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS or OPENCODE_DISABLE_CLAUDE_CODE to stop OpenCode from scanning it; Quoin's generated roles already deny skills outside the quoin-* set",
+    "skills-path-missing": "create the directory, or remove the entry from skills.paths",
+    "permission-loosened": "a generated role's own permission always wins while that role is active; narrow the role's own permission map instead of the user config",
 }
 
 
@@ -878,8 +892,7 @@ def _subagent_depth_findings(docs: List[Tuple[Path, dict]], roots) -> List[Findi
 
 def run_host(project_root, source_dir, env, home, which, version_runner) -> List[Finding]:
     """Host-environment checks: install state, manifest drift, config,
-    rules fallback, flags and PATH/binary. Skill-discovery census checks
-    are not wired in here yet."""
+    rules fallback, skill-discovery census, flags and PATH/binary."""
     root = Path(project_root)
     findings: List[Finding] = []
 
@@ -906,9 +919,499 @@ def run_host(project_root, source_dir, env, home, which, version_runner) -> List
     docs, config_findings = _read_config_files(root, worktree, env, home, roots)
     findings.extend(config_findings)
     findings.extend(_subagent_depth_findings(docs, roots))
+    findings.extend(_permission_loosened_findings(docs))
+    findings.extend(_census_findings(root, worktree, env, home, docs, rendered, roots))
     findings.extend(_rules_findings(root, worktree, env, home, roots))
     findings.extend(_flag_findings(env))
     findings.extend(_path_findings(which))
     findings.extend(_binary_findings(which, version_runner, source_dir))
 
     return findings
+
+
+# --- Skill discovery census --------------------------------------------
+
+_SKILL_MD_NAME = "SKILL.md"
+_CENSUS_FILE_CAP = 5000
+_CENSUS_DIR_CAP = 50000
+
+_SCALAR_BAD_PREFIXES = (">", "|", "[", "{", "&", "*", "!", "%", "@", "`")
+_YAML_LITERALS = frozenset(("true", "false", "yes", "no", "on", "off", "null", "~"))
+_NUMBER_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
+_NAME_LINE_RE = re.compile(r"^name[ \t]*:")
+_SINGLE_QUOTED_RE = re.compile(r"^'((?:[^']|'')*)'\s*(#.*)?$")
+
+
+def _json_string_end(s: str) -> Optional[int]:
+    """`s[0]` is a `"`. Returns the index of the matching unescaped closing
+    quote, or None if there isn't one on this line."""
+    i = 1
+    n = len(s)
+    while i < n:
+        c = s[i]
+        if c == "\\":
+            i += 2
+            continue
+        if c == '"':
+            return i
+        i += 1
+    return None
+
+
+def read_skill_name(text: str) -> Tuple[str, Optional[str]]:
+    """Tolerantly read the top-level `name:` value from a SKILL.md's
+    frontmatter block. Used only by the skill census — never a
+    replacement for `frontmatter.parse`, which is used for smoke checks
+    only and rejects every real, unquoted Claude skill header.
+
+    Returns `("named", name)`, `("absent", None)` or `("unverified",
+    None)`. `absent` means OpenCode reads no string name from the file
+    (no opening fence, or no top-level `name:` line) and skips it
+    silently. `unverified` means the reader cannot say with certainty
+    what OpenCode would read; such files are counted, never grouped.
+    """
+    if text.startswith("﻿"):
+        text = text[1:]
+    raw_lines = text.split("\n")
+    lines = [ln[:-1] if ln.endswith("\r") else ln for ln in raw_lines]
+    if not lines or lines[0].strip() != "---":
+        return ("absent", None)
+    close_idx = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            close_idx = i
+            break
+    if close_idx is None:
+        return ("unverified", None)
+    body = lines[1:close_idx]
+    name_idxs = [i for i, ln in enumerate(body) if _NAME_LINE_RE.match(ln)]
+    if not name_idxs:
+        return ("absent", None)
+    if len(name_idxs) > 1:
+        return ("unverified", None)
+    line = body[name_idxs[0]]
+    value_part = line.split(":", 1)[1].strip()
+    if not value_part:
+        return ("unverified", None)
+
+    if value_part[0] == "'":
+        m = _SINGLE_QUOTED_RE.match(value_part)
+        if not m:
+            return ("unverified", None)
+        name = m.group(1).replace("''", "'")
+        return ("named", name) if name else ("unverified", None)
+
+    if value_part[0] == '"':
+        end = _json_string_end(value_part)
+        if end is None:
+            return ("unverified", None)
+        rest = value_part[end + 1 :].strip()
+        if rest and not rest.startswith("#"):
+            return ("unverified", None)
+        try:
+            name = json.loads(value_part[: end + 1])
+        except json.JSONDecodeError:
+            return ("unverified", None)
+        if not isinstance(name, str) or not name:
+            return ("unverified", None)
+        return ("named", name)
+
+    comment = re.search(r"\s+#", value_part)
+    plain = (value_part[: comment.start()] if comment else value_part).strip()
+    if not plain:
+        return ("unverified", None)
+    if plain[0] in _SCALAR_BAD_PREFIXES:
+        return ("unverified", None)
+    if plain.lower() in _YAML_LITERALS:
+        return ("unverified", None)
+    if _NUMBER_RE.match(plain):
+        return ("unverified", None)
+    return ("named", plain)
+
+
+class _CensusBudget:
+    __slots__ = ("files", "dirs", "truncated")
+
+    def __init__(self):
+        self.files = 0
+        self.dirs = 0
+        self.truncated = False
+
+
+def _walk_for_skill_md(start: Path, want_dot: bool, budget: "_CensusBudget"):
+    """Yield absolute `SKILL.md` paths under `start`, sorted per directory
+    (deterministic), following symlinked directories, stopping only on a
+    cycle (a directory whose realpath is already on the current descent
+    chain), honoring the census file/directory caps."""
+    yield from _walk_for_skill_md_inner(start, want_dot, budget, [])
+
+
+def _walk_for_skill_md_inner(start: Path, want_dot: bool, budget: "_CensusBudget", chain: List[str]):
+    if budget.truncated:
+        return
+    try:
+        real = os.path.realpath(str(start))
+    except OSError:
+        return
+    if real in chain:
+        return
+    if budget.dirs >= _CENSUS_DIR_CAP:
+        budget.truncated = True
+        return
+    try:
+        entry_names = sorted(os.listdir(str(start)))
+    except OSError:
+        return
+    budget.dirs += 1
+    next_chain = chain + [real]
+    for entry in entry_names:
+        if not want_dot and entry.startswith("."):
+            continue
+        full = start / entry
+        try:
+            st = os.lstat(str(full))
+        except OSError:
+            continue
+        is_dir = stat.S_ISDIR(st.st_mode)
+        if not is_dir and stat.S_ISLNK(st.st_mode):
+            try:
+                is_dir = stat.S_ISDIR(os.stat(str(full)).st_mode)
+            except OSError:
+                is_dir = False
+        if is_dir:
+            yield from _walk_for_skill_md_inner(full, want_dot, budget, next_chain)
+            if budget.truncated:
+                return
+        elif entry == _SKILL_MD_NAME:
+            if budget.files >= _CENSUS_FILE_CAP:
+                budget.truncated = True
+                return
+            budget.files += 1
+            yield full
+
+
+def _census_ext_roots(root: Path, worktree: Path, env, home) -> List[Tuple[Path, bool]]:
+    """`(dir, want_dot=True)` pairs for the external `.claude`/`.agents`
+    skill roots, home first, then project root..worktree nearest first."""
+    if _flag_set(env, "OPENCODE_DISABLE_EXTERNAL_SKILLS"):
+        return []
+    ext_names = []
+    if not _flag_set(env, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS") and not _flag_set(env, "OPENCODE_DISABLE_CLAUDE_CODE"):
+        ext_names.append(".claude")
+    ext_names.append(".agents")
+    roots: List[Tuple[Path, bool]] = []
+    for d in ext_names:
+        roots.append((Path(home) / d / "skills", True))
+        for dirp in _dir_chain(worktree, root):
+            roots.append((dirp / d / "skills", True))
+    return roots
+
+
+def _census_config_dirs(root: Path, worktree: Path, env, home) -> List[Path]:
+    """Config dirs that also serve as skill roots, `G_xdg` first, then
+    project `.opencode` root..worktree nearest first, then `~/.opencode`
+    and `OPENCODE_CONFIG_DIR`."""
+    dirs: List[Path] = [_xdg_config_dir(env, home)]
+    if not _flag_set(env, "OPENCODE_DISABLE_PROJECT_CONFIG"):
+        for dirp in _dir_chain(worktree, root):
+            dirs.append(dirp / ".opencode")
+    home_opencode = Path(home) / ".opencode"
+    if home_opencode.is_dir():
+        dirs.append(home_opencode)
+    config_dir_env = env.get("OPENCODE_CONFIG_DIR")
+    if config_dir_env:
+        dirs.append(Path(config_dir_env))
+    return dirs
+
+
+def _last_skills_field(docs: List[Tuple[Path, dict]], field: str):
+    """The value of `skills.<field>` from the last config file, in load
+    order, whose `skills` map sets it (config merging replaces arrays
+    whole, not element-wise), and the path of that file. `(None, None)`
+    when no file sets it."""
+    value = None
+    value_path = None
+    for path, payload in docs:
+        skills = payload.get("skills")
+        if isinstance(skills, dict) and field in skills:
+            value = skills[field]
+            value_path = path
+    return value, value_path
+
+
+def _is_under(path, root) -> bool:
+    try:
+        Path(os.path.abspath(str(path))).relative_to(os.path.abspath(str(root)))
+        return True
+    except ValueError:
+        return False
+
+
+def census(project_root, worktree, env, home, docs) -> Tuple[Dict[str, List[Path]], List[Finding], int, Dict[str, str]]:
+    """The skill-discovery census: walks every root OpenCode scans for
+    `SKILL.md` files, in its own scan order, and groups them by name and
+    by `SKILL.md` realpath, so a symlink alias of one file is one skill
+    with several locations, not a duplicate.
+
+    Returns `(name -> [absolute path per distinct unit, in scan order],
+    findings, unverified_count, unit -> "claude"|"other" category for the
+    first-found location of each named unit)`. `findings` here covers only
+    `skills-path-missing` and `census-truncated`; duplicate, legacy and
+    outside-project findings are built by `_census_findings` once the
+    caller also has the rendered catalog's names.
+    """
+    root = Path(project_root)
+    budget = _CensusBudget()
+    findings: List[Finding] = []
+    seen_roots: set = set()
+    seen_matches: set = set()
+    ordered_matches: List[Tuple[Path, str]] = []
+
+    def _scan(start: Path, want_dot: bool, category: str) -> None:
+        norm_root = os.path.abspath(str(start))
+        if norm_root in seen_roots:
+            return
+        seen_roots.add(norm_root)
+        if not start.is_dir():
+            return
+        for match in _walk_for_skill_md(start, want_dot, budget):
+            norm_match = os.path.abspath(str(match))
+            if norm_match in seen_matches:
+                continue
+            seen_matches.add(norm_match)
+            ordered_matches.append((match, category))
+
+    for start, want_dot in _census_ext_roots(root, worktree, env, home):
+        _scan(start, want_dot, "claude")
+
+    for cfg_dir in _census_config_dirs(root, worktree, env, home):
+        _scan(cfg_dir / "skill", False, "config")
+        _scan(cfg_dir / "skills", False, "config")
+
+    skills_paths, skills_paths_doc = _last_skills_field(docs, "paths")
+    base_roots = _build_roots(root, env, home)
+    if isinstance(skills_paths, list):
+        for i, entry in enumerate(skills_paths):
+            if not isinstance(entry, str):
+                continue
+            expanded = os.path.expanduser(entry)
+            p = Path(expanded) if os.path.isabs(expanded) else root / expanded
+            if not p.is_dir():
+                cfg_display = display_path(skills_paths_doc, base_roots) if skills_paths_doc else ""
+                findings.append(make_finding("skills-path-missing", "info", path=cfg_display, number=i))
+                continue
+            _scan(p, False, "skills-path")
+
+    skills_urls, _skills_urls_doc = _last_skills_field(docs, "urls")
+    if isinstance(skills_urls, list) and skills_urls:
+        findings.append(make_finding("skills-url-not-scanned", "info", count=len(skills_urls)))
+
+    if budget.truncated:
+        findings.append(make_finding("census-truncated", "info", count=budget.files))
+
+    unit_first_path: Dict[str, Path] = {}
+    unit_first_category: Dict[str, str] = {}
+    scan_order_units: List[str] = []
+    for match, category in ordered_matches:
+        try:
+            unit = os.path.realpath(str(match))
+        except OSError:
+            unit = str(match)
+        if unit in unit_first_path:
+            continue
+        unit_first_path[unit] = match
+        unit_first_category[unit] = category
+        scan_order_units.append(unit)
+
+    census_map: Dict[str, List[Path]] = {}
+    unverified_count = 0
+    for unit in scan_order_units:
+        path = unit_first_path[unit]
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            unverified_count += 1
+            continue
+        try:
+            text = raw.decode("utf-8-sig")
+        except UnicodeDecodeError:
+            unverified_count += 1
+            continue
+        kind, name = read_skill_name(text)
+        if kind == "absent":
+            continue
+        if kind == "unverified":
+            unverified_count += 1
+            continue
+        census_map.setdefault(name, []).append(path)
+
+    if unverified_count:
+        findings.append(make_finding("census-unverified", "info", count=unverified_count))
+
+    return census_map, findings, unverified_count, unit_first_category
+
+
+_SKILL_DUP_REMEDIATION = (
+    "OpenCode loads only one of these copies, and which one is not fixed; "
+    "keep one location and remove or rename the others."
+)
+_SKILL_DUP_URL_SENTENCE = "A skill fetched from a URL in skills.urls can also take this name."
+
+
+def _legacy_claude_unit_count(root: Path, worktree: Path, home, catalog_ids) -> int:
+    """Count distinct `SKILL.md` realpaths under `~/.claude/skills` (or a
+    walked-up project `.claude/skills`) whose name equals a catalog id.
+
+    This is deliberately independent of `OPENCODE_DISABLE_CLAUDE_CODE(_SKILLS)`
+    / `OPENCODE_DISABLE_EXTERNAL_SKILLS`: the finding still fires (at `info`)
+    when a flag already stops OpenCode from scanning `.claude`, so the
+    severity downgrade in `_census_findings` has something to downgrade.
+    """
+    if not catalog_ids:
+        return 0
+    budget = _CensusBudget()
+    seen_roots: set = set()
+    seen_units: set = set()
+    count = 0
+    starts = [Path(home) / ".claude" / "skills"]
+    for dirp in _dir_chain(worktree, root):
+        starts.append(dirp / ".claude" / "skills")
+    for start in starts:
+        norm = os.path.abspath(str(start))
+        if norm in seen_roots or not start.is_dir():
+            seen_roots.add(norm)
+            continue
+        seen_roots.add(norm)
+        for match in _walk_for_skill_md(start, True, budget):
+            try:
+                unit = os.path.realpath(str(match))
+            except OSError:
+                continue
+            if unit in seen_units:
+                continue
+            seen_units.add(unit)
+            try:
+                text = match.read_bytes().decode("utf-8-sig")
+            except (OSError, UnicodeDecodeError):
+                continue
+            kind, name = read_skill_name(text)
+            if kind == "named" and name in catalog_ids:
+                count += 1
+    return count
+
+
+def _census_findings(project_root, worktree, env, home, docs, rendered, roots) -> List[Finding]:
+    """Wires `census()` into `run_host`: duplicate, legacy-discovery and
+    outside-project findings, plus the `skills-path-missing` /
+    `census-truncated` findings `census()` itself returns."""
+    census_map, base_findings, _unverified_count, _unit_first_category = census(
+        project_root, worktree, env, home, docs
+    )
+    findings: List[Finding] = list(base_findings)
+
+    catalog_ids = frozenset(
+        rf.source_id for rf in rendered.values() if rf.kind == "skill"
+    ) if rendered else frozenset()
+    quoin_names = frozenset(names.normalize(cid) for cid in catalog_ids)
+
+    skills_urls, _skills_urls_doc = _last_skills_field(docs, "urls")
+    urls_nonempty = isinstance(skills_urls, list) and bool(skills_urls)
+
+    project_skills_dir = Path(project_root) / ".opencode" / "skills"
+    legacy_units = 0
+    for name in sorted(census_map):
+        locations = census_map[name]
+        if len(locations) >= 2:
+            display_paths = [display_path(loc, roots) for loc in locations]
+            remediation = _SKILL_DUP_REMEDIATION
+            if urls_nonempty:
+                remediation = _SKILL_DUP_REMEDIATION + " " + _SKILL_DUP_URL_SENTENCE
+            if name in catalog_ids or name in quoin_names:
+                findings.append(
+                    make_finding(
+                        "skill-duplicate", "warn", name=name,
+                        names=", ".join(display_paths), remediation=remediation,
+                    )
+                )
+            else:
+                findings.append(
+                    make_finding(
+                        "skill-duplicate-unnamed", "warn",
+                        names=", ".join(display_paths), remediation=remediation,
+                    )
+                )
+        if name in quoin_names:
+            for loc in locations:
+                if not _is_under(loc, project_skills_dir):
+                    findings.append(
+                        make_finding(
+                            "quoin-skill-outside-project", "warn",
+                            name=name, path=display_path(loc, roots),
+                        )
+                    )
+    legacy_units = _legacy_claude_unit_count(Path(project_root), Path(worktree), home, catalog_ids)
+    if legacy_units:
+        legacy_off = (
+            _flag_set(env, "OPENCODE_DISABLE_CLAUDE_CODE_SKILLS")
+            or _flag_set(env, "OPENCODE_DISABLE_CLAUDE_CODE")
+            or _flag_set(env, "OPENCODE_DISABLE_EXTERNAL_SKILLS")
+        )
+        findings.append(
+            make_finding(
+                "legacy-claude-skills",
+                "info" if legacy_off else "warn",
+                count=legacy_units,
+            )
+        )
+
+    return findings
+
+
+def _tool_has_allow(value) -> bool:
+    if value == "allow":
+        return True
+    if isinstance(value, dict):
+        return any(v == "allow" for v in value.values())
+    return False
+
+
+_PERMISSION_TOOL_KEYS = ("bash", "edit", "glob", "grep", "lsp", "read", "skill", "task")
+
+
+def _compute_tools_some_role_allows() -> "frozenset":
+    allowed = set()
+    for role in generate.ROLES:
+        perms = generate.role_permissions(role)
+        for key in _PERMISSION_TOOL_KEYS:
+            if key in perms and _tool_has_allow(perms[key]):
+                allowed.add(key)
+    return frozenset(allowed)
+
+
+_TOOLS_SOME_ROLE_ALLOWS = _compute_tools_some_role_allows()
+
+
+def _permission_loosened_findings(docs: List[Tuple[Path, dict]]) -> List[Finding]:
+    """A generated role's own allow always wins while that role
+    runs, so a stricter user-level `permission` rule for a tool some role
+    allows is reported once, naming only tools from the generated set —
+    never a raw key or value read from the config file."""
+    loosened: set = set()
+    for _path, payload in docs:
+        perm = payload.get("permission")
+        if isinstance(perm, str):
+            if perm in ("deny", "ask"):
+                loosened |= _TOOLS_SOME_ROLE_ALLOWS
+            continue
+        if isinstance(perm, dict):
+            for key, value in perm.items():
+                if key not in _TOOLS_SOME_ROLE_ALLOWS:
+                    continue
+                narrows = value in ("deny", "ask") or (
+                    isinstance(value, dict) and any(v in ("deny", "ask") for v in value.values())
+                )
+                if narrows:
+                    loosened.add(key)
+    if not loosened:
+        return []
+    return [make_finding("permission-loosened", "info", names=", ".join(sorted(loosened)))]
