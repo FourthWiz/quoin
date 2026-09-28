@@ -10,9 +10,10 @@ advisory whole-file projection at the bottom, which is deliberately loose).
 All addends are pinned exactly (plan MIN-1 r2 / MAJ-2 r3: every term in the
 projection is a named, re-derivable constant, no `~` approximations). Live
 figures re-derived at implement time (round-4 critic's well-formed blank-line
-model, MIN-1 of critic-response-4.md): keep set 7,371 B, generated header
+model): keep set 7,311 B, generated header
 338 B (pinned verbatim in T-04), pointer index 1,452 B (140 B header + 1,311 B
-of 24 rows + 1 blank) -> CLAUDE.slim.md source == 9,161 B exactly. This
+of 24 rows + 1 blank) -> CLAUDE.slim.md source == 9,101 B exactly (keep set
+shrank 60 B when the finalization-rule bullet was shortened). This
 matches the live committed file byte-for-byte (T-08 does not hand-transcribe
 this figure a second time; it reads the committed file directly).
 """
@@ -76,15 +77,15 @@ def test_slim_deployed_projection_below_ceiling_exact_figures():
     """
     slim_text = SLIM.read_text(encoding="utf-8")
     source_len = len(slim_text.encode("utf-8"))
-    assert source_len == 9_161, (
-        f"CLAUDE.slim.md source is {source_len} B, expected 9,161 B exactly "
-        "(7,371 B keep set + 338 B pinned header + 1,452 B pointer index). "
+    assert source_len == 9_101, (
+        f"CLAUDE.slim.md source is {source_len} B, expected 9,101 B exactly "
+        "(7,311 B keep set + 338 B pinned header + 1,452 B pointer index). "
         "If this changed intentionally, re-pin every downstream figure in "
         "this file and in T-12's claude_md_slim ceiling."
     )
 
     marker_block_source = source_len + MARKER_FRAME
-    assert marker_block_source == 9_217, marker_block_source
+    assert marker_block_source == 9_157, marker_block_source
 
     substituted = slim_text.replace(QUOIN_HOME_PLACEHOLDER, PROJECT_STANDIN)
     substituted_len = len(substituted.encode("utf-8"))
@@ -94,10 +95,10 @@ def test_slim_deployed_projection_below_ceiling_exact_figures():
     assert substituted_len == source_len + sub_delta
 
     marker_block_substituted = substituted_len + MARKER_FRAME
-    assert marker_block_substituted == 9_397, marker_block_substituted
+    assert marker_block_substituted == 9_337, marker_block_substituted
 
     headroom = SLIM_MARKER_BLOCK_CEILING - marker_block_substituted
-    assert headroom == 843, headroom
+    assert headroom == 903, headroom
     assert marker_block_substituted <= SLIM_MARKER_BLOCK_CEILING, (
         f"CLAUDE.slim.md substituted marker block is {marker_block_substituted} B "
         f"on a {len(PROJECT_STANDIN)}-char worst-case project path; "

@@ -147,4 +147,68 @@ The `end_of_day_due` field defaults to `yes` at every session-state write. `/end
 
 **Orphaned sessions** (flag=no, never rolled up): If a session-state file already has `end_of_day_due: no` AND was never included in a daily-cache body (because `/end_of_day` ran after it was written and used the old `<today>-*.md` glob), that session is silently skipped by the normal hybrid rule — the existing `no` flag is treated as authoritative. Use `/end_of_day --recover-orphans` to surface these sessions. The subcommand partitions orphans into two groups by file date: RECENT (within last 7 days) and HISTORICAL (older). The user confirms each group separately. Orphan detection uses a word-boundary-aware slug match: a session is an orphan iff its task-name slug (post-date portion of filename) is absent from the body of every daily-cache file, using `r"(?<![\w-])" + re.escape(slug) + r"(?![\w-])"` — hyphens count as part of the slug token so prefix collisions like `json-discovery-map` vs `json-discovery-map-review` do not produce false-positive coverage. Alternatively, manually flip any orphaned session's `end_of_day_due` field back to `yes` and re-run `/end_of_day`.
 
+## /cleanup — full reference
+
+Detail relocated from `cleanup/SKILL.md` to keep it under its byte ceiling (IVG-262 D-10). The SKILL.md keeps every test-pinned anchor in place and points here for the rest.
+
+### /cleanup vs /sleep --purge --sentinels
+
+| Dimension | /cleanup | /sleep --purge --sentinels |
+|---|---|---|
+| Delete mechanism | `trash_move` (recoverable, to `trash/<date>/`) | `rm -f` (permanent delete) |
+| Selection logic | keep-freshest (UUID skip) + age (`QUOIN_CLEANUP_SENTINEL_WINDOW`, default 1d) | age-only (`--older-than Nd`, explicit argument required) |
+| Current session | always preserved (UUID-suffix skip BEFORE age check) | no special protection |
+| Auto-fire | yes (from `/checkpoint` Step 1.47, default-on) | no (requires explicit invocation) |
+| Recovery | `mv .workflow_artifacts/memory/trash/<date>/<file> .workflow_artifacts/memory/` | not recoverable |
+
+### Step 5b rationale (session temp-file sweep)
+
+Crashed Class-A-writer leftovers: the session-state atomic-write mechanism (`implement`/`end_of_day`/etc.) composes a body to `<session-path>.body.tmp`, validates it, then atomically renames to `<session-path>`. A process that crashes or is interrupted mid-write leaves the `.body.tmp` (or a bare `.tmp`) file behind. These are NOT selected by any real reader (`select_unprocessed_sessions.py`'s `file_pattern` is anchored `\.md$`, so `.body.tmp`/`.tmp` files are already excluded from selection today) but they pollute manual `ls`/`grep end_of_day_due: yes` inspection of `sessions/`.
+
+Reuses the same `QUOIN_CLEANUP_SENTINEL_WINDOW` (default 1 day) age threshold as the sentinel sweep — a legitimate write completes (write → validate → rename) in well under a second, so any survivor older than the window is a crash artifact, never an in-flight write.
+
+### Step 5c rationale (run-state sweep)
+
+No UUID protection and no `active` guard: the record and its notes file are swept INDEPENDENTLY of each other and of whatever `active` says, so a record kept alive by ongoing boundary writes may outlive notes that stopped being appended, and vice versa. That is deliberate — pairing them would require reading the record to sweep it, which this age-only design forbids. The consequence is that a swept record's `notes_path` may point at a file that no longer resolves; every reader already tolerates that (T-04, T-11 tier 4).
+
+### --dry-run would-trash example
+
+```
+[cleanup --dry-run] would trash:
+  SENTINELS (<S>):
+    - <path>
+    ...
+  SESSION TEMP FILES (<T>):
+    - <path>
+    ...
+  CHECKPOINTS (<C>):
+    - <path>
+    ...
+  RUN STATE (<R>):
+    - <path>
+    ...
+```
+
+### Task bookkeeping pass
+
+Buckets: done, abandoned, nearly-done, in-progress, not-a-task — computed by
+`task_bookkeeping.py classify` from disk facts (EOT preflight evidence,
+session files, workflow phase) plus an optional fail-open `gh` PR probe.
+Thresholds: `--stale-days`/`QUOIN_CLEANUP_TASK_STALE_DAYS` (default 14),
+`--idle-days`/`QUOIN_CLEANUP_TASK_IDLE_DAYS` (default 30).
+
+Trashed task folders go to the top-level `.workflow_artifacts/trash/<date>/`,
+not `memory/trash/` — top-level `trash/` already holds task-shaped trees and
+is excluded from every scanner; putting task trees under `memory/` would
+perturb `memory_version_key`'s recursive walk and memory browsing instead.
+Recover with `mv .workflow_artifacts/trash/<date>/<task> .workflow_artifacts/`.
+
+Re-created stub twins (a `.workflow_artifacts/finalized/<task>` archive
+already exists, and the live folder holds nothing but `cost-ledger.md` /
+`task-source.md`) are offered Trash / Leave, never Archive — the live root
+cause (ledger writes landing after finalization) is a separate follow-up.
+
+Full interactive procedure (bucket-ordered prompting, per-task batching, the
+exact report-only messages and resume hint): `memory/cleanup-task-bookkeeping.md`.
+
 The `fallback_fires` field counts Class B writer Step 5 English-fallback invocations and Step 2 Haiku dispatch retries during this session. The active skill increments the field in place (atomic-rename pattern, mirror of end_of_day_due flip) immediately before emitting the `format-kit-skipped` warning. Default value is `0` at every session-state write; never decremented. KNOWN ISSUE: under parallel subagent fallback fires (rare; <1/day in practice given pre-Stage-4 finalized-artifact data), the read-modify-write update can undercount — it never overcounts. For low-frequency telemetry visibility this undercounting is acceptable; if a future post-merge measurement shows >5% undercounting, escalate to a per-skill append-only counter file (per Stage 4 D-03-rev2 option 3 — currently deferred).

@@ -679,6 +679,30 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/thorough_plan/SKILL.md",
         "quoin/dev/tests/test_run_state_wiring.py",
     ),
+    # Task-bookkeeping pass prose spans cleanup/SKILL.md,
+    # checkpoint/SKILL.md, the runtime-neutral core doc, the reference doc,
+    # and README.md's Utilities row -- none of their existing rows reach the
+    # bookkeeping-pass slicer assertions.
+    (
+        "quoin/adapters/claude/skills/cleanup/SKILL.md",
+        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/checkpoint/SKILL.md",
+        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
+    ),
+    (
+        "quoin/core/skills/cleanup.md",
+        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
+    ),
+    (
+        "quoin/memory/cleanup-task-bookkeeping.md",
+        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
+    ),
+    (
+        "README.md",
+        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
+    ),
     # The frozen POSIX-sh reader body lives outside quoin/dev/tests/ (it is a
     # spike file, not a .py source file), so an edit to its bytes alone was
     # NOT selectable by the generic .py-mtime rule and fell through to the

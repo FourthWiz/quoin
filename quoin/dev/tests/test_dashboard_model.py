@@ -395,6 +395,19 @@ def test_scan_tasks_excludes_memory_cache_finalized(tmp_path):
     assert "finalized" not in task_names
 
 
+def test_scan_tasks_excludes_trash(tmp_path):
+    """Test that a top-level trash/ dir is excluded from the scan."""
+    root, _, _, _ = make_fixture_tree(tmp_path)
+    trash_dir = root / ".workflow_artifacts" / "trash" / "2026-09-27" / "old-task"
+    trash_dir.mkdir(parents=True)
+    (trash_dir / "current-plan.md").write_text("x", encoding="utf-8")
+
+    result = scan_tasks(root, include_finalized=False)
+
+    task_names = {t["name"] for t in result["tasks"]}
+    assert "trash" not in task_names
+
+
 def test_scan_tasks_active_task_is_string(tmp_path):
     """Test that active_task is a JSON-serializable string (not Path) — CRIT-1."""
     root, _, _, _ = make_fixture_tree(tmp_path)

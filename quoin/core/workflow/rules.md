@@ -4,7 +4,7 @@ These are runtime-neutral Quoin workflow rules. Runtime adapters may translate i
 
 ## Safety
 
-- Do not move active task folders into `.workflow_artifacts/finalized/` during planning, implementation, or review.
+- Do not move active task folders into `.workflow_artifacts/finalized/` during planning, implementation, or review; the one exception is the cleanup skill's task bookkeeping pass, which may archive a task folder after explicit per-task confirmation.
 - Finalization is an explicit user decision.
 - Implementation is an explicit user decision unless the user has deliberately invoked an end-to-end orchestrator and confirmed its checkpoints.
 - Pull requests and remote publishing are explicit user actions controlled by the active runtime adapter.

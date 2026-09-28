@@ -344,7 +344,7 @@ Four skills handle session lifecycle at different granularities (v3 lifecycle se
 - `/checkpoint` — general-purpose state-save. Three save modes: `--mode restore` (default), `--mode load-as-reference`, `--mode mid-agent`. `/checkpoint --restore` re-hydrates in a fresh session.
 - `/end_of_day` — rolls up daily session state into `.workflow_artifacts/memory/daily/<date>.md`; touches `lessons-learned.md` if insights promoted; auto-invokes `/sleep`.
 - `/sleep` — Scans daily insights + session files (30-day window); three-bucket decisions (Promote/Soft-Forget/deferred). Writes ONLY to `lessons-learned.md` + `forgotten/`.
-- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`. Auto-fires as the first sub-block of `/checkpoint` Step 1.5.
+- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`; standalone runs also offer confirmed task-folder archive. Auto-fires as the first sub-block of `/checkpoint` Step 1.5.
 
 Full subcommand contracts, mode auto-detection rules, restore-picker logic, and env knobs: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
 

@@ -11,6 +11,11 @@ atomic-writer artifacts, IVG-137 T-06) into a recoverable `trash/<date>/`
 archive so the session state directory stays navigable and stale sentinels do
 not cause false-positive lifecycle events.
 
+A standalone run (not fired from `/checkpoint`) also offers a task bookkeeping
+pass: it sorts `.workflow_artifacts/` task folders into five buckets — done,
+abandoned, nearly-done, in-progress, not-a-task — and, after per-task
+confirmation, archives or trashes the ones that are safe to move.
+
 ## When to use
 
 - User says "/cleanup" or "clean up stale sentinels".
@@ -32,6 +37,11 @@ not cause false-positive lifecycle events.
 - Stale sentinels and old checkpoints moved to `.workflow_artifacts/memory/trash/<date>/`.
 - Optional dry-run report (when `--dry-run` flag present): lists what WOULD be moved
   without moving anything.
+- Standalone only: a classification table (`--no-tasks` to skip it), and, on
+  confirmed rows, task folders moved to the top-level `.workflow_artifacts/finalized/`
+  or `.workflow_artifacts/trash/<date>/` — a deliberate exception to the trash-only
+  restriction above, since these are whole-task archive/trash moves, not sentinel
+  sweeps.
 
 ## Behavior contract
 
@@ -42,6 +52,12 @@ not cause false-positive lifecycle events.
 - Dry-run is safe: `--dry-run` MUST make no filesystem changes.
 - Missing directories are a no-op (not an error).
 - Never modify source files, never commit.
+- The task bookkeeping pass never invokes `/pr` or `/end_of_task` — it only prints
+  the command for the person to run themselves; it degrades to a report-only
+  message (no folders moved) under `--dry-run`, `[no-interactive]`, `[autonomous]`,
+  or when no `AskUserQuestion` channel is available (the common case for a
+  dispatched Agent-tool subagent), and in that last case also prints a resume hint
+  (`[no-redispatch] /cleanup`) so the run isn't a silent dead end.
 
 ## Out of scope
 
