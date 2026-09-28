@@ -69,7 +69,7 @@ DAY = 86400.0
 
 
 # ---------------------------------------------------------------------------
-# T-01: root resolution, thresholds, scan_candidates, activity
+# Root resolution, thresholds, scan_candidates, activity
 # ---------------------------------------------------------------------------
 
 def test_resolve_root_cwd_hit(tmp_path, monkeypatch):
@@ -176,7 +176,7 @@ def test_drive_conflict_name_not_a_task(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T-02: single-stage classification, EOT evidence, not-a-task, empty
+# Single-stage classification, EOT evidence, not-a-task, empty
 # ---------------------------------------------------------------------------
 
 def test_empty_folder_old_is_abandoned(tmp_path):
@@ -333,7 +333,7 @@ def test_evidence_non_empty_on_every_row(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T-03: multi-stage classification
+# Multi-stage classification
 # ---------------------------------------------------------------------------
 
 _ARCH_ALL_DONE = """## Stage decomposition
@@ -437,7 +437,7 @@ def test_list_number_mismatch_keys_on_s_token(tmp_path):
 def test_em_dash_bold_colon_headings_parsed(tmp_path):
     ids, completed = parse_stage_ids(_ARCH_EM_DASH_BOLD_COLON)
     assert ids == {1, 2}
-    assert completed == {2}  # only S-2 row has a checkmark
+    assert completed == {2}  # only the second stage's row has a checkmark
 
 
 def test_sublist_in_another_section_not_counted(tmp_path):
@@ -468,7 +468,7 @@ def test_stage_scoped_more_work_preflight_in_progress(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T-04: PR probe
+# PR probe
 # ---------------------------------------------------------------------------
 
 def test_gh_missing_no_row_change(tmp_path, monkeypatch):
@@ -641,7 +641,7 @@ def test_multi_stage_row_ignores_probe(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T-05: options matrix, JSON/table output
+# Options matrix, JSON/table output
 # ---------------------------------------------------------------------------
 
 def test_json_output_deterministic_across_two_runs(tmp_path):
@@ -712,7 +712,7 @@ def test_classify_is_read_only(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T-06: apply
+# apply
 # ---------------------------------------------------------------------------
 
 def test_apply_archive_success(tmp_path):
@@ -781,6 +781,27 @@ def test_apply_not_a_task_marker_refused(tmp_path):
     assert result["exit"] == 3
 
 
+def test_apply_trash_stub_with_finalized_twin_succeeds(tmp_path):
+    # An empty folder re-created after finalization, alongside its finalized/
+    # twin, is the exact shape classify recommends Trash for — apply must not
+    # refuse it as not-a-task.
+    task_dir = _mk(tmp_path, "stubtwin1")
+    (tmp_path / ".workflow_artifacts" / "finalized" / "stubtwin1").mkdir(parents=True)
+    result = apply_action(tmp_path, "trash", "stubtwin1")
+    assert result["ok"] is True
+    assert not task_dir.exists()
+
+
+def test_apply_trash_empty_abandoned_folder_succeeds(tmp_path):
+    # A plain empty folder (no finalized/ twin) is still a stub, not
+    # not-a-task, so apply must allow trashing it too.
+    task_dir = _mk(tmp_path, "emptyabandoned1")
+    os.utime(str(task_dir), (NOW - 20 * DAY, NOW - 20 * DAY))
+    result = apply_action(tmp_path, "trash", "emptyabandoned1")
+    assert result["ok"] is True
+    assert not task_dir.exists()
+
+
 def test_apply_expect_mismatch_refused(tmp_path):
     task_dir = _mk(tmp_path, "fp1", files={"current-plan.md": "x"})
     result = apply_action(tmp_path, "archive", "fp1", expect="0:99999")
@@ -815,6 +836,6 @@ def test_apply_dry_run_leaves_tree_unchanged(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# T-08 (script-side pin): trash excluded from scan_candidates already covered
+# Script-side pin: trash excluded from scan_candidates already covered
 # above in test_scan_candidates_excludes_reserved_names.
 # ---------------------------------------------------------------------------

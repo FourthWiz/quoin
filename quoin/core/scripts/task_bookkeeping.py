@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """quoin/core/scripts/task_bookkeeping.py — task-folder bookkeeping classifier.
 
-Sorts `.workflow_artifacts/` task folders into done / abandoned / nearly-done /
+Sorts the workflow's task folders into done / abandoned / nearly-done /
 in-progress / not-a-task, backed by disk facts (EOT preflight evidence, session
 files, workflow phase) plus an optional fail-open GitHub PR probe. Read-only
 (`classify`); folder moves are performed only by `apply`, one task at a time.
@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import datetime
 import importlib.util
+import inspect
 import json
 import os
 import re
@@ -62,7 +63,7 @@ detect_phase = _status_graph.detect_phase
 _is_drive_conflict = _status_graph._is_drive_conflict
 SECTION_RE = _path_resolve.SECTION_RE
 
-# Local union (T-01): correct even before the one-token status_graph change
+# Local union: correct even before the one-token status_graph change
 # (adding "trash" to _EXCLUDED_NAMES) lands.
 _EXCLUDED_NAMES = frozenset(_status_graph._EXCLUDED_NAMES | {"trash"})
 
@@ -102,8 +103,8 @@ def _list_regular_entries(task_dir: Path):
 
 
 def scan_candidates(wa: Path) -> list:
-    """Direct child dirs of .workflow_artifacts/, skipping files, symlinks and
-    excluded names (memory/cache/finalized/security-review/trash)."""
+    """Direct child dirs of the task-artifacts root, skipping files, symlinks
+    and excluded names (memory/cache/finalized/security-review/trash)."""
     out = []
     try:
         entries = sorted(wa.iterdir(), key=lambda p: p.name)
@@ -166,8 +167,8 @@ def _dir_is_effectively_empty(d: Path) -> bool:
 
 
 def is_stub(task_dir: Path) -> bool:
-    """D-01: no regular files other than root cost-ledger.md / task-source.md
-    and dotfiles; empty subdirectories do not count."""
+    """No regular files other than root cost-ledger.md / task-source.md and
+    dotfiles; empty subdirectories do not count."""
     for entry in _list_regular_entries(task_dir):
         if entry.is_dir():
             if not _dir_is_effectively_empty(entry):
@@ -236,7 +237,7 @@ def multi_stage_shape(task_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# EOT evidence (T-02)
+# EOT evidence
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -257,7 +258,7 @@ class SessionIndex:
     """Reads memory/sessions/*.md once; key = filename minus date prefix,
     minus '.md', minus a trailing '-orchestrator'; exact-equality lookup."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, task_names: Optional[set] = None):
         self._markers = set()
         self._branches: dict = {}
         sessions_dir = root / ".workflow_artifacts" / "memory" / "sessions"
@@ -274,6 +275,12 @@ class SessionIndex:
             slug = m.group(1)
             if slug.endswith("-orchestrator"):
                 slug = slug[: -len("-orchestrator")]
+            # A session file can only ever be looked up under a name in
+            # task_names (the folders classify is actually scoring), so skip
+            # the read entirely for everything else — avoids reading every
+            # session file on every classify call.
+            if task_names is not None and slug not in task_names:
+                continue
             try:
                 text = entry.read_text(encoding="utf-8")
             except (OSError, UnicodeDecodeError):
@@ -306,9 +313,19 @@ def load_eot(task_dir: Path, session_index: Optional[SessionIndex] = None) -> Eo
 
     commit_or_abort = data.get("commit_or_abort")
     archive_type = data.get("archive_type")
+    # Fields below feed a shell command (commit_hash) or an equality/lookup
+    # (branch, stage); a malformed non-string value is treated as absent
+    # rather than raised, so one bad preflight file never takes down the
+    # whole classify pass.
     commit_hash = data.get("commit_hash")
+    if not isinstance(commit_hash, str):
+        commit_hash = None
     stage = data.get("stage")
+    if not isinstance(stage, str):
+        stage = None
     branch = data.get("branch")
+    if not isinstance(branch, str):
+        branch = None
 
     if commit_or_abort == "abort":
         status = "incomplete"
@@ -326,7 +343,7 @@ def load_eot(task_dir: Path, session_index: Optional[SessionIndex] = None) -> Eo
 
 
 # ---------------------------------------------------------------------------
-# Single-stage classification (T-02)
+# Single-stage classification
 # ---------------------------------------------------------------------------
 
 def single_stage_rules(task_dir: Path, eot: EotState, phase: str, idle_days: int,
@@ -374,7 +391,7 @@ def single_stage_rules(task_dir: Path, eot: EotState, phase: str, idle_days: int
 
 
 # ---------------------------------------------------------------------------
-# Multi-stage classification (T-03)
+# Multi-stage classification
 # ---------------------------------------------------------------------------
 
 _STAGE_ROW_RE = re.compile(r"^\d+\.\s+(.*?)\bS-(\d+)\b")
@@ -468,7 +485,7 @@ def multi_stage_rules(task_dir: Path, eot: EotState, idle_days: int, idle_thresh
         return {"bucket": "done", "evidence": evidence, "next_commands": [], "prompt": False}
 
     if S and S <= (F | C | L) and (L or X):
-        # D-02: stage-scoped "more work planned" preflight
+        # Stage-scoped "more work planned" preflight
         if eot.stage and eot.archive_type == "none":
             norm_stage = _normalize_stage_field(eot.stage)
             if norm_stage in L or norm_stage in X:
@@ -501,7 +518,7 @@ def multi_stage_rules(task_dir: Path, eot: EotState, idle_days: int, idle_thresh
 
 
 # ---------------------------------------------------------------------------
-# PR probe (T-04) — fail-open, injectable, never promotes to done
+# PR probe — fail-open, injectable, never promotes to done
 # ---------------------------------------------------------------------------
 
 @dataclass
@@ -530,6 +547,8 @@ class GhProbe:
     def __init__(self, repo_dirs=None):
         self._repo_dirs = list(repo_dirs) if repo_dirs else None
         self._bulk_cache: dict = {}
+        self._bulk_ok_cache: dict = {}
+        self._repos_cache: Optional[list] = None
         self._status = None
         self._detail = ""
 
@@ -556,6 +575,8 @@ class GhProbe:
     def _repos(self, root: Path):
         if self._repo_dirs is not None:
             return [Path(d) for d in self._repo_dirs]
+        if self._repos_cache is not None:
+            return self._repos_cache
         repos = []
         candidates = [root]
         try:
@@ -574,36 +595,46 @@ class GhProbe:
                 continue
             if "github.com" in (remote.stdout or ""):
                 repos.append(c)
+        self._repos_cache = repos
         return repos
 
     def _bulk_list(self, repo: Path):
         key = str(repo)
         if key in self._bulk_cache:
             return self._bulk_cache[key]
+        data, ok = [], False
         try:
             proc = subprocess.run(
                 ["gh", "pr", "list", "--state", "all", "--limit", "300",
                  "--json", "number,state,headRefName,mergedAt"],
                 capture_output=True, text=True, timeout=_subprocess_timeout(), cwd=str(repo),
             )
-            data = json.loads(proc.stdout) if proc.returncode == 0 else []
-        except (subprocess.TimeoutExpired, OSError, ValueError):
-            data = []
+            if proc.returncode == 0:
+                data = json.loads(proc.stdout)
+                ok = True
+        except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
+            data, ok = [], False
         self._bulk_cache[key] = data
+        self._bulk_ok_cache[key] = ok
         return data
 
     def __call__(self, task: str, branch_keys, commit_hash, root: Path) -> PrInfo:
         status, _ = self.preflight(root)
         if status != "ok":
             return PrInfo(state="unknown")
+        any_unsaturated_ok_no_match = False
         for repo in self._repos(root):
             rows = self._bulk_list(repo)
+            ok = self._bulk_ok_cache.get(str(repo), True)
             saturated = len(rows) >= 300
             for bk in branch_keys:
                 for r in rows:
                     if r.get("headRefName") == bk:
                         return PrInfo(state=_pr_state_from_row(r), number=r.get("number"), repo=repo.name)
-            if not branch_keys and commit_hash:
+            # Not matched on a branch key in this repo (or there were none):
+            # fall back to a commit-SHA search whenever we have a hash to
+            # search with, not only when branch_keys is empty.
+            if commit_hash:
                 try:
                     proc = subprocess.run(
                         ["gh", "pr", "list", "--state", "all", "--search", commit_hash,
@@ -611,14 +642,34 @@ class GhProbe:
                         capture_output=True, text=True, timeout=_subprocess_timeout(), cwd=str(repo),
                     )
                     sha_rows = json.loads(proc.stdout) if proc.returncode == 0 else []
-                except (subprocess.TimeoutExpired, OSError, ValueError):
+                except (subprocess.TimeoutExpired, OSError, ValueError, TypeError):
                     sha_rows = []
                 if sha_rows:
                     r0 = sha_rows[0]
                     return PrInfo(state=_pr_state_from_row(r0), number=r0.get("number"), repo=repo.name)
             if saturated:
                 return PrInfo(state="unknown")
+            if ok:
+                any_unsaturated_ok_no_match = True
+        if any_unsaturated_ok_no_match:
+            return PrInfo(state="none")
         return PrInfo(state="unknown")
+
+
+def _pr_lookup_accepts_root(pr_lookup) -> bool:
+    """True unless pr_lookup's positional signature clearly has fewer than 4
+    params — decided once via introspection, never via a TypeError retry
+    (a TypeError raised inside pr_lookup for an unrelated reason, e.g. bad
+    input data, must not be mistaken for an arity mismatch)."""
+    try:
+        params = inspect.signature(pr_lookup).parameters.values()
+    except (TypeError, ValueError):
+        return True
+    positional = [
+        p for p in params
+        if p.kind in (inspect.Parameter.POSITIONAL_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    return len(positional) >= 4
 
 
 def _apply_pr_effects(rows: list, root: Path, pr_lookup, repo_dirs, session_index: SessionIndex):
@@ -629,6 +680,8 @@ def _apply_pr_effects(rows: list, root: Path, pr_lookup, repo_dirs, session_inde
     gh_detail = ""
     if isinstance(pr_lookup, GhProbe):
         gh_status, gh_detail = pr_lookup.preflight(root)
+
+    accepts_root = _pr_lookup_accepts_root(pr_lookup)
 
     for row in rows:
         if row.get("_is_multi_stage"):
@@ -649,9 +702,9 @@ def _apply_pr_effects(rows: list, root: Path, pr_lookup, repo_dirs, session_inde
             continue
 
         commit_hash = eot.commit_hash if eot else None
-        try:
+        if accepts_root:
             info = pr_lookup(name, branch_keys, commit_hash, root)
-        except TypeError:
+        else:
             info = pr_lookup(name, branch_keys, commit_hash)
         row["pr"] = {"state": info.state, "number": info.number, "repo": info.repo}
 
@@ -674,7 +727,7 @@ def _apply_pr_effects(rows: list, root: Path, pr_lookup, repo_dirs, session_inde
 
 
 # ---------------------------------------------------------------------------
-# Options matrix, actions (T-05)
+# Options matrix, actions
 # ---------------------------------------------------------------------------
 
 _BUCKET_ORDER = ["done", "abandoned", "nearly-done", "in-progress", "not-a-task"]
@@ -763,13 +816,26 @@ def classify(root: Path, *, now: Optional[float] = None, stale_days: int = 14,
     if now is None:
         now = time.time()
     wa = root / ".workflow_artifacts"
-    session_index = SessionIndex(root)
+    candidates = scan_candidates(wa)
+    session_index = SessionIndex(root, task_names={c.name for c in candidates})
 
     rows: list = []
     silenced: list = []
 
-    for task_dir in scan_candidates(wa):
+    for task_dir in candidates:
         name = task_dir.name
+
+        if not _TASK_NAME_RE.match(name):
+            last_activity_epoch, file_count = activity(task_dir)
+            idle = int((now - last_activity_epoch) // 86400)
+            fingerprint = _fingerprint(last_activity_epoch, file_count)
+            row = _finish_row(
+                name, {"bucket": "not-a-task", "evidence": ["unsafe folder name"],
+                       "next_commands": [], "prompt": False},
+                last_activity_epoch, idle, fingerprint, is_multi_stage=False,
+            )
+            rows.append(row)
+            continue
 
         if (task_dir / ".quoin-not-a-task").exists():
             silenced.append(name)
@@ -877,10 +943,11 @@ def classify(root: Path, *, now: Optional[float] = None, stale_days: int = 14,
 
 
 # ---------------------------------------------------------------------------
-# apply (T-06)
+# apply
 # ---------------------------------------------------------------------------
 
 _TASK_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_EXCLUDED_NAMES_LOWER = frozenset(n.lower() for n in _EXCLUDED_NAMES)
 
 
 def _validate_task_name(root: Path, task: str):
@@ -891,7 +958,10 @@ def _validate_task_name(root: Path, task: str):
         return None, "invalid task name"
     if not _TASK_NAME_RE.match(task):
         return None, "invalid task name"
-    if task in _EXCLUDED_NAMES:
+    # Case-insensitive: on a case-insensitive filesystem (default macOS),
+    # "Security-Review" resolves to the same directory as "security-review",
+    # so the exclusion has to key on lowercase too, not just exact match.
+    if task.lower() in _EXCLUDED_NAMES_LOWER:
         return None, "invalid task name"
     task_dir = root / ".workflow_artifacts" / task
     if task_dir.is_symlink():
@@ -902,16 +972,18 @@ def _validate_task_name(root: Path, task: str):
 
 
 def _is_not_a_task_by_disk(root: Path, task_dir: Path) -> bool:
-    """Disk rules 0-3 only (no PR probe, no idle/in-progress re-derivation)."""
-    wa = root / ".workflow_artifacts"
+    """Disk rules 0-3, in the same order classify uses: marker, then the stub
+    check (an empty or ledger-only folder is never refused, whether or not a
+    finalized/ twin exists — this is what lets apply trash/archive an empty
+    stub), then drive-conflict, then the general shape check."""
     name = task_dir.name
     if (task_dir / ".quoin-not-a-task").exists():
         return True
+    if is_stub(task_dir):
+        return False
     if _is_drive_conflict(name):
         return True
-    if not_a_task_shape(task_dir):
-        return True
-    return False
+    return not_a_task_shape(task_dir)
 
 
 def apply_action(root: Path, action: str, task: str, *, dry_run: bool = False,
