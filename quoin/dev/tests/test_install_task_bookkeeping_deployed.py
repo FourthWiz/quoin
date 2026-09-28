@@ -1,4 +1,4 @@
-"""IVG-262 T-09: install.sh deploys task_bookkeeping.py to both targets, plus
+"""install.sh deploys task_bookkeeping.py to both targets, plus
 the cleanup-task-bookkeeping.md reference doc.
 
 Two-tier test (mirrors test_install_nested_root_check_deployed.py):

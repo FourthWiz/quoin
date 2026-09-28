@@ -55,7 +55,7 @@ TIER1_MEMORY_FILES = (
     "clean-authored-content.md",
     # Category-3 comment-cleanup criteria (Tier-1 memory file)
     "comment-cleanup-criteria.md",
-    # IVG-262: /cleanup task-bookkeeping pass interactive procedure (Tier-1 memory file)
+    # /cleanup task-bookkeeping pass interactive procedure (Tier-1 memory file)
     "cleanup-task-bookkeeping.md",
 )
 
@@ -151,7 +151,7 @@ DEPLOYED_SCRIPTS = (
     "handoff_measure.py",  # IVG-248: agent-handoff payload-size instrument (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors footprint_report.py)
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
     "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
-    "task_bookkeeping.py",  # IVG-262: task-folder bookkeeping classifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "task_bookkeeping.py",  # task-folder bookkeeping classifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
 )
 
 # T-05: obsolete artifacts to remove from prior installs
@@ -458,7 +458,7 @@ CORE_SCRIPTS = (
     "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator core impl; required by ~/.claude/scripts/handoff_validate.py parents[1] loader
     "comment_cleanup.py",  # pre-PR comment cleanup core impl; required by the wrapper's parents[1] loader
-    "task_bookkeeping.py",  # IVG-262: task-folder bookkeeping classifier core impl; required by ~/.claude/scripts/task_bookkeeping.py parents[1] loader
+    "task_bookkeeping.py",  # task-folder bookkeeping classifier core impl; required by ~/.claude/scripts/task_bookkeeping.py parents[1] loader
 )
 
 

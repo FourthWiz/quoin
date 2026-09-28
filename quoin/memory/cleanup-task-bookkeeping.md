@@ -14,7 +14,7 @@ after the person confirms that specific task.
 
 ## Inputs
 
-Read from `task_bookkeeping.py classify --format json`:
+Read from `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format json`:
 
 - `rows[].task`, `rows[].bucket`, `rows[].evidence` — what to show the person.
 - `rows[].options` — the exact, ordered option list for that row's
@@ -93,11 +93,25 @@ AskUserQuestion(
 For each row the person confirmed an archive or trash action for:
 
 ```
-task_bookkeeping.py apply <archive|trash> <task> --expect <row.fingerprint>
+python3 __QUOIN_HOME__/scripts/task_bookkeeping.py apply <archive|trash> <task> --expect <row.fingerprint>
 ```
 
 On a non-zero exit, print that task's JSON error line and continue to the
 next confirmed row — one failed move never blocks the rest of the batch.
+
+### Option label -> action mapping
+
+Every option label in `rows[].options` maps to exactly one of these; there is
+no other action an answer can produce:
+
+| option label | action |
+|---|---|
+| `Archive` | `apply archive <task> --expect <row.fingerprint>` |
+| `Archive anyway` | `apply archive <task> --expect <row.fingerprint>` |
+| `Trash` | `apply trash <task> --expect <row.fingerprint>` |
+| `Leave` | no action — skip this row |
+| `Print /pr` | no action — collect `/pr` into the closing summary's Next commands block |
+| `Print /end_of_task <task>` | no action — collect `/end_of_task <task>` into the closing summary's Next commands block |
 
 ## Summary
 

@@ -1,10 +1,10 @@
-"""IVG-262 T-12: task-bookkeeping prose contracts across cleanup/SKILL.md,
+"""Task-bookkeeping prose contracts across cleanup/SKILL.md,
 checkpoint/SKILL.md, the reference doc, and the runtime-neutral core docs.
 
 Two-slicer pattern (lessons: scoped greps, not whole-file counts) plus a
 handful of cross-file ordering and region-scoped-count assertions that pin
-the D-16/D-17 decisions: the report-only resume hint, and the unconditional
-Step 7/Step 8 defer-to-the-pass rewording.
+the report-only resume hint, and the unconditional Step 7/Step 8
+defer-to-the-pass rewording.
 """
 from __future__ import annotations
 

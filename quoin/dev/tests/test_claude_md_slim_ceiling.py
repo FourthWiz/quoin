@@ -10,10 +10,10 @@ advisory whole-file projection at the bottom, which is deliberately loose).
 All addends are pinned exactly (plan MIN-1 r2 / MAJ-2 r3: every term in the
 projection is a named, re-derivable constant, no `~` approximations). Live
 figures re-derived at implement time (round-4 critic's well-formed blank-line
-model, MIN-1 of critic-response-4.md): keep set 7,311 B, generated header
+model): keep set 7,311 B, generated header
 338 B (pinned verbatim in T-04), pointer index 1,452 B (140 B header + 1,311 B
-of 24 rows + 1 blank) -> CLAUDE.slim.md source == 9,101 B exactly (re-measured
-IVG-262: keep set shrank 60 B when the finalization-rule bullet was shortened). This
+of 24 rows + 1 blank) -> CLAUDE.slim.md source == 9,101 B exactly (keep set
+shrank 60 B when the finalization-rule bullet was shortened). This
 matches the live committed file byte-for-byte (T-08 does not hand-transcribe
 this figure a second time; it reads the committed file directly).
 """

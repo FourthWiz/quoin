@@ -292,7 +292,7 @@ class TestPickActiveTask:
         assert pick_active_task(tmp_path) is None
 
     def test_excludes_trash_dir(self, tmp_path):
-        """IVG-262: newest-mtime trash/ dir must never be picked as the active task."""
+        """A newest-mtime trash/ dir must never be picked as the active task."""
         make_task(tmp_path, "old-task", ["current-plan.md"])
         trash = tmp_path / ".workflow_artifacts" / "trash"
         trash.mkdir(parents=True)

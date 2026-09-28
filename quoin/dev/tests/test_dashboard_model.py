@@ -396,7 +396,7 @@ def test_scan_tasks_excludes_memory_cache_finalized(tmp_path):
 
 
 def test_scan_tasks_excludes_trash(tmp_path):
-    """Test that a top-level trash/ dir is excluded from the scan (IVG-262)."""
+    """Test that a top-level trash/ dir is excluded from the scan."""
     root, _, _, _ = make_fixture_tree(tmp_path)
     trash_dir = root / ".workflow_artifacts" / "trash" / "2026-09-27" / "old-task"
     trash_dir.mkdir(parents=True)

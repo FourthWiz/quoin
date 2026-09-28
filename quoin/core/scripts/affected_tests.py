@@ -679,7 +679,7 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/thorough_plan/SKILL.md",
         "quoin/dev/tests/test_run_state_wiring.py",
     ),
-    # IVG-262: task-bookkeeping pass prose spans cleanup/SKILL.md,
+    # Task-bookkeeping pass prose spans cleanup/SKILL.md,
     # checkpoint/SKILL.md, the runtime-neutral core doc, the reference doc,
     # and README.md's Utilities row -- none of their existing rows reach the
     # bookkeeping-pass slicer assertions.
