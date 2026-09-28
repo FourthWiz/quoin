@@ -615,6 +615,7 @@ def test_posture_pin_full_allow_and_ask_set():
             (role, "edit", "%s/*" % generate.ARTIFACT_ROOT, "allow"),
             (role, "edit", "*/%s/*" % generate.ARTIFACT_ROOT, "allow"),
             (role, "bash", "*", "ask"),
+            (role, "bash", "quoin opencode script classify_critic_issues *", "allow"),
             (role, "bash", "quoin opencode script path_resolve *", "allow"),
             (role, "bash", "quoin opencode script validate_artifact *", "allow"),
             (role, "bash", "*>*", "ask"),
@@ -971,8 +972,18 @@ def test_instruction_document_contains_required_content():
     for phrase in (
         'any prompt, in any agent', 'not a security boundary', 'until OpenCode restarts', 'answer "once"',
         'creates or empties', '3>', 'written directly on', 'MCP or plugin tool',
+        "OpenCode's permission check treats the redirection as part of the whole list",
+        'external-directory prompts',
     ):
         assert phrase in perm_body, phrase
+    # The sentence introducing `3>` sits in its own paragraph, separated by a
+    # blank line from the paragraph naming `quoin opencode script`: no
+    # single rendered line both names the script runner and carries a
+    # redirection character.
+    for line in perm_body.splitlines():
+        if "quoin opencode script" in line:
+            assert ">" not in line and "<" not in line, line
+    assert "\n\n" in perm_body
     assert "for the rest of the session" not in instr
     assert perm_body.count("boundary") == perm_body.count("not a security boundary")
     assert "model diversity" not in instr
@@ -1479,6 +1490,40 @@ def test_no_script_reference_line_pairs_with_a_redirection_character():
                 continue
             stripped = placeholder_re.sub("", line)
             assert ">" not in stripped and "<" not in stripped, (relpath, line)
+
+
+def test_no_rendered_command_file_has_a_triple_blank_line():
+    # The command template places {{COMMAND_NOTE}} directly before the
+    # arguments line; an empty note must still leave exactly one blank
+    # line, never a stray one left over from the placeholder's own line.
+    files = generate.render_source_dir(SOURCE_DIR)
+    for relpath, rf in files.items():
+        if rf.kind != "command":
+            continue
+        text = rf.content.decode("utf-8")
+        assert "\n\n\n" not in text, relpath
+
+
+def test_command_note_keeps_exactly_one_blank_line_before_the_arguments_line():
+    files = generate.render_source_dir(SOURCE_DIR)
+    overlays = generate._read_json(SOURCE_DIR / "adapters" / "opencode" / "overlays.json")
+    saw_a_non_empty_note = False
+    for relpath, rf in files.items():
+        if rf.kind != "command":
+            continue
+        cid = rf.source_id
+        note = overlays["entries"][cid]["command_note"]
+        text = rf.content.decode("utf-8")
+        assert "Arguments passed to this command:" in text
+        if note:
+            saw_a_non_empty_note = True
+            expected_prefix = generate._expand_artifact_root(note) + "\n\nArguments passed to this command:"
+            assert expected_prefix in text, relpath
+        else:
+            assert "\n\nArguments passed to this command:" in text, relpath
+    # At least one real command (a critic- or reviewer-delegating one) has a
+    # non-empty command_note, so the non-empty branch above is exercised.
+    assert saw_a_non_empty_note
 
 
 def test_forbidden_patterns_and_model_ids_over_every_rendered_file():

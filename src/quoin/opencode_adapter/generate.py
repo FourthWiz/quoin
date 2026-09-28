@@ -43,8 +43,8 @@ READ_RULE = {"*": "allow", "*.env": "ask", "*.env.*": "ask", "*.env.example": "a
 # investigator holds a write-capable script (scripts.WRITE_CAPABLE_SCRIPTS):
 # `generate_discovery_map`.
 ROLE_SCRIPTS: Dict[str, tuple] = {
-    "architect": ("path_resolve", "validate_artifact"),
-    "planner": ("path_resolve", "validate_artifact"),
+    "architect": ("classify_critic_issues", "path_resolve", "validate_artifact"),
+    "planner": ("classify_critic_issues", "path_resolve", "validate_artifact"),
     "gate": ("path_resolve", "validate_artifact"),
     "implementer": ("path_resolve", "validate_artifact"),
     "coordinator": (
@@ -940,7 +940,13 @@ def render(inputs: GeneratorInputs) -> Dict[str, RenderedFile]:
         agent = names.role_agent_name(role)
         overlay_entry = inputs.overlays["entries"][cid]
         description = _expand_artifact_root(overlay_entry["description"])
-        command_note = _expand_artifact_root(overlay_entry["command_note"])
+        expanded_command_note = _expand_artifact_root(overlay_entry["command_note"])
+        # The template places {{COMMAND_NOTE}} directly before "Arguments
+        # passed to this command:" on the same line, so a non-empty note
+        # supplies its own trailing blank line and an empty one leaves
+        # exactly one blank line between the intro paragraph and the
+        # arguments line.
+        command_note = expanded_command_note + "\n\n" if expanded_command_note else ""
 
         parts_c = {
             "kind": "command",
