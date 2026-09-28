@@ -841,10 +841,10 @@ def test_load_inputs_on_the_real_tree_succeeds():
 
 
 def test_load_inputs_raises_generation_error_on_drifting_manifest(tmp_path):
-    import shutil
+    import _opencode_helpers
 
     copy_dir = tmp_path / "quoin"
-    shutil.copytree(SOURCE_DIR, copy_dir)
+    _opencode_helpers.copy_source_subset(copy_dir)
     manifest_path = copy_dir / "adapters" / "opencode" / "feature-manifest.json"
     data = json.loads(manifest_path.read_text())
     data["schema_version"] = 999
@@ -1267,10 +1267,10 @@ def test_overlay_drift_template_unknown_placeholder_raises():
 
 
 def test_load_inputs_on_temp_copy_with_drifting_manifest_raises_with_drift_message(tmp_path):
-    import shutil
+    import _opencode_helpers
 
     copy_dir = tmp_path / "quoin"
-    shutil.copytree(SOURCE_DIR, copy_dir)
+    _opencode_helpers.copy_source_subset(copy_dir)
     manifest_path = copy_dir / "adapters" / "opencode" / "feature-manifest.json"
     data = json.loads(manifest_path.read_text())
     data["roles"]["architect"]["mode"] = "bogus-mode"
@@ -1300,10 +1300,10 @@ def test_claude_token_inside_instructions_legacy_section_is_accepted():
 
 
 def _copy_source_tree(tmp_path):
-    import shutil
+    import _opencode_helpers
 
     copy_dir = tmp_path / "quoin"
-    shutil.copytree(SOURCE_DIR, copy_dir)
+    _opencode_helpers.copy_source_subset(copy_dir)
     return copy_dir
 
 
@@ -1563,7 +1563,7 @@ def test_render_from_a_full_copy_matches_the_worktree_render(tmp_path):
     import shutil
 
     copy_dir = tmp_path / "quoin"
-    shutil.copytree(SOURCE_DIR, copy_dir)
+    shutil.copytree(SOURCE_DIR, copy_dir, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     files_worktree = generate.render_source_dir(SOURCE_DIR)
     files_copy = generate.render_source_dir(copy_dir)
     assert files_worktree.keys() == files_copy.keys()
@@ -1710,10 +1710,10 @@ def test_dependency_exact_entry_notes_edit_changes_only_that_skill():
 
 
 def test_dependency_exact_non_bundle_contract_edit_changes_nothing(tmp_path):
-    import shutil
+    import _opencode_helpers
 
     copy_dir = tmp_path / "quoin"
-    shutil.copytree(SOURCE_DIR, copy_dir)
+    _opencode_helpers.copy_source_subset(copy_dir)
     before = generate.render_source_dir(copy_dir)
 
     sleep_path = copy_dir / "core" / "skills" / "sleep.md"

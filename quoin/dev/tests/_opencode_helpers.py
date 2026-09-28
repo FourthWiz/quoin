@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
+import shutil
 import socket
 import sys
 import threading
@@ -13,10 +14,37 @@ from pathlib import Path
 
 import pytest
 
-OPENCODE_DIR = Path(__file__).resolve().parent.parent.parent / "adapters" / "opencode"
+SOURCE_DIR = Path(__file__).resolve().parent.parent.parent
+OPENCODE_DIR = SOURCE_DIR / "adapters" / "opencode"
 
 SEEDED_SECRET = "sk-test-SEEDED-SECRET-0000"
 SEEDED_SECRET_ESCAPED = 'sk-test-"quo\\te"-SECRET-1111'
+
+# The subset of the quoin source tree the opencode generator and installer
+# actually read: the adapter's own directory, the contract and rules files
+# the generator pulls in, and the helper scripts the runner dispatches to.
+_SOURCE_SUBSET_DIRS = ("adapters/opencode", "core/workflow", "core/skills", "core/scripts")
+
+
+def copy_source_subset(dest) -> Path:
+    """Copy `_SOURCE_SUBSET_DIRS` plus the format-kit sidecar into `dest`,
+    and give it an empty `skills/` directory so `_resolve_source_dir`
+    accepts `dest` as an explicit `--source-dir` (it only checks for that
+    directory's presence). A full `shutil.copytree` of the whole quoin
+    source tree is unnecessary for tests that only read this subset, and
+    copying only it is materially faster.
+    """
+    dest = Path(dest)
+    ignore = shutil.ignore_patterns("__pycache__", "*.pyc")
+    for rel in _SOURCE_SUBSET_DIRS:
+        shutil.copytree(SOURCE_DIR / rel, dest / rel, ignore=ignore)
+    (dest / "memory").mkdir(parents=True, exist_ok=True)
+    shutil.copy2(
+        SOURCE_DIR / "memory" / "format-kit.sections.json",
+        dest / "memory" / "format-kit.sections.json",
+    )
+    (dest / "skills").mkdir(parents=True, exist_ok=True)  # required by --source-dir resolution
+    return dest
 
 
 def load_module(path, name):

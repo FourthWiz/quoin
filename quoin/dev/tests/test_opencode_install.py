@@ -1371,22 +1371,11 @@ def test_uninstall_keeps_an_edited_file_and_leaves_workflow_and_env_untouched(tm
     assert env_path.read_bytes() == env_before
 
 
-def _reinstall_source_subset(dest: Path) -> None:
-    import shutil
-
-    for rel in ("adapters/opencode", "core/workflow", "core/skills", "core/scripts"):
-        shutil.copytree(SOURCE_DIR / rel, dest / rel)
-    (dest / "memory").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(
-        SOURCE_DIR / "memory" / "format-kit.sections.json",
-        dest / "memory" / "format-kit.sections.json",
-    )
-    (dest / "skills").mkdir(parents=True, exist_ok=True)  # required by --source-dir resolution
-
-
 def test_reinstall_after_a_skill_edit_updates_only_that_skill_and_metadata(tmp_path):
+    import _opencode_helpers
+
     source = tmp_path / "source"
-    _reinstall_source_subset(source)
+    _opencode_helpers.copy_source_subset(source)
     root = tmp_path / "proj"
     root.mkdir()
 
