@@ -82,6 +82,9 @@ def _write_skill(path: Path, name: str, body: str = "content") -> None:
         ("---\nname: plan\nno closing fence", "unverified", None),
         ("---\n  name: indented\n---\n", "absent", None),
         ("---\nname: \n---\n", "unverified", None),
+        ('---\n"name": plan\n---\n', "unverified", None),
+        ("---\n'name': plan\n---\n", "unverified", None),
+        ("---\n{name: plan}\n---\n", "unverified", None),
     ],
 )
 def test_read_skill_name_cases(text, expected_kind, expected_name):
@@ -227,6 +230,40 @@ def test_duplicate_remediation_names_no_location_and_adds_url_sentence_when_conf
     assert "URL" in dup[0].remediation
 
 
+def test_skills_paths_absolute_root_never_prints_raw(fixture):
+    """Major 1 regression: an absolute `skills.paths` entry outside every
+    known root (project root, home, config-location env vars) must still
+    render through a named root in a duplicate finding, never as a raw
+    absolute filesystem path."""
+    home, project, source_dir, env = fixture
+    sp_dir = home.parent / "sp-outside"
+    _write_skill(sp_dir / "dup" / "SKILL.md", "dup")
+    _write_skill(project / ".opencode" / "skills" / "dup" / "SKILL.md", "dup")
+    (project / "opencode.json").write_text(
+        json.dumps({"skills": {"paths": [str(sp_dir)]}}), encoding="utf-8"
+    )
+
+    findings = _run_host(project, source_dir, env, home)
+    dup = [f for f in findings if f.id == "skill-duplicate-unnamed"]
+    assert len(dup) == 1
+    assert str(sp_dir) not in dup[0].message
+    assert "skills.paths[0] of ./opencode.json" in dup[0].message
+
+
+def test_skills_paths_relative_root_never_prints_raw(fixture):
+    home, project, source_dir, env = fixture
+    _write_skill(project / "sp-rel" / "dup" / "SKILL.md", "dup")
+    _write_skill(project / ".opencode" / "skills" / "dup" / "SKILL.md", "dup")
+    (project / "opencode.json").write_text(
+        json.dumps({"skills": {"paths": ["sp-rel"]}}), encoding="utf-8"
+    )
+
+    findings = _run_host(project, source_dir, env, home)
+    dup = [f for f in findings if f.id == "skill-duplicate-unnamed"]
+    assert len(dup) == 1
+    assert "skills.paths[0] of ./opencode.json" in dup[0].message
+
+
 # --- permission-loosened ---------------------------------------------------
 
 
@@ -279,7 +316,16 @@ def test_census_never_prints_a_secret(fixture, monkeypatch):
 
     ocd = home.parent / ("ocd-" + secret)
     ocd.mkdir()
-    (ocd / "opencode.json").write_text(json.dumps({"subagent_depth": 3}), encoding="utf-8")
+
+    sp_abs = home.parent / ("sp-abs-" + secret)
+    _write_skill(sp_abs / "dup" / "SKILL.md", "dup")
+    _write_skill(project_opencode.parent / "dup" / "SKILL.md", "dup")
+    sp_rel_name = "sp-rel-" + secret
+    _write_skill(project / sp_rel_name / "dup2" / "SKILL.md", "dup2")
+    _write_skill(project_opencode.parent / "dup2" / "SKILL.md", "dup2")
+    (ocd / "opencode.json").write_text(
+        json.dumps({"subagent_depth": 3, "skills": {"paths": [str(sp_abs), sp_rel_name]}}), encoding="utf-8"
+    )
 
     env = {
         "HOME": str(real_home),

@@ -146,6 +146,54 @@ def test_owned_unreadable_on_chmod_000_and_run_completes(fixture):
     assert [f.id for f in findings if f.id == "owned-unreadable" and f.path == "./" + relpath]
 
 
+def test_install_version_differs_redacts_non_version_metadata(fixture):
+    """Minor 1 regression: `install.py` only checks `isinstance(str)` before
+    persisting `quoin_version`/`opencode_version`, so a corrupted or
+    hand-edited metadata file can carry an arbitrary string. The doctor
+    must never interpolate it verbatim into a finding message."""
+    home, project, source_dir, env = fixture
+    _install(project, source_dir, env)
+    meta_path = project / install.METADATA_RELPATH
+    obj = json.loads(meta_path.read_text(encoding="utf-8"))
+    obj["quoin_version"] = "v-" + helpers.SEEDED_SECRET
+    obj["opencode_version"] = "\x1b[31m1.2.3\x1b[0m"
+    meta_path.write_text(json.dumps(obj), encoding="utf-8")
+
+    findings = _run_host(project, source_dir, env, home)
+    differs = [f for f in findings if f.id == "install-version-differs"]
+    assert len(differs) == 1
+    assert helpers.SEEDED_SECRET not in differs[0].message
+    assert "\x1b" not in differs[0].message
+    assert "unknown" in differs[0].message
+
+
+def test_home_opencode_dir_reads_its_own_opencode_json_directly(fixture):
+    """Major 3 regression: `~/.opencode` already ends in `.opencode`, so it
+    must be read directly (`~/.opencode/opencode.json`), never with another
+    `.opencode` appended (`~/.opencode/.opencode/opencode.json`, which
+    OpenCode itself never reads)."""
+    home, project, source_dir, env = fixture
+    home_ocd = home / ".opencode"
+    home_ocd.mkdir()
+    (home_ocd / "opencode.json").write_text(json.dumps({"subagent_depth": 4}), encoding="utf-8")
+    findings = _run_host(project, source_dir, env, home)
+    raised = [f for f in findings if f.id == "subagent-depth-raised"]
+    assert len(raised) == 1 and "4" in raised[0].message
+    assert not [f.id for f in findings if f.id == "config-unreadable"]
+
+
+def test_home_opencode_dir_jsonc_variant_is_also_read(fixture):
+    home, project, source_dir, env = fixture
+    home_ocd = home / ".opencode"
+    home_ocd.mkdir()
+    (home_ocd / "opencode.jsonc").write_text(
+        "{\n  // a comment\n  \"subagent_depth\": 2,\n}\n", encoding="utf-8"
+    )
+    findings = _run_host(project, source_dir, env, home)
+    assert [f.id for f in findings if f.id == "subagent-depth-raised"]
+    assert not [f.id for f in findings if f.id == "config-unreadable"]
+
+
 def test_manifest_drift_reports_count(fixture, monkeypatch):
     home, project, source_dir, env = fixture
     monkeypatch.setattr(manifest, "check_source_dir", lambda _sd: ["a", "b", "c"])
@@ -227,6 +275,87 @@ def test_jsonc_with_comments_and_trailing_comma_parses(fixture):
     findings = _run_host(project, source_dir, env, home)
     assert [f.id for f in findings if f.id == "subagent-depth-raised"]
     assert not [f.id for f in findings if f.id == "config-unreadable"]
+
+
+def test_jsonc_trailing_comma_regex_does_not_touch_a_string_value(fixture):
+    """Minor 6 regression: a `,}`/`,]` substring inside a JSON string value
+    must survive; only a genuine trailing comma before a closing brace or
+    bracket, outside any string literal, is stripped."""
+    home, project, source_dir, env = fixture
+    text = json.dumps({"subagent_depth": 2, "instructions": ["a value with a ,} inside it"]})
+    (project / "opencode.json").write_text(text, encoding="utf-8")
+    findings = _run_host(project, source_dir, env, home)
+    assert [f.id for f in findings if f.id == "subagent-depth-raised"]
+    assert not [f.id for f in findings if f.id == "config-unreadable"]
+
+
+def test_strip_jsonc_leaves_a_string_bearing_trailing_comma_syntax_intact():
+    text = '{\n  "a": "x,}",\n  "b": 1,\n}\n'
+    stripped = doctor._strip_jsonc(text)
+    payload = json.loads(stripped)
+    assert payload == {"a": "x,}", "b": 1}
+
+
+def test_big_int_subagent_depth_does_not_crash_and_is_config_unreadable(fixture):
+    """Major 2 regression: a 5000-digit integer literal trips Python's
+    int-string-conversion limit inside `json.loads` with a bare `ValueError`
+    (not `json.JSONDecodeError`), on Python 3.14+. The doctor must degrade
+    to a `config-unreadable` finding, not crash."""
+    home, project, source_dir, env = fixture
+    text = '{"subagent_depth": %s}' % ("9" * 5000)
+    (project / "opencode.json").write_text(text, encoding="utf-8")
+    findings = _run_host(project, source_dir, env, home)
+    assert [f.id for f in findings if f.id == "config-unreadable"]
+    assert not [f.id for f in findings if f.id == "subagent-depth-raised"]
+
+
+class _OutSink:
+    def __init__(self):
+        self.parts = []
+
+    def write(self, text):
+        self.parts.append(text)
+
+    def getvalue(self):
+        return "".join(self.parts)
+
+
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ValueError("boom"),
+        OSError("boom"),
+        RecursionError("boom"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "boom"),
+        json.JSONDecodeError("boom", "doc", 0),
+    ],
+    ids=["ValueError", "OSError", "RecursionError", "UnicodeDecodeError", "JSONDecodeError"],
+)
+def test_run_doctor_boundary_catches_every_documented_exception_class(fixture, monkeypatch, exc):
+    """Major 2 regression: `run_doctor` must catch each documented
+    exception class raised anywhere in the host-mode path and emit a
+    redacted finding with a non-zero exit, never let a traceback (which
+    could carry a raw path or config value) escape to the caller."""
+    home, project, source_dir, env = fixture
+
+    def _boom(*_a, **_k):
+        raise exc
+
+    monkeypatch.setattr(doctor, "run_host", _boom)
+
+    for as_json in (False, True):
+        out, err = _OutSink(), _OutSink()
+        code = doctor.run_doctor(project, source_dir, False, as_json, out, err, env=env, home=home, which=_which_none)
+        assert code != 0
+        combined = out.getvalue() + err.getvalue()
+        assert "Traceback" not in combined
+        assert "boom" not in combined
+        assert str(home) not in combined
+        assert str(project) not in combined
+        assert "doctor-internal-error" in combined
+        if as_json:
+            payload = json.loads(out.getvalue())
+            assert {f["id"] for f in payload["findings"]} == {"doctor-internal-error"}
 
 
 def test_garbage_config_yields_config_unreadable(fixture):

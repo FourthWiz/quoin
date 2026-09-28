@@ -114,7 +114,7 @@ checks a project's generated OpenCode assets.
   project's own `.opencode/skills`, legacy Claude Code skills OpenCode may
   also load), a user `permission` config that narrows a tool a generated
   role's own permission map still allows while it runs, and the `opencode`
-  binary's presence, PATH position and version. Because it reads the real
+  binary's presence and version (not its position on `PATH`). Because it reads the real
   host, a machine that also has Quoin's Claude adapter installed normally
   reports warnings — its own Claude rules files and skills are visible to
   the census, and that is expected, not a failure. Use `--smoke` for a
@@ -132,7 +132,7 @@ Exit codes:
 |---|---|
 | 0 | healthy — no `error` or `warn` findings |
 | 1 | one or more `error` findings, or a `--smoke` check failed |
-| 2 | usage error, such as `--json` or `--smoke` combined with a non-`opencode` runtime |
+| 2 | usage error, such as `--json` combined with a non-`opencode` runtime (`--smoke` is valid for `codex` too) |
 | 4 | warnings only — no `error` findings, at least one `warn` finding |
 
 JSON schema (`--json`):

@@ -101,6 +101,7 @@ MESSAGES: Dict[str, str] = {
     "skills-path-missing": "skills.paths[%(number)s] in %(path)s names a directory that does not exist",
     "census-truncated": "the skill census stopped early after reaching its file or directory visit cap (%(count)s file(s) counted)",
     "permission-loosened": "a config file's user permission narrows the following tools, but a generated role allows them while it runs: %(names)s",
+    "doctor-internal-error": "the doctor could not complete because of an unexpected host or config condition (%(name)s)",
 }
 
 _REMEDIATIONS: Dict[str, str] = {
@@ -125,7 +126,7 @@ _REMEDIATIONS: Dict[str, str] = {
     "quoin-skill-outside-project": "a skill named this may shadow or be shadowed by the project's own generated skill; move it or rename it",
     "legacy-claude-skills": "set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS or OPENCODE_DISABLE_CLAUDE_CODE to stop OpenCode from scanning it; Quoin's generated roles already deny skills outside the quoin-* set",
     "skills-path-missing": "create the directory, or remove the entry from skills.paths",
-    "permission-loosened": "a generated role's own permission always wins while that role is active; narrow the role's own permission map instead of the user config",
+    "permission-loosened": "a generated role's own permission can override a stricter user config while that role runs directly; narrow the role's own permission map instead of the user config",
 }
 
 
@@ -493,17 +494,26 @@ def run_doctor(
         print("opencode doctor: project root %s is not a directory" % project_root, file=err)
         return 2
 
-    if smoke:
-        findings = run_smoke(source_dir)
-    else:
-        findings = run_host(
-            root,
-            source_dir,
-            os.environ if env is None else env,
-            Path.home() if home is None else home,
-            __import__("shutil").which if which is None else which,
-            version_runner,
-        )
+    try:
+        if smoke:
+            findings = run_smoke(source_dir)
+        else:
+            findings = run_host(
+                root,
+                source_dir,
+                os.environ if env is None else env,
+                Path.home() if home is None else home,
+                __import__("shutil").which if which is None else which,
+                version_runner,
+            )
+    except (ValueError, OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        # Last-resort boundary: nothing here may reach `out`/`err` except
+        # the exception's class name (never `str(exc)`, which can carry a
+        # raw path or config value) — see the module docstring's redaction
+        # contract. Individual channels (config parsing, host `is_dir`
+        # probes) already degrade to a specific finding where practical;
+        # this only catches what those miss.
+        findings = [make_finding("doctor-internal-error", "error", name=type(exc).__name__)]
 
     status = report_status(findings)
     text = render_json(findings, status) if as_json else render_text(findings, status)
@@ -534,6 +544,18 @@ _CONFIG_LOCATION_VARS = ("OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG", "OPENCODE_CON
 _VERSION_RE = re.compile(r"\d+\.\d+\.\d+")
 
 
+def _safe_version(value) -> str:
+    """A metadata-sourced version string, exactly as it will be printed in
+    a finding message. `install.py` only checks `isinstance(str)` before
+    writing it to the install-ownership record, so a doctor run must not
+    trust it to be a well-formed version on its own — an operator-editable
+    (or corrupted) metadata file could carry an arbitrary string, including
+    an ANSI escape or embedded secret-looking text."""
+    if isinstance(value, str) and _VERSION_RE.fullmatch(value):
+        return value
+    return "unknown"
+
+
 def _flag_set(env, name: str) -> bool:
     value = env.get(name)
     if value is None:
@@ -553,7 +575,10 @@ def _worktree_root(root) -> Path:
     fallback (project/project.ts L217)."""
     current = Path(os.path.abspath(str(root)))
     while True:
-        if (current / ".git").exists():
+        # `os.path.lexists` (unlike `Path.exists()`) swallows any `OSError`
+        # — including `EACCES` on Python 3.10-3.13, where `Path.exists()`
+        # re-raises a permission error instead of treating it as absent.
+        if os.path.lexists(str(current / ".git")):
             return current
         parent = current.parent
         if parent == current:
@@ -648,12 +673,14 @@ def _install_state_findings(root: Path, rendered, source_dir, roots) -> List[Fin
     except manifest.ManifestLoadError:
         pinned = None
     if meta.quoin_version != __about__.__version__ or (pinned is not None and meta.opencode_version != pinned):
+        safe_quoin_version = _safe_version(meta.quoin_version)
+        safe_opencode_version = _safe_version(meta.opencode_version)
         findings.append(
             make_finding(
                 "install-version-differs",
                 "info",
-                version="quoin %s, opencode %s" % (meta.quoin_version, meta.opencode_version),
-                expected="quoin %s, opencode %s" % (__about__.__version__, pinned or meta.opencode_version),
+                version="quoin %s, opencode %s" % (safe_quoin_version, safe_opencode_version),
+                expected="quoin %s, opencode %s" % (__about__.__version__, pinned or safe_opencode_version),
             )
         )
 
@@ -787,7 +814,44 @@ def _strip_jsonc(text: str) -> str:
         out.append(c)
         i += 1
     stripped = "".join(out)
-    return re.sub(r",(\s*[}\]])", r"\1", stripped)
+
+    # Strip a trailing comma before a closing `}` or `]`, outside string
+    # literals only: the naive whole-text regex this replaced would also
+    # strip a `,}`/`,]` substring sitting inside a JSON string *value*
+    # (comments are already gone above, so this second string-aware pass
+    # only has to track quoting, not comments too).
+    result: List[str] = []
+    in_string = False
+    escape = False
+    j = 0
+    m = len(stripped)
+    while j < m:
+        c = stripped[j]
+        if in_string:
+            result.append(c)
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            j += 1
+            continue
+        if c == '"':
+            in_string = True
+            result.append(c)
+            j += 1
+            continue
+        if c == ",":
+            k = j + 1
+            while k < m and stripped[k] in " \t\r\n":
+                k += 1
+            if k < m and stripped[k] in "}]":
+                j += 1
+                continue  # drop the trailing comma; the closing brace/bracket is appended on its own turn
+        result.append(c)
+        j += 1
+    return "".join(result)
 
 
 def _load_config_file(path: Path) -> Optional[dict]:
@@ -807,7 +871,12 @@ def _load_config_file(path: Path) -> Optional[dict]:
         raise _ConfigUnreadable()
     try:
         payload = json.loads(_strip_jsonc(text))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, ValueError, RecursionError):
+        # `ValueError` also covers a bare int-string-conversion limit error
+        # (a huge integer literal, e.g. `subagent_depth` with thousands of
+        # digits) that `json.loads` can raise outside `JSONDecodeError` —
+        # not a parse error by class, but this config file is equally
+        # unreadable either way.
         raise _ConfigUnreadable()
     if not isinstance(payload, dict):
         raise _ConfigUnreadable()
@@ -849,17 +918,31 @@ def _read_config_files(root: Path, worktree: Path, env, home, roots) -> Tuple[Li
             _try(d / "opencode.json")
             _try(d / "opencode.jsonc")
 
-    dotted_dirs: List[Path] = list(project_dirs)  # each dir's own `.opencode` subdir, below
+    # `project_dirs` are worktree-chain directories that each need their own
+    # `.opencode` subdir appended. `home_opencode` and `config_dir_env`, by
+    # contrast, already name a `.opencode`-suffixed (or override) directory
+    # and must be read directly — appending another `.opencode` under them
+    # reads a directory OpenCode never does (`config/paths.ts` L23-39: the
+    # walked-up home entry stops at `home`, so it is exactly `home/.opencode`;
+    # `config/config.ts` L438-448 reads `opencode.json(c)` directly from any
+    # directory in that list whose name already ends in `.opencode`, or that
+    # equals `OPENCODE_CONFIG_DIR`, with no extra subdir appended).
+    dotted_dirs: List[Path] = list(project_dirs)  # each dir's own `.opencode` subdir, appended below
+    already_dotted: set = set()
     home_opencode = Path(home) / ".opencode"
-    if home_opencode.is_dir():
+    # `os.path.isdir` (unlike `Path.is_dir()`) swallows any `OSError` —
+    # including `EACCES` on Python 3.10-3.13 for an unreadable parent dir.
+    if os.path.isdir(str(home_opencode)):
         dotted_dirs.append(home_opencode)
+        already_dotted.add(os.path.abspath(str(home_opencode)))
     config_dir_env = env.get("OPENCODE_CONFIG_DIR")
     if config_dir_env:
         dotted_dirs.append(Path(config_dir_env))
+        already_dotted.add(os.path.abspath(str(config_dir_env)))
 
     seen: set = set()
     for d in dotted_dirs:
-        candidate = d if (config_dir_env and os.path.abspath(str(d)) == os.path.abspath(config_dir_env)) else d / ".opencode"
+        candidate = d if os.path.abspath(str(d)) in already_dotted else d / ".opencode"
         norm = os.path.abspath(str(candidate))
         if norm in seen:
             continue
@@ -939,6 +1022,8 @@ _SCALAR_BAD_PREFIXES = (">", "|", "[", "{", "&", "*", "!", "%", "@", "`")
 _YAML_LITERALS = frozenset(("true", "false", "yes", "no", "on", "off", "null", "~"))
 _NUMBER_RE = re.compile(r"^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 _NAME_LINE_RE = re.compile(r"^name[ \t]*:")
+_QUOTED_NAME_LINE_RE = re.compile(r"""^["']name["'][ \t]*:""")
+_FLOW_MAPPING_LINE_RE = re.compile(r"^\{.*\}[ \t]*(#.*)?$")
 _SINGLE_QUOTED_RE = re.compile(r"^'((?:[^']|'')*)'\s*(#.*)?$")
 
 
@@ -984,6 +1069,16 @@ def read_skill_name(text: str) -> Tuple[str, Optional[str]]:
     if close_idx is None:
         return ("unverified", None)
     body = lines[1:close_idx]
+    # A quoted `name` key (`"name":`/`'name':`) or a flow-mapping frontmatter
+    # block (`{name: plan}`) may or may not define `name` the way OpenCode's
+    # own YAML parser sees it — this reader only tolerates the plain
+    # unquoted-key, block-mapping form `_NAME_LINE_RE` matches. Either shape
+    # must read `unverified` (cannot say with certainty), never `absent`
+    # (certain OpenCode reads no name), which is the reader's contract.
+    if any(_FLOW_MAPPING_LINE_RE.match(ln) for ln in body):
+        return ("unverified", None)
+    if any(_QUOTED_NAME_LINE_RE.match(ln) for ln in body):
+        return ("unverified", None)
     name_idxs = [i for i, ln in enumerate(body) if _NAME_LINE_RE.match(ln)]
     if not name_idxs:
         return ("absent", None)
@@ -1116,7 +1211,7 @@ def _census_config_dirs(root: Path, worktree: Path, env, home) -> List[Path]:
         for dirp in _dir_chain(worktree, root):
             dirs.append(dirp / ".opencode")
     home_opencode = Path(home) / ".opencode"
-    if home_opencode.is_dir():
+    if os.path.isdir(str(home_opencode)):
         dirs.append(home_opencode)
     config_dir_env = env.get("OPENCODE_CONFIG_DIR")
     if config_dir_env:
@@ -1172,7 +1267,7 @@ def census(project_root, worktree, env, home, docs) -> Tuple[Dict[str, List[Path
         if norm_root in seen_roots:
             return
         seen_roots.add(norm_root)
-        if not start.is_dir():
+        if not os.path.isdir(str(start)):
             return
         for match in _walk_for_skill_md(start, want_dot, budget):
             norm_match = os.path.abspath(str(match))
@@ -1278,7 +1373,7 @@ def _legacy_claude_unit_count(root: Path, worktree: Path, home, catalog_ids) -> 
         starts.append(dirp / ".claude" / "skills")
     for start in starts:
         norm = os.path.abspath(str(start))
-        if norm in seen_roots or not start.is_dir():
+        if norm in seen_roots or not os.path.isdir(str(start)):
             seen_roots.add(norm)
             continue
         seen_roots.add(norm)
@@ -1309,6 +1404,22 @@ def _census_findings(project_root, worktree, env, home, docs, rendered, roots) -
     )
     findings: List[Finding] = list(base_findings)
 
+    # `roots` alone never covers a `skills.paths` entry outside every known
+    # root (project root, config-location env vars, home): without this, a
+    # unit found under such an entry prints as a raw absolute path in the
+    # duplicate/outside-project findings below. Mirror census()'s own entry
+    # resolution exactly so the root matches the path census actually walked.
+    display_roots = list(roots)
+    skills_paths, skills_paths_doc = _last_skills_field(docs, "paths")
+    if isinstance(skills_paths, list):
+        cfg_display = display_path(skills_paths_doc, roots) if skills_paths_doc else ""
+        for i, entry in enumerate(skills_paths):
+            if not isinstance(entry, str):
+                continue
+            expanded = os.path.expanduser(entry)
+            resolved = expanded if os.path.isabs(expanded) else str(Path(project_root) / expanded)
+            display_roots.append((resolved, "skills.paths[%d] of %s" % (i, cfg_display)))
+
     catalog_ids = frozenset(
         rf.source_id for rf in rendered.values() if rf.kind == "skill"
     ) if rendered else frozenset()
@@ -1322,7 +1433,7 @@ def _census_findings(project_root, worktree, env, home, docs, rendered, roots) -
     for name in sorted(census_map):
         locations = census_map[name]
         if len(locations) >= 2:
-            display_paths = [display_path(loc, roots) for loc in locations]
+            display_paths = [display_path(loc, display_roots) for loc in locations]
             remediation = _SKILL_DUP_REMEDIATION
             if urls_nonempty:
                 remediation = _SKILL_DUP_REMEDIATION + " " + _SKILL_DUP_URL_SENTENCE
@@ -1346,7 +1457,7 @@ def _census_findings(project_root, worktree, env, home, docs, rendered, roots) -
                     findings.append(
                         make_finding(
                             "quoin-skill-outside-project", "warn",
-                            name=name, path=display_path(loc, roots),
+                            name=name, path=display_path(loc, display_roots),
                         )
                     )
     legacy_units = _legacy_claude_unit_count(Path(project_root), Path(worktree), home, catalog_ids)
@@ -1392,10 +1503,12 @@ _TOOLS_SOME_ROLE_ALLOWS = _compute_tools_some_role_allows()
 
 
 def _permission_loosened_findings(docs: List[Tuple[Path, dict]]) -> List[Finding]:
-    """A generated role's own allow always wins while that role
-    runs, so a stricter user-level `permission` rule for a tool some role
-    allows is reported once, naming only tools from the generated set —
-    never a raw key or value read from the config file."""
+    """A generated role's own allow can override a stricter user-level
+    `permission` rule while that role runs directly (though not when it
+    runs as a subagent, where the parent session's deny rules re-apply —
+    see compatibility.md), so a tool some role allows is reported once,
+    naming only tools from the generated set — never a raw key or value
+    read from the config file."""
     loosened: set = set()
     for _path, payload in docs:
         perm = payload.get("permission")

@@ -112,8 +112,9 @@ Status: generated project assets, offline-verified; no live runtime evidence.
   project-local commands, skills and role agents for the manifest-supported
   subset of the migrated skill catalog, and `quoin opencode uninstall`
   reverses it, removing only what it owns.
-- `quoin doctor --runtime opencode` checks the install offline; `--smoke`
-  re-renders and validates the catalog without touching host state, and
+- `quoin doctor --runtime opencode` checks the install against the real host
+  filesystem and environment by default; `--smoke` is the offline mode —
+  it re-renders and validates the catalog without touching host state — and
   `--json` prints a machine-readable report. Host-mode checks also warn about
   a legacy skills folder OpenCode's own discovery may pick up under the home
   directory.
