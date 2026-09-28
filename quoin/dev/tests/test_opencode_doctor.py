@@ -1,9 +1,9 @@
-"""Offline smoke checks for the OpenCode adapter doctor (T-05).
+"""Offline smoke checks for the OpenCode adapter doctor.
 
-Host-environment checks (`run_host`) land in T-06/T-07 and are tested in a
-later commit; this file covers only `run_smoke` and the report-rendering
-primitives (`Finding`, `make_finding`, `display_path`, `render_text`,
-`render_json`, `report_status`, `exit_code`).
+Host-environment checks (`run_host`) are tested in `test_opencode_doctor_host.py`;
+this file covers only `run_smoke` and the report-rendering primitives
+(`Finding`, `make_finding`, `display_path`, `render_text`, `render_json`,
+`report_status`, `exit_code`).
 """
 from __future__ import annotations
 
