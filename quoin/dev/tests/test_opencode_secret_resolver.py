@@ -6,7 +6,9 @@ from __future__ import annotations
 import ast
 import copy
 import json
+import logging
 import pickle
+import socket
 import subprocess
 import traceback
 from pathlib import Path
@@ -25,7 +27,10 @@ from quoin.opencode_adapter.secrets import (
     default_resolver,
     parse,
 )
-from test_opencode_runtime_config import RecordingEnv
+from quoin.opencode_adapter import errors as config_errors, merge
+from quoin.opencode_adapter.errors import ConfigErrors
+from test_opencode_role_resolution import COMBINATIONS, run_pipeline
+from test_opencode_runtime_config import CASES, RecordingEnv, run_case
 
 SEED = helpers.SEEDED_SECRET
 FORMS = helpers.secret_forms(SEED)
@@ -408,3 +413,123 @@ def test_subprocess_is_named_only_inside_default_runner():
     assert hits
     assert all(id(n) in inside for n in hits)
     assert any(isinstance(n, ast.Import) for n in hits)
+
+
+# ------------------------------------------------- resolvers are never invoked
+
+CREDENTIAL_ENV_NAMES = {
+    "OPENROUTER_API_KEY",
+    "LOCAL_GW_TOKEN",
+    "QUOIN_CORP_GW_API_KEY",
+    "QUOIN_CORP_GW_B_API_KEY",
+    "QUOIN_LOCAL_GW_API_KEY",
+    "QUOIN_OPENROUTER_API_KEY",
+}
+
+
+@pytest.fixture
+def resolver_trap(monkeypatch):
+    def boom(*args, **kwargs):
+        raise AssertionError("a resolver or the network was used outside an explicit resolve")
+
+    for owner, name in (
+        (EnvBackend, "resolve"),
+        (MacKeychainBackend, "resolve"),
+        (CredentialResolver, "resolve"),
+        (secrets, "_default_runner"),
+        (SecretValue, "__init__"),
+        (socket.socket, "connect"),
+        (socket, "create_connection"),
+        (socket, "getaddrinfo"),
+        (subprocess, "run"),
+        (subprocess, "Popen"),
+    ):
+        monkeypatch.setattr(owner, name, boom)
+
+
+def test_no_pipeline_stage_invokes_a_resolver(tmp_path_factory, resolver_trap):
+    reached_resolve, reached_with_managed = 0, 0
+    for key in sorted(COMBINATIONS):
+        out = run_pipeline(tmp_path_factory.mktemp("trap"), key)
+        assert not set(out.env.reads) & CREDENTIAL_ENV_NAMES, key
+        expected = COMBINATIONS[key]
+        assert (out.stage == "resolve") == (expected[0] == "ok"), key
+        if out.stage == "resolve":
+            reached_resolve += 1
+            reached_with_managed += key[2] != "none"
+    assert reached_resolve > 0 and reached_with_managed > 0
+
+
+_SECRETS_ONLY_TYPES = {"CredentialRef"}
+_FORBIDDEN_NAMES = {
+    "SecretValue", "EnvBackend", "MacKeychainBackend", "CredentialResolver", "default_resolver",
+    "subprocess",
+}
+
+
+@pytest.mark.parametrize("module", ["merge", "qualification", "roles"])
+def test_pure_stages_never_touch_secret_machinery(module):
+    tree = ast.parse((SRC_DIR / (module + ".py")).read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.module and node.module.split(".")[-1] == "secrets":
+                assert {a.name for a in node.names} <= _SECRETS_ONLY_TYPES
+            if not node.module and node.level == 1:
+                assert "secrets" not in {a.name for a in node.names}
+        elif isinstance(node, ast.Import):
+            assert all(a.name.split(".")[-1] != "secrets" for a in node.names)
+        elif isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "secrets":
+            assert node.attr in _SECRETS_ONLY_TYPES
+        elif isinstance(node, ast.Name):
+            assert node.id not in _FORBIDDEN_NAMES
+        elif isinstance(node, ast.alias):
+            assert node.name not in _FORBIDDEN_NAMES
+
+
+# ----------------------------------------------- seeded secret across surfaces
+
+
+def test_seeded_secret_never_appears_on_this_stage_surfaces(tmp_path_factory, caplog):
+    surfaces = []
+    keychain_runner = Recorder(1, SEED.encode() + b"\n")
+    err_texts = []
+    for _ in range(1):
+        err = capture(_direct(keychain_runner))
+        err_texts += [str(err), repr(err), err.render(True), err.render(False)]
+    surfaces += err_texts
+
+    with caplog.at_level(logging.INFO, logger="quoin.opencode.roles"):
+        for key in sorted(COMBINATIONS):
+            tmp = tmp_path_factory.mktemp("seeded")
+            out = run_pipeline(tmp, key)
+            for name in CREDENTIAL_ENV_NAMES:
+                out.env[name] = SEED  # seeded after the run: nothing may have read or kept them
+            if out.error is not None:
+                surfaces += [str(out.error), repr(out.error)]
+                for err in out.error.errors:
+                    surfaces += [str(err), repr(err), err.message, err.fix]
+            if out.effective is not None:
+                surfaces += [repr(out.effective), json.dumps(merge.canonical(out.effective))]
+                surfaces += [repr(f) for f in out.effective.findings]
+                surfaces += [repr(v) for v in out.effective.providers.values()]
+            if out.qualifications is not None:
+                surfaces += [repr(q) for q in out.qualifications.values()]
+            if out.resolutions is not None:
+                surfaces += [repr(out.resolutions)] + [repr(r) for r in out.resolutions.roles + out.resolutions.auxiliary]
+                surfaces += [repr(f) for f in out.resolutions.findings]
+    surfaces += [r.getMessage() for r in caplog.records]
+    surfaces += list(config_errors.FINDING_MESSAGES.values())
+
+    for case in CASES["invalid"]:
+        if case["expected_class"] not in config_errors.MERGE_CLASSES:
+            continue
+        env, load = run_case(case, tmp_path_factory.mktemp("mergecase"))
+        for name in CREDENTIAL_ENV_NAMES:
+            env[name] = SEED
+        with pytest.raises(ConfigErrors) as info:
+            merge.ensure_compilable(merge.merge(load()))
+        surfaces += [str(info.value), repr(info.value)] + [repr(e) for e in info.value.errors]
+
+    assert len(surfaces) > 100
+    for text in surfaces:
+        assert not has_seed(text)

@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import ast
 import dataclasses
+import itertools
+import json
 import logging
+import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
@@ -22,10 +26,12 @@ from _opencode_merge_helpers import (
     fixture,
     loaded,
 )
-from quoin.opencode_adapter import merge, roles
+from quoin.opencode_adapter import config, merge, paths, qualification, roles
+from quoin.opencode_adapter.errors import ConfigErrors
 from quoin.opencode_adapter.generate import ROLES
 from quoin.opencode_adapter.qualification import QualificationResult
 from quoin.opencode_adapter.roles import AUXILIARY, AllowUnqualifiedRefused, resolve_all
+from test_opencode_runtime_config import RecordingEnv, run_case
 
 SRC_DIR = helpers.SOURCE_DIR.parent / "src" / "quoin" / "opencode_adapter"
 STAMP = "2026-09-28T12:00:00Z"
@@ -385,3 +391,288 @@ def test_roles_imports_are_limited():
         if isinstance(node, ast.ImportFrom) and node.level == 1:
             relative |= {node.module} if node.module else {a.name for a in node.names}
     assert relative <= {"config", "errors", "generate", "merge", "qualification"}
+
+
+# =============================================================================
+# Whole-pipeline matrix: profile x project x managed, through real files
+# =============================================================================
+
+NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
+PROFILES = {"work": PROFILE_WORK, "minimal": PROFILE_MINIMAL, "personal": PROFILE_PERSONAL}
+PROJECTS = {
+    "none": None,
+    "work": PROJECT_WORK,
+    "narrow": PROJECT_WORK_NARROW,
+    "personal": PROJECT_PERSONAL,
+    "unclassified": "valid/project-unclassified.json",
+}
+MANAGEDS = {"none": None, "managed-work": MANAGED_WORK, "managed-strict": MANAGED_STRICT}
+ALLOWED_ENV_READS = {"XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY"}
+
+_PROBE = {}
+
+
+def probe_module():
+    if "m" not in _PROBE:
+        _PROBE["m"] = helpers.load_module(
+            helpers.OPENCODE_DIR / "probe_gateway.py", "probe_gateway_role_matrix"
+        )
+    return _PROBE["m"]
+
+
+# Outcome literals: ("load-error", CLASS), ("merge-error", CLASS) or
+# ("ok", effective_providers, excluded_providers, classification, launchable,
+# reason the second-model group is blocked for, or None).
+# "Second-model group": for the work profile the planner-side roles and the
+# auxiliaries, which use work-planner on the second gateway; for the minimal
+# and personal profiles every role, which all use the single default model.
+DANGLING = ("load-error", "dangling-reference")
+_W2, _W1 = ("corp-gw", "corp-gw-b"), ("corp-gw",)
+COMBINATIONS = {
+    # ---- profile work
+    ("work", "none", "none"): ("ok", _W2, {}, "work", False, None),
+    ("work", "none", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("work", "none", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
+    ("work", "work", "none"): ("ok", _W1, {"corp-gw-b": "not-allowed"}, "work", False, "not-allowed"),
+    ("work", "work", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("work", "work", "managed-strict"): ("ok", _W1, {"corp-gw-b": "not-allowed"}, "work", False, "not-allowed"),
+    ("work", "narrow", "none"): ("ok", _W1, {"corp-gw-b": "host-not-allowed"}, "work", False, "host-not-allowed"),
+    ("work", "narrow", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("work", "narrow", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
+    ("work", "personal", "none"): ("ok", _W2, {}, "work", True, None),
+    ("work", "personal", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("work", "personal", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
+    ("work", "unclassified", "none"): ("ok", _W2, {}, "work", False, None),
+    ("work", "unclassified", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("work", "unclassified", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
+    # ---- profile minimal
+    ("minimal", "none", "none"): ("ok", ("local-gw",), {}, "work", False, None),
+    ("minimal", "none", "managed-work"): ("ok", (), {"local-gw": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("minimal", "none", "managed-strict"): ("ok", (), {"local-gw": "host-not-allowed"}, "work", False, "host-not-allowed"),
+    ("minimal", "work", "none"): DANGLING,
+    ("minimal", "work", "managed-work"): DANGLING,
+    ("minimal", "work", "managed-strict"): DANGLING,
+    ("minimal", "narrow", "none"): DANGLING,
+    ("minimal", "narrow", "managed-work"): DANGLING,
+    ("minimal", "narrow", "managed-strict"): DANGLING,
+    ("minimal", "personal", "none"): ("ok", ("local-gw",), {}, "work", True, None),
+    ("minimal", "personal", "managed-work"): ("ok", (), {"local-gw": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("minimal", "personal", "managed-strict"): ("ok", (), {"local-gw": "host-not-allowed"}, "work", False, "host-not-allowed"),
+    ("minimal", "unclassified", "none"): ("ok", ("local-gw",), {}, "work", False, None),
+    ("minimal", "unclassified", "managed-work"): ("ok", (), {"local-gw": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
+    ("minimal", "unclassified", "managed-strict"): ("ok", (), {"local-gw": "host-not-allowed"}, "work", False, "host-not-allowed"),
+    # ---- profile personal
+    ("personal", "none", "none"): ("ok", ("openrouter",), {}, "personal", False, None),
+    ("personal", "none", "managed-work"): ("ok", (), {"openrouter": "managed-not-allowed"}, "personal", False, "managed-not-allowed"),
+    ("personal", "none", "managed-strict"): ("ok", (), {"openrouter": "host-not-allowed"}, "personal", False, "host-not-allowed"),
+    ("personal", "work", "none"): DANGLING,
+    ("personal", "work", "managed-work"): DANGLING,
+    ("personal", "work", "managed-strict"): DANGLING,
+    ("personal", "narrow", "none"): DANGLING,
+    ("personal", "narrow", "managed-work"): DANGLING,
+    ("personal", "narrow", "managed-strict"): DANGLING,
+    ("personal", "personal", "none"): ("ok", ("openrouter",), {}, "personal", True, None),
+    ("personal", "personal", "managed-work"): ("ok", (), {"openrouter": "managed-not-allowed"}, "personal", False, "managed-not-allowed"),
+    ("personal", "personal", "managed-strict"): ("ok", (), {"openrouter": "host-not-allowed"}, "personal", False, "host-not-allowed"),
+    ("personal", "unclassified", "none"): ("ok", ("openrouter",), {}, "personal", False, None),
+    ("personal", "unclassified", "managed-work"): ("ok", (), {"openrouter": "managed-not-allowed"}, "personal", False, "managed-not-allowed"),
+    ("personal", "unclassified", "managed-strict"): ("ok", (), {"openrouter": "host-not-allowed"}, "personal", False, "host-not-allowed"),
+}
+
+# Attempts that must be refused outright, run from their invalid fixtures.
+EXTRA_ROWS = {
+    "personal-profile-for-work": ("merge-error", "personal-profile-for-work"),
+    "personal-provider-kind-for-work": ("merge-error", "personal-provider-kind-for-work"),
+}
+
+WORK_PLANNER_GROUP = PLANNER_ROLES + AUXILIARY
+
+
+class Outcome:
+    def __init__(self):
+        self.stage = "load"
+        self.error = None
+        self.loaded = self.effective = self.qualifications = self.resolutions = None
+        self.env = None
+
+
+def _install(env, home, rel):
+    text = (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / rel).read_text(
+        encoding="utf-8"
+    )
+    name = json.loads(text)["profile"]
+    target = paths.profile_path(name, env, home)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(text, encoding="utf-8")
+    return name
+
+
+def write_probe_records(env, home, effective, now=NOW):
+    """A qualified record, built by the probe itself, for every profile model."""
+    probe = probe_module()
+    pinned = qualification.pinned_version()
+    for model in effective.models.values():
+        provider = effective.providers[model.provider]
+        steps = [
+            {"step": i + 1, "name": name, "result": "pass", "diagnostic": None}
+            for i, name in enumerate(("auth_and_text", "tool_round_trip", "streaming"))
+        ]
+        report = probe.ProbeReport(context=None, steps=steps, verdict="qualified", blocking_step=None)
+        cfg = probe.ProbeConfig(
+            base_url=merge.provider_base_url(provider), model=model.model_id, provider=provider.id,
+            credential_env=provider.credential_env, runtime_version=pinned,
+        )
+        record = probe.build_capability_record(report, cfg, now=now - timedelta(days=1))
+        target = paths.qualification_path(model.qualification_ref[len("local:"):], env, home)
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        os.chmod(target.parent, 0o700)
+        target.write_text(json.dumps(record), encoding="utf-8")
+        os.chmod(target, 0o600)
+
+
+def run_pipeline(tmp_path, key):
+    """load_all -> merge -> evaluate_all -> resolve_all as far as it goes."""
+    profile_key, project_key, managed_key = key
+    env = RecordingEnv({"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "XDG_STATE_HOME": str(tmp_path / "state")})
+    home, project_root = tmp_path / "home", tmp_path / "project"
+    out = Outcome()
+    out.env = env
+    name = _install(env, home, PROFILES[profile_key])
+    if PROJECTS[project_key] is not None:
+        (project_root / ".quoin").mkdir(parents=True)
+        (project_root / ".quoin" / "runtime.json").write_text(
+            (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / PROJECTS[project_key]).read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+    if MANAGEDS[managed_key] is not None:
+        managed_file = tmp_path / "managed.json"
+        managed_file.write_text(
+            (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / MANAGEDS[managed_key]).read_text(
+                encoding="utf-8"
+            ),
+            encoding="utf-8",
+        )
+        env["QUOIN_OPENCODE_MANAGED_POLICY"] = str(managed_file)
+    try:
+        out.loaded = config.load_all(project_root=project_root, profile=name, env=env, home=home)
+    except ConfigErrors as exc:
+        out.error = exc
+        return out
+    out.stage = "merge"
+    try:
+        out.effective = merge.merge(out.loaded)
+    except ConfigErrors as exc:
+        out.error = exc
+        return out
+    out.stage = "resolve"
+    write_probe_records(env, home, out.effective)
+    out.qualifications = qualification.evaluate_all(
+        out.effective, env=env, home=home, now=NOW, pinned_version=qualification.pinned_version()
+    )
+    out.resolutions = resolve_all(out.effective, out.qualifications)
+    return out
+
+
+def test_combinations_table_is_the_full_product():
+    assert set(COMBINATIONS) == set(itertools.product(PROFILES, PROJECTS, MANAGEDS))
+    assert len(COMBINATIONS) == 45
+
+
+def _groups(profile_key):
+    if profile_key == "work":
+        return {"second": WORK_PLANNER_GROUP, "first": CODER_ROLES}
+    return {"second": tuple(ROLES) + AUXILIARY, "first": ()}
+
+
+@pytest.mark.parametrize("key", sorted(COMBINATIONS), ids=["-".join(k) for k in sorted(COMBINATIONS)])
+def test_combination_outcome(key, tmp_path):
+    expected = COMBINATIONS[key]
+    out = run_pipeline(tmp_path, key)
+    assert set(out.env.reads) <= ALLOWED_ENV_READS
+    if expected[0] == "load-error":
+        assert out.stage == "load" and out.error is not None
+        assert {e.rejection_class for e in out.error.errors} == {expected[1]}
+        return
+    assert out.error is None and out.stage == "resolve"
+    _, effective_ids, excluded, classification, launchable, blocked = expected
+    eff, res = out.effective, out.resolutions
+    assert eff.effective_providers == effective_ids
+    assert dict(eff.excluded_providers) == excluded
+    assert eff.classification == classification
+    assert res.launchable is launchable
+    got = by_role(res)
+    groups = _groups(key[0])
+    for role in groups["second"]:
+        if blocked is None:
+            assert (got[role].status, got[role].block_reason) == ("ok", None), role
+        else:
+            assert (got[role].status, got[role].block_reason) == ("blocked", blocked), role
+    for role in groups["first"]:
+        assert (got[role].status, got[role].block_reason) == ("ok", None), role
+    if key[1] == "unclassified" or key[1] == "none":
+        assert not res.launchable
+        assert [e.message_id for e in merge.compile_blockers(eff)] == [
+            "missing-classification" if key[1] == "unclassified" else "no-project-file"
+        ]
+    else:
+        assert merge.compile_blockers(eff) == ()
+
+
+def _all_outcomes(tmp_path_factory):
+    return {key: run_pipeline(tmp_path_factory.mktemp("matrix"), key) for key in sorted(COMBINATIONS)}
+
+
+@pytest.fixture(scope="module")
+def outcomes(tmp_path_factory):
+    return _all_outcomes(tmp_path_factory)
+
+
+def test_work_never_reaches_a_personal_provider_or_profile(outcomes):
+    checked = 0
+    for key, out in outcomes.items():
+        if out.stage != "resolve" or out.effective.classification != "work":
+            continue
+        profile_data = json.loads(
+            (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / PROFILES[key[0]]).read_text(
+                encoding="utf-8"
+            )
+        )
+        assert profile_data["classification"] == "work"
+        resolutions = out.resolutions.roles + out.resolutions.auxiliary
+        assert len(resolutions) == len(ROLES) + len(AUXILIARY)
+        for r in resolutions:
+            assert r.provider_kind != "openrouter"
+            assert r.provider_id in profile_data["providers"]
+            if r.status == "ok":
+                assert r.provider_id in out.effective.effective_providers
+            checked += 1
+    assert checked > 0
+
+
+def test_matrix_is_not_vacuous(outcomes):
+    work_ok = [k for k, o in outcomes.items() if o.stage == "resolve" and o.effective.classification == "work"]
+    personal_ok = [k for k, o in outcomes.items() if o.stage == "resolve" and o.effective.classification == "personal"]
+    raised = [k for k, o in outcomes.items() if o.stage != "resolve"]
+    assert len(work_ok) > 10 and len(personal_ok) > 5 and len(raised) == 12
+    for managed_key in ("managed-work", "managed-strict"):
+        ok_under_managed = [
+            r
+            for k, o in outcomes.items()
+            if k[0] == "work" and k[2] == managed_key
+            for r in o.resolutions.roles + o.resolutions.auxiliary
+            if r.status == "ok"
+        ]
+        assert ok_under_managed, managed_key
+
+
+@pytest.mark.parametrize("case_id", sorted(EXTRA_ROWS))
+def test_attempt_fixtures_are_refused(case_id, tmp_path):
+    from test_opencode_runtime_config import CASES
+
+    case = next(c for c in CASES["invalid"] if c["id"] == case_id)
+    env, load = run_case(case, tmp_path)
+    with pytest.raises(ConfigErrors) as info:
+        merge.merge(load())
+    assert {e.rejection_class for e in info.value.errors} == {EXTRA_ROWS[case_id][1]}
