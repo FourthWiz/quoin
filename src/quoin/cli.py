@@ -334,10 +334,10 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         return 1
     print("Prerequisites OK")
 
-    # IVG-281: remove any previous install record before the first deploy
-    # step, so a failed or partial install (below) never leaves an older
-    # install's record sitting next to a partially deployed hook tree —
-    # see runtime_record.remove_existing_record.
+    # Remove any previous install record before the first deploy step, so a
+    # failed or partial install (below) never leaves an older install's
+    # record sitting next to a partially deployed hook tree — see
+    # runtime_record.remove_existing_record.
     from quoin import runtime_record
 
     runtime_record.remove_existing_record(dest_root)
@@ -447,9 +447,9 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         )
         print("  Install with: pip install pyyaml", file=sys.stderr)
 
-    # IVG-281: records the interpreter and package tree this install
-    # deployed from, so an auto-resume hand-off can relaunch the exact same
-    # CLI instead of guessing via PATH. Never fails the install.
+    # Records the interpreter and package tree this install deployed from,
+    # so an auto-resume hand-off can relaunch the exact same CLI instead of
+    # guessing via PATH. Never fails the install.
     from quoin import runtime_record
 
     record_path = runtime_record.write_runtime_record(dest_root, source_dir)

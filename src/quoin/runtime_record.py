@@ -29,10 +29,10 @@ RUNTIME_RECORD_SCHEMA = 1
 _VERSION_RE = re.compile(r"""__version__\s*=\s*["']([^"']+)["']""")
 
 
-def _remove_stale_record(dest_root: Path, note: str) -> str:
-    """Best-effort removal of an existing record so a skipped or failed
-    write never leaves an older install's record behind for a newly
-    deployed hook to read. Returns `note`, extended when a record existed."""
+def _unlink_record_if_present(dest_root: Path) -> bool:
+    """Best-effort unlink of the install record at `dest_root`. Returns
+    whether a record was actually there to remove — shared by the two
+    callers below, which differ only in how they report that fact."""
     path = dest_root / RUNTIME_RECORD_FILENAME
     try:
         existed = path.exists()
@@ -42,7 +42,14 @@ def _remove_stale_record(dest_root: Path, note: str) -> str:
         path.unlink()
     except OSError:
         pass
-    if existed:
+    return existed
+
+
+def _remove_stale_record(dest_root: Path, note: str) -> str:
+    """Best-effort removal of an existing record so a skipped or failed
+    write never leaves an older install's record behind for a newly
+    deployed hook to read. Returns `note`, extended when a record existed."""
+    if _unlink_record_if_present(dest_root):
         return note + " (previous install record removed)"
     return note
 
@@ -58,15 +65,7 @@ def remove_existing_record(dest_root: Path) -> None:
     partially deployed hook tree, so a hand-off can relaunch an interpreter
     the new deploy never actually confirmed."""
     path = dest_root / RUNTIME_RECORD_FILENAME
-    try:
-        existed = path.exists()
-    except OSError:
-        existed = False
-    try:
-        path.unlink()
-    except OSError:
-        pass
-    if existed:
+    if _unlink_record_if_present(dest_root):
         print(f"quoin: removed the previous install record at {path} before deploying", file=sys.stderr)
 
 

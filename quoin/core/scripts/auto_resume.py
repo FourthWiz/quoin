@@ -45,6 +45,7 @@ import os
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -852,11 +853,26 @@ def _do_handoff(
         except OSError:
             pass
         return "DENIED|log"
+    # Resolved to absolute here rather than trusted as given: the child no
+    # longer runs with project_root (or the caller's cwd) as its own cwd,
+    # so a relative value would resolve against whatever _neutral_cwd()
+    # picks instead of what the caller meant.
     argv = res["argv"] + [
         "run", "--autonomous", task,
-        "--project-root", str(project_root),
+        "--project-root", str(Path(project_root).resolve()),
         "--halt-on-abort", "--max-relaunch", str(remaining),
     ]
+    neutral_cwd = _neutral_cwd()
+    if neutral_cwd is None:
+        try:
+            log_fh.close()
+        except OSError:
+            pass
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return "DENIED|cwd"
     # D-06: the child adopts this lock (rather than racing to create its own)
     # by presenting the same token back via `QUOIN_SUPERVISOR_LOCK_TOKEN`.
     child_env = dict(os.environ)
@@ -865,11 +881,13 @@ def _do_handoff(
     try:
         proc = _popen(
             argv,
-            # Not project_root: this is `python -m quoin`, and `-m` puts the
-            # working directory first on sys.path, ahead of the recorded
-            # interpreter's own site-packages (see _neutral_cwd). The child
-            # still learns the real project root from --project-root above.
-            cwd=_neutral_cwd(),
+            # Not project_root: the argv above runs quoin via a small
+            # bootstrap (see _SPAWN_BOOTSTRAP) rather than `python -m
+            # quoin` directly, but both forms put the working directory
+            # first on sys.path, ahead of the recorded interpreter's own
+            # site-packages (see _neutral_cwd). The child still learns the
+            # real project root from --project-root above.
+            cwd=neutral_cwd,
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
@@ -909,7 +927,7 @@ def _do_handoff(
 
 
 # ---------------------------------------------------------------------------
-# Shared interpreter resolver (IVG-281): prefers the installer's own record
+# Shared interpreter resolver: prefers the installer's own record
 # of what interpreter and package tree it deployed from, falling back to a
 # legacy PATH lookup when no record exists. Used by every hand-off caller
 # (Stop, SessionStart, the `handoff` subcommand) and by `cli-check`, so a
@@ -920,7 +938,26 @@ def _do_handoff(
 RUNTIME_RECORD_FILENAME = "quoin-runtime.json"
 RUNTIME_RECORD_SCHEMA = 1
 _RECORD_MAX_BYTES = 16384
-_PROBE_SNIPPET = "import sys, quoin, quoin.cli; sys.stdout.write('\\nQUOIN_VERSION=' + quoin.__version__ + '\\n')"
+_PROBE_SNIPPET = (
+    "import sys\n"
+    "if sys.path and sys.path[0] in ('', '.'):\n"
+    "    del sys.path[0]\n"
+    "import quoin, quoin.cli\n"
+    "sys.stdout.write('\\nQUOIN_VERSION=' + quoin.__version__ + '\\n')\n"
+)
+# Used instead of `-m quoin` for the detached supervisor spawn. `-m`, like
+# `-c` above, puts the working directory first on sys.path; the recorded
+# interpreter may be any Python version quoin supports, so this can't lean
+# on `-P`/PYTHONSAFEPATH (3.11+ only) or `-I` (which would also drop the
+# recorded PYTHONPATH a Tier-2 install depends on). Running the same
+# sys.path strip through `-c` before handing off to runpy keeps the fix
+# identical on every supported version.
+_SPAWN_BOOTSTRAP = (
+    "import sys, runpy\n"
+    "if sys.path and sys.path[0] in ('', '.'):\n"
+    "    del sys.path[0]\n"
+    "runpy.run_module('quoin', run_name='__main__', alter_sys=True)\n"
+)
 _VERSION_TOKEN_RE = re.compile(r"^QUOIN_VERSION=(\S+)\s*$", re.M)
 _REMEDY = "re-run 'quoin install' (same scope) and check 'quoin doctor'"
 # Start/stop callers act on a live knob, so the remedy names it. Handoff and
@@ -941,17 +978,48 @@ def _reset_cli_memo() -> None:
     _CLI_MEMO.clear()
 
 
-def _neutral_cwd() -> str:
+def _neutral_cwd() -> Optional[str]:
     """cwd for the probe and the supervisor spawn — never the caller's own
-    project root. ``-c`` and ``-m`` both put the working directory first on
-    ``sys.path``, ahead of the recorded interpreter's site-packages, so a
+    project root, and never a directory any other local user can write to.
+    ``-c`` and ``-m`` both put the working directory first on ``sys.path``,
+    ahead of the recorded interpreter's own site-packages, so a
     project-supplied ``quoin.py`` or ``quoin/`` package sitting at the
     project root would otherwise be imported (and run) instead of the real
-    installed package. The system temp directory is never inside a cloned
-    project, so it can't be shadowed this way; ``--project-root`` is still
-    passed to the spawned process explicitly, so it learns the real project
-    root without needing it as its cwd."""
-    return tempfile.gettempdir()
+    installed package — and the system temp directory has the same
+    problem on a shared host: it's world-writable by default on Linux, and
+    on macOS too whenever TMPDIR is unset, so another local user could
+    plant a package there for every hand-off to pick up.
+
+    Uses the quoin deploy root instead (the directory ``quoin install``
+    created, e.g. ``~/.claude/``): it already exists, was created by
+    whoever ran the install, holds no ``quoin`` module or package of its
+    own (so it can't shadow the import itself), and needs no per-launch
+    creation or cleanup — unlike a fresh ``mkdtemp()`` per launch, which
+    would have to keep living after this function returns, since the
+    supervisor spawn is detached and outlives this process. Before
+    trusting it, verify by ``lstat`` that it is a real directory (not a
+    symlink another user could have swapped in), owned by the current
+    user, and not writable by group or other — the same properties that
+    make the shared temp dir unsafe. Returns ``None`` if the deploy root
+    can't be found or fails that check; callers must treat that as a
+    resolver failure and never fall back to a shared directory.
+    ``--project-root`` is still passed to the spawned process explicitly,
+    so it learns the real project root without needing it as its cwd."""
+    root = _deploy_root()
+    if root is None:
+        return None
+    root_str = str(root)
+    try:
+        st = os.lstat(root_str)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        return None
+    if st.st_uid != os.getuid():
+        return None
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return None
+    return root_str
 
 
 def _deploy_root() -> Optional[Path]:
@@ -970,9 +1038,9 @@ def _runtime_record_path() -> Optional[Path]:
 
 def _probe_budget_ms(caller: str) -> int:
     if caller == "start":
-        # T-01 sizing: baseline + default + 1s kill slack must stay under
-        # the 5s SessionStart stanza budget (measured against the worst
-        # case, not a healthy probe).
+        # Baseline + default + 1s kill slack must stay under the 5s
+        # SessionStart stanza budget (measured against the worst case, not
+        # a healthy probe).
         return _clamp_int("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", 1500, 250, 3000)
     if caller == "stop":
         return _clamp_int("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", 3000, 250, 7000)
@@ -1144,7 +1212,12 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
             if fallback.exists() and os.access(str(fallback), os.X_OK):
                 binpath = str(fallback)
         if binpath:
-            base.update(source="legacy", status="usable", argv=[binpath])
+            # shutil.which() can return a relative path when PATH contains
+            # "." or an empty entry; the probe/spawn no longer run with the
+            # caller's own cwd, so a relative argv[0] would resolve against
+            # whatever directory _neutral_cwd() picks instead of the
+            # caller's intent. Absolutize it here, once.
+            base.update(source="legacy", status="usable", argv=[os.path.abspath(binpath)])
         else:
             base.update(source="legacy", status="missing")
         return base
@@ -1200,12 +1273,23 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
         env_extra = {"PYTHONPATH": env["PYTHONPATH"], "QUOIN_HANDOFF_PYTHONPATH": pythonpath}
     base["pythonpath"] = pythonpath
 
+    cwd = _neutral_cwd()
+    if cwd is None:
+        base.update(
+            source="record", status="stale", kind="no-safe-cwd",
+            message=_build_message(
+                "could not find a private, user-owned directory to run the version probe from",
+                _REMEDY,
+            ),
+        )
+        return base
+
     budget_ms = _probe_budget_ms(caller)
     timeout_s = budget_ms / 1000.0
     tries = 1 + _probe_retries(caller)
     result = {"status": "timeout", "rc": None, "stdout": "", "stderr_tail": ""}
     for _ in range(tries):
-        result = _probe(python, env, _neutral_cwd(), timeout_s)
+        result = _probe(python, env, cwd, timeout_s)
         if result["status"] != "timeout":
             break
 
@@ -1271,7 +1355,7 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
         )
         return base
 
-    base.update(source="record", status="usable", argv=[python, "-m", "quoin"], env_extra=env_extra)
+    base.update(source="record", status="usable", argv=[python, "-c", _SPAWN_BOOTSTRAP], env_extra=env_extra)
     return base
 
 
@@ -1286,7 +1370,7 @@ def resolve_cli(project_root, caller: str) -> dict:
         return _CLI_MEMO[key]
     try:
         result = _resolve_cli_uncached(project_root, caller)
-    except Exception as exc:  # noqa: BLE001 — the resolver must be total (D-20)
+    except Exception as exc:  # noqa: BLE001 — the resolver must be total
         rp = _runtime_record_path()
         return {
             "source": "record", "status": "stale", "argv": None, "env_extra": {},
@@ -1714,6 +1798,22 @@ def main(argv=None) -> int:
             args = parser.parse_args(argv)
         except SystemExit:
             return 0
+        # Resolved once, here, before any handler runs: every subcommand
+        # feeds --project-root into a memory-dir path, and the `handoff`
+        # subcommand also forwards it into a detached child's argv. Neither
+        # the memory dir nor the child run with the caller's own cwd, so a
+        # relative value would silently resolve against the wrong
+        # directory once it got there.
+        project_root = getattr(args, "project_root", None)
+        if project_root:
+            try:
+                args.project_root = str(Path(project_root).resolve())
+            except OSError:
+                pass  # fail open — handlers already cope with a bad path
+        # The memo is process-lifetime, not call-lifetime; reset it per
+        # `main()` invocation so a long-lived process (or a test) never
+        # serves a stale resolver result to a later, unrelated call.
+        _reset_cli_memo()
         command = getattr(args, "command", None)
         if not command:
             return 0
