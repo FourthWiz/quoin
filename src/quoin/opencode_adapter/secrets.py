@@ -163,6 +163,8 @@ class EnvBackend(SecretResolver):
         self._environ = environ
 
     def resolve(self, ref: CredentialRef) -> SecretValue:
+        if ref.scheme != "env" or ref.name is None:
+            raise SecretResolutionError("unsafe-reference", ref)
         value = self._environ.get(ref.name)
         if value is None:
             raise SecretResolutionError("env-missing", ref)
@@ -198,6 +200,7 @@ def _default_runner(argv: Sequence[str], timeout: float) -> Tuple[int, bytes]:
     import subprocess
 
     failure = None
+    completed = None
     try:
         completed = subprocess.run(
             list(argv),
@@ -215,6 +218,8 @@ def _default_runner(argv: Sequence[str], timeout: float) -> Tuple[int, bytes]:
     if failure == "timeout":
         raise _RunnerTimeout()
     if failure == "unavailable":
+        raise _RunnerUnavailable()
+    if completed is None:
         raise _RunnerUnavailable()
     return completed.returncode, completed.stdout
 
@@ -267,7 +272,13 @@ class MacKeychainBackend(SecretResolver):
         # and nothing secret in its traceback frames.
         if self._platform != "darwin":
             raise SecretResolutionError("backend-unavailable", ref)
-        if ref.scheme != "keychain" or ref.service.startswith("-") or ref.account.startswith("-"):
+        if (
+            ref.scheme != "keychain"
+            or ref.service is None
+            or ref.account is None
+            or ref.service.startswith("-")
+            or ref.account.startswith("-")
+        ):
             raise SecretResolutionError("unsafe-reference", ref)
         argv = [_SECURITY_BINARY, "find-generic-password", "-s", ref.service, "-a", ref.account, "-w"]
         runner = self._runner if self._runner is not None else _default_runner

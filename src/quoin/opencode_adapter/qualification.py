@@ -137,6 +137,7 @@ def evaluate(
         probed = datetime.strptime(stamp, _TIMESTAMP_FORMAT).replace(tzinfo=timezone.utc)
     except ValueError:
         return result("malformed", "bad-shape")
+    stamp = probed.strftime(_TIMESTAMP_FORMAT)
     if probed > now + CLOCK_SKEW:
         return result("malformed", "future-timestamp", probed_at=stamp)
     if verdict == "not_qualified":

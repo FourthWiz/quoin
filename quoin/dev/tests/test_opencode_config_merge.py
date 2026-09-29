@@ -338,6 +338,13 @@ def test_enumerated_defaults_when_no_layer_sets_them():
         ({"sharing": "manual"}, {}, {"sharing": "deny"}, "sharing", "deny", ("managed",),
          [("sharing", "profile")]),
         ({"sharing": "manual"}, {"sharing": "manual"}, {}, "sharing", "manual", ("profile", "project"), []),
+        ({}, {"sharing": "manual"}, {}, "sharing", "deny", ("default",), [("sharing", "project")]),
+        ({}, {"external_writes": "approval-required"}, {}, "external_writes", "deny", ("default",),
+         [("external_writes", "project")]),
+        ({}, {"sharing": "deny"}, {}, "sharing", "deny", ("project",), []),
+        ({"sharing": "manual"}, {"sharing": "deny"}, {}, "sharing", "deny", ("project",),
+         [("sharing", "profile")]),
+        ({}, {"isolation": "managed"}, {}, "isolation", "managed", ("project",), []),
         ({"isolation": "convenience"}, {}, {"isolation": "managed"}, "isolation", "managed",
          ("managed",), [("isolation", "profile")]),
         ({"isolation": "managed"}, {"isolation": "convenience"}, {}, "isolation", "managed",
@@ -543,6 +550,26 @@ def test_project_narrow_and_managed_strict_fixtures():
     assert eff.effective_providers == (COR,)
 
 
+def test_effective_allowed_hosts_exclude_denied_hosts():
+    eff = merge.merge(loaded(profile(denied_hosts=[H2])))
+    assert H2 not in eff.values["policy.allowed_hosts"].value
+    assert H1 in eff.values["policy.allowed_hosts"].value
+    assert H2 in eff.values["policy.denied_hosts"].value
+
+
+def test_integrations_enabled_origin_reflects_a_narrowing_project():
+    data = fixture(PROFILE_WORK)
+    data["integrations"] = {"enabled": ["jira", "mail"]}
+    proj = fixture(PROJECT_PERSONAL)
+    proj["profile"] = "work"
+    proj["integrations"] = {"enabled": ["jira"]}
+    eff = merge.merge(loaded(data, proj))
+    assert eff.values["integrations.enabled"] == merge.Value(("jira",), ("profile", "project"))
+    proj["integrations"] = {"enabled": ["jira", "mail"]}
+    eff = merge.merge(loaded(data, proj))
+    assert eff.values["integrations.enabled"].origin == ("profile",)
+
+
 def test_integrations_merge_never_widens():
     data = fixture(PROFILE_WORK)
     proj = fixture(PROJECT_PERSONAL)
@@ -647,8 +674,9 @@ def test_model_views():
     )
 
 
-def test_merge_source_avoids_dataclass_conversion_helpers_and_secret_resolvers():
-    tree = ast.parse((SRC_DIR / "merge.py").read_text(encoding="utf-8"))
+@pytest.mark.parametrize("module", ["merge.py", "roles.py", "qualification.py"])
+def test_provider_handling_modules_avoid_dataclass_conversion_helpers(module):
+    tree = ast.parse((SRC_DIR / module).read_text(encoding="utf-8"))
     names = {n.id for n in ast.walk(tree) if isinstance(n, ast.Name)}
     names |= {n.attr for n in ast.walk(tree) if isinstance(n, ast.Attribute)}
     names |= {a.name for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom)) for a in n.names}

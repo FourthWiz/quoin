@@ -360,7 +360,9 @@ def _merge_security(
         return names or ("default",)
 
     values["policy.allowed_providers"] = Value(effective, origin_of("allowed_providers"))
-    values["policy.allowed_hosts"] = Value(tuple(sorted(hosts)), origin_of("allowed_hosts"))
+    values["policy.allowed_hosts"] = Value(
+        tuple(sorted(hosts - denied_hosts)), origin_of("allowed_hosts")
+    )
     values["policy.denied_providers"] = Value(tuple(sorted(denied)), origin_of("denied_providers"))
     values["policy.denied_hosts"] = Value(tuple(sorted(denied_hosts)), origin_of("denied_hosts"))
     return effective, excluded
@@ -378,6 +380,15 @@ def _merge_enumerated(
             item = _dict(_dict(layers.get(layer)).get("policy")).get(name) if layer in layers else None
             if item in rank:
                 set_by[layer] = item
+        # The project file is untrusted: it may narrow the baseline (the
+        # profile value, or the built-in default when the profile is silent)
+        # but never move away from it.
+        floor = rank[set_by["profile"]] if "profile" in set_by else rank[_ENUM_DEFAULTS[name]]
+        if "project" in set_by and rank[set_by["project"]] > floor:
+            del set_by["project"]
+            findings.append(
+                make_finding("less-restrictive-ignored", False, _FIELD_TOKEN[name], "project")
+            )
         if set_by:
             best = min(rank[item] for item in set_by.values())
             effective = order[best]
@@ -421,7 +432,12 @@ def _merge_integrations(
         result = base & set(project["enabled"]) if "enabled" in project else base
         if "enabled" in project and set(project["enabled"]) - result:
             findings.append(make_finding("integrations-value-ignored", False, "integrations-enabled", "project"))
-        origin = ("profile",) if "enabled" in profile else ("default",)
+        if "enabled" in project and "enabled" in profile:
+            origin = ("profile", "project") if result != set(profile["enabled"]) else ("profile",)
+        elif "enabled" in profile:
+            origin = ("profile",)
+        else:
+            origin = ("default",) if not result else ("project",)
         values["integrations.enabled"] = Value(tuple(sorted(result)), origin)
 
     if "mode" in profile or "mode" in project:

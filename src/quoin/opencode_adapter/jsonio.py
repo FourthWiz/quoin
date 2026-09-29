@@ -104,9 +104,13 @@ def _plain(tree: Any) -> Any:
     return tree
 
 
-def _read_and_parse(path, file_label: str, max_bytes: int) -> Tuple[Any, os.stat_result]:
+def _read_and_parse(
+    path, file_label: str, max_bytes: int, nofollow: bool = False
+) -> Tuple[Any, os.stat_result]:
     try:
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        if nofollow:
+            flags |= getattr(os, "O_NOFOLLOW", 0)
         with os.fdopen(os.open(path, flags), "rb") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode):
@@ -154,7 +158,7 @@ def load_strict_with_stat(
     """Like `load_strict`, also returning the `fstat` of the descriptor that
     was read (no stat-then-reopen window). A symlink is refused where the
     platform supports `O_NOFOLLOW`."""
-    return _read_and_parse(path, file_label, max_bytes)
+    return _read_and_parse(path, file_label, max_bytes, nofollow=True)
 
 
 def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> Any:

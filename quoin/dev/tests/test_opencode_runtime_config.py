@@ -247,6 +247,18 @@ def set_url(data, url):
     return data
 
 
+def test_symlinked_profile_loads(tmp_path):
+    env, home, _ = _sandbox(tmp_path)
+    real = tmp_path / "dotfiles" / "work.json"
+    real.parent.mkdir()
+    real.write_text(json.dumps(base_profile()), encoding="utf-8")
+    link = paths.profile_path("work", env, home)
+    link.parent.mkdir(parents=True, exist_ok=True)
+    link.symlink_to(real)
+    layer = config.load_profile("work", env=env, home=home)
+    assert layer.classification_state == "work"
+
+
 def test_base_profile_loads(tmp_path):
     layer = load_profile_data(tmp_path, base_profile())
     assert layer.kind == "profile" and layer.file == "profiles/work.json"

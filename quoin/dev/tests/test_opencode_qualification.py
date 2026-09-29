@@ -131,6 +131,15 @@ def test_age_boundary(box, probe):
     assert state(box.evaluate()) == ("stale", "too-old")
 
 
+def test_probed_at_is_returned_normalised(box, probe):
+    record = probe_record(probe)
+    t = NOW - timedelta(hours=1)
+    record["probed_at"] = "%d-%d-%dT%d:%d:%dZ" % (t.year, t.month, t.day, t.hour, t.minute, t.second)
+    box.write(record)
+    result = box.evaluate()
+    assert result.probed_at == t.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def test_future_timestamp_with_skew(box, probe):
     box.write(probe_record(probe, now=NOW + qualification.CLOCK_SKEW))
     assert state(box.evaluate()) == ("qualified", None)

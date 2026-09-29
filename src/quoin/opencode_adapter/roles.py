@@ -169,9 +169,10 @@ def resolve_all(
                 unqualified.add(model_name)
             else:
                 status = "blocked"
-        if status == "blocked":
+        assert block is not None or status == "ok"
+        if status == "blocked" and block is not None:
             findings.append(make_finding("role-blocked", True, role, block))
-        elif status == "unqualified":
+        elif status == "unqualified" and block is not None:
             findings.append(make_finding("role-unqualified", True, role, block))
 
         effort = effort_origin = options = diagnostic = None
