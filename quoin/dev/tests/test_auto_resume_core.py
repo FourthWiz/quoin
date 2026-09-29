@@ -32,8 +32,21 @@ def _load_module():
 
 
 @pytest.fixture()
-def ar(monkeypatch):
-    return _load_module()
+def ar(monkeypatch, tmp_path):
+    module = _load_module()
+    # Hermeticity (R-05): no test should read a real install record or a
+    # real HOME, and none should spawn a real process via _popen.
+    monkeypatch.setattr(module, "_runtime_record_path", lambda: tmp_path / "absent-quoin-runtime.json")
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
+    popen_calls = []
+
+    def _guard_popen(argv, **kw):
+        popen_calls.append(argv)
+        raise AssertionError(f"unexpected real _popen call: {argv!r}")
+
+    monkeypatch.setattr(module, "_popen", _guard_popen)
+    yield module
+    assert popen_calls == [], f"_popen was called without a fake override: {popen_calls!r}"
 
 
 @pytest.fixture()
