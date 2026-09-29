@@ -5,10 +5,11 @@ hooks-driven session-lifecycle machinery (context-utilization advisories,
 sentinel sweeps, worktree isolation) — it never edits it. This test asserts
 that claim two ways:
 
-  1. No file under `quoin/hooks/**` was touched by the autonomous work: none
-     of them mention "autonomous" at all (the autonomous plan's scope is
-     entirely SKILL.md/scripts/memory files — the hooks dir is a read-only
-     dependency, sourced via `. __QUOIN_HOME__/hooks/_lib.sh`, never written).
+  1. No hook mentions the mode: none of the scripts under `quoin/hooks/**`
+     say "autonomous" anywhere — including `stop.sh`, the run-continuation
+     hook added by ordinary development (IVG-280), which cooperates with an
+     armed session purely through file sentinels and never names the mode
+     it serves.
   2. The tunable `QUOIN_*_BPS` / threshold constants in `hooks/_lib.sh`
      (`read_constants()`) are byte-identical to their known pre-autonomous
      default values — a content check, not a hash, so a future intentional
@@ -84,7 +85,8 @@ def lib_sh_text() -> str:
 
 
 def test_hooks_dir_has_expected_files() -> None:
-    """Sanity: the hooks dir exists and has the known 7-script roster (no new
+    """Sanity: the hooks dir exists and has the known 8-script roster (`stop.sh`
+    is the run-continuation hook added by ordinary development, IVG-280 — no
     hook script was added by autonomous work, no existing one was removed).
     Non-script housekeeping files (e.g. `.keep`) are ignored."""
     assert HOOKS_DIR.is_dir()
@@ -96,6 +98,7 @@ def test_hooks_dir_has_expected_files() -> None:
             "precompact.sh",
             "sessionend.sh",
             "sessionstart.sh",
+            "stop.sh",
             "userpromptsubmit.sh",
             "worktreecreate.sh",
         ]

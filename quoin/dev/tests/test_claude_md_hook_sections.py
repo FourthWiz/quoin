@@ -36,6 +36,7 @@ EXPECTED_HOOK_TUPLES = [
     ("SessionStart", "compact"),
     ("SessionEnd", "*"),
     ("WorktreeCreate", "*"),
+    ("Stop", "*"),
 ]
 
 

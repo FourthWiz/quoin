@@ -518,7 +518,7 @@ def _fake_source_dir(tmp: Path) -> Path:
     """Return tmp with stub hook scripts under tmp/hooks/."""
     hooks_dir = tmp / "hooks"
     hooks_dir.mkdir(parents=True)
-    for fname in ("userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "_lib.sh", "worktreecreate.sh"):
+    for fname in ("userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "_lib.sh", "worktreecreate.sh", "stop.sh"):
         (hooks_dir / fname).write_text("#!/bin/bash\n")
     return tmp
 
@@ -543,6 +543,7 @@ def test_deploy_hooks_stanza_placement():
         assert len(hooks.get("SessionStart", [])) == 3  # startup + resume + compact
         assert len(hooks.get("SessionEnd", [])) == 1
         assert len(hooks.get("WorktreeCreate", [])) == 1  # IVG-116
+        assert len(hooks.get("Stop", [])) == 1  # IVG-280
 
         # Commands must use absolute paths, not tilde
         cmd = hooks["UserPromptSubmit"][0]["hooks"][0]["command"]
@@ -571,6 +572,32 @@ def test_deploy_hooks_worktreecreate_stanza():
         assert stanza.get("matcher") == "*", f"unexpected matcher: {stanza.get('matcher')}"
         cmd = stanza["hooks"][0]["command"]
         assert cmd.endswith("worktreecreate.sh"), f"unexpected command: {cmd}"
+        assert not cmd.startswith("~"), f"tilde path in command: {cmd}"
+
+
+def test_deploy_hooks_stop_stanza():
+    """IVG-280: deploy_hooks must register the Stop stanza (matcher '*',
+    timeout 10, command ending in stop.sh)."""
+    from quoin import installer  # noqa: PLC0415
+    import json as _json
+
+    with tempfile.TemporaryDirectory() as tmp_str:
+        tmp = Path(tmp_str)
+        src = _fake_source_dir(tmp / "src")
+        dest = tmp / ".claude"
+
+        installer.deploy_hooks(src, dest)
+
+        settings = _json.loads((dest / "settings.json").read_text())
+        stop_stanzas = settings.get("hooks", {}).get("Stop", [])
+        assert len(stop_stanzas) == 1, "Stop stanza not registered"
+
+        stanza = stop_stanzas[0]
+        assert stanza.get("matcher") == "*", f"unexpected matcher: {stanza.get('matcher')}"
+        hook = stanza["hooks"][0]
+        assert hook.get("timeout") == 10, f"unexpected timeout: {hook.get('timeout')}"
+        cmd = hook["command"]
+        assert cmd.endswith("stop.sh"), f"unexpected command: {cmd}"
         assert not cmd.startswith("~"), f"tilde path in command: {cmd}"
 
 

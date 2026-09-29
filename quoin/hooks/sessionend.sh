@@ -27,6 +27,22 @@
 # STEP -1: Capture stdin (even if unused — consistency with other hooks)
 STDIN=$(cat)
 
+# run continuation: mark this session ended and drop its arm so a later
+# Stop in the same process tree never fires against a session that's gone.
+# jq-free and runs before STEP 1's jq-dependent early exit.
+(
+  _ar_sid=$(printf '%s' "$STDIN" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9-]*\)".*/\1/p' | head -1)
+  [ -n "$_ar_sid" ] || exit 0
+  _ar_cwd=$(printf '%s' "$STDIN" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$_ar_cwd" ] || _ar_cwd="$PWD"
+  _ar_root=$(resolve_project_root "$_ar_cwd")
+  _ar_mem="$_ar_root/.workflow_artifacts/memory"
+  [ -n "$_ar_root" ] && [ -d "$_ar_mem" ] || exit 0
+  ls "$_ar_mem"/run-state-*.json >/dev/null 2>&1 || exit 0
+  touch "$_ar_mem/session-ended-$_ar_sid.txt"
+  rm -f "$_ar_mem/run-continue-arm-$_ar_sid.txt"
+) </dev/null >/dev/null 2>&1 || true
+
 # STEP 1: Parse cwd from stdin
 cwd=$(printf '%s' "$STDIN" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
 [ -z "$cwd" ] && cwd="$PWD"

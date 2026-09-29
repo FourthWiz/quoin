@@ -3,12 +3,17 @@ from __future__ import annotations
 
 import argparse
 import importlib.resources
+import json
 import os
 import pathlib
 import runpy
 import shutil
+import signal
 import sys
 import textwrap
+import time
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 
@@ -812,6 +817,266 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Supervisor single-driver lock (T-04). Filename templates are duplicated
+# from `quoin/core/scripts/auto_resume.py` (a standalone deployed script,
+# not part of this package, so it cannot be imported here) — a parity test
+# pins the two copies byte-identical.
+# ---------------------------------------------------------------------------
+
+_SUPERVISOR_LOCK_TEMPLATE = "run-supervisor-{task}.pid"
+_SUPERVISOR_RESULT_TEMPLATE = "run-supervisor-{task}.result"
+_SUPERVISOR_HALT_TEMPLATE = "autonomous-halt-{task}.md"
+
+
+def _iso_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _read_json(path: pathlib.Path):
+    try:
+        text = path.read_text()
+    except OSError:
+        return None
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+def _atomic_write_text(memory_dir: pathlib.Path, path: pathlib.Path, content: str) -> None:
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
+    tmp.write_text(content)
+    os.replace(str(tmp), str(path))
+
+
+def _atomic_write_json(memory_dir: pathlib.Path, path: pathlib.Path, data: dict) -> None:
+    _atomic_write_text(memory_dir, path, json.dumps(data, sort_keys=True) + "\n")
+
+
+def _supervisor_paths(project_root: pathlib.Path, task: str) -> dict:
+    memory_dir = project_root / ".workflow_artifacts" / "memory"
+    return {
+        "memory_dir": memory_dir,
+        "lock": memory_dir / _SUPERVISOR_LOCK_TEMPLATE.format(task=task),
+        "result": memory_dir / _SUPERVISOR_RESULT_TEMPLATE.format(task=task),
+        "halt": memory_dir / _SUPERVISOR_HALT_TEMPLATE.format(task=task),
+    }
+
+
+def _write_supervisor_result(memory_dir: pathlib.Path, result_path: pathlib.Path, status: str, relaunches: int) -> None:
+    data = {"status": status, "relaunches": relaunches, "finished_at": _iso_now()}
+    _atomic_write_json(memory_dir, result_path, data)
+
+
+def _write_abort_halt(memory_dir: pathlib.Path, halt_path: pathlib.Path, task: str, reason: str) -> None:
+    """Write the halt sentinel unless one already exists (never overwritten, D-22)."""
+    if halt_path.exists():
+        return
+    content = (
+        f"task: {task}\n"
+        "phase: run\n"
+        f"reason: {reason}\n"
+        f"timestamp: {_iso_now()}\n"
+        f"resume_hint: /run --resume {task}\n"
+    )
+    _atomic_write_text(memory_dir, halt_path, content)
+
+
+def _release_supervisor_lock(lock_path: pathlib.Path, our_pid: int) -> None:
+    """Remove the lock only when it still names our own pid (never a
+    lock some other process has since taken over)."""
+    data = _read_json(lock_path)
+    if data is None:
+        return
+    try:
+        held_pid = int(data.get("pid", -1))
+    except (TypeError, ValueError):
+        return
+    if held_pid == our_pid:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
+def _create_lock_exclusive(lock_path: pathlib.Path, payload: bytes) -> bool:
+    """Creates `lock_path` atomically and already fully populated with
+    `payload` — mirrors `auto_resume.py`'s helper of the same name (kept in
+    sync by hand; this module cannot import the standalone helper script,
+    which must stand alone under a bare system Python).
+
+    `payload` is written in full to a private tempfile in the same
+    directory first, then published under `lock_path` with `os.link` —
+    `os.link` fails with `FileExistsError` if `lock_path` already exists,
+    so at most one caller can ever win, and the file it publishes is
+    always the fully-written one. The previous O_CREAT|O_EXCL-then-
+    `os.write` split left a window where the lock existed but was still
+    empty; a reader hitting that window parsed it as `None` and could
+    unlink a winner's in-flight lock, and a lock left in exactly that
+    state by a crash made every later acquire refuse with `pid -1`
+    forever, since the path already existed but never parsed."""
+    tmp_path = lock_path.parent / f".{lock_path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(str(tmp_path), str(lock_path))
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        try:
+            os.unlink(str(tmp_path))
+        except OSError:
+            pass
+
+
+_STALE_UNPARSEABLE_LOCK_SECS = 5.0
+
+
+def _lock_is_stale(lock_path: pathlib.Path) -> bool:
+    """Mirrors `auto_resume.py`'s helper of the same name. A lock is
+    reclaimable only when its owner is provably gone: a parseable lock
+    naming a dead pid, or a lock that still fails to parse well past the
+    atomic creator's own write latency. An unparseable-but-fresh lock is
+    never treated as stale on emptiness alone — it could be another
+    creator's in-flight write."""
+    data = _read_json(lock_path)
+    if data is not None:
+        try:
+            pid = int(data.get("pid", -1))
+        except (TypeError, ValueError):
+            return True
+        return not (pid > 0 and _pid_alive(pid))
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return False
+    return age > _STALE_UNPARSEABLE_LOCK_SECS
+
+
+def _claim_lock_for_removal(lock_path: pathlib.Path):
+    """Mirrors `auto_resume.py`'s helper of the same name: atomically takes
+    exclusive ownership of `lock_path` for removal and returns the JSON
+    content it held, or `None` if it had none or another racer already
+    claimed it first. `os.rename` within the same directory is atomic on
+    POSIX, so at most one of two racing reclaimers can ever succeed
+    against the same source name — closing the race where two callers
+    both read the same dead lock before either removed it."""
+    claim_path = lock_path.parent / f"{lock_path.name}.stale-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        os.rename(str(lock_path), str(claim_path))
+    except OSError:
+        return None
+    try:
+        data = _read_json(claim_path)
+    finally:
+        try:
+            claim_path.unlink()
+        except OSError:
+            pass
+    return data
+
+
+def _acquire_supervisor_lock(
+    memory_dir: pathlib.Path,
+    lock_path: pathlib.Path,
+    result_path: pathlib.Path,
+    task: str,
+    max_relaunch: int,
+    token: "str | None",
+    _retried: bool = False,
+) -> tuple:
+    """Best-effort single-driver lock (D-06/D-19).
+
+    A live lock naming a different pid refuses the run. A dead-pid lock is
+    replaced; a dead `writer: "handoff"` lock with no `.result` yet is
+    charged its full grant as an `ORPHANED` result before replacement (the
+    supervisor that held it never got to report in). A live `writer:
+    "handoff"` lock whose `token` field matches `token` (our own
+    `QUOIN_SUPERVISOR_LOCK_TOKEN`) is adopted — this process IS the child
+    that lock was reserved for.
+
+    Lock creation is atomic (`_create_lock_exclusive`), so a reader can
+    never observe a lock that exists but is still empty, and replacing a
+    lock that looks abandoned is conditional on it actually being stale
+    (`_lock_is_stale`) rather than on a bare failed parse — an unparseable
+    lock that is still fresh is refused, not clobbered, since it could be
+    another creator's in-flight write.
+
+    Returns ``(acquired, held_pid)``; ``held_pid`` is only meaningful when
+    ``acquired`` is False.
+    """
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    existing = _read_json(lock_path)
+    if existing is not None:
+        try:
+            held_pid = int(existing.get("pid", -1))
+        except (TypeError, ValueError):
+            held_pid = -1
+        alive = held_pid > 0 and _pid_alive(held_pid)
+        if alive:
+            if existing.get("writer") == "handoff" and token and existing.get("token") == token:
+                return True, None
+            return False, held_pid
+        if existing.get("writer") == "handoff" and not result_path.exists():
+            try:
+                granted = int(existing.get("granted", 0) or 0)
+            except (TypeError, ValueError):
+                granted = 0
+            _write_supervisor_result(memory_dir, result_path, "ORPHANED", granted)
+        _claim_lock_for_removal(lock_path)
+    elif lock_path.exists():
+        # `existing` failed to parse but the path is occupied — never
+        # treat that as "no lock": the atomic creator above could still be
+        # mid-write. Only reclaim once the lock is provably stale.
+        if not _lock_is_stale(lock_path):
+            current = _read_json(lock_path) or {}
+            try:
+                held_pid = int(current.get("pid", -1))
+            except (TypeError, ValueError):
+                held_pid = -1
+            return False, held_pid
+        _claim_lock_for_removal(lock_path)
+    content = {
+        "pid": os.getpid(),
+        "started_at": _iso_now(),
+        "granted": max_relaunch,
+        "writer": "cli",
+        "task": task,
+    }
+    payload = (json.dumps(content, sort_keys=True) + "\n").encode("utf-8")
+    if _create_lock_exclusive(lock_path, payload):
+        return True, None
+    if _retried:
+        existing2 = _read_json(lock_path) or {}
+        try:
+            held_pid2 = int(existing2.get("pid", -1))
+        except (TypeError, ValueError):
+            held_pid2 = -1
+        return False, held_pid2
+    return _acquire_supervisor_lock(
+        memory_dir, lock_path, result_path, task, max_relaunch, token, _retried=True
+    )
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """`quoin run --autonomous <task>` — external supervisor entrypoint (T-08).
 
@@ -820,22 +1085,82 @@ def _cmd_run(args: argparse.Namespace) -> int:
     Resolves --project-root, builds the real headless launch_fn, and runs
     the relaunch loop to a terminal condition (SUCCESS/HALTED/ABORTED).
 
+    A single-driver lock (T-04) guards against two supervisors racing on
+    the same task: a live foreign lock refuses with exit 3 before any
+    launch happens. Under `--halt-on-abort`, a non-SUCCESS terminal state
+    also writes a halt sentinel and a `.result` file, and SIGTERM/SIGINT
+    stop the run the same way, so a hand-off never leaves the task silently
+    stuck (D-20). Without the flag, behavior is unchanged: no lock is
+    contended in the normal case, no `.result` and no halt are written.
+
     NOTE (MIN-2): --budget is a no-op stub this release — cost is bounded
     only by --max-relaunch + exponential backoff. See autonomous-mode.md.
     """
     from quoin import supervisor as _supervisor  # noqa: PLC0415
 
     project_root = pathlib.Path(args.project_root).resolve()
+    paths = _supervisor_paths(project_root, args.task)
+
+    # Popped immediately after the lock decision so a relaunch child this
+    # process itself spawns never inherits our own adoption token.
+    token = os.environ.pop("QUOIN_SUPERVISOR_LOCK_TOKEN", None)
+    acquired, held_pid = _acquire_supervisor_lock(
+        paths["memory_dir"], paths["lock"], paths["result"], args.task, args.max_relaunch, token
+    )
+    if not acquired:
+        print(f"quoin run: REFUSED (supervisor lock held by pid {held_pid})")
+        print(f"  task: {args.task}")
+        return 3
+
     launch_fn = _supervisor.make_launch_fn(
         project_root,
         permission_mode=args.permission_mode,
     )
-    result = _supervisor.supervise(
-        args.task,
-        project_root,
-        launch_fn=launch_fn,
-        max_relaunch=args.max_relaunch,
-    )
+    launches = 0
+
+    def _counting_launch_fn(task):
+        nonlocal launches
+        launches += 1
+        return launch_fn(task)
+
+    old_handlers = None
+    if args.halt_on_abort:
+        def _on_signal(signum, _frame):
+            _write_abort_halt(paths["memory_dir"], paths["halt"], args.task, "supervisor stopped by signal")
+            _write_supervisor_result(paths["memory_dir"], paths["result"], "STOPPED", launches)
+            _release_supervisor_lock(paths["lock"], os.getpid())
+            raise SystemExit(143 if signum == signal.SIGTERM else 130)
+
+        old_handlers = (
+            signal.signal(signal.SIGTERM, _on_signal),
+            signal.signal(signal.SIGINT, _on_signal),
+        )
+
+    try:
+        result = _supervisor.supervise(
+            args.task,
+            project_root,
+            launch_fn=_counting_launch_fn,
+            max_relaunch=args.max_relaunch,
+        )
+    except SystemExit:
+        raise
+    except BaseException:
+        if args.halt_on_abort:
+            _write_abort_halt(paths["memory_dir"], paths["halt"], args.task, "supervisor error")
+            _write_supervisor_result(paths["memory_dir"], paths["result"], "ERROR", launches)
+        _release_supervisor_lock(paths["lock"], os.getpid())
+        raise
+    finally:
+        if old_handlers is not None:
+            signal.signal(signal.SIGTERM, old_handlers[0])
+            signal.signal(signal.SIGINT, old_handlers[1])
+
+    if args.halt_on_abort:
+        if result.status == "ABORTED":
+            _write_abort_halt(paths["memory_dir"], paths["halt"], args.task, result.reason or "aborted")
+        _write_supervisor_result(paths["memory_dir"], paths["result"], result.status, launches)
+    _release_supervisor_lock(paths["lock"], os.getpid())
 
     label = result.status
     if result.reason:
@@ -1280,6 +1605,15 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Maximum relaunch count before aborting (default: 10; mirrors "
             "supervisor.DEFAULT_MAX_RELAUNCH)."
+        ),
+    )
+    run_p.add_argument(
+        "--halt-on-abort",
+        action="store_true",
+        help=(
+            "Write a halt sentinel and a .result file on a non-SUCCESS "
+            "terminal state (incl. a caught signal); used by the automatic "
+            "hand-off so an unattended run never goes silently stuck."
         ),
     )
     run_p.add_argument(

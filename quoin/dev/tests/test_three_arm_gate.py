@@ -523,7 +523,7 @@ class TestArmRegisteredStanzas:
         finally:
             _remove_worktree(main_root)
 
-    def test_candidate_arm_worktree_registers_eight_stanzas_with_compact(self, tmp_path):
+    def test_candidate_arm_worktree_registers_nine_stanzas_with_compact(self, tmp_path):
         """Pins this branch's own HEAD, which registers the
         `SessionStart`/`compact` stanza the baseline above does not."""
         from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
@@ -536,8 +536,9 @@ class TestArmRegisteredStanzas:
             pytest.skip("HEAD not reachable as a worktree in this checkout")
         try:
             stanzas = arm_registered_stanzas(candidate_root)
-            assert len(stanzas) == 8
+            assert len(stanzas) == 9
             assert ("SessionStart", "compact", "sessionstart.sh") in stanzas
+            assert ("Stop", "*", "stop.sh") in stanzas
         finally:
             _remove_worktree(candidate_root)
 

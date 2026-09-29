@@ -10,8 +10,8 @@ roster, not AST-derived like the count and the WorktreeCreate ordinal are
 — a deliberate trade-off (round-1 MIN-6): a bare cardinality check would
 miss a call whose event/matcher pair silently changed while the count
 stayed the same, and the list-equality form catches that. This makes the
-tuple list a ninth surface needing an update at stanza nine, alongside the
-five below.
+tuple list an extra surface needing an update at every new stanza,
+alongside the five below.
 """
 import ast
 import re
@@ -33,8 +33,9 @@ EXPECTED_STANZAS = [
     ("SessionStart", "compact"),
     ("SessionEnd", "*"),
     ("WorktreeCreate", "*"),
+    ("Stop", "*"),
 ]
-EXPECTED_COUNT = len(EXPECTED_STANZAS)  # 8
+EXPECTED_COUNT = len(EXPECTED_STANZAS)  # 9
 
 
 def _append_stanza_calls():
@@ -95,7 +96,7 @@ def test_printed_stanza_count_is_derived_not_literal():
     )
 
 
-def test_claude_md_and_catalog_name_eight_stanzas():
+def test_claude_md_and_catalog_name_nine_stanzas():
     for path in (CLAUDE_MD, WORKFLOW_CATALOG):
         text = path.read_text(encoding="utf-8")
         assert f"registers {EXPECTED_COUNT} (event, matcher) stanzas" in text, (
@@ -103,10 +104,10 @@ def test_claude_md_and_catalog_name_eight_stanzas():
         )
 
 
-def test_hooks_table_names_eight_stanzas_in_words():
+def test_hooks_table_names_nine_stanzas_in_words():
     text = HOOKS_TABLE.read_text(encoding="utf-8")
-    assert "registers eight (event, matcher) stanzas" in text, (
-        "hooks-table.md does not name the stanza count as the word 'eight'"
+    assert "registers nine (event, matcher) stanzas" in text, (
+        "hooks-table.md does not name the stanza count as the word 'nine'"
     )
 
 
@@ -131,7 +132,28 @@ def test_hooks_guide_worktreecreate_ordinal_matches_ast_index():
     )
 
 
-def test_hooks_table_has_eight_data_rows_including_compact():
+def test_hooks_guide_stop_ordinal_matches_ast_index():
+    calls = _append_stanza_calls()
+    stop_indices = [
+        i for i, (event, matcher, _) in enumerate(calls, start=1) if event == "Stop"
+    ]
+    assert len(stop_indices) == 1, "expected exactly one Stop stanza call"
+    ordinal_index = stop_indices[0]  # 1-based position in the AST call list
+
+    ordinals = {
+        1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth",
+        6: "sixth", 7: "seventh", 8: "eighth", 9: "ninth", 10: "tenth",
+    }
+    expected_word = ordinals[ordinal_index]
+
+    text = HOOKS_GUIDE.read_text(encoding="utf-8")
+    assert f"Registered as the {expected_word} stanza (`Stop`" in text, (
+        f"hooks-guide.md's Stop ordinal does not match its "
+        f"AST call-list position ({ordinal_index} -> '{expected_word}')"
+    )
+
+
+def test_hooks_table_has_nine_data_rows_including_compact():
     text = HOOKS_TABLE.read_text(encoding="utf-8")
     lines = text.splitlines()
     # The table's data rows are the pipe-delimited lines after the header

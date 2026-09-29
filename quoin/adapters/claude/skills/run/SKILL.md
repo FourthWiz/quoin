@@ -57,6 +57,21 @@ branch in this file. The read side of this contract (a resumed session re-establ
 `AUTONOMOUS=true` from this marker before its own first decision point) is documented
 in `## Resume` below.
 
+### Arm the in-session continuation (only under `AUTONOMOUS`, fresh entry only)
+
+Immediately after the marker write above, when this is a fresh `--autonomous`
+invocation (not a `--resume`), arm the owning session for in-session
+continuation so the Stop hook can nudge this same conversation instead of
+only ever handing off to a detached supervisor:
+
+```bash
+python3 __QUOIN_HOME__/scripts/auto_resume.py arm --project-root "$(pwd)" \
+  --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID" --entry fresh || true
+```
+
+Never blocks on failure — a missing helper or a malformed arm is a no-op, and
+the external supervisor hand-off path is unaffected either way.
+
 ### Parse input and determine task profile
 
 Scan the task description (with `--autonomous` already stripped, if present) for profile tags and runtime overrides, in this order:
@@ -115,6 +130,16 @@ If exit 1 (`OVER|...`): STOP. Tell the user verbatim:
    /run pipelines are even more failure-prone than /end_of_task because they
    span every phase. Please open a fresh chat to start a long pipeline.
    Override at your own risk by re-invoking with prefix [no-session-age-guard] /run"
+
+  Under `AUTONOMOUS`, replace the verbatim STOP above with a hand-off attempt
+  instead — no one is present to open a fresh chat:
+  ```bash
+  python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
+    --task <task-name> --reason session-age --on-fail-halt "session age cap"
+  ```
+  Print the command's stdout as the pipeline's stop notice and end the turn.
+  `DENIED|opt-out` or a missing/failing helper (empty stdout) falls through to
+  the unchanged verbatim STOP text above.
 
 If exit 0 (`OK|...`): continue to ### Check git state.
 
@@ -318,12 +343,16 @@ _cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-roo
      - **`QUOIN_PHASE_BUDGET_BLOCK=1`** (opt-in, default off) → print a
        fresh-session resume instruction (`/run --resume <task>`) and STOP. A
        printed instruction, NOT an `AskUserQuestion`.
-  4. **`_AUTONOMOUS`** (`[autonomous]` / `--autonomous`) → the SAME non-blocking
-     path as (1)-(3), and ADDITIONALLY perform the existing Hook-cooperation
-     self-checkpoint + supervisor relaunch via `/run --resume --autonomous`
-     (reuse the "Hook cooperation (autonomous)" contract — no new mechanism).
-     Interactive has no supervisor → it continues in-session with the checkpoint
-     as a clean-recovery backstop.
+  4. **`_AUTONOMOUS`** (`[autonomous]` / `--autonomous`) → the same non-blocking
+     path as (1)-(3). Under `QUOIN_PHASE_BUDGET_BLOCK=1` only: after the boundary
+     checkpoint, attempt a hand-off:
+     ```bash
+     python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
+       --task <task-name> --reason budget
+     ```
+     `HANDOFF|...` → print the notice and end the turn (the Stop hook stands
+     down behind the supervisor lock this hand-off just took). Any other result
+     → continue in-session; never stop on a printed instruction.
 - Exit 1 but `$_cbg_out` does NOT start with `OVER|` (helper crashed before
   reaching its own fail-OPEN try/except — e.g. empty output or a traceback, never
   a genuine budget read) → treat identically to the `OK|0|` fail-OPEN path above:
@@ -1280,7 +1309,12 @@ state, before checking completion sentinels, before anything else:
   resume invocation's own text carries `--autonomous` (belt-and-suspenders, D-06).
   This is what guarantees a headless `claude -p "/run --resume --autonomous
   {task}"` relaunch never reverts to interactive and stalls waiting on a prompt
-  no one is present to answer.
+  no one is present to answer. Also re-arm the in-session continuation for this
+  (resumed) owning session:
+  ```bash
+  python3 __QUOIN_HOME__/scripts/auto_resume.py arm --project-root "$(pwd)" \
+    --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID" --entry resume || true
+  ```
 - If the marker is absent: `AUTONOMOUS` is determined normally from the invocation
   text — plain (non-autonomous) resume, unchanged from pre-T-09 behavior.
 
@@ -1514,7 +1548,20 @@ that tradeoff.
 - **Subagent failure:** inform the user, offer to retry the phase. If the failed subagent was Phase 6 (`/end_of_task`), see "end_of_task failure recovery (inline finish)" under Phase 6 above before archiving.
 - **Gate failure:** present failures, offer to fix (re-run the phase) or stop
 - **Git errors:** report and let the user resolve. **Git conflict (Hard-stop #4, autonomous):** under `AUTONOMOUS`, a git conflict (merge/rebase/push conflict, at any phase) is a hard stop — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop; never attempt automatic conflict resolution.
-- **Context exhaustion:** save state, instruct user to resume with `/run --resume <task-name>`
+- **Context exhaustion:** save state, instruct user to resume with `/run --resume <task-name>`.
+  Under `AUTONOMOUS`, attempt a hand-off instead of waiting for the user:
+  ```bash
+  python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
+    --task <task-name> --reason context --on-fail-halt "context exhaustion"
+  ```
+- **The user asks to stop an autonomous run:**
+  ```bash
+  python3 __QUOIN_HOME__/scripts/auto_resume.py pause --project-root "$(pwd)" \
+    --task <task-name> --session-id "$CLAUDE_CODE_SESSION_ID"
+  ```
+  Every `handoff` call site in this file treats empty stdout (the helper is
+  missing, or a partial install failed to load the wrapper) exactly like a
+  `DENIED|` result and falls through to that site's unchanged interactive text.
 - **Stream-idle timeout recovery (orchestrator-only).** If a spawned subagent
   returns a tool_result whose content contains `Stream idle timeout - partial response received`:
   do NOT use SendMessage to resume the dead child (this also
@@ -1613,10 +1660,8 @@ the threshold values themselves live in `hooks/_lib.sh`'s
   for an expected multi-week autonomous run. This bullet lives inside `## Hook
   cooperation (autonomous)`, so the conditioning above does not reach an
   interactive (non-autonomous) `/run` session — a scope narrowing worth
-  flagging for the `S-7` sweep, not an oversight. The pre-phase budget
-  block's item (4) (`:321-326`) is unchanged: it reuses this contract, and
-  `boundary_checkpoint.py` (deterministic, no model call) still always
-  runs on the over-budget path.
+  flagging for the `S-7` sweep, not an oversight. `boundary_checkpoint.py`
+  (deterministic, no model call) still always runs on the over-budget path.
 - **There is no block to catch — the band is a pure advisory.** At and
   above `BLOCK_BPS` (95%) the prompt hook returns `additionalContext`
   plus a `systemMessage` and the prompt continues in the same turn; it
@@ -1632,14 +1677,19 @@ the threshold values themselves live in `hooks/_lib.sh`'s
 - **Hooks fail open; the orchestrator never assumes otherwise.** The
   compaction hook never blocks by design — it only ever allows, and no
   hook in the set emits a stop signal on any path. The orchestrator
-  relies on automatic compaction plus a supervisor's cross-phase relaunch
-  unconditionally, never on a block signal it might be handed.
+  relies on automatic compaction plus the Stop-hook continuation (armed
+  owning session) and the SessionStart hand-off (owner gone) documented in
+  `memory/autonomous-mode.md`, both bounded by `auto-resume-<task>.json`
+  and standing down behind every hard-stop sentinel. The Stop hook's block
+  response is a continue instruction to the model, never a stop signal, so
+  the "no block to catch" rule above still holds.
 - **Hard constraint.** Autonomous mode NEVER writes to any file under
   `hooks/`, and NEVER modifies or lowers a `QUOIN_*_BPS` constant or any
   other hook threshold — anywhere, under any condition. The cooperation
   described above is entirely additive branches in this document; it adds
-  no new hook script. Hook scripts change only through ordinary quoin
-  development, never from this mode.
+  no hook script at runtime — the Stop hook ships with quoin like every
+  other hook. Hook scripts change only through ordinary quoin development,
+  never from this mode.
 
 ## Gate boundaries reference
 

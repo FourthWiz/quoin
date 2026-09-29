@@ -128,7 +128,7 @@ def test_classification_table_matches_plan_table():
     keep_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_KEEP_HEADINGS)
     drop_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_DROP_HEADINGS)
     assert keep_bytes == 7311, keep_bytes  # finalization-rule bullet shortened
-    assert drop_bytes == 31984, drop_bytes  # /cleanup bullet gained the task-bookkeeping clause
+    assert drop_bytes == 31969, drop_bytes  # Stop/`*` stanza added, recent-sessions.md phrasing tightened (net -15, D-16)
 
 
 def test_classification_table_is_bijective_with_source_headings():

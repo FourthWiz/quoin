@@ -41,6 +41,40 @@ Registered as the eighth stanza (`WorktreeCreate`/`*`, timeout 10s). Fires when 
 
 Whether isolation is even attempted is gated UPSTREAM by the `worktree_isolation.py --decide` STEP A0 in the four source-mutating SKILL.md (default `skip`; see `dispatch-guide.md`). The authoritative hook source is `quoin/quoin/hooks/worktreecreate.sh`; the copy at `quoin/quoin/adapters/claude/hooks/worktreecreate.sh` is a mirror kept byte-identical by a `test_worktreecreate_hook.py` assertion.
 
+## Stop hook (`stop.sh`, IVG-280)
+
+Registered as the ninth stanza (`Stop`/`*`, timeout 10s). Fires at the end of every assistant turn. Two shell-level early exits (no `.workflow_artifacts/memory` under the resolved project root, no `run-continue-arm-*.txt` file present) run before any Python process starts, so the common case — no armed run in this project — costs a couple of `ls`/`test` calls. When an arm file is present, the hook hands off to `python3 scripts/auto_resume.py stop --project-root <root>` with the Stop hook's own stdin (session_id, transcript_path, background_tasks, stop_hook_active) passed straight through.
+
+- **What it does:** continues an interrupted `/run --autonomous` span in the session that armed it — either by emitting an in-session continuation block, or, once the in-session block count reaches `QUOIN_AUTO_RESUME_HANDOFF_AT`, by spawning a detached `quoin run --autonomous` supervisor and letting the turn end quietly.
+- **Fail-OPEN:** any error, missing `python3`, or a helper that raises internally exits 0 with empty stdout — the harness's own Stop-block cap remains the outer bound regardless.
+- **Opt-out:** `QUOIN_AUTO_RESUME=0` disables the helper entirely; the hook still exits early on the two shell-level checks either way, but the helper's own subcommands additionally no-op under the knob.
+- **State files:** `run-continue-arm-<sid>.txt` (armed by `/run`'s Setup/Resume steps), `run-continue-consent-<sid>.txt` and `session-ended-<sid>.txt` (written by `userpromptsubmit.sh`/`sessionend.sh`), `auto-resume-<task>.json` (the continuation counter), `run-supervisor-<task>.pid`/`.result`/`.log` (the hand-off lock and its outcome) — all under `.workflow_artifacts/memory/`, all read or written exclusively by `scripts/auto_resume.py` and `src/quoin/cli.py`'s `run` subcommand.
+- **Un-registering.** `QUOIN_AUTO_RESUME=0` is the supported opt-out (above) and needs no settings.json edit. To remove the stanza itself instead:
+
+  ```bash
+  python3 - <<'EOF'
+  import json, pathlib, shutil
+
+  settings_path = pathlib.Path.home() / ".claude" / "settings.json"
+  backup_path = settings_path.with_suffix(settings_path.suffix + ".bak")
+  shutil.copyfile(settings_path, backup_path)
+
+  settings = json.loads(settings_path.read_text())
+  stanzas = settings.get("hooks", {}).get("Stop", [])
+  settings.setdefault("hooks", {})["Stop"] = [
+      s for s in stanzas
+      if not any(h.get("command", "").endswith("stop.sh") for h in s.get("hooks", []))
+  ]
+  settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+  print(f"Backed up to {backup_path}; Stop stanza(s) ending in stop.sh removed.")
+  EOF
+  ```
+
+  To fully roll back state as well, delete the state files listed above for
+  the task(s) in question — they are inert once the stanza is gone, but
+  removing them clears any stale counter or lock before re-enabling the
+  feature later.
+
 ## Tunable constants
 
 Hook scripts read these values at runtime via `${QUOIN_*:-default}` parameter expansion. Defaults are baked into the scripts:

@@ -837,6 +837,55 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/docs/runtime-portability-status.md",
         "quoin/dev/tests/test_runtime_portability_docs.py",
     ),
+    # IVG-280 (T-09): the four run-continuation hook scripts are .sh, not
+    # .py, so the generic mtime rule never selected their behavioral
+    # fixtures or the token-clean guard on a hooks-only diff.
+    (
+        "quoin/hooks/stop.sh",
+        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
+    ),
+    (
+        "quoin/hooks/stop.sh",
+        "quoin/dev/tests/test_autonomous_hooks_untouched.py",
+    ),
+    (
+        "quoin/hooks/sessionstart.sh",
+        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
+    ),
+    (
+        "quoin/hooks/sessionstart.sh",
+        "quoin/dev/tests/test_autonomous_hooks_untouched.py",
+    ),
+    (
+        "quoin/hooks/userpromptsubmit.sh",
+        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
+    ),
+    (
+        "quoin/hooks/userpromptsubmit.sh",
+        "quoin/dev/tests/test_autonomous_hooks_untouched.py",
+    ),
+    (
+        "quoin/hooks/sessionend.sh",
+        "quoin/dev/tests/test_auto_resume_hook_shell_suite.py",
+    ),
+    (
+        "quoin/hooks/sessionend.sh",
+        "quoin/dev/tests/test_autonomous_hooks_untouched.py",
+    ),
+    # run/SKILL.md and autonomous-mode.md's run-continuation wiring
+    # (IVG-280 T-07) has its own dedicated contract pin.
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_run_skill_auto_resume_contract.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_run_skill_auto_resume_contract.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_hook_stanza_count_parity.py",
+    ),
     (
         "quoin/docs/runtime-parity-matrix.md",
         "quoin/dev/tests/test_opencode_docs.py",

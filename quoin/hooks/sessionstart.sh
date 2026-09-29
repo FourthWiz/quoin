@@ -115,6 +115,26 @@ run-notes: ${rs_notes_path}"
 fi
 # === end IVG-258 post-compaction re-entry ===
 
+# === run continuation hand-off ===
+# On a fresh or resumed session start, ask the run-continuation helper
+# whether the previous owner of an active run-state record is gone; if so
+# it spawns a detached supervisor and returns an advisory naming the task.
+# Decision logic lives in scripts/auto_resume.py. Fail-safe: without a
+# session_id, a memory dir, a run-state record or python3, this does nothing.
+_ar_task=""
+case "$src" in
+  startup|resume)
+    if [ -n "$session_id" ] && [ -d "$MEMORY_DIR" ] \
+       && ls "$MEMORY_DIR"/run-state-*.json >/dev/null 2>&1 \
+       && command -v python3 >/dev/null 2>&1; then
+      _ar_out=$(python3 "$(dirname "$0")/../scripts/auto_resume.py" start --project-root "$cwd" --source "$src" --session-id "$session_id" 2>/dev/null)
+      [ -n "$_ar_out" ] && printf '%s\n' "$_ar_out"
+      _ar_task=$(printf '%s' "$_ar_out" | sed -n 's/.*task=\([A-Za-z0-9._-]*\) .*via=supervisor.*/\1/p')
+    fi
+    ;;
+esac
+# === end run continuation hand-off ===
+
 # === S-4 missing-EOD banner ===
 # Check for session files with end_of_day_due: yes within last 36 hours.
 # Sentinel dedup: skip if banner fired within the last 5 minutes.
@@ -302,8 +322,12 @@ fi
 if [ -z "$pending_restore" ]; then
   most_recent=$(ls -t "${MEMORY_DIR}"/pending-restore-*.txt 2>/dev/null | head -1)
   if [ -n "$most_recent" ] && [ -f "$most_recent" ]; then
-    pending_restore="$most_recent"
-    session_id_match="mismatch-warning: surfaced from different session (mtime-most-recent fallback)"
+    if [ -n "$_ar_task" ] && grep -qF -- "$_ar_task" "$most_recent"; then
+      : # the run-continuation hand-off above already covers this task
+    else
+      pending_restore="$most_recent"
+      session_id_match="mismatch-warning: surfaced from different session (mtime-most-recent fallback)"
+    fi
   fi
 fi
 

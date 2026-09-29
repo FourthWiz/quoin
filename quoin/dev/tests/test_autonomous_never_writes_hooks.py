@@ -140,8 +140,9 @@ def test_no_threshold_constant_reassigned() -> None:
 
 def test_hooks_dir_roster_unchanged() -> None:
     """Corroborating structural check: the hooks/ directory still has
-    exactly its known 7-script roster — no script was added, removed, or
-    renamed by the T-12/T-13 autonomous work."""
+    exactly its known 8-script roster (`stop.sh` is the run-continuation
+    hook added by ordinary development, IVG-280) — no script was added,
+    removed, or renamed by the T-12/T-13 autonomous work."""
     assert HOOKS_DIR.is_dir()
     names = sorted(p.name for p in HOOKS_DIR.glob("*.sh"))
     expected = sorted(
@@ -151,6 +152,7 @@ def test_hooks_dir_roster_unchanged() -> None:
             "precompact.sh",
             "sessionend.sh",
             "sessionstart.sh",
+            "stop.sh",
             "userpromptsubmit.sh",
             "worktreecreate.sh",
         ]
