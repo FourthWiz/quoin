@@ -843,6 +843,30 @@ def test_do_handoff_live_lock_is_never_reclaimed(ar, project, monkeypatch):
     assert json.loads(lock_path.read_text()) == live_lock
 
 
+def test_handoff_releases_reservation_on_non_oserror_spawn_failure(ar, project, monkeypatch):
+    """MIN reproduction: a spawn failure that isn't an `OSError` (e.g. a
+    malformed argv raising `ValueError`, or `subprocess.SubprocessError`)
+    used to skip the reservation cleanup entirely, leaving the lock behind
+    under this process's own (still-alive) pid until a later settle
+    mistakenly charged it as a crashed supervisor's grant."""
+    monkeypatch.setattr(ar, "_which", lambda name: "/usr/bin/quoin")
+
+    def _boom(argv, **kw):
+        raise ValueError("boom")
+
+    monkeypatch.setattr(ar, "_popen", _boom)
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
+              "resume_command": "/run --resume demo"}
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, record)
+
+    assert result == "DENIED|spawn"
+    assert not (memory / "run-supervisor-demo.pid").exists()
+
+
 def test_handoff_on_fail_halt_skips_halt_when_locked(ar, project, monkeypatch, capsys):
     """MAJ: `--on-fail-halt` must never halt a supervised child just
     because a live supervisor already holds the lock — that is the normal

@@ -825,13 +825,24 @@ def _do_handoff(
     log_path = memory_dir / LOG_TEMPLATE.format(task=task)
     try:
         log_fd = os.open(str(log_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-        log_fh = os.fdopen(log_fd, "ab")
     except OSError:
         try:
             lock_path.unlink()
         except OSError:
             pass
-        return "NO_CLI|"
+        return "DENIED|log"
+    try:
+        log_fh = os.fdopen(log_fd, "ab")
+    except OSError:
+        try:
+            os.close(log_fd)
+        except OSError:
+            pass
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return "DENIED|log"
     argv = [
         quoin_bin, "run", "--autonomous", task,
         "--project-root", str(project_root),
@@ -851,7 +862,11 @@ def _do_handoff(
             start_new_session=True,
             env=child_env,
         )
-    except OSError:
+    except Exception:  # noqa: BLE001 — any spawn failure (not just OSError,
+        # e.g. ValueError/SubprocessError from a malformed argv or a
+        # startupinfo/session-group failure) must still release the
+        # reservation; otherwise it sits under this process's own pid until
+        # a later settle charges it as a crashed supervisor.
         try:
             lock_path.unlink()
         except OSError:
