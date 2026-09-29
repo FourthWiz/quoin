@@ -1,0 +1,74 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "openrouter/example-vendor/example-model",
+  "small_model": "openrouter/example-vendor/example-model",
+  "agent": {
+    "quoin-coordinator": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-investigator": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-architect": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-planner": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-implementer": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-critic": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-reviewer": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "quoin-gate": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "title": {
+      "model": "openrouter/example-vendor/example-model"
+    },
+    "compaction": {
+      "model": "openrouter/example-vendor/example-model"
+    }
+  },
+  "share": "disabled",
+  "autoupdate": false,
+  "enabled_providers": [
+    "openrouter"
+  ],
+  "provider": {
+    "openrouter": {
+      "npm": "@openrouter/ai-sdk-provider",
+      "name": "openrouter",
+      "options": {
+        "baseURL": "https://openrouter.ai/api/v1",
+        "apiKey": "{env:QUOIN_OPENROUTER_API_KEY}"
+      },
+      "whitelist": [
+        "example-vendor/example-model"
+      ],
+      "models": {
+        "example-vendor/example-model": {
+          "name": "personal-model"
+        }
+      }
+    }
+  },
+  "experimental": {
+    "policies": [
+      {
+        "action": "provider.use",
+        "effect": "deny",
+        "resource": "*"
+      },
+      {
+        "action": "provider.use",
+        "effect": "allow",
+        "resource": "openrouter"
+      }
+    ]
+  }
+}

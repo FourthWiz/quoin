@@ -504,3 +504,31 @@ def test_hostnames_on_allowlist():
     for name, text in _clean_content_corpus().items():
         for host in _extract_hosts(text):
             assert _host_ok(host), "%s in %s not on allowlist" % (host, name)
+
+
+def test_adapter_design_decisions_section():
+    text = DECISIONS_PATH.read_text(encoding="utf-8")
+    sections = _sections(text, 2)
+    assert "Adapter design decisions" in sections
+    body = sections["Adapter design decisions"]
+    assert not re.search(r"^Value:", body, re.MULTILINE)
+    entries = _sections(text, 3)
+    provider = entries["Provider access in compiled configuration"]
+    assert re.search(r"^Status:\s*decided\s*$", provider, re.MULTILINE)
+    for needle in ("enabled_providers", "whitelist", "experimental.policies", "deny-all", "supplement"):
+        assert needle in provider, needle
+    # The section sits after the maintainer decisions and before the probe results.
+    order = [m.group(1) for m in re.finditer(r"^## (.+)$", text, re.MULTILINE)]
+    assert order.index("Maintainer decisions") < order.index("Adapter design decisions") < order.index(
+        "Gateway probe results"
+    )
+    # Every maintainer decision still has no value.
+    maintainer = sections["Maintainer decisions"]
+    assert len(re.findall(r"^Value:\s*not set\s*$", maintainer, re.MULTILINE)) == len(DECISION_HEADINGS)
+
+
+def test_documents_never_call_the_work_profile_supported():
+    for path in (DECISIONS_PATH, COMPAT_PATH):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            for match in re.finditer(r"work profile[^.\n]*\bsupported\b", line, re.IGNORECASE):
+                assert re.search(r"\bnot\b", match.group(0), re.IGNORECASE), line

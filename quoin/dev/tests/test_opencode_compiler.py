@@ -986,3 +986,38 @@ def test_compile_and_check_leave_the_installed_project_untouched(tmp_path):
     compiler.check(ev, target)
     assert tree_state(world.root) == before
     assert target.is_dir() and not str(target).startswith(str(world.root))
+
+
+# ================================================================== goldens
+
+GOLDEN_DIR = helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "compiled"
+
+
+def golden_bytes(name, tmp_path):
+    """The compiled document for a golden scenario, as written to disk.
+
+    The work scenario is the work profile with a classified project that
+    narrows nothing; the personal scenario is the personal profile. Both use
+    qualification records built by the probe itself at the fixed clock. To
+    regenerate a golden after an intended change, call this function from a
+    REPL (with the tests directory on `sys.path`) and write the result to
+    `quoin/adapters/opencode/fixtures/compiled/<name>.opencode.json`.
+    """
+    profile = {"work": PROFILE_WORK, "personal": PROFILE_PERSONAL}[name]
+    return compiler.build(World(tmp_path, profile=profile).evaluate()).native_bytes
+
+
+@pytest.mark.parametrize("name", ["work", "personal"])
+def test_goldens_are_current_and_byte_identical(tmp_path, name):
+    committed = (GOLDEN_DIR / ("%s.opencode.json" % name)).read_bytes()
+    assert golden_bytes(name, tmp_path / "first") == committed
+    assert golden_bytes(name, tmp_path / "second") == committed
+
+
+@pytest.mark.parametrize("name", ["work", "personal"])
+def test_goldens_validate_against_the_subset_schema(name):
+    from quoin.opencode_adapter import schema_check
+
+    schema = json.loads(paths.native_schema_path().read_text(encoding="utf-8"))
+    doc = json.loads((GOLDEN_DIR / ("%s.opencode.json" % name)).read_text(encoding="utf-8"))
+    assert schema_check.validate(doc, schema, "config") == []

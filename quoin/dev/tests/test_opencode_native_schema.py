@@ -325,3 +325,17 @@ def test_schema_accepts_the_documented_variants(work_doc):
     }
     doc["agent"]["quoin-gate"]["variant"] = "quoin-low"
     assert violations(doc) == []
+
+
+GOLDENS = sorted((SCHEMA_PATH.parent.parent / "fixtures" / "compiled").glob("*.opencode.json"))
+
+
+def test_golden_documents_validate_offline():
+    assert [p.name for p in GOLDENS] == ["personal.opencode.json", "work.opencode.json"]
+    for path in GOLDENS:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        assert violations(doc) == [], path.name
+        assert list(doc) == [
+            "$schema", "model", "small_model", "agent", "share", "autoupdate",
+            "enabled_providers", "provider", "experimental",
+        ]

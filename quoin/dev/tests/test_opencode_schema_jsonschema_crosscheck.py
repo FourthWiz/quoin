@@ -61,6 +61,8 @@ def test_native_subset_schema_agrees_with_a_standard_validator(tmp_path):
     )
     doc = compiler.build(World(tmp_path).evaluate()).document
     assert validator.is_valid(doc)
+    for golden in native.GOLDENS:
+        assert validator.is_valid(json.loads(golden.read_text(encoding="utf-8"))), golden.name
     checked = 0
     for name, mutate in sorted(native.NEGATIVES.items()):
         broken = copy.deepcopy(doc)
