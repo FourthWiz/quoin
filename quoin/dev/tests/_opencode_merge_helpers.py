@@ -274,7 +274,7 @@ class World:
     agent stubs and probe-built qualification records, as real files."""
 
     def __init__(self, tmp_path, profile=PROFILE_WORK, project="open", managed=None,
-                 agents=True, records=True):
+                 agents=True, records=True, root=None):
         self.tmp = Path(tmp_path)
         self.env = {
             "XDG_CONFIG_HOME": str(self.tmp / "xdg"),
@@ -282,7 +282,7 @@ class World:
         }
         self.home = self.tmp / "home"
         self.home.mkdir(parents=True, exist_ok=True)
-        self.root = self.tmp / "project"
+        self.root = Path(root) if root is not None else self.tmp / "project"
         self.root.mkdir(parents=True, exist_ok=True)
         self.profile = _data(profile)
         if project == "open":

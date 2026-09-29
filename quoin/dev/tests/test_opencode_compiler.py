@@ -723,3 +723,266 @@ def test_serialization_forms(work):
         json.dumps(result.sidecar, sort_keys=True, indent=2, ensure_ascii=False) + "\n"
     ).encode("utf-8")
     assert "digest" in repr(result) and "provider" not in repr(result)
+
+
+# ================================================================== output
+
+
+@pytest.fixture
+def umask0():
+    old = os.umask(0)
+    yield
+    os.umask(old)
+
+
+def mode(path):
+    return stat.S_IMODE(os.stat(path).st_mode)
+
+
+def tree_state(root):
+    """Paths, bytes and modes of everything below `root`."""
+    out = {}
+    for path in sorted(root.rglob("*")):
+        rel = path.relative_to(root).as_posix()
+        out[rel] = (mode(path), path.read_bytes() if path.is_file() and not path.is_symlink() else None)
+    return out
+
+
+def refusal(ev, **kw):
+    with pytest.raises(compiler.OutputRefused) as info:
+        compiler.resolve_output_dir(ev, env=kw.pop("env", None) or {}, home=kw.pop("home", None) or "/nonexistent", **kw)
+    return info.value
+
+
+def test_default_location_shape(work):
+    ev = work.evaluate()
+    target = compiler.resolve_output_dir(ev, output=None, env=work.env, home=work.home)
+    assert target == work.tmp / "state" / "quoin" / "opencode" / "work" / paths.project_key(work.root)
+
+
+def test_output_inside_the_project_is_refused_and_nothing_is_written(work):
+    ev = work.evaluate()
+    before = tree_state(work.tmp)
+    for target in (work.root, work.root / "out", work.root / "deep" / "er" / "still"):
+        err = refusal(ev, output=target, home=work.home)
+        assert err.code == "inside-project" and str(work.root) not in str(err)
+    assert tree_state(work.tmp) == before
+
+
+def test_output_inside_a_nested_git_worktree_is_refused(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    world = World(tmp_path / "w", root=repo / "packages" / "app")
+    ev = world.evaluate()
+    assert refusal(ev, output=repo / "elsewhere", home=world.home).code == "inside-project"
+    assert refusal(ev, output=repo, home=world.home).code == "inside-project"
+    outside = tmp_path / "outside" / "out"
+    assert compiler.resolve_output_dir(ev, output=outside, env=world.env, home=world.home) == outside
+
+
+def test_output_through_a_symlink_into_the_project_is_refused(work):
+    link = work.tmp / "alias"
+    link.symlink_to(work.root)
+    ev = work.evaluate()
+    assert refusal(ev, output=link / "out", home=work.home).code == "inside-project"
+    assert refusal(ev, output=link, home=work.home).code == "inside-project"
+
+
+def test_output_through_a_differently_cased_alias_is_refused(work):
+    upper = work.tmp / "PROJECT"
+    if not upper.exists():
+        pytest.skip("the temporary filesystem is case sensitive")
+    ev = work.evaluate()
+    assert refusal(ev, output=upper / "out", home=work.home).code == "inside-project"
+
+
+def test_state_home_inside_the_project_is_refused(work):
+    work.env["XDG_STATE_HOME"] = str(work.root / "state")
+    ev = work.evaluate()
+    err = refusal(ev, output=None, env=work.env, home=work.home)
+    assert err.code == "inside-project" and "XDG_STATE_HOME" in err.fix and "--output" in err.fix
+
+
+def test_a_checkout_at_home_does_not_capture_the_default_location(tmp_path):
+    home = tmp_path / "home"
+    (home / ".git").mkdir(parents=True)
+    world = World(tmp_path, root=home / "work" / "proj")
+    del world.env["XDG_STATE_HOME"]
+    ev = world.evaluate()
+    target = compiler.resolve_output_dir(ev, output=None, env=world.env, home=world.home)
+    assert str(target).startswith(str(home / ".local" / "state"))
+    result = compiler.build(ev)
+    compiler.write(result, target)
+    assert (target / "opencode.json").is_file()
+
+
+def test_output_argument_shapes(work):
+    ev = work.evaluate()
+    a_file = work.tmp / "a-file"
+    a_file.write_text("x", encoding="utf-8")
+    assert refusal(ev, output=a_file, home=work.home).code == "not-a-directory"
+    err = refusal(ev, output=work.tmp / "new" / "opencode.json", home=work.home)
+    assert err.code == "names-a-file" and "names a directory" in err.fix
+    assert not (work.tmp / "new").exists()
+    # An existing directory whose name ends in .json is still a directory.
+    weird = work.tmp / "weird.json"
+    weird.mkdir()
+    assert compiler.resolve_output_dir(ev, output=weird, env=work.env, home=work.home) == weird
+
+
+def test_output_refusal_messages_are_closed():
+    assert set(compiler.OUTPUT_MESSAGES) == {"not-a-directory", "names-a-file", "inside-project"}
+    with pytest.raises(ValueError):
+        compiler.OutputRefused("other")
+
+
+def test_write_makes_private_files_and_directories(work, umask0):
+    result = compiler.build(work.evaluate())
+    target = work.tmp / "out" / "nested"
+    written = compiler.write(result, target)
+    assert written == target / "opencode.json"
+    assert mode(target) == 0o700 and mode(target.parent) == 0o700
+    assert mode(target / "opencode.json") == 0o600 and mode(target / "quoin-compile.json") == 0o600
+    assert (target / "opencode.json").read_bytes() == result.native_bytes
+    assert (target / "quoin-compile.json").read_bytes() == result.sidecar_bytes
+
+
+def test_write_refuses_a_group_writable_existing_directory(work):
+    result = compiler.build(work.evaluate())
+    target = work.tmp / "loose"
+    target.mkdir()
+    os.chmod(target, 0o770)
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        compiler.write(result, target)
+    assert list(target.iterdir()) == []
+
+
+def test_write_replaces_an_existing_file_privately(work):
+    result = compiler.build(work.evaluate())
+    target = work.tmp / "out"
+    compiler.write(result, target)
+    os.chmod(target / "opencode.json", 0o644)
+    compiler.write(result, target)
+    assert mode(target / "opencode.json") == 0o600
+
+
+@pytest.fixture
+def written(work):
+    ev = work.evaluate()
+    target = work.tmp / "out"
+    compiler.write(compiler.build(ev), target)
+    return work, ev, target
+
+
+def test_check_fresh_is_ok(written):
+    _, ev, target = written
+    assert compiler.check(ev, target) == compiler.CheckResult(True, ())
+
+
+def test_check_reports_a_changed_profile_as_stale(written):
+    work, _, target = written
+    work.profile["providers"]["corp-gw"]["name"] = "Renamed"
+    work.write()
+    assert compiler.check(work.evaluate(), target) == compiler.CheckResult(False, ("stale",))
+
+
+def test_check_reports_a_changed_byte_as_stale(written):
+    _, ev, target = written
+    data = bytearray((target / "opencode.json").read_bytes())
+    data[-3] ^= 0x01
+    (target / "opencode.json").write_bytes(bytes(data))
+    assert compiler.check(ev, target).reasons == ("stale",)
+
+
+def test_check_reports_an_edited_sidecar_as_stale(written):
+    _, ev, target = written
+    (target / "quoin-compile.json").write_text("not json", encoding="utf-8")
+    assert compiler.check(ev, target).reasons == ("stale",)
+    (target / "quoin-compile.json").write_text("[1]", encoding="utf-8")
+    assert compiler.check(ev, target).reasons == ("stale",)
+
+
+def test_check_missing_files(written):
+    _, ev, target = written
+    (target / "quoin-compile.json").unlink()
+    assert compiler.check(ev, target) == compiler.CheckResult(False, ("missing",))
+    assert compiler.check(ev, target / "nowhere").reasons == ("missing",)
+
+
+def test_check_symlinked_output_counts_as_missing(written):
+    _, ev, target = written
+    real = target / "real.json"
+    (target / "opencode.json").rename(real)
+    (target / "opencode.json").symlink_to(real)
+    assert compiler.check(ev, target).reasons == ("missing",)
+
+
+def test_check_permissions(written):
+    _, ev, target = written
+    os.chmod(target / "opencode.json", 0o644)
+    assert compiler.check(ev, target).reasons == ("not-private",)
+    os.chmod(target / "opencode.json", 0o600)
+    os.chmod(target / "quoin-compile.json", 0o640)
+    assert compiler.check(ev, target).reasons == ("not-private",)
+    os.chmod(target / "quoin-compile.json", 0o600)
+    os.chmod(target, 0o770)
+    assert compiler.check(ev, target).reasons == ("not-private",)
+    os.chmod(target, 0o700)
+    assert compiler.check(ev, target).ok
+
+
+def test_check_flag_mismatch_is_reported_without_a_rebuild(tmp_path):
+    world = World(tmp_path)
+    world.write_records(now=NOW - timedelta(days=40))
+    ev = world.evaluate(allow_unqualified=True)
+    target = tmp_path / "out"
+    compiler.write(compiler.build(ev), target)
+    assert compiler.check(ev, target).ok
+    strict = world.evaluate()
+    result = compiler.check(strict, target)
+    assert result == compiler.CheckResult(False, ("flag-mismatch",))
+
+
+def test_check_flag_given_but_not_needed_is_not_a_mismatch(written):
+    work, _, target = written
+    assert compiler.check(work.evaluate(allow_unqualified=True), target).ok
+
+
+def test_check_lets_a_blocked_rebuild_propagate(written):
+    work, _, target = written
+    (work.root / ".opencode" / "agents" / "quoin-gate.md").unlink()
+    with pytest.raises(compiler.CompileBlocked):
+        compiler.check(work.evaluate(), target)
+
+
+def test_check_never_writes(written):
+    work, ev, target = written
+    before = {p.name: (p.stat().st_mtime_ns, p.read_bytes()) for p in target.iterdir()}
+    dir_before = tree_state(work.tmp)
+    compiler.check(ev, target)
+    work.profile["providers"]["corp-gw"]["name"] = "Renamed"
+    work.write()
+    compiler.check(work.evaluate(), target)
+    assert {p.name: (p.stat().st_mtime_ns, p.read_bytes()) for p in target.iterdir()} == before
+    assert [k for k in tree_state(target)] == sorted(before)
+    assert dir_before.keys() <= tree_state(work.tmp).keys()
+
+
+def test_compile_and_check_leave_the_installed_project_untouched(tmp_path):
+    import io
+
+    from quoin.opencode_adapter import install
+
+    world = World(tmp_path, agents=False)
+    out_sink, err_sink = io.StringIO(), io.StringIO()
+    code = install.run_install(str(world.root), helpers.SOURCE_DIR, None, False, out_sink, err_sink)
+    assert code == 0, out_sink.getvalue() + err_sink.getvalue()
+    before = tree_state(world.root)
+    assert any(name.endswith("opencode.jsonc") for name in before)
+    ev = world.evaluate()
+    assert not [f for f in ev.findings if f.code == "agent-file-missing"]
+    target = compiler.resolve_output_dir(ev, output=None, env=world.env, home=world.home)
+    compiler.write(compiler.build(ev), target)
+    compiler.check(ev, target)
+    assert tree_state(world.root) == before
+    assert target.is_dir() and not str(target).startswith(str(world.root))
