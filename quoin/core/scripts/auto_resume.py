@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -366,8 +367,12 @@ def _supervisor_lock_live(memory_dir: Path, task: str) -> bool:
     return pid > 0 and _pid_alive(pid)
 
 
-def _write_lock(memory_dir: Path, task: str, pid: int, granted: int, writer: str) -> None:
+def _write_lock(
+    memory_dir: Path, task: str, pid: int, granted: int, writer: str, token: "str | None" = None
+) -> None:
     data = {"pid": pid, "started_at": _iso_now(), "granted": granted, "writer": writer}
+    if token:
+        data["token"] = token
     content = json.dumps(data, sort_keys=True) + "\n"
     _atomic_write_text(memory_dir, f"{LOCK_TEMPLATE.format(task=task)}.", _lock_path(memory_dir, task), content)
 
@@ -661,6 +666,11 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
         "--project-root", str(project_root),
         "--halt-on-abort", "--max-relaunch", str(remaining),
     ]
+    # D-06: the child adopts this lock (rather than racing to create its own)
+    # by presenting the same token back via `QUOIN_SUPERVISOR_LOCK_TOKEN`.
+    token = uuid.uuid4().hex
+    child_env = dict(os.environ)
+    child_env["QUOIN_SUPERVISOR_LOCK_TOKEN"] = token
     try:
         proc = _popen(
             argv,
@@ -669,6 +679,7 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
             stdout=log_fh,
             stderr=log_fh,
             start_new_session=True,
+            env=child_env,
         )
     except OSError:
         return "NO_CLI|"
@@ -677,7 +688,7 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
             log_fh.close()
         except OSError:
             pass
-    _write_lock(memory_dir, task, proc.pid, remaining, "handoff")
+    _write_lock(memory_dir, task, proc.pid, remaining, "handoff", token=token)
     attempts += 1
     counter["attempts"] = attempts
     counter["consecutive_no_progress"] = 0 if progressed else counter.get("consecutive_no_progress", 0)
