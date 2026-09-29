@@ -49,6 +49,31 @@ Registered as the ninth stanza (`Stop`/`*`, timeout 10s). Fires at the end of ev
 - **Fail-OPEN:** any error, missing `python3`, or a helper that raises internally exits 0 with empty stdout — the harness's own Stop-block cap remains the outer bound regardless.
 - **Opt-out:** `QUOIN_AUTO_RESUME=0` disables the helper entirely; the hook still exits early on the two shell-level checks either way, but the helper's own subcommands additionally no-op under the knob.
 - **State files:** `run-continue-arm-<sid>.txt` (armed by `/run`'s Setup/Resume steps), `run-continue-consent-<sid>.txt` and `session-ended-<sid>.txt` (written by `userpromptsubmit.sh`/`sessionend.sh`), `auto-resume-<task>.json` (the continuation counter), `run-supervisor-<task>.pid`/`.result`/`.log` (the hand-off lock and its outcome) — all under `.workflow_artifacts/memory/`, all read or written exclusively by `scripts/auto_resume.py` and `src/quoin/cli.py`'s `run` subcommand.
+- **Un-registering.** `QUOIN_AUTO_RESUME=0` is the supported opt-out (above) and needs no settings.json edit. To remove the stanza itself instead:
+
+  ```bash
+  python3 - <<'EOF'
+  import json, pathlib, shutil
+
+  settings_path = pathlib.Path.home() / ".claude" / "settings.json"
+  backup_path = settings_path.with_suffix(settings_path.suffix + ".bak")
+  shutil.copyfile(settings_path, backup_path)
+
+  settings = json.loads(settings_path.read_text())
+  stanzas = settings.get("hooks", {}).get("Stop", [])
+  settings.setdefault("hooks", {})["Stop"] = [
+      s for s in stanzas
+      if not any(h.get("command", "").endswith("stop.sh") for h in s.get("hooks", []))
+  ]
+  settings_path.write_text(json.dumps(settings, indent=2) + "\n")
+  print(f"Backed up to {backup_path}; Stop stanza(s) ending in stop.sh removed.")
+  EOF
+  ```
+
+  To fully roll back state as well, delete the state files listed above for
+  the task(s) in question — they are inert once the stanza is gone, but
+  removing them clears any stale counter or lock before re-enabling the
+  feature later.
 
 ## Tunable constants
 
