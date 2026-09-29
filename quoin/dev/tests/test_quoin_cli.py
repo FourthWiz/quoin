@@ -504,6 +504,34 @@ def test_installer_byte_identical_to_install_sh():
                             for h in s.get("hooks", []):
                                 cmd = h.get("command", "")
                                 assert not cmd.startswith("~"), f"tilde path in settings.json: {cmd}"
+                if rel.name == "quoin-runtime.json":
+                    # The install record legitimately varies per invocation: each
+                    # transport picks its own interpreter (install.sh probes PATH for
+                    # the newest available python3.x; the in-process python transport
+                    # here always runs under sys.executable), and installed_at is a
+                    # wall-clock timestamp. Normalize those fields; everything else
+                    # (schema, version, quoin_file, source_dir, source_version) must
+                    # still match exactly.
+                    record_a = _json.loads(ta)
+                    record_b = _json.loads(tb)
+                    volatile = {"installed_at", "python", "pythonpath"}
+                    for field in volatile:
+                        assert field in record_a, f"quoin-runtime.json missing field: {field}"
+                        assert field in record_b, f"quoin-runtime.json missing field: {field}"
+                    assert record_a["python"], "bash transport recorded an empty python path"
+                    assert record_b["python"], "python transport recorded an empty python path"
+                    assert Path(record_a["python"]).is_absolute(), (
+                        f"bash transport python path is not absolute: {record_a['python']}"
+                    )
+                    assert Path(record_b["python"]).is_absolute(), (
+                        f"python transport python path is not absolute: {record_b['python']}"
+                    )
+                    stable_a = {k: v for k, v in record_a.items() if k not in volatile}
+                    stable_b = {k: v for k, v in record_b.items() if k not in volatile}
+                    assert stable_a == stable_b, (
+                        f"quoin-runtime.json non-volatile field mismatch: {stable_a} != {stable_b}"
+                    )
+                    continue
                 assert ta == tb, f"file content mismatch after home-normalization: {rel}"
             except UnicodeDecodeError:
                 # Genuine binary file — compare raw bytes (no home-prefix substitution possible)
