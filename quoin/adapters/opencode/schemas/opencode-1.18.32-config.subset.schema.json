@@ -48,7 +48,8 @@
                 "low",
                 "medium",
                 "high"
-              ]
+              ],
+              "$comment": "Nested effort level of the OpenRouter variant shape (transform.ts L858-864)."
             }
           },
           "$comment": "OpenRouter variant option, nested reasoning.effort (transform.ts L858-864)."
@@ -297,7 +298,8 @@
               },
               "$comment": "core/src/v1/config/config.ts L185-187."
             }
-          }
+          },
+          "$comment": "core/src/v1/config/config.ts L185-187 (experimental block; only policies is emitted)."
         }
       },
       "$comment": "Entry point: the top-level keys the compiler emits."
