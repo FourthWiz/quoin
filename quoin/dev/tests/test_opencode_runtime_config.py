@@ -726,12 +726,25 @@ def _module_tree(name):
     return ast.parse(src)
 
 
+def _allowed_subprocess_nodes(name, tree):
+    """Only the keychain module may name `subprocess`, and only inside its
+    module-level `_default_runner` function."""
+    if name != "secrets":
+        return set()
+    runner = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "_default_runner"]
+    assert len(runner) == 1
+    return {id(n) for n in ast.walk(runner[0])}
+
+
 @pytest.mark.parametrize("name", NEW_MODULES)
 def test_module_python_floor_and_purity(name):
     tree = _module_tree(name)
+    allowed_subprocess = _allowed_subprocess_nodes(name, tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
+                if alias.name == "subprocess" and id(node) in allowed_subprocess:
+                    continue
                 assert not alias.name.startswith(_FORBIDDEN_IMPORTS) or alias.name == "urllib.parse", alias.name
         elif isinstance(node, ast.ImportFrom):
             module = node.module or ""
@@ -740,6 +753,8 @@ def test_module_python_floor_and_purity(name):
             assert module not in _NEWER_NAMES
         elif isinstance(node, ast.Name):
             assert node.id not in _NEWER_NAMES
+            if node.id == "subprocess":
+                assert id(node) in allowed_subprocess, "subprocess named outside _default_runner"
         elif isinstance(node, ast.Attribute):
             if isinstance(node.value, ast.Name) and node.value.id == "os":
                 assert node.attr not in ("environ", "getenv", "getenvb")

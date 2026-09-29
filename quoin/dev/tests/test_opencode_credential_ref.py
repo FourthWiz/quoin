@@ -79,7 +79,9 @@ def test_schema_pattern_equals_grammar_constant():
     assert re.search(refs.CREDENTIAL_REF_PATTERN, "env:ABC")
 
 
-def test_module_has_no_backend_imports():
+def test_module_never_reads_the_process_environment():
+    # The subprocess machinery is confined to one function; the resolver tests
+    # check that placement with an AST walk.
     text = Path(refs.__file__).read_text(encoding="utf-8")
-    for word in ("subprocess", "os.environ", "getenv", "import os"):
+    for word in ("os.environ", "getenv", "import os"):
         assert word not in text
