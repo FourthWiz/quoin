@@ -22,7 +22,7 @@ SCHEMA_PATH = SOURCE_DIR / "adapters" / "opencode" / "schemas" / "runtime-config
 SRC_DIR = SOURCE_DIR.parent / "src" / "quoin" / "opencode_adapter"
 CASES = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))
 ALLOWED_ENV_READS = {"XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY"}
-NEW_MODULES = ("errors", "paths", "jsonio", "schema_check", "secrets", "config", "merge", "qualification")
+NEW_MODULES = ("errors", "paths", "jsonio", "schema_check", "secrets", "config", "merge", "qualification", "roles")
 
 
 class RecordingEnv(dict):
