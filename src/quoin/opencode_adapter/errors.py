@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Sequence, Tuple
+from typing import Any, Dict, Iterable, Optional, Sequence, Tuple
 
 # Classes raised while loading one layer or while cross-checking the loaded
 # layers against each other.
@@ -83,7 +83,14 @@ CLASS_PRIORITY: Tuple[str, ...] = (
     "invalid-type",
     "dangling-reference",
     "env-name-collision",
+    "personal-profile-for-work",
+    "personal-provider-kind-for-work",
+    "allowlist-broadening",
+    "limit-above-ceiling",
+    "missing-classification",
 )
+
+OVERRIDE_LABEL = "command-line override"
 
 _PARAM_NAMES = frozenset({"expected", "allowed", "layer", "line", "column", "limit"})
 
@@ -237,9 +244,33 @@ MESSAGES: Dict[str, Tuple[str, str]] = {
         "a personal profile cannot be used for work",
         "select a work profile",
     ),
+    "allowlist-broadening-host": (
+        "a layer widens a host allow list set by a stricter layer",
+        "remove the extra hosts",
+    ),
     "missing-classification": (
         "the project does not declare a classification",
         "set classification to work or personal",
+    ),
+    "unknown-classification": (
+        "the project classification is not work or personal",
+        "set classification to work or personal",
+    ),
+    "no-project-file": (
+        "no project runtime file was found, so the project has no classification",
+        "create .quoin/runtime.json with a classification",
+    ),
+    "limit-above-profile": (
+        "the project raises a limit above the profile value; project limits may only narrow",
+        "lower the project limit or raise it in the profile",
+    ),
+    "unknown-override-role": (
+        "the override names a role that is not one of the known roles",
+        "use one of: %(allowed)s",
+    ),
+    "override-dangling-model": (
+        "the override names a model the profile does not declare",
+        "name a model declared in the selected profile",
     ),
     "limit-above-ceiling": (
         "a limit exceeds the ceiling set by a stricter layer",
@@ -289,7 +320,13 @@ MESSAGE_CLASS: Dict[str, str] = {
     "no-profile-selected": "profile-not-found",
     "allowlist-broadening": "allowlist-broadening",
     "personal-profile-for-work": "personal-profile-for-work",
+    "allowlist-broadening-host": "allowlist-broadening",
     "missing-classification": "missing-classification",
+    "unknown-classification": "missing-classification",
+    "no-project-file": "missing-classification",
+    "limit-above-profile": "limit-above-ceiling",
+    "unknown-override-role": "unknown-role",
+    "override-dangling-model": "dangling-reference",
     "limit-above-ceiling": "limit-above-ceiling",
     "personal-provider-kind-for-work": "personal-provider-kind-for-work",
 }
@@ -315,6 +352,16 @@ SECRET_SHAPE_RE = re.compile(
             r"(?<![A-Za-z0-9])(?i:bearer)\s+(?=[A-Za-z0-9._~+/=-]*[0-9])"
             r"[A-Za-z0-9._~+/=-]{20,}",
             _LB + r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}",
+            # Lowercase-prefixed shapes require a digit and an uppercase
+            # letter in the tail so ordinary lowercase identifiers can never
+            # match. The AIza prefix already contains uppercase letters that
+            # no identifier can, so it needs no lookahead.
+            _LB + r"glpat-(?=[A-Za-z0-9_-]*[0-9])(?=[A-Za-z0-9_-]*[A-Z])[A-Za-z0-9_-]{20,}",
+            _LB + r"hf_(?=[A-Za-z0-9]*[0-9])(?=[A-Za-z0-9]*[A-Z])[A-Za-z0-9]{30,}",
+            _LB + r"gh[osur]_(?=[A-Za-z0-9]*[0-9])(?=[A-Za-z0-9]*[A-Z])[A-Za-z0-9]{36}",
+            _LB
+            + r"[sr]k_(?:live|test)_(?=[A-Za-z0-9]*[0-9])(?=[A-Za-z0-9]*[A-Z])[A-Za-z0-9]{24,}",
+            r"(?<![A-Za-z0-9])AIza[0-9A-Za-z_-]{35}",
         )
     )
 )
@@ -420,6 +467,120 @@ def make_error(
         message_id,
         tuple(sorted((k, _freeze(v)) for k, v in params.items())),
     )
+
+
+# ------------------------------------------------------------- findings
+
+# Non-error diagnostics produced by merging and role resolution. A finding
+# never carries user data: its subject holds only closed-set tokens or
+# identifiers that already passed the identifier grammar and the secret sweep.
+FINDING_CODES = frozenset(
+    {
+        "missing-classification",
+        "provider-excluded",
+        "less-restrictive-ignored",
+        "integrations-value-ignored",
+        "no-managed-policy",
+        "provider-ids-are-labels",
+        "isolation-unverified",
+        "role-blocked",
+        "role-unqualified",
+        "effort-omitted",
+        "summary-unused",
+    }
+)
+
+FINDING_MESSAGES: Dict[str, str] = {
+    "missing-classification": "the project has no valid classification; the configuration cannot be compiled",
+    "provider-excluded": "a provider was excluded by the layered policy",
+    "less-restrictive-ignored": "a layer asked for a less restrictive setting than the effective one; it was ignored",
+    "integrations-value-ignored": "a project integrations value would widen the profile and was ignored",
+    "no-managed-policy": "no managed policy is installed on this machine",
+    "provider-ids-are-labels": "managed provider allow and deny lists match provider ids, which are user labels; hosts are the primary identity",
+    "isolation-unverified": "isolation is set to managed but nothing verifies it yet",
+    "role-blocked": "a role cannot run because its model is blocked",
+    "role-unqualified": "a role runs on a model that has no valid qualification record",
+    "effort-omitted": "the reasoning effort was not applied to the request",
+    "summary-unused": "the summary model has no consumer in the pinned runtime",
+}
+
+# Closed reason tokens used in finding subjects and resolution results.
+EXCLUSION_REASONS = frozenset(
+    {"not-allowed", "denied", "host-not-allowed", "host-denied", "managed-not-allowed"}
+)
+QUALIFICATION_REASONS = frozenset(
+    {
+        "unreadable",
+        "bad-schema",
+        "bad-shape",
+        "unsafe-permissions",
+        "future-timestamp",
+        "not-qualified",
+        "could-not-run",
+        "model-mismatch",
+        "endpoint-mismatch",
+        "runtime-mismatch",
+        "too-old",
+    }
+)
+ROLE_REASONS = frozenset(
+    {
+        "override",
+        "role-mapping",
+        "default-model",
+        "auxiliary-model",
+        "classification-incompatible",
+        "qualification-missing",
+        "qualification-failed",
+        "qualification-stale",
+        "qualification-mismatched",
+        "qualification-malformed",
+        "effort-max",
+        "effort-no-capability",
+        "effort-no-mapping",
+        "effort-unqualified",
+    }
+)
+REASON_CODES = EXCLUSION_REASONS | QUALIFICATION_REASONS | ROLE_REASONS
+
+# Closed field and layer tokens (dot-free so they pass the key grammar).
+FIELD_TOKENS = frozenset(
+    {
+        "sharing",
+        "external_writes",
+        "isolation",
+        "integrations-enabled",
+        "integrations-mode",
+        "integrations-backend",
+    }
+)
+LAYER_TOKENS = ("default", "profile", "project", "override", "managed")
+
+
+@dataclass(frozen=True)
+class Finding:
+    code: str
+    blocking: bool
+    subject: Tuple[str, ...] = ()
+    error: Optional[ConfigError] = None
+
+
+def make_finding(
+    code: str, blocking: bool, *subject: str, error: Optional[ConfigError] = None
+) -> Finding:
+    """Build a `Finding`. Unknown codes and any subject element that is not a
+    plain identifier-like token, or that looks like a secret, are programmer
+    errors (ValueError)."""
+    if code not in FINDING_CODES:
+        raise ValueError("unknown finding code")
+    for element in subject:
+        if (
+            not isinstance(element, str)
+            or not _SAFE_KEY_RE.fullmatch(element)
+            or SECRET_SHAPE_RE.search(element)
+        ):
+            raise ValueError("finding subject must be a plain identifier token")
+    return Finding(code, bool(blocking), tuple(subject), error)
 
 
 class ConfigErrors(Exception):

@@ -197,3 +197,186 @@ def test_config_errors_dedupe_is_linear_and_ordered(monkeypatch):
     assert calls["n"] <= 2 * 40000
     assert len(exc.errors) == 20000
     assert [e.json_path for e in exc.errors[:3]] == ["$.p0", "$.p1", "$.p2"]
+
+
+# ------------------------------------------------------ priority and findings
+
+
+def test_priority_table_is_closed_and_unique():
+    assert set(errors.CLASS_PRIORITY) == REJECTION_CLASSES
+    assert len(errors.CLASS_PRIORITY) == len(set(errors.CLASS_PRIORITY))
+
+
+def test_merge_classes_rank_after_load_classes():
+    order = list(errors.CLASS_PRIORITY)
+    assert order[-5:] == [
+        "personal-profile-for-work",
+        "personal-provider-kind-for-work",
+        "allowlist-broadening",
+        "limit-above-ceiling",
+        "missing-classification",
+    ]
+
+
+@pytest.mark.parametrize(
+    "message_id,cls",
+    [
+        ("number-too-large", "invalid-json"),
+        ("unknown-classification", "missing-classification"),
+        ("no-project-file", "missing-classification"),
+        ("allowlist-broadening-host", "allowlist-broadening"),
+        ("limit-above-profile", "limit-above-ceiling"),
+        ("unknown-override-role", "unknown-role"),
+        ("override-dangling-model", "dangling-reference"),
+    ],
+)
+def test_new_message_ids_map_to_classes_with_fixes(message_id, cls):
+    assert MESSAGE_CLASS[message_id] == cls
+    err = make_error(cls, errors.OVERRIDE_LABEL, "$", message_id, allowed=("a", "b"))
+    assert err.message and err.fix
+    assert "%(" not in err.message and "%(" not in err.fix
+
+
+def test_override_label_is_a_fixed_string():
+    assert errors.OVERRIDE_LABEL == "command-line override"
+
+
+def test_finding_codes_have_static_messages():
+    assert set(errors.FINDING_MESSAGES) == set(errors.FINDING_CODES)
+    for text in errors.FINDING_MESSAGES.values():
+        assert text and "%" not in text
+
+
+def test_every_finding_code_can_be_built_with_its_subject_shape():
+    shapes = {
+        "missing-classification": (),
+        "provider-excluded": ("corp-gw", "managed-not-allowed"),
+        "less-restrictive-ignored": ("external_writes", "project"),
+        "integrations-value-ignored": ("integrations-backend", "project"),
+        "no-managed-policy": (),
+        "provider-ids-are-labels": (),
+        "isolation-unverified": (),
+        "role-blocked": ("planner", "host-not-allowed"),
+        "role-unqualified": ("planner", "qualification-missing"),
+        "effort-omitted": ("planner", "effort-no-capability"),
+        "summary-unused": (),
+    }
+    assert set(shapes) == set(errors.FINDING_CODES)
+    for code, subject in shapes.items():
+        finding = errors.make_finding(code, False, *subject)
+        assert finding.code == code and finding.subject == subject and finding.error is None
+    for token in errors.FIELD_TOKENS | set(errors.LAYER_TOKENS) | errors.REASON_CODES:
+        assert errors._SAFE_KEY_RE.fullmatch(token) and not SECRET_SHAPE_RE.search(token)
+
+
+def test_make_finding_rejects_bad_input():
+    with pytest.raises(ValueError):
+        errors.make_finding("no-such-code", False)
+    with pytest.raises(ValueError):
+        errors.make_finding("provider-excluded", False, "gateway.example.invalid", "denied")
+    with pytest.raises(ValueError):
+        errors.make_finding("provider-excluded", False, "https://x", "denied")
+    with pytest.raises(ValueError):
+        errors.make_finding("provider-excluded", False, SHAPES["ghp"], "denied")
+    with pytest.raises(ValueError):
+        errors.make_finding("provider-excluded", False, "a" * 65, "denied")
+    with pytest.raises(ValueError):
+        errors.make_finding("provider-excluded", False, "ok\n", "denied")
+
+
+# ------------------------------------------------ extended secret shapes
+
+
+def _new_shapes():
+    return {
+        "glpat": "glpat" + "-" + "Ab1" * 8,
+        "hf": "hf" + "_" + "Ab1" * 11,
+        "ghs": "ghs" + "_" + "Ab1" * 12,
+        "gho": "gho" + "_" + "Ab1" * 12,
+        "ghu": "ghu" + "_" + "Ab1" * 12,
+        "ghr": "ghr" + "_" + "Ab1" * 12,
+        "sk-live": "sk" + "_live_" + "Ab1" * 8,
+        "sk-test": "sk" + "_test_" + "Ab1" * 8,
+        "rk-live": "rk" + "_live_" + "Ab1" * 8,
+        "aiza": "AIza" + "Sy" + "a1" * 17 + "b",
+    }
+
+
+NEW_SHAPES = _new_shapes()
+
+
+@pytest.mark.parametrize("name", sorted(NEW_SHAPES))
+def test_new_secret_shapes_match(name):
+    assert SECRET_SHAPE_RE.search(NEW_SHAPES[name])
+    assert SECRET_SHAPE_RE.search("x = " + NEW_SHAPES[name] + " end")
+    assert not SECRET_SHAPE_RE.search("my_" + NEW_SHAPES[name]) or name == "aiza"
+
+
+# prefix, alphabet of the tail, minimum length, lookahead shapes
+_PROPERTY_SHAPES = [
+    ("glpat" + "-", B64URL, 20, True),
+    ("hf" + "_", B64URL[:-2], 30, True),
+    ("ghs" + "_", B64URL[:-2], 36, True),
+    ("sk" + "_live_", B64URL[:-2], 24, True),
+    ("sk" + "_test_", B64URL[:-2], 24, True),
+    ("AIza", B64URL, 35, False),
+]
+
+
+@pytest.mark.parametrize("prefix,alphabet,minimum,lookahead", _PROPERTY_SHAPES)
+def test_new_secret_shapes_property(prefix, alphabet, minimum, lookahead):
+    rng = random.Random(271)
+    digits = "0123456789"
+    upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    misses = 0
+    for length in (minimum, minimum + 17):
+        for _ in range(1000):
+            tail = [rng.choice(alphabet) for _ in range(length)]
+            if lookahead:
+                a, b = rng.sample(range(length), 2)
+                tail[a] = rng.choice(digits)
+                tail[b] = rng.choice(upper)
+            if not SECRET_SHAPE_RE.search(prefix + "".join(tail)):
+                misses += 1
+    assert misses == 0
+
+
+def test_lookahead_shapes_ignore_digit_free_or_uppercase_free_tokens():
+    # Accepted false negatives: the trade for never matching lowercase ids.
+    assert not SECRET_SHAPE_RE.search("ghs" + "_" + "a" * 36)
+    assert not SECRET_SHAPE_RE.search("ghs" + "_" + "A" * 36)
+    assert not SECRET_SHAPE_RE.search("sk" + "_live_" + "a" * 24)
+    assert not SECRET_SHAPE_RE.search("sk" + "_live_" + "A" * 24)
+
+
+NEW_NEGATIVES = [
+    "hf-cache-model",
+    "glpat-free-name",
+    "ghs-runner",
+    "sk_live_demo",
+    "hf_" + "abcdefghij" * 3 + "1",
+    "gh" + "s_" + "a" * 36,
+    "-".join(["planner"] * 9),
+    "-".join(["glpat", "coder", "model", "large", "instruct", "v2", "longname"]),
+    "AIz" + "b" + "x" * 35,
+    "xAIza" + "x" * 35,
+]
+
+
+@pytest.mark.parametrize("text", NEW_NEGATIVES)
+def test_new_secret_shapes_do_not_hit_realistic_ids(text):
+    assert not SECRET_SHAPE_RE.search(text)
+
+
+def test_sixty_three_char_hyphenated_lowercase_ids_never_match():
+    for prefix in ("glpat-", "hf_", "ghs_", "sk_live_", "sk_test_", "rk_live_"):
+        ident = (prefix + "abcdefghij-" * 8)[:63]
+        assert not SECRET_SHAPE_RE.search(ident), prefix
+
+
+def test_committed_fixtures_have_no_secret_shape_hits():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent.parent / "adapters" / "opencode" / "fixtures"
+    for path in root.rglob("*.json"):
+        assert not SECRET_SHAPE_RE.search(path.read_text(encoding="utf-8")), path
