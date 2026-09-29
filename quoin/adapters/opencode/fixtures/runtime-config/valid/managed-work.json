@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "allowed_providers": [
+      "corp-gw"
+    ],
+    "denied_hosts": [
+      "untrusted.example.invalid"
+    ],
+    "sharing": "deny"
+  },
+  "limits": {
+    "max_run_seconds": 3600
+  }
+}

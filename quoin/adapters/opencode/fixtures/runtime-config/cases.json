@@ -1,0 +1,444 @@
+{
+  "version": 1,
+  "valid": [
+    {
+      "id": "profile-work",
+      "file": "valid/profile-work.json",
+      "layer": "profile",
+      "jsonschema_valid": true,
+      "classification_state": "work",
+      "install_as": "work"
+    },
+    {
+      "id": "profile-personal",
+      "file": "valid/profile-personal.json",
+      "layer": "profile",
+      "jsonschema_valid": true,
+      "classification_state": "personal",
+      "install_as": "personal"
+    },
+    {
+      "id": "profile-minimal",
+      "file": "valid/profile-minimal.json",
+      "layer": "profile",
+      "jsonschema_valid": true,
+      "classification_state": "work",
+      "install_as": "minimal"
+    },
+    {
+      "id": "project-work",
+      "file": "valid/project-work.json",
+      "layer": "project",
+      "jsonschema_valid": true,
+      "classification_state": "work",
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "project-personal",
+      "file": "valid/project-personal.json",
+      "layer": "project",
+      "jsonschema_valid": true,
+      "classification_state": "personal",
+      "companions": {
+        "profile": "valid/profile-personal.json"
+      }
+    },
+    {
+      "id": "project-unclassified",
+      "file": "valid/project-unclassified.json",
+      "layer": "project",
+      "jsonschema_valid": true,
+      "classification_state": "missing",
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "managed-work",
+      "file": "valid/managed-work.json",
+      "layer": "managed",
+      "jsonschema_valid": true
+    }
+  ],
+  "invalid": [
+    {
+      "id": "invalid-json",
+      "file": "invalid/invalid-json.json",
+      "layer": "profile",
+      "expected_class": "invalid-json",
+      "expected_path": "$",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": null,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-json-nan",
+      "file": "invalid/invalid-json-nan.json",
+      "layer": "profile",
+      "expected_class": "invalid-json",
+      "expected_path": "$",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": null,
+      "install_as": "work"
+    },
+    {
+      "id": "duplicate-key-nested",
+      "file": "invalid/duplicate-key-nested.json",
+      "layer": "profile",
+      "expected_class": "duplicate-key",
+      "expected_path": "$.providers.corp-gw.name",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": null,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-json-too-deep",
+      "file": "invalid/invalid-json-too-deep.json",
+      "layer": "profile",
+      "expected_class": "invalid-json",
+      "expected_path": "$",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "unknown-key-provider",
+      "file": "invalid/unknown-key-provider.json",
+      "layer": "profile",
+      "expected_class": "unknown-key",
+      "expected_path": "$.providers.corp-gw.timeout",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "unknown-key-managed-roles",
+      "file": "invalid/unknown-key-managed-roles.json",
+      "layer": "managed",
+      "expected_class": "unknown-key",
+      "expected_path": "$.roles",
+      "expected_file_label": "managed policy",
+      "jsonschema_valid": false
+    },
+    {
+      "id": "invalid-type-provider-kind",
+      "file": "invalid/invalid-type-provider-kind.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.providers.corp-gw.kind",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-type-openrouter-responses",
+      "file": "invalid/invalid-type-openrouter-responses.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.providers.openrouter.endpoint_family",
+      "expected_file_label": "profiles/personal.json",
+      "jsonschema_valid": true,
+      "install_as": "personal"
+    },
+    {
+      "id": "invalid-url-port",
+      "file": "invalid/invalid-url-port.json",
+      "layer": "profile",
+      "expected_class": "invalid-url",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "offending_value": "99999",
+      "install_as": "work"
+    },
+    {
+      "id": "dangling-role-model",
+      "file": "invalid/dangling-role-model.json",
+      "layer": "profile",
+      "expected_class": "dangling-reference",
+      "expected_path": "$.roles.coordinator.model",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "dangling-default-model",
+      "file": "invalid/dangling-default-model.json",
+      "layer": "profile",
+      "expected_class": "dangling-reference",
+      "expected_path": "$.default_model",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "dangling-model-provider",
+      "file": "invalid/dangling-model-provider.json",
+      "layer": "profile",
+      "expected_class": "dangling-reference",
+      "expected_path": "$.models.work-coder.provider",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "dangling-allowed-provider",
+      "file": "invalid/dangling-allowed-provider.json",
+      "layer": "profile",
+      "expected_class": "dangling-reference",
+      "expected_path": "$.policy.allowed_providers[0]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "dangling-project-role-model",
+      "file": "invalid/dangling-project-role-model.json",
+      "layer": "project",
+      "expected_class": "dangling-reference",
+      "expected_path": "$.roles.implementer.model",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "unresolved-placeholder-replace-with",
+      "file": "invalid/unresolved-placeholder-replace-with.json",
+      "layer": "profile",
+      "expected_class": "unresolved-placeholder",
+      "expected_path": "$.models.work-coder.model_id",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "offending_value": "REPLACE_WITH_GATEWAY_MODEL_ID",
+      "install_as": "work"
+    },
+    {
+      "id": "unresolved-placeholder-file",
+      "file": "invalid/unresolved-placeholder-file.json",
+      "layer": "profile",
+      "expected_class": "unresolved-placeholder",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "offending_value": "gateway-url",
+      "install_as": "work"
+    },
+    {
+      "id": "insecure-http",
+      "file": "invalid/insecure-http.json",
+      "layer": "profile",
+      "expected_class": "insecure-http",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "url-credentials-userinfo",
+      "file": "invalid/url-credentials-userinfo.json",
+      "layer": "profile",
+      "expected_class": "url-credentials",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "offending_value": "user@gateway",
+      "install_as": "work"
+    },
+    {
+      "id": "url-credentials-query",
+      "file": "invalid/url-credentials-query.json",
+      "layer": "profile",
+      "expected_class": "url-credentials",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "offending_value": "tenant=a",
+      "install_as": "work"
+    },
+    {
+      "id": "inline-credential-ref",
+      "file": "invalid/inline-credential-ref.json",
+      "layer": "profile",
+      "expected_class": "inline-credential",
+      "expected_path": "$.providers.corp-gw.credential_ref",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "offending_value": "plain-text-value",
+      "install_as": "work"
+    },
+    {
+      "id": "inline-credential-shape",
+      "file": "invalid/inline-credential-shape.json",
+      "layer": "profile",
+      "expected_class": "inline-credential",
+      "expected_path": "$.providers.corp-gw.name",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "splice": {
+        "marker": "@@SECRET_SHAPE@@",
+        "shape": "sk"
+      },
+      "install_as": "work"
+    },
+    {
+      "id": "unsupported-schema-version",
+      "file": "invalid/unsupported-schema-version.json",
+      "layer": "profile",
+      "expected_class": "unsupported-schema-version",
+      "expected_path": "$.schema_version",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-limit-zero",
+      "file": "invalid/invalid-limit-zero.json",
+      "layer": "profile",
+      "expected_class": "invalid-limit",
+      "expected_path": "$.limits.max_tool_calls",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-limit-bool",
+      "file": "invalid/invalid-limit-bool.json",
+      "layer": "profile",
+      "expected_class": "invalid-limit",
+      "expected_path": "$.limits.max_tool_calls",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-limit-float",
+      "file": "invalid/invalid-limit-float.json",
+      "layer": "profile",
+      "expected_class": "invalid-limit",
+      "expected_path": "$.limits.max_tool_calls",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "unknown-runtime",
+      "file": "invalid/unknown-runtime.json",
+      "layer": "profile",
+      "expected_class": "unknown-runtime",
+      "expected_path": "$.runtime",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-profile-name-pattern",
+      "file": "invalid/invalid-profile-name-pattern.json",
+      "layer": "profile",
+      "expected_class": "invalid-profile-name",
+      "expected_path": "$.profile",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-profile-name-stem",
+      "file": "invalid/invalid-profile-name-stem.json",
+      "layer": "profile",
+      "expected_class": "invalid-profile-name",
+      "expected_path": "$.profile",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "unknown-role",
+      "file": "invalid/unknown-role.json",
+      "layer": "profile",
+      "expected_class": "unknown-role",
+      "expected_path": "$.roles.wizard",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-effort",
+      "file": "invalid/invalid-effort.json",
+      "layer": "profile",
+      "expected_class": "invalid-effort",
+      "expected_path": "$.roles.coordinator.effort",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "offending_value": "extreme",
+      "install_as": "work"
+    },
+    {
+      "id": "env-name-collision",
+      "file": "invalid/env-name-collision.json",
+      "layer": "profile",
+      "expected_class": "env-name-collision",
+      "expected_path": "$.providers.corp_gw",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "project-declares-endpoint-providers",
+      "file": "invalid/project-declares-endpoint-providers.json",
+      "layer": "project",
+      "expected_class": "project-declares-endpoint",
+      "expected_path": "$.providers.extra-gw",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": false,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "project-declares-endpoint-models",
+      "file": "invalid/project-declares-endpoint-models.json",
+      "layer": "project",
+      "expected_class": "project-declares-endpoint",
+      "expected_path": "$.models",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": false,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "endpoint-identity-change",
+      "file": "invalid/endpoint-identity-change.json",
+      "layer": "project",
+      "expected_class": "endpoint-identity-change",
+      "expected_path": "$.providers.corp-gw",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": false,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "cross-profile-fallback-enabled",
+      "file": "invalid/cross-profile-fallback-enabled.json",
+      "layer": "profile",
+      "expected_class": "cross-profile-fallback-enabled",
+      "expected_path": "$.policy.cross_profile_fallback",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "profile-not-found",
+      "file": "invalid/profile-not-found.json",
+      "layer": "project",
+      "expected_class": "profile-not-found",
+      "expected_path": "$",
+      "expected_file_label": "profiles/ghost.json",
+      "jsonschema_valid": true
+    }
+  ]
+}

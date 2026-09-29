@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "roles": {
+    "implementer": {
+      "model": "missing-model"
+    }
+  },
+  "policy": {
+    "allowed_providers": [
+      "corp-gw"
+    ]
+  },
+  "limits": {
+    "max_tool_calls": 100
+  }
+}
