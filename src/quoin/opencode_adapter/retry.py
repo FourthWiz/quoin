@@ -13,11 +13,11 @@ from __future__ import annotations
 import random
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from email.utils import parsedate_to_datetime
-from typing import Callable, Iterable, Mapping, Optional, Union
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Union
 
 FAILURE_KINDS = ("connect", "timeout", "http", "auth", "policy", "config")
 GIVE_UP_REASONS = (
@@ -108,9 +108,9 @@ class RetryPolicy:
     max_elapsed: Optional[float] = None
     base: float = 1.0
     cap: float = 30.0
-    rng: Optional[Callable[[], float]] = None
-    clock: Optional[Callable[[], float]] = None
-    wall_clock: Optional[Callable[[], datetime]] = None
+    rng: Callable[[], float] = field(default_factory=lambda: random.Random().random)
+    clock: Callable[[], float] = time.monotonic
+    wall_clock: Callable[[], datetime] = _utc_now
 
     def __post_init__(self) -> None:
         if not _is_int(self.max_retries) or self.max_retries < 0:
@@ -121,12 +121,6 @@ class RetryPolicy:
             raise ValueError("max_elapsed must be positive")
         if self.base <= 0 or self.cap <= 0:
             raise ValueError("base and cap must be positive")
-        if self.rng is None:
-            object.__setattr__(self, "rng", random.Random().random)
-        if self.clock is None:
-            object.__setattr__(self, "clock", time.monotonic)
-        if self.wall_clock is None:
-            object.__setattr__(self, "wall_clock", _utc_now)
 
     @classmethod
     def from_limits(
@@ -144,10 +138,17 @@ class RetryPolicy:
         missing time limit means only the attempt cap applies."""
         retries = _limit(limits, "max_transient_retries")
         seconds = _limit(limits, "max_run_seconds")
+        injected: Dict[str, Any] = {}
+        if rng is not None:
+            injected["rng"] = rng
+        if clock is not None:
+            injected["clock"] = clock
+        if wall_clock is not None:
+            injected["wall_clock"] = wall_clock
         return cls(
             max_retries=retries or 0,
             max_elapsed=float(seconds) if seconds is not None else None,
-            base=base, cap=cap, rng=rng, clock=clock, wall_clock=wall_clock,
+            base=base, cap=cap, **injected,
         )
 
     def start(self) -> float:
@@ -199,8 +200,9 @@ class RetryPolicy:
 def _transient(failure: Failure) -> bool:
     if failure.kind in ("connect", "timeout"):
         return True
-    if failure.kind == "http":
-        return failure.status == 429 or 500 <= failure.status <= 599
+    status = failure.status
+    if failure.kind == "http" and status is not None:
+        return status == 429 or 500 <= status <= 599
     return False
 
 
