@@ -1037,7 +1037,7 @@ def _probe(argv0: str, env: dict, cwd: str, timeout_s: float) -> dict:
     return {"status": status, "rc": rc, "stdout": stdout_text, "stderr_tail": stderr_tail}
 
 
-def _load_runtime_record(path: Path):
+def _load_runtime_record(path: Path) -> tuple[Optional[dict], Optional[str]]:
     """Returns ``(record_dict, None)`` on a valid record or ``(None, kind)``
     on any validation failure. Never raises — permission errors and other
     ``OSError`` subclasses on the read map to ``record-invalid``, same as
@@ -1100,6 +1100,7 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
             ),
         )
         return base
+    assert record is not None  # err_kind is None only when _load_runtime_record returned data
     base["record"] = record
     python = record["python"]
     version = record["version"]
@@ -1379,7 +1380,8 @@ def _cmd_start(args) -> int:
         return 0
     if handoff_result.startswith("STALE_CLI|"):
         message = handoff_result.split("|", 2)[2]
-        resume_command = record.get("resume_command") or f"/run --resume {task}"
+        stored_resume_command = record.get("resume_command") if isinstance(record, dict) else None
+        resume_command = stored_resume_command or f"/run --resume {task}"
         advisory = (
             f"[quoin-auto-resume] task={task} reason=startup: auto-resume hand-off "
             f"skipped: {message}; resume manually: {resume_command}"
