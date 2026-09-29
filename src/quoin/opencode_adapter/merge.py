@@ -384,11 +384,9 @@ def _merge_enumerated(
         # profile value, or the built-in default when the profile is silent)
         # but never move away from it.
         floor = rank[set_by["profile"]] if "profile" in set_by else rank[_ENUM_DEFAULTS[name]]
+        dropped_project = None
         if "project" in set_by and rank[set_by["project"]] > floor:
-            del set_by["project"]
-            findings.append(
-                make_finding("less-restrictive-ignored", False, _FIELD_TOKEN[name], "project")
-            )
+            dropped_project = set_by.pop("project")
         if set_by:
             best = min(rank[item] for item in set_by.values())
             effective = order[best]
@@ -396,6 +394,13 @@ def _merge_enumerated(
         else:
             effective, best, origin = _ENUM_DEFAULTS[name], rank[_ENUM_DEFAULTS[name]], ("default",)
         values["policy." + name] = Value(effective, origin)
+        # A dropped project value is only worth reporting when the result is
+        # not the very value the project asked for (a stricter layer may have
+        # set it anyway).
+        if dropped_project is not None and dropped_project != effective:
+            findings.append(
+                make_finding("less-restrictive-ignored", False, _FIELD_TOKEN[name], "project")
+            )
         for layer in ("profile", "project", "managed"):
             if layer in set_by and rank[set_by[layer]] > best:
                 findings.append(

@@ -12,7 +12,7 @@ import os
 import secrets as _stdlib_secrets
 import stat
 from pathlib import Path
-from typing import Any, Iterator, List, Tuple
+from typing import Any, Iterator, List, Optional, Tuple
 
 from .errors import ConfigErrors, make_error
 
@@ -198,8 +198,58 @@ def _ensure_private_dirs(directory: Path) -> None:
         os.chmod(new, 0o700)
 
 
-def write_private_atomic(path, data: bytes) -> None:
+def _require_private_parent(directory: Path) -> None:
+    """Stricter rule for output that other tools will trust: an existing
+    containing directory must be ours and closed to group and world writes;
+    when it must be created, the nearest existing ancestor must be ours (or
+    root's) and closed to group and world writes, unless it is sticky (a
+    shared temporary directory, where the new 0700 directory is ours and
+    cannot be renamed by others)."""
+    if directory.exists():
+        info = os.stat(directory)
+        if info.st_uid != os.getuid():
+            raise UnsafeDirectoryError("directory is owned by another user")
+        if info.st_mode & 0o022:
+            raise UnsafeDirectoryError("directory is writable by group or others")
+        return
+    probe = directory
+    while not probe.exists():
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    info = os.stat(probe)
+    if info.st_uid not in (os.getuid(), 0):
+        raise UnsafeDirectoryError("directory is owned by another user")
+    if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+        raise UnsafeDirectoryError("directory is writable by group or others")
+
+
+def read_regular_bytes(path, *, max_bytes: int) -> Optional[Tuple[bytes, os.stat_result]]:
+    """Read a regular file through one descriptor that never follows a
+    symlink. Returns `None` for anything else: absent, symlink, non-regular,
+    unreadable or larger than `max_bytes`."""
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > max_bytes:
+                return None
+            raw = handle.read(max_bytes + 1)
+    except OSError:
+        return None
+    if len(raw) > max_bytes:
+        return None
+    return raw, info
+
+
+def write_private_atomic(path, data: bytes, *, private_parent: bool = False) -> None:
     path = Path(path)
+    if private_parent:
+        _require_private_parent(path.parent)
     _ensure_private_dirs(path.parent)
     tmp = path.parent / (".%s.%s.tmp" % (path.name, _stdlib_secrets.token_hex(8)))
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

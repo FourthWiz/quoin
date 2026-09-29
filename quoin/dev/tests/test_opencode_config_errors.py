@@ -260,6 +260,12 @@ def test_every_finding_code_can_be_built_with_its_subject_shape():
         "role-unqualified": ("planner", "qualification-missing"),
         "effort-omitted": ("planner", "effort-no-capability"),
         "summary-unused": (),
+        "agent-file-missing": ("planner",),
+        "native-id-conflict": ("or-main",),
+        "native-ref-invalid": ("work-coder",),
+        "endpoint-family-unverified": ("corp-gw-b",),
+        "later-layers-can-override": (),
+        "policies-supplementary": (),
     }
     assert set(shapes) == set(errors.FINDING_CODES)
     for code, subject in shapes.items():

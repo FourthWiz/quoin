@@ -20,6 +20,7 @@ ENV_XDG_STATE = "XDG_STATE_HOME"
 ENV_MANAGED_POLICY = "QUOIN_OPENCODE_MANAGED_POLICY"
 
 SCHEMA_FILE = "runtime-config.schema.json"
+NATIVE_SCHEMA_FILE = "opencode-1.18.32-config.subset.schema.json"
 
 
 class AdapterDataMissing(RuntimeError):
@@ -124,3 +125,57 @@ def runtime_config_schema_path() -> Path:
     if not path.is_file():
         raise AdapterDataMissing("runtime configuration schema not found")
     return path
+
+
+def native_schema_path() -> Path:
+    data_dir = adapter_data_dir()
+    if data_dir is None:
+        raise AdapterDataMissing("adapter data directory not found")
+    path = data_dir / "schemas" / NATIVE_SCHEMA_FILE
+    if not path.is_file():
+        raise AdapterDataMissing("native configuration schema not found")
+    return path
+
+
+def compiled_output_dir(
+    profile: str, project_root: Path, env: Mapping[str, str], home: Path
+) -> Path:
+    """Default directory for the compiled configuration of one profile and
+    one project."""
+    if not PROFILE_RE.fullmatch(profile):
+        raise ValueError("profile name must be validated by the caller")
+    return state_dir(env, home) / profile / project_key(project_root)
+
+
+def _same_file(a: Path, b: Path) -> bool:
+    try:
+        return os.path.samestat(os.stat(a), os.stat(b))
+    except OSError:
+        return False
+
+
+def git_worktree_root(project_root: Path, home: Optional[Path] = None) -> Optional[Path]:
+    """Nearest directory at or above the project that holds a `.git` entry (a
+    directory, or the file a linked worktree uses), found without running
+    git. A match that is the home directory or one of its ancestors is
+    ignored, so a dotfiles checkout at `~/.git` never makes everything under
+    home count as inside the project; the project root itself is still
+    checked."""
+    real = Path(os.path.realpath(str(project_root)))
+    home_chain = []
+    if home is not None:
+        probe = Path(os.path.realpath(str(home)))
+        while True:
+            home_chain.append(probe)
+            if probe.parent == probe:
+                break
+            probe = probe.parent
+    current = real
+    while True:
+        if os.path.lexists(current / ".git"):
+            if current == real or not any(_same_file(current, item) for item in home_chain):
+                return current
+            return None
+        if current.parent == current:
+            return None
+        current = current.parent

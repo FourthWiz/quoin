@@ -216,3 +216,83 @@ def test_existing_target_is_replaced(tmp_path):
     assert target.read_bytes() == b"new"
     assert stat.S_IMODE(target.stat().st_mode) == 0o600
     assert [p.name for p in tmp_path.iterdir()] == ["f.json"]
+
+
+# ------------------------------------------------ private parent and reads
+
+
+@pytest.fixture
+def umask0():
+    old = os.umask(0)
+    yield
+    os.umask(old)
+
+
+def _dir(path, mode):
+    path.mkdir()
+    os.chmod(path, mode)
+    return path
+
+
+def test_private_parent_accepts_a_closed_directory(tmp_path):
+    parent = _dir(tmp_path / "out", 0o700)
+    jsonio.write_private_atomic(parent / "f.json", b"x", private_parent=True)
+    assert stat.S_IMODE((parent / "f.json").stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("mode", [0o770, 0o777, 0o1777, 0o720])
+def test_private_parent_refuses_a_loose_existing_directory(tmp_path, mode):
+    parent = _dir(tmp_path / "out", mode)
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        jsonio.write_private_atomic(parent / "f.json", b"x", private_parent=True)
+    assert list(parent.iterdir()) == []
+    if mode & 0o002 and not mode & stat.S_ISVTX:
+        return  # the default rule already refuses a non-sticky world-writable directory
+    jsonio.write_private_atomic(parent / "g.json", b"x")
+    assert (parent / "g.json").read_bytes() == b"x"
+
+
+def test_created_directories_stay_private_under_a_zero_umask(tmp_path, umask0):
+    target = tmp_path / "a" / "b" / "f.json"
+    jsonio.write_private_atomic(target, b"x", private_parent=True)
+    for directory in (tmp_path / "a", tmp_path / "a" / "b"):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o700
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize(
+    "mode,ok", [(0o770, False), (0o1777, True), (0o777, False), (0o700, True)]
+)
+def test_private_parent_checks_the_nearest_existing_ancestor(tmp_path, mode, ok):
+    ancestor = _dir(tmp_path / "base", mode)
+    target = ancestor / "new" / "f.json"
+    if ok:
+        jsonio.write_private_atomic(target, b"x", private_parent=True)
+        assert stat.S_IMODE((ancestor / "new").stat().st_mode) == 0o700
+    else:
+        with pytest.raises(jsonio.UnsafeDirectoryError):
+            jsonio.write_private_atomic(target, b"x", private_parent=True)
+        assert not (ancestor / "new").exists()
+
+
+def test_write_forces_a_private_file_mode_over_an_existing_file(tmp_path):
+    target = tmp_path / "f.json"
+    target.write_bytes(b"old")
+    os.chmod(target, 0o644)
+    jsonio.write_private_atomic(target, b"new", private_parent=True)
+    assert target.read_bytes() == b"new"
+    assert stat.S_IMODE(target.stat().st_mode) == 0o600
+
+
+def test_read_regular_bytes(tmp_path):
+    good = tmp_path / "f"
+    good.write_bytes(b"abc")
+    raw, info = jsonio.read_regular_bytes(good, max_bytes=10)
+    assert raw == b"abc" and stat.S_ISREG(info.st_mode)
+    assert jsonio.read_regular_bytes(tmp_path / "missing", max_bytes=10) is None
+    (tmp_path / "link").symlink_to(good)
+    assert jsonio.read_regular_bytes(tmp_path / "link", max_bytes=10) is None
+    assert jsonio.read_regular_bytes(tmp_path, max_bytes=10) is None
+    os.mkfifo(tmp_path / "fifo")
+    assert jsonio.read_regular_bytes(tmp_path / "fifo", max_bytes=10) is None
+    assert jsonio.read_regular_bytes(good, max_bytes=2) is None

@@ -114,7 +114,10 @@ _RESOLUTION_MESSAGES: Dict[str, str] = {
     "backend-unavailable": (
         "keychain backend unavailable on this platform; use env:NAME or run on macOS"
     ),
-    "unsafe-reference": "the keychain service and account must not start with a hyphen",
+    "unsafe-reference": (
+        "the credential reference cannot be used by this backend; a keychain reference "
+        "needs a service and an account, and neither may start with a hyphen"
+    ),
 }
 
 RESOLUTION_CODES = frozenset(_RESOLUTION_MESSAGES)

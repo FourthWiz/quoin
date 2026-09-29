@@ -128,3 +128,52 @@ def test_missing_data_raises(monkeypatch):
 def test_module_never_exits():
     text = (SRC_PKG / "opencode_adapter" / "paths.py").read_text(encoding="utf-8")
     assert "sys.exit" not in text
+
+
+# ------------------------------------------------------ compiler locations
+
+
+def test_native_schema_path_is_found_in_the_source_tree():
+    path = paths.native_schema_path()
+    assert path.name == paths.NATIVE_SCHEMA_FILE and path.parent.name == "schemas"
+
+
+def test_native_schema_path_missing_data_raises(monkeypatch):
+    monkeypatch.setattr(paths, "adapter_data_dir", lambda: None)
+    with pytest.raises(paths.AdapterDataMissing):
+        paths.native_schema_path()
+
+
+def test_compiled_output_dir_shape_and_validation(tmp_path):
+    env = {"XDG_STATE_HOME": str(tmp_path / "state")}
+    project = tmp_path / "proj"
+    project.mkdir()
+    got = paths.compiled_output_dir("work", project, env, tmp_path / "home")
+    assert got == tmp_path / "state" / "quoin" / "opencode" / "work" / paths.project_key(project)
+    for bad in ("../x", "Work", "", "a/b"):
+        with pytest.raises(ValueError):
+            paths.compiled_output_dir(bad, project, env, tmp_path / "home")
+
+
+def test_git_worktree_root(tmp_path):
+    plain = tmp_path / "plain" / "deep"
+    plain.mkdir(parents=True)
+    assert paths.git_worktree_root(plain) is None
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / "a" / "b").mkdir(parents=True)
+    assert paths.git_worktree_root(repo / "a" / "b") == Path(os.path.realpath(repo))
+    linked = tmp_path / "linked"
+    (linked / "sub").mkdir(parents=True)
+    (linked / ".git").write_text("gitdir: elsewhere\n", encoding="utf-8")
+    assert paths.git_worktree_root(linked / "sub") == Path(os.path.realpath(linked))
+
+
+def test_git_worktree_root_ignores_a_checkout_at_home(tmp_path):
+    home = tmp_path / "home"
+    (home / ".git").mkdir(parents=True)
+    project = home / "work" / "project"
+    project.mkdir(parents=True)
+    assert paths.git_worktree_root(project, home) is None
+    (project / ".git").mkdir()
+    assert paths.git_worktree_root(project, home) == Path(os.path.realpath(project))

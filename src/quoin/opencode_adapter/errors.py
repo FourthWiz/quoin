@@ -487,6 +487,12 @@ FINDING_CODES = frozenset(
         "role-unqualified",
         "effort-omitted",
         "summary-unused",
+        "agent-file-missing",
+        "native-id-conflict",
+        "native-ref-invalid",
+        "endpoint-family-unverified",
+        "later-layers-can-override",
+        "policies-supplementary",
     }
 )
 
@@ -502,6 +508,12 @@ FINDING_MESSAGES: Dict[str, str] = {
     "role-unqualified": "a role runs on a model that has no valid qualification record",
     "effort-omitted": "the reasoning effort was not applied to the request",
     "summary-unused": "the summary model has no consumer in the pinned runtime",
+    "agent-file-missing": "the generated agent file for this role is missing; install the OpenCode scaffold into the project first",
+    "native-id-conflict": "two providers of kind openrouter are in use; only one can map to the built-in OpenCode provider id openrouter",
+    "native-ref-invalid": "the model id cannot be written as an OpenCode model reference; it must not contain whitespace or control characters",
+    "endpoint-family-unverified": "this endpoint family is not verified for compiled configuration on the pinned runtime",
+    "later-layers-can-override": "the compiled file is one of several OpenCode config layers; project files, .opencode files, inline config, markdown agent and mode files and organization config can override it; the effective configuration is verified at launch",
+    "policies-supplementary": "provider policy statements are not evaluated on the pinned runtime's run path; the provider allowlist and per-provider model whitelists are the enforced controls",
 }
 
 # Closed reason tokens used in finding subjects and resolution results.
