@@ -51,7 +51,8 @@ def profiles_dir(env: Mapping[str, str], home: Path) -> Path:
 
 
 def profile_path(name: str, env: Mapping[str, str], home: Path) -> Path:
-    assert PROFILE_RE.fullmatch(name), "profile name must be validated by the caller"
+    if not PROFILE_RE.fullmatch(name):
+        raise ValueError("profile name must be validated by the caller")
     return profiles_dir(env, home) / (name + ".json")
 
 
@@ -60,7 +61,8 @@ def qualifications_dir(env: Mapping[str, str], home: Path) -> Path:
 
 
 def qualification_path(name: str, env: Mapping[str, str], home: Path) -> Path:
-    assert PROFILE_RE.fullmatch(name), "name must be validated by the caller"
+    if not PROFILE_RE.fullmatch(name):
+        raise ValueError("name must be validated by the caller")
     return qualifications_dir(env, home) / (name + ".json")
 
 

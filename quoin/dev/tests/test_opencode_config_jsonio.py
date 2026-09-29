@@ -54,6 +54,26 @@ def test_non_finite_numbers(tmp_path, literal):
     assert exc.errors[0].message_id == "non-finite-number"
 
 
+@pytest.mark.parametrize("literal", ["1e400", "-1e400", "1E999", "[1e400]"])
+def test_overflowing_exponents_rejected_at_load(tmp_path, literal):
+    text = literal if literal.startswith("[") else '{"a": %s}' % literal
+    exc = err_of(tmp_path, text)
+    assert exc.errors[0].rejection_class == "invalid-json"
+    assert exc.errors[0].message_id == "non-finite-number"
+
+
+def test_ordinary_floats_still_load(tmp_path):
+    assert load(tmp_path, '{"a": 1.5, "b": 1e3}') == {"a": 1.5, "b": 1000.0}
+
+
+def test_fifo_is_not_opened_blocking(tmp_path):
+    fifo = tmp_path / "f.json"
+    os.mkfifo(fifo)
+    with pytest.raises(ConfigErrors) as info:
+        jsonio.load_strict(fifo, file_label="f.json")
+    assert info.value.errors[0].message_id == "unreadable-file"
+
+
 def test_bom_rejected(tmp_path):
     exc = err_of(tmp_path, b"\xef\xbb\xbf{}")
     assert exc.errors[0].message_id == "has-bom"

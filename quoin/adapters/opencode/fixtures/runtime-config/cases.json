@@ -84,6 +84,16 @@
       "install_as": "work"
     },
     {
+      "id": "invalid-json-overflow",
+      "file": "invalid/invalid-json-overflow.json",
+      "layer": "profile",
+      "expected_class": "invalid-json",
+      "expected_path": "$",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": null,
+      "install_as": "work"
+    },
+    {
       "id": "duplicate-key-nested",
       "file": "invalid/duplicate-key-nested.json",
       "layer": "profile",
@@ -151,6 +161,36 @@
       "expected_file_label": "profiles/work.json",
       "jsonschema_valid": true,
       "offending_value": "99999",
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-url-port-zero",
+      "file": "invalid/invalid-url-port-zero.json",
+      "layer": "profile",
+      "expected_class": "invalid-url",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-url-host-percent",
+      "file": "invalid/invalid-url-host-percent.json",
+      "layer": "profile",
+      "expected_class": "invalid-url",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "invalid-url-host-backslash",
+      "file": "invalid/invalid-url-host-backslash.json",
+      "layer": "profile",
+      "expected_class": "invalid-url",
+      "expected_path": "$.providers.corp-gw.base_url",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
       "install_as": "work"
     },
     {
@@ -439,6 +479,16 @@
       "expected_path": "$",
       "expected_file_label": "profiles/ghost.json",
       "jsonschema_valid": true
+    },
+    {
+      "id": "invalid-qualification-ref-newline",
+      "file": "invalid/invalid-qualification-ref-newline.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.models.work-coder.qualification_ref",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
     }
   ]
 }

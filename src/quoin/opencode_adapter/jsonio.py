@@ -7,6 +7,7 @@ absurd nesting. Failures are `ConfigErrors`; no file content is echoed.
 from __future__ import annotations
 
 import json
+import math
 import os
 import secrets as _stdlib_secrets
 import stat
@@ -41,6 +42,13 @@ def _pairs(pairs: List[Tuple[str, Any]]) -> dict:
 
 def _reject_constant(name: str) -> Any:
     raise ValueError("non-finite number")
+
+
+def _reject_float(text: str) -> float:
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("non-finite number")
+    return value
 
 
 def _fail(label: str, message_id: str, **params: Any) -> ConfigErrors:
@@ -87,8 +95,12 @@ def _plain(tree: Any) -> Any:
 
 def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> Any:
     try:
-        with open(path, "rb") as handle:
-            if os.fstat(handle.fileno()).st_size > max_bytes:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("not a regular file")
+            if info.st_size > max_bytes:
                 raise _fail(file_label, "file-too-large", limit=max_bytes)
             raw = handle.read(max_bytes + 1)
     except OSError:
@@ -102,7 +114,10 @@ def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> 
     except UnicodeDecodeError:
         raise _fail(file_label, "not-utf8") from None
     try:
-        tree = json.loads(text, object_pairs_hook=_pairs, parse_constant=_reject_constant)
+        tree = json.loads(
+            text, object_pairs_hook=_pairs,
+            parse_constant=_reject_constant, parse_float=_reject_float,
+        )
     except json.JSONDecodeError as exc:
         raise _fail(file_label, "malformed-json", line=exc.lineno, column=exc.colno) from None
     except RecursionError:
@@ -143,7 +158,12 @@ def _ensure_private_dirs(directory: Path) -> None:
         probe = probe.parent
     _check_ancestor(probe)
     for new in reversed(missing):
-        os.mkdir(new, 0o700)
+        try:
+            os.mkdir(new, 0o700)
+        except FileExistsError:
+            # Created concurrently; it must still be a trustworthy directory.
+            _check_ancestor(new)
+            continue
         os.chmod(new, 0o700)
 
 

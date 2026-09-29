@@ -292,7 +292,9 @@ MESSAGE_CLASS: Dict[str, str] = {
 _LB = r"(?<![A-Za-z0-9_-])"
 
 # Shapes of well-known secrets. Every alternative is left-bounded so a token
-# embedded inside an ordinary identifier never matches.
+# embedded inside an ordinary identifier never matches. The boundary also
+# excludes "_" and "-", so a token glued to a prefix such as "my_" or "token-"
+# is not flagged: that keeps ordinary hyphenated identifiers from matching.
 SECRET_SHAPE_RE = re.compile(
     "|".join(
         (
@@ -419,11 +421,9 @@ class ConfigErrors(Exception):
     """The only exception config code raises for user-data defects."""
 
     def __init__(self, errors: Sequence[ConfigError]):
-        seen = []
-        for err in errors:
-            if err not in seen:
-                seen.append(err)
-        self.errors: Tuple[ConfigError, ...] = tuple(seen)
+        # Errors are frozen and hashable, so a dict keeps first-seen order in
+        # linear time.
+        self.errors: Tuple[ConfigError, ...] = tuple(dict.fromkeys(errors))
         super().__init__(self.errors)
 
     def __str__(self) -> str:

@@ -180,3 +180,14 @@ def test_dedupe_keeps_highest_priority_per_path():
     other = make_error("invalid-type", "f", "$.b", "wrong-type")
     kept = errors.dedupe_by_path([schema, other, placeholder])
     assert [e.rejection_class for e in kept] == ["unresolved-placeholder", "invalid-type"]
+
+
+def test_config_errors_dedupe_is_linear_and_ordered():
+    import time
+
+    errs = [make_error("invalid-type", "f", "$.p%d" % (i % 20000), "wrong-type") for i in range(40000)]
+    start = time.monotonic()
+    exc = ConfigErrors(errs)
+    assert time.monotonic() - start < 2.0
+    assert len(exc.errors) == 20000
+    assert [e.json_path for e in exc.errors[:3]] == ["$.p0", "$.p1", "$.p2"]

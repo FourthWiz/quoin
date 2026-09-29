@@ -6,6 +6,7 @@ instead of being ignored, so a schema can never silently loosen.
 """
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Dict, Iterator, List, Optional, Tuple
@@ -104,7 +105,7 @@ def _json_equal(a: Any, b: Any) -> bool:
 def _normalise(value: Any) -> Any:
     if isinstance(value, bool):
         return value
-    if isinstance(value, float) and value == int(value):
+    if isinstance(value, float) and math.isfinite(value) and value == int(value):
         return int(value)
     if isinstance(value, dict):
         return {k: _normalise(v) for k, v in value.items()}

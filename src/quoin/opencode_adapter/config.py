@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import copy
 import functools
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
@@ -45,6 +46,8 @@ MANAGED_LABEL = "managed policy"
 
 _PLACEHOLDER_MARKERS = ("REPLACE_WITH_", "${", "{env:", "{file:")
 _HOST_RE = re.compile(r"[A-Za-z0-9.:-]{1,253}")
+_URL_HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,250}[A-Za-z0-9])?\.?")
+_QUALIFICATION_REF_RE = re.compile(r"local:[a-z0-9][a-z0-9_-]{0,62}")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _EFFORTS = ("low", "medium", "high", "max")
 _LIMIT_KEYS = (
@@ -157,22 +160,39 @@ def _map_violation(v: schema_check.Violation, label: str) -> ConfigError:
 # -------------------------------------------------------- URL checking
 
 
+def _host_is_well_formed(host: str) -> bool:
+    if ":" in host:
+        try:
+            ipaddress.IPv6Address(host)
+        except ValueError:
+            return False
+        return True
+    return bool(_URL_HOST_RE.fullmatch(host))
+
+
 def _check_base_url(url: str, path: Tuple[Any, ...], label: str) -> Optional[ConfigError]:
     if any(c.isspace() or ord(c) < 32 for c in url):
         return make_error("invalid-url", label, path, "invalid-url")
     if "?" in url or "#" in url:
         return make_error("url-credentials", label, path, "url-credentials")
+    # A JavaScript URL parser reads a backslash as a path separator and
+    # decodes percent-escapes in the host; refuse both, and anything that is
+    # not printable ASCII, so every parser sees the same host.
+    if "\\" in url or any(ord(c) > 126 for c in url):
+        return make_error("invalid-url", label, path, "invalid-url")
     try:
         parts = urlsplit(url)
         host = parts.hostname
-        parts.port
+        port = parts.port
     except ValueError:
+        return make_error("invalid-url", label, path, "invalid-url")
+    if port == 0 or "%" in parts.netloc:
         return make_error("invalid-url", label, path, "invalid-url")
     if parts.scheme not in ("http", "https"):
         return make_error("invalid-url", label, path, "invalid-url")
     if "@" in parts.netloc:
         return make_error("url-credentials", label, path, "url-credentials")
-    if not host:
+    if not host or not _host_is_well_formed(host):
         return make_error("invalid-url", label, path, "invalid-url")
     if parts.scheme == "http" and host not in _LOOPBACK_HOSTS:
         return make_error("insecure-http", label, path, "insecure-http")
@@ -197,7 +217,12 @@ def endpoint_identity_tuple(value: Any) -> Optional[Tuple[str, str, str, str]]:
     family = value.get("endpoint_family")
     url = value.get("base_url")
     ref = value.get("credential_ref")
-    if not all(isinstance(x, str) for x in (kind, family, url, ref)):
+    if not (
+        isinstance(kind, str)
+        and isinstance(family, str)
+        and isinstance(url, str)
+        and isinstance(ref, str)
+    ):
         return None
     try:
         identity = _endpoint_identity(url)
@@ -271,6 +296,13 @@ def _semantic(
         for name, model in models.items():
             errs += _ident_errors(name, ("models", name), label)
             model = _dict(model)
+            qref = model.get("qualification_ref")
+            if isinstance(qref, str) and not _QUALIFICATION_REF_RE.fullmatch(qref):
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("models", name, "qualification_ref"), "wrong-type"
+                    )
+                )
             ref = model.get("provider")
             errs += _ident_errors(ref, ("models", name, "provider"), label)
             if isinstance(ref, str) and ref not in providers:
@@ -470,6 +502,12 @@ def load_all(
     env: Mapping[str, str],
     home: Path,
 ) -> LoadedConfig:
+    """Load the project, profile and managed layers.
+
+    Raises `ConfigErrors` for defects in user data. A missing or unreadable
+    packaged schema raises `AdapterDataMissing` instead, which callers must
+    handle separately.
+    """
     project = load_project(project_root)
     name = profile
     if not name and project is not None:

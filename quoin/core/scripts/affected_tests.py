@@ -858,6 +858,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_opencode_runtime_config.py",
     ),
     (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-json-overflow.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
         "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-json-too-deep.json",
         "quoin/dev/tests/test_opencode_runtime_config.py",
     ),
@@ -895,6 +899,22 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-url-port.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-url-host-backslash.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-url-host-percent.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-url-port-zero.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/invalid-qualification-ref-newline.json",
         "quoin/dev/tests/test_opencode_runtime_config.py",
     ),
     (

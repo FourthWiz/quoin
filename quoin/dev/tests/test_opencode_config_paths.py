@@ -38,7 +38,7 @@ def test_derived_paths(tmp_path):
     assert paths.profile_path("work", env, HOME) == base / "profiles" / "work.json"
     assert paths.qualification_path("q1", env, HOME) == base / "qualifications" / "q1.json"
     assert paths.state_dir(env, HOME) == tmp_path / "s" / "quoin" / "opencode"
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         paths.profile_path("Bad Name", env, HOME)
 
 

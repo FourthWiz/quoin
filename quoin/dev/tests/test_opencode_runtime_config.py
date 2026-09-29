@@ -316,6 +316,14 @@ URL_CASES = [
     ("https://gateway.example.invalid/v1 x", "invalid-url"),
     ("https://gateway.example.invalid/\tv1", "invalid-url"),
     ("gateway.example.invalid", "invalid-url"),
+    ("https://evil.example.invalid\\gateway.example.invalid/v1", "invalid-url"),
+    ("https://gateway.example.invalid/v1\\x", "invalid-url"),
+    ("https://%65vil.example.invalid/v1", "invalid-url"),
+    ("https://gateway.example.invalid:0/v1", "invalid-url"),
+    ("https://gateway.example.invalid\x7f/v1", "invalid-url"),
+    ("https://g\u00e4teway.example.invalid/v1", "invalid-url"),
+    ("https://[fe80::1%25eth0]/v1", "invalid-url"),
+    ("https://gateway_.example.invalid/v1", "invalid-url"),
 ]
 
 
@@ -324,6 +332,16 @@ def test_url_rejections(tmp_path, url, cls):
     assert failures(tmp_path, set_url(base_profile(), url)) == [
         (cls, "$.providers.corp-gw.base_url")
     ]
+
+
+def test_qualification_ref_trailing_newline_rejected(tmp_path):
+    data = base_profile()
+    data["models"]["work-coder"]["qualification_ref"] = "local:work-coder\n"
+    assert failures(tmp_path, data) == [("invalid-type", "$.models.work-coder.qualification_ref")]
+
+
+def test_ipv6_literal_host_accepted(tmp_path):
+    load_profile_data(tmp_path, set_url(base_profile(), "https://[2001:db8::1]:8443/v1"))
 
 
 def test_userinfo_with_password_built_at_run_time(tmp_path):
