@@ -137,6 +137,45 @@ def test_pyenv_style_interpreter_resolves_usable(tmp_path, monkeypatch):
     assert res["argv"][0] == str(interp)
 
 
+# ── spawn bootstrap: hostile package in cwd, real interpreter ──────────────
+
+
+def test_spawn_bootstrap_ignores_hostile_package_in_cwd(tmp_path):
+    """Defense in depth for the detached supervisor spawn (see
+    _SPAWN_BOOTSTRAP): even when the spawn's cwd contains a hostile
+    `quoin/` package — as it would have under the pre-fix cwd choice — the
+    bootstrap's own sys.path[0] strip must stop it from being imported and
+    run, while the real installed CLI still runs normally."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "auto_resume_e2e_spawn_bootstrap", QUOIN_SRC / "core" / "scripts" / "auto_resume.py"
+    )
+    ar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ar)
+
+    hostile_dir = tmp_path / "hostile-cwd"
+    hostile_dir.mkdir()
+    marker = tmp_path / "marker.txt"
+    (hostile_dir / "quoin").mkdir()
+    (hostile_dir / "quoin" / "__init__.py").write_text(
+        f"open({str(marker)!r}, 'w').write('imported')\n", encoding="utf-8",
+    )
+    (hostile_dir / "quoin" / "__main__.py").write_text(
+        "print('HOSTILE MAIN RAN')\n", encoding="utf-8",
+    )
+
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": str(SRC)}
+    proc = subprocess.run(
+        [sys.executable, "-c", ar._SPAWN_BOOTSTRAP, "--version"],
+        cwd=str(hostile_dir), env=env,
+        capture_output=True, text=True, timeout=10,
+    )
+    assert not marker.exists(), "the hostile quoin/ package in cwd was imported"
+    assert "HOSTILE MAIN RAN" not in proc.stdout
+    assert proc.returncode == 0
+    assert proc.stdout.strip() == f"quoin {quoin.__version__}"
+
+
 # ── real venv: pip/uv-venv/uv-tool/pipx-style install ───────────────────────
 
 

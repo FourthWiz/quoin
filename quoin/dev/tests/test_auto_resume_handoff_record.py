@@ -182,7 +182,7 @@ def test_handoff_usable_argv_and_env(ar, project, monkeypatch, capsys):
     out = capsys.readouterr().out.strip()
     assert out.startswith("HANDOFF|4321|")
     argv, env = captured[0]
-    assert argv[:3] == [str(interp), "-m", "quoin"]
+    assert argv[:3] == [str(interp), "-c", ar._SPAWN_BOOTSTRAP]
     assert argv[3:6] == ["run", "--autonomous", "demo"]
     assert "QUOIN_SUPERVISOR_LOCK_TOKEN" in env
     assert env["QUOIN_HANDOFF_PYTHONPATH"] == str(project / "src")
@@ -218,7 +218,69 @@ def test_handoff_spawn_cwd_is_not_project_root(ar, project, monkeypatch, capsys)
     argv, cwd = captured[0]
     assert cwd != str(project)
     assert "--project-root" in argv
-    assert argv[argv.index("--project-root") + 1] == str(project)
+    assert argv[argv.index("--project-root") + 1] == str(project.resolve())
+
+
+def test_handoff_spawn_cwd_is_owned_by_current_user_and_not_group_or_world_writable(
+    ar, project, monkeypatch, capsys,
+):
+    """The directory the detached supervisor actually spawns into must be
+    the same private, verified directory _neutral_cwd() picks — never
+    something an attacker-controlled other local user could write into."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    interp = _fake_interpreter(project / "fakebin", mode="ok")
+    _write_runtime_record(ar._runtime_record_path(), python=str(interp), version="9.9.9")
+
+    captured = []
+
+    class _FakeProc:
+        pid = 4321
+
+    def _fake_popen(argv, **kw):
+        captured.append(kw.get("cwd"))
+        return _FakeProc()
+
+    monkeypatch.setattr(ar, "_popen", _fake_popen)
+    rc = ar._cmd_handoff(_Args(project_root=str(project), task="demo", reason="budget", on_fail_halt=None))
+    assert rc == 0
+    assert capsys.readouterr().out.strip().startswith("HANDOFF|")
+    cwd = captured[0]
+    st = os.lstat(cwd)
+    assert not stat.S_ISLNK(st.st_mode)
+    assert st.st_uid == os.getuid()
+    assert not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
+
+
+def test_handoff_denied_when_no_safe_cwd_available(ar, project, monkeypatch, capsys):
+    """A hand-off must be refused outright — never silently spawned from a
+    shared or unverified directory — when _neutral_cwd() can't find a safe
+    one to use for the spawn itself. `resolve_cli`'s own probe-time check
+    already covers the common case (a bad deploy root fails the probe
+    first and comes back `STALE_CLI|no-safe-cwd`); this pins the
+    independent, second checkpoint right before the spawn, using a memoized
+    `resolve_cli` result so that check is the only one exercised."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    interp = _fake_interpreter(project / "fakebin", mode="ok")
+    _write_runtime_record(ar._runtime_record_path(), python=str(interp), version="9.9.9")
+
+    real_neutral_cwd = ar._neutral_cwd()
+    assert real_neutral_cwd is not None
+    calls = {"n": 0}
+
+    def _flaky_neutral_cwd():
+        calls["n"] += 1
+        return real_neutral_cwd if calls["n"] == 1 else None
+
+    monkeypatch.setattr(ar, "_neutral_cwd", _flaky_neutral_cwd)
+
+    rc = ar._cmd_handoff(_Args(project_root=str(project), task="demo", reason="budget", on_fail_halt=None))
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "DENIED|cwd"
+    assert not (memory / "run-supervisor-demo.pid").exists()
 
 
 def test_handoff_budget_reason_no_halt_writes_notes_only(ar, project, monkeypatch, capsys):

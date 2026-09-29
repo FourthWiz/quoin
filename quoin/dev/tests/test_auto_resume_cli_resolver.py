@@ -254,7 +254,7 @@ def _resolve_with_mode(ar, tmp_path, monkeypatch, mode, caller="start", version=
 def test_probe_ok_usable(ar, tmp_path, monkeypatch):
     res = _resolve_with_mode(ar, tmp_path, monkeypatch, "ok")
     assert res["status"] == "usable"
-    assert res["argv"][1:] == ["-m", "quoin"]
+    assert res["argv"][1:] == ["-c", ar._SPAWN_BOOTSTRAP]
     assert res["probed_version"] == "1.0.0"
 
 
@@ -321,7 +321,10 @@ def test_probe_timeout_grandchild_process_group_killed(ar, tmp_path, monkeypatch
 
 
 def test_handoff_caller_retries_once_then_probe_timeout(ar, tmp_path, monkeypatch):
-    monkeypatch.setenv("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", "250")
+    # "handoff" ignores QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS (fixed 8s budget
+    # by design — see _probe_budget_ms) — patch the budget function
+    # directly so this test doesn't wait out two real 8s timeouts.
+    monkeypatch.setattr(ar, "_probe_budget_ms", lambda caller: 250)
     calls = []
     real_probe = ar._probe
 
@@ -420,6 +423,107 @@ def test_probe_ignores_hostile_package_at_project_root(ar, tmp_path, monkeypatch
     assert res["probed_version"] == _real_quoin_version()
 
 
+# Round-2 major fix (a planted package in a shared, world-writable working
+# directory — the system temp dir on Linux, or on macOS whenever TMPDIR is
+# unset — could be imported and run as the hand-off's own user). Two
+# independent layers are pinned separately below: _neutral_cwd() must never
+# resolve to a shared/unsafe directory, and the probe's own sys.path strip
+# must stop the import even if something else forced it to run from one
+# anyway (defense in depth — see _PROBE_SNIPPET / _SPAWN_BOOTSTRAP).
+
+
+def test_probe_ignores_hostile_package_even_if_forced_to_run_from_it(ar, tmp_path, monkeypatch):
+    """Belt-and-suspenders: even if _neutral_cwd() were somehow made to
+    return a directory a hostile package was planted in — never the real
+    shared temp directory here, only a tmp_path stand-in for it — the
+    probe snippet's own sys.path[0] strip must still stop the import."""
+    hostile_dir = tmp_path / "would-be-shared-tmp"
+    hostile_dir.mkdir()
+    marker = tmp_path / "marker.txt"
+    (hostile_dir / "quoin").mkdir()
+    (hostile_dir / "quoin" / "__init__.py").write_text(
+        f"open({str(marker)!r}, 'w').write('imported')\n__version__ = 'hostile'\n", encoding="utf-8",
+    )
+    (hostile_dir / "quoin" / "cli.py").write_text("", encoding="utf-8")
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_real_record(record_path)
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+    monkeypatch.setattr(ar, "_neutral_cwd", lambda: str(hostile_dir))
+
+    res = ar.resolve_cli(tmp_path / "project", "cli-check")
+
+    assert not marker.exists(), "sys.path[0] strip did not stop the hostile import"
+    assert res["status"] == "usable"
+    assert res["probed_version"] == _real_quoin_version()
+
+
+def test_neutral_cwd_never_the_shared_temp_dir(ar, tmp_path, monkeypatch):
+    """_neutral_cwd() must not resolve to tempfile.gettempdir() — a shared
+    directory other local users can write to on Linux (and on macOS
+    whenever TMPDIR is unset) — even though it always exists."""
+    fake_shared_tmp = tmp_path / "fake-shared-tmp"
+    fake_shared_tmp.mkdir()
+    os.chmod(fake_shared_tmp, 0o1777)
+    monkeypatch.setattr(ar.tempfile, "gettempdir", lambda: str(fake_shared_tmp))
+
+    cwd = ar._neutral_cwd()
+
+    assert cwd is not None
+    assert cwd != str(fake_shared_tmp)
+
+
+def test_neutral_cwd_accepts_a_private_deploy_root(tmp_path):
+    ar_at, deploy_root = _ar_at_deploy(tmp_path)
+    os.chmod(deploy_root, 0o700)
+    assert ar_at._neutral_cwd() == str(deploy_root)
+
+
+def test_neutral_cwd_rejects_group_or_world_writable_deploy_root(tmp_path):
+    """A deploy root a hand-off's own user doesn't fully control (e.g. a
+    shared project checkout with a lax umask) must never be used as cwd —
+    that's the same hazard as the world-writable temp dir this fix closes."""
+    ar_at, deploy_root = _ar_at_deploy(tmp_path)
+    os.chmod(deploy_root, 0o777)
+    assert ar_at._neutral_cwd() is None
+
+
+def test_neutral_cwd_rejects_deploy_root_that_is_a_symlink(tmp_path):
+    ar_at, deploy_root = _ar_at_deploy(tmp_path)
+    real_dir = tmp_path / "real-elsewhere"
+    real_dir.mkdir()
+    os.chmod(real_dir, 0o700)
+    import shutil as _shutil
+    _shutil.rmtree(deploy_root)
+    deploy_root.symlink_to(real_dir)
+    assert ar_at._neutral_cwd() is None
+
+
+def test_neutral_cwd_none_when_deploy_root_missing(ar):
+    """_deploy_root() returns None outside the deploy layout (e.g. this
+    module loaded ad hoc, as most tests in this file do via `ar`) —
+    _neutral_cwd() must fail closed, never fall back to a shared dir."""
+    import unittest.mock
+    with unittest.mock.patch.object(ar, "_deploy_root", return_value=None):
+        assert ar._neutral_cwd() is None
+
+
+def test_resolve_cli_stale_when_no_safe_cwd_available(ar, tmp_path, monkeypatch):
+    """The probe must be refused, not silently run from an unsafe or
+    made-up directory, when _neutral_cwd() can't find a safe one."""
+    interp = _write_fake_interpreter(tmp_path / "fakebin")
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_record(record_path, python=str(interp))
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+    monkeypatch.setattr(ar, "_neutral_cwd", lambda: None)
+    monkeypatch.setenv("FAKE_MODE", "ok")
+
+    res = ar.resolve_cli(tmp_path / "project", "cli-check")
+
+    assert res["status"] == "stale"
+    assert res["kind"] == "no-safe-cwd"
+    assert "quoin install" in res["message"]
+
+
 def test_probe_project_root_is_quoin_repo_itself_still_resolves(ar, tmp_path, monkeypatch):
     """This worktree's own root has a top-level `quoin/` directory (the
     hooks/skills/scripts source tree, no `__init__.py`) — using this tool
@@ -459,9 +563,9 @@ def test_probe_missing_project_root_no_longer_misreported_as_broken_interpreter(
     """A missing --project-root used to reach Popen's cwd directly and
     raise OSError, mapped to interpreter-not-executable — misleading,
     since the interpreter itself was fine. Running the probe from a
-    neutral, always-present cwd (tempfile.gettempdir()) removes this case
-    along with the shadowing risk: cwd no longer depends on project_root
-    at all."""
+    neutral cwd (the quoin deploy root, verified private — see
+    _neutral_cwd) removes this case along with the shadowing risk: cwd no
+    longer depends on project_root at all."""
     interp = _write_fake_interpreter(tmp_path / "fakebin")
     record_path = tmp_path / "quoin-runtime.json"
     _write_record(record_path, python=str(interp))
@@ -485,7 +589,10 @@ def test_timeout_remedy_start_stop_names_knob(ar, tmp_path, monkeypatch):
 
 
 def test_timeout_remedy_handoff_and_cli_check_no_knob_mention(ar, tmp_path, monkeypatch):
-    monkeypatch.setenv("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", "250")
+    # Both callers ignore the timeout knob (fixed 8s budget) — patch the
+    # budget function directly so this test doesn't wait out real 8s/16s
+    # timeouts on every run.
+    monkeypatch.setattr(ar, "_probe_budget_ms", lambda caller: 250)
     for caller in ("handoff", "cli-check"):
         res = _resolve_with_mode(ar, tmp_path, monkeypatch, "sleep", caller=caller)
         # No literal <task> placeholder: the remedy is generic instead of
