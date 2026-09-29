@@ -1021,3 +1021,231 @@ def test_goldens_validate_against_the_subset_schema(name):
     schema = json.loads(paths.native_schema_path().read_text(encoding="utf-8"))
     doc = json.loads((GOLDEN_DIR / ("%s.opencode.json" % name)).read_text(encoding="utf-8"))
     assert schema_check.validate(doc, schema, "config") == []
+
+
+# ============================================ compiled matrix and boundaries
+
+from _opencode_merge_helpers import (  # noqa: E402
+    ALLOWED_ENV_READS,
+    COMBINATIONS,
+    PROFILES,
+    run_pipeline,
+)
+from quoin.opencode_adapter import explain, secrets  # noqa: E402
+
+MATRIX_KEYS = sorted(COMBINATIONS)
+PROFILE_NAMES = {"work": "work", "minimal": "minimal", "personal": "personal"}
+CREDENTIAL_ENV_NAMES = (
+    "QUOIN_CORP_GW_API_KEY", "QUOIN_CORP_GW_B_API_KEY", "QUOIN_LOCAL_GW_API_KEY",
+    "QUOIN_OPENROUTER_API_KEY", "LOCAL_GW_TOKEN", "OPENROUTER_API_KEY",
+)
+
+
+def _forbid_resolution(mp):
+    def boom(*args, **kwargs):
+        raise AssertionError("a credential was resolved, or the network or a subprocess was used")
+
+    mp.setattr(secrets.EnvBackend, "resolve", boom)
+    mp.setattr(secrets.MacKeychainBackend, "resolve", boom)
+    mp.setattr(secrets.CredentialResolver, "resolve", boom)
+    mp.setattr(secrets, "_default_runner", boom)
+    mp.setattr(secrets.SecretValue, "__init__", boom)
+    mp.setattr(socket.socket, "connect", boom)
+    mp.setattr(socket, "create_connection", boom)
+    mp.setattr(subprocess, "run", boom)
+    mp.setattr(subprocess, "Popen", boom)
+
+
+def _install_agent_stubs(root):
+    agent_dir = root / ".opencode" / "agents"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    for role in ROLES:
+        (agent_dir / ("quoin-%s.md" % role)).write_text("stub\n", encoding="utf-8")
+
+
+def _all_forms(ev):
+    """Every rendering of an evaluation, plus the compile outcome."""
+    texts = []
+    for redact in (False, True):
+        for as_json in (False, True):
+            texts.append(explain.render(ev, redact=redact, as_json=as_json))
+    return texts
+
+
+def _matrix_row(key, tmp_path):
+    out = run_pipeline(tmp_path, key)
+    env, home, root = out.env, tmp_path / "home", tmp_path / "project"
+    for name in CREDENTIAL_ENV_NAMES:
+        env[name] = helpers.SEEDED_SECRET
+    _install_agent_stubs(root)
+    record = {"key": key, "env": env, "tmp": tmp_path, "texts": [], "raised": None}
+    kwargs = dict(
+        project_root=root, profile=PROFILE_NAMES[key[0]], env=env, home=home, now=NOW
+    )
+    try:
+        ev = compiler.evaluate(**kwargs)
+    except ConfigErrors as exc:
+        record["raised"] = exc
+        return record
+    record["ev"] = ev
+    record["texts"] += _all_forms(ev)
+    try:
+        result = compiler.build(ev)
+    except compiler.CompileBlocked as exc:
+        record["blocked"] = exc
+        record["written"] = (tmp_path / "state").exists()
+        return record
+    target = tmp_path / "out"
+    compiler.write(result, target)
+    record["result"] = result
+    record["check"] = compiler.check(ev, target)
+    record["files"] = [(target / "opencode.json").read_text(encoding="utf-8"),
+                       (target / "quoin-compile.json").read_text(encoding="utf-8")]
+    return record
+
+
+@pytest.fixture(scope="module")
+def matrix(tmp_path_factory):
+    results = {}
+    with pytest.MonkeyPatch.context() as mp:
+        _forbid_resolution(mp)
+        for key in MATRIX_KEYS:
+            results[key] = _matrix_row(key, tmp_path_factory.mktemp("compiled-matrix"))
+    return results
+
+
+def _expects_block(key):
+    expected = COMBINATIONS[key]
+    return expected[5] is not None or key[1] in ("none", "unclassified")
+
+
+def test_the_matrix_table_is_the_full_product():
+    assert len(MATRIX_KEYS) == 45
+
+
+@pytest.mark.parametrize("key", MATRIX_KEYS, ids=["-".join(k) for k in MATRIX_KEYS])
+def test_compiled_matrix(key, matrix):
+    record = matrix[key]
+    expected = COMBINATIONS[key]
+    assert set(record["env"].reads) <= ALLOWED_ENV_READS
+    if expected[0] in ("load-error", "merge-error"):
+        assert {e.rejection_class for e in record["raised"].errors} == {expected[1]}
+        return
+    assert record["raised"] is None
+    if _expects_block(key):
+        assert isinstance(record.get("blocked"), compiler.CompileBlocked)
+        assert record["written"] is False
+        return
+    result, ev = record["result"], record["ev"]
+    doc = result.document
+    assert record["check"].ok
+    policies = doc["experimental"]["policies"]
+    assert policies[0] == {"action": "provider.use", "effect": "deny", "resource": "*"}
+    allowed = [p["resource"] for p in policies[1:]]
+    assert all(p["effect"] == "allow" for p in policies[1:])
+    assert doc["enabled_providers"] == allowed == sorted(doc["provider"])
+    permitted = {
+        compiler.native_provider_id(ev.effective.providers[pid]) for pid in ev.effective.effective_providers
+    }
+    assert set(doc["enabled_providers"]) <= permitted
+    referenced = {
+        compiler.native_provider_id(ev.effective.providers[r.provider_id])
+        for r in compiler._emitted_resolutions(ev.resolutions)
+    }
+    assert set(doc["provider"]) == referenced
+    for quoin_id, native in result.sidecar["native_provider"].items():
+        view = ev.effective.providers[quoin_id]
+        if view.kind == "openai-compatible":
+            assert native == "quoin-" + quoin_id and native not in BUILTIN_PROVIDER_IDS
+        if ev.effective.classification == "work":
+            assert ev.effective.profile_classification == "work"
+            assert view.kind != "openrouter" and native != "openrouter"
+    if ev.effective.classification == "work":
+        assert not any(name == "openrouter" for name in doc["provider"])
+    assert "max" not in json.dumps(doc) and "summary" not in doc["agent"]
+
+
+def test_the_matrix_is_not_vacuous(matrix):
+    built = {k: r for k, r in matrix.items() if "result" in r}
+    assert any(r["ev"].effective.classification == "work" for r in built.values())
+    assert any(r["ev"].effective.classification == "personal" for r in built.values())
+    blocked = [k for k, r in matrix.items() if "blocked" in r]
+    raised = [k for k, r in matrix.items() if r["raised"] is not None]
+    assert built and len(blocked) + len(raised) + len(built) == 45
+    assert len(raised) == 12
+
+
+def test_a_managed_work_row_builds(tmp_path):
+    profile = fixture(PROFILE_WORK)
+    profile["models"]["work-planner"]["provider"] = "corp-gw"
+    world = World(tmp_path, profile=profile, managed=MANAGED_WORK)
+    with pytest.MonkeyPatch.context() as mp:
+        _forbid_resolution(mp)
+        ev = world.evaluate()
+        assert ev.effective.managed_present and ev.effective.classification == "work"
+        result = compiler.build(ev)
+    assert list(result.document["provider"]) == ["quoin-corp-gw"]
+    assert compiler.launchable(ev)
+
+
+def test_the_matrix_and_renders_never_hold_a_seeded_secret(matrix):
+    forms = helpers.secret_forms(helpers.SEEDED_SECRET)
+    checked = 0
+    for record in matrix.values():
+        chunks = list(record["texts"]) + list(record.get("files", ()))
+        if "result" in record:
+            chunks.append(json.dumps(record["result"].sidecar))
+            chunks.append(record["result"].digest)
+            chunks.append(
+                jsonio.dump_canonical(compiler.digest_input(record["ev"], record["result"].document)).decode("utf-8")
+            )
+        if "blocked" in record:
+            chunks += [str(record["blocked"]), repr(record["blocked"])]
+        for chunk in chunks:
+            for form in forms:
+                assert form not in chunk
+            checked += 1
+    assert checked > 200
+
+
+def test_error_objects_never_carry_secrets_or_paths(work, monkeypatch):
+    work.env["QUOIN_CORP_GW_API_KEY"] = helpers.SEEDED_SECRET
+    ev = work.evaluate()
+    errors_seen = []
+    for gate in compiler.GATE_MESSAGES:
+        errors_seen.append(compiler.CompileGateError(gate))
+    for code in compiler.OUTPUT_MESSAGES:
+        errors_seen.append(compiler.OutputRefused(code))
+    (work.root / ".opencode" / "agents" / "quoin-gate.md").unlink()
+    with pytest.raises(compiler.CompileBlocked) as info:
+        compiler.build(work.evaluate())
+    errors_seen.append(info.value)
+    for exc in errors_seen:
+        for text in (str(exc), repr(exc)):
+            for form in helpers.secret_forms(helpers.SEEDED_SECRET):
+                assert form not in text
+            assert str(work.tmp) not in text and "example.invalid" not in text
+    assert ev
+
+
+def test_compiler_and_explain_never_name_resolvers_or_processes():
+    forbidden = {
+        "EnvBackend", "MacKeychainBackend", "CredentialResolver", "SecretValue",
+        "default_resolver", "subprocess", "_default_runner", "SecretResolver",
+    }
+    for name in ("compiler", "explain"):
+        tree = ast.parse((SRC_DIR / (name + ".py")).read_text(encoding="utf-8"))
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Name):
+                found.add(node.id)
+            elif isinstance(node, ast.Attribute):
+                found.add(node.attr)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                found |= {a.name for a in node.names}
+                if isinstance(node, ast.ImportFrom) and node.module:
+                    found.add(node.module)
+        assert not (found & forbidden), (name, found & forbidden)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name) and node.value.id == "os":
+                assert node.attr not in ("environ", "getenv", "getenvb"), name

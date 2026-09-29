@@ -265,3 +265,34 @@ def test_personal_profile_compiles(tmp_path, monkeypatch, capsys):
         capsys, "compile", "--profile", "personal", "--project-root", str(world.root)
     )
     assert code == 0 and out.splitlines()[2] == "launchable: true"
+
+
+# --------------------------------------------- invalid fixtures, no leakage
+
+from test_opencode_config_errors import SHAPES  # noqa: E402
+from test_opencode_runtime_config import CASES, run_case  # noqa: E402
+
+
+@pytest.mark.parametrize("case", CASES["invalid"], ids=[c["id"] for c in CASES["invalid"]])
+def test_invalid_fixtures_through_compile_print_no_secret(case, tmp_path, monkeypatch, capsys):
+    env, _ = run_case(case, tmp_path)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", env["XDG_CONFIG_HOME"])
+    monkeypatch.setenv("XDG_STATE_HOME", env["XDG_STATE_HOME"])
+    if "QUOIN_OPENCODE_MANAGED_POLICY" in env:
+        monkeypatch.setenv("QUOIN_OPENCODE_MANAGED_POLICY", env["QUOIN_OPENCODE_MANAGED_POLICY"])
+    else:
+        monkeypatch.delenv("QUOIN_OPENCODE_MANAGED_POLICY", raising=False)
+    for name in ("QUOIN_CORP_GW_API_KEY", "QUOIN_CORP_GW_B_API_KEY", "QUOIN_LOCAL_GW_API_KEY",
+                 "QUOIN_OPENROUTER_API_KEY", "LOCAL_GW_TOKEN", "OPENROUTER_API_KEY"):
+        monkeypatch.setenv(name, helpers.SEEDED_SECRET)
+    profile = case.get("select") or case.get("install_as") or "work"
+    code = cli.main(
+        ["opencode", "config", "compile", "--profile", profile, "--project-root", str(tmp_path / "project")]
+    )
+    captured = capsys.readouterr()
+    text = captured.out + captured.err
+    assert code in (1, 2), case["id"]
+    for form in helpers.secret_forms(helpers.SEEDED_SECRET) + list(SHAPES.values()):
+        assert form not in text, case["id"]
+    assert not (tmp_path / "state").exists()
