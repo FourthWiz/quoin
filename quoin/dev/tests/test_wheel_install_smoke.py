@@ -223,6 +223,15 @@ def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
         "quoin/opencode_adapter/install.py",
         "quoin/opencode_adapter/scripts.py",
         "quoin/opencode_adapter/doctor.py",
+        # runtime configuration schema, fixtures and loader modules
+        "quoin/data/adapters/opencode/schemas/runtime-config.schema.json",
+        "quoin/data/adapters/opencode/fixtures/runtime-config/cases.json",
+        "quoin/opencode_adapter/errors.py",
+        "quoin/opencode_adapter/paths.py",
+        "quoin/opencode_adapter/jsonio.py",
+        "quoin/opencode_adapter/schema_check.py",
+        "quoin/opencode_adapter/secrets.py",
+        "quoin/opencode_adapter/config.py",
     ]
     required += [
         f"quoin/data/core/skills/{skill_id}.md" for skill_id in supported_ids

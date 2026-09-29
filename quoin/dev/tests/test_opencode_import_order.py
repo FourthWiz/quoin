@@ -27,10 +27,23 @@ _ADAPTER_MODULES = (
     "quoin.opencode_adapter.scripts",
 )
 
+_CONFIG_MODULES = tuple(
+    "quoin.opencode_adapter." + name
+    for name in ("errors", "paths", "jsonio", "schema_check", "secrets", "config")
+)
+
 _ORDERS = list(itertools.permutations(_ADAPTER_MODULES))
 _CLI_FIRST_ORDERS = [("quoin.cli",) + order for order in _ORDERS]
 
-_ALL_ORDERS = _ORDERS + _CLI_FIRST_ORDERS
+# Each config module alone, followed by the CLI, and the CLI followed by it;
+# a full permutation of the new set would add nothing but time.
+_CONFIG_ORDERS = (
+    [(m,) for m in _CONFIG_MODULES]
+    + [(m, "quoin.cli") for m in _CONFIG_MODULES]
+    + [("quoin.cli", m) for m in _CONFIG_MODULES]
+)
+
+_ALL_ORDERS = _ORDERS + _CLI_FIRST_ORDERS + _CONFIG_ORDERS
 _IDS = ["-".join(m.rsplit(".", 1)[-1] for m in order) for order in _ALL_ORDERS]
 
 

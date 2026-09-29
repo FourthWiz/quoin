@@ -997,6 +997,20 @@ def test_affected_tests_self_check():
         "quoin/core/workflow/skills.json": {"test_opencode_manifest.py", "test_opencode_generate.py"},
         ".github/workflows/adapter-check.yml": {"test_opencode_manifest.py"},
     }
+    # The runtime-config fixtures are inventoried by their own cases file, so
+    # derive their rows from it rather than listing each one by hand.
+    runtime_dir = "quoin/adapters/opencode/fixtures/runtime-config/"
+    runtime_cases = json.loads((repo_root / runtime_dir / "cases.json").read_text(encoding="utf-8"))
+    runtime_files = {"cases.json"}
+    for case in runtime_cases["valid"] + runtime_cases["invalid"]:
+        runtime_files.add(case["file"])
+        runtime_files.update((case.get("companions") or {}).values())
+    for rel in runtime_files:
+        per_file_expected[runtime_dir + rel] = {"test_opencode_runtime_config.py"}
+    per_file_expected["quoin/adapters/opencode/schemas/runtime-config.schema.json"] = {
+        "test_opencode_runtime_config.py",
+        "test_opencode_schema_check.py",
+    }
     for path, expected in per_file_expected.items():
         selectors, unmatched, ignored = affected_tests.map_changed_to_tests([path], repo_root)
         assert not unmatched, (path, unmatched)
