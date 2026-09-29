@@ -1,0 +1,701 @@
+{
+  "schema_version": 2,
+  "feature_name": "opencode-project-assets",
+  "adapter": "opencode",
+  "status": "generated-offline-verified",
+  "description": "Catalog manifest classifying all 32 portable Quoin workflow skills for the OpenCode adapter, with per-entry support status, generated-name mapping and a drift check against the portable catalog. The generator, installer and doctor for the supported entries are implemented and offline-verified; live runtime evidence is not yet collected.",
+  "opencode_version": "1.18.32",
+  "entrypoints": [
+    {
+      "type": "module",
+      "path": "python -m quoin.opencode_adapter check-manifest",
+      "args": [
+        "--source-dir <path>"
+      ]
+    },
+    {
+      "type": "cli",
+      "path": "quoin install --runtime opencode",
+      "args": [
+        "--project-root <path>",
+        "--profile <label>",
+        "--check"
+      ]
+    },
+    {
+      "type": "cli",
+      "path": "quoin opencode uninstall",
+      "args": [
+        "--project-root <path>",
+        "--dry-run"
+      ]
+    },
+    {
+      "type": "cli",
+      "path": "quoin opencode script",
+      "args": [
+        "<name> [args...]"
+      ]
+    },
+    {
+      "type": "cli",
+      "path": "quoin doctor --runtime opencode",
+      "args": [
+        "--project-root <path>",
+        "--smoke",
+        "--json"
+      ]
+    }
+  ],
+  "portable_inputs": [
+    {
+      "path": "quoin/core/workflow/skills.json",
+      "description": "Canonical skill catalog: id, phase, effort, user-facing and spawn-target flags for all 32 portable skills"
+    },
+    {
+      "path": "quoin/core/skills/*.md",
+      "description": "Portable per-skill workflow contracts referenced by the generated command and skill assets"
+    },
+    {
+      "path": "quoin/core/workflow/rules.md",
+      "description": "Portable workflow rules source for the generated instruction document"
+    }
+  ],
+  "generated_outputs": [
+    {
+      "path": ".opencode/commands/quoin-*.md",
+      "description": "One command per supported skill, binding to its role's agent"
+    },
+    {
+      "path": ".opencode/skills/quoin-*/SKILL.md",
+      "description": "One skill per supported entry, assembled from its bundle contract and overlay"
+    },
+    {
+      "path": ".opencode/agents/quoin-*.md",
+      "description": "One agent per Quoin role, carrying its permission map and prompt"
+    },
+    {
+      "path": ".opencode/quoin/instructions.md",
+      "description": "The rendered instruction document OpenCode loads project-wide"
+    },
+    {
+      "path": ".opencode/opencode.jsonc",
+      "description": "The generated config file pointing OpenCode at the instruction document"
+    }
+  ],
+  "unsupported_outputs": [
+    {
+      "name": "global OpenCode install",
+      "reason": "Only project-local .opencode assets are generated; global install paths are out of scope"
+    },
+    {
+      "name": "provider, model, policy, plugin and MCP configuration",
+      "reason": "The adapter owns asset generation and name translation only, never provider or process configuration"
+    },
+    {
+      "name": "any asset for run",
+      "reason": "Phase orchestration needs the runtime driver; a stub command would be misleading"
+    },
+    {
+      "name": "model pinning in agent files",
+      "reason": "Generated agent frontmatter carries no model key, so nothing pins or leaks to a provider"
+    }
+  ],
+  "validation": {
+    "commands": [
+      "PYTHONPATH=src python3 -m quoin.opencode_adapter check-manifest --source-dir quoin",
+      "python3 -m pytest quoin/dev/tests/test_opencode_manifest.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_generate.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_install.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_script_runner.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_doctor.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_doctor_host.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_doctor_census.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_import_order.py",
+      "python3 -m pytest quoin/dev/tests/test_opencode_binary_contract.py"
+    ],
+    "notes": "Run from the repository root."
+  },
+  "milestones": [
+    "adapter-foundation",
+    "workflow-execution",
+    "work-context",
+    "controlled-writes",
+    "release-hardening",
+    "none"
+  ],
+  "roles": {
+    "coordinator": {
+      "mode": "primary",
+      "summary": "Runs write-capable commands and persists findings returned by critic and reviewer subagents"
+    },
+    "investigator": {
+      "mode": "all",
+      "summary": "Runs discovery and serves as a read-mostly delegation target"
+    },
+    "architect": {
+      "mode": "primary",
+      "summary": "Writes architecture artifacts for a task"
+    },
+    "planner": {
+      "mode": "primary",
+      "summary": "Plans and revises in-loop for plan and thorough-plan"
+    },
+    "implementer": {
+      "mode": "primary",
+      "summary": "Edits within the project to implement a converged plan"
+    },
+    "critic": {
+      "mode": "subagent",
+      "summary": "Critiques a plan with no write and no shell access"
+    },
+    "reviewer": {
+      "mode": "subagent",
+      "summary": "Reviews an implementation with no write and no shell access"
+    },
+    "gate": {
+      "mode": "primary",
+      "summary": "Runs deterministic validators and enforces the quality gate"
+    }
+  },
+  "limits": {
+    "delegation_depth": {
+      "value": 1,
+      "enforcement": "enforced-natively",
+      "note": "OpenCode default subagent_depth; not live-tested"
+    },
+    "concurrency": {
+      "implementer": 1,
+      "review_worker": 1,
+      "enforcement": "declared-not-enforced",
+      "note": "No verified native concurrency cap; parallel Task calls within one turn remain possible"
+    }
+  },
+  "catalog_entries": [
+    {
+      "id": "architect",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {
+        "command": "quoin-architect",
+        "skill": "quoin-architect",
+        "agent_role": "architect"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "capture_insight",
+      "status": "documentation-only",
+      "reason": "This is a portable scratchpad write outside the initial bundle.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "checkpoint",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script; does not run cleanup, which is unsupported; writes its own recent-sessions.md entry",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {
+        "command": "quoin-checkpoint",
+        "skill": "quoin-checkpoint",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "cleanup",
+      "status": "unsupported",
+      "reason": "This trash-moves Claude hook sentinels and checkpoint files that do not exist on OpenCode.",
+      "target_milestone": "none",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "continue_work",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; no hook-written session index or Claude transcripts; resumes from session state and the checkpoint handoff",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {
+        "command": "quoin-continue-work",
+        "skill": "quoin-continue-work",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "cost_snapshot",
+      "status": "unsupported",
+      "reason": "This reads Claude JSONL and ccusage data; OpenCode cost translation lands with the workflow-execution milestone.",
+      "target_milestone": "workflow-execution",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "critic",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {
+        "command": "quoin-critic",
+        "skill": "quoin-critic",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "discover",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {
+        "command": "quoin-discover",
+        "skill": "quoin-discover",
+        "agent_role": "investigator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "end_of_day",
+      "status": "unsupported",
+      "reason": "This depends on Claude SessionEnd hook claims and session files that OpenCode does not provide.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "end_of_task",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {
+        "command": "quoin-end-of-task",
+        "skill": "quoin-end-of-task",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "enrich",
+      "status": "documentation-only",
+      "reason": "This is a portable prompt-sharpening phase that sits outside the initial bundle of generated assets.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "expand",
+      "status": "documentation-only",
+      "reason": "This is a portable artifact expansion utility outside the initial bundle.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "gate",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {
+        "command": "quoin-gate",
+        "skill": "quoin-gate",
+        "agent_role": "gate"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "implement",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {
+        "command": "quoin-implement",
+        "skill": "quoin-implement",
+        "agent_role": "implementer"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "init_workflow",
+      "status": "documentation-only",
+      "reason": "Its bootstrap role overlaps the OpenCode installer, and its Claude permission setup has no OpenCode equivalent.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "next_steps",
+      "status": "documentation-only",
+      "reason": "This is portable queue file management outside the initial bundle.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "plan",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {
+        "command": "quoin-plan",
+        "skill": "quoin-plan",
+        "agent_role": "planner"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "pr",
+      "status": "documentation-only",
+      "reason": "This performs an external write by opening a remote pull request, and needs its own authorization path before it is generated.",
+      "target_milestone": "controlled-writes",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "review",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {
+        "command": "quoin-review",
+        "skill": "quoin-review",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "revise",
+      "status": "documentation-only",
+      "reason": "The planner revises inside quoin-thorough-plan; there is no standalone revise command yet.",
+      "target_milestone": "workflow-execution",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "revise-fast",
+      "status": "unsupported",
+      "reason": "This is a Claude cost-tier variant of revise; model-tier selection is a role and model resolver concern outside this adapter.",
+      "target_milestone": "none",
+      "catalog": {
+        "user_facing": false,
+        "spawn_target": true
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "rollback",
+      "status": "documentation-only",
+      "reason": "This is a portable git undo operation that needs implementer-scope safety checks before it is generated.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "run",
+      "status": "documentation-only",
+      "reason": "Phase orchestration needs the OpenCode runtime driver; no OpenCode asset is generated for this entry.",
+      "target_milestone": "workflow-execution",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "security_review",
+      "status": "documentation-only",
+      "reason": "This is a read-only review variant that will reuse the reviewer role in a later milestone.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "sleep",
+      "status": "documentation-only",
+      "reason": "This is portable lessons consolidation normally chained from end_of_day, which is unsupported.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "specify",
+      "status": "documentation-only",
+      "reason": "This is a portable upstream phase that sits outside the initial bundle of generated assets.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": true
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "start_of_day",
+      "status": "unsupported",
+      "reason": "This depends on Claude session-start hook state and banners that OpenCode does not provide.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "status",
+      "status": "documentation-only",
+      "reason": "This is a portable read-only pipeline status report outside the initial bundle.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "thorough_plan",
+      "status": "supported",
+      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "target_milestone": "adapter-foundation",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {
+        "command": "quoin-thorough-plan",
+        "skill": "quoin-thorough-plan",
+        "agent_role": "planner"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "triage",
+      "status": "documentation-only",
+      "reason": "The routing table names Claude slash commands; it needs OpenCode-facing names before it can be generated.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "weekly_review",
+      "status": "documentation-only",
+      "reason": "This aggregates portable memory files outside the initial bundle.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "workspace",
+      "status": "documentation-only",
+      "reason": "This manages git worktree workspaces for concurrent sessions, and the concurrency model is untested on OpenCode.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    }
+  ]
+}

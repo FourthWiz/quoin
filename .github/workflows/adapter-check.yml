@@ -4,6 +4,9 @@ on:
   pull_request:
   push:
 
+permissions:
+  contents: read
+
 jobs:
   adapter-check:
     name: Validate adapter drift
@@ -21,3 +24,9 @@ jobs:
 
       - name: Run registration roster check
         run: python3 quoin/dev/check_registration.py
+
+      - name: Run OpenCode manifest drift check
+        run: PYTHONPATH=src python3 -m quoin.opencode_adapter check-manifest --source-dir quoin
+
+      - name: Run OpenCode doctor smoke check
+        run: PYTHONPATH=src python3 -m quoin doctor --runtime opencode --smoke --project-root .

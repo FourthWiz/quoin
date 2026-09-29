@@ -438,21 +438,50 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
 
 
 def _cmd_install(args: argparse.Namespace) -> int:
-    # --scope project cannot combine with --runtime codex — check before dispatch
+    runtime = getattr(args, "runtime", "claude")
+
+    # --profile is only meaningful for --runtime opencode — check before dispatch
+    if getattr(args, "profile", None) is not None and runtime != "opencode":
+        _abort("quoin: --profile is only valid with --runtime opencode")
+
+    # --scope project cannot combine with --runtime codex or opencode — check before dispatch
     scope: str = getattr(args, "scope", None) or "user"
-    if scope.startswith("project") and getattr(args, "runtime", "claude") == "codex":
+    if scope.startswith("project") and runtime in ("codex", "opencode"):
         _abort("quoin: --scope project is only valid with --runtime claude")
 
-    if args.runtime == "codex":
+    if runtime == "opencode":
+        return _cmd_opencode_install(args)
+    if runtime == "codex":
         return _cmd_codex_init(args)
     if args.check:
         print(
-            "quoin: install --check is only supported with --runtime codex; "
-            "use 'quoin doctor' for Claude install health checks",
+            "quoin: install --check is only supported with --runtime codex "
+            "or opencode; use 'quoin doctor' for Claude install health checks",
             file=sys.stderr,
         )
         return 2
     return _cmd_claude_install(args)
+
+
+def _cmd_opencode_install(args: argparse.Namespace) -> int:
+    source_dir = _resolve_source_dir(args.source_dir)
+    from quoin.opencode_adapter.install import run_install
+
+    return run_install(
+        args.project_root,
+        source_dir,
+        getattr(args, "profile", None),
+        args.check,
+        sys.stdout,
+        sys.stderr,
+    )
+
+
+def _cmd_opencode_script(args: argparse.Namespace) -> int:
+    source_dir = _resolve_source_dir(args.source_dir)
+    from quoin.opencode_adapter import scripts
+
+    return scripts.run(args.name, args.script_args, source_dir)
 
 
 def _codex_script(source_dir: pathlib.Path, name: str) -> pathlib.Path:
@@ -543,7 +572,30 @@ def _cmd_dashboard(args: argparse.Namespace) -> int:
     return _run_codex_script(script, server_argv)
 
 
+def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
+    source_dir = _resolve_source_dir(args.source_dir)
+    from quoin.opencode_adapter import doctor
+
+    return doctor.run_doctor(
+        args.project_root,
+        source_dir,
+        args.smoke,
+        args.json,
+        sys.stdout,
+        sys.stderr,
+    )
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
+    if getattr(args, "json", False) and args.runtime != "opencode":
+        _abort("quoin: --json is only valid with --runtime opencode")
+
+    scope: str = getattr(args, "scope", None) or "user"
+    if scope.startswith("project") and args.runtime == "opencode":
+        _abort("quoin: --scope project is only valid with --runtime claude")
+
+    if args.runtime == "opencode":
+        return _cmd_opencode_doctor(args)
     if args.runtime == "codex":
         return _cmd_codex_doctor(args)
 
@@ -827,11 +879,13 @@ def main(argv: list[str] | None = None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
             "Install Quoin for a runtime. Claude installs globally to ~/.claude. "
-            "Codex generates or checks repo-local AGENTS.md scaffold only."
+            "Codex generates or checks repo-local AGENTS.md scaffold only. "
+            "OpenCode installs a repo-local .opencode/ scaffold under a project root."
         ),
         help=(
             "Install Quoin for a runtime: Claude globally to ~/.claude "
-            "(default), or Codex repo-local AGENTS.md scaffold"
+            "(default), Codex repo-local AGENTS.md scaffold, or OpenCode "
+            "repo-local .opencode/ scaffold"
         ),
         epilog=textwrap.dedent("""\
             Scope (--scope):
@@ -847,25 +901,38 @@ def main(argv: list[str] | None = None) -> int:
               quoin install --dev
               quoin install --scope project
               quoin install --runtime codex --project-root .
+              quoin install --runtime opencode --project-root .
               quoin install --autocompact-pct 75
               quoin install --clear-autocompact-env
         """),
     )
     install_p.add_argument(
         "--runtime",
-        choices=("claude", "codex"),
+        choices=("claude", "codex", "opencode"),
         default="claude",
         help=(
             "Runtime target. 'claude' installs globally to ~/.claude; "
-            "'codex' generates repo-local AGENTS.md only. Defaults to claude."
+            "'codex' generates repo-local AGENTS.md only; 'opencode' installs "
+            "a repo-local .opencode/ scaffold. Defaults to claude."
         ),
     )
     install_p.add_argument(
         "--project-root",
         default=".",
         help=(
-            "Project root for --runtime codex AGENTS.md generation/checking; "
-            "defaults to the current directory."
+            "Project root for --runtime codex AGENTS.md generation/checking, "
+            "or --runtime opencode scaffold install; defaults to the current "
+            "directory."
+        ),
+    )
+    install_p.add_argument(
+        "--profile",
+        default=None,
+        metavar="P",
+        help=(
+            "Only valid with --runtime opencode: an install profile label "
+            "recorded in the install metadata. Omitted, a reinstall keeps "
+            "the previously recorded label (null on a first install)."
         ),
     )
     install_p.add_argument(
@@ -873,7 +940,8 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help=(
             "For --runtime codex, check AGENTS.md without writing files "
-            "(same behavior as 'quoin codex init --check')."
+            "(same behavior as 'quoin codex init --check'). For --runtime "
+            "opencode, report what would change without writing files."
         ),
     )
     install_p.add_argument("--dev", action="store_true", help="Install dev dependencies")
@@ -957,7 +1025,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     doctor_p.add_argument(
         "--runtime",
-        choices=("claude", "codex"),
+        choices=("claude", "codex", "opencode"),
         default="claude",
         help="Runtime to check; defaults to claude.",
     )
@@ -967,23 +1035,36 @@ def main(argv: list[str] | None = None) -> int:
         metavar="user|project[:DIR]",
         help=(
             "Installation scope to check. 'user' (default) checks ~/.claude/. "
-            "'project' checks <CWD>/.claude/. 'project:/path' checks /path/.claude/."
+            "'project' checks <CWD>/.claude/. 'project:/path' checks /path/.claude/. "
+            "Only valid with --runtime claude."
         ),
     )
     doctor_p.add_argument(
         "--project-root",
         default=".",
-        help="Project root for Codex readiness checks; defaults to the current directory.",
+        help=(
+            "Project root for Codex readiness checks or the OpenCode adapter's "
+            "install/census checks; defaults to the current directory."
+        ),
     )
     doctor_p.add_argument(
         "--source-dir",
         metavar="PATH",
-        help="Override quoin data source directory for Codex adapter scripts.",
+        help="Override quoin data source directory for Codex/OpenCode adapter scripts.",
     )
     doctor_p.add_argument(
         "--smoke",
         action="store_true",
-        help="For --runtime codex, also run the deterministic repo-local smoke check.",
+        help=(
+            "For --runtime codex, also run the deterministic repo-local smoke check. "
+            "For --runtime opencode, run only the offline render/smoke checks "
+            "(skip host checks that depend on this machine's install state)."
+        ),
+    )
+    doctor_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Only valid with --runtime opencode: print a machine-readable report.",
     )
 
     codex_p = sub.add_parser(
@@ -1012,6 +1093,49 @@ def main(argv: list[str] | None = None) -> int:
         "--source-dir",
         metavar="PATH",
         help="Override quoin data source directory for Codex adapter scripts.",
+    )
+
+    opencode_p = sub.add_parser(
+        "opencode",
+        description="Repo-local OpenCode helpers (uninstall the .opencode/ scaffold; run an allowlisted Quoin script).",
+        help="Repo-local OpenCode helpers",
+    )
+    opencode_sub = opencode_p.add_subparsers(dest="opencode_command")
+
+    opencode_uninstall_p = opencode_sub.add_parser(
+        "uninstall",
+        description="Remove everything Quoin owns under a project's .opencode/ scaffold.",
+        help="Remove the repo-local .opencode/ scaffold Quoin owns",
+    )
+    opencode_uninstall_p.add_argument(
+        "--project-root",
+        default=".",
+        help="Project root holding the .opencode/ scaffold; defaults to the current directory.",
+    )
+    opencode_uninstall_p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report what would be removed without writing or deleting anything.",
+    )
+
+    opencode_script_p = opencode_sub.add_parser(
+        "script",
+        description="Run an allowlisted Quoin script by name, under the same output-safety policy an OpenCode role uses.",
+        help="Run an allowlisted Quoin script by name",
+    )
+    opencode_script_p.add_argument(
+        "--source-dir",
+        metavar="PATH",
+        help="Override quoin data source directory.",
+    )
+    opencode_script_p.add_argument(
+        "name",
+        help="Script name from the allowlist (e.g. path_resolve, validate_artifact).",
+    )
+    opencode_script_p.add_argument(
+        "script_args",
+        nargs=argparse.REMAINDER,
+        help="Arguments forwarded to the script unchanged.",
     )
 
     dashboard_p = sub.add_parser(
@@ -1200,6 +1324,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.codex_command == "init":
             return _cmd_codex_init(args)
         codex_p.print_help()
+        return 1
+    elif args.command == "opencode":
+        if args.opencode_command == "uninstall":
+            from quoin.opencode_adapter.install import run_uninstall
+
+            return run_uninstall(args.project_root, args.dry_run, sys.stdout, sys.stderr)
+        if args.opencode_command == "script":
+            return _cmd_opencode_script(args)
+        opencode_p.print_help()
         return 1
     elif args.command == "router":
         # Lazy import keeps quoin install path import-clean (R-11 / D-01).

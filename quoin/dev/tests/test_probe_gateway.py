@@ -962,17 +962,40 @@ def test_affected_tests_self_check():
     # select at least one opencode test on its own, with nothing unmatched
     # or ignored, so a change to just that file is never test-blind.
     per_file_expected = {
+        "quoin/adapters/opencode/feature-manifest.json": {
+            "test_opencode_manifest.py",
+            "test_opencode_docs.py",
+            "test_opencode_generate.py",
+        },
+        "quoin/adapters/opencode/overlays.json": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/command.md": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/skill.md": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/agent.md": {"test_opencode_generate.py", "test_opencode_docs.py"},
+        "quoin/adapters/opencode/templates/instructions.md": {
+            "test_opencode_generate.py",
+            "test_opencode_docs.py",
+        },
         "quoin/adapters/opencode/fixtures/scenarios.json": {
             "test_fake_openai_server.py",
             "test_probe_gateway.py",
             "test_probe_gateway_tool_loop.py",
         },
+        "quoin/adapters/opencode/fixtures/install-cases.json": {
+            "test_opencode_install.py",
+            "test_opencode_docs.py",
+        },
         "quoin/adapters/opencode/probe_gateway.py": {"test_probe_gateway.py"},
         "quoin/adapters/opencode/fake_openai_server.py": {"test_fake_openai_server.py"},
-        "quoin/adapters/opencode/README.md": {"test_probe_gateway.py", "test_opencode_docs.py"},
-        "quoin/adapters/opencode/compatibility.md": {"test_opencode_docs.py"},
+        "quoin/adapters/opencode/README.md": {
+            "test_probe_gateway.py",
+            "test_opencode_docs.py",
+            "test_opencode_manifest.py",
+        },
+        "quoin/adapters/opencode/compatibility.md": {"test_opencode_docs.py", "test_opencode_manifest.py"},
         "quoin/adapters/opencode/decisions.md": {"test_opencode_docs.py"},
         "pyproject.toml": {"test_probe_gateway.py"},
+        "quoin/core/workflow/skills.json": {"test_opencode_manifest.py", "test_opencode_generate.py"},
+        ".github/workflows/adapter-check.yml": {"test_opencode_manifest.py"},
     }
     for path, expected in per_file_expected.items():
         selectors, unmatched, ignored = affected_tests.map_changed_to_tests([path], repo_root)

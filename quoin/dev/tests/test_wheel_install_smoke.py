@@ -7,6 +7,7 @@ Skipped when `claude` is absent (CI-friendly) and when `build` is not installed.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -170,24 +171,191 @@ def test_wheel_contents_include_codex_cli_assets(built_wheel):
 
 @_requires_build
 def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
-    """Wheel installs must include the opencode qualification assets."""
+    """Wheel installs must include the opencode qualification assets and every
+    runtime data file the generator, installer and doctor read at import or
+    render time — not just the qualification-harness files."""
     with zipfile.ZipFile(built_wheel) as whl:
         names = whl.namelist()
 
+    manifest = json.loads(
+        (QUOIN_SRC / "adapters" / "opencode" / "feature-manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    supported_ids = sorted(
+        entry["id"] for entry in manifest["catalog_entries"] if entry["status"] == "supported"
+    )
+    assert supported_ids, "feature-manifest.json has no supported catalog entries"
+
     required = [
+        # qualification-harness files (pre-existing coverage)
         "quoin/data/adapters/opencode/probe_gateway.py",
         "quoin/data/adapters/opencode/fake_openai_server.py",
         "quoin/data/adapters/opencode/fixtures/scenarios.json",
         "quoin/data/adapters/opencode/README.md",
         "quoin/data/adapters/opencode/compatibility.md",
         "quoin/data/adapters/opencode/decisions.md",
+        # generator/installer/doctor runtime data
+        "quoin/data/adapters/opencode/feature-manifest.json",
+        "quoin/data/adapters/opencode/overlays.json",
+        "quoin/data/adapters/opencode/fixtures/install-cases.json",
+        "quoin/data/adapters/opencode/templates/agent.md",
+        "quoin/data/adapters/opencode/templates/command.md",
+        "quoin/data/adapters/opencode/templates/instructions.md",
+        "quoin/data/adapters/opencode/templates/skill.md",
+        "quoin/data/core/workflow/skills.json",
+        "quoin/data/core/workflow/rules.md",
+        "quoin/data/memory/format-kit.sections.json",
+        # the six allowlisted core scripts the opencode script runner exposes
+        "quoin/data/core/scripts/checkpoint_picker.py",
+        "quoin/data/core/scripts/classify_critic_issues.py",
+        "quoin/data/core/scripts/generate_discovery_map.py",
+        "quoin/data/core/scripts/handoff_validate.py",
+        "quoin/data/core/scripts/path_resolve.py",
+        "quoin/data/core/scripts/validate_artifact.py",
+        # the opencode_adapter package itself (installed package, not force-include)
+        "quoin/opencode_adapter/__init__.py",
+        "quoin/opencode_adapter/__main__.py",
+        "quoin/opencode_adapter/names.py",
+        "quoin/opencode_adapter/manifest.py",
+        "quoin/opencode_adapter/frontmatter.py",
+        "quoin/opencode_adapter/generate.py",
+        "quoin/opencode_adapter/install.py",
+        "quoin/opencode_adapter/scripts.py",
+        "quoin/opencode_adapter/doctor.py",
     ]
+    required += [
+        f"quoin/data/core/skills/{skill_id}.md" for skill_id in supported_ids
+    ]
+
     for path in required:
         assert any(name.endswith(path) for name in names), f"Missing wheel asset: {path}"
 
     assert not any(
         "adapters/opencode/" in name and (name.endswith("__pycache__") or "__pycache__/" in name or name.endswith(".pyc"))
         for name in names
+    )
+
+
+@_requires_build
+@pytest.mark.slow_fs
+def test_wheel_opencode_install_and_doctor_in_clean_venv(built_wheel, tmp_path):
+    """Install the wheel into a throwaway venv and drive the opencode CLI
+    end to end from it, outside the checkout and outside the project .venv.
+
+    This is the only test that proves the opencode adapter's runtime data
+    (templates, fixtures, manifest, core scripts, skill docs) actually
+    resolves through importlib.resources on a real pip install — the
+    contents test above only checks the zip listing.
+    """
+    checkout_status_before = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout
+
+    venv_dir = tmp_path / "venv"
+    result = subprocess.run(
+        [sys.executable, "-m", "venv", str(venv_dir)],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"venv creation failed:\n{result.stderr[:500]}")
+
+    venv_python = venv_dir / "bin" / "python"
+    venv_quoin = venv_dir / "bin" / "quoin"
+    if not venv_python.exists():
+        pytest.skip(f"venv creation did not produce {venv_python} (ensurepip likely missing)")
+
+    result = subprocess.run(
+        [
+            str(venv_python), "-m", "pip", "install",
+            "--no-index", "--no-deps", "--disable-pip-version-check",
+            str(built_wheel),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"wheel install into clean venv failed:\n{result.stderr[:500]}")
+
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    proj_dir = tmp_path / "proj"
+    proj_dir.mkdir()
+    (proj_dir / ".git").mkdir()
+
+    env = {
+        "PATH": f"{venv_dir / 'bin'}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "HOME": str(home_dir),
+        "PYTHONNOUSERSITE": "1",
+        "PIP_NO_INDEX": "1",
+    }
+
+    # The installed package resolves under the venv, not the checkout or
+    # the project .venv — proves _resolve_source_dir's Tier 1 (wheel)
+    # path is exercised, not an accidental editable-install fallback.
+    result = subprocess.run(
+        [
+            str(venv_python), "-c",
+            "import quoin, quoin.cli as c; "
+            "print(quoin.__file__); print(c._resolve_source_dir(None))",
+        ],
+        env=env,
+        cwd=str(proj_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"import probe failed:\n{result.stdout}\n{result.stderr}"
+    probe_lines = [line for line in result.stdout.splitlines() if line.strip()]
+    assert len(probe_lines) == 2, f"expected two printed paths, got: {result.stdout!r}"
+    for line in probe_lines:
+        assert str(venv_dir) in line, f"path not under the clean venv: {line}"
+
+    def run_quoin(*args: str) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [str(venv_quoin), *args],
+            env=env,
+            cwd=str(proj_dir),
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    result = run_quoin("install", "--runtime", "opencode", "--project-root", ".")
+    assert result.returncode == 0, f"install failed:\n{result.stdout}\n{result.stderr}"
+    assert (proj_dir / ".opencode" / "commands" / "quoin-plan.md").exists()
+
+    result = run_quoin("install", "--runtime", "opencode", "--project-root", ".", "--check")
+    assert result.returncode == 0, f"install --check failed:\n{result.stdout}\n{result.stderr}"
+
+    result = run_quoin("doctor", "--runtime", "opencode", "--smoke", "--project-root", ".")
+    assert result.returncode == 0, f"doctor --smoke failed:\n{result.stdout}\n{result.stderr}"
+
+    result = run_quoin("doctor", "--runtime", "opencode", "--smoke", "--project-root", ".", "--json")
+    assert result.returncode == 0, f"doctor --smoke --json failed:\n{result.stdout}\n{result.stderr}"
+    report = json.loads(result.stdout)
+    assert report["status"] == "healthy", report
+
+    result = run_quoin("opencode", "uninstall", "--project-root", ".")
+    assert result.returncode == 0, f"uninstall failed:\n{result.stdout}\n{result.stderr}"
+    assert not (proj_dir / ".opencode").exists(), "uninstall left owned files behind"
+
+    checkout_status_after = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=str(REPO),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    ).stdout
+    assert checkout_status_after == checkout_status_before, (
+        "clean-venv install/doctor/uninstall wrote something outside the temp dirs"
     )
 
 

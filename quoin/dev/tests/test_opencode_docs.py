@@ -12,6 +12,7 @@ import re
 import subprocess
 
 import _opencode_helpers as helpers
+from quoin.opencode_adapter import manifest as opencode_manifest
 
 probe = helpers.load_module(helpers.OPENCODE_DIR / "probe_gateway.py", "quoin_opencode_probe_gateway_docs")
 
@@ -21,6 +22,7 @@ DECISIONS_PATH = helpers.OPENCODE_DIR / "decisions.md"
 README_PATH = helpers.OPENCODE_DIR / "README.md"
 ADAPTERS_README_PATH = REPO_ROOT / "quoin" / "adapters" / "README.md"
 STATUS_PATH = REPO_ROOT / "quoin" / "docs" / "runtime-portability-status.md"
+PARITY_MATRIX_PATH = REPO_ROOT / "quoin" / "docs" / "runtime-parity-matrix.md"
 
 CLAIM_HEADINGS = (
     "CLI run invocation and JSON event output",
@@ -208,7 +210,8 @@ def test_documents_exist_and_are_linked():
     assert "compatibility.md" in readme
     assert "decisions.md" in readme
     adapters_readme = ADAPTERS_README_PATH.read_text(encoding="utf-8")
-    assert "OpenCode: qualification in progress" in adapters_readme
+    assert "OpenCode: generated project assets" in adapters_readme
+    assert "live runtime support is not yet verified" in adapters_readme
     assert "opencode/compatibility.md" in adapters_readme
     assert "opencode/decisions.md" in adapters_readme
 
@@ -220,12 +223,50 @@ def test_status_page_opencode_section():
     assert order.index("OpenCode") == order.index("Codex") + 1
     assert order.index("OpenCode") == order.index("Portable Core") - 1
     body = _opencode_status_section()
-    assert "qualification in progress" in body
-    assert "no runtime integration" in body
+    assert "generated project assets" in body
+    assert "no live runtime evidence" in body
+    assert "quoin install --runtime opencode" in body
+    assert "quoin doctor --runtime opencode" in body
+    assert "quoin opencode uninstall" in body
     assert "compatibility.md" in body
     assert "decisions.md" in body
     assert "installable" not in body.lower()
+    for forbidden in ("live-tested", "fully supported", "runtime-verified"):
+        assert forbidden not in body.lower()
     assert "~/." not in body
+
+
+def test_parity_matrix_opencode_column():
+    semantics_header, semantics_rows = _parity_matrix_table_rows("Workflow Semantics")
+    skill_header, skill_rows = _parity_matrix_table_rows("Migrated Skill Coverage")
+
+    assert "OpenCode" in "".join(semantics_header)
+    assert "OpenCode" in skill_header
+
+    assert len(skill_rows) == 32
+    for row in skill_rows:
+        assert len(row) == len(skill_header), row
+
+    manifest = opencode_manifest.load_manifest(REPO_ROOT / "quoin")
+    by_id = {entry["id"]: entry for entry in manifest["catalog_entries"]}
+    skill_col = skill_header.index("OpenCode")
+    for row in skill_rows:
+        skill_id = row[0].strip("`")
+        cell = row[skill_col]
+        assert "live" not in cell.lower(), (skill_id, cell)
+        entry = by_id.get(skill_id)
+        if entry is None:
+            continue
+        if entry["status"] == "supported":
+            assert cell.startswith("`%s`" % entry["opencode"]["command"]), (skill_id, cell)
+        elif entry["status"] == "documentation-only":
+            assert cell.startswith("documentation-only"), (skill_id, cell)
+        elif entry["status"] == "unsupported":
+            assert cell.startswith("unsupported:"), (skill_id, cell)
+
+    assert len(semantics_rows) == 17
+    for row in semantics_rows:
+        assert len(row) == len(semantics_header), row
 
 
 def test_compatibility_pinned_release():
@@ -353,6 +394,48 @@ _FORBIDDEN_PATTERNS = (
 )
 
 
+def _parity_matrix_sections():
+    text = PARITY_MATRIX_PATH.read_text(encoding="utf-8")
+    return _sections(text, 2)
+
+
+def _parity_matrix_table_rows(heading):
+    section = _parity_matrix_sections()[heading]
+    header = None
+    rows = []
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if header is None:
+            header = cells
+            continue
+        if set("".join(cells)) <= {"-"}:
+            continue
+        rows.append(cells)
+    return header, rows
+
+
+def _parity_matrix_opencode_cells():
+    """OpenCode-column cells from both parity matrix tables, keyed by row id.
+
+    Not swept by `_shipped_files()` (that walker is scoped to
+    `quoin/adapters/opencode/`), so this file's OpenCode prose needs its own
+    entry in the clean-content/model-id/hostname corpus.
+    """
+    cells = {}
+    for heading in ("Workflow Semantics", "Migrated Skill Coverage"):
+        header, rows = _parity_matrix_table_rows(heading)
+        col = header.index("OpenCode") if "OpenCode" in header else next(
+            i for i, name in enumerate(header) if name.startswith("OpenCode")
+        )
+        for row in rows:
+            key = row[0]
+            cells["<parity matrix: %s / %s>" % (heading, key)] = row[col]
+    return cells
+
+
 def _clean_content_corpus():
     texts = {}
     for rel in _shipped_files():
@@ -360,6 +443,7 @@ def _clean_content_corpus():
             texts[rel] = (REPO_ROOT / rel).read_text(encoding="utf-8")
     texts["<status page OpenCode section>"] = _opencode_status_section()
     texts["<adapters README OpenCode bullet>"] = _opencode_adapters_bullet()
+    texts.update(_parity_matrix_opencode_cells())
     return texts
 
 

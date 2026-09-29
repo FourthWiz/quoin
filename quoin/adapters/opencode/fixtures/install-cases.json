@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "cases": {
+    "clean": {
+      "description": "An empty project with a single ordinary file; the installer has nothing to conflict with.",
+      "files": {
+        "README.md": "# Demo project\n\nA plain project used only to test a clean install.\n"
+      }
+    },
+    "unowned-command": {
+      "description": "A project that already has a hand-written file at one of the installer's owned command paths.",
+      "files": {
+        ".opencode/commands/quoin-plan.md": "# My own plan command\n\nNotes I wrote myself; the installer did not create this file.\n"
+      }
+    },
+    "codex-agents-md": {
+      "description": "A project with a root AGENTS.md in the Codex generator's own style, to check the two adapters coexist.",
+      "files": {
+        "AGENTS.md": "# AGENTS.md\n\nRepo-local guidance for coding agents in this project.\n\n## Working rules\n\n- Read the task spec before starting.\n- Keep changes scoped to the task at hand.\n- Run the project's own test suite before finishing.\n"
+      }
+    },
+    "user-configs": {
+      "description": "A project with its own root and repo-local OpenCode config files, each holding a user key the installer must not touch.",
+      "files": {
+        "opencode.json": "{\n  \"$schema\": \"https://opencode.ai/config.json\",\n  \"theme\": \"dark\",\n  \"instructions\": [\"./AGENTS.md\"]\n}\n",
+        ".opencode/opencode.json": "{\n  \"model\": \"user-default/user-model\"\n}\n"
+      }
+    },
+    "conflicting-jsonc": {
+      "description": "A project whose repo-local config is a user-owned .jsonc file, which conflicts with the installer's own JSONC output.",
+      "files": {
+        ".opencode/opencode.jsonc": "// user settings\n{\n  \"theme\": \"light\",\n}\n"
+      }
+    },
+    "workflow-and-secrets": {
+      "description": "A project with an artifact root holding memory and task files, plus a .env file, none of which the installer or uninstaller may touch.",
+      "files": {
+        "{{ARTIFACT_ROOT}}/memory/lessons-learned.md": "# Lessons learned\n\nPlaceholder entry used only by the install fixture.\n",
+        "{{ARTIFACT_ROOT}}/demo-task/notes.md": "Demo task notes, unrelated to the OpenCode installer.\n",
+        ".env": "DEMO_API_KEY=placeholder-value\n"
+      }
+    }
+  }
+}
