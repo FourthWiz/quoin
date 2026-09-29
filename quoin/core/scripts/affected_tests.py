@@ -797,6 +797,48 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/schemas/runtime-config.schema.json",
         "quoin/dev/tests/test_opencode_schema_jsonschema_crosscheck.py",
     ),
+    # The native configuration subset schema and the compiled reference
+    # documents: a change re-runs the schema, compiler and closure tests.
+    (
+        "quoin/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
+        "quoin/dev/tests/test_opencode_native_schema.py",
+    ),
+    (
+        "quoin/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
+        "quoin/dev/tests/test_opencode_schema_check.py",
+    ),
+    (
+        "quoin/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
+        "quoin/dev/tests/test_opencode_schema_jsonschema_crosscheck.py",
+    ),
+    (
+        "quoin/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
+        "quoin/dev/tests/test_opencode_compiler.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/work.opencode.json",
+        "quoin/dev/tests/test_opencode_compiler.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/work.opencode.json",
+        "quoin/dev/tests/test_opencode_native_schema.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/work.opencode.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/personal.opencode.json",
+        "quoin/dev/tests/test_opencode_compiler.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/personal.opencode.json",
+        "quoin/dev/tests/test_opencode_native_schema.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/personal.opencode.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
     (
         "quoin/adapters/opencode/fixtures/runtime-config/cases.json",
         "quoin/dev/tests/test_opencode_runtime_config.py",
@@ -1068,6 +1110,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/adapters/opencode/compatibility.md",
         "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
+        "quoin/adapters/opencode/compatibility.md",
+        "quoin/dev/tests/test_opencode_native_schema.py",
     ),
     (
         "quoin/adapters/opencode/decisions.md",
