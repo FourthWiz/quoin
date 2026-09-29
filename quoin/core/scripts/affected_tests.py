@@ -755,6 +755,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # here in the same change; the self-check test in test_probe_gateway.py
     # enforces that rule.
     (
+        "quoin/adapters/opencode/feature-manifest.json",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
+        "quoin/adapters/opencode/feature-manifest.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
         "quoin/adapters/opencode/fixtures/scenarios.json",
         "quoin/dev/tests/test_fake_openai_server.py",
     ),
@@ -765,6 +773,18 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/adapters/opencode/fixtures/scenarios.json",
         "quoin/dev/tests/test_probe_gateway_tool_loop.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/install-cases.json",
+        "quoin/dev/tests/test_opencode_install.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/install-cases.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        ".github/workflows/adapter-check.yml",
+        "quoin/dev/tests/test_opencode_manifest.py",
     ),
     # Bare filename match: this row also matches any project's own
     # top-level pyproject.toml once this script is deployed there, since
@@ -786,12 +806,20 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_opencode_docs.py",
     ),
     (
+        "quoin/adapters/opencode/compatibility.md",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
         "quoin/adapters/opencode/decisions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),
     (
         "quoin/adapters/opencode/README.md",
         "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/README.md",
+        "quoin/dev/tests/test_opencode_manifest.py",
     ),
     (
         "quoin/adapters/README.md",
@@ -857,6 +885,117 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/docs/hooks-guide.md",
         "quoin/dev/tests/test_hook_stanza_count_parity.py",
+    ),
+    (
+        "quoin/docs/runtime-parity-matrix.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/docs/runtime-parity-matrix.md",
+        "quoin/dev/tests/test_runtime_portability_docs.py",
+    ),
+    (
+        "quoin/core/workflow/skills.json",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
+        "quoin/adapters/opencode/feature-manifest.json",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/overlays.json",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/overlays.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/command.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/command.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/skill.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/skill.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/agent.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/agent.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/instructions.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/instructions.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    # The generator reads rules.md, skills.json and every supported bundle
+    # contract at render time (`generate.load_inputs`), so an edit to any of
+    # them needs to select the generator's own test file too.
+    (
+        "quoin/core/workflow/rules.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/workflow/skills.json",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/architect.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/checkpoint.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/continue_work.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/critic.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/discover.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/end_of_task.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/gate.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/implement.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/plan.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/review.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    (
+        "quoin/core/skills/thorough_plan.md",
+        "quoin/dev/tests/test_opencode_generate.py",
     ),
 )
 

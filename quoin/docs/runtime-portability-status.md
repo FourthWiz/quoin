@@ -106,14 +106,27 @@ Status: repo-local setup/readiness only; no verified global install target.
 
 ## OpenCode
 
-Status: qualification in progress; no runtime integration.
+Status: generated project assets, offline-verified; no live runtime evidence.
 
+- `quoin install --runtime opencode` (`--check` for a dry-run diff) generates
+  project-local commands, skills and role agents for the manifest-supported
+  subset of the migrated skill catalog, and `quoin opencode uninstall`
+  reverses it, removing only what it owns.
+- `quoin doctor --runtime opencode` checks the install against the real host
+  filesystem and environment by default; `--smoke` is the offline mode —
+  it re-renders and validates the catalog without touching host state — and
+  `--json` prints a machine-readable report. Host-mode checks also warn about
+  a legacy skills folder OpenCode's own discovery may pick up under the home
+  directory.
+- Every skill in the catalog is classified in
+  `quoin/adapters/opencode/feature-manifest.json` as supported,
+  documentation-only, or unsupported for OpenCode.
 - Gateway qualification tooling lives in `quoin/adapters/opencode/` (probe and
   offline fake provider).
 - Pinned release and claim status in `quoin/adapters/opencode/compatibility.md`.
 - Open maintainer decisions in `quoin/adapters/opencode/decisions.md`.
-- There is no OpenCode installer, no generated OpenCode assets, and no global
-  OpenCode path assumed.
+- There is no global OpenCode installer or global OpenCode path assumed; all
+  generated assets are project-local.
 
 ## Portable Core
 

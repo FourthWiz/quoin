@@ -8,6 +8,6 @@ Current adapter status:
 
 - Claude Code: supported today through the existing `quoin/install.sh`, `quoin/CLAUDE.md`, and `quoin/skills/` layout.
 - Codex: scaffolded through repo-local instructions and documentation.
-- OpenCode: qualification in progress. No runtime integration exists yet; see `opencode/compatibility.md` (pinned upstream release and verified claims) and `opencode/decisions.md` (open maintainer decisions).
+- OpenCode: generated project assets (`quoin install --runtime opencode`, `quoin doctor --runtime opencode`, `quoin opencode uninstall`), statically checked and offline smoke-tested; live runtime support is not yet verified. See `opencode/README.md`, `opencode/compatibility.md` and `opencode/decisions.md`.
 
 Do not duplicate shared memory files, scripts, or skill templates into adapter folders until the shared core has been split from runtime overlays.
