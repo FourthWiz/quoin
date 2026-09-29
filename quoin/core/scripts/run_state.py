@@ -205,6 +205,42 @@ def _notes_path(memory_dir: Path, task: str) -> Path:
     return memory_dir / f"run-notes-{task}.md"
 
 
+_TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _valid_task(task: str) -> bool:
+    if not isinstance(task, str) or not _TASK_RE.match(task):
+        return False
+    return ".." not in task
+
+
+def append_note(memory_dir: Path, task: str, text: str, max_bytes: int | None = None) -> bool:
+    """Append a single auto-resume note block to ``run-notes-{task}.md``.
+
+    Standalone from the run-state record: this never reads or writes
+    ``run-state-{task}.json``, only the companion notes file, so an
+    auto-resume continuation can leave a durable trail without touching the
+    resume record `/run` owns. ``text`` goes through the same ``_sanitize``
+    pass the record's fields use, so it can never forge an extra line in the
+    notes file. Returns ``True`` once the append was attempted (best-effort
+    — a write failure is warned to stderr, not raised); returns ``False``
+    without attempting anything for an invalid ``task``.
+    """
+    if not _valid_task(task):
+        return False
+    try:
+        memory_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        print(f"[run_state] WARNING: could not create {memory_dir}: {exc}", file=sys.stderr)
+        return True
+    block = f"## {datetime.now(tz=timezone.utc).isoformat()} — auto-resume\n- {_sanitize(text)}\n\n"
+    budget = max_bytes if max_bytes is not None else int(
+        os.environ.get("QUOIN_RUN_NOTES_MAX_BYTES", "262144")
+    )
+    _append_notes(_notes_path(memory_dir, task), block, budget)
+    return True
+
+
 def _append_notes(notes_path: Path, block: str, max_bytes: int) -> None:
     """Append ``block`` to ``notes_path``, rotating to a bounded two-file
     footprint (T-04) when the existing file is already over budget. Best
@@ -516,6 +552,7 @@ def main(argv: list[str] | None = None) -> int:
     mode.add_argument("--write", action="store_true")
     mode.add_argument("--clear", action="store_true")
     mode.add_argument("--read", action="store_true")
+    mode.add_argument("--note", default=None, metavar="TEXT")
 
     parser.add_argument("--project-root", required=True, metavar="PATH", dest="project_root")
     parser.add_argument("--task", required=True, metavar="NAME")
@@ -556,6 +593,10 @@ def main(argv: list[str] | None = None) -> int:
             return _do_clear(args)
         if args.read:
             return _do_read(args)
+        if args.note is not None:
+            memory_dir = Path(args.project_root) / ".workflow_artifacts" / "memory"
+            append_note(memory_dir, args.task, args.note)
+            return 0
         # No mode selected: nothing to do, fail-open.
         return 0
     except Exception as exc:  # noqa: BLE001
