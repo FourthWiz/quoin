@@ -105,3 +105,8 @@ added = "2026-09-27"
 id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_red_record_with_matching_run_identity_still_does_not_authorise"
 reason = "fails at the branch base too; unrelated to the OpenCode adapter"
 added = "2026-09-27"
+
+[[entry]]
+id = "quoin/dev/tests/test_handoff_measure.py::test_growth_bound_case_u_capped_model_caps_at_deleted_bytes"
+reason = "macOS ENAMETOOLONG in an unrelated long-path fixture; fails at the branch base too"
+added = "2026-09-29"
