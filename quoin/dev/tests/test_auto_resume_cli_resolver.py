@@ -59,7 +59,7 @@ case "$mode" in
     exit 0
     ;;
   grandchild)
-    ( sleep 30 & )
+    ( sleep 30 & echo $! > "$FAKE_PIDFILE" )
     sleep 30
     exit 0
     ;;
@@ -290,12 +290,33 @@ def test_probe_timeout_bounded_and_within_wall_clock(ar, tmp_path, monkeypatch):
 
 
 def test_probe_timeout_grandchild_process_group_killed(ar, tmp_path, monkeypatch):
+    """D-05/R-08: `killpg` must kill the whole process group the probe
+    started, not just its own pid — otherwise a backgrounded grandchild
+    (like the fake interpreter's own `sleep 30 &`) outlives the timeout."""
+    pidfile = tmp_path / "grandchild.pid"
+    monkeypatch.setenv("FAKE_PIDFILE", str(pidfile))
     monkeypatch.setenv("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", "250")
     start = time.monotonic()
     res = _resolve_with_mode(ar, tmp_path, monkeypatch, "grandchild", caller="start")
     elapsed = time.monotonic() - start
     assert res["kind"] == "probe-timeout"
     assert elapsed < 2.0
+
+    # Give the grandchild a moment to have written its pid, then confirm
+    # it is actually gone — a dropped killpg would leave it running for
+    # the full 30s `sleep`.
+    for _ in range(20):
+        if pidfile.exists():
+            break
+        time.sleep(0.05)
+    assert pidfile.exists(), "fake interpreter never wrote its grandchild pid"
+    grandchild_pid = int(pidfile.read_text().strip())
+    try:
+        os.kill(grandchild_pid, 0)
+    except ProcessLookupError:
+        pass  # gone, as expected
+    else:
+        pytest.fail(f"grandchild pid {grandchild_pid} is still alive after the probe timeout")
 
 
 def test_handoff_caller_retries_once_then_probe_timeout(ar, tmp_path, monkeypatch):
