@@ -184,7 +184,7 @@ def _make_fake_src(tmp: Path) -> Path:
     hooks_dir = tmp / "hooks"
     hooks_dir.mkdir(parents=True)
     for fname in ("userpromptsubmit.sh", "precompact.sh", "postcompact.sh",
-                  "sessionstart.sh", "sessionend.sh", "_lib.sh", "worktreecreate.sh"):
+                  "sessionstart.sh", "sessionend.sh", "_lib.sh", "worktreecreate.sh", "stop.sh"):
         (hooks_dir / fname).write_text("#!/bin/bash\n")
     return tmp
 
@@ -231,7 +231,7 @@ def test_deploy_hooks_project_mode_settings_in_project(tmp_path, monkeypatch):
     assert settings_path.exists()
     settings = json.loads(settings_path.read_text())
     hooks = settings.get("hooks", {})
-    # All 8 stanzas registered in project settings
+    # All 9 stanzas registered in project settings
     assert len(hooks.get("UserPromptSubmit", [])) == 1
     assert len(hooks.get("SessionStart", [])) == 3
     assert len(hooks.get("SessionEnd", [])) == 1

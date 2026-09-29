@@ -201,7 +201,7 @@ class TestAutocompactEnvInstall:
         deploy_hooks(QUOIN_SRC, dest, autocompact_pct=75)
         settings = json.loads((dest / "settings.json").read_text())
         stanza_count = sum(len(v) for v in settings["hooks"].values())
-        assert stanza_count == 8
+        assert stanza_count == 9
         assert "skillOverrides" in settings
         assert "deny" in settings["permissions"]
 

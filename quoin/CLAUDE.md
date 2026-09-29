@@ -396,7 +396,7 @@ The 10 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block
 
 ### Hooks deployed by quoin
 
-`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers 8 (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`. `userpromptsubmit.sh` enforces context-utilization advisory-only and idle-session detection; `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing to `recent-sessions.md` (`<cwd>/.workflow_artifacts/memory/recent-sessions.md`, read by `/continue_work`).
+`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers 9 (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`, Stop/`*`. `userpromptsubmit.sh` enforces context-utilization advisory-only and idle-session detection; `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing `<cwd>/.workflow_artifacts/memory/recent-sessions.md` (read by `/continue_work`).
 
 The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink form compaction continuity: `__QUOIN_HOME__/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope, installer flags only) is the only place quoin sets a non-`QUOIN_*` var: `quoin/docs/hooks-guide.md`.
 

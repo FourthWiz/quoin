@@ -282,6 +282,7 @@ _QUOIN_HOOK_BASENAMES = frozenset({
     "postcompact.sh",
     "sessionstart.sh",
     "sessionend.sh",
+    "stop.sh",
 })
 
 
@@ -763,7 +764,7 @@ def deploy_hooks(
     # sources a not-yet-updated _lib.sh would emit "command not found" on
     # stderr and report no active run while one is live. Copying _lib.sh
     # first closes that window; it never depends on the other hook scripts.
-    hook_scripts = ("_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "worktreecreate.sh")
+    hook_scripts = ("_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "worktreecreate.sh", "stop.sh")
     src_hooks = source_dir / "hooks"
     dst_hooks = dest_root / "hooks"
     dst_hooks.mkdir(parents=True, exist_ok=True)
@@ -778,7 +779,7 @@ def deploy_hooks(
         _copy_with_substitution(src, dst, dest_root)
         print(f"Copied hook {fname} to {dest_root}/hooks/")
 
-    # Merge 8 hook stanzas into settings.json using Python json module
+    # Merge 9 hook stanzas into settings.json using Python json module
     # settings.json lives inside dest_root (~/.claude/settings.json)
     settings_path = dest_root / "settings.json"
 
@@ -840,6 +841,7 @@ def deploy_hooks(
     _append_stanza("SessionStart",     "compact", f"{hooks_dir}/sessionstart.sh",     5)
     _append_stanza("SessionEnd",       "*",       f"{hooks_dir}/sessionend.sh",       5)
     _append_stanza("WorktreeCreate",   "*",       f"{hooks_dir}/worktreecreate.sh",   10)
+    _append_stanza("Stop",             "*",       f"{hooks_dir}/stop.sh",             10)
 
     # Merge rm -rf / rm -fr deny rules into permissions.deny (idempotent).
     # These prevent accidental recursive deletes while still allowing plain rm.

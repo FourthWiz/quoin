@@ -1,6 +1,6 @@
 # Hooks deployed by quoin — full reference table
 
-`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers eight (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`:
+`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers nine (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`:
 
 | Event | Matcher | Script | Timeout | Contract |
 |-------|---------|--------|---------|----------|
@@ -12,6 +12,7 @@
 | SessionStart | `compact` | `sessionstart.sh` | 5s | Dedicated early-exit branch (IVG-258 S-4), reached before the startup/resume banner body; on a fresh active run-state record matching the session, emits exactly one JSON object carrying `additionalContext` (always — an active run's task/phase/step, next action, and run-notes path) and `initialUserMessage` (echoing the record's `resume_command` verbatim, when present) — the dual re-entry channel; silent no-op (no stdout, exit 0) when no matching record is found, including a `session_id` mismatch |
 | SessionEnd | `*` | `sessionend.sh` | 5s | EOD nudge if `end_of_day_due: yes` |
 | WorktreeCreate | `*` | `worktreecreate.sh` | 10s | Nested-git worktree isolation for source-mutating skills. Reads the dispatch sidecar; when a single nested repo resolves and the harness omits path/branch, self-generates `quoin/wt-<ts>-<pid>` + a worktree under `${TMPDIR:-/tmp}/quoin-worktrees` (outside the Drive tree; project `.worktrees/` fallback) and runs `git worktree add` (bounded by `QUOIN_SUBPROCESS_TIMEOUT`), printing the path to stdout. Fail-OPEN (exits 0, no stdout on any skip/error); audit log records `selfgen=1`. Opt-out: `QUOIN_WORKTREE_SELFGEN=0`. |
+| Stop | `*` | `stop.sh` | 10s | Continues an interrupted /run in the session that armed it. Two shell early exits (no memory dir, no arm file) before any Python start; decision in `scripts/auto_resume.py`. Fail-OPEN. Opt-out: `QUOIN_AUTO_RESUME=0`. |
 
 All hooks fail-OPEN (exit 0 on any error). jq is a soft-required dependency (`brew install jq`). Tunable constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, `QUOIN_PANIC_BPS`, etc.) use `${QUOIN_*:-default}` expansion; thresholds use integer basis-points arithmetic (e.g., `8500` = 85.00%, `9000` = 90.00%).
 
@@ -39,6 +40,10 @@ Skill-side sweep knobs (read inline in `cleanup/SKILL.md`, NOT hook constants �
 
 Script-side knobs (read inline by a `core/scripts/` script, neither a hook constant nor skill-side — do NOT add to `_lib.sh`):
 - `QUOIN_RUN_NOTES_MAX_BYTES` (default 262144 = 256 KiB) — rotation cap for `run-notes-<task>.md`, read inline at `run_state.py`.
+- `QUOIN_AUTO_RESUME` (`0` disables; default on) — read inline at `auto_resume.py`; every path behaves as today and the helper never writes a halt.
+- `QUOIN_AUTO_RESUME_MAX` (default 10, clamp 1..100) — bound on continuations per span.
+- `QUOIN_AUTO_RESUME_IDLE_SECS` (default 900, min 60) — transcript-idle threshold for a `gone` owner.
+- `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6, clamp 1..7) — in-session block count at which the Stop hook attempts a hand-off.
 
 **Opt-in platform-threshold delegation.** `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and `CLAUDE_CODE_AUTO_COMPACT_WINDOW` are **not** `QUOIN_*` knobs — they are read natively by Claude Code, not by any quoin hook — and are never written by default. See `quoin/docs/hooks-guide.md` for the full opt-in contract.
 
