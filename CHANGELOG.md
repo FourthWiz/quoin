@@ -20,7 +20,7 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Changed
 
-- **`quoin run --autonomous` gains `--halt-on-abort`, a single-driver lock, and a result file** (v0.32.0). Under the new flag, a non-SUCCESS terminal state — including a caught `SIGTERM`/`SIGINT` — writes a halt sentinel and a result file the launcher can read back, instead of leaving a detached run silently stuck. A lock file now also refuses a second concurrent `quoin run` for the same task (a new exit code, 3) rather than letting two supervisors race. Behavior without the flag is unchanged.
+- **`quoin run --autonomous` gains `--halt-on-abort`, a single-driver lock, and a result file** (v0.33.0). Under the new flag, a non-SUCCESS terminal state — including a caught `SIGTERM`/`SIGINT` — writes a halt sentinel and a result file the launcher can read back, instead of leaving a detached run silently stuck. A lock file now also refuses a second concurrent `quoin run` for the same task (a new exit code, 3) rather than letting two supervisors race. Behavior without the flag is unchanged.
 - **`/sleep` and `/cleanup` now run on Sonnet.** Haiku skipped steps and produced inconsistent promote/forget judgment during memory consolidation; both skills also now carry the Sonnet minimum-tier guard alongside the rest of the Sonnet-tier roster.
 - **`/pr` no longer adds a Claude Code attribution footer or session link to PR descriptions** (v0.29.6). The PR body template dropped the `Generated with Claude Code` footer, and Step 4 now tells the agent to disregard a runtime system-reminder that asks it to append tool or agent attribution to a PR description. The clean-authored-content rule and the runtime-neutral `/pr` doc were updated to match.
 
