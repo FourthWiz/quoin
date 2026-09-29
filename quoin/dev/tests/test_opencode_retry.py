@@ -88,7 +88,7 @@ def test_failure_validation():
 
 @pytest.mark.parametrize(
     "header,expected",
-    [("7", 7.0), (" 7 ", 7.0), ("0", 0.0), ("120", 30.0), ("9" * 5000, 30.0)],
+    [("7", 7.0), (" 7 ", 7.0), ("0", 0.0), ("120", 30.0), ("9" * 5000, 30.0), ("007", 7.0), ("0" * 16, 0.0), ("0" * 20 + "5", 5.0)],
 )
 def test_retry_after_seconds_are_honoured_without_jitter_and_capped(header, expected):
     for jitter in (0.0, 0.999):
@@ -129,6 +129,19 @@ def test_full_jitter_bounds(attempt):
 def test_the_cap_is_reached_at_high_attempts():
     got = policy(max_retries=20, jitter=1.0).decide(12, 0.0, Failure("connect"))
     assert got == Retry(30.0)
+
+
+@pytest.mark.parametrize("attempt", [1024, 1025, 1026, 5000])
+def test_huge_attempt_counts_stay_bounded(attempt):
+    got = policy(max_retries=5000, jitter=1.0).decide(attempt, 0.0, Failure("connect"))
+    assert got == Retry(30.0)
+
+
+def test_a_large_configured_limit_never_overflows():
+    pol = RetryPolicy.from_limits({"max_transient_retries": 5000}, rng=lambda: 1.0)
+    for attempt in (63, 64, 1025, 5000):
+        assert pol.decide(attempt, pol.start(), Failure("timeout")) == Retry(30.0)
+    assert pol.decide(5001, pol.start(), Failure("timeout")) == GiveUp("attempts-exhausted")
 
 
 def test_base_and_cap_are_configurable():

@@ -403,3 +403,39 @@ def test_default_writes_keep_their_previous_rules(tmp_path):
     group = _dir(tmp_path / "g", 0o775)
     jsonio.write_private_atomic(group / "f.json", b"1")
     assert (group / "f.json").read_bytes() == b"1"
+
+
+def test_ensure_private_directory_checks_every_ancestor(tmp_path):
+    top = _dir(tmp_path / "top", 0o777)
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        jsonio.ensure_private_directory(top / "mid" / "leaf")
+    assert not (top / "mid").exists()
+    inner = top / "inner"
+    inner.mkdir(mode=0o700)
+    os.chmod(inner, 0o700)
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        jsonio.ensure_private_directory(inner)
+    os.chmod(top, 0o755)
+    jsonio.ensure_private_directory(inner)
+
+
+def test_ensure_private_directory_refuses_an_existing_directory_with_a_wrong_mode(tmp_path):
+    wrong = _dir(tmp_path / "wrong", 0o722)
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        jsonio.ensure_private_directory(wrong / "child")
+
+
+def test_a_symlinked_ancestor_cannot_route_around_the_chain_check(tmp_path):
+    loose = _dir(tmp_path / "loose", 0o777)
+    real = loose / "real"
+    real.mkdir(mode=0o700)
+    os.chmod(real, 0o700)
+    home = _dir(tmp_path / "home", 0o700)
+    os.symlink(str(real), str(home / "link"))
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        jsonio.write_private_atomic(home / "link" / "sub" / "f.json", b"x", private_parent=True)
+    with pytest.raises(jsonio.UnsafeDirectoryError):
+        jsonio.ensure_private_directory(home / "link" / "sub")
+    assert not (real / "sub").exists()
+    os.chmod(loose, 0o755)
+    jsonio.ensure_private_directory(home / "link" / "sub")

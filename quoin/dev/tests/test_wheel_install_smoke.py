@@ -364,8 +364,8 @@ def test_wheel_opencode_install_and_doctor_in_clean_venv(built_wheel, tmp_path):
     # bytecode there (the installer may already have compiled it).
     result = subprocess.run(
         [
-            str(venv_python), "-B", "-c",
-            "import os; "
+            str(venv_python), "-c",
+            "import os, sys; assert not sys.dont_write_bytecode; "
             "from quoin.opencode_adapter import paths, probe_cli; "
             "snap = lambda: sorted(os.path.join(r, n) for r, d, f in os.walk(str(paths.adapter_data_dir())) for n in d + f); "
             "before = snap(); mod = probe_cli.load_probe_module(); assert callable(mod.execute); "

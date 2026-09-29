@@ -210,8 +210,17 @@ def _check_chain(directory: Path) -> None:
     ancestor) up to the filesystem root, must belong to the current user or
     to root and must not be writable by group or others, unless it is
     sticky. Anyone who can write to an ancestor could otherwise swap the
-    directory the files are trusted in."""
-    probe = Path(os.path.abspath(str(directory)))
+    directory the files are trusted in. Both the lexical path and its
+    symlink-resolved form are walked, so a symlinked ancestor cannot route
+    the check around a loosely protected real directory."""
+    lexical = os.path.abspath(str(directory))
+    _check_chain_of(Path(lexical))
+    resolved = os.path.realpath(lexical)
+    if resolved != lexical:
+        _check_chain_of(Path(resolved))
+
+
+def _check_chain_of(probe: Path) -> None:
     while not probe.exists():
         if probe.parent == probe:
             break

@@ -195,6 +195,7 @@ def test_invalid_fixtures_print_no_secret(case, tmp_path, monkeypatch, capsys, s
         captured = capsys.readouterr()
         text = captured.out + captured.err
         assert code in (0, 1, 2), case["id"]
+        assert text.strip(), (case["id"], sub)
         for form in helpers.secret_forms(secret) + list(SHAPES.values()):
             assert form not in text, (case["id"], sub)
 

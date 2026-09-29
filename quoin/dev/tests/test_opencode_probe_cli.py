@@ -187,6 +187,25 @@ def test_the_secret_really_reaches_the_gateway(box, server):
     assert requests and all(r["auth_matches_expected"] is True for r in requests)
 
 
+def test_the_secret_travels_only_through_the_probe_environment(box):
+    module = probe_cli.load_probe_module()
+    seen = {}
+    real = module.execute
+
+    def spy(config, env, **kwargs):
+        seen["credential_env"] = config.credential_env
+        seen["env_keys"] = sorted(env)
+        seen["config_text"] = repr(config)
+        return real(config, env, **kwargs)
+
+    with mock.patch.object(module, "execute", spy):
+        box.call()
+    assert seen["credential_env"] == probe_cli.PROBE_ENV_NAME
+    assert seen["env_keys"] == [probe_cli.PROBE_ENV_NAME]
+    for form in helpers.secret_forms(SECRET):
+        assert form not in seen["config_text"]
+
+
 def test_model_selects_a_non_default_model(box, server):
     assert box.call(model="other-model") == 0
     assert paths.qualification_path("other-model", box.env, box.home).is_file()
@@ -422,12 +441,14 @@ def test_loading_leaves_only_the_private_module_name():
     assert probe_cli.load_probe_module() is module  # cached
 
 
-def test_loading_writes_no_bytecode_next_to_the_script():
+def test_loading_writes_no_bytecode_next_to_the_script(monkeypatch):
     def pycaches():
         return sorted(str(p) for p in DATA_DIR.rglob("__pycache__"))
 
     before = pycaches()
     probe_cli._LOADED.clear()
+    # Bytecode writing is on here, so only the loader's own guard keeps it out.
+    monkeypatch.setattr(sys, "dont_write_bytecode", False)
     probe_cli.load_probe_module()
     assert pycaches() == before == []
 

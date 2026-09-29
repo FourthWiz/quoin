@@ -29,6 +29,7 @@ GIVE_UP_REASONS = (
 
 _DELTA_SECONDS = re.compile(r"[0-9]+")
 _MAX_DIGITS = 12
+_MAX_EXPONENT = 62
 
 
 def _is_int(value: object) -> bool:
@@ -169,7 +170,7 @@ class RetryPolicy:
             return GiveUp("attempts-exhausted")
         delay = self._retry_after(failure)
         if delay is None:
-            ceiling = min(self.cap, self.base * 2 ** (attempt - 1))
+            ceiling = min(self.cap, self.base * 2.0 ** min(attempt - 1, _MAX_EXPONENT))
             delay = self.rng() * ceiling
         if self.max_elapsed is not None:
             elapsed = self.clock() - started_at
@@ -183,7 +184,8 @@ class RetryPolicy:
             return None
         text = text.strip()
         if _DELTA_SECONDS.fullmatch(text):
-            value = float(int(text)) if len(text) <= _MAX_DIGITS else float("inf")
+            digits = text.lstrip("0") or "0"
+            value = float(int(digits)) if len(digits) <= _MAX_DIGITS else float("inf")
             return min(value, self.cap)
         try:
             when = parsedate_to_datetime(text)
