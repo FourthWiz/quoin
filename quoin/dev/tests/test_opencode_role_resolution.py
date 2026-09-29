@@ -31,6 +31,18 @@ from quoin.opencode_adapter.errors import ConfigErrors
 from quoin.opencode_adapter.generate import ROLES
 from quoin.opencode_adapter.qualification import QualificationResult
 from quoin.opencode_adapter.roles import AUXILIARY, AllowUnqualifiedRefused, resolve_all
+from _opencode_merge_helpers import (
+    ALLOWED_ENV_READS,
+    COMBINATIONS,
+    MANAGEDS,
+    NOW,
+    PROFILES,
+    PROJECTS,
+    Outcome,
+    probe_module,
+    run_pipeline,
+    write_probe_records,
+)
 from test_opencode_runtime_config import RecordingEnv, run_case
 
 SRC_DIR = helpers.SOURCE_DIR.parent / "src" / "quoin" / "opencode_adapter"
@@ -397,88 +409,6 @@ def test_roles_imports_are_limited():
 # Whole-pipeline matrix: profile x project x managed, through real files
 # =============================================================================
 
-NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc)
-PROFILES = {"work": PROFILE_WORK, "minimal": PROFILE_MINIMAL, "personal": PROFILE_PERSONAL}
-PROJECTS = {
-    "none": None,
-    "work": PROJECT_WORK,
-    "narrow": PROJECT_WORK_NARROW,
-    "personal": PROJECT_PERSONAL,
-    "unclassified": "valid/project-unclassified.json",
-}
-MANAGEDS = {"none": None, "managed-work": MANAGED_WORK, "managed-strict": MANAGED_STRICT}
-ALLOWED_ENV_READS = {"XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY"}
-
-_PROBE = {}
-
-
-def probe_module():
-    if "m" not in _PROBE:
-        _PROBE["m"] = helpers.load_module(
-            helpers.OPENCODE_DIR / "probe_gateway.py", "probe_gateway_role_matrix"
-        )
-    return _PROBE["m"]
-
-
-# Outcome literals: ("load-error", CLASS), ("merge-error", CLASS) or
-# ("ok", effective_providers, excluded_providers, classification, launchable,
-# reason the second-model group is blocked for, or None).
-# "Second-model group": for the work profile the planner-side roles and the
-# auxiliaries, which use work-planner on the second gateway; for the minimal
-# and personal profiles every role, which all use the single default model.
-DANGLING = ("load-error", "dangling-reference")
-_W2, _W1 = ("corp-gw", "corp-gw-b"), ("corp-gw",)
-COMBINATIONS = {
-    # ---- profile work
-    ("work", "none", "none"): ("ok", _W2, {}, "work", False, None),
-    ("work", "none", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("work", "none", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
-    ("work", "work", "none"): ("ok", _W1, {"corp-gw-b": "not-allowed"}, "work", False, "not-allowed"),
-    ("work", "work", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("work", "work", "managed-strict"): ("ok", _W1, {"corp-gw-b": "not-allowed"}, "work", False, "not-allowed"),
-    ("work", "narrow", "none"): ("ok", _W1, {"corp-gw-b": "host-not-allowed"}, "work", False, "host-not-allowed"),
-    ("work", "narrow", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("work", "narrow", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
-    ("work", "personal", "none"): ("ok", _W2, {}, "work", True, None),
-    ("work", "personal", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("work", "personal", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
-    ("work", "unclassified", "none"): ("ok", _W2, {}, "work", False, None),
-    ("work", "unclassified", "managed-work"): ("ok", _W1, {"corp-gw-b": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("work", "unclassified", "managed-strict"): ("ok", _W1, {"corp-gw-b": "denied"}, "work", False, "denied"),
-    # ---- profile minimal
-    ("minimal", "none", "none"): ("ok", ("local-gw",), {}, "work", False, None),
-    ("minimal", "none", "managed-work"): ("ok", (), {"local-gw": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("minimal", "none", "managed-strict"): ("ok", (), {"local-gw": "host-not-allowed"}, "work", False, "host-not-allowed"),
-    ("minimal", "work", "none"): DANGLING,
-    ("minimal", "work", "managed-work"): DANGLING,
-    ("minimal", "work", "managed-strict"): DANGLING,
-    ("minimal", "narrow", "none"): DANGLING,
-    ("minimal", "narrow", "managed-work"): DANGLING,
-    ("minimal", "narrow", "managed-strict"): DANGLING,
-    ("minimal", "personal", "none"): ("ok", ("local-gw",), {}, "work", True, None),
-    ("minimal", "personal", "managed-work"): ("ok", (), {"local-gw": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("minimal", "personal", "managed-strict"): ("ok", (), {"local-gw": "host-not-allowed"}, "work", False, "host-not-allowed"),
-    ("minimal", "unclassified", "none"): ("ok", ("local-gw",), {}, "work", False, None),
-    ("minimal", "unclassified", "managed-work"): ("ok", (), {"local-gw": "managed-not-allowed"}, "work", False, "managed-not-allowed"),
-    ("minimal", "unclassified", "managed-strict"): ("ok", (), {"local-gw": "host-not-allowed"}, "work", False, "host-not-allowed"),
-    # ---- profile personal
-    ("personal", "none", "none"): ("ok", ("openrouter",), {}, "personal", False, None),
-    ("personal", "none", "managed-work"): ("ok", (), {"openrouter": "managed-not-allowed"}, "personal", False, "managed-not-allowed"),
-    ("personal", "none", "managed-strict"): ("ok", (), {"openrouter": "host-not-allowed"}, "personal", False, "host-not-allowed"),
-    ("personal", "work", "none"): DANGLING,
-    ("personal", "work", "managed-work"): DANGLING,
-    ("personal", "work", "managed-strict"): DANGLING,
-    ("personal", "narrow", "none"): DANGLING,
-    ("personal", "narrow", "managed-work"): DANGLING,
-    ("personal", "narrow", "managed-strict"): DANGLING,
-    ("personal", "personal", "none"): ("ok", ("openrouter",), {}, "personal", True, None),
-    ("personal", "personal", "managed-work"): ("ok", (), {"openrouter": "managed-not-allowed"}, "personal", False, "managed-not-allowed"),
-    ("personal", "personal", "managed-strict"): ("ok", (), {"openrouter": "host-not-allowed"}, "personal", False, "host-not-allowed"),
-    ("personal", "unclassified", "none"): ("ok", ("openrouter",), {}, "personal", False, None),
-    ("personal", "unclassified", "managed-work"): ("ok", (), {"openrouter": "managed-not-allowed"}, "personal", False, "managed-not-allowed"),
-    ("personal", "unclassified", "managed-strict"): ("ok", (), {"openrouter": "host-not-allowed"}, "personal", False, "host-not-allowed"),
-}
-
 # Attempts that must be refused outright, run from their invalid fixtures.
 EXTRA_ROWS = {
     "personal-profile-for-work": ("merge-error", "personal-profile-for-work"),
@@ -486,93 +416,6 @@ EXTRA_ROWS = {
 }
 
 WORK_PLANNER_GROUP = PLANNER_ROLES + AUXILIARY
-
-
-class Outcome:
-    def __init__(self):
-        self.stage = "load"
-        self.error = None
-        self.loaded = self.effective = self.qualifications = self.resolutions = None
-        self.env = None
-
-
-def _install(env, home, rel):
-    text = (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / rel).read_text(
-        encoding="utf-8"
-    )
-    name = json.loads(text)["profile"]
-    target = paths.profile_path(name, env, home)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(text, encoding="utf-8")
-    return name
-
-
-def write_probe_records(env, home, effective, now=NOW):
-    """A qualified record, built by the probe itself, for every profile model."""
-    probe = probe_module()
-    pinned = qualification.pinned_version()
-    for model in effective.models.values():
-        provider = effective.providers[model.provider]
-        steps = [
-            {"step": i + 1, "name": name, "result": "pass", "diagnostic": None}
-            for i, name in enumerate(("auth_and_text", "tool_round_trip", "streaming"))
-        ]
-        report = probe.ProbeReport(context=None, steps=steps, verdict="qualified", blocking_step=None)
-        cfg = probe.ProbeConfig(
-            base_url=merge.provider_base_url(provider), model=model.model_id, provider=provider.id,
-            credential_env=provider.credential_env, runtime_version=pinned,
-        )
-        record = probe.build_capability_record(report, cfg, now=now - timedelta(days=1))
-        target = paths.qualification_path(model.qualification_ref[len("local:"):], env, home)
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        os.chmod(target.parent, 0o700)
-        target.write_text(json.dumps(record), encoding="utf-8")
-        os.chmod(target, 0o600)
-
-
-def run_pipeline(tmp_path, key):
-    """load_all -> merge -> evaluate_all -> resolve_all as far as it goes."""
-    profile_key, project_key, managed_key = key
-    env = RecordingEnv({"XDG_CONFIG_HOME": str(tmp_path / "xdg"), "XDG_STATE_HOME": str(tmp_path / "state")})
-    home, project_root = tmp_path / "home", tmp_path / "project"
-    out = Outcome()
-    out.env = env
-    name = _install(env, home, PROFILES[profile_key])
-    if PROJECTS[project_key] is not None:
-        (project_root / ".quoin").mkdir(parents=True)
-        (project_root / ".quoin" / "runtime.json").write_text(
-            (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / PROJECTS[project_key]).read_text(
-                encoding="utf-8"
-            ),
-            encoding="utf-8",
-        )
-    if MANAGEDS[managed_key] is not None:
-        managed_file = tmp_path / "managed.json"
-        managed_file.write_text(
-            (helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "runtime-config" / MANAGEDS[managed_key]).read_text(
-                encoding="utf-8"
-            ),
-            encoding="utf-8",
-        )
-        env["QUOIN_OPENCODE_MANAGED_POLICY"] = str(managed_file)
-    try:
-        out.loaded = config.load_all(project_root=project_root, profile=name, env=env, home=home)
-    except ConfigErrors as exc:
-        out.error = exc
-        return out
-    out.stage = "merge"
-    try:
-        out.effective = merge.merge(out.loaded)
-    except ConfigErrors as exc:
-        out.error = exc
-        return out
-    out.stage = "resolve"
-    write_probe_records(env, home, out.effective)
-    out.qualifications = qualification.evaluate_all(
-        out.effective, env=env, home=home, now=NOW, pinned_version=qualification.pinned_version()
-    )
-    out.resolutions = resolve_all(out.effective, out.qualifications)
-    return out
 
 
 def test_combinations_table_is_the_full_product():

@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 import _opencode_helpers as helpers
+from _opencode_merge_helpers import RecordingEnv
 from test_opencode_config_errors import SHAPES
 from quoin.opencode_adapter import config, errors, generate, install, merge, paths, secrets as refs
 from quoin.opencode_adapter.errors import ConfigErrors
@@ -23,26 +24,6 @@ SRC_DIR = SOURCE_DIR.parent / "src" / "quoin" / "opencode_adapter"
 CASES = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))
 ALLOWED_ENV_READS = {"XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY"}
 NEW_MODULES = ("errors", "paths", "jsonio", "schema_check", "secrets", "config", "merge", "qualification", "roles")
-
-
-class RecordingEnv(dict):
-    """Environment mapping that records every key read."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.reads = []
-
-    def get(self, key, default=None):
-        self.reads.append(key)
-        return super().get(key, default)
-
-    def __getitem__(self, key):
-        self.reads.append(key)
-        return super().__getitem__(key)
-
-    def __contains__(self, key):
-        self.reads.append(key)
-        return super().__contains__(key)
 
 
 def read_fixture(rel):
