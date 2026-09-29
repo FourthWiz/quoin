@@ -410,6 +410,73 @@ def test_handoff_opt_out_denied(ar, project, monkeypatch, capsys):
     assert capsys.readouterr().out.strip() == "DENIED|opt-out"
 
 
+def _mock_successful_spawn(ar, monkeypatch, pid=4242):
+    """Route `_which`/`_popen` to a fake CLI + fake subprocess so a handoff
+    can run to completion without spawning anything real. Returns the list
+    the fake `_popen` call's argv gets appended to."""
+    monkeypatch.setattr(ar, "_which", lambda name: "/usr/bin/quoin")
+    captured_argv = []
+
+    class _FakeProc:
+        def __init__(self):
+            self.pid = pid
+
+    def _fake_popen(argv, **kw):
+        captured_argv.append(argv)
+        return _FakeProc()
+
+    monkeypatch.setattr(ar, "_popen", _fake_popen)
+    return captured_argv
+
+
+def test_handoff_grant_is_cap_minus_attempts_minus_one(ar, project, monkeypatch, capsys):
+    """D-01: the hand-off's own charge plus its grant must together stay
+    within the cap — grant = cap - attempts_before - 1, not cap - attempts_before
+    (the round-2 off-by-one this pins is the 'edge' row of the worked table)."""
+    captured_argv = _mock_successful_spawn(ar, monkeypatch)
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    monkeypatch.setenv("QUOIN_AUTO_RESUME_MAX", "10")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["attempts"] = 8
+    ar._write_counter(memory, "demo", counter)
+
+    rc = ar._cmd_handoff(_Args(
+        project_root=str(project), task="demo", reason="budget", on_fail_halt=None,
+    ))
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert out.startswith("HANDOFF|4242|9/10"), out
+    written = ar._load_counter(memory, "demo")
+    assert written["attempts"] == 9
+    argv = captured_argv[0]
+    assert argv[argv.index("--max-relaunch") + 1] == "1", argv
+
+
+def test_handoff_refused_at_cap_minus_one_remaining(ar, project, monkeypatch, capsys):
+    """D-01 'refused' row: attempts_before=9 leaves only 1 unit of budget —
+    not enough for the hand-off's own charge plus a launch grant — so it must
+    refuse (halt `auto-resume cap`) rather than spawn a supervisor that could
+    overshoot the cap."""
+    _mock_successful_spawn(ar, monkeypatch)
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    monkeypatch.setenv("QUOIN_AUTO_RESUME_MAX", "10")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["attempts"] = 9
+    ar._write_counter(memory, "demo", counter)
+
+    rc = ar._cmd_handoff(_Args(
+        project_root=str(project), task="demo", reason="budget", on_fail_halt=None,
+    ))
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "DENIED|cap"
+    halt = (memory / "autonomous-halt-demo.md").read_text()
+    assert "reason: auto-resume cap" in halt
+
+
 def test_handoff_startup_refuses_live_owner(ar, project, monkeypatch, tmp_path, capsys):
     fake_home = tmp_path / "fake-home"
     proj_dir = fake_home / ".claude" / "projects" / "-p-"

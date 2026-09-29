@@ -314,3 +314,108 @@ done-sentinel-LAST:
   final report — at the memory-dir location outside the archived folder,
   so a kill at any boundary resumes with no duplicated work. The
   "never auto-create a PR" invariant holds in every mode.
+
+## In-session continuation and hand-off
+
+Stage 2 above covers the EXTERNAL supervisor. This section covers a
+second, cheaper continuation path that runs INSIDE the owning
+conversation before any supervisor gets involved: a Stop hook (`stop.sh`)
+that notices an interrupted span and nudges the same session to keep
+going, escalating to a detached hand-off only once the in-session budget
+for that is spent.
+
+**Arm / disarm — a consent model, not a lock.** `/run`'s Setup arms the
+owning session (`--entry fresh`) right after the autonomous-span marker
+is written; `/run --resume` re-arms it (`--entry resume`) at its own
+Step 0. The arm is a file, `run-continue-arm-<sid>.txt`, named after the
+session that holds it. Any human-typed prompt in that session disarms it
+immediately — `userpromptsubmit.sh` removes the arm on every
+`UserPromptSubmit` except one whose `transcript_path` is a subagent
+transcript, or whose `prompt` begins with a recorded harness-notification
+prefix (currently just `<task-notification>`; see the finding for
+probe (a2), which found no other source to add). A person typing
+anything at all — even "hold on" — always takes control back; this is a
+liveness cost, never a correctness risk, since disarming only ever
+stops a continuation that would otherwise have happened. `sessionend.sh`
+also drops the arm when a session ends, and separately writes
+`session-ended-<sid>.txt`.
+
+**Stop continuation.** When the owning session's Stop hook fires and its
+arm is present, `auto_resume.py stop` either emits an in-session
+continuation block (the model is told to keep going with the exact
+`resume_command` from the record) or, once the chain of blocks reaches
+`QUOIN_AUTO_RESUME_HANDOFF_AT`, attempts a hand-off to a detached
+supervisor instead of blocking again.
+
+**Startup hand-off and owner liveness.** On `SessionStart`
+(`startup`/`resume`), `auto_resume.py start` checks whether the record's
+owning session is `gone` (an `session-ended-<sid>.txt` marker exists, or
+its transcript — and the widest mtime under its subagent tree — has been
+idle at least `QUOIN_AUTO_RESUME_IDLE_SECS`), `live` (recent transcript
+activity), or `unknown` (no transcript found by glob). Only `gone`
+authorizes a hand-off; both `live` and `unknown` refuse, fail-safe
+against ever double-driving the same task from two sessions at once.
+
+**The budget (D-01).** One unit = one continuation event: an in-session
+Stop block, a hand-off, or one headless supervisor launch. A hand-off
+charges its own unit AND must leave room for at least one launch, so it
+is allowed only when `attempts_before + 2 <= QUOIN_AUTO_RESUME_MAX`; its
+grant is `G = QUOIN_AUTO_RESUME_MAX - attempts_before - 1` (floored at
+1). The Stop path's in-session fallback needs only
+`attempts_before + 1 <= QUOIN_AUTO_RESUME_MAX`. Across every combination
+of in-session blocks, hand-offs, and headless launches, `attempts` never
+exceeds `QUOIN_AUTO_RESUME_MAX` for the span. `attempts` never decays
+within a span — it is a hard per-span ceiling, even while `.done`
+sentinel counts keep rising — because only a human typing a fresh `/run`
+prompt starts a new span (the consent rule below); a task that keeps
+making real progress but keeps exhausting its continuation budget is a
+sign the budget itself needs raising, not a bug to route around.
+
+**Knobs and defaults:** `QUOIN_AUTO_RESUME` (`0` disables; default on),
+`QUOIN_AUTO_RESUME_MAX` (default 10, clamp 1..100), `QUOIN_AUTO_RESUME_IDLE_SECS`
+(default 900, min 60), `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6, clamp 1..7).
+
+**Halt reasons** (any of these is terminal — no further continuation):
+`auto-resume cap`, `no forward progress`, `relaunch cap`, `session age cap`,
+`context exhaustion`, `paused by user`, `supervisor stopped by signal`,
+`supervisor error`.
+
+**The harness's own block cap is an independent outer bound.** Claude
+Code itself stops honoring a Stop hook's `"decision": "block"` response
+after a fixed number of consecutive fires per turn (observed 8; see the
+finding's probe (a)). `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6) is
+chosen to hand off to a detached supervisor before that harness cap is
+ever reached, so the two bounds cooperate rather than race.
+
+**A user-typed `quoin run --autonomous` without `--halt-on-abort` leaves
+no halt on abort** — that flag is what the automatic hand-off path adds
+specifically so a detached run never goes silently stuck. Without it, an
+aborted run leaves no sentinel at all, so the next session start may
+legitimately hand the same run off again within the remaining budget.
+
+**Consent rule.** Only a typed `/run` prompt (in the owning session,
+matched at `userpromptsubmit.sh`, tolerating leading whitespace and both
+`/run <task>` and `/run --resume <task>`) resets the continuation budget
+by writing `run-continue-consent-<sid>.txt`, consumed by the next `arm`.
+Every other typed prompt disarms without resetting anything.
+
+**Liveness residual.** An owner session waiting at a permission prompt
+for the full idle window reads as `gone` even though a human may return
+to it — there is no way to distinguish "abandoned" from "paused at a
+prompt" from outside the session. If a hand-off fires while you are still
+there: answer or cancel the pending prompt in the original session, or
+kill the pid named in the hand-off notice.
+
+**Opt-out.** `QUOIN_AUTO_RESUME=0` disables the helper entirely; every
+path then behaves exactly as it did before this feature, and no halt is
+ever written by it.
+
+**State files** (D-02, all under `.workflow_artifacts/memory/`, outside
+the task folder): `run-continue-arm-<sid>.txt`, `run-continue-consent-<sid>.txt`,
+`session-ended-<sid>.txt`, `auto-resume-<task>.json` (the continuation
+counter), `run-supervisor-<task>.pid`/`.result`/`.log` (the single-driver
+lock and its outcome).
+
+**Un-registering the continuation hook** (if you need to disable it at
+the install level rather than via the opt-out knob above): see the Hooks
+Guide's reference entry for the ninth stanza.

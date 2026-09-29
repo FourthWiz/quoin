@@ -633,7 +633,10 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
     counter = settle_supervisor(memory_dir, task, counter)
     cap = _max_attempts()
     attempts = counter.get("attempts", 0)
-    if attempts >= cap:
+    # A hand-off charges its own unit plus at least one grant launch, so it
+    # is only safe when both fit under the cap (attempts + 2 <= cap); the
+    # Stop path's in-session fallback (attempts + 1 <= cap) covers the gap.
+    if attempts + 2 > cap:
         _write_halt(memory_dir, task, record, "auto-resume cap")
         _write_counter(memory_dir, task, counter)
         return "DENIED|cap"
@@ -654,7 +657,9 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
             quoin_bin = str(fallback)
         else:
             return "NO_CLI|"
-    remaining = max(cap - attempts, 1)
+    # The hand-off's own charge (below, attempts += 1) plus this grant must
+    # together stay within cap: grant = cap - attempts_before - 1 (D-01).
+    remaining = max(cap - attempts - 1, 1)
     log_path = memory_dir / LOG_TEMPLATE.format(task=task)
     try:
         memory_dir.mkdir(parents=True, exist_ok=True)
