@@ -916,7 +916,7 @@ def _do_handoff(
 RUNTIME_RECORD_FILENAME = "quoin-runtime.json"
 RUNTIME_RECORD_SCHEMA = 1
 _RECORD_MAX_BYTES = 16384
-_PROBE_SNIPPET = "import sys, quoin, quoin.cli; sys.stdout.write('\nQUOIN_VERSION=' + quoin.__version__ + '\n')"
+_PROBE_SNIPPET = "import sys, quoin, quoin.cli; sys.stdout.write('\\nQUOIN_VERSION=' + quoin.__version__ + '\\n')"
 _VERSION_TOKEN_RE = re.compile(r"^QUOIN_VERSION=(\S+)\s*$", re.M)
 _REMEDY = "re-run 'quoin install' (same scope) and check 'quoin doctor'"
 # Start/stop callers act on a live knob, so the remedy names it. Handoff and
