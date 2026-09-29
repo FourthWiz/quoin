@@ -113,6 +113,10 @@ MESSAGES: Dict[str, Tuple[str, str]] = {
         "file nests values deeper than %(limit)s levels",
         "flatten the structure; configuration files are shallow",
     ),
+    "number-too-large": (
+        "file contains a number literal that is too large",
+        "use a smaller number; limits are ordinary integers",
+    ),
     "unreadable-file": (
         "file could not be read",
         "check that the file exists and is readable by the current user",
@@ -254,6 +258,7 @@ MESSAGE_CLASS: Dict[str, str] = {
     "has-bom": "invalid-json",
     "non-finite-number": "invalid-json",
     "nesting-too-deep": "invalid-json",
+    "number-too-large": "invalid-json",
     "unreadable-file": "invalid-json",
     "managed-policy-unreadable": "invalid-json",
     "duplicate-key": "duplicate-key",

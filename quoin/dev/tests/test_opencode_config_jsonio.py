@@ -62,6 +62,42 @@ def test_overflowing_exponents_rejected_at_load(tmp_path, literal):
     assert exc.errors[0].message_id == "non-finite-number"
 
 
+def test_huge_integers_are_classified_as_too_large(tmp_path):
+    for digits in (33, 5000):
+        exc = err_of(tmp_path, '{"a": %s}' % ("9" * digits))
+        assert exc.errors[0].rejection_class == "invalid-json"
+        assert exc.errors[0].message_id == "number-too-large"
+        assert "9999" not in str(exc)
+    exc = err_of(tmp_path, '{"a": -%s}' % ("9" * 33))
+    assert exc.errors[0].message_id == "number-too-large"
+
+
+def test_integer_at_the_digit_limit_loads_and_sign_is_not_counted(tmp_path):
+    assert load(tmp_path, '{"a": %s}' % ("9" * 32))["a"] == int("9" * 32)
+    assert load(tmp_path, '{"a": -%s}' % ("9" * 32))["a"] == -int("9" * 32)
+
+
+def test_load_strict_with_stat_returns_the_stat_of_the_read_descriptor(tmp_path):
+    path = tmp_path / "f.json"
+    path.write_text('{"a": 1}', encoding="utf-8")
+    tree, info = jsonio.load_strict_with_stat(path, file_label="f.json")
+    assert tree == {"a": 1}
+    assert info.st_size == path.stat().st_size
+    assert info.st_uid == os.getuid()
+    assert stat.S_ISREG(info.st_mode)
+
+
+@pytest.mark.skipif(not hasattr(os, "O_NOFOLLOW"), reason="platform lacks O_NOFOLLOW")
+def test_load_strict_with_stat_refuses_a_symlink(tmp_path):
+    real = tmp_path / "real.json"
+    real.write_text("{}", encoding="utf-8")
+    link = tmp_path / "link.json"
+    link.symlink_to(real)
+    with pytest.raises(ConfigErrors) as info:
+        jsonio.load_strict_with_stat(link, file_label="link.json")
+    assert info.value.errors[0].message_id == "unreadable-file"
+
+
 def test_ordinary_floats_still_load(tmp_path):
     assert load(tmp_path, '{"a": 1.5, "b": 1e3}') == {"a": 1.5, "b": 1000.0}
 

@@ -18,6 +18,7 @@ from .errors import ConfigErrors, make_error
 
 MAX_CONFIG_BYTES = 1_048_576
 MAX_DEPTH = 64
+MAX_INT_DIGITS = 32
 
 
 class UnsafeDirectoryError(RuntimeError):
@@ -49,6 +50,16 @@ def _reject_float(text: str) -> float:
     if not math.isfinite(value):
         raise ValueError("non-finite number")
     return value
+
+
+class _NumberTooLarge(ValueError):
+    pass
+
+
+def _parse_int(text: str) -> int:
+    if len(text.lstrip("-")) > MAX_INT_DIGITS:
+        raise _NumberTooLarge("number literal too large")
+    return int(text)
 
 
 def _fail(label: str, message_id: str, **params: Any) -> ConfigErrors:
@@ -93,9 +104,9 @@ def _plain(tree: Any) -> Any:
     return tree
 
 
-def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> Any:
+def _read_and_parse(path, file_label: str, max_bytes: int) -> Tuple[Any, os.stat_result]:
     try:
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         with os.fdopen(os.open(path, flags), "rb") as handle:
             info = os.fstat(handle.fileno())
             if not stat.S_ISREG(info.st_mode):
@@ -117,11 +128,14 @@ def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> 
         tree = json.loads(
             text, object_pairs_hook=_pairs,
             parse_constant=_reject_constant, parse_float=_reject_float,
+            parse_int=_parse_int,
         )
     except json.JSONDecodeError as exc:
         raise _fail(file_label, "malformed-json", line=exc.lineno, column=exc.colno) from None
     except RecursionError:
         raise _fail(file_label, "nesting-too-deep", limit=MAX_DEPTH) from None
+    except _NumberTooLarge:
+        raise _fail(file_label, "number-too-large") from None
     except ValueError:
         raise _fail(file_label, "non-finite-number") from None
     if _depth_exceeded(tree, MAX_DEPTH):
@@ -131,7 +145,20 @@ def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> 
         raise ConfigErrors(
             [make_error("duplicate-key", file_label, seg, "duplicate-key") for seg in dups]
         )
-    return _plain(tree)
+    return _plain(tree), info
+
+
+def load_strict_with_stat(
+    path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES
+) -> Tuple[Any, os.stat_result]:
+    """Like `load_strict`, also returning the `fstat` of the descriptor that
+    was read (no stat-then-reopen window). A symlink is refused where the
+    platform supports `O_NOFOLLOW`."""
+    return _read_and_parse(path, file_label, max_bytes)
+
+
+def load_strict(path, *, file_label: str, max_bytes: int = MAX_CONFIG_BYTES) -> Any:
+    return _read_and_parse(path, file_label, max_bytes)[0]
 
 
 def dump_canonical(obj: Any) -> bytes:

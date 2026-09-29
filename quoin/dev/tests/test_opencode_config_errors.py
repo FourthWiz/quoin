@@ -182,12 +182,18 @@ def test_dedupe_keeps_highest_priority_per_path():
     assert [e.rejection_class for e in kept] == ["unresolved-placeholder", "invalid-type"]
 
 
-def test_config_errors_dedupe_is_linear_and_ordered():
-    import time
+def test_config_errors_dedupe_is_linear_and_ordered(monkeypatch):
+    calls = {"n": 0}
+    real_eq = ConfigError.__eq__
 
+    def counting_eq(self, other):
+        calls["n"] += 1
+        return real_eq(self, other)
+
+    monkeypatch.setattr(ConfigError, "__eq__", counting_eq)
     errs = [make_error("invalid-type", "f", "$.p%d" % (i % 20000), "wrong-type") for i in range(40000)]
-    start = time.monotonic()
     exc = ConfigErrors(errs)
-    assert time.monotonic() - start < 2.0
+    # A quadratic scan needs on the order of 10^8 comparisons.
+    assert calls["n"] <= 2 * 40000
     assert len(exc.errors) == 20000
     assert [e.json_path for e in exc.errors[:3]] == ["$.p0", "$.p1", "$.p2"]

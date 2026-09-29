@@ -45,8 +45,7 @@ PROJECT_LABEL = ".quoin/runtime.json"
 MANAGED_LABEL = "managed policy"
 
 _PLACEHOLDER_MARKERS = ("REPLACE_WITH_", "${", "{env:", "{file:")
-_HOST_RE = re.compile(r"[A-Za-z0-9.:-]{1,253}")
-_URL_HOST_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,250}[A-Za-z0-9])?\.?")
+_LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
 _QUALIFICATION_REF_RE = re.compile(r"local:[a-z0-9][a-z0-9_-]{0,62}")
 _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 _EFFORTS = ("low", "medium", "high", "max")
@@ -160,14 +159,56 @@ def _map_violation(v: schema_check.Violation, label: str) -> ConfigError:
 # -------------------------------------------------------- URL checking
 
 
-def _host_is_well_formed(host: str) -> bool:
+def host_is_well_formed(host: Any, *, allow_trailing_dot: bool = True) -> bool:
+    """True when `host` is a DNS name, an IPv4 literal or an unbracketed IPv6
+    literal that every URL parser reads the same way.
+
+    A name whose last label is all digits or starts with `0x` is only
+    accepted as a canonical dotted-decimal IPv4 address, so the shorthand
+    spellings some resolvers accept (`127.1`, `2130706433`, `0x7f.1`) are
+    refused instead of silently naming a different machine.
+    """
+    if not isinstance(host, str) or not host:
+        return False
     if ":" in host:
+        if "%" in host:
+            return False
         try:
             ipaddress.IPv6Address(host)
         except ValueError:
             return False
         return True
-    return bool(_URL_HOST_RE.fullmatch(host))
+    if host.endswith("."):
+        if not allow_trailing_dot:
+            return False
+        host = host[:-1]
+    if not host or len(host) > 253:
+        return False
+    labels = host.split(".")
+    if not all(_LABEL_RE.fullmatch(label) for label in labels):
+        return False
+    last = labels[-1]
+    if last.isdigit() and last.isascii() or last[:2] in ("0x", "0X"):
+        try:
+            ipaddress.IPv4Address(host)
+        except ValueError:
+            return False
+    return True
+
+
+def host_key(host: str) -> str:
+    """Comparison key for a host: lowercase, one trailing dot removed, IP
+    literals in canonical form, IPv4-mapped IPv6 folded to plain IPv4."""
+    key = host.lower()
+    if key.endswith("."):
+        key = key[:-1]
+    try:
+        address = ipaddress.ip_address(key)
+    except ValueError:
+        return key
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        return str(address.ipv4_mapped)
+    return address.compressed
 
 
 def _check_base_url(url: str, path: Tuple[Any, ...], label: str) -> Optional[ConfigError]:
@@ -192,14 +233,14 @@ def _check_base_url(url: str, path: Tuple[Any, ...], label: str) -> Optional[Con
         return make_error("invalid-url", label, path, "invalid-url")
     if "@" in parts.netloc:
         return make_error("url-credentials", label, path, "url-credentials")
-    if not host or not _host_is_well_formed(host):
+    if not host or not host_is_well_formed(host):
         return make_error("invalid-url", label, path, "invalid-url")
     if parts.scheme == "http" and host not in _LOOPBACK_HOSTS:
         return make_error("insecure-http", label, path, "insecure-http")
     return None
 
 
-def _endpoint_identity(url: str) -> str:
+def endpoint_identity(url: str) -> str:
     # Same normalisation as the gateway probe: host lowercased, an explicit
     # port kept, path verbatim, query/fragment/userinfo dropped.
     parts = urlsplit(url)
@@ -207,6 +248,9 @@ def _endpoint_identity(url: str) -> str:
     if parts.port:
         netloc += ":%d" % (parts.port,)
     return urlunsplit((parts.scheme, netloc, parts.path, "", ""))
+
+
+_endpoint_identity = endpoint_identity
 
 
 def endpoint_identity_tuple(value: Any) -> Optional[Tuple[str, str, str, str]]:
@@ -225,7 +269,7 @@ def endpoint_identity_tuple(value: Any) -> Optional[Tuple[str, str, str, str]]:
     ):
         return None
     try:
-        identity = _endpoint_identity(url)
+        identity = endpoint_identity(url)
     except ValueError:
         return None
     return (kind, family, identity, ref)
@@ -354,7 +398,9 @@ def _semantic(
         items = policy.get(list_name)
         if isinstance(items, list):
             for index, item in enumerate(items):
-                if isinstance(item, str) and not _HOST_RE.fullmatch(item):
+                if isinstance(item, str) and not host_is_well_formed(
+                    item, allow_trailing_dot=False
+                ):
                     errs.append(
                         make_error("invalid-type", label, ("policy", list_name, index), "wrong-type")
                     )

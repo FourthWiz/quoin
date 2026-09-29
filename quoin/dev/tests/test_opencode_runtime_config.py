@@ -324,6 +324,14 @@ URL_CASES = [
     ("https://g\u00e4teway.example.invalid/v1", "invalid-url"),
     ("https://[fe80::1%25eth0]/v1", "invalid-url"),
     ("https://gateway_.example.invalid/v1", "invalid-url"),
+    ("https://0x7f.1/v1", "invalid-url"),
+    ("https://2130706433/v1", "invalid-url"),
+    ("https://127.1/v1", "invalid-url"),
+    ("https://999.1.1.1/v1", "invalid-url"),
+    ("https://a..b/v1", "invalid-url"),
+    ("https://a.-b/v1", "invalid-url"),
+    ("https://-a.b/v1", "invalid-url"),
+    ("https://" + "a" * 64 + ".example.invalid/v1", "invalid-url"),
 ]
 
 
@@ -332,6 +340,79 @@ def test_url_rejections(tmp_path, url, cls):
     assert failures(tmp_path, set_url(base_profile(), url)) == [
         (cls, "$.providers.corp-gw.base_url")
     ]
+
+
+@pytest.mark.parametrize(
+    "url", ["https://127.0.0.1/v1", "https://10.0.0.1/v1", "https://gateway.example.invalid./v1"]
+)
+def test_well_formed_hosts_accepted(tmp_path, url):
+    load_profile_data(tmp_path, set_url(base_profile(), url))
+
+
+HOST_LIST_TABLE = [
+    ("gateway.example.invalid", True),
+    ("127.0.0.1", True),
+    ("::1", True),
+    ("2001:db8::1", True),
+    ("localhost", True),
+    ("gateway.example.invalid.", False),
+    ("2130706433", False),
+    ("0x7f.1", False),
+    ("127.1", False),
+    ("a..b", False),
+    ("a.-b", False),
+    ("-a.b", False),
+    ("", False),
+    ("bad host", False),
+    ("fe80::1%eth0", False),
+    ("a" * 64 + ".example", False),
+    (".".join(["a" * 60] * 5), False),
+]
+
+
+@pytest.mark.parametrize("host,ok", HOST_LIST_TABLE)
+def test_host_is_well_formed_host_list_form(host, ok):
+    assert config.host_is_well_formed(host, allow_trailing_dot=False) is ok
+
+
+def test_host_is_well_formed_trailing_dot_option():
+    assert config.host_is_well_formed("gateway.example.invalid.")
+    assert not config.host_is_well_formed("gateway.example.invalid..")
+    assert not config.host_is_well_formed(".")
+    assert not config.host_is_well_formed(5)
+
+
+@pytest.mark.parametrize(
+    "host,key",
+    [
+        ("Gateway.Example.Invalid", "gateway.example.invalid"),
+        ("gateway.example.invalid.", "gateway.example.invalid"),
+        ("::1", "::1"),
+        ("0:0:0:0:0:0:0:1", "::1"),
+        ("0000:0000:0000:0000:0000:0000:0000:0001", "::1"),
+        ("::ffff:127.0.0.1", "127.0.0.1"),
+        ("::ffff:7f00:1", "127.0.0.1"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("2001:DB8::1", "2001:db8::1"),
+    ],
+)
+def test_host_key(host, key):
+    assert config.host_key(host) == key
+
+
+@pytest.mark.parametrize("entry", ["2130706433", "a..b", "0x7f.1"])
+def test_host_list_entries_use_the_url_host_rule(tmp_path, entry):
+    for list_name in ("allowed_hosts", "denied_hosts"):
+        data = base_profile()
+        data["policy"][list_name] = [entry]
+        assert failures(tmp_path, data) == [("invalid-type", "$.policy.%s[0]" % list_name)]
+
+
+def test_endpoint_identity_is_public_and_aliased():
+    assert config._endpoint_identity is config.endpoint_identity
+    assert config.endpoint_identity("https://GW.example.invalid:8443/v1?x=1") == (
+        "https://gw.example.invalid:8443/v1"
+    )
 
 
 def test_qualification_ref_trailing_newline_rejected(tmp_path):
