@@ -368,6 +368,12 @@ SECRET_SHAPE_RE = re.compile(
 
 _SAFE_KEY_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
+# A provider model id may not contain whitespace or control characters: the
+# native reference splits at the first slash and reads the rest verbatim, so
+# such a character could never round-trip. Shared by the compiler and the
+# import preview so the two cannot disagree.
+BAD_MODEL_ID_RE = re.compile(r"[\s\x00-\x1f\x7f]")
+
 
 def render_json_path(segments: Iterable[Any]) -> str:
     """Render path segments as `$`, `.name` and `[N]`.

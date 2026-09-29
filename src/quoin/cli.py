@@ -608,6 +608,60 @@ def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_opencode_config_import_preview(args: argparse.Namespace) -> int:
+    from quoin.opencode_adapter import import_preview, paths
+    from quoin.opencode_adapter.errors import ConfigErrors
+    from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
+
+    if (args.confirm_model_id or args.force) and not args.apply:
+        print("quoin: --confirm-model-id and --force need --apply", file=sys.stderr)
+        return 2
+    home = pathlib.Path.home()
+    env = _opencode_config_env()
+    try:
+        tiers, from_file = import_preview.read_source(home)
+        proposal = import_preview.propose(tiers, profile_name=args.profile_name)
+        target = paths.profile_path(proposal.profile_name, env, home)
+        if not args.apply:
+            print("source: %s" % ("models.json (read only)" if from_file else "built-in defaults (no models.json)"))
+            print("target: %s" % target)
+            sys.stdout.write(proposal.text)
+            print(
+                "to apply, confirm every provider model id (the model_id values above, "
+                "not the or-* names): quoin opencode config import-preview --apply "
+                "--confirm-model-id ID ..."
+            )
+            print(
+                "each model must be qualified with quoin opencode probe --profile %s "
+                "--synthetic-only --model MODEL before it can be compiled" % proposal.profile_name
+            )
+            return 0
+        written = import_preview.apply(
+            proposal, confirmed=args.confirm_model_id, force=args.force, env=env, home=home
+        )
+    except ValueError as exc:
+        print("quoin: %s" % exc, file=sys.stderr)
+        return 2
+    except ConfigErrors as exc:
+        for item in exc.errors:
+            print(str(item), file=sys.stderr)
+        return 2
+    except import_preview.ImportRefused as exc:
+        print("quoin: %s" % exc, file=sys.stderr)
+        return 2
+    except UnsafeDirectoryError as exc:
+        print("quoin: the profiles directory is not private enough: %s" % exc, file=sys.stderr)
+        return 2
+    except paths.AdapterDataMissing:
+        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
+        return 2
+    except OSError:
+        print("quoin: the profile could not be read or written; check the profiles directory", file=sys.stderr)
+        return 2
+    print("written: %s" % written)
+    return 0
+
+
 def _cmd_opencode_probe(args: argparse.Namespace) -> int:
     import types
 
@@ -1626,7 +1680,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opencode_config_p = opencode_sub.add_parser(
         "config",
-        description="Explain or compile the layered OpenCode runtime configuration.",
+        description="Explain, compile or import the layered OpenCode runtime configuration.",
         help="Explain or compile the OpenCode runtime configuration",
     )
     opencode_config_sub = opencode_config_p.add_subparsers(dest="config_command")
@@ -1676,6 +1730,28 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Accept models without a valid qualification record (refused for work under a managed policy).",
     )
+
+    config_import_p = opencode_config_sub.add_parser(
+        "import-preview",
+        description=(
+            "Propose a personal profile from the model mapping `quoin models` keeps. "
+            "The preview writes nothing; --apply writes the profile after every provider "
+            "model id is confirmed."
+        ),
+        help="Propose a personal profile from the quoin models mapping",
+    )
+    config_import_p.add_argument(
+        "--profile-name", default="personal", help="Name of the proposed profile; defaults to personal."
+    )
+    config_import_p.add_argument("--apply", action="store_true", help="Write the proposed profile.")
+    config_import_p.add_argument(
+        "--confirm-model-id",
+        action="append",
+        default=[],
+        metavar="ID",
+        help="Confirm one provider model id (repeat for every id in the proposal).",
+    )
+    config_import_p.add_argument("--force", action="store_true", help="Replace an existing profile.")
 
     opencode_probe_p = opencode_sub.add_parser(
         "probe",
@@ -1913,6 +1989,8 @@ def main(argv: list[str] | None = None) -> int:
                 return _cmd_opencode_config_explain(args)
             if args.config_command == "compile":
                 return _cmd_opencode_config_compile(args)
+            if args.config_command == "import-preview":
+                return _cmd_opencode_config_import_preview(args)
             opencode_config_p.print_help()
             return 1
         opencode_p.print_help()

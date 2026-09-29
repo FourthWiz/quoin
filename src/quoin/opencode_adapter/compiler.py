@@ -28,13 +28,12 @@ import functools
 import hashlib
 import json
 import os
-import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import config, jsonio, merge, names, paths, qualification, roles, schema_check
-from .errors import Finding, make_finding
+from .errors import BAD_MODEL_ID_RE, Finding, make_finding
 from .generate import ROLES
 
 NATIVE_ID_PREFIX = "quoin-"
@@ -61,7 +60,6 @@ PACKAGES: Mapping[Tuple[str, str], str] = {
 RESPONSES_FAMILY_VERIFIED = True
 
 AUXILIARY_EMITTED = ("title", "compaction")
-_BAD_MODEL_ID_RE = re.compile(r"[\s\x00-\x1f\x7f]")
 _PLACEHOLDER_MARKERS = ("{env:", "{file:", "${", "REPLACE_WITH_")
 
 
@@ -185,7 +183,7 @@ def _compile_findings(
         if res.model in seen_models:
             continue
         seen_models.add(res.model)
-        if not res.model_id or _BAD_MODEL_ID_RE.search(res.model_id):
+        if not res.model_id or BAD_MODEL_ID_RE.search(res.model_id):
             out.append(make_finding("native-ref-invalid", True, res.model))
     if not RESPONSES_FAMILY_VERIFIED:
         for pid in sorted({r.provider_id for r in referenced if r.endpoint_family == "responses"}):

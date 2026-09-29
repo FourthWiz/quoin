@@ -424,12 +424,14 @@ def _classification_state(data: Dict[str, Any], kind: str) -> str:
 # ---------------------------------------------------------- layer loads
 
 
-def load_layer(
-    path, kind: str, *, file_label: str, expected_profile: Optional[str] = None
+def validate_layer_data(
+    data: Any, kind: str, *, file_label: str, expected_profile: Optional[str] = None
 ) -> Layer:
-    data = jsonio.load_strict(path, file_label=file_label)
+    """Validate an already-parsed layer document (sweep, schema, semantics).
+    Raises `ConfigErrors`; the input is not modified."""
     if not isinstance(data, dict):
         raise ConfigErrors([make_error("invalid-type", file_label, "$", "not-an-object")])
+    data = copy.deepcopy(data)
     errs: List[ConfigError] = _sweep(data, file_label)
     declared: Dict[str, Any] = {}
     if kind == "project":
@@ -442,6 +444,15 @@ def load_layer(
         raise ConfigErrors(kept)
     return Layer(
         kind, file_label, copy.deepcopy(data), _classification_state(data, kind), declared
+    )
+
+
+def load_layer(
+    path, kind: str, *, file_label: str, expected_profile: Optional[str] = None
+) -> Layer:
+    data = jsonio.load_strict(path, file_label=file_label)
+    return validate_layer_data(
+        data, kind, file_label=file_label, expected_profile=expected_profile
     )
 
 
