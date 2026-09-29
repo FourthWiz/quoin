@@ -528,7 +528,131 @@ def test_adapter_design_decisions_section():
 
 
 def test_documents_never_call_the_work_profile_supported():
-    for path in (DECISIONS_PATH, COMPAT_PATH):
+    for path in (DECISIONS_PATH, COMPAT_PATH, README_PATH, ADAPTERS_README_PATH):
         for line in path.read_text(encoding="utf-8").splitlines():
             for match in re.finditer(r"work profile[^.\n]*\bsupported\b", line, re.IGNORECASE):
                 assert re.search(r"\bnot\b", match.group(0), re.IGNORECASE), line
+    for match in re.finditer(r"work profile[^.\n]*\bsupported\b", _opencode_status_section(), re.IGNORECASE):
+        assert re.search(r"\bnot\b", match.group(0), re.IGNORECASE), match.group(0)
+
+
+# ------------------------------------------------ runtime configuration docs
+
+RUNTIME_SUBSECTIONS = (
+    "Commands",
+    "File locations",
+    "Work profile status",
+    "Qualification and the probe",
+    "Native schema subset",
+    "Launcher contract",
+    "Retry policy",
+)
+
+
+def _readme_block(heading, level):
+    text = README_PATH.read_text(encoding="utf-8")
+    matches = list(_HEADING_RE.finditer(text))
+    for index, match in enumerate(matches):
+        if len(match.group(1)) == level and match.group(2) == heading:
+            end = next(
+                (m.start() for m in matches[index + 1:] if len(m.group(1)) <= level), len(text)
+            )
+            return text[match.end():end]
+    raise AssertionError("no heading %r in the adapter README" % heading)
+
+
+def test_readme_runtime_configuration_sections():
+    text = README_PATH.read_text(encoding="utf-8")
+    headings = [(len(m.group(1)), m.group(2)) for m in _HEADING_RE.finditer(text)]
+    assert (2, "Runtime configuration") in headings
+    names = [name for level, name in headings if level == 3]
+    positions = [names.index(name) for name in RUNTIME_SUBSECTIONS]
+    assert positions == sorted(positions)
+    # the section follows the doctor section
+    level2 = [name for level, name in headings if level == 2]
+    assert level2.index("Runtime configuration") == level2.index("Doctor") + 1
+    for command in (
+        "quoin opencode config explain",
+        "quoin opencode config compile",
+        "quoin opencode config import-preview",
+        "quoin opencode probe",
+    ):
+        assert command in _readme_block("Commands", 3)
+    assert "--synthetic-only" in _readme_block("Commands", 3)
+    assert "probe --profile" in text and "--synthetic-only" in text
+    for word in ("OPENROUTER_API_KEY", "OPENCODE_CONFIG", "native_sha256", "--check"):
+        assert word in _readme_block("Launcher contract", 3) or word in text
+    for word in ("OPENROUTER_API_KEY", "OPENCODE_CONFIG", "native_sha256"):
+        assert word in _readme_block("Launcher contract", 3)
+
+
+def test_readme_documents_every_cli_flag():
+    from quoin import cli
+
+    commands = _readme_block("Commands", 3)
+    for flag in (
+        "--profile", "--project-root", "--redact", "--json", "--output", "--check", "--allow-unqualified",
+        "--profile-name", "--apply", "--confirm-model-id", "--force", "--synthetic-only", "--model",
+    ):
+        assert flag in commands, flag
+    parser_source = (REPO_ROOT / "src" / "quoin" / "cli.py").read_text(encoding="utf-8")
+    for sub in ("import-preview", '"probe"'):
+        assert sub in parser_source
+    assert cli.CONFIG_ENV_KEYS
+
+
+def _launcher_keys():
+    block = _readme_block("Launcher contract", 3)
+    top, nested = [], []
+    for line in block.splitlines():
+        top_match = re.match(r"^- `([a-z0-9_]+)`", line)
+        nested_match = re.match(r"^  - `([a-z0-9_]+)`", line)
+        if top_match:
+            top.append(top_match.group(1))
+        elif nested_match:
+            nested.append((nested_match.group(1), line))
+    return top, nested
+
+
+def test_readme_launcher_contract_matches_the_sidecar(tmp_path):
+    from _opencode_merge_helpers import World
+    from quoin.opencode_adapter import compiler
+
+    result = compiler.build(World(tmp_path).evaluate())
+    top, nested = _launcher_keys()
+    assert sorted(top) == sorted(result.sidecar)
+    assert len(top) == len(set(top))
+    assert sorted(name for name, _ in nested) == sorted(result.sidecar["launch_requirements"])
+    protected_line = next(line for name, line in nested if name == "protected_keys")
+    named = re.findall(r"`([^`]+)`", protected_line)[1:]
+    assert sorted(named) == sorted(compiler.PROTECTED_KEYS)
+    assert sorted(named) == sorted(result.sidecar["launch_requirements"]["protected_keys"])
+
+
+def test_readme_file_locations_match_the_path_functions():
+    from quoin.opencode_adapter import paths
+
+    env = {"XDG_CONFIG_HOME": "/xdgconfig", "XDG_STATE_HOME": "/xdgstate"}
+    home = paths.Path("/somehome")
+    root = paths.Path("/some/project")
+
+    def shown(path, **swaps):
+        text = str(path).replace("/xdgconfig", "$XDG_CONFIG_HOME").replace("/xdgstate", "$XDG_STATE_HOME")
+        for old, new in swaps.items():
+            text = text.replace(old, new)
+        return text
+
+    block = _readme_block("File locations", 3)
+    assert shown(paths.profile_path("xnamex", env, home), xnamex="NAME") in block
+    assert shown(paths.qualification_path("xnamex", env, home), xnamex="NAME") in block
+    key = paths.project_key(root)
+    compiled = shown(paths.compiled_output_dir("xprofx", root, env, home), xprofx="PROFILE", **{key: "PROJECT_KEY"})
+    assert compiled + "/opencode.json" in block
+    assert paths.ENV_MANAGED_POLICY in block
+    assert paths.project_runtime_path(root).name in block and ".quoin/runtime.json" in block
+
+
+def test_readme_says_the_work_profile_is_not_supported_and_records_stay_unset():
+    body = _readme_block("Work profile status", 3)
+    assert re.search(r"work profile is not yet supported", body)
+    assert "not set" in body

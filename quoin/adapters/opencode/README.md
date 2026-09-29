@@ -18,6 +18,10 @@ backend.
   without a real gateway or API credentials.
 - `fixtures/scenarios.json` — the data-only catalogue of request/response
   shapes the fake server plays back.
+- `quoin opencode config explain|compile|import-preview` and
+  `quoin opencode probe` — the runtime-configuration commands: resolve the
+  layered profile, compile a native config outside the project, propose a
+  personal profile, and qualify a model (see "Runtime configuration").
 - `feature-manifest.json` — the classified catalogue of every Quoin skill,
   with a support status, a target milestone, and the OpenCode asset names
   generated for it. See "Support classification" below.
@@ -170,6 +174,131 @@ explicitly allowed to substitute into it. A path is always rendered under
 its matching root's display name (see the install and script-runner
 sections above), never as a raw absolute path; the doctor never echoes
 file content, exception text or an environment variable's value.
+
+## Runtime configuration
+
+Runtime configuration decides which provider and model each Quoin role uses
+when OpenCode runs, and compiles that decision into a native OpenCode config
+file that is kept outside the project. It is layered: a personal profile,
+an optional project file that may only narrow it, and an optional managed
+policy that only constrains. Everything described here is checked offline;
+no live OpenCode run or corporate gateway has been qualified.
+
+### Commands
+
+- `quoin opencode config explain [--profile NAME] [--project-root PATH] [--redact] [--json]`
+  shows how the layers resolve, which roles are blocked and why, and where the
+  compiled files would go. `--redact` masks endpoint hosts, keychain accounts
+  and the output location. Exit 0 when compilable, 1 when a blocking finding
+  remains, 2 for configuration or usage errors.
+- `quoin opencode config compile --profile NAME [--project-root PATH] [--output DIR] [--check] [--allow-unqualified]`
+  writes the compiled pair (see file locations). `--check` writes nothing and
+  reports whether the files on disk match a fresh build. `--allow-unqualified`
+  accepts models without a valid qualification record and marks the result
+  not launchable; it is refused for a work project under a managed policy.
+  Exit 0 written or up to date, 1 blocked or stale, 2 configuration, usage or
+  file-system errors.
+- `quoin opencode config import-preview [--profile-name NAME] [--apply] [--confirm-model-id ID ...] [--force]`
+  proposes a personal profile from the tier-to-model mapping `quoin models`
+  keeps. The preview reads that mapping and writes nothing. `--apply` writes
+  the profile only when every provider model id in the proposal is confirmed
+  with `--confirm-model-id` (the `model_id` values, not the `or-*` names) and
+  nothing else is; an existing profile is kept unless `--force` is given.
+  Exit 0 for a preview or a write, 2 for anything refused.
+- `quoin opencode probe --profile NAME --synthetic-only [--model NAME] [--project-root PATH]`
+  qualifies one profile model against its gateway and writes its qualification
+  record. Exit 0 qualified, 1 not qualified, 2 could not run or refused.
+
+### File locations
+
+- Profiles: `$XDG_CONFIG_HOME/quoin/opencode/profiles/NAME.json`.
+- Project file: `.quoin/runtime.json` in the project root.
+- Managed policy: the file named by `QUOIN_OPENCODE_MANAGED_POLICY`; there is
+  no platform default location.
+- Qualification records: `$XDG_CONFIG_HOME/quoin/opencode/qualifications/NAME.json`.
+- Compiled pair: `$XDG_STATE_HOME/quoin/opencode/PROFILE/PROJECT_KEY/opencode.json`
+  and `quoin-compile.json` next to it. The compiled files are never written
+  inside the project or its git checkout.
+
+`XDG_CONFIG_HOME` and `XDG_STATE_HOME` default to `.config` and
+`.local/state` under the home directory. Files are written mode 0600 into
+directories of mode 0700; an existing directory that other users can write
+to is refused.
+
+### Work profile status
+
+The work profile is not yet supported: no corporate gateway has been
+qualified, and every gateway value in `decisions.md` is still `not set`. The
+personal OpenRouter profile is the only one `import-preview` produces.
+
+### Qualification and the probe
+
+`quoin opencode probe` sends a short handshake to the model's gateway. It
+sends synthetic prompts only, but the requests are live and may be billed,
+which is why it refuses to run without `--synthetic-only`. It supports the
+chat-completions endpoint family only. The credential is resolved when the
+probe runs and handed to the probe script in memory; it is never placed on a
+command line, in a file or in output.
+
+The previous qualification record is removed before any request is sent, and
+every verdict, including could-not-run, writes a new record. A failed or
+interrupted re-probe therefore leaves the model unqualified (`failed` or
+missing), never still qualified. Records expire after 30 days or when the
+endpoint, the model id or the pinned OpenCode version changes.
+
+### Native schema subset
+
+The vendored native-config schema covers exactly the keys the compiler emits.
+It is stricter than OpenCode itself, keeps the upstream enums, and cites its
+sources and blob hashes in its `$comment` fields. `compatibility.md` has the
+per-fact rows the compiler relies on.
+
+### Launcher contract
+
+Compiling writes `quoin-compile.json` beside the native file. A launcher reads
+these keys:
+
+- `sidecar_format` — version of this file's layout.
+- `digest` — digest of every input that shaped the native file.
+- `native_sha256` — SHA-256 of the native file's exact bytes.
+- `launchable` — false when unqualified models were accepted; refuse to launch.
+- `unqualified_models` — the models accepted without a valid record.
+- `pinned_version` — the OpenCode version the compilation targets.
+- `profile` — the profile name.
+- `project_key` — the stable key of the project directory.
+- `classification` — the effective work or personal classification.
+- `role_resolutions` — per role: model, provider, effort and origin.
+- `auxiliary_resolutions` — the same for the title and compaction agents.
+- `effort_diagnostics` — roles whose effort was left out, with the reason.
+- `credential_env` — environment variable name to profile provider id.
+- `native_provider` — profile provider id to native provider id.
+- `launch_requirements` — what a launcher must do:
+  - `config_path_env` — the variable that carries the compiled file's path.
+  - `protected_keys` — the keys later config layers must not change: `$schema`, `model`, `small_model`, `agent`, `share`, `autoupdate`, `enabled_providers`, `provider`, `experimental.policies`.
+  - `credential_env_required` — every `credential_env` name must be exported with a value.
+
+A launcher must:
+
+1. Refuse a compiled pair with `launchable: false`.
+2. Rebuild in memory, or run `config compile --check` immediately before launch, and verify `native_sha256` rather than trusting the stored files.
+3. Pass the compiled file through `OPENCODE_CONFIG`.
+4. For every `credential_env` name, resolve that provider's `credential_ref` at launch and export a non-empty value under that name only; refuse on an empty value.
+5. Remove `OPENROUTER_API_KEY` and other ambient provider credential variables from the child environment. The OpenRouter kind keeps OpenCode's built-in provider id and would otherwise fall back to an ambient or stored key.
+6. Use an isolated OpenCode data directory so keys stored by `opencode auth` are not merged in.
+7. Verify that the `protected_keys` were not overridden by later config layers: the project's `opencode.json(c)`, `.opencode` files, `OPENCODE_CONFIG_CONTENT`, and organization or managed config.
+8. Never put a secret on a command line.
+
+### Retry policy
+
+The retry policy is a library only; the launcher consumes it. Connect
+errors, timeouts, 429 and 5xx responses are transient; authentication,
+policy, configuration and other responses are not. `Retry-After` is honoured
+(seconds or an HTTP date) without jitter and capped at 30 seconds, otherwise
+delays use exponential backoff with full jitter. The attempt cap comes from
+`max_transient_retries` and the time budget from `max_run_seconds`. A request
+is never repeated while a state-changing tool is running. Unknown token or
+cost usage stays unknown (`None`) when totalled, and a retry never moves work
+to another profile.
 
 ## Running the probe
 

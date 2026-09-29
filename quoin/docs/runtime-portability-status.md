@@ -122,7 +122,9 @@ Status: generated project assets, offline-verified; no live runtime evidence.
   `quoin/adapters/opencode/feature-manifest.json` as supported,
   documentation-only, or unsupported for OpenCode.
 - Gateway qualification tooling lives in `quoin/adapters/opencode/` (probe and
-  offline fake provider).
+  offline fake provider). `quoin opencode config explain|compile|import-preview`
+  and `quoin opencode probe` are offline-verified configuration tooling; the
+  work profile is not yet supported, and there is still no live runtime evidence.
 - Pinned release and claim status in `quoin/adapters/opencode/compatibility.md`.
 - Open maintainer decisions in `quoin/adapters/opencode/decisions.md`.
 - There is no global OpenCode installer or global OpenCode path assumed; all
