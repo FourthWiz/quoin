@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "allowed_hosts": [
+      "gateway.example.invalid"
+    ],
+    "denied_providers": [
+      "corp-gw-b"
+    ],
+    "sharing": "deny"
+  },
+  "limits": {
+    "max_tool_calls": 250
+  }
+}

@@ -13,7 +13,7 @@ import pytest
 
 import _opencode_helpers as helpers
 from test_opencode_config_errors import SHAPES
-from quoin.opencode_adapter import config, errors, generate, install, paths, secrets as refs
+from quoin.opencode_adapter import config, errors, generate, install, merge, paths, secrets as refs
 from quoin.opencode_adapter.errors import ConfigErrors
 
 SOURCE_DIR = helpers.SOURCE_DIR
@@ -22,7 +22,7 @@ SCHEMA_PATH = SOURCE_DIR / "adapters" / "opencode" / "schemas" / "runtime-config
 SRC_DIR = SOURCE_DIR.parent / "src" / "quoin" / "opencode_adapter"
 CASES = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))
 ALLOWED_ENV_READS = {"XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY"}
-NEW_MODULES = ("errors", "paths", "jsonio", "schema_check", "secrets", "config")
+NEW_MODULES = ("errors", "paths", "jsonio", "schema_check", "secrets", "config", "merge")
 
 
 class RecordingEnv(dict):
@@ -70,9 +70,14 @@ def run_case(case, tmp_path):
     if splice:
         text = text.replace(splice["marker"], SHAPES[{"sk": "sk-proj", "ghp": "ghp", "akia": "akia",
                             "xox": "xox", "bearer": "bearer", "jwt": "jwt"}[splice["shape"]]])
-    for comp in (case.get("companions") or {}).values():
+    for kind, comp in (case.get("companions") or {}).items():
         comp_text = read_fixture(comp)
-        _install_profile(env, home, comp_text, json.loads(comp_text)["profile"])
+        if kind == "profile":
+            _install_profile(env, home, comp_text, json.loads(comp_text)["profile"])
+        else:
+            companion = tmp_path / "companion-managed.json"
+            companion.write_text(comp_text, encoding="utf-8")
+            env["QUOIN_OPENCODE_MANAGED_POLICY"] = str(companion)
     layer = case["layer"]
     if layer == "managed":
         target = tmp_path / "managed.json"
@@ -118,17 +123,19 @@ def test_cases_file_shape():
         assert set(case) <= {"id", "file", "layer", "jsonschema_valid", "install_as", "companions",
                              "classification_state", "select"}
         assert case["layer"] in ("profile", "project", "managed")
+        assert set(case.get("companions") or {}) <= {"profile", "managed"}
     for case in CASES["invalid"]:
         assert set(case) <= {"id", "file", "layer", "expected_class", "expected_path",
                              "expected_file_label", "jsonschema_valid", "install_as", "companions",
                              "select", "splice", "offending_value", "note"}
         assert case["jsonschema_valid"] in (True, False, None)
         assert case["layer"] in ("profile", "project", "managed")
+        assert set(case.get("companions") or {}) <= {"profile", "managed"}
 
 
 def test_every_load_class_has_a_case_and_classes_are_known():
     used = {c["expected_class"] for c in CASES["invalid"]}
-    assert errors.LOAD_CLASSES <= used
+    assert errors.REJECTION_CLASSES <= used
     assert used <= errors.REJECTION_CLASSES
 
 
@@ -156,7 +163,13 @@ def test_fixtures_hold_no_secret_shapes_and_are_plain_utf8():
 
 @pytest.mark.parametrize("case", CASES["invalid"], ids=lambda c: c["id"])
 def test_invalid_case(case, tmp_path, offline_traps):
-    env, call = run_case(case, tmp_path)
+    env, load = run_case(case, tmp_path)
+
+    def call():
+        loaded = load()
+        if case["layer"] != "managed":
+            merge.ensure_compilable(merge.merge(loaded))
+
     with pytest.raises(ConfigErrors) as info:
         call()
     exc = info.value
@@ -190,6 +203,21 @@ def test_valid_case(case, tmp_path, offline_traps):
     assert layer is not None
     if "classification_state" in case:
         assert layer.classification_state == case["classification_state"]
+    if case["layer"] != "managed":
+        blockers = merge.compile_blockers(merge.merge(result))
+        if case["layer"] == "profile":
+            assert [(e.rejection_class, e.json_path, e.message_id) for e in blockers] == [
+                ("missing-classification", "$", "no-project-file")
+            ]
+        elif case["classification_state"] in ("work", "personal"):
+            assert blockers == ()
+            merge.ensure_compilable(merge.merge(result))
+        else:
+            assert [(e.rejection_class, e.json_path) for e in blockers] == [
+                ("missing-classification", "$")
+            ]
+            with pytest.raises(ConfigErrors):
+                merge.ensure_compilable(merge.merge(result))
     assert set(env.reads) <= ALLOWED_ENV_READS
     for name in env.reads:
         assert not name.endswith("_API_KEY")

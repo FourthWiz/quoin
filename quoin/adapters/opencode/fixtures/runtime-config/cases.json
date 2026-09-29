@@ -60,6 +60,22 @@
       "file": "valid/managed-work.json",
       "layer": "managed",
       "jsonschema_valid": true
+    },
+    {
+      "id": "project-work-narrow",
+      "file": "valid/project-work-narrow.json",
+      "layer": "project",
+      "jsonschema_valid": true,
+      "classification_state": "work",
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "managed-strict",
+      "file": "valid/managed-strict.json",
+      "layer": "managed",
+      "jsonschema_valid": true
     }
   ],
   "invalid": [
@@ -489,6 +505,102 @@
       "expected_file_label": "profiles/work.json",
       "jsonschema_valid": true,
       "install_as": "work"
+    },
+    {
+      "id": "allowlist-broadening-provider",
+      "file": "invalid/allowlist-broadening-provider.json",
+      "layer": "project",
+      "expected_class": "allowlist-broadening",
+      "expected_path": "$.policy.allowed_providers[0]",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json",
+        "managed": "valid/managed-work.json"
+      }
+    },
+    {
+      "id": "allowlist-broadening-host",
+      "file": "invalid/allowlist-broadening-host.json",
+      "layer": "project",
+      "expected_class": "allowlist-broadening",
+      "expected_path": "$.policy.allowed_hosts[0]",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "personal-profile-for-work",
+      "file": "invalid/personal-profile-for-work.json",
+      "layer": "project",
+      "expected_class": "personal-profile-for-work",
+      "expected_path": "$.classification",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-personal.json"
+      }
+    },
+    {
+      "id": "missing-classification",
+      "file": "invalid/missing-classification.json",
+      "layer": "project",
+      "expected_class": "missing-classification",
+      "expected_path": "$",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "missing-classification-unknown",
+      "file": "invalid/missing-classification-unknown.json",
+      "layer": "project",
+      "expected_class": "missing-classification",
+      "expected_path": "$.classification",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "limit-above-ceiling",
+      "file": "invalid/limit-above-ceiling.json",
+      "layer": "project",
+      "expected_class": "limit-above-ceiling",
+      "expected_path": "$.limits.max_run_seconds",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json",
+        "managed": "valid/managed-work.json"
+      }
+    },
+    {
+      "id": "limit-above-profile",
+      "file": "invalid/limit-above-profile.json",
+      "layer": "project",
+      "expected_class": "limit-above-ceiling",
+      "expected_path": "$.limits.max_tool_calls",
+      "expected_file_label": ".quoin/runtime.json",
+      "jsonschema_valid": true,
+      "companions": {
+        "profile": "valid/profile-work.json"
+      }
+    },
+    {
+      "id": "personal-provider-kind-for-work",
+      "file": "invalid/personal-provider-kind-for-work.json",
+      "layer": "profile",
+      "expected_class": "personal-provider-kind-for-work",
+      "expected_path": "$.providers.openrouter.kind",
+      "expected_file_label": "profiles/work-or.json",
+      "jsonschema_valid": true,
+      "install_as": "work-or"
     }
   ]
 }

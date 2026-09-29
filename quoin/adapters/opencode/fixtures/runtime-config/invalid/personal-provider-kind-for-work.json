@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work-or",
+  "classification": "work",
+  "providers": {
+    "openrouter": {
+      "kind": "openrouter",
+      "endpoint_family": "chat-completions",
+      "base_url": "https://openrouter.ai/api/v1",
+      "credential_ref": "env:OPENROUTER_API_KEY"
+    }
+  },
+  "models": {
+    "router-model": {
+      "provider": "openrouter",
+      "model_id": "example-vendor/example-model",
+      "qualification_ref": "local:router-model"
+    }
+  },
+  "default_model": "router-model"
+}

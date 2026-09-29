@@ -993,6 +993,55 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/fixtures/runtime-config/valid/project-work.json",
         "quoin/dev/tests/test_opencode_runtime_config.py",
     ),
+    # Fixtures that exercise merging and role resolution as well as loading.
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/allowlist-broadening-host.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/allowlist-broadening-provider.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/limit-above-ceiling.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/limit-above-profile.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/missing-classification-unknown.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/missing-classification.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/personal-profile-for-work.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/personal-provider-kind-for-work.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/managed-strict.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/project-work-narrow.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/managed-strict.json",
+        "quoin/dev/tests/test_opencode_role_resolution.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/project-work-narrow.json",
+        "quoin/dev/tests/test_opencode_role_resolution.py",
+    ),
     (
         ".github/workflows/adapter-check.yml",
         "quoin/dev/tests/test_opencode_manifest.py",

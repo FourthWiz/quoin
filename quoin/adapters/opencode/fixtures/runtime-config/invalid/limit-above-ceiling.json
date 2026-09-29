@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "limits": {
+    "max_run_seconds": 7200
+  }
+}
