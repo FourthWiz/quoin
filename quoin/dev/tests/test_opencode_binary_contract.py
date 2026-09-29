@@ -180,13 +180,14 @@ def test_binary_resolves_the_instruction_document(installed_project):
     ), instructions
 
 
-def test_binary_keeps_the_compiled_security_keys(tmp_path):
+@pytest.mark.parametrize("golden_name", ["work", "work-variants"])
+def test_binary_keeps_the_compiled_security_keys(tmp_path, golden_name):
     """A compiled configuration pointed at through `OPENCODE_CONFIG` keeps its
     provider allowlist, model pins, small model, title agent, sharing switch
     and policy list after the binary has merged and decoded it. Project
     config is disabled and the placeholder variables carry dummy values, so
     nothing outside the fixture influences the result."""
-    golden = SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "compiled" / "work.opencode.json"
+    golden = SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "compiled" / ("%s.opencode.json" % golden_name)
     expected = json.loads(golden.read_text(encoding="utf-8"))
     config_file = tmp_path / "opencode.json"
     config_file.write_bytes(golden.read_bytes())
@@ -217,3 +218,12 @@ def test_binary_keeps_the_compiled_security_keys(tmp_path):
     assert decoded["agent"]["title"]["model"] == expected["agent"]["title"]["model"]
     assert decoded["share"] == expected["share"]
     assert decoded["experimental"]["policies"] == expected["experimental"]["policies"]
+    for provider_id, provider in expected["provider"].items():
+        assert decoded["provider"][provider_id]["whitelist"] == provider["whitelist"]
+        for model_id, model in provider["models"].items():
+            kept = decoded["provider"][provider_id]["models"][model_id]
+            for variant_name, variant in model.get("variants", {}).items():
+                assert kept["variants"][variant_name] == variant
+    for agent_name, agent in expected["agent"].items():
+        if "variant" in agent:
+            assert decoded["agent"][agent_name]["variant"] == agent["variant"]

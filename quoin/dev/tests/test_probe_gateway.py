@@ -1020,7 +1020,7 @@ def test_affected_tests_self_check():
         "test_opencode_schema_check.py",
         "test_opencode_compiler.py",
     }
-    for golden in ("work", "personal"):
+    for golden in ("work", "work-variants", "personal"):
         per_file_expected["quoin/adapters/opencode/fixtures/compiled/%s.opencode.json" % golden] = {
             "test_opencode_compiler.py",
             "test_opencode_native_schema.py",

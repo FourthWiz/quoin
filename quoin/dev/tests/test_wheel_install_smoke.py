@@ -236,11 +236,12 @@ def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
         "quoin/opencode_adapter/qualification.py",
         "quoin/opencode_adapter/roles.py",
         # native configuration compiler, its explain renderer, the vendored
-        # subset schema and the two compiled reference documents
+        # subset schema and the three compiled reference documents
         "quoin/opencode_adapter/compiler.py",
         "quoin/opencode_adapter/explain.py",
         "quoin/data/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
         "quoin/data/adapters/opencode/fixtures/compiled/work.opencode.json",
+        "quoin/data/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
         "quoin/data/adapters/opencode/fixtures/compiled/personal.opencode.json",
     ]
     required += [

@@ -331,7 +331,7 @@ GOLDENS = sorted((SCHEMA_PATH.parent.parent / "fixtures" / "compiled").glob("*.o
 
 
 def test_golden_documents_validate_offline():
-    assert [p.name for p in GOLDENS] == ["personal.opencode.json", "work.opencode.json"]
+    assert [p.name for p in GOLDENS] == ["personal.opencode.json", "work-variants.opencode.json", "work.opencode.json"]
     for path in GOLDENS:
         doc = json.loads(path.read_text(encoding="utf-8"))
         assert violations(doc) == [], path.name

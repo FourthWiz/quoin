@@ -828,6 +828,18 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_opencode_docs.py",
     ),
     (
+        "quoin/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
+        "quoin/dev/tests/test_opencode_compiler.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
+        "quoin/dev/tests/test_opencode_native_schema.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
         "quoin/adapters/opencode/fixtures/compiled/personal.opencode.json",
         "quoin/dev/tests/test_opencode_compiler.py",
     ),

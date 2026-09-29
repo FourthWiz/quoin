@@ -1011,34 +1011,63 @@ def test_compile_and_check_leave_the_installed_project_untouched(tmp_path):
 GOLDEN_DIR = helpers.SOURCE_DIR / "adapters" / "opencode" / "fixtures" / "compiled"
 
 
+GOLDEN_NAMES = ["work", "work-variants", "personal"]
+
+
+def _report_reasoning_support(world):
+    """Rewrite every qualification record so the model reports supported
+    reasoning parameters, as a gateway that accepts an effort setting would."""
+    for model in world.effective().models.values():
+        target = paths.qualification_path(model.qualification_ref[len("local:"):], world.env, world.home)
+        record = json.loads(target.read_text(encoding="utf-8"))
+        record["capabilities"]["reasoning_parameters"] = {
+            "status": "supported", "source": "observed", "value": None, "detail": None,
+        }
+        target.write_text(json.dumps(record), encoding="utf-8")
+
+
 def golden_bytes(name, tmp_path):
     """The compiled document for a golden scenario, as written to disk.
 
     The work scenario is the work profile with a classified project that
-    narrows nothing; the personal scenario is the personal profile. Both use
-    qualification records built by the probe itself at the fixed clock. To
-    regenerate a golden after an intended change, call this function from a
-    REPL (with the tests directory on `sys.path`) and write the result to
-    `quoin/adapters/opencode/fixtures/compiled/<name>.opencode.json`.
+    narrows nothing; the personal scenario is the personal profile; the
+    work-variants scenario is the work scenario with every model's record
+    reporting supported reasoning parameters, so effort variants are emitted.
+    All use qualification records built by the probe itself at the fixed
+    clock. To regenerate a golden after an intended change, call this
+    function from a REPL (with the tests directory on `sys.path`) and write
+    the result to `quoin/adapters/opencode/fixtures/compiled/<name>.opencode.json`.
     """
-    profile = {"work": PROFILE_WORK, "personal": PROFILE_PERSONAL}[name]
-    return compiler.build(World(tmp_path, profile=profile).evaluate()).native_bytes
+    profile = {"work": PROFILE_WORK, "work-variants": PROFILE_WORK, "personal": PROFILE_PERSONAL}[name]
+    world = World(tmp_path, profile=profile)
+    if name == "work-variants":
+        _report_reasoning_support(world)
+    return compiler.build(world.evaluate()).native_bytes
 
 
-@pytest.mark.parametrize("name", ["work", "personal"])
+@pytest.mark.parametrize("name", GOLDEN_NAMES)
 def test_goldens_are_current_and_byte_identical(tmp_path, name):
     committed = (GOLDEN_DIR / ("%s.opencode.json" % name)).read_bytes()
     assert golden_bytes(name, tmp_path / "first") == committed
     assert golden_bytes(name, tmp_path / "second") == committed
 
 
-@pytest.mark.parametrize("name", ["work", "personal"])
+@pytest.mark.parametrize("name", GOLDEN_NAMES)
 def test_goldens_validate_against_the_subset_schema(name):
     from quoin.opencode_adapter import schema_check
 
     schema = json.loads(paths.native_schema_path().read_text(encoding="utf-8"))
     doc = json.loads((GOLDEN_DIR / ("%s.opencode.json" % name)).read_text(encoding="utf-8"))
     assert schema_check.validate(doc, schema, "config") == []
+
+
+def test_the_variant_golden_really_carries_variants():
+    doc = json.loads((GOLDEN_DIR / "work-variants.opencode.json").read_text(encoding="utf-8"))
+    models = [m for p in doc["provider"].values() for m in p["models"].values()]
+    assert any(m.get("variants") for m in models)
+    assert any("variant" in agent for name, agent in doc["agent"].items() if name.startswith("quoin-"))
+    plain = json.loads((GOLDEN_DIR / "work.opencode.json").read_text(encoding="utf-8"))
+    assert "variant" not in json.dumps(plain["agent"])
 
 
 # ============================================ compiled matrix and boundaries
