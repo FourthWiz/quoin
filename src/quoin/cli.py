@@ -608,6 +608,48 @@ def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_opencode_probe(args: argparse.Namespace) -> int:
+    import types
+
+    from quoin.opencode_adapter import paths, probe_cli
+    from quoin.opencode_adapter.errors import ConfigErrors
+    from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
+
+    env = _opencode_config_env()
+    # A copy behind a read-only view: the probe can read credential variables
+    # to resolve a reference but nothing can write through to the real
+    # environment.
+    environ = types.MappingProxyType(dict(os.environ))
+    try:
+        return probe_cli.run(
+            profile=args.profile,
+            model=args.model,
+            project_root=pathlib.Path(args.project_root) if args.project_root else None,
+            synthetic_only=args.synthetic_only,
+            env=env,
+            environ=environ,
+            home=pathlib.Path.home(),
+            now=datetime.now(timezone.utc),
+            platform=sys.platform,
+        )
+    except ConfigErrors as exc:
+        for item in exc.errors:
+            print(str(item), file=sys.stderr)
+        return 2
+    except paths.AdapterDataMissing:
+        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
+        return 2
+    except UnsafeDirectoryError as exc:
+        print("quoin: the qualification directory is not private enough: %s" % exc, file=sys.stderr)
+        return 2
+    except OSError:
+        print(
+            "quoin: the probe could not read or write its files; check the qualification directory",
+            file=sys.stderr,
+        )
+        return 2
+
+
 def _codex_script(source_dir: pathlib.Path, name: str) -> pathlib.Path:
     script = source_dir / "adapters" / "codex" / name
     if not script.is_file():
@@ -1541,7 +1583,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opencode_p = sub.add_parser(
         "opencode",
-        description="Repo-local OpenCode helpers (uninstall the .opencode/ scaffold; run an allowlisted Quoin script; explain or compile the runtime configuration).",
+        description="Repo-local OpenCode helpers (uninstall the .opencode/ scaffold; run an allowlisted Quoin script; explain or compile the runtime configuration; probe a gateway model).",
         help="Repo-local OpenCode helpers",
     )
     opencode_sub = opencode_p.add_subparsers(dest="opencode_command")
@@ -1633,6 +1675,32 @@ def main(argv: list[str] | None = None) -> int:
         "--allow-unqualified",
         action="store_true",
         help="Accept models without a valid qualification record (refused for work under a managed policy).",
+    )
+
+    opencode_probe_p = opencode_sub.add_parser(
+        "probe",
+        description=(
+            "Qualify a profile model against its gateway with a short synthetic handshake. "
+            "The probe sends live requests that may be billed, and writes a qualification "
+            "record that compile checks."
+        ),
+        help="Qualify a profile model against its gateway with a short synthetic handshake",
+    )
+    opencode_probe_p.add_argument("--profile", required=True, help="Profile name.")
+    opencode_probe_p.add_argument(
+        "--synthetic-only",
+        action="store_true",
+        help="Confirm that only synthetic prompts are sent; the probe refuses to run without it.",
+    )
+    opencode_probe_p.add_argument(
+        "--model",
+        metavar="NAME",
+        help="Profile model name to probe; defaults to the profile's default model.",
+    )
+    opencode_probe_p.add_argument(
+        "--project-root",
+        default=None,
+        help="Also apply this project's classification and policy; it must be classified work or personal.",
     )
 
     dashboard_p = sub.add_parser(
@@ -1838,6 +1906,8 @@ def main(argv: list[str] | None = None) -> int:
             return run_uninstall(args.project_root, args.dry_run, sys.stdout, sys.stderr)
         if args.opencode_command == "script":
             return _cmd_opencode_script(args)
+        if args.opencode_command == "probe":
+            return _cmd_opencode_probe(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)
