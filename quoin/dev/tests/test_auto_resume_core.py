@@ -710,6 +710,139 @@ def test_handoff_lock_create_race_refuses_instead_of_overwriting(ar, project, mo
     assert json.loads((memory / "run-supervisor-demo.pid").read_text()) == winner_lock
 
 
+# ---------------------------------------------------------------------------
+# MAJ round-2 reproduction: lock creation atomicity + conditional stale
+# removal (review-2 issue 2).
+# ---------------------------------------------------------------------------
+
+
+def test_create_lock_exclusive_never_publishes_a_half_written_file(ar, project):
+    """The atomic creator must never let a reader observe `lock_path`
+    existing but empty — the old O_CREAT|O_EXCL-then-`os.write` split left
+    exactly that window. Once it returns True, the file is already fully
+    populated, and it leaves no temp file behind."""
+    memory = project / ".workflow_artifacts" / "memory"
+    memory.mkdir(parents=True, exist_ok=True)
+    lock_path = memory / "run-supervisor-demo.pid"
+    payload = json.dumps({"pid": 123, "granted": 3, "writer": "handoff"}).encode("utf-8") + b"\n"
+
+    assert ar._create_lock_exclusive(lock_path, payload) is True
+    assert lock_path.read_bytes() == payload
+    leftovers = [p for p in memory.iterdir() if p.name != lock_path.name]
+    assert leftovers == [], f"temp file(s) left behind: {leftovers}"
+
+    # A second creator loses the race against the now-fully-populated file.
+    assert ar._create_lock_exclusive(lock_path, b'{"pid": 456}\n') is False
+    assert lock_path.read_bytes() == payload
+
+
+def test_do_handoff_refuses_fresh_empty_lock_instead_of_clobbering(ar, project, monkeypatch):
+    """Empty-lock-window reproduction: a lock file that exists but fails to
+    parse (as an in-flight winner's create would look for a moment under
+    the old split-write) must never be treated as stale on emptiness alone
+    while it's still fresh — a racing loser must refuse, not clobber a
+    winner's lock that simply hasn't been observed as valid yet."""
+    _mock_successful_spawn(ar, monkeypatch)
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
+              "resume_command": "/run --resume demo"}
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    monkeypatch.setattr(ar, "_supervisor_lock_live", lambda mem, task: False)
+    lock_path = memory / "run-supervisor-demo.pid"
+    lock_path.write_text("")  # empty — unparseable, and freshly written
+
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, record)
+
+    assert result == "LOCKED|"
+    assert lock_path.read_text() == "", "a fresh empty lock must not be clobbered"
+
+
+def test_do_handoff_reclaims_old_empty_lock_and_spawns(ar, project, monkeypatch):
+    """An empty/unparseable lock old enough that it cannot still be
+    mid-write (well past the atomic creator's own latency) is genuinely
+    abandoned — e.g. a crash before this fix shipped — and must be
+    reclaimable so `quoin run --autonomous` doesn't refuse forever."""
+    _mock_successful_spawn(ar, monkeypatch)
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
+              "resume_command": "/run --resume demo"}
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    monkeypatch.setattr(ar, "_supervisor_lock_live", lambda mem, task: False)
+    lock_path = memory / "run-supervisor-demo.pid"
+    lock_path.write_text("")
+    old_time = time.time() - (ar._STALE_UNPARSEABLE_LOCK_SECS + 5)
+    os.utime(lock_path, (old_time, old_time))
+
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, record)
+
+    assert result.startswith("HANDOFF|")
+    written = json.loads(lock_path.read_text())
+    assert written["pid"] == 4242
+
+
+def test_claim_lock_for_removal_lets_only_one_racer_win(ar, project):
+    """Concurrent double-spawn reproduction, at the primitive level:
+    `settle_supervisor`'s old read-then-unlink let two racers both read the
+    same dead-pid lock before either removed it, so both could charge its
+    grant (and, via the retry path this backs, both could go on to spawn a
+    supervisor). `_claim_lock_for_removal`'s atomic rename means only one
+    of two racing claims against the same lock can ever return content —
+    the second always sees the (already-renamed-away) source gone."""
+    memory = project / ".workflow_artifacts" / "memory"
+    memory.mkdir(parents=True, exist_ok=True)
+    lock_path = memory / "run-supervisor-demo.pid"
+    lock_path.write_text(json.dumps({"pid": 999, "granted": 3, "writer": "handoff"}))
+
+    first = ar._claim_lock_for_removal(lock_path)
+    second = ar._claim_lock_for_removal(lock_path)
+
+    assert first is not None and first["granted"] == 3
+    assert second is None
+    assert not lock_path.exists()
+
+
+def test_settle_supervisor_charges_a_dead_lock_exactly_once(ar, project, monkeypatch):
+    """Invariant (not itself the race, which is covered at the primitive
+    level above): calling `settle_supervisor` again after it has already
+    consumed a dead-pid lock must never re-charge — the lock is gone, so
+    there is nothing left to read."""
+    memory = project / ".workflow_artifacts" / "memory"
+    memory.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(ar, "_pid_alive", lambda pid: False)
+    ar._write_lock(memory, "demo", pid=999, granted=3, writer="handoff")
+
+    counter_a = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter_a = ar.settle_supervisor(memory, "demo", counter_a)
+    assert counter_a["attempts"] == 3
+    assert not (memory / "run-supervisor-demo.pid").exists()
+
+    counter_b = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter_b = ar.settle_supervisor(memory, "demo", counter_b)
+    assert counter_b["attempts"] == 0
+
+
+def test_do_handoff_live_lock_is_never_reclaimed(ar, project, monkeypatch):
+    """Stale-vs-live reproduction: a lock naming a pid that is still alive
+    must never be reclaimed, regardless of the create race."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
+              "resume_command": "/run --resume demo"}
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    monkeypatch.setattr(ar, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(ar, "_supervisor_lock_live", lambda mem, task: False)  # force past the early check
+    live_lock = {"pid": 999, "started_at": "x", "granted": 3, "writer": "handoff"}
+    lock_path = memory / "run-supervisor-demo.pid"
+    lock_path.write_text(json.dumps(live_lock))
+
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, record)
+
+    assert result == "LOCKED|999"
+    assert json.loads(lock_path.read_text()) == live_lock
+
+
 def test_handoff_on_fail_halt_skips_halt_when_locked(ar, project, monkeypatch, capsys):
     """MAJ: `--on-fail-halt` must never halt a supervised child just
     because a live supervisor already holds the lock — that is the normal

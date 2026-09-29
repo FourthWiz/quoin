@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import traceback
 import uuid
 from datetime import datetime, timezone
@@ -392,23 +393,102 @@ def _write_lock(
 
 
 def _create_lock_exclusive(lock_path: Path, payload: bytes) -> bool:
-    """Creates `lock_path` with O_CREAT|O_EXCL so two concurrent callers can
-    never both believe they hold the lock — the loser gets FileExistsError
-    and must fall back to a liveness check on what the winner wrote."""
+    """Creates `lock_path` atomically and already fully populated with
+    `payload`, so no reader can ever observe a lock file that exists but
+    is still empty. The previous O_CREAT|O_EXCL-then-`os.write` split left
+    exactly that window: a lock created but not yet written parsed as None,
+    which a racing reader treated as "not live" and unlinked out from under
+    the winner.
+
+    `payload` is written in full to a private tempfile in the same
+    directory first, then published under `lock_path` with `os.link` —
+    `os.link` fails with `FileExistsError` if `lock_path` already exists,
+    so at most one caller can ever win, and the file it publishes is
+    always the fully-written one (never a half-written one)."""
+    tmp_path = lock_path.parent / f".{lock_path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
     try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(str(tmp_path), str(lock_path))
+        return True
     except FileExistsError:
         return False
-    try:
-        os.write(fd, payload)
     finally:
-        os.close(fd)
-    return True
+        try:
+            os.unlink(str(tmp_path))
+        except OSError:
+            pass
+
+
+_STALE_UNPARSEABLE_LOCK_SECS = 5.0
+
+
+def _lock_is_stale(lock_path: Path) -> bool:
+    """A lock is reclaimable only when its owner is provably gone: a
+    parseable lock naming a dead pid, or a lock that still fails to parse
+    well past the atomic creator's own write latency. A lock that fails to
+    parse but is still fresh is never treated as stale on emptiness alone
+    — that was the regression this closes (round-1's O_CREAT|O_EXCL-then-
+    write split could leave a lock in exactly that state, and a racing
+    reader unlinked it out from under an in-flight winner). With the
+    atomic creator above, a lock only fails to parse now if it predates
+    this fix or was corrupted externally, so treating an old-enough
+    unparseable lock as stale keeps that recovery path without reopening
+    the race."""
+    data = _load_json(lock_path)
+    if data is not None:
+        try:
+            pid = int(data.get("pid", -1))
+        except (TypeError, ValueError):
+            return True
+        return not (pid > 0 and _pid_alive(pid))
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return False
+    return age > _STALE_UNPARSEABLE_LOCK_SECS
+
+
+def _claim_lock_for_removal(lock_path: Path):
+    """Atomically takes exclusive ownership of `lock_path` for removal and
+    returns the JSON content it held (or `None` if it had none, or if
+    another racer already claimed/removed it first).
+
+    `os.rename` within the same directory is atomic on POSIX: at most one
+    caller's rename against the same source name can ever succeed. A
+    second caller's rename fails with `FileNotFoundError` because the
+    first caller already moved it away, so the two can never both charge
+    the same crashed supervisor's grant or both believe they cleared the
+    path for a fresh create."""
+    claim_path = lock_path.parent / f"{lock_path.name}.stale-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        os.rename(str(lock_path), str(claim_path))
+    except OSError:
+        return None
+    try:
+        data = _load_json(claim_path)
+    finally:
+        try:
+            claim_path.unlink()
+        except OSError:
+            pass
+    return data
 
 
 def settle_supervisor(memory_dir: Path, task: str, counter: dict) -> dict:
     """Consume a finished supervisor's `.result`, or charge a crashed
-    supervisor's full grant when its lock names a dead pid (D-19)."""
+    supervisor's full grant when its lock names a dead pid (D-19).
+
+    The dead-lock charge-and-remove is claimed with `_claim_lock_for_removal`
+    before it is charged, not read-then-unlinked as two separate steps: two
+    processes racing to settle the same dead-pid lock could otherwise both
+    read it before either removed it and both charge its grant. Only the
+    caller whose atomic rename actually wins reads back real content and
+    charges anything; the loser's rename fails and it charges nothing."""
     result_path = _result_path(memory_dir, task)
     result = _load_json(result_path)
     if result is not None:
@@ -430,15 +510,18 @@ def settle_supervisor(memory_dir: Path, task: str, counter: dict) -> dict:
         except (TypeError, ValueError):
             pid = -1
         if pid > 0 and not _pid_alive(pid):
-            try:
-                granted = int(lock.get("granted", 0) or 0)
-            except (TypeError, ValueError):
-                granted = 0
-            counter["attempts"] = counter.get("attempts", 0) + granted
-            try:
-                lock_path.unlink()
-            except OSError:
-                pass
+            claimed = _claim_lock_for_removal(lock_path)
+            if claimed is not None:
+                try:
+                    claimed_pid = int(claimed.get("pid", -1))
+                except (TypeError, ValueError):
+                    claimed_pid = -1
+                if claimed_pid == pid:
+                    try:
+                        granted = int(claimed.get("granted", 0) or 0)
+                    except (TypeError, ValueError):
+                        granted = 0
+                    counter["attempts"] = counter.get("attempts", 0) + granted
     return counter
 
 
@@ -725,14 +808,16 @@ def _do_handoff(
     except OSError:
         return "NO_CLI|"
     if not _create_lock_exclusive(lock_path, reservation):
-        if _supervisor_lock_live(memory_dir, task):
+        # Losing the create only proves *something* is there now — not that
+        # it is stale. `_lock_is_stale` (not a bare liveness check) is what
+        # decides reclaim: a lock that is live, or unparseable-but-fresh
+        # (could be another creator's in-flight winner), is refused rather
+        # than clobbered.
+        if not _lock_is_stale(lock_path):
             lock = _load_json(lock_path) or {}
             return f"LOCKED|{lock.get('pid', '')}"
         counter = settle_supervisor(memory_dir, task, counter)
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
+        _claim_lock_for_removal(lock_path)
         if not _create_lock_exclusive(lock_path, reservation):
             lock = _load_json(lock_path) or {}
             return f"LOCKED|{lock.get('pid', '')}"
