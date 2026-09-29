@@ -7,10 +7,9 @@ gated on `--halt-on-abort`, and the SIGTERM/SIGINT abort path. Uses a fake
 clock, per the plan's own test recipe — no real `claude` subprocess or
 real sleep is ever involved.
 
-Does not attempt every branch in the architecture's exhaustive list (e.g.
-the O_CREAT|O_EXCL pre-reservation race-window closer described in D-06 is
-a documented simplification, see current-plan.md T-04) — the primary
-contracts below are what `/review` should treat as this task's baseline.
+Does not attempt every branch in the architecture's exhaustive list — the
+primary contracts below are what `/review` should treat as this task's
+baseline.
 """
 from __future__ import annotations
 
@@ -230,6 +229,40 @@ def test_live_foreign_lock_refuses_with_exit_3(monkeypatch, project):
     assert fn.state["n"] == 0  # never launched
     # the foreign lock is left alone — it names a live pid, not ours
     assert json.loads(lock_path.read_text())["pid"] == os.getpid()
+
+
+def test_lock_create_race_refuses_instead_of_overwriting(project, monkeypatch):
+    """MAJ reproduction: two processes can both find no live lock at read
+    time. The final create uses O_CREAT|O_EXCL so only one of them can
+    actually win — the loser must retry against the real winner and refuse,
+    never silently overwrite the winner's lock with its own pid."""
+    memory_dir = project / ".workflow_artifacts" / "memory"
+    lock_path = _lock_path(project, "demo")
+    result_path = memory_dir / "run-supervisor-demo.result"
+
+    winner_pid = os.getpid()  # our own pid is always alive
+    winner_lock = {"pid": winner_pid, "started_at": "x", "granted": 9, "writer": "cli", "task": "demo"}
+
+    real_read_json = cli._read_json
+    calls = {"n": 0}
+
+    def fake_read_json(path):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return None  # simulate a read before the winner's lock existed
+        return real_read_json(path)
+
+    monkeypatch.setattr(cli, "_read_json", fake_read_json)
+
+    # The concurrent winner has already created its lock on disk by the
+    # time our own O_CREAT|O_EXCL create runs.
+    lock_path.write_text(json.dumps(winner_lock))
+
+    acquired, held_pid = cli._acquire_supervisor_lock(memory_dir, lock_path, result_path, "demo", 9, None)
+
+    assert acquired is False
+    assert held_pid == winner_pid
+    assert json.loads(lock_path.read_text()) == winner_lock
 
 
 def test_dead_pid_cli_lock_is_replaced_and_run_proceeds(monkeypatch, project):

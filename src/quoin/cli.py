@@ -918,6 +918,7 @@ def _acquire_supervisor_lock(
     task: str,
     max_relaunch: int,
     token: "str | None",
+    _retried: bool = False,
 ) -> tuple:
     """Best-effort single-driver lock (D-06/D-19).
 
@@ -928,6 +929,11 @@ def _acquire_supervisor_lock(
     "handoff"` lock whose `token` field matches `token` (our own
     `QUOIN_SUPERVISOR_LOCK_TOKEN`) is adopted — this process IS the child
     that lock was reserved for.
+
+    The final create uses O_CREAT|O_EXCL: if two processes both find no
+    live lock and race to create one, only one create wins and the other
+    retries once against whatever the winner wrote, instead of silently
+    overwriting it.
 
     Returns ``(acquired, held_pid)``; ``held_pid`` is only meaningful when
     ``acquired`` is False.
@@ -961,7 +967,24 @@ def _acquire_supervisor_lock(
         "writer": "cli",
         "task": task,
     }
-    _atomic_write_json(memory_dir, lock_path, content)
+    payload = (json.dumps(content, sort_keys=True) + "\n").encode("utf-8")
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        if _retried:
+            existing2 = _read_json(lock_path) or {}
+            try:
+                held_pid2 = int(existing2.get("pid", -1))
+            except (TypeError, ValueError):
+                held_pid2 = -1
+            return False, held_pid2
+        return _acquire_supervisor_lock(
+            memory_dir, lock_path, result_path, task, max_relaunch, token, _retried=True
+        )
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
     return True, None
 
 

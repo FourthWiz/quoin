@@ -228,6 +228,93 @@ def test_stop_no_forward_progress_halts(ar, project, monkeypatch, capsys):
     assert "reason: no forward progress" in halt
 
 
+def test_stop_counter_survives_marker_rewrite_across_reentries(ar, project, monkeypatch, capsys):
+    """CRIT reproduction: run SKILL.md rewrites the marker's timestamp on
+    every autonomous entry, including every supervisor child's own
+    `/run --resume --autonomous`. That rewrite alone must never reset the
+    budget — only `arm`'s consumed consent stamp may (see the arm tests
+    above). Three re-entries with the marker rewritten each time must
+    accumulate `attempts` to 3, not reset it to 1 each time."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _arm(memory, "sid-1")
+    for i in range(3):
+        _write_marker(memory, "demo", timestamp=f"2026-09-29T0{i}:00:00+00:00")
+        _write_record(memory, "demo", "sid-1", phase_index=i)
+        _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+        rc = ar._cmd_stop(_Args(project_root=str(project)))
+        assert rc == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["decision"] == "block"
+
+    counter = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert counter["attempts"] == 3
+    assert counter["consecutive_no_progress"] == 0
+
+
+def test_no_progress_streak_increments_and_eventually_halts(ar, project, monkeypatch, capsys):
+    """CRIT reproduction: a continuation that makes no progress must
+    increment `consecutive_no_progress`; before the fix it never moved off
+    0, so the two-in-a-row halt could never fire (reproduced upstream with
+    10+ non-progressing continuations and no halt)."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1", phase_index=3)
+    _arm(memory, "sid-1")
+
+    # Continuation 1: first-ever evaluation always counts as progressed
+    # (last_phase starts at None), so it must not touch the streak.
+    _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+    assert ar._cmd_stop(_Args(project_root=str(project))) == 0
+    out1 = json.loads(capsys.readouterr().out)
+    assert out1["decision"] == "block"
+    counter = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert counter["consecutive_no_progress"] == 0
+
+    # Continuation 2: same phase, no new .done files -> no progress. Must
+    # increment the streak.
+    _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+    assert ar._cmd_stop(_Args(project_root=str(project))) == 0
+    out2 = json.loads(capsys.readouterr().out)
+    assert out2["decision"] == "block"
+    counter = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert counter["consecutive_no_progress"] == 1
+
+    # Continuation 3: still no progress -> the streak must now halt.
+    _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+    assert ar._cmd_stop(_Args(project_root=str(project))) == 0
+    assert capsys.readouterr().out == ""
+    halt = (memory / "autonomous-halt-demo.md").read_text()
+    assert "reason: no forward progress" in halt
+
+
+def test_stop_cap_handoff_denied_falls_through_to_in_session_block(ar, project, monkeypatch, capsys):
+    """MAJ: at attempts == MAX-1 with chain >= HANDOFF_AT, a hand-off is one
+    unit too expensive (needs attempts+2<=MAX) but the cheaper in-session
+    block (attempts+1<=MAX) still fits — the Stop path must fall through to
+    it, with no halt and no spawn, rather than ending the turn one unit
+    early."""
+    monkeypatch.setattr(ar, "_which", lambda name: "/usr/bin/quoin")
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1", phase_index=9)
+    _arm(memory, "sid-1")
+    monkeypatch.setenv("QUOIN_AUTO_RESUME_MAX", "10")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["attempts"] = 9  # MAX - 1
+    counter["chain_blocks"] = ar._handoff_at() - 1
+    counter["last_phase"] = ["implement", 3]
+    ar._write_counter(memory, "demo", counter)
+    _stop_stdin(monkeypatch, {"session_id": "sid-1", "stop_hook_active": True})
+
+    rc = ar._cmd_stop(_Args(project_root=str(project)))
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["decision"] == "block"
+    assert not (memory / "autonomous-halt-demo.md").exists()
+    written = ar._load_counter(memory, "demo")
+    assert written["attempts"] == 10
+
+
 def test_stop_a_halted_task_is_skipped(ar, project, monkeypatch, capsys):
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
@@ -241,60 +328,102 @@ def test_stop_a_halted_task_is_skipped(ar, project, monkeypatch, capsys):
 
 
 # ---------------------------------------------------------------------------
-# arm — D-17 reset rules.
+# arm — D-04 consent-stamp reset rules (never on marker rewrite / in_flight).
 # ---------------------------------------------------------------------------
 
 
-def test_arm_resets_counter_when_not_in_flight(ar, project):
+def test_arm_without_consent_keeps_counter_despite_marker_rewrite(ar, project):
+    """CRIT reproduction: `/run` rewrites the marker's timestamp on every
+    autonomous entry, including a resumed `/run --resume --autonomous`. A
+    bare re-arm with no consent stamp on file must never reset the budget
+    on that rewrite alone."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo", timestamp="2026-09-29T01:00:00+00:00")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["attempts"] = 5
+    ar._write_counter(memory, "demo", counter)
+
+    ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="sid-1", entry="resume"))
+
+    reloaded = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert reloaded["attempts"] == 5
+    assert reloaded["in_flight"] is False
+    assert (memory / "run-continue-arm-sid-1.txt").exists()
+
+
+def test_arm_with_consent_and_no_live_lock_resets_counter(ar, project):
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
     counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
     counter["attempts"] = 5
-    counter["in_flight"] = False
+    counter["consecutive_no_progress"] = 1
+    counter["chain_blocks"] = 3
     ar._write_counter(memory, "demo", counter)
+    (memory / "run-continue-consent-sid-1.txt").touch()
 
     ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="sid-1", entry="resume"))
 
     reloaded = json.loads((memory / "auto-resume-demo.json").read_text())
     assert reloaded["attempts"] == 0
-    assert (memory / "run-continue-arm-sid-1.txt").exists()
+    assert reloaded["consecutive_no_progress"] == 0
+    assert reloaded["chain_blocks"] == 0
+    # the stamp is consumed exactly once
+    assert not (memory / "run-continue-consent-sid-1.txt").exists()
 
 
-def test_arm_does_not_reset_while_in_flight(ar, project):
-    memory = project / ".workflow_artifacts" / "memory"
-    _write_marker(memory, "demo")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
-    counter["attempts"] = 5
-    counter["in_flight"] = True
-    ar._write_counter(memory, "demo", counter)
-
-    ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="sid-1", entry="fresh"))
-
-    reloaded = json.loads((memory / "auto-resume-demo.json").read_text())
-    assert reloaded["attempts"] == 5
-    assert reloaded["in_flight"] is False
-
-
-def test_arm_does_not_reset_while_supervisor_lock_live(ar, project, monkeypatch):
+def test_arm_with_consent_but_live_lock_keeps_counter_and_consumes_consent(ar, project, monkeypatch):
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
     counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
     counter["attempts"] = 4
-    counter["in_flight"] = False
     ar._write_counter(memory, "demo", counter)
     monkeypatch.setattr(ar, "_pid_alive", lambda pid: True)
     ar._write_lock(memory, "demo", pid=999, granted=3, writer="handoff")
+    (memory / "run-continue-consent-sid-1.txt").touch()
 
     ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="sid-1", entry="resume"))
 
     reloaded = json.loads((memory / "auto-resume-demo.json").read_text())
     assert reloaded["attempts"] == 4
+    assert not (memory / "run-continue-consent-sid-1.txt").exists()
+
+
+def test_arm_stale_consent_older_than_prior_arm_is_ignored(ar, project):
+    """A consent stamp left over from an earlier span (before this
+    session's previous arm) must not reset a budget it was never meant
+    for."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["attempts"] = 5
+    ar._write_counter(memory, "demo", counter)
+
+    arm_path = memory / "run-continue-arm-sid-1.txt"
+    arm_path.write_text(f"task: demo\narmed_at: {ar._iso_now()}\n")
+    consent_path = memory / "run-continue-consent-sid-1.txt"
+    consent_path.touch()
+    old_time = time.time() - 3600
+    os.utime(consent_path, (old_time, old_time))
+
+    ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="sid-1", entry="resume"))
+
+    reloaded = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert reloaded["attempts"] == 5
+    assert not consent_path.exists()
+
+
+def test_arm_without_marker_is_noop(ar, project):
+    memory = project / ".workflow_artifacts" / "memory"
+    ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="sid-1", entry="fresh"))
+    assert not (memory / "run-continue-arm-sid-1.txt").exists()
+    assert not (memory / "auto-resume-demo.json").exists()
 
 
 def test_arm_invalid_task_or_sid_does_nothing(ar, project):
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
     ar._cmd_arm(_Args(project_root=str(project), task="../evil", session_id="sid-1", entry="fresh"))
     ar._cmd_arm(_Args(project_root=str(project), task="demo", session_id="not/valid", entry="fresh"))
-    memory = project / ".workflow_artifacts" / "memory"
     assert list(memory.glob("run-continue-arm-*.txt")) == []
 
 
@@ -475,6 +604,57 @@ def test_handoff_refused_at_cap_minus_one_remaining(ar, project, monkeypatch, ca
     assert capsys.readouterr().out.strip() == "DENIED|cap"
     halt = (memory / "autonomous-halt-demo.md").read_text()
     assert "reason: auto-resume cap" in halt
+
+
+def test_handoff_lock_create_race_refuses_instead_of_overwriting(ar, project, monkeypatch):
+    """MAJ reproduction: two concurrent hand-offs can both pass a stale
+    liveness read before either creates the lock. The O_CREAT|O_EXCL
+    create must let only one winner through — the loser must refuse
+    (`LOCKED|`) rather than overwrite the winner's lock with its own pid."""
+    _mock_successful_spawn(ar, monkeypatch)
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
+              "resume_command": "/run --resume demo"}
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+
+    winner_pid = os.getpid()  # our own pid is always alive
+    winner_lock = {"pid": winner_pid, "started_at": "x", "granted": 3, "writer": "handoff", "token": "winner-token"}
+    (memory / "run-supervisor-demo.pid").write_text(json.dumps(winner_lock))
+
+    real_lock_live = ar._supervisor_lock_live
+    calls = {"n": 0}
+
+    def fake_lock_live(mem, task):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return False  # simulate the stale read before the winner's create
+        return real_lock_live(mem, task)
+
+    monkeypatch.setattr(ar, "_supervisor_lock_live", fake_lock_live)
+
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, record)
+
+    assert result == f"LOCKED|{winner_pid}"
+    assert json.loads((memory / "run-supervisor-demo.pid").read_text()) == winner_lock
+
+
+def test_handoff_on_fail_halt_skips_halt_when_locked(ar, project, monkeypatch, capsys):
+    """MAJ: `--on-fail-halt` must never halt a supervised child just
+    because a live supervisor already holds the lock — that is the normal
+    case of a run in progress, not a failure to hand off."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    monkeypatch.setattr(ar, "_pid_alive", lambda pid: True)
+    ar._write_lock(memory, "demo", pid=999, granted=3, writer="cli")
+
+    rc = ar._cmd_handoff(_Args(
+        project_root=str(project), task="demo", reason="context", on_fail_halt="context exhaustion",
+    ))
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "LOCKED|999"
+    assert not (memory / "autonomous-halt-demo.md").exists()
 
 
 def test_handoff_startup_refuses_live_owner(ar, project, monkeypatch, tmp_path, capsys):

@@ -253,18 +253,24 @@ def _task_from_marker_path(path: Path) -> str:
     return name[len(prefix): -len(suffix)]
 
 
-def _load_marker(path: Path):
-    """Markers are `field: value` text (see run/SKILL.md), not JSON."""
+def _load_kv_text(path: Path) -> dict:
+    """Parses `field: value` text files (markers, arm records)."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError:
-        return None
+        return {}
     data = {}
     for line in text.splitlines():
         if ":" not in line:
             continue
         key, _, value = line.partition(":")
         data[key.strip()] = value.strip()
+    return data
+
+
+def _load_marker(path: Path):
+    """Markers are `field: value` text (see run/SKILL.md), not JSON."""
+    data = _load_kv_text(path)
     if "timestamp" not in data:
         return None
     return data
@@ -329,8 +335,14 @@ def _load_counter(memory_dir: Path, task: str):
 
 
 def _get_or_reset_counter(memory_dir: Path, task: str, marker_timestamp):
+    """Load the durable counter, initializing a fresh one only when none
+    exists yet. `marker_timestamp` is carried for a first-write audit trail
+    only — a marker rewrite (which happens on every autonomous entry, see
+    run SKILL.md) must never reset the budget on its own. The only path
+    that resets `attempts` is `arm`, and only on a consumed consent stamp
+    (see `_cmd_arm`)."""
     counter = _load_counter(memory_dir, task)
-    if counter is None or counter.get("marker_timestamp") != marker_timestamp:
+    if counter is None:
         return _default_counter(task, marker_timestamp)
     return counter
 
@@ -375,6 +387,21 @@ def _write_lock(
         data["token"] = token
     content = json.dumps(data, sort_keys=True) + "\n"
     _atomic_write_text(memory_dir, f"{LOCK_TEMPLATE.format(task=task)}.", _lock_path(memory_dir, task), content)
+
+
+def _create_lock_exclusive(lock_path: Path, payload: bytes) -> bool:
+    """Creates `lock_path` with O_CREAT|O_EXCL so two concurrent callers can
+    never both believe they hold the lock — the loser gets FileExistsError
+    and must fall back to a liveness check on what the winner wrote."""
+    try:
+        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return False
+    try:
+        os.write(fd, payload)
+    finally:
+        os.close(fd)
+    return True
 
 
 def settle_supervisor(memory_dir: Path, task: str, counter: dict) -> dict:
@@ -476,14 +503,19 @@ def owner_state(sid, memory_dir: "Path | None" = None) -> str:
 
 
 def _prune_ended_markers(memory_dir: Path) -> None:
+    """Prunes both `session-ended-*` markers and stale `run-continue-
+    consent-*` stamps — a consent stamp a session never spends (e.g. the
+    session crashed before its next `arm`) would otherwise accumulate
+    forever."""
     try:
         cutoff = _now() - _ENDED_MARKER_PRUNE_DAYS * 86400
-        for path in memory_dir.glob(ENDED_TEMPLATE.format(sid="*")):
-            try:
-                if path.stat().st_mtime < cutoff:
-                    path.unlink()
-            except OSError:
-                continue
+        for template in (ENDED_TEMPLATE, CONSENT_TEMPLATE):
+            for path in memory_dir.glob(template.format(sid="*")):
+                try:
+                    if path.stat().st_mtime < cutoff:
+                        path.unlink()
+                except OSError:
+                    continue
     except OSError:
         pass
 
@@ -613,10 +645,24 @@ def _evaluate_gate(memory_dir: Path, mode: str, candidates):
 # ---------------------------------------------------------------------------
 
 
-def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, counter: dict, record):
+def _do_handoff(
+    memory_dir: Path,
+    project_root: Path,
+    task: str,
+    reason: str,
+    counter: dict,
+    record,
+    halt_on_cap: bool = True,
+):
     """Attempt a detached `quoin run --autonomous` hand-off. Returns one of
     ``HANDOFF|<pid>|<n>/<cap>``, ``NO_CLI|``, ``LOCKED|<pid>``,
-    ``OWNER_LIVE|<sid>``, ``DENIED|<reason>``."""
+    ``OWNER_LIVE|<sid>``, ``DENIED|<reason>``.
+
+    `halt_on_cap` gates only the cap-exhausted branch: the `handoff`
+    subcommand and a startup hand-off have no cheaper fallback, so they
+    write the cap halt themselves. The Stop path's stop-cap branch passes
+    False — it has an in-session fallback one unit cheaper than a hand-off,
+    so a denied hand-off there must fall through, not end the run."""
     if not _auto_resume_enabled():
         return "DENIED|opt-out"
     record = record or {}
@@ -637,8 +683,9 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
     # is only safe when both fit under the cap (attempts + 2 <= cap); the
     # Stop path's in-session fallback (attempts + 1 <= cap) covers the gap.
     if attempts + 2 > cap:
-        _write_halt(memory_dir, task, record, "auto-resume cap")
-        _write_counter(memory_dir, task, counter)
+        if halt_on_cap:
+            _write_halt(memory_dir, task, record, "auto-resume cap")
+            _write_counter(memory_dir, task, counter)
         return "DENIED|cap"
     done_now = _count_done(memory_dir, task)
     last_phase = counter.get("last_phase")
@@ -660,11 +707,43 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
     # The hand-off's own charge (below, attempts += 1) plus this grant must
     # together stay within cap: grant = cap - attempts_before - 1 (D-01).
     remaining = max(cap - attempts - 1, 1)
-    log_path = memory_dir / LOG_TEMPLATE.format(task=task)
+
+    # The lock is reserved under our own pid with O_CREAT|O_EXCL *before*
+    # Popen, so two concurrent hand-offs can never both spawn a supervisor —
+    # only one process can win the exclusive create. A lock left behind by a
+    # dead process is settled and unlinked, then the create is retried once.
+    token = uuid.uuid4().hex
+    lock_path = _lock_path(memory_dir, task)
+    reservation = json.dumps(
+        {"pid": os.getpid(), "started_at": _iso_now(), "granted": remaining, "writer": "handoff", "token": token},
+        sort_keys=True,
+    ).encode("utf-8") + b"\n"
     try:
         memory_dir.mkdir(parents=True, exist_ok=True)
-        log_fh = open(str(log_path), "ab")
     except OSError:
+        return "NO_CLI|"
+    if not _create_lock_exclusive(lock_path, reservation):
+        if _supervisor_lock_live(memory_dir, task):
+            lock = _load_json(lock_path) or {}
+            return f"LOCKED|{lock.get('pid', '')}"
+        counter = settle_supervisor(memory_dir, task, counter)
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        if not _create_lock_exclusive(lock_path, reservation):
+            lock = _load_json(lock_path) or {}
+            return f"LOCKED|{lock.get('pid', '')}"
+
+    log_path = memory_dir / LOG_TEMPLATE.format(task=task)
+    try:
+        log_fd = os.open(str(log_path), os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+        log_fh = os.fdopen(log_fd, "ab")
+    except OSError:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
         return "NO_CLI|"
     argv = [
         quoin_bin, "run", "--autonomous", task,
@@ -673,7 +752,6 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
     ]
     # D-06: the child adopts this lock (rather than racing to create its own)
     # by presenting the same token back via `QUOIN_SUPERVISOR_LOCK_TOKEN`.
-    token = uuid.uuid4().hex
     child_env = dict(os.environ)
     child_env["QUOIN_SUPERVISOR_LOCK_TOKEN"] = token
     try:
@@ -687,16 +765,22 @@ def _do_handoff(memory_dir: Path, project_root: Path, task: str, reason: str, co
             env=child_env,
         )
     except OSError:
-        return "NO_CLI|"
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return "DENIED|spawn"
     finally:
         try:
             log_fh.close()
         except OSError:
             pass
+    # Now that the child is real, atomically replace the reservation with
+    # its actual pid (same other fields).
     _write_lock(memory_dir, task, proc.pid, remaining, "handoff", token=token)
     attempts += 1
     counter["attempts"] = attempts
-    counter["consecutive_no_progress"] = 0 if progressed else counter.get("consecutive_no_progress", 0)
+    counter["consecutive_no_progress"] = 0 if progressed else counter.get("consecutive_no_progress", 0) + 1
     counter["last_done_count"] = done_now
     counter["last_phase"] = cur_phase
     counter["in_flight"] = True
@@ -755,18 +839,22 @@ def _cmd_stop(args) -> int:
 
     cap = _max_attempts()
     if counter["chain_blocks"] >= _handoff_at() and _which("quoin"):
-        handoff_result = _do_handoff(memory_dir, Path(args.project_root), task, "stop-cap", counter, record)
+        handoff_result = _do_handoff(
+            memory_dir, Path(args.project_root), task, "stop-cap", counter, record, halt_on_cap=False
+        )
         if handoff_result.startswith("HANDOFF|"):
             return 0
-        if handoff_result.startswith("DENIED|cap") or handoff_result.startswith("DENIED|no-progress"):
+        if handoff_result.startswith("DENIED|no-progress"):
             # I-13: a halt was already written — the Stop path stays terminal.
             return 0
-        # LOCKED| / NO_CLI| / OWNER_LIVE| / DENIED|opt-out: fall through to a
-        # plain in-session block; the harness's own cap remains the outer bound.
+        # DENIED|cap (no halt written — halt_on_cap=False) / LOCKED| /
+        # NO_CLI| / OWNER_LIVE| / DENIED|opt-out: fall through to a plain
+        # in-session block, still bounded by the attempts+1 <= cap check
+        # `_evaluate_gate` already applied before returning this candidate.
 
     attempts = counter.get("attempts", 0) + 1
     counter["attempts"] = attempts
-    counter["consecutive_no_progress"] = 0 if result["progressed"] else counter.get("consecutive_no_progress", 0)
+    counter["consecutive_no_progress"] = 0 if result["progressed"] else counter.get("consecutive_no_progress", 0) + 1
     counter["last_done_count"] = result["done_now"]
     counter["last_phase"] = result["cur_phase"]
     counter["in_flight"] = True
@@ -829,31 +917,72 @@ def _cmd_start(args) -> int:
 
 
 def _cmd_arm(args) -> int:
+    """Records per-session consent to continue this run and, only on a
+    consumed consent stamp with no live supervisor, resets the budget.
+
+    A consent stamp (`run-continue-consent-{sid}.txt`) is written only by a
+    typed `/run` prompt (see userpromptsubmit.sh) — never by a marker
+    rewrite, a supervisor child's own re-entry, or a model self-resume — so
+    those paths keep whatever budget the span already has. The stamp is
+    consumed (unlinked) on every `arm` call whether or not it is honored,
+    and is ignored if it predates this session's previous arm (a stale
+    stamp from an earlier span)."""
+    if not _auto_resume_enabled():
+        return 0
     if not _run_state._valid_task(args.task) or not _valid_sid(args.session_id):
         return 0
     memory_dir = _memory_dir(args.project_root)
+    marker_path = memory_dir / MARKER_TEMPLATE.format(task=args.task)
+    if not marker_path.exists():
+        return 0
+    marker = _load_marker(marker_path)
+    marker_ts = marker.get("timestamp") if marker else None
+
     arm_path = memory_dir / ARM_TEMPLATE.format(sid=args.session_id)
+    prev_armed_at = None
+    if arm_path.exists():
+        prev_armed_at = _parse_iso(_load_kv_text(arm_path).get("armed_at"))
+
+    consent_path = memory_dir / CONSENT_TEMPLATE.format(sid=args.session_id)
+    consent = False
+    if consent_path.exists():
+        try:
+            consent_mtime = consent_path.stat().st_mtime
+        except OSError:
+            consent_mtime = None
+        if consent_mtime is not None:
+            consent = prev_armed_at is None or consent_mtime >= prev_armed_at.timestamp()
+        try:
+            consent_path.unlink()
+        except OSError:
+            pass
+
     try:
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        arm_path.touch()
+        _atomic_write_text(
+            memory_dir,
+            f"{ARM_TEMPLATE.format(sid=args.session_id)}.",
+            arm_path,
+            f"task: {args.task}\narmed_at: {_iso_now()}\n",
+        )
     except OSError:
         return 0
 
-    marker_path = memory_dir / MARKER_TEMPLATE.format(task=args.task)
-    marker = _load_marker(marker_path) if marker_path.exists() else None
-    marker_ts = marker.get("timestamp") if marker else None
+    try:
+        (memory_dir / ENDED_TEMPLATE.format(sid=args.session_id)).unlink()
+    except OSError:
+        pass
 
-    counter = _load_counter(memory_dir, args.task)
-    lock_live = _supervisor_lock_live(memory_dir, args.task)
-    if counter is None or counter.get("marker_timestamp") != marker_ts:
-        counter = _default_counter(args.task, marker_ts)
-    elif not counter.get("in_flight") and not lock_live:
-        # D-17: a human-typed `/run --resume` resets the budget; a
-        # hook-driven or supervisor-child resume (in_flight, or a live
-        # supervisor lock) never resets it.
-        counter = _default_counter(args.task, marker_ts)
-    else:
-        counter["in_flight"] = False
+    counter = _load_counter(memory_dir, args.task) or _default_counter(args.task, marker_ts)
+    counter = settle_supervisor(memory_dir, args.task, counter)
+    live = _supervisor_lock_live(memory_dir, args.task)
+    if consent and not live:
+        counter["attempts"] = 0
+        counter["consecutive_no_progress"] = 0
+        counter["chain_blocks"] = 0
+        counter["last_done_count"] = None
+        counter["last_phase"] = None
+    counter["in_flight"] = False
+    counter["marker_timestamp"] = marker_ts
     _write_counter(memory_dir, args.task, counter)
     return 0
 
@@ -870,7 +999,12 @@ def _cmd_handoff(args) -> int:
     counter = _get_or_reset_counter(memory_dir, args.task, marker_ts)
     result = _do_handoff(memory_dir, Path(args.project_root), args.task, args.reason, counter, record)
     print(result)
-    if not result.startswith("HANDOFF|") and args.on_fail_halt:
+    # A `LOCKED|` refusal means a live supervisor is already driving this
+    # task — that is success from the caller's point of view, not a failure
+    # to halt on. Halting here would stop a supervised child's own turn
+    # (e.g. on context exhaustion) even though the run is progressing fine
+    # under the supervisor that holds the lock.
+    if not result.startswith("HANDOFF|") and not result.startswith("LOCKED|") and args.on_fail_halt:
         if not _sentinel_exists(memory_dir, HALT_TEMPLATE, args.task):
             _write_halt(memory_dir, args.task, record, args.on_fail_halt)
     return 0
