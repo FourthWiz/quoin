@@ -439,6 +439,15 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         )
         print("  Install with: pip install pyyaml", file=sys.stderr)
 
+    # IVG-281: records the interpreter and package tree this install
+    # deployed from, so an auto-resume hand-off can relaunch the exact same
+    # CLI instead of guessing via PATH. Never fails the install.
+    from quoin import runtime_record
+
+    record_path = runtime_record.write_runtime_record(dest_root, source_dir)
+    if record_path is not None:
+        print(f"Wrote install record {record_path}")
+
     return 0
 
 
@@ -1292,6 +1301,26 @@ def _acquire_supervisor_lock(
     )
 
 
+def _strip_handoff_pythonpath() -> None:
+    """Removes the `PYTHONPATH` entry an auto-resume hand-off prepended so
+    it could relaunch the recorded interpreter, before this process
+    relaunches `claude` — the relaunched `claude` subprocess inherits
+    `os.environ`, and it must see the user's own `PYTHONPATH`, not the
+    hand-off's."""
+    marker = os.environ.pop("QUOIN_HANDOFF_PYTHONPATH", None)
+    if not marker:
+        return
+    entries = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    try:
+        entries.remove(marker)
+    except ValueError:
+        return
+    if entries:
+        os.environ["PYTHONPATH"] = os.pathsep.join(entries)
+    else:
+        del os.environ["PYTHONPATH"]
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """`quoin run --autonomous <task>` — external supervisor entrypoint (T-08).
 
@@ -1315,6 +1344,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     project_root = pathlib.Path(args.project_root).resolve()
     paths = _supervisor_paths(project_root, args.task)
+
+    # Strips an auto-resume hand-off's PYTHONPATH prepend before any launch
+    # so the relaunched `claude` subprocess (which inherits os.environ) sees
+    # the user's own PYTHONPATH, not the hand-off's.
+    _strip_handoff_pythonpath()
 
     # Popped immediately after the lock decision so a relaunch child this
     # process itself spawns never inherits our own adoption token.
