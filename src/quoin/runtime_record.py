@@ -47,6 +47,29 @@ def _remove_stale_record(dest_root: Path, note: str) -> str:
     return note
 
 
+def remove_existing_record(dest_root: Path) -> None:
+    """Best-effort: unlinks any existing install record before the first
+    deploy step of an install runs. `write_runtime_record`'s own cleanup
+    (`_remove_stale_record`) only fires on its own skip/failure paths,
+    which never run if the install aborts before reaching the writer at
+    all (the writer is the very last step) — without this, a failed or
+    partial install (missing prerequisites, a placeholder violation, a
+    Ctrl-C) leaves the previous install's record in place next to a
+    partially deployed hook tree, so a hand-off can relaunch an interpreter
+    the new deploy never actually confirmed."""
+    path = dest_root / RUNTIME_RECORD_FILENAME
+    try:
+        existed = path.exists()
+    except OSError:
+        existed = False
+    try:
+        path.unlink()
+    except OSError:
+        pass
+    if existed:
+        print(f"quoin: removed the previous install record at {path} before deploying", file=sys.stderr)
+
+
 def _unaided_quoin_file(python: str, timeout: float = 10.0) -> Optional[str]:
     """Runs `python -c "import quoin; ..."` with PYTHONPATH stripped, so the
     result reflects only what that interpreter can import on its own. None

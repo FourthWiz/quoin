@@ -334,6 +334,14 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         return 1
     print("Prerequisites OK")
 
+    # IVG-281: remove any previous install record before the first deploy
+    # step, so a failed or partial install (below) never leaves an older
+    # install's record sitting next to a partially deployed hook tree —
+    # see runtime_record.remove_existing_record.
+    from quoin import runtime_record
+
+    runtime_record.remove_existing_record(dest_root)
+
     # T-04
     installer.deploy_memory(source_dir, dest_root)
     installer.deploy_quickstart(source_dir, dest_root)

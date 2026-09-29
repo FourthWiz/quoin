@@ -239,7 +239,11 @@ def test_stop_at_handoff_at_stale_record_block_unchanged_reason(ar, project, mon
     out = json.loads(capsys.readouterr().out)
     assert out["decision"] == "block"
     assert "resume the run" in out["reason"] or "/run --resume" in out["reason"]
-    assert "interpreter-missing" in out["systemMessage"] or "stale" in out["systemMessage"].lower()
+    # _stale_record's interpreter path is under memory_dir, whose own path
+    # contains this test's name (pytest tmp_path naming) — asserting a
+    # literal "stale" substring would pass on that coincidence alone rather
+    # than on the actual interpreter-missing message text.
+    assert "no longer exists" in out["systemMessage"]
     assert not (memory / "autonomous-halt-demo.md").exists()
     written = ar._load_counter(memory, "demo")
     assert written["attempts"] == 1
@@ -270,6 +274,35 @@ def test_stop_and_handoff_resolver_verdict_agrees(ar, project, monkeypatch, stal
     assert stop_verdict["source"] == handoff_verdict["source"]
     if not stale:
         assert stop_verdict["status"] == "usable"
+
+
+# ── no-progress guard (D-04) ─────────────────────────────────────────────────
+
+
+def test_do_handoff_no_progress_first_miss_does_not_deny(ar, project, monkeypatch):
+    """`_evaluate_gate` only ever hands `_do_handoff` a candidate when
+    either progress was made or this is the FIRST consecutive miss — a
+    second miss halts at the gate itself, before `_do_handoff` runs at all.
+    `_do_handoff` re-derives `progressed` from the same counter and record,
+    so on a first-miss candidate its own no-progress check must agree and
+    let the call through to CLI resolution instead of denying it a second
+    time (D-04). Record absent + `_which` None (record-less path) isolates
+    this from any interpreter-resolution branch."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1", phase="implement", phase_index=3)
+    monkeypatch.setattr(ar, "_which", lambda name: None)
+    record = ar._load_json(memory / "run-state-demo.json")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["last_phase"] = ["implement", 3]  # matches record -> not progressed
+    counter["last_done_count"] = 0
+    counter["consecutive_no_progress"] = 0  # first miss, not yet at the gate's halt threshold
+
+    result = ar._do_handoff(
+        memory, project, "demo", "stop-cap", counter, record, halt_on_cap=False, probe_caller="stop",
+    )
+    assert not result.startswith("DENIED|no-progress")
+    assert not (memory / "autonomous-halt-demo.md").exists()
 
 
 # ── resolver-error on Stop and handoff (D-20) ───────────────────────────────

@@ -276,6 +276,48 @@ def test_install_placeholder_violation_writes_no_record(tmp_path, monkeypatch):
     assert not (tmp_path / ".claude" / "quoin-runtime.json").exists()
 
 
+def test_remove_existing_record_unlinks_and_reports(tmp_path, capsys):
+    dest_root = tmp_path / "dest"
+    dest_root.mkdir()
+    record_path = dest_root / runtime_record.RUNTIME_RECORD_FILENAME
+    record_path.write_text("{}", encoding="utf-8")
+    runtime_record.remove_existing_record(dest_root)
+    assert not record_path.exists()
+    assert "removed the previous install record" in capsys.readouterr().err
+
+
+def test_remove_existing_record_no_op_when_absent(tmp_path, capsys):
+    dest_root = tmp_path / "dest"
+    dest_root.mkdir()
+    runtime_record.remove_existing_record(dest_root)  # must not raise
+    assert capsys.readouterr().err == ""
+
+
+def test_install_placeholder_violation_removes_previous_record(tmp_path, monkeypatch):
+    """review-1.md issue 4: a failed or partial install must not leave the
+    PREVIOUS install's record in place next to a partially deployed hook
+    tree — a stale record whose interpreter/version no longer matches what
+    actually got deployed would otherwise launch silently. Seeds dest_root
+    with a record from an earlier successful install, then fails the same
+    way `test_install_placeholder_violation_writes_no_record` does."""
+    import unittest.mock
+    import quoin.cli as cli
+    import quoin.installer as inst
+
+    _stub_install_operations(monkeypatch)
+    monkeypatch.setattr(inst, "assert_no_placeholders", lambda *a, **kw: ["some/file.md: __QUOIN_HOME__"])
+    monkeypatch.chdir(tmp_path)
+    dest_root = tmp_path / ".claude"
+    dest_root.mkdir(parents=True)
+    old_record = dest_root / "quoin-runtime.json"
+    old_record.write_text(json.dumps({"schema": 1, "python": "/old/python", "version": "0.0.1"}), encoding="utf-8")
+    args = _install_args()
+    with unittest.mock.patch("time.sleep"):
+        result = cli._cmd_claude_install(args)
+    assert result == 1
+    assert not old_record.exists()
+
+
 def test_install_survives_writer_internal_error(tmp_path, monkeypatch):
     """The writer's own never-raises contract (test_writer_never_raises_on_
     unexpected_error) is what keeps a bad write from failing the install —

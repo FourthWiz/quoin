@@ -865,7 +865,11 @@ def _do_handoff(
     try:
         proc = _popen(
             argv,
-            cwd=str(project_root),
+            # Not project_root: this is `python -m quoin`, and `-m` puts the
+            # working directory first on sys.path, ahead of the recorded
+            # interpreter's own site-packages (see _neutral_cwd). The child
+            # still learns the real project root from --project-root above.
+            cwd=_neutral_cwd(),
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
@@ -922,11 +926,11 @@ _REMEDY = "re-run 'quoin install' (same scope) and check 'quoin doctor'"
 # Start/stop callers act on a live knob, so the remedy names it. Handoff and
 # cli-check ignore the knob (fixed 8 s budget), so naming it would mislead.
 _TIMEOUT_REMEDY_KNOB = (
-    "the machine was slow; retry '/run --resume <task>' or raise "
+    "the machine was slow; retry the auto-resume hand-off or raise "
     "QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS (reinstalling will not help)"
 )
 _TIMEOUT_REMEDY_FIXED = (
-    "the machine was slow; retry '/run --resume <task>' and check for a slow or "
+    "the machine was slow; retry the auto-resume hand-off and check for a slow or "
     "cloud-synced filesystem (reinstalling will not help)"
 )
 
@@ -935,6 +939,19 @@ _CLI_MEMO: dict = {}
 
 def _reset_cli_memo() -> None:
     _CLI_MEMO.clear()
+
+
+def _neutral_cwd() -> str:
+    """cwd for the probe and the supervisor spawn — never the caller's own
+    project root. ``-c`` and ``-m`` both put the working directory first on
+    ``sys.path``, ahead of the recorded interpreter's site-packages, so a
+    project-supplied ``quoin.py`` or ``quoin/`` package sitting at the
+    project root would otherwise be imported (and run) instead of the real
+    installed package. The system temp directory is never inside a cloned
+    project, so it can't be shadowed this way; ``--project-root`` is still
+    passed to the spawned process explicitly, so it learns the real project
+    root without needing it as its cwd."""
+    return tempfile.gettempdir()
 
 
 def _deploy_root() -> Optional[Path]:
@@ -976,12 +993,53 @@ def _remedy(kind: str, caller: str) -> str:
 
 _CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f]")
 _MULTISPACE_RE = re.compile(r" {2,}")
+_MESSAGE_MAX = 300
+# Caps the composed detail sentence (well under _MESSAGE_MAX so the fixed
+# remedy that follows always fits) as a defensive backstop — in practice
+# each interpolated value inside it is already bounded by _VALUE_MAX below.
+_DETAIL_MAX = 160
+# Caps one interpolated value (an interpreter path, a version string, a
+# stderr line, an exception message) *before* it's embedded in a sentence.
+# A Drive-synced interpreter path or a chatty stderr line can be much
+# longer than the fixed wording around it, so truncating the finished
+# sentence from the right risks cutting the literal wording that comes
+# after the value (e.g. "...no longer exists") instead of the value
+# itself — capping the value first keeps the sentence's own wording, and
+# the remedy that follows it, intact.
+_VALUE_MAX = 100
+
+
+def _clean_text(s: str) -> str:
+    s = _CONTROL_RE.sub(" ", s)
+    return _MULTISPACE_RE.sub(" ", s).strip()
+
+
+def _cap_value(s: str) -> str:
+    """Caps a single value before it's interpolated into a message
+    sentence, keeping the tail (a path's filename end, or the more
+    specific part of an exception message)."""
+    s = _clean_text(s)
+    if len(s) <= _VALUE_MAX:
+        return s
+    return "…" + s[-(_VALUE_MAX - 1):]
 
 
 def _sanitize_msg(s: str) -> str:
-    s = _CONTROL_RE.sub(" ", s)
-    s = _MULTISPACE_RE.sub(" ", s).strip()
-    return s[:300]
+    """Cleans and caps a whole message with no separate detail/remedy
+    split (the resolver-error and cli-check exception paths)."""
+    return _clean_text(s)[:_MESSAGE_MAX]
+
+
+def _build_message(detail: str, remedy: str) -> str:
+    """Composes a stale/failure message from a `detail` sentence (its own
+    interpolated values already capped via `_cap_value`) and a fixed
+    `remedy`, capping only the detail's overall length as a backstop.
+    Every stale message must end with its remedy — a message whose remedy
+    got truncated away tells the user there's a problem without telling
+    them what to do about it."""
+    detail = _clean_text(detail)[:_DETAIL_MAX]
+    remedy = _clean_text(remedy)
+    return (detail + "; " + remedy)[:_MESSAGE_MAX]
 
 
 def _probe(argv0: str, env: dict, cwd: str, timeout_s: float) -> dict:
@@ -1095,9 +1153,7 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
     if err_kind:
         base.update(
             source="record", status="stale", kind=err_kind,
-            message=_sanitize_msg(
-                "the install record is missing or invalid; " + _remedy(err_kind, caller)
-            ),
+            message=_build_message("the install record is missing or invalid", _remedy(err_kind, caller)),
         )
         return base
     assert record is not None  # err_kind is None only when _load_runtime_record returned data
@@ -1110,27 +1166,28 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
     if source_version is not None and source_version != version:
         base.update(
             source="record", status="stale", kind="version-mismatch",
-            message=_sanitize_msg(
-                f"deployed files are at version {source_version} but the recorded CLI is "
-                f"{version}; " + _remedy("version-mismatch", caller)
+            message=_build_message(
+                f"deployed files are at version {_cap_value(source_version)} but the recorded "
+                f"CLI is {_cap_value(version)}",
+                _remedy("version-mismatch", caller),
             ),
         )
         return base
     if not os.path.exists(python):
         base.update(
             source="record", status="stale", kind="interpreter-missing",
-            message=_sanitize_msg(
-                f"recorded interpreter {python} no longer exists; "
-                + _remedy("interpreter-missing", caller)
+            message=_build_message(
+                f"recorded interpreter {_cap_value(python)} no longer exists",
+                _remedy("interpreter-missing", caller),
             ),
         )
         return base
     if not os.access(python, os.X_OK):
         base.update(
             source="record", status="stale", kind="interpreter-not-executable",
-            message=_sanitize_msg(
-                f"recorded interpreter {python} is not executable; "
-                + _remedy("interpreter-not-executable", caller)
+            message=_build_message(
+                f"recorded interpreter {_cap_value(python)} is not executable",
+                _remedy("interpreter-not-executable", caller),
             ),
         )
         return base
@@ -1148,7 +1205,7 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
     tries = 1 + _probe_retries(caller)
     result = {"status": "timeout", "rc": None, "stdout": "", "stderr_tail": ""}
     for _ in range(tries):
-        result = _probe(python, env, str(project_root), timeout_s)
+        result = _probe(python, env, _neutral_cwd(), timeout_s)
         if result["status"] != "timeout":
             break
 
@@ -1156,24 +1213,24 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
     if status == "timeout":
         base.update(
             source="record", status="stale", kind="probe-timeout",
-            message=_sanitize_msg("the version probe timed out; " + _remedy("probe-timeout", caller)),
+            message=_build_message("the version probe timed out", _remedy("probe-timeout", caller)),
         )
         return base
     if status == "oserror-tmp":
         base.update(
             source="record", status="stale", kind="resolver-error",
-            message=_sanitize_msg(
-                "auto-resume could not check the installed quoin (could not create a "
-                "temp file for the probe); " + _REMEDY
+            message=_build_message(
+                "auto-resume could not check the installed quoin (could not create a temp file for the probe)",
+                _REMEDY,
             ),
         )
         return base
     if status == "oserror":
         base.update(
             source="record", status="stale", kind="interpreter-not-executable",
-            message=_sanitize_msg(
-                f"recorded interpreter {python} could not be started; "
-                + _remedy("interpreter-not-executable", caller)
+            message=_build_message(
+                f"recorded interpreter {_cap_value(python)} could not be started",
+                _remedy("interpreter-not-executable", caller),
             ),
         )
         return base
@@ -1181,9 +1238,9 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
         tail = result.get("stderr_tail") or "no error output"
         base.update(
             source="record", status="stale", kind="import-failed",
-            message=_sanitize_msg(
-                f"the version probe exited with an error ({tail}); "
-                + _remedy("import-failed", caller)
+            message=_build_message(
+                f"the version probe exited with an error ({_cap_value(tail)})",
+                _remedy("import-failed", caller),
             ),
         )
         return base
@@ -1195,9 +1252,9 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
     if token_match is None:
         base.update(
             source="record", status="stale", kind="import-failed",
-            message=_sanitize_msg(
-                "the version probe produced no version token; "
-                + _remedy("import-failed", caller)
+            message=_build_message(
+                "the version probe produced no version token",
+                _remedy("import-failed", caller),
             ),
         )
         return base
@@ -1206,9 +1263,10 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
     if probed_version != version:
         base.update(
             source="record", status="stale", kind="version-mismatch",
-            message=_sanitize_msg(
-                f"the probed CLI reports {probed_version} but the record says {version}; "
-                + _remedy("version-mismatch", caller)
+            message=_build_message(
+                f"the probed CLI reports {_cap_value(probed_version)} but the record says "
+                f"{_cap_value(version)}",
+                _remedy("version-mismatch", caller),
             ),
         )
         return base
@@ -1233,9 +1291,10 @@ def resolve_cli(project_root, caller: str) -> dict:
         return {
             "source": "record", "status": "stale", "argv": None, "env_extra": {},
             "kind": "resolver-error",
-            "message": _sanitize_msg(
+            "message": _build_message(
                 f"auto-resume could not check the installed quoin "
-                f"({type(exc).__name__}: {exc}); " + _REMEDY
+                f"({type(exc).__name__}: {_cap_value(str(exc))})",
+                _REMEDY,
             ),
             "record_path": str(rp) if rp is not None else None,
             "record": None, "probed_version": None, "pythonpath": None,

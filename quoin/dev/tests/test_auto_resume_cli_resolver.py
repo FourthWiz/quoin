@@ -357,13 +357,18 @@ def test_timeout_remedy_start_stop_names_knob(ar, tmp_path, monkeypatch):
     for caller in ("start", "stop"):
         res = _resolve_with_mode(ar, tmp_path, monkeypatch, "sleep", caller=caller)
         assert "QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS" in res["message"]
+        assert "<task>" not in res["message"]
 
 
 def test_timeout_remedy_handoff_and_cli_check_no_knob_mention(ar, tmp_path, monkeypatch):
     monkeypatch.setenv("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", "250")
     for caller in ("handoff", "cli-check"):
         res = _resolve_with_mode(ar, tmp_path, monkeypatch, "sleep", caller=caller)
-        assert "retry '/run --resume" in res["message"]
+        # No literal <task> placeholder (review-1.md issue 3): the remedy is
+        # generic instead of naming a task this resolver-level call has no
+        # access to.
+        assert "retry the auto-resume hand-off" in res["message"]
+        assert "<task>" not in res["message"]
         assert "QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS" not in res["message"]
 
 
