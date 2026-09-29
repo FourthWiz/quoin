@@ -86,7 +86,7 @@ def evaluate(
 
     Check order, first failure wins: absent record, unsafe directory or
     file, unreadable, wrong schema, wrong shape, timestamp in the future,
-    failed verdict, model, endpoint and runtime identity, age.
+    failed probe result, model, endpoint and runtime identity, age.
     """
     if now.tzinfo is None or now.utcoffset() is None:
         raise ValueError("now must be timezone-aware")

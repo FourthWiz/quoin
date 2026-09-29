@@ -29,7 +29,10 @@ _ADAPTER_MODULES = (
 
 _CONFIG_MODULES = tuple(
     "quoin.opencode_adapter." + name
-    for name in ("errors", "paths", "jsonio", "schema_check", "secrets", "config")
+    for name in (
+        "errors", "paths", "jsonio", "schema_check", "secrets", "config",
+        "merge", "qualification", "roles",
+    )
 )
 
 _ORDERS = list(itertools.permutations(_ADAPTER_MODULES))

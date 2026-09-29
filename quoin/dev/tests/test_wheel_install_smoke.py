@@ -232,6 +232,9 @@ def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
         "quoin/opencode_adapter/schema_check.py",
         "quoin/opencode_adapter/secrets.py",
         "quoin/opencode_adapter/config.py",
+        "quoin/opencode_adapter/merge.py",
+        "quoin/opencode_adapter/qualification.py",
+        "quoin/opencode_adapter/roles.py",
     ]
     required += [
         f"quoin/data/core/skills/{skill_id}.md" for skill_id in supported_ids
