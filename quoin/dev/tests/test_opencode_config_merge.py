@@ -349,6 +349,11 @@ def test_enumerated_defaults_when_no_layer_sets_them():
          ("managed",), [("isolation", "profile")]),
         ({"isolation": "managed"}, {"isolation": "convenience"}, {}, "isolation", "managed",
          ("profile",), [("isolation", "project")]),
+        # The project asked for the very value a stricter layer produced: no
+        # finding about the project.
+        ({}, {"sharing": "manual"}, {"sharing": "manual"}, "sharing", "manual", ("managed",), []),
+        ({}, {"external_writes": "approval-required"}, {"external_writes": "approval-required"},
+         "external_writes", "approval-required", ("managed",), []),
     ],
 )
 def test_enumerated_settings_take_the_most_restrictive_value(prof, proj, man, key, expected, origin, ignored):
