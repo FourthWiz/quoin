@@ -18,6 +18,7 @@ import json
 import os
 import signal
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -344,6 +345,104 @@ def test_lock_token_env_popped_even_on_plain_run(monkeypatch, project):
     cli.main(["run", "--autonomous", "demo", "--project-root", str(project)])
 
     assert "QUOIN_SUPERVISOR_LOCK_TOKEN" not in os.environ
+
+
+# ---------------------------------------------------------------------------
+# MAJ round-2 reproduction: lock creation atomicity + conditional stale
+# removal (review-2 issue 2), cli.py side.
+# ---------------------------------------------------------------------------
+
+
+def test_create_lock_exclusive_never_publishes_a_half_written_file(project):
+    """Empty-lock-window reproduction, at the primitive level: once
+    `_create_lock_exclusive` returns True the file is already fully
+    populated (never observable half-written), and no temp file survives."""
+    memory_dir = project / ".workflow_artifacts" / "memory"
+    lock_path = _lock_path(project, "demo")
+    payload = json.dumps({"pid": 123, "granted": 3, "writer": "cli"}).encode("utf-8") + b"\n"
+
+    assert cli._create_lock_exclusive(lock_path, payload) is True
+    assert lock_path.read_bytes() == payload
+    leftovers = [p for p in memory_dir.iterdir() if p.name != lock_path.name]
+    assert leftovers == [], f"temp file(s) left behind: {leftovers}"
+
+
+def test_acquire_lock_refuses_fresh_empty_lock_instead_of_wedging(project):
+    """CLI regression (review-2 issue 2c): the old O_CREAT|O_EXCL-then-
+    `os.write` split could leave an unparseable lock behind (a crash,
+    ENOSPC). Because the path already existed, every later O_CREAT|O_EXCL
+    create failed too, so `_read_json` returning None made the old code
+    treat it as "no lock" and still try to recreate it in place — refusing
+    forever with pid -1 since the create itself kept failing. A fresh
+    unparseable lock must be refused as ambiguous (ordinary LOCKED-style
+    refusal), never mistaken for "no lock exists" or wedged permanently."""
+    memory_dir = project / ".workflow_artifacts" / "memory"
+    result_path = _result_path(project, "demo")
+    lock_path = _lock_path(project, "demo")
+    lock_path.write_text("")  # empty — unparseable, and freshly written
+
+    acquired, held_pid = cli._acquire_supervisor_lock(memory_dir, lock_path, result_path, "demo", 9, None)
+
+    assert acquired is False
+    assert held_pid == -1
+    assert lock_path.read_text() == "", "a fresh empty lock must not be clobbered"
+
+
+def test_acquire_lock_reclaims_old_empty_lock_instead_of_refusing_forever(project):
+    """The CLI regression's actual failure mode: an empty lock old enough
+    that it cannot still be mid-write is genuinely abandoned and must be
+    reclaimable, or `quoin run --autonomous` refuses forever until a human
+    deletes the file by hand."""
+    memory_dir = project / ".workflow_artifacts" / "memory"
+    result_path = _result_path(project, "demo")
+    lock_path = _lock_path(project, "demo")
+    lock_path.write_text("")
+    old_time = time.time() - (cli._STALE_UNPARSEABLE_LOCK_SECS + 5)
+    os.utime(lock_path, (old_time, old_time))
+
+    acquired, held_pid = cli._acquire_supervisor_lock(memory_dir, lock_path, result_path, "demo", 9, None)
+
+    assert acquired is True
+    assert held_pid is None
+    written = json.loads(lock_path.read_text())
+    assert written["pid"] == os.getpid()
+
+
+def test_acquire_lock_never_reclaims_a_live_lock(project):
+    """Stale-vs-live reproduction: a lock naming a pid that is still alive
+    must never be reclaimed, even when it fails our own `_read_json` call
+    (simulating a racing read against a concurrent creator's lock)."""
+    memory_dir = project / ".workflow_artifacts" / "memory"
+    result_path = _result_path(project, "demo")
+    lock_path = _lock_path(project, "demo")
+    live_lock = {"pid": os.getpid(), "started_at": "x", "granted": 3, "writer": "cli"}
+    lock_path.write_text(json.dumps(live_lock))
+
+    acquired, held_pid = cli._acquire_supervisor_lock(memory_dir, lock_path, result_path, "demo", 9, None)
+
+    assert acquired is False
+    assert held_pid == os.getpid()
+    assert json.loads(lock_path.read_text()) == live_lock
+
+
+def test_concurrent_double_spawn_only_one_racer_wins(project, monkeypatch):
+    """Concurrent double-spawn reproduction: two processes racing to
+    reclaim the same dead-pid lock must not both go on to create their own
+    — `_claim_lock_for_removal`'s atomic rename means only one of them can
+    ever get the lock's content back, so the loser must see a fresh lock
+    (whichever racer wins the subsequent create) rather than clobbering it."""
+    memory_dir = project / ".workflow_artifacts" / "memory"
+    result_path = _result_path(project, "demo")
+    lock_path = _lock_path(project, "demo")
+    dead_pid = 2**30
+    lock_path.write_text(json.dumps({"pid": dead_pid, "started_at": "x", "granted": 5, "writer": "cli"}))
+
+    first = cli._claim_lock_for_removal(lock_path)
+    second = cli._claim_lock_for_removal(lock_path)
+
+    assert first is not None and first["pid"] == dead_pid
+    assert second is None
+    assert not lock_path.exists()
 
 
 def test_lock_removed_only_when_it_names_our_pid():

@@ -11,6 +11,8 @@ import shutil
 import signal
 import sys
 import textwrap
+import time
+import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -911,6 +913,88 @@ def _release_supervisor_lock(lock_path: pathlib.Path, our_pid: int) -> None:
             pass
 
 
+def _create_lock_exclusive(lock_path: pathlib.Path, payload: bytes) -> bool:
+    """Creates `lock_path` atomically and already fully populated with
+    `payload` — mirrors `auto_resume.py`'s helper of the same name (kept in
+    sync by hand; this module cannot import the standalone helper script,
+    which must stand alone under a bare system Python).
+
+    `payload` is written in full to a private tempfile in the same
+    directory first, then published under `lock_path` with `os.link` —
+    `os.link` fails with `FileExistsError` if `lock_path` already exists,
+    so at most one caller can ever win, and the file it publishes is
+    always the fully-written one. The previous O_CREAT|O_EXCL-then-
+    `os.write` split left a window where the lock existed but was still
+    empty; a reader hitting that window parsed it as `None` and could
+    unlink a winner's in-flight lock, and a lock left in exactly that
+    state by a crash made every later acquire refuse with `pid -1`
+    forever, since the path already existed but never parsed."""
+    tmp_path = lock_path.parent / f".{lock_path.name}.tmp-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        fd = os.open(str(tmp_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        try:
+            os.write(fd, payload)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.link(str(tmp_path), str(lock_path))
+        return True
+    except FileExistsError:
+        return False
+    finally:
+        try:
+            os.unlink(str(tmp_path))
+        except OSError:
+            pass
+
+
+_STALE_UNPARSEABLE_LOCK_SECS = 5.0
+
+
+def _lock_is_stale(lock_path: pathlib.Path) -> bool:
+    """Mirrors `auto_resume.py`'s helper of the same name. A lock is
+    reclaimable only when its owner is provably gone: a parseable lock
+    naming a dead pid, or a lock that still fails to parse well past the
+    atomic creator's own write latency. An unparseable-but-fresh lock is
+    never treated as stale on emptiness alone — it could be another
+    creator's in-flight write."""
+    data = _read_json(lock_path)
+    if data is not None:
+        try:
+            pid = int(data.get("pid", -1))
+        except (TypeError, ValueError):
+            return True
+        return not (pid > 0 and _pid_alive(pid))
+    try:
+        age = time.time() - lock_path.stat().st_mtime
+    except OSError:
+        return False
+    return age > _STALE_UNPARSEABLE_LOCK_SECS
+
+
+def _claim_lock_for_removal(lock_path: pathlib.Path):
+    """Mirrors `auto_resume.py`'s helper of the same name: atomically takes
+    exclusive ownership of `lock_path` for removal and returns the JSON
+    content it held, or `None` if it had none or another racer already
+    claimed it first. `os.rename` within the same directory is atomic on
+    POSIX, so at most one of two racing reclaimers can ever succeed
+    against the same source name — closing the race where two callers
+    both read the same dead lock before either removed it."""
+    claim_path = lock_path.parent / f"{lock_path.name}.stale-{os.getpid()}-{uuid.uuid4().hex}"
+    try:
+        os.rename(str(lock_path), str(claim_path))
+    except OSError:
+        return None
+    try:
+        data = _read_json(claim_path)
+    finally:
+        try:
+            claim_path.unlink()
+        except OSError:
+            pass
+    return data
+
+
 def _acquire_supervisor_lock(
     memory_dir: pathlib.Path,
     lock_path: pathlib.Path,
@@ -930,10 +1014,12 @@ def _acquire_supervisor_lock(
     `QUOIN_SUPERVISOR_LOCK_TOKEN`) is adopted — this process IS the child
     that lock was reserved for.
 
-    The final create uses O_CREAT|O_EXCL: if two processes both find no
-    live lock and race to create one, only one create wins and the other
-    retries once against whatever the winner wrote, instead of silently
-    overwriting it.
+    Lock creation is atomic (`_create_lock_exclusive`), so a reader can
+    never observe a lock that exists but is still empty, and replacing a
+    lock that looks abandoned is conditional on it actually being stale
+    (`_lock_is_stale`) rather than on a bare failed parse — an unparseable
+    lock that is still fresh is refused, not clobbered, since it could be
+    another creator's in-flight write.
 
     Returns ``(acquired, held_pid)``; ``held_pid`` is only meaningful when
     ``acquired`` is False.
@@ -956,10 +1042,19 @@ def _acquire_supervisor_lock(
             except (TypeError, ValueError):
                 granted = 0
             _write_supervisor_result(memory_dir, result_path, "ORPHANED", granted)
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
+        _claim_lock_for_removal(lock_path)
+    elif lock_path.exists():
+        # `existing` failed to parse but the path is occupied — never
+        # treat that as "no lock": the atomic creator above could still be
+        # mid-write. Only reclaim once the lock is provably stale.
+        if not _lock_is_stale(lock_path):
+            current = _read_json(lock_path) or {}
+            try:
+                held_pid = int(current.get("pid", -1))
+            except (TypeError, ValueError):
+                held_pid = -1
+            return False, held_pid
+        _claim_lock_for_removal(lock_path)
     content = {
         "pid": os.getpid(),
         "started_at": _iso_now(),
@@ -968,24 +1063,18 @@ def _acquire_supervisor_lock(
         "task": task,
     }
     payload = (json.dumps(content, sort_keys=True) + "\n").encode("utf-8")
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-    except FileExistsError:
-        if _retried:
-            existing2 = _read_json(lock_path) or {}
-            try:
-                held_pid2 = int(existing2.get("pid", -1))
-            except (TypeError, ValueError):
-                held_pid2 = -1
-            return False, held_pid2
-        return _acquire_supervisor_lock(
-            memory_dir, lock_path, result_path, task, max_relaunch, token, _retried=True
-        )
-    try:
-        os.write(fd, payload)
-    finally:
-        os.close(fd)
-    return True, None
+    if _create_lock_exclusive(lock_path, payload):
+        return True, None
+    if _retried:
+        existing2 = _read_json(lock_path) or {}
+        try:
+            held_pid2 = int(existing2.get("pid", -1))
+        except (TypeError, ValueError):
+            held_pid2 = -1
+        return False, held_pid2
+    return _acquire_supervisor_lock(
+        memory_dir, lock_path, result_path, task, max_relaunch, token, _retried=True
+    )
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
