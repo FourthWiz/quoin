@@ -931,6 +931,13 @@ def test_check_permissions(written):
     assert compiler.check(ev, target).ok
 
 
+@pytest.mark.parametrize("mode", [0o750, 0o705, 0o755])
+def test_check_reports_a_readable_containing_directory_as_not_private(written, mode):
+    _, ev, target = written
+    os.chmod(target, mode)
+    assert compiler.check(ev, target).reasons == ("not-private",)
+
+
 def test_check_flag_mismatch_is_reported_without_a_rebuild(tmp_path):
     world = World(tmp_path)
     world.write_records(now=NOW - timedelta(days=40))
@@ -941,6 +948,17 @@ def test_check_flag_mismatch_is_reported_without_a_rebuild(tmp_path):
     strict = world.evaluate()
     result = compiler.check(strict, target)
     assert result == compiler.CheckResult(False, ("flag-mismatch",))
+
+
+def test_check_reads_stale_once_the_unqualified_models_are_qualified(tmp_path):
+    world = World(tmp_path)
+    world.write_records(now=NOW - timedelta(days=40))
+    ev = world.evaluate(allow_unqualified=True)
+    assert ev.resolutions.unqualified_models
+    target = tmp_path / "out"
+    compiler.write(compiler.build(ev), target)
+    world.write_records()  # fresh records: every model is qualified now
+    assert compiler.check(world.evaluate(), target) == compiler.CheckResult(False, ("stale",))
 
 
 def test_check_flag_given_but_not_needed_is_not_a_mismatch(written):

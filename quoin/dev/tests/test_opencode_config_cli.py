@@ -196,6 +196,27 @@ def test_loose_output_directory_is_refused(work, capsys):
     assert list(target.iterdir()) == []
 
 
+def test_compile_write_failure_prints_fixed_text_without_the_path(work, capsys, monkeypatch):
+    def boom(*args, **kwargs):
+        raise PermissionError("/secret/path")
+
+    monkeypatch.setattr(compiler, "write", boom)
+    code, out, err = run(capsys, *compile_args(work))
+    assert code == 2 and out == ""
+    assert err == "quoin: the compiled files could not be written or read; check the output directory\n"
+    assert "/secret/path" not in err
+
+
+@pytest.mark.parametrize("name,extra", [("check", ("--check",)), ("resolve_output_dir", ())])
+def test_compile_check_and_resolve_failures_use_the_same_text(work, capsys, monkeypatch, name, extra):
+    def boom(*args, **kwargs):
+        raise PermissionError("/secret/path")
+
+    monkeypatch.setattr(compiler, name, boom)
+    code, _, err = run(capsys, *compile_args(work, *extra))
+    assert code == 2 and "could not be written or read" in err and "/secret/path" not in err
+
+
 def test_invalid_profile_prints_one_error_per_block(work, capsys):
     profile_file = paths.profile_path("work", work.env, work.home)
     profile_file.write_text('{"schema_version": 1, "runtime": "opencode", "profile": "work"', encoding="utf-8")

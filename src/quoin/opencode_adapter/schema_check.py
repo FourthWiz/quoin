@@ -6,6 +6,7 @@ instead of being ignored, so a schema can never silently loosen.
 """
 from __future__ import annotations
 
+import functools
 import math
 import re
 from dataclasses import dataclass
@@ -114,6 +115,18 @@ def _normalise(value: Any) -> Any:
     return value
 
 
+@functools.lru_cache(maxsize=None)
+def _compile(pattern: str) -> "re.Pattern[str]":
+    """Compile a schema pattern with ECMA-262 end-of-input semantics: a final
+    unescaped `$` matches only at the very end of the string, never before a
+    trailing newline (which is what Python's `$` does)."""
+    if pattern.endswith("$"):
+        backslashes = len(pattern) - 1 - len(pattern[:-1].rstrip("\\"))
+        if backslashes % 2 == 0:
+            pattern = pattern[:-1] + r"\Z"
+    return re.compile(pattern)
+
+
 class _Validator:
     def __init__(self, root: Dict[str, Any]):
         self.root = root
@@ -145,7 +158,7 @@ class _Validator:
         if "const" in schema and not _json_equal(instance, schema["const"]):
             out.append(Violation(path, "const", expected=(schema["const"],)))
         if isinstance(instance, str):
-            if "pattern" in schema and not re.search(schema["pattern"], instance):
+            if "pattern" in schema and not _compile(schema["pattern"]).search(instance):
                 out.append(Violation(path, "pattern"))
             if "minLength" in schema and len(instance) < schema["minLength"]:
                 out.append(Violation(path, "minLength"))

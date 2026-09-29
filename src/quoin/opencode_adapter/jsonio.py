@@ -171,15 +171,22 @@ def dump_canonical(obj: Any) -> bytes:
     ).encode("utf-8")
 
 
-def _check_ancestor(directory: Path) -> None:
+def _check_ancestor(directory: Path, allow_root_sticky: bool = False) -> None:
+    """The nearest existing directory new private directories are created in
+    must be ours and closed to world writes unless it is sticky. With
+    `allow_root_sticky`, a root-owned sticky directory (a shared temporary
+    directory) is accepted too: the directories created inside it are ours
+    and cannot be renamed or removed by others."""
     info = os.stat(directory)
     if info.st_uid != os.getuid():
+        if allow_root_sticky and info.st_uid == 0 and info.st_mode & stat.S_ISVTX:
+            return
         raise UnsafeDirectoryError("directory is owned by another user")
     if info.st_mode & 0o002 and not info.st_mode & stat.S_ISVTX:
         raise UnsafeDirectoryError("directory is world-writable")
 
 
-def _ensure_private_dirs(directory: Path) -> None:
+def _ensure_private_dirs(directory: Path, allow_root_sticky: bool = False) -> None:
     missing = []
     probe = directory
     while not probe.exists():
@@ -187,29 +194,57 @@ def _ensure_private_dirs(directory: Path) -> None:
         if probe.parent == probe:
             break
         probe = probe.parent
-    _check_ancestor(probe)
+    _check_ancestor(probe, allow_root_sticky)
     for new in reversed(missing):
         try:
             os.mkdir(new, 0o700)
         except FileExistsError:
             # Created concurrently; it must still be a trustworthy directory.
-            _check_ancestor(new)
+            _check_ancestor(new, allow_root_sticky)
             continue
         os.chmod(new, 0o700)
 
 
-def _require_private_parent(directory: Path) -> None:
-    """Stricter rule for output that other tools will trust: an existing
-    containing directory must be ours and closed to group and world writes;
-    when it must be created, the nearest existing ancestor must be ours (or
-    root's) and closed to group and world writes, unless it is sticky (a
-    shared temporary directory, where the new 0700 directory is ours and
-    cannot be renamed by others)."""
+def _check_chain(directory: Path) -> None:
+    """Every existing ancestor, from the directory (or its nearest existing
+    ancestor) up to the filesystem root, must belong to the current user or
+    to root and must not be writable by group or others, unless it is
+    sticky. Anyone who can write to an ancestor could otherwise swap the
+    directory the files are trusted in."""
+    probe = Path(os.path.abspath(str(directory)))
+    while not probe.exists():
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    uid = os.getuid()
+    while True:
+        info = os.stat(probe)
+        if info.st_uid not in (uid, 0):
+            raise UnsafeDirectoryError("directory is owned by another user")
+        if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+            raise UnsafeDirectoryError("directory is writable by group or others")
+        if probe.parent == probe:
+            return
+        probe = probe.parent
+
+
+def _require_private_parent(directory: Path, *, exact: bool) -> None:
+    """Rule for a directory other tools will trust files in. An existing
+    directory must be ours; with `exact` it must have no group or other
+    permission bits at all (mode 700), otherwise it must merely be closed to
+    group and other writes. A directory that has to be created is checked
+    through its nearest existing ancestor, which must be ours (or root's) and
+    closed to group and other writes, unless it is sticky (a shared
+    temporary directory, where the new 0700 directory is ours and cannot be
+    renamed by others)."""
     if directory.exists():
         info = os.stat(directory)
         if info.st_uid != os.getuid():
             raise UnsafeDirectoryError("directory is owned by another user")
-        if info.st_mode & 0o022:
+        if exact:
+            if info.st_mode & 0o077:
+                raise UnsafeDirectoryError("directory must be private (mode 700)")
+        elif info.st_mode & 0o022:
             raise UnsafeDirectoryError("directory is writable by group or others")
         return
     probe = directory
@@ -222,6 +257,15 @@ def _require_private_parent(directory: Path) -> None:
         raise UnsafeDirectoryError("directory is owned by another user")
     if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
         raise UnsafeDirectoryError("directory is writable by group or others")
+
+
+def ensure_private_directory(directory) -> None:
+    """Create `directory` (mode 700) or verify an existing one is ours and
+    closed to group and other writes; every ancestor is checked too."""
+    directory = Path(directory)
+    _check_chain(directory)
+    _require_private_parent(directory, exact=False)
+    _ensure_private_dirs(directory, allow_root_sticky=True)
 
 
 def read_regular_bytes(path, *, max_bytes: int) -> Optional[Tuple[bytes, os.stat_result]]:
@@ -249,8 +293,11 @@ def read_regular_bytes(path, *, max_bytes: int) -> Optional[Tuple[bytes, os.stat
 def write_private_atomic(path, data: bytes, *, private_parent: bool = False) -> None:
     path = Path(path)
     if private_parent:
-        _require_private_parent(path.parent)
-    _ensure_private_dirs(path.parent)
+        _check_chain(path.parent)
+        _require_private_parent(path.parent, exact=True)
+        _ensure_private_dirs(path.parent, allow_root_sticky=True)
+    else:
+        _ensure_private_dirs(path.parent)
     tmp = path.parent / (".%s.%s.tmp" % (path.name, _stdlib_secrets.token_hex(8)))
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:

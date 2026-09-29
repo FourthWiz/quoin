@@ -670,7 +670,7 @@ def check(ev: Evaluation, directory) -> CheckResult:
     if (
         stored_native[1].st_mode & 0o077
         or stored_side[1].st_mode & 0o077
-        or dir_mode & 0o022
+        or dir_mode & 0o077
     ):
         reasons.append("not-private")
     try:
@@ -680,13 +680,25 @@ def check(ev: Evaluation, directory) -> CheckResult:
     if not isinstance(stored, dict):
         return CheckResult(False, tuple(reasons + ["stale"]))
     # A file compiled with unqualified models needs the same flag to be
-    # rebuilt; without it the rebuild would be refused, which says nothing
-    # useful about the file. (The opposite direction needs no special case:
-    # a rebuild that no longer needs the flag simply differs and is stale.)
+    # rebuilt. Without it, the rebuild is refused only while some model still
+    # lacks a valid qualification; once every model is qualified the files are
+    # simply stale.
+    fresh = None
     unqualified = stored.get("unqualified_models")
     if unqualified and not ev.allow_unqualified:
-        return CheckResult(False, tuple(reasons + ["flag-mismatch"]))
-    fresh = build(ev)
+        try:
+            fresh = build(ev)
+        except CompileBlocked as exc:
+            if any(
+                f.code == "role-blocked"
+                and len(f.subject) > 1
+                and f.subject[1].startswith("qualification-")
+                for f in exc.findings
+            ):
+                return CheckResult(False, tuple(reasons + ["flag-mismatch"]))
+            raise
+    if fresh is None:
+        fresh = build(ev)
     if fresh.native_bytes != stored_native[0] or fresh.sidecar_bytes != stored_side[0]:
         reasons.append("stale")
     return CheckResult(not reasons, tuple(reasons))

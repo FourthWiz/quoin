@@ -558,6 +558,9 @@ def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
     return 1 if (gate is not None or compiler.compile_blockers(ev)) else 0
 
 
+_COMPILE_IO_TEXT = "quoin: the compiled files could not be written or read; check the output directory"
+
+
 def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
     from quoin.opencode_adapter import compiler, paths
     from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
@@ -570,6 +573,9 @@ def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
         directory = compiler.resolve_output_dir(ev, output=args.output, env=env, home=home)
     except compiler.OutputRefused as exc:
         print("quoin: %s\n  fix: %s" % (exc, exc.fix), file=sys.stderr)
+        return 2
+    except OSError:
+        print(_COMPILE_IO_TEXT, file=sys.stderr)
         return 2
     try:
         if args.check:
@@ -592,6 +598,9 @@ def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
         return 2
     except paths.AdapterDataMissing:
         print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
+        return 2
+    except OSError:
+        print(_COMPILE_IO_TEXT, file=sys.stderr)
         return 2
     print("compiled: %s" % written)
     print("digest: %s" % result.digest)

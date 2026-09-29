@@ -152,3 +152,45 @@ def test_validator_does_not_depend_on_config_module():
         line.split()[-1] for line in text.splitlines() if line.startswith("from .") or line.startswith("import ")
     ]
     assert "from .config" not in text and "import config" not in text
+
+
+# ------------------------------------------------ end-of-string anchoring
+
+
+def test_a_final_dollar_matches_only_at_the_very_end():
+    schema = {"pattern": "^a$"}
+    assert check("a", schema) == []
+    assert kinds(check("a\n", schema)) == ["pattern"]
+    assert kinds(check("ab", schema)) == ["pattern"]
+
+
+def test_an_escaped_final_dollar_stays_a_literal():
+    schema = {"pattern": r"^a\$"}
+    assert check("a$", schema) == []
+    assert kinds(check("a", schema)) == ["pattern"]
+    # two backslashes escape each other, so the dollar is an anchor again
+    anchored = {"pattern": r"^a\\$"}
+    assert check("a\\", anchored) == []
+    assert kinds(check("a\\\n", anchored)) == ["pattern"]
+
+
+def test_a_dollar_that_is_not_final_is_left_alone():
+    assert check("ab", {"pattern": "a|b$"}) == []
+    assert check("a", {"pattern": "^(a$|b)"}) == []
+
+
+def test_native_ids_reject_a_trailing_newline():
+    schema = json.loads(
+        (SCHEMAS / "opencode-1.18.32-config.subset.schema.json").read_text(encoding="utf-8")
+    )
+    defs = schema["$defs"]
+    name = next(k for k, v in defs.items() if v.get("pattern", "").startswith("^(openrouter|quoin-[a-z0-9]") and "/" not in v["pattern"])
+    assert validate("quoin-x", schema, name) == []
+    assert [v.keyword for v in validate("quoin-x\n", schema, name)] == ["pattern"]
+
+
+def test_the_standard_validator_keeps_python_dollar_semantics():
+    jsonschema = pytest.importorskip("jsonschema", reason="jsonschema is a dev-only dependency")
+    schema = {"type": "string", "pattern": "^a$"}
+    assert jsonschema.Draft202012Validator(schema).is_valid("a\n")
+    assert kinds(check("a\n", schema)) == ["pattern"]
