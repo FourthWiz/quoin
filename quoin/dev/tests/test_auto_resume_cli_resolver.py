@@ -10,6 +10,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import stat
 import sys
 import time
@@ -349,6 +350,129 @@ def test_stop_caller_does_not_retry(ar, tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
+# ── neutral cwd for the probe ─────────────────────────────────────────────────
+#
+# A project containing a top-level `quoin.py` or `quoin/` package must never
+# have that file imported by the probe just because the resolver used to run
+# it with the project root as cwd (`-c` puts the working directory first on
+# sys.path, ahead of the recorded interpreter's own site-packages). These
+# tests use a real Python interpreter (not the fake `#!/bin/sh` one) so the
+# actual import resolution is exercised, with the record's `pythonpath`
+# pointed at this worktree's own `src/` so the probe can find the real
+# installed package when it isn't shadowed.
+
+
+def _real_quoin_version() -> str:
+    about = REPO_ROOT / "src" / "quoin" / "__about__.py"
+    match = re.search(r"""__version__\s*=\s*["']([^"']+)["']""", about.read_text(encoding="utf-8"))
+    assert match is not None, "could not read quoin.__version__ from __about__.py"
+    return match.group(1)
+
+
+def _write_real_record(record_path: Path) -> None:
+    record = {
+        "schema": 1,
+        "python": sys.executable,
+        "version": _real_quoin_version(),
+        "pythonpath": str(REPO_ROOT / "src"),
+        "quoin_file": str(REPO_ROOT / "src" / "quoin" / "__init__.py"),
+        "source_dir": str(REPO_ROOT),
+        "source_version": None,
+        "installed_at": "2026-09-29T00:00:00Z",
+    }
+    record_path.write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_probe_ignores_hostile_flat_module_at_project_root(ar, tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    marker = tmp_path / "marker.txt"  # outside project_root: proves the hostile code ran
+    (project_root / "quoin.py").write_text(
+        f"open({str(marker)!r}, 'w').write('imported')\n", encoding="utf-8",
+    )
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_real_record(record_path)
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+
+    res = ar.resolve_cli(project_root, "cli-check")
+
+    assert not marker.exists(), "the project root's own quoin.py was imported by the probe"
+    assert res["status"] == "usable"
+    assert res["probed_version"] == _real_quoin_version()
+
+
+def test_probe_ignores_hostile_package_at_project_root(ar, tmp_path, monkeypatch):
+    project_root = tmp_path / "project"
+    (project_root / "quoin").mkdir(parents=True)
+    marker = tmp_path / "marker.txt"
+    (project_root / "quoin" / "__init__.py").write_text(
+        f"open({str(marker)!r}, 'w').write('imported')\n__version__ = 'hostile'\n", encoding="utf-8",
+    )
+    (project_root / "quoin" / "cli.py").write_text("", encoding="utf-8")
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_real_record(record_path)
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+
+    res = ar.resolve_cli(project_root, "cli-check")
+
+    assert not marker.exists(), "the project root's own quoin/ package was imported by the probe"
+    assert res["status"] == "usable"
+    assert res["probed_version"] == _real_quoin_version()
+
+
+def test_probe_project_root_is_quoin_repo_itself_still_resolves(ar, tmp_path, monkeypatch):
+    """This worktree's own root has a top-level `quoin/` directory (the
+    hooks/skills/scripts source tree, no `__init__.py`) — using this tool
+    on a checkout of itself must not be broken by the cwd fix."""
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_real_record(record_path)
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+
+    res = ar.resolve_cli(REPO_ROOT, "cli-check")
+
+    assert res["status"] == "usable"
+    assert res["probed_version"] == _real_quoin_version()
+
+
+def test_probe_cwd_is_never_project_root(ar, tmp_path, monkeypatch):
+    interp = _write_fake_interpreter(tmp_path / "fakebin")
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_record(record_path, python=str(interp))
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+    project_root = tmp_path / "project"
+    project_root.mkdir()
+    captured_cwds = []
+    real_probe = ar._probe
+
+    def _capturing_probe(argv0, env, cwd, timeout_s):
+        captured_cwds.append(cwd)
+        return real_probe(argv0, env, cwd, timeout_s)
+
+    monkeypatch.setattr(ar, "_probe", _capturing_probe)
+    monkeypatch.setenv("FAKE_MODE", "ok")
+    res = ar.resolve_cli(project_root, "start")
+    assert res["status"] == "usable"
+    assert captured_cwds and all(cwd != str(project_root) for cwd in captured_cwds)
+
+
+def test_probe_missing_project_root_no_longer_misreported_as_broken_interpreter(ar, tmp_path, monkeypatch):
+    """A missing --project-root used to reach Popen's cwd directly and
+    raise OSError, mapped to interpreter-not-executable — misleading,
+    since the interpreter itself was fine. Running the probe from a
+    neutral, always-present cwd (tempfile.gettempdir()) removes this case
+    along with the shadowing risk: cwd no longer depends on project_root
+    at all."""
+    interp = _write_fake_interpreter(tmp_path / "fakebin")
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_record(record_path, python=str(interp))
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+    monkeypatch.setenv("FAKE_MODE", "ok")
+    missing_project_root = tmp_path / "does-not-exist-at-all"
+    res = ar.resolve_cli(missing_project_root, "start")
+    assert res["status"] == "usable"
+    assert res["kind"] is None
+
+
 # ── timeout remedy text per caller ───────────────────────────────────────────
 
 
@@ -364,9 +488,8 @@ def test_timeout_remedy_handoff_and_cli_check_no_knob_mention(ar, tmp_path, monk
     monkeypatch.setenv("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", "250")
     for caller in ("handoff", "cli-check"):
         res = _resolve_with_mode(ar, tmp_path, monkeypatch, "sleep", caller=caller)
-        # No literal <task> placeholder (review-1.md issue 3): the remedy is
-        # generic instead of naming a task this resolver-level call has no
-        # access to.
+        # No literal <task> placeholder: the remedy is generic instead of
+        # naming a task this resolver-level call has no access to.
         assert "retry the auto-resume hand-off" in res["message"]
         assert "<task>" not in res["message"]
         assert "QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS" not in res["message"]

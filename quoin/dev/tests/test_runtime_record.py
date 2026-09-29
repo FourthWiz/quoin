@@ -294,12 +294,12 @@ def test_remove_existing_record_no_op_when_absent(tmp_path, capsys):
 
 
 def test_install_placeholder_violation_removes_previous_record(tmp_path, monkeypatch):
-    """review-1.md issue 4: a failed or partial install must not leave the
-    PREVIOUS install's record in place next to a partially deployed hook
-    tree — a stale record whose interpreter/version no longer matches what
-    actually got deployed would otherwise launch silently. Seeds dest_root
-    with a record from an earlier successful install, then fails the same
-    way `test_install_placeholder_violation_writes_no_record` does."""
+    """A failed or partial install must not leave the PREVIOUS install's
+    record in place next to a partially deployed hook tree — a stale
+    record whose interpreter/version no longer matches what actually got
+    deployed would otherwise launch silently. Seeds dest_root with a
+    record from an earlier successful install, then fails the same way
+    `test_install_placeholder_violation_writes_no_record` does."""
     import unittest.mock
     import quoin.cli as cli
     import quoin.installer as inst

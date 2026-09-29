@@ -189,6 +189,38 @@ def test_handoff_usable_argv_and_env(ar, project, monkeypatch, capsys):
     assert env["PYTHONPATH"].startswith(str(project / "src"))
 
 
+def test_handoff_spawn_cwd_is_not_project_root(ar, project, monkeypatch, capsys):
+    """The detached supervisor spawn (`python -m quoin run ...`) must not
+    run with the project root as its cwd — `-m` puts the working
+    directory first on sys.path, so a hostile `quoin.py` or `quoin/`
+    package sitting at the project root would otherwise be imported and
+    run from this hand-off. `--project-root` is still passed explicitly
+    in argv, so the relaunched run still learns the real path."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    interp = _fake_interpreter(project / "fakebin", mode="ok")
+    _write_runtime_record(ar._runtime_record_path(), python=str(interp), version="9.9.9")
+
+    captured = []
+
+    class _FakeProc:
+        pid = 4321
+
+    def _fake_popen(argv, **kw):
+        captured.append((argv, kw.get("cwd")))
+        return _FakeProc()
+
+    monkeypatch.setattr(ar, "_popen", _fake_popen)
+    rc = ar._cmd_handoff(_Args(project_root=str(project), task="demo", reason="budget", on_fail_halt=None))
+    assert rc == 0
+    assert capsys.readouterr().out.strip().startswith("HANDOFF|")
+    argv, cwd = captured[0]
+    assert cwd != str(project)
+    assert "--project-root" in argv
+    assert argv[argv.index("--project-root") + 1] == str(project)
+
+
 def test_handoff_budget_reason_no_halt_writes_notes_only(ar, project, monkeypatch, capsys):
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
