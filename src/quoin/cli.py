@@ -489,6 +489,116 @@ def _cmd_opencode_script(args: argparse.Namespace) -> int:
     return scripts.run(args.name, args.script_args, source_dir)
 
 
+# Environment names the configuration pipeline reads; nothing else is ever
+# copied out of the real environment, so no credential variable can reach it.
+CONFIG_ENV_KEYS = ("HOME", "XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY")
+
+
+def _opencode_config_env() -> dict:
+    return {key: os.environ[key] for key in CONFIG_ENV_KEYS if key in os.environ}
+
+
+def _print_findings(findings) -> None:
+    from quoin.opencode_adapter import errors
+
+    for finding in findings:
+        subject = " [%s]" % ", ".join(finding.subject) if finding.subject else ""
+        print("%s: %s%s" % (finding.code, errors.FINDING_MESSAGES[finding.code], subject), file=sys.stderr)
+
+
+def _opencode_config_evaluate(args: argparse.Namespace, *, allow_unqualified: bool):
+    """Evaluate the configuration; returns (evaluation, env, home) or an int
+    exit code after printing the reason."""
+    from quoin.opencode_adapter import compiler, paths
+    from quoin.opencode_adapter.errors import ConfigErrors
+    from quoin.opencode_adapter.roles import AllowUnqualifiedRefused
+
+    env = _opencode_config_env()
+    home = pathlib.Path.home()
+    try:
+        ev = compiler.evaluate(
+            project_root=pathlib.Path(args.project_root),
+            profile=args.profile,
+            env=env,
+            home=home,
+            now=datetime.now(timezone.utc),
+            allow_unqualified=allow_unqualified,
+        )
+    except ConfigErrors as exc:
+        for item in exc.errors:
+            print(str(item), file=sys.stderr)
+        return 2
+    except paths.AdapterDataMissing:
+        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
+        return 2
+    except AllowUnqualifiedRefused as exc:
+        print("quoin: %s" % exc, file=sys.stderr)
+        return 2
+    return ev, env, home
+
+
+def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
+    from quoin.opencode_adapter import compiler, explain, paths
+
+    got = _opencode_config_evaluate(args, allow_unqualified=False)
+    if isinstance(got, int):
+        return got
+    ev, env, home = got
+    try:
+        output_dir = paths.compiled_output_dir(ev.profile, ev.project_root, env, home)
+        result, gate = explain.try_build(ev)
+        text = explain.render(
+            ev, redact=args.redact, as_json=args.json, compile_result=result,
+            output_dir=output_dir, gate_failure=gate,
+        )
+    except paths.AdapterDataMissing:
+        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
+        return 2
+    sys.stdout.write(text)
+    return 1 if (gate is not None or compiler.compile_blockers(ev)) else 0
+
+
+def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
+    from quoin.opencode_adapter import compiler, paths
+    from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
+
+    got = _opencode_config_evaluate(args, allow_unqualified=args.allow_unqualified)
+    if isinstance(got, int):
+        return got
+    ev, env, home = got
+    try:
+        directory = compiler.resolve_output_dir(ev, output=args.output, env=env, home=home)
+    except compiler.OutputRefused as exc:
+        print("quoin: %s\n  fix: %s" % (exc, exc.fix), file=sys.stderr)
+        return 2
+    try:
+        if args.check:
+            outcome = compiler.check(ev, directory)
+            if outcome.ok:
+                print("up to date")
+                return 0
+            print("stale: " + ", ".join(outcome.reasons))
+            return 1
+        result = compiler.build(ev)
+        written = compiler.write(result, directory)
+    except compiler.CompileBlocked as exc:
+        _print_findings(exc.findings)
+        return 1
+    except compiler.CompileGateError as exc:
+        print("quoin: %s [gate %s]" % (exc, exc.gate), file=sys.stderr)
+        return 1
+    except UnsafeDirectoryError as exc:
+        print("quoin: the output directory is not private enough: %s" % exc, file=sys.stderr)
+        return 2
+    except paths.AdapterDataMissing:
+        print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
+        return 2
+    print("compiled: %s" % written)
+    print("digest: %s" % result.digest)
+    print("launchable: %s" % ("true" if result.launchable else "false"))
+    return 0
+
+
 def _codex_script(source_dir: pathlib.Path, name: str) -> pathlib.Path:
     script = source_dir / "adapters" / "codex" / name
     if not script.is_file():
@@ -1422,7 +1532,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opencode_p = sub.add_parser(
         "opencode",
-        description="Repo-local OpenCode helpers (uninstall the .opencode/ scaffold; run an allowlisted Quoin script).",
+        description="Repo-local OpenCode helpers (uninstall the .opencode/ scaffold; run an allowlisted Quoin script; explain or compile the runtime configuration).",
         help="Repo-local OpenCode helpers",
     )
     opencode_sub = opencode_p.add_subparsers(dest="opencode_command")
@@ -1461,6 +1571,59 @@ def main(argv: list[str] | None = None) -> int:
         "script_args",
         nargs=argparse.REMAINDER,
         help="Arguments forwarded to the script unchanged.",
+    )
+
+    opencode_config_p = opencode_sub.add_parser(
+        "config",
+        description="Explain or compile the layered OpenCode runtime configuration.",
+        help="Explain or compile the OpenCode runtime configuration",
+    )
+    opencode_config_sub = opencode_config_p.add_subparsers(dest="config_command")
+
+    config_explain_p = opencode_config_sub.add_parser(
+        "explain",
+        description="Show how the layered configuration resolves for a profile and project.",
+        help="Show how the configuration resolves",
+    )
+    config_explain_p.add_argument(
+        "--profile", help="Profile name; defaults to the profile named by the project file."
+    )
+    config_explain_p.add_argument(
+        "--project-root", default=".", help="Project root; defaults to the current directory."
+    )
+    config_explain_p.add_argument(
+        "--redact",
+        action="store_true",
+        help="Mask endpoint hosts, host lists, keychain accounts and the output location.",
+    )
+    config_explain_p.add_argument("--json", action="store_true", help="Print JSON instead of text.")
+
+    config_compile_p = opencode_config_sub.add_parser(
+        "compile",
+        description="Compile the configuration into a native OpenCode config file outside the project.",
+        help="Compile the native OpenCode config",
+    )
+    config_compile_p.add_argument("--profile", required=True, help="Profile name to compile.")
+    config_compile_p.add_argument(
+        "--project-root", default=".", help="Project root; defaults to the current directory."
+    )
+    config_compile_p.add_argument(
+        "--output",
+        metavar="DIR",
+        help=(
+            "Directory the compiled files are written inside (a directory, not a file); "
+            "defaults to a per-project location under the state directory."
+        ),
+    )
+    config_compile_p.add_argument(
+        "--check",
+        action="store_true",
+        help="Compare the written files with a fresh build and report whether they are up to date; writes nothing.",
+    )
+    config_compile_p.add_argument(
+        "--allow-unqualified",
+        action="store_true",
+        help="Accept models without a valid qualification record (refused for work under a managed policy).",
     )
 
     dashboard_p = sub.add_parser(
@@ -1666,6 +1829,13 @@ def main(argv: list[str] | None = None) -> int:
             return run_uninstall(args.project_root, args.dry_run, sys.stdout, sys.stderr)
         if args.opencode_command == "script":
             return _cmd_opencode_script(args)
+        if args.opencode_command == "config":
+            if args.config_command == "explain":
+                return _cmd_opencode_config_explain(args)
+            if args.config_command == "compile":
+                return _cmd_opencode_config_compile(args)
+            opencode_config_p.print_help()
+            return 1
         opencode_p.print_help()
         return 1
     elif args.command == "router":

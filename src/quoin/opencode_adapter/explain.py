@@ -357,8 +357,12 @@ def render(
     as_json: bool,
     compile_result: Any = AUTO,
     output_dir: Optional[Path] = None,
+    gate_failure: Optional[str] = None,
 ) -> str:
-    doc = explain_document(ev, redact=redact, compile_result=compile_result, output_dir=output_dir)
+    doc = explain_document(
+        ev, redact=redact, compile_result=compile_result, output_dir=output_dir,
+        gate_failure=gate_failure,
+    )
     if as_json:
         return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
     return _text(doc)
