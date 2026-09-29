@@ -367,8 +367,79 @@ def test_arm_with_consent_and_no_live_lock_resets_counter(ar, project):
     assert reloaded["attempts"] == 0
     assert reloaded["consecutive_no_progress"] == 0
     assert reloaded["chain_blocks"] == 0
+    # CRIT reproduction (review round 2): a consent-honored reset used to
+    # write `last_done_count: None`, which crashes every later gate/
+    # hand-off comparison (`done_now > None`) with a TypeError. It must
+    # always land back on a valid int, matching `_default_counter`.
+    assert reloaded["last_done_count"] == 0
     # the stamp is consumed exactly once
     assert not (memory / "run-continue-consent-sid-1.txt").exists()
+
+
+def test_arm_with_consent_then_stop_survives_the_reset_through_main(ar, project, monkeypatch, capsys):
+    """CRIT reproduction (review round 2), exercised through `main()` the
+    same way the real CLI is invoked: a consent stamp, `arm`, then `stop`
+    must still evaluate the gate and block. Before the fix, the arm's
+    reset wrote `last_done_count: None` and the following `stop` crashed
+    inside `_evaluate_gate` (`done_now > None`), which `main()`'s fail-open
+    wrapper swallowed — empty stdout, exit 0, auto-resume silently dead."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter["attempts"] = 5
+    counter["last_done_count"] = 3
+    ar._write_counter(memory, "demo", counter)
+    (memory / "run-continue-consent-sid-1.txt").touch()
+
+    rc = ar.main([
+        "arm", "--project-root", str(project), "--task", "demo",
+        "--session-id", "sid-1", "--entry", "resume",
+    ])
+    assert rc == 0
+    reloaded = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert reloaded["attempts"] == 0
+    assert reloaded["last_done_count"] == 0
+
+    _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+    rc = ar.main(["stop", "--project-root", str(project)])
+    assert rc == 0
+    out_text = capsys.readouterr().out
+    assert out_text != "", "stop produced no output — the gate crashed and was swallowed"
+    out = json.loads(out_text)
+    assert out["decision"] == "block"
+
+    reloaded2 = json.loads((memory / "auto-resume-demo.json").read_text())
+    assert reloaded2["attempts"] == 1
+    assert not (memory / "auto-resume-errors.log").exists()
+
+
+def test_unexpected_gate_error_is_logged_to_observable_file(ar, project, monkeypatch, capsys):
+    """The fail-open wrapper in `main()` prints to stderr, but both hook
+    call sites (`stop.sh`, `sessionstart.sh`) invoke this helper with
+    `2>/dev/null` — so that print alone is invisible in real use. A
+    swallowed exception must also land in a durable file under the memory
+    dir so a silent fail-open death can be found after the fact."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    _arm(memory, "sid-1")
+    _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+
+    def _boom(*a, **kw):
+        raise TypeError("'>' not supported between instances of 'int' and 'NoneType'")
+
+    monkeypatch.setattr(ar, "_evaluate_gate", _boom)
+
+    rc = ar.main(["stop", "--project-root", str(project)])
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+    log_path = memory / "auto-resume-errors.log"
+    assert log_path.exists()
+    content = log_path.read_text()
+    assert "command=stop" in content
+    assert "TypeError" in content
 
 
 def test_arm_with_consent_but_live_lock_keeps_counter_and_consumes_consent(ar, project, monkeypatch):

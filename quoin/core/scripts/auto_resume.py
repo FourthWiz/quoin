@@ -45,6 +45,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,6 +88,7 @@ ARM_TEMPLATE = "run-continue-arm-{sid}.txt"
 ENDED_TEMPLATE = "session-ended-{sid}.txt"
 CONSENT_TEMPLATE = "run-continue-consent-{sid}.txt"
 COMPACT_TEMPLATE = "compact-happened-{sid}.txt"
+ERROR_LOG_TEMPLATE = "auto-resume-errors.log"
 
 COUNTER_SCHEMA = 1
 _ENDED_MARKER_PRUNE_DAYS = 7
@@ -620,7 +622,7 @@ def _evaluate_gate(memory_dir: Path, mode: str, candidates):
         done_now = _count_done(memory_dir, task)
         last_phase = counter.get("last_phase")
         cur_phase = [record.get("phase"), record.get("phase_index")]
-        progressed = done_now > counter.get("last_done_count", 0) or last_phase != cur_phase
+        progressed = done_now > (counter.get("last_done_count") or 0) or last_phase != cur_phase
         if not progressed:
             if counter.get("consecutive_no_progress", 0) + 1 >= 2:
                 counter["consecutive_no_progress"] = counter.get("consecutive_no_progress", 0) + 1
@@ -690,7 +692,7 @@ def _do_handoff(
     done_now = _count_done(memory_dir, task)
     last_phase = counter.get("last_phase")
     cur_phase = [record.get("phase"), record.get("phase_index")]
-    progressed = done_now > counter.get("last_done_count", 0) or last_phase != cur_phase
+    progressed = done_now > (counter.get("last_done_count") or 0) or last_phase != cur_phase
     if not progressed:
         if counter.get("consecutive_no_progress", 0) + 1 >= 2:
             counter["consecutive_no_progress"] = counter.get("consecutive_no_progress", 0) + 1
@@ -847,9 +849,15 @@ def _cmd_stop(args) -> int:
         if handoff_result.startswith("DENIED|no-progress"):
             # I-13: a halt was already written — the Stop path stays terminal.
             return 0
-        # DENIED|cap (no halt written — halt_on_cap=False) / LOCKED| /
-        # NO_CLI| / OWNER_LIVE| / DENIED|opt-out: fall through to a plain
-        # in-session block, still bounded by the attempts+1 <= cap check
+        if handoff_result.startswith("LOCKED|"):
+            # A supervisor won the lock between the gate check and this
+            # hand-off attempt (e.g. a concurrent `start`/`handoff`) — it is
+            # already driving the task, so this session must not also keep
+            # blocking on it in-session.
+            return 0
+        # DENIED|cap (no halt written — halt_on_cap=False) / NO_CLI| /
+        # OWNER_LIVE| / DENIED|opt-out: fall through to a plain in-session
+        # block, still bounded by the attempts+1 <= cap check
         # `_evaluate_gate` already applied before returning this candidate.
 
     attempts = counter.get("attempts", 0) + 1
@@ -924,19 +932,18 @@ def _cmd_arm(args) -> int:
     typed `/run` prompt (see userpromptsubmit.sh) — never by a marker
     rewrite, a supervisor child's own re-entry, or a model self-resume — so
     those paths keep whatever budget the span already has. The stamp is
-    consumed (unlinked) on every `arm` call whether or not it is honored,
-    and is ignored if it predates this session's previous arm (a stale
-    stamp from an earlier span)."""
+    consumed (unlinked) on every `arm` call whether or not it is honored —
+    even a no-op call against a task with no active marker — and is
+    ignored if it predates this session's previous arm (a stale stamp
+    from an earlier span). Consumption happens BEFORE the marker check
+    below: a plain `/run` against an inactive task must still clear a
+    leftover stamp, or a later human arm in the same session could wrongly
+    honor it."""
     if not _auto_resume_enabled():
         return 0
     if not _run_state._valid_task(args.task) or not _valid_sid(args.session_id):
         return 0
     memory_dir = _memory_dir(args.project_root)
-    marker_path = memory_dir / MARKER_TEMPLATE.format(task=args.task)
-    if not marker_path.exists():
-        return 0
-    marker = _load_marker(marker_path)
-    marker_ts = marker.get("timestamp") if marker else None
 
     arm_path = memory_dir / ARM_TEMPLATE.format(sid=args.session_id)
     prev_armed_at = None
@@ -956,6 +963,12 @@ def _cmd_arm(args) -> int:
             consent_path.unlink()
         except OSError:
             pass
+
+    marker_path = memory_dir / MARKER_TEMPLATE.format(task=args.task)
+    if not marker_path.exists():
+        return 0
+    marker = _load_marker(marker_path)
+    marker_ts = marker.get("timestamp") if marker else None
 
     try:
         _atomic_write_text(
@@ -979,7 +992,7 @@ def _cmd_arm(args) -> int:
         counter["attempts"] = 0
         counter["consecutive_no_progress"] = 0
         counter["chain_blocks"] = 0
-        counter["last_done_count"] = None
+        counter["last_done_count"] = 0
         counter["last_phase"] = None
     counter["in_flight"] = False
     counter["marker_timestamp"] = marker_ts
@@ -1105,7 +1118,46 @@ _HANDLERS = {
 }
 
 
+def _log_unexpected_error(args, exc: BaseException) -> None:
+    """Best-effort durable record of a fail-OPEN exception (I-01).
+
+    `stop.sh` and `sessionstart.sh` invoke this helper with `2>/dev/null`,
+    so the stderr warning below is normally invisible in real use — a
+    crash here can silently kill auto-resume for a task with no trace
+    anywhere. This writes the same event to a plain-text file under the
+    memory dir instead (reusing the same bounded-append primitive
+    `append_note` already uses for run-notes), so a fail-OPEN death always
+    leaves a trail a human or a future dispatch can actually find."""
+    project_root = getattr(args, "project_root", None) if args is not None else None
+    if not project_root:
+        return
+    try:
+        memory_dir = _memory_dir(project_root)
+        memory_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    command = getattr(args, "command", None) if args is not None else None
+    task = getattr(args, "task", None) if args is not None else None
+    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+    if len(tb) > 4000:
+        tb = tb[-4000:]
+    block = (
+        f"## {_iso_now()} — command={command or '?'} task={task or '?'}\n"
+        f"- {type(exc).__name__}: {exc}\n"
+        f"```\n{tb}```\n\n"
+    )
+    try:
+        _run_state._append_notes(
+            memory_dir / ERROR_LOG_TEMPLATE,
+            block,
+            int(os.environ.get("QUOIN_RUN_NOTES_MAX_BYTES", "262144")),
+        )
+    except Exception:
+        pass
+
+
 def main(argv=None) -> int:
+    args = None
     try:
         parser = _build_parser()
         try:
@@ -1122,6 +1174,10 @@ def main(argv=None) -> int:
     except BaseException as exc:  # noqa: BLE001 — fail-open contract (I-01)
         try:
             print(f"[auto_resume] WARNING: unexpected error: {exc}", file=sys.stderr)
+        except Exception:
+            pass
+        try:
+            _log_unexpected_error(args, exc)
         except Exception:
             pass
         return 0
