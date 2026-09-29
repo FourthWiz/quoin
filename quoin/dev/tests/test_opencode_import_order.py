@@ -31,7 +31,7 @@ _CONFIG_MODULES = tuple(
     "quoin.opencode_adapter." + name
     for name in (
         "errors", "paths", "jsonio", "schema_check", "secrets", "config",
-        "merge", "qualification", "roles", "compiler", "explain",
+        "merge", "qualification", "roles", "compiler", "explain", "probe_cli", "import_preview", "retry",
     )
 )
 

@@ -25,7 +25,7 @@ CASES = json.loads((FIXTURES / "cases.json").read_text(encoding="utf-8"))
 ALLOWED_ENV_READS = {"XDG_CONFIG_HOME", "XDG_STATE_HOME", "QUOIN_OPENCODE_MANAGED_POLICY"}
 NEW_MODULES = (
     "errors", "paths", "jsonio", "schema_check", "secrets", "config", "merge", "qualification", "roles",
-    "compiler", "explain",
+    "compiler", "explain", "probe_cli", "import_preview", "retry",
 )
 
 
