@@ -83,6 +83,44 @@ def test_detached_grandchild_is_reaped(tmp_path):
     assert h.load_record(tmp_path, prepared.run_id)["state"] == "cancelled"
 
 
+class _ProcWithZombie:
+    """The real process table plus one tracked, already-dead descendant that
+    the table still lists as a zombie."""
+
+    def __init__(self):
+        self.extra = None
+
+    def __getattr__(self, name):
+        return getattr(proctree, name)
+
+    def snapshot(self, *args, **kwargs):
+        table = proctree.snapshot(*args, **kwargs)
+        if table is None:
+            return None
+        if self.extra is not None:
+            table = dict(table)
+            table[self.extra.pid] = self.extra
+        return table
+
+
+def test_a_listed_zombie_never_forces_the_kill_escalation(tmp_path):
+    import subprocess
+    import sys
+
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    prepared = h.make_prepared(tmp_path, "hang")
+    stub = _ProcWithZombie()
+    drv = h.make_driver(tmp_path, grace_s=GRACE, kill_grace_s=KILL_GRACE, proc=stub)
+    handle = drv.start(prepared)
+    time.sleep(0.3)
+    stub.extra = proctree.ProcInfo(gone.pid, handle.proc.pid, handle.pgid, "Z", "zombie-start")
+    handle.tracked[gone.pid] = proctree.Identity(gone.pid, "zombie-start")
+    result, _ = _cancel_with_observer(drv, handle)
+    assert result.escalated_kill is False and result.duration_s < GRACE
+    assert result.descendants_remaining == 0
+
+
 def test_hang_obeys_term(tmp_path):
     drv, prepared, handle = _start(tmp_path, "hang")
     time.sleep(0.3)
