@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import re
 import sys
+import unicodedata
 from typing import List, NamedTuple, Optional
 
 DONE_GLYPHS = ("✓", "✅")
@@ -36,6 +37,10 @@ _TASK_RE = re.compile(
     r"(?:\*\*|`)?"
     r"T-(?P<num>\d+)(?P<suf>[a-z])?(?=\W|$)"
     r"(?:\*\*|`)?:?\s*(?P<post>" + _GLYPH + r")?"
+)
+_STATUS_LINE = re.compile(
+    r"^(?:#{2,4}\s+|\d+[.)]\s+|[-*+]\s+)?(?:\[[ xX]\]\s+)?"
+    r"(?:✓|✅|⏳|🚫|✗|❌)"
 )
 _TASKS_HEADING = re.compile(r"^##\s+Tasks\s*$")
 _NEXT_HEADING = re.compile(r"^##\s")
@@ -55,10 +60,20 @@ def _norm(glyph: Optional[str]) -> Optional[str]:
     return glyph.replace(_VS16, "")
 
 
+def _status_only(glyph: Optional[str]) -> Optional[str]:
+    """Keep a postfix glyph only when every char is a symbol (category So),
+    so dashes, brackets and arrows after the task id are not read as status."""
+    norm = _norm(glyph)
+    if norm and all(unicodedata.category(ch) == "So" for ch in norm):
+        return norm
+    return None
+
+
 def scan_plan_text(text: str) -> PlanStatus:
     in_tasks = False
     seen_heading = False
     in_fence = False
+    ambiguous = False
     done_by_id: dict = {}
     order: List[str] = []
     for line in text.splitlines():
@@ -70,19 +85,24 @@ def scan_plan_text(text: str) -> PlanStatus:
             continue
         if not in_tasks:
             if _TASKS_HEADING.match(line):
+                if seen_heading:
+                    ambiguous = True
                 in_tasks = True
                 seen_heading = True
             continue
         if _NEXT_HEADING.match(line):
-            break
+            in_tasks = False
+            continue
         m = _TASK_RE.match(line)
         if not m:
+            if _STATUS_LINE.match(line):
+                ambiguous = True
             continue
         if not (m.group("prefix") or m.group("checkbox") or m.group("glyph")):
             continue
         tid = "T-" + m.group("num") + (m.group("suf") or "")
         lead = _norm(m.group("glyph"))
-        post = _norm(m.group("post"))
+        post = _status_only(m.group("post"))
         eff = lead if lead is not None else post
         done = eff in DONE_GLYPHS and (post is None or post in DONE_GLYPHS)
         if lead is not None and post is not None and lead != post and not (
@@ -98,6 +118,8 @@ def scan_plan_text(text: str) -> PlanStatus:
         return PlanStatus("UNKNOWN", 0, [], "no Tasks section")
     if not order:
         return PlanStatus("UNKNOWN", 0, [], "no task lines")
+    if ambiguous or in_fence:
+        return PlanStatus("UNKNOWN", 0, [], "ambiguous tasks section")
     pending = [t for t in order if not done_by_id[t]]
     if pending:
         return PlanStatus("PENDING", len(order), pending, "")

@@ -176,3 +176,37 @@ def test_core_imports_under_python_38():
     r = subprocess.run([exe, "-c", code, str(CORE_PATH)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "ALLDONE"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "1. ✅ T-01 — x",
+        "1. ✅ T-01 – x",
+        "1. ✅ T-01 (x)",
+        "1. ✅ **T-01** — x",
+        "- ✅ T-01 → x",
+        "1. ✅ T-01. x",
+    ],
+)
+def test_punctuation_after_id_is_not_a_postfix_glyph(line):
+    s = _kind(line + "\n")
+    assert s.kind == "ALLDONE", line
+
+
+def test_punctuation_does_not_make_a_pending_line_done():
+    assert _kind("1. ⏳ T-01 — x\n").kind == "PENDING"
+    assert _kind("1. T-01 — x\n").kind == "PENDING"
+
+
+def test_status_line_without_id_is_unknown():
+    assert _kind("1. ✅ T-01: a\n2. ⏳ polish the docs\n").kind == "UNKNOWN"
+
+
+def test_unterminated_fence_is_unknown():
+    assert pt.scan_plan_text("## Tasks\n\n1. ✅ T-01: a\n```\n2. ⏳ T-02: b\n").kind == "UNKNOWN"
+
+
+def test_second_tasks_heading_is_unknown():
+    text = "## Tasks\n\n1. ✅ T-01: a\n\n## Notes\n\nx\n\n## Tasks\n\n1. ⏳ T-02: b\n"
+    assert pt.scan_plan_text(text).kind == "UNKNOWN"
