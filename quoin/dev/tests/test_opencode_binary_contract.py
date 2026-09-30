@@ -56,22 +56,26 @@ def _pinned_version() -> Optional[str]:
 _BINARY_VERSION = _binary_version()
 _PINNED_VERSION = _pinned_version()
 
-_SKIP_REASON = (
-    "no 'opencode' binary on PATH"
-    if _OPENCODE_BIN is None
-    else (
-        "'opencode --version' did not report the pinned release "
-        f"({_PINNED_VERSION!r}); saw {_BINARY_VERSION!r}"
-    )
-)
+def skip_reason(binary_path, pinned, reported) -> Optional[str]:
+    """Why this module cannot run against the binary found, or None to run.
 
-pytestmark = pytest.mark.skipif(
-    _OPENCODE_BIN is None
-    or _PINNED_VERSION is None
-    or _BINARY_VERSION is None
-    or _PINNED_VERSION not in _BINARY_VERSION,
-    reason=_SKIP_REASON,
-)
+    `binary_path` is the executable found on PATH (None when absent),
+    `pinned` the release the adapter targets and `reported` what
+    `opencode --version` printed.
+    """
+    if binary_path is None:
+        return "no 'opencode' binary on PATH"
+    if pinned is None or reported is None or pinned not in reported:
+        return (
+            "'opencode --version' did not report the pinned release "
+            f"({pinned!r}); saw {reported!r}"
+        )
+    return None
+
+
+_SKIP_REASON = skip_reason(_OPENCODE_BIN, _PINNED_VERSION, _BINARY_VERSION)
+
+pytestmark = pytest.mark.skipif(_SKIP_REASON is not None, reason=_SKIP_REASON or "")
 
 
 @pytest.fixture()
@@ -227,3 +231,87 @@ def test_binary_keeps_the_compiled_security_keys(tmp_path, golden_name):
     for agent_name, agent in expected["agent"].items():
         if "variant" in agent:
             assert decoded["agent"][agent_name]["variant"] == agent["variant"]
+
+
+def _driver_world(tmp_path, base_url, git):
+    """A disposable home and project, an installed adapter, a work profile
+    whose providers point at the loopback fake, and probe-built
+    qualification records. Returns (world, root)."""
+    import _opencode_merge_helpers as merge_helpers
+
+    profile = merge_helpers.fixture(merge_helpers.PROFILE_WORK)
+    for provider in profile["providers"].values():
+        provider["base_url"] = base_url
+        provider["credential_ref"] = "env:QUOIN_CORP_GW_API_KEY"
+        provider.pop("use_env_proxy", None)
+    profile["policy"]["allowed_hosts"] = ["127.0.0.1"]
+    profile["policy"]["denied_hosts"] = []
+    outer = tmp_path / "outer"
+    root = outer / "proj" if not git else outer
+    root.mkdir(parents=True)
+    if git:
+        (root / ".git").mkdir()
+    world = merge_helpers.World(tmp_path, profile=profile, agents=False, root=root)
+    code = install.run_install(str(root), SOURCE_DIR, None, False, io.StringIO(), io.StringIO())
+    assert code == 0
+    return world, root
+
+
+def test_driver_phase_run_against_pinned_binary(tmp_path, monkeypatch):
+    """One `checkpoint` phase through the driver against the real binary
+    and a loopback provider fake: the attempt ends in a terminal state,
+    every native line parses, a `stopped` event closes the sidecar and no
+    process from the run survives. The native stream is written under
+    `tmp_path` for a maintainer to promote later."""
+    import _opencode_helpers as helpers
+    from quoin.opencode_adapter import driver, runstore
+
+    helpers.install_loopback_guard(monkeypatch)
+    server_module = helpers.load_module(
+        helpers.OPENCODE_DIR / "fake_openai_server.py", "fake_openai_server_driver_case"
+    )
+    with server_module.FakeProviderServer() as server:
+        git = driver.NON_GIT_DISCOVERY_VERIFIED is not True
+        world, root = _driver_world(tmp_path, server.base_url, git=git)
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: world.home))
+        env = {
+            **os.environ, **world.env,
+            "HOME": str(world.home),
+            "OPENCODE_DISABLE_AUTOUPDATE": "1",
+            "QUOIN_CORP_GW_API_KEY": "loopback-only-value",
+        }
+        drv = driver.OpenCodeDriver(root, env=env, home=world.home)
+        request = driver.RunRequest(
+            project_root=root, task="contract-demo", stage=None, phase="checkpoint", profile="work",
+            timeout_s=120,
+        )
+        if git:
+            # The non-git layout is exercised by refusing it, not by running it.
+            non_git = tmp_path / "non-git"
+            non_git.mkdir()
+            with pytest.raises(driver.PrepareRefused) as info:
+                driver.OpenCodeDriver(non_git, env=env, home=world.home).prepare(
+                    driver.RunRequest(project_root=non_git, task="contract-demo", stage=None,
+                                      phase="checkpoint", profile="work")
+                )
+            assert info.value.code == "non-git-root-unverified"
+        prepared = drv.prepare(request)
+        handle = drv.start(prepared, deadline_s=120)
+        events = list(drv.observe(handle))
+        record = runstore.load_record(runstore.store_dir(root), prepared.run_id)
+        assert record["state"] != "prepared", record["state"]
+        assert any(ev.type == "stopped" for ev in events)
+        bad = {k: v for k, v in handle.pipeline.counters.items()
+               if k in ("non-json", "non-utf8", "non-object", "too-deep", "missing-type", "oversized") and v}
+        assert not bad, bad
+        sidecar = runstore.read_sidecar(prepared.artifact_paths.sidecar).events
+        assert sidecar, "the sidecar holds no events"
+        native = tmp_path / "captured-native-stream.jsonl"
+        native.write_text(
+            "".join(json.dumps(ev.to_dict(), sort_keys=True, default=str) + "\n" for ev in sidecar),
+            encoding="utf-8",
+        )
+        survivors = subprocess.run(
+            ["pgrep", "-f", str(prepared.cwd)], capture_output=True, text=True, timeout=10
+        ).stdout.split()
+        assert not [pid for pid in survivors if pid != str(os.getpid())], survivors
