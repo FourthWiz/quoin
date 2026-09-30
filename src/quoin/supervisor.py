@@ -35,7 +35,10 @@ import from the CLI's lazy-import dispatch path (mirrors the
 """
 from __future__ import annotations
 
+import re
+import shlex
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional, Union
@@ -317,6 +320,68 @@ class LaunchResult:
     stderr: str = ""
     timed_out: bool = False
 
+# ---------------------------------------------------------------------------
+# Child session identity + takeover text
+# ---------------------------------------------------------------------------
+
+#: Prefix of the run-notes line that records each headless child launch.
+CHILD_NOTE_PREFIX = "[quoin-autonomous-child]"
+
+_SPACE_RUN_RE = re.compile(r"\s{2,}")
+
+
+def is_child_session_id(s: object) -> bool:
+    """True for a canonical lowercase UUID4 string (safe to pass to claude)."""
+    if not isinstance(s, str):
+        return False
+    try:
+        parsed = uuid.UUID(s)
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return parsed.version == 4 and str(parsed) == s
+
+
+def takeover_command(cwd: PathLike, sid: str) -> str:
+    """Shell command that resumes the child session interactively."""
+    return f"cd {shlex.quote(str(cwd))} && claude --resume {sid}"
+
+
+def takeover_pointer(task: str, project_root: PathLike) -> str:
+    """Command that stops the run and prints the resume command."""
+    return (
+        f"quoin run --takeover {task} "
+        f"--project-root {shlex.quote(str(project_root))}"
+    )
+
+
+def takeover_hint(task: str, project_root: PathLike, sid: Optional[str] = None) -> str:
+    """Pointer, prefixed with the child session id when it is valid."""
+    pointer = takeover_pointer(task, project_root)
+    if is_child_session_id(sid):
+        return f"child_session={sid} {pointer}"
+    return pointer
+
+
+def _sanitize_safe(text: str) -> bool:
+    """True when the run-state sanitizer would leave ``text`` unchanged."""
+    if '"' in text or "\\" in text:
+        return False
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        return False
+    return _SPACE_RUN_RE.search(text) is None
+
+
+def takeover_notice_pointer(task: str, project_root: PathLike) -> str:
+    """Pointer for sanitized one-line surfaces (notices, notes lines).
+
+    Falls back to the bare form when the full pointer would be rewritten by
+    the sanitizer, so the line never shows an altered path.
+    """
+    pointer = takeover_pointer(task, project_root)
+    if _sanitize_safe(pointer):
+        return pointer
+    return f"quoin run --takeover {task}"
+
 
 def resolve_repo_root(project_root: PathLike) -> Path:
     """Resolve the real git repo root via ``git rev-parse --show-toplevel``.
@@ -351,6 +416,7 @@ def build_relaunch_argv(
     *,
     permission_mode: str = DEFAULT_PERMISSION_MODE,
     allowed_tools: "tuple[str, ...]" = DEFAULT_ALLOWED_TOOLS,
+    session_id: Optional[str] = None,
 ) -> "list[str]":
     """Build the argv for the headless relaunch subprocess (T-07).
 
@@ -367,6 +433,8 @@ def build_relaunch_argv(
         argv.append("--dangerously-skip-permissions")
     else:
         argv.extend(["--allowedTools", *allowed_tools])
+    if session_id:
+        argv.extend(["--session-id", session_id])
     argv.extend(["--output-format", "text"])
     return argv
 
@@ -389,11 +457,24 @@ def make_launch_fn(
     """
     import subprocess  # local import — keeps module-top import-lean (D-01)
 
-    def _launch(task: str) -> LaunchResult:
-        repo_root = resolve_repo_root(project_root)
+    def _launch(
+        task: str,
+        *,
+        session_id: Optional[str] = None,
+        cwd: Optional[PathLike] = None,
+        on_spawn: Optional[Callable[[int], object]] = None,
+    ) -> LaunchResult:
+        repo_root = Path(cwd) if cwd is not None else resolve_repo_root(project_root)
         argv = build_relaunch_argv(
-            task, permission_mode=permission_mode, allowed_tools=allowed_tools
+            task,
+            permission_mode=permission_mode,
+            allowed_tools=allowed_tools,
+            session_id=session_id,
         )
+        if on_spawn is not None:
+            return _launch_with_spawn_hook(
+                subprocess, argv, repo_root, timeout, on_spawn
+            )
         try:
             proc = subprocess.run(
                 argv,
@@ -420,4 +501,162 @@ def make_launch_fn(
             # e.g. `claude` binary not found on PATH — surface, don't crash.
             return LaunchResult(returncode=-1, stderr=str(exc))
 
+    #: Tells the tracking wrapper this launcher accepts session_id/cwd/on_spawn.
+    _launch.supports_child_tracking = True  # type: ignore[attr-defined]
     return _launch
+
+
+def _launch_with_spawn_hook(
+    subprocess: object,
+    argv: "list[str]",
+    repo_root: Path,
+    timeout: float,
+    on_spawn: Callable[[int], object],
+) -> LaunchResult:
+    """Popen-based launch that reports the child pid right after spawn.
+
+    Mirrors the ``subprocess.run`` path's result shape. On timeout the child
+    is killed and reaped with a bounded wait; there is deliberately no second
+    ``communicate()`` because grandchildren holding the pipes open would make
+    it block forever.
+    """
+    try:
+        proc = subprocess.Popen(  # type: ignore[attr-defined]
+            argv,
+            cwd=str(repo_root),
+            stdin=subprocess.DEVNULL,  # type: ignore[attr-defined]
+            stdout=subprocess.PIPE,  # type: ignore[attr-defined]
+            stderr=subprocess.PIPE,  # type: ignore[attr-defined]
+            text=True,
+        )
+    except OSError as exc:
+        return LaunchResult(returncode=-1, stderr=str(exc))
+    try:
+        # A failing hook must not abort the launch; BaseException (a signal
+        # handler's SystemExit) still unwinds through the outer handler.
+        try:
+            on_spawn(proc.pid)
+        except Exception:
+            pass
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as exc:  # type: ignore[attr-defined]
+            proc.kill()
+            try:
+                proc.wait(timeout=5)
+            except Exception:
+                pass
+            for stream in (getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
+                try:
+                    if stream is not None:
+                        stream.close()
+                except Exception:
+                    pass
+            out_text = exc.stdout if isinstance(exc.stdout, str) else ""
+            err_text = exc.stderr if isinstance(exc.stderr, str) else ""
+            return LaunchResult(
+                returncode=-1,
+                stdout=out_text or "",
+                stderr=(err_text or "") + "\n[launch timed out]",
+                timed_out=True,
+            )
+        return LaunchResult(returncode=proc.returncode, stdout=out, stderr=err)
+    except BaseException:
+        try:
+            proc.kill()
+            proc.wait(timeout=5)
+        except Exception:
+            pass
+        raise
+
+
+# ---------------------------------------------------------------------------
+# Tracked launch: known child session id per launch
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ChildLaunch:
+    """Identity of one headless child launch."""
+
+    session_id: str
+    cwd: str
+    launch_no: int
+    started_at: str
+
+
+def _utc_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def make_tracked_launch_fn(
+    task: str,
+    project_root: PathLike,
+    base_launch: Callable[..., object],
+    *,
+    first_session_id: Optional[str] = None,
+    id_fn: Optional[Callable[[], str]] = None,
+    repo_root_fn: Callable[[PathLike], Path] = resolve_repo_root,
+    record_fn: Optional[Callable[[Optional[ChildLaunch], bool], object]] = None,
+    on_pid_fn: Optional[Callable[[str, int], object]] = None,
+    halt_fn: Callable[[str, PathLike], Optional[str]] = read_halt,
+    now_fn: Optional[Callable[[], str]] = None,
+) -> Callable[[str], object]:
+    """Wrap ``base_launch`` so every child gets a known session id.
+
+    The id and cwd are recorded (``record_fn(entry, True)``) BEFORE the child
+    spawns, so a takeover can always find it. A halt sentinel that appears
+    between the record and the spawn reverts the record
+    (``record_fn(previous, False)``) and skips the launch. Launchers that do
+    not advertise ``supports_child_tracking`` are called with just ``(task,)``.
+    """
+    if id_fn is None:
+        id_fn = lambda: str(uuid.uuid4())  # noqa: E731
+    if now_fn is None:
+        now_fn = _utc_now
+    state = {"first_used": False}
+
+    def _safe(fn: Optional[Callable[..., object]], *args: object) -> None:
+        if fn is None:
+            return
+        try:
+            fn(*args)
+        except Exception:
+            pass
+
+    def _skipped() -> LaunchResult:
+        launch_fn.skipped += 1  # type: ignore[attr-defined]
+        return LaunchResult(returncode=-1, stderr="[launch skipped: halted]")
+
+    def launch_fn(t: str) -> object:
+        if not getattr(base_launch, "supports_child_tracking", False):
+            return base_launch(t)
+        if halt_fn(task, project_root) is not None:
+            return _skipped()
+        if not state["first_used"] and is_child_session_id(first_session_id):
+            sid = str(first_session_id)
+        else:
+            sid = id_fn()
+        state["first_used"] = True
+        cwd = str(repo_root_fn(project_root))
+        n = launch_fn.launches + 1  # type: ignore[attr-defined]
+        entry = ChildLaunch(sid, cwd, n, now_fn())
+        prev = launch_fn.last  # type: ignore[attr-defined]
+        _safe(record_fn, entry, True)
+        launch_fn.last = entry  # type: ignore[attr-defined]
+        if halt_fn(task, project_root) is not None:
+            _safe(record_fn, prev, False)
+            launch_fn.last = prev  # type: ignore[attr-defined]
+            return _skipped()
+        launch_fn.launches = n  # type: ignore[attr-defined]
+        return base_launch(
+            t,
+            session_id=sid,
+            cwd=cwd,
+            on_spawn=lambda pid: _safe(on_pid_fn, sid, pid),
+        )
+
+    launch_fn.last = None  # type: ignore[attr-defined]
+    launch_fn.skipped = 0  # type: ignore[attr-defined]
+    launch_fn.launches = 0  # type: ignore[attr-defined]
+    return launch_fn
