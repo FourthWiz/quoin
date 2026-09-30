@@ -34,7 +34,7 @@ def _load_module():
 @pytest.fixture()
 def ar(monkeypatch, tmp_path):
     module = _load_module()
-    # Hermeticity (R-05): no test should read a real install record or a
+    # Hermeticity: no test should read a real install record or a
     # real HOME, and none should spawn a real process via _popen.
     monkeypatch.setattr(module, "_runtime_record_path", lambda: tmp_path / "absent-quoin-runtime.json")
     monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
@@ -1024,7 +1024,7 @@ def test_main_always_exits_zero_on_garbage_argv(ar):
 def test_main_resolves_relative_project_root_before_dispatch(ar, tmp_path, monkeypatch):
     """A relative --project-root must resolve against the caller's actual
     cwd before any handler runs — not against whatever cwd a later
-    probe/spawn switches into (issue 4/round 2)."""
+    probe/spawn switches into."""
     captured = {}
 
     def _capture(args):

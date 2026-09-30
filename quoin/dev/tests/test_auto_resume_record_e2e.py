@@ -1,7 +1,7 @@
-"""End-to-end tests for IVG-281: a real install writes a record that the
-deployed resolver, invoked as a real subprocess, reads back correctly —
-and the deployed hook stays inside its timing budget even when the
-recorded interpreter never responds.
+"""End-to-end tests for the auto-resume interpreter resolver: a real
+install writes a record that the deployed resolver, invoked as a real
+subprocess, reads back correctly — and the deployed hook stays inside its
+timing budget even when the recorded interpreter never responds.
 
 These are slower than the unit-level resolver/writer tests and touch a
 real subprocess and (where noted) a real venv; skip cleanly if venv
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import time
 import venv
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -101,7 +102,7 @@ def test_real_install_then_cli_check_reports_usable(tmp_path, monkeypatch):
     assert out["status"] == "usable"
     assert out["probed_version"] == quoin.__version__
     # pythonpath is consistent with whether the record's interpreter can
-    # unaided-import quoin (R-07: a stale shared venv may shadow it).
+    # unaided-import quoin (a stale shared venv may shadow it).
     if record["pythonpath"] is None:
         assert out["pythonpath"] is None
     else:
@@ -260,7 +261,7 @@ def test_real_venv_interpreter_resolves_usable(tmp_path):
         stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10,
     )
     elapsed = time.monotonic() - start
-    print(f"real-venv probe wall time: {elapsed:.3f}s")  # T-01: recorded, not asserted beyond 5s
+    print(f"real-venv probe wall time: {elapsed:.3f}s")  # printed for timing baselines; only the 5 s ceiling is asserted
     assert elapsed < 5.0
     assert proc.returncode == 0
     match = ar._VERSION_TOKEN_RE.search(proc.stdout)
@@ -298,7 +299,7 @@ def test_stop_hook_stays_within_budget_when_interpreter_hangs(tmp_path):
         "at_stage_boundary": False, "route": "", "profile": "", "artifacts": [],
         "next_action": "", "resume_command": "/run --resume demo",
         "notes_path": str(memory / "run-notes-demo.md"),
-        "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
     }), encoding="utf-8")
     (memory / "run-continue-arm-sid-1.txt").touch()
     counter = {

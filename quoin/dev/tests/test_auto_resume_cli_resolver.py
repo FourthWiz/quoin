@@ -1,5 +1,5 @@
 """Tests for the shared interpreter resolver (`resolve_cli`) in
-`auto_resume.py` (IVG-281).
+`auto_resume.py`.
 
 A fake `#!/bin/sh` interpreter stands in for a real Python so the probe
 path is exercised end to end (real subprocess, real process group, real
@@ -205,7 +205,7 @@ def test_source_version_mismatch_no_probe(ar, tmp_path, monkeypatch):
 
 
 def test_version_mismatch_with_missing_interpreter_reports_only_mismatch(ar, tmp_path, monkeypatch):
-    """D-22: source_version != version is checked before the interpreter
+    """source_version != version is checked before the interpreter
     existence check, so a record with both problems reports only the
     version mismatch, with probed_version left null (not probed)."""
     record_path = tmp_path / "quoin-runtime.json"
@@ -291,7 +291,7 @@ def test_probe_timeout_bounded_and_within_wall_clock(ar, tmp_path, monkeypatch):
 
 
 def test_probe_timeout_grandchild_process_group_killed(ar, tmp_path, monkeypatch):
-    """D-05/R-08: `killpg` must kill the whole process group the probe
+    """`killpg` must kill the whole process group the probe
     started, not just its own pid — otherwise a backgrounded grandchild
     (like the fake interpreter's own `sleep 30 &`) outlives the timeout."""
     pidfile = tmp_path / "grandchild.pid"

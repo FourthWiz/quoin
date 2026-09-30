@@ -1,5 +1,4 @@
-"""Tests for `_strip_handoff_pythonpath` and its wiring into `quoin run`
-(IVG-281 T-07).
+"""Tests for `_strip_handoff_pythonpath` and its wiring into `quoin run`.
 
 An auto-resume hand-off prepends its recorded `pythonpath` to `PYTHONPATH`
 so the relaunched `quoin` CLI can import itself; `quoin run` must strip

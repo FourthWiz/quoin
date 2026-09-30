@@ -1,5 +1,5 @@
 """Tests for the install-record writer (`quoin.runtime_record`) and its
-`_cmd_claude_install` wiring (IVG-281).
+`_cmd_claude_install` wiring.
 
 Covers the writer's field derivation, its never-raises contract, and the
 parity that keeps the writer and the shared resolver (`auto_resume.py`)
@@ -186,7 +186,7 @@ def test_writer_never_raises_on_unexpected_error(tmp_path, monkeypatch, capsys):
     assert "could not write install record" in capsys.readouterr().err
 
 
-# ── _cmd_claude_install wiring (T-06) ───────────────────────────────────────
+# ── _cmd_claude_install wiring ───────────────────────────────────────────────
 
 
 def _stub_install_operations(monkeypatch):

@@ -1,6 +1,6 @@
 """Tests for the call-site integration between the shared interpreter
 resolver (`resolve_cli`) and the hand-off callers — `handoff`, `start`, and
-`stop` (IVG-281). Uses the same fake `.workflow_artifacts/memory` tree and
+`stop`. Uses the same fake `.workflow_artifacts/memory` tree and
 fixture style as `test_auto_resume_core.py`.
 """
 from __future__ import annotations
@@ -409,7 +409,7 @@ def test_stop_and_handoff_resolver_verdict_agrees(ar, project, monkeypatch, stal
     """Both callers share one resolver (`resolve_cli`) — this pins that a
     given record state resolves to the same usable/stale verdict for both,
     with `_which` pinned to None so the record-less cases share the same
-    `~/.local/bin` fallback too (critic MIN-7)."""
+    `~/.local/bin` fallback too."""
     memory = project / ".workflow_artifacts" / "memory"
     monkeypatch.setattr(ar, "_which", lambda name: None)
     if stale:
@@ -428,7 +428,7 @@ def test_stop_and_handoff_resolver_verdict_agrees(ar, project, monkeypatch, stal
         assert stop_verdict["status"] == "usable"
 
 
-# ── no-progress guard (D-04) ─────────────────────────────────────────────────
+# ── no-progress guard ────────────────────────────────────────────────────────
 
 
 def test_do_handoff_no_progress_first_miss_does_not_deny(ar, project, monkeypatch):
@@ -438,7 +438,7 @@ def test_do_handoff_no_progress_first_miss_does_not_deny(ar, project, monkeypatc
     `_do_handoff` re-derives `progressed` from the same counter and record,
     so on a first-miss candidate its own no-progress check must agree and
     let the call through to CLI resolution instead of denying it a second
-    time (D-04). Record absent + `_which` None (record-less path) isolates
+    time. Record absent + `_which` None (record-less path) isolates
     this from any interpreter-resolution branch."""
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
@@ -457,7 +457,7 @@ def test_do_handoff_no_progress_first_miss_does_not_deny(ar, project, monkeypatc
     assert not (memory / "autonomous-halt-demo.md").exists()
 
 
-# ── resolver-error on Stop and handoff (D-20) ───────────────────────────────
+# ── resolver-error on Stop and handoff ────────────────────────────────────────
 
 
 def test_stop_resolver_error_prints_block_no_halt(ar, project, monkeypatch, capsys):
@@ -516,7 +516,7 @@ def test_start_resolver_error_advisory(ar, project, monkeypatch, capsys):
     assert "could not check the installed quoin" in ctx
 
 
-# ── local-bin alignment (architecture D-18) ─────────────────────────────────
+# ── local-bin alignment ──────────────────────────────────────────────────────
 
 
 def test_stop_local_bin_alignment(ar, project, monkeypatch, capsys, tmp_path):
