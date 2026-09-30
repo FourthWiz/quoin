@@ -56,6 +56,11 @@ stage-aware path resolver when locating phase artifacts.
 - The skill MUST read the converged plan completely before acting and confirm
   task scope with the user when the plan covers more than a single dispatch's
   worth of work.
+- Under the autonomous span, a dispatch that finds every plan task done (per a
+  deterministic plan check) MUST return a distinct all-tasks-complete
+  completion and record a persistent completion marker that is not the phase's
+  done sentinel; a dispatch scoped to a gate failure or to a review's requested
+  changes MUST fix those items even when no task is pending.
 - The skill MUST follow existing code style and conventions; respect existing
   abstractions; write tests alongside implementation; not swallow exceptions;
   not leave debug code.

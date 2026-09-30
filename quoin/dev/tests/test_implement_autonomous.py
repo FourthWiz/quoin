@@ -87,3 +87,43 @@ def test_dispatch_sites_not_hand_edited(implement_skill_text: str) -> None:
     text = implement_skill_text
     assert "<!-- §0-worktree-fallback-begin -->" in text
     assert "<!-- §0-worktree-fallback-end -->" in text
+
+
+def _after_implementation_section(text: str) -> str:
+    return text[text.index("## After implementation"):]
+
+
+def test_confirm_task_autonomous_branch_checks_plan_and_writes_marker(implement_skill_text: str) -> None:
+    section = _confirm_task_section(implement_skill_text)
+    assert "plan_tasks.py" in section
+    assert "stdout prefix" in section
+    assert "$PROJECT_ROOT/.workflow_artifacts/memory/autonomous-progress-{task}/implement.tasks.done" in section
+    assert "all plan tasks complete" in section
+    assert "no selectable tasks" in section
+    assert "All tasks already implemented." in section
+    # only the orchestrator writes implement.done: it appears in the negative clause only
+    assert "do NOT write `implement.done` (only the orchestrator writes it, after its gate)" in section
+    assert section.replace(
+        "do NOT write `implement.done` (only the orchestrator writes it, after its gate)", ""
+    ).count("implement.done") == 0
+    assert "write-atomic" in section and "implement.done`" not in section.split("write-atomic")[1][:60]
+
+
+def test_confirm_task_fix_scope_precedes_plan_check(implement_skill_text: str) -> None:
+    section = _confirm_task_section(implement_skill_text)
+    fix = section.index("Fix scope")
+    assert fix < section.index("plan_tasks.py")
+    fix_para = section[fix : section.index("**`[autonomous]` branch:**")]
+    assert "`Fix scope:`" in fix_para
+    assert "gate <gate audit path>" in fix_para
+    assert "review <review file path>" in fix_para
+    assert "gate fix applied" in fix_para and "review fix applied" in fix_para
+
+
+def test_after_implementation_writes_marker_only_on_clean_autonomous_finish(implement_skill_text: str) -> None:
+    section = _after_implementation_section(implement_skill_text)
+    marker = section[section.index("**Completion marker.**"):section.index("**Final-message branch.**")]
+    assert "plan_tasks.py" in marker
+    assert "never on the PARTIAL path" in marker
+    assert "never on a scoped dispatch" in marker
+    assert "all plan tasks complete" in marker
