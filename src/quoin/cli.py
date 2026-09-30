@@ -9,6 +9,7 @@ import pathlib
 import runpy
 import shutil
 import signal
+import subprocess
 import sys
 import textwrap
 import time
@@ -823,6 +824,107 @@ def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
     )
 
 
+def _doctor_auto_resume_cli(
+    dest_root: pathlib.Path,
+    project_root: pathlib.Path,
+    errors: list[str],
+    warnings: list[str],
+    *,
+    run=subprocess.run,
+    which=shutil.which,
+) -> None:
+    """Verify the auto-resume hand-off CLI the same way the hooks do: via
+    the deployed resolver's read-only ``cli-check``, in a scrubbed env. This
+    keeps what doctor reports identical to what SessionStart/Stop would see."""
+    dest_label = str(dest_root)
+    print(f"Auto-resume CLI ({dest_label}/quoin-runtime.json):")
+
+    record_path = dest_root / "quoin-runtime.json"
+    if not record_path.exists():
+        print("  ✗ no install record")
+        errors.append(
+            f"no install record at {record_path}; re-run 'quoin install' (same scope)"
+        )
+    else:
+        resolver = dest_root / "core" / "scripts" / "auto_resume.py"
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "QUOIN_HANDOFF_PYTHONPATH")}
+        env["PATH"] = "/usr/bin:/bin"
+        predates_msg = (
+            "deployed auto_resume.py could not report the hand-off CLI "
+            "(predates the install record or failed); re-run 'quoin install'"
+        )
+        parsed = None
+        try:
+            proc = run(
+                [sys.executable, str(resolver), "cli-check", "--project-root", str(project_root)],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                stdin=subprocess.DEVNULL,
+            )
+            lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+            if lines:
+                candidate = json.loads(lines[-1])
+                if isinstance(candidate, dict):
+                    parsed = candidate
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            parsed = None
+
+        if parsed is None or "source" not in parsed or "status" not in parsed:
+            print("  ✗ could not report the hand-off CLI")
+            errors.append(predates_msg)
+        elif parsed.get("status") == "error":
+            print("  ✗ could not report the hand-off CLI")
+            errors.append(f"{predates_msg}: {parsed.get('message')}")
+        elif parsed.get("source") != "record":
+            print("  ✗ resolver ignored the install record")
+            errors.append(predates_msg)
+        elif parsed.get("status") == "stale":
+            kind = parsed.get("kind")
+            message = parsed.get("message")
+            print(f"  ✗ not usable ({kind})")
+            errors.append(f"auto-resume hand-off CLI is not usable ({kind}): {message}")
+        else:
+            probed_version = parsed.get("probed_version")
+            if probed_version is not None and probed_version != __version__:
+                print("  ✗ recorded interpreter runs a different quoin version")
+                errors.append(
+                    f"recorded interpreter runs quoin {probed_version} but this CLI is "
+                    f"{__version__}; re-run 'quoin install' with the CLI you use"
+                )
+            else:
+                print("  ✓ hand-off CLI is usable")
+
+            pythonpath = parsed.get("pythonpath")
+            if pythonpath:
+                print(f"  · hand-off relies on PYTHONPATH={pythonpath}")
+                warnings.append(
+                    f"hand-off relies on PYTHONPATH={pythonpath} (install.sh source-tree "
+                    "fallback); installing the package (pip install -e, uv tool, pipx) and "
+                    "re-running 'quoin install' from it avoids this"
+                )
+
+    # Project scope gets a plain warning; user scope already errors on this
+    # earlier in _cmd_doctor's prerequisites block, so avoid a duplicate.
+    is_project_mode = dest_root.parent == project_root
+    found = which("claude")
+    if found is None:
+        if is_project_mode:
+            print("  ✗ claude not found on PATH")
+            warnings.append(
+                "claude not found on PATH; an auto-resume supervisor cannot relaunch a session"
+            )
+    else:
+        if which("claude", path="/usr/bin:/bin") is None:
+            print(
+                "  · claude resolves only outside /usr/bin:/bin; a supervisor started "
+                "from a minimal-PATH hook may not find it"
+            )
+
+    print()
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     if getattr(args, "json", False) and args.runtime != "opencode":
         _abort("quoin: --json is only valid with --runtime opencode")
@@ -1009,6 +1111,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         print(f"  ✗ {claude_md_label} — not found")
         errors.append(f"CLAUDE.md not found at {claude_md_label}; run 'quoin install'")
+
+    print()
+    doctor_project_root = dest_root.parent if is_project_mode else pathlib.Path.cwd()
+    _doctor_auto_resume_cli(dest_root, doctor_project_root, errors, warnings)
 
     # Open-model router probe (user-scope only — home CCR paths are not project-scoped)
     if not is_project_mode:
