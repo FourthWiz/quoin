@@ -1041,3 +1041,876 @@ class OpenCodeDriver:
         if parsed(agent_rel).get("mode") not in ("primary", "all"):
             raise refuse("workflow-validation", "command-agent-not-primary", "the agent %s cannot run as a primary agent" % agent)
         return agent
+
+    # ------------------------------------------------------------- start
+
+    def start(self, prepared: PreparedRun, *, deadline_s: Optional[float] = None) -> RuntimeHandle:
+        """Move a prepared run to `running` and spawn its first attempt.
+
+        The transition is a plain record write: cross-process exclusion is the
+        caller's phase lock. The returned handle is serviced only by
+        `observe`; see the class docstring.
+        """
+        if prepared.launch_env is None or prepared.artifact_paths is None:
+            raise ValueError("the prepared run has no launch environment")
+        directory = prepared.artifact_paths.sidecar.parent
+        record = runstore.load_record(directory, prepared.run_id)
+        if record is None:
+            raise ValueError("the prepared run has no record")
+        if record.get("state") != "prepared":
+            raise IllegalTransition("a run in state %s cannot be started" % record.get("state"))
+        launch_env.verify_compiled(prepared.config_path, prepared.native_sha256)
+        transition(record, "running", None, _iso(self._clock))
+        runstore.write_record(directory, record)
+        return self._spawn_attempt(
+            prepared, list(prepared.argv), deadline_s=deadline_s, seed=AttemptSeed(record=record)
+        )
+
+    def _spawn_attempt(
+        self,
+        prepared: PreparedRun,
+        argv: Sequence[str],
+        *,
+        deadline_s: Optional[float] = None,
+        seed: Optional[AttemptSeed] = None,
+    ) -> RuntimeHandle:
+        """Spawn one attempt; the caller has already moved the run to
+        `running`. No state change happens here except recording the attempt.
+        A failure after the transition ends the attempt and the run
+        `interrupted` and re-raises."""
+        seed = seed or AttemptSeed()
+        assert prepared.artifact_paths is not None and prepared.launch_env is not None
+        directory = prepared.artifact_paths.sidecar.parent
+        record = seed.record if seed.record is not None else runstore.load_record(directory, prepared.run_id)
+        if record is None:
+            raise ValueError("the run has no record")
+        attempts = record.setdefault("attempts", [])
+        staged = attempts[-1] if attempts and attempts[-1].get("state") == _STAGED else None
+        number = seed.attempt or (staged["attempt"] if staged else len(attempts) + 1)
+        if staged is not None:
+            entry = staged
+        else:
+            entry = runstore.new_attempt(
+                number, pid=None, pgid=None, child_start=None, driver_pid=os.getpid(),
+                driver_start=None, resume_mode=seed.resume_mode,
+                input_hashes_before=prepared.input_hashes, repo_revisions_before=prepared.repo_revisions,
+                clock=self._clock,
+            )
+        hashes_before = dict(entry.get("input_hashes_before") or prepared.input_hashes)
+        redactor = prepared.launch_env.redactor
+        writer = None
+        proc = None
+        try:
+            launch_env.verify_compiled(prepared.config_path, prepared.native_sha256)
+            writer = runstore.SidecarWriter(prepared.artifact_paths.sidecar)
+            pipeline = ev.EventPipeline(
+                prepared.run_id, number, redact=redactor, observed_clock=self._clock,
+                start_sequence=seed.start_sequence, deduper=seed.deduper,
+                max_line_bytes=self._max_line_bytes,
+            )
+            driver_start = self._proc.start_time(os.getpid())
+            proc = subprocess.Popen(
+                list(argv), cwd=str(prepared.cwd), stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+                env=prepared.launch_env.materialize(), close_fds=True,
+            )
+        except BaseException as exc:
+            if writer is not None:
+                writer.close()
+            self._spawn_failed(record, directory, entry, attempts, exc)
+            raise
+
+        deadline_value = deadline_s if deadline_s is not None else (prepared.request.timeout_s or DEFAULT_TIMEOUT_S)
+        facts = seed.facts if seed.facts is not None else AttemptFacts()
+        handle = RuntimeHandle(
+            driver=self, prepared=prepared, run_id=prepared.run_id, attempt=number, proc=proc,
+            pgid=None, child_start=None, directory=directory, record=record, entry=entry,
+            writer=writer, pipeline=pipeline, facts=facts, redactor=redactor,
+            stdout_q=queue.Queue(maxsize=self._queue_size), signal_q=queue.Queue(),
+            stderr_ring=collections.deque(maxlen=self._stderr_tail_lines),
+            deadline=self._monotonic() + float(deadline_value),
+            hashes_before=hashes_before, counters_base=dict(record.get("counters_total") or {}),
+            resume_mode=seed.resume_mode, native_session_id=seed.native_session_id,
+            ran_anything=seed.ran_anything, state_changing=set(), start_sequence=seed.start_sequence,
+            task=prepared.request.task, started_event=None, stdout_thread=None, stderr_thread=None,
+        )
+        try:
+            handle.pgid = os.getpgid(proc.pid)
+            handle.child_start = self._proc.start_time(proc.pid)
+            handle.last_scan = self._monotonic()
+            if handle.child_start is not None:
+                handle.tracked[proc.pid] = Identity(proc.pid, handle.child_start)
+            with handle.record_lock:
+                entry.update(
+                    pid=proc.pid, pgid=handle.pgid, child_start=handle.child_start,
+                    driver_pid=os.getpid(), driver_start=driver_start, resume_mode=seed.resume_mode,
+                    state="running", started_at=_iso(self._clock), reason=None,
+                    input_hashes_before=hashes_before,
+                )
+                if entry is not staged:
+                    attempts.append(entry)
+                record["updated_at"] = _iso(self._clock)
+                runstore.write_record(directory, record)
+                runstore.write_pointer(directory, runstore.new_pointer(prepared.request.task, prepared.run_id, self._clock))
+        except BaseException as exc:
+            self._kill_now(handle)
+            writer.close()
+            self._spawn_failed(record, directory, entry, attempts, exc)
+            raise
+
+        handle.stdout_thread = threading.Thread(target=self._read_stdout, args=(handle,), daemon=True)
+        handle.stderr_thread = threading.Thread(target=self._read_stderr, args=(handle,), daemon=True)
+        handle.stdout_thread.start()
+        handle.stderr_thread.start()
+        try:
+            started = pipeline.driver_event(
+                EventType.STARTED,
+                ev.StartedPayload(
+                    pid=proc.pid, pgid=handle.pgid, argv=tuple(redactor(a) for a in argv),
+                    env_names=tuple(prepared.env_names), runtime_version=prepared.runtime_version,
+                    config_digest=prepared.config_digest, role=prepared.role,
+                    effective_model=prepared.effective_model, attempt=number,
+                    resume_mode=seed.resume_mode,
+                ),
+            )
+            if started is not None:
+                self._write_event(handle, started)
+            handle.started_event = started
+            self._checkpoint(handle)
+        except BaseException as exc:
+            self._abort(handle, exc)
+            self._close(handle)
+            raise
+        return handle
+
+    def _spawn_failed(
+        self, record: Dict[str, Any], directory: Path, entry: Dict[str, Any],
+        attempts: List[Dict[str, Any]], exc: BaseException,
+    ) -> None:
+        """End the attempt and the run `interrupted(driver-error)` after a
+        failure between the transition and a fully started attempt."""
+        try:
+            entry.update(
+                state="interrupted", reason="driver-error", ended_at=_iso(self._clock),
+                driver_pid=os.getpid(),
+            )
+            if not any(a is entry for a in attempts):
+                attempts.append(entry)
+            if record.get("state") == "running":
+                transition(record, "interrupted", "driver-error", _iso(self._clock))
+            runstore.write_record(directory, record)
+        except Exception:  # noqa: BLE001 - never mask the original failure
+            pass
+
+    def _kill_now(self, handle: RuntimeHandle) -> None:
+        try:
+            os.killpg(handle.pgid if handle.pgid else handle.proc.pid, _signal.SIGKILL)
+        except (OSError, ProcessLookupError):
+            try:
+                handle.proc.kill()
+            except OSError:
+                pass
+        try:
+            handle.proc.wait(timeout=5)
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ----------------------------------------------------------- readers
+
+    @staticmethod
+    def _put(handle: RuntimeHandle, item: Tuple[Any, ...]) -> bool:
+        while not handle.closing.is_set():
+            try:
+                handle.stdout_q.put(item, timeout=0.2)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _read_stdout(self, handle: RuntimeHandle) -> None:
+        stream = handle.proc.stdout
+        limit = self._max_line_bytes
+        try:
+            while not handle.closing.is_set():
+                chunk = stream.readline(limit + 1)
+                if not chunk:
+                    break
+                if len(chunk) > limit and not chunk.endswith(b"\n"):
+                    # Discard the rest of an over-long line without holding it.
+                    while True:
+                        rest = stream.readline(65536)
+                        if not rest or rest.endswith(b"\n"):
+                            break
+                    if not self._put(handle, ("oversized",)):
+                        return
+                    continue
+                if not self._put(handle, ("line", chunk)):
+                    return
+            self._put(handle, ("eof",))
+        except (OSError, ValueError) as exc:
+            self._put(handle, ("error", type(exc).__name__))
+
+    def _read_stderr(self, handle: RuntimeHandle) -> None:
+        stream = handle.proc.stderr
+        limit, bound = 64 * 1024, 8 * 1024
+        try:
+            while not handle.closing.is_set():
+                chunk = stream.readline(limit + 1)
+                if not chunk:
+                    return
+                if self._stderr_read_delay_s:
+                    time.sleep(self._stderr_read_delay_s)
+                if len(chunk) > limit and not chunk.endswith(b"\n"):
+                    while True:
+                        rest = stream.readline(65536)
+                        if not rest or rest.endswith(b"\n"):
+                            break
+                    handle.stderr_discarded += 1
+                text = chunk.decode("utf-8", "replace")
+                found = ev.parse_stderr_line(text.rstrip("\r\n"))
+                if found is not None:
+                    handle.signal_q.put(found)
+                # Redact the whole chunk first, then bound it, so a secret that
+                # straddles the bound is replaced before it can be cut.
+                shown = handle.redactor(text.rstrip("\r\n"))
+                shown = shown.encode("utf-8")[:bound].decode("utf-8", "ignore")
+                handle.stderr_ring.append(shown)
+        except (OSError, ValueError):
+            return
+
+    # ------------------------------------------------------------ events
+
+    def _write_event(self, handle: RuntimeHandle, event: ev.RuntimeEvent) -> bool:
+        """Append one event and update what the observer knows. Returns true
+        when a checkpoint is due."""
+        handle.writer.write(event)
+        handle.last_sequence = event.sequence
+        handle.event_count += 1
+        handle.facts.update(event)
+        if event.origin == "native":
+            handle.ran_anything = True
+            if handle.native_session_id is None and event.session_id:
+                handle.native_session_id = event.session_id
+        payload = event.payload
+        if event.type is EventType.PROGRESS:
+            if event.native is not None and event.native.id and payload.tool in WRITABLE_TOOLS:
+                handle.state_changing.add(event.native.id)
+            if payload.kind in ("step_start", "halted") or payload.delegation is not None:
+                return True
+        if event.type in (EventType.USAGE, EventType.APPROVAL_REQUIRED, EventType.ERROR):
+            return True
+        return self._checkpoint_every > 0 and handle.event_count % self._checkpoint_every == 0
+
+    def _emit_driver(self, handle: RuntimeHandle, etype: EventType, payload: Any) -> Optional[ev.RuntimeEvent]:
+        event = handle.pipeline.driver_event(etype, payload)
+        if event is not None:
+            self._write_event(handle, event)
+        return event
+
+    def _checkpoint(self, handle: RuntimeHandle) -> None:
+        handle.writer.fsync()
+        steps = handle.facts.steps()
+        with handle.record_lock:
+            runstore.write_checkpoint(
+                handle.directory,
+                runstore.new_checkpoint(
+                    handle.run_id, handle.attempt, last_sequence=handle.last_sequence,
+                    sidecar_offset=handle.writer.offset, native_session_id=handle.native_session_id,
+                    repo_revisions=handle.prepared.repo_revisions, step_open=steps.open_step,
+                    ran_anything=handle.ran_anything, state_changing_part_ids=handle.state_changing,
+                    clock=self._clock,
+                ),
+            )
+
+    def _handle_item(self, handle: RuntimeHandle, item: Tuple[Any, ...]) -> List[ev.RuntimeEvent]:
+        kind = item[0]
+        if kind == "line":
+            events = handle.pipeline.feed_line(item[1])
+            due = False
+            for event in events:
+                due = self._write_event(handle, event) or due
+            if due:
+                self._checkpoint(handle)
+            return events
+        if kind == "oversized":
+            handle.pipeline.counters["lines"] += 1
+            handle.pipeline.counters["oversized"] += 1
+        elif kind == "eof":
+            handle.stdout_eof = True
+        elif kind == "error":
+            handle.facts.driver_error = True
+            handle.stdout_eof = True
+            if not handle.terminated:
+                self._terminate_once(handle, "driver-error")
+        return []
+
+    def _service_signals(self, handle: RuntimeHandle, *, allow_terminate: bool) -> List[ev.RuntimeEvent]:
+        out: List[ev.RuntimeEvent] = []
+        while True:
+            try:
+                found = handle.signal_q.get_nowait()
+            except queue.Empty:
+                return out
+            if found.kind == "approval":
+                payload = ev.approval_from_stderr(found, redact=handle.redactor)
+                event = self._emit_driver(handle, EventType.APPROVAL_REQUIRED, payload)
+                handle.facts.approval = True
+                if event is not None:
+                    out.append(event)
+                if allow_terminate and not handle.terminated:
+                    self._terminate_once(handle, "approval")
+            elif found.kind == "agent_fallback":
+                message = handle.redactor('agent "%s" is missing or not a primary agent; the runtime fell back' % found.name)
+                event = self._emit_driver(
+                    handle, EventType.ERROR,
+                    ev.ErrorPayload(name="AgentFallback", message=message[:256], failure_kind="config"),
+                )
+                handle.facts.agent_fallback = True
+                if event is not None:
+                    out.append(event)
+                if allow_terminate and not handle.terminated:
+                    self._terminate_once(handle, "agent-fallback")
+
+    # ----------------------------------------------------------- observe
+
+    def observe(self, handle: RuntimeHandle) -> Iterator[ev.RuntimeEvent]:
+        """Yield the attempt's events as they arrive and finish the attempt.
+
+        Runs the deadline, the approval and cancel checks, the descendant
+        rescans and the end-of-attempt bookkeeping. Any exception, and the
+        caller abandoning the generator, ends the attempt `interrupted`,
+        stops the child and re-raises.
+        """
+        with handle.record_lock:
+            if handle.finalizing or handle.finalized or handle.observer_active:
+                return
+            handle.observer_active = True
+        try:
+            yield from self._observe(handle)
+        except BaseException as exc:
+            self._abort(handle, exc)
+            raise
+        finally:
+            handle.observer_active = False
+            self._close(handle)
+
+    def _observe(self, handle: RuntimeHandle) -> Iterator[ev.RuntimeEvent]:
+        if not handle.started_yielded:
+            handle.started_yielded = True
+            if handle.started_event is not None:
+                yield handle.started_event
+        while True:
+            if not handle.terminated:
+                if handle.cancel_event.is_set():
+                    self._terminate_once(handle, "cancel")
+                elif self._monotonic() >= handle.deadline:
+                    self._terminate_once(handle, "timeout")
+            for event in self._service_signals(handle, allow_terminate=True):
+                yield event
+            try:
+                item = handle.stdout_q.get(timeout=self._poll_s)
+            except queue.Empty:
+                item = None
+            if item is not None:
+                for event in self._handle_item(handle, item):
+                    yield event
+                if handle.facts.approval and not handle.terminated:
+                    self._terminate_once(handle, "approval")
+            self._maybe_rescan(handle)
+            if handle.proc.poll() is not None:
+                break
+            if handle.stdout_eof:
+                now = self._monotonic()
+                if handle.eof_at is None:
+                    handle.eof_at = now
+                elif now - handle.eof_at >= self._eof_grace_s:
+                    if not handle.terminated:
+                        self._terminate_once(handle, "eof-without-exit")
+                    break
+        with handle.record_lock:
+            handle.finalizing = True
+        for event in self._finish(handle):
+            yield event
+
+    # ------------------------------------------------- end of an attempt
+
+    def _finish(self, handle: RuntimeHandle) -> List[ev.RuntimeEvent]:
+        """Everything after the child stops: drain, join, reap leftovers,
+        classify, write the terminal records. The caller has set
+        `finalizing`."""
+        out: List[ev.RuntimeEvent] = []
+        facts, proc = handle.facts, handle.proc
+        code = proc.poll()
+        if code is None:
+            try:
+                code = proc.wait(timeout=self._grace_s + self._kill_grace_s)
+            except subprocess.TimeoutExpired:
+                code = None
+        if code is not None:
+            if code < 0:
+                facts.exit_signal = -code
+            else:
+                facts.exit_code = code
+        out.extend(self._drain_stdout(handle))
+        self._join(handle.stderr_thread, 2.0)
+        out.extend(self._service_signals(handle, allow_terminate=False))
+        reaped = self._reap_leftovers(handle)
+        if reaped:
+            handle.leftovers_count += reaped
+            self._join(handle.stderr_thread, 1.0)
+            out.extend(self._service_signals(handle, allow_terminate=False))
+        if (
+            handle.resume_mode == "session" and facts.exit_code == 1
+            and facts.new_native_events == 0 and not facts.cancelled and not facts.timeout
+        ):
+            facts.session_lost = True
+        after = self._hash_now(handle)
+        revisions = self._revisions_now(handle)
+        if after is not None:
+            for payload in runstore.diff_hashes(handle.hashes_before, after):
+                event = self._emit_driver(handle, EventType.ARTIFACT_REFERENCE, payload)
+                if event is not None:
+                    out.append(event)
+        outcome = classify(facts)
+        stopped = self._emit_driver(
+            handle, EventType.STOPPED,
+            ev.StoppedPayload(
+                state=outcome.state, exit_code=outcome.exit_code, signal=outcome.signal,
+                reason=outcome.reason, evidence=outcome.evidence or "none",
+                step_summary=facts.steps().to_dict(),
+            ),
+        )
+        if stopped is not None:
+            out.append(stopped)
+        self._write_final(handle, outcome, after, revisions)
+        return out
+
+    def _drain_stdout(self, handle: RuntimeHandle) -> List[ev.RuntimeEvent]:
+        """Read what is left on stdout. It can stay open after the child exits
+        because a descendant inherited it: the wait is bounded, leftovers are
+        reaped once, then the wait is bounded again."""
+        out: List[ev.RuntimeEvent] = []
+        deadline = self._monotonic() + self._exit_drain_s
+        reaped_once = False
+        while not handle.stdout_eof:
+            remaining = deadline - self._monotonic()
+            if remaining <= 0:
+                if not reaped_once:
+                    reaped_once = True
+                    handle.leftovers_count += self._reap_leftovers(handle)
+                    deadline = self._monotonic() + self._exit_drain_s
+                    continue
+                break
+            try:
+                item = handle.stdout_q.get(timeout=min(self._poll_s, remaining))
+            except queue.Empty:
+                continue
+            out.extend(self._handle_item(handle, item))
+        if not handle.stdout_eof:
+            counters = handle.pipeline.counters
+            counters["truncated-after-exit"] = counters.get("truncated-after-exit", 0) + 1
+            handle.closing.set()
+        return out
+
+    @staticmethod
+    def _join(thread: Optional[threading.Thread], timeout: float) -> None:
+        if thread is not None and thread.is_alive():
+            thread.join(timeout)
+
+    def _hash_now(self, handle: RuntimeHandle) -> Optional[Dict[str, Any]]:
+        try:
+            return runstore.hash_inputs(
+                self.project_root, handle.task, handle.prepared.request.context_refs
+            )
+        except (runstore.RunStoreError, OSError):
+            return None
+
+    def _revisions_now(self, handle: RuntimeHandle) -> Optional[List[Dict[str, Any]]]:
+        try:
+            return runstore.repo_revisions(self.project_root)
+        except Exception:  # noqa: BLE001 - revisions are advisory
+            return None
+
+    def _write_final(
+        self, handle: RuntimeHandle, outcome: AttemptOutcome,
+        after_hashes: Optional[Mapping[str, Any]], revisions: Optional[List[Dict[str, Any]]],
+    ) -> None:
+        """Write the terminal attempt, record and checkpoint once."""
+        try:
+            handle.writer.fsync()
+            everything = runstore.read_sidecar(handle.writer.path).events
+            totals = ev.usage_totals(everything)
+            usage = ev.to_retry_usage(totals)
+        except (OSError, runstore.RunStoreError):
+            totals, usage = ev.UsagePayload(), retry.Usage(None, None)
+        with handle.record_lock:
+            if handle.finalized:
+                return
+            record, entry = handle.record, handle.entry
+            now = _iso(self._clock)
+            with handle.tracked_lock:
+                descendants = sorted(
+                    ({"pid": i.pid, "start": i.start} for i in handle.tracked.values() if i.pid != handle.proc.pid),
+                    key=lambda d: d["pid"],
+                )
+            entry.update(
+                ended_at=now, exit_code=outcome.exit_code, signal=outcome.signal,
+                state=outcome.state, reason=outcome.reason, evidence=outcome.evidence,
+                counters=dict(handle.pipeline.counters), descendants=descendants,
+                leftovers_reaped=handle.leftovers_count > 0,
+                leftovers_reaped_count=handle.leftovers_count,
+                input_hashes_after=dict(after_hashes) if after_hashes is not None else None,
+                repo_revisions_after=[dict(r) for r in revisions] if revisions is not None else None,
+            )
+            record["counters_total"] = runstore.add_counters(handle.counters_base, handle.pipeline.counters)
+            record["usage_totals"] = totals.to_dict()
+            record["retry_usage"] = {
+                "tokens": usage.tokens, "cost": None if usage.cost is None else str(usage.cost),
+            }
+            record["stderr_tail"] = handle.redactor("\n".join(list(handle.stderr_ring)))
+            record["resume_blocked"] = outcome.resume_blocked
+            record["outcome"] = {
+                "state": outcome.state, "evidence": outcome.evidence, "reason": outcome.reason,
+                "exit_code": outcome.exit_code, "signal": outcome.signal,
+                "new_native_events": outcome.new_native_events,
+            }
+            if after_hashes is not None:
+                record["input_hashes"] = dict(after_hashes)
+            if revisions is not None:
+                record["repo_revisions"] = [dict(r) for r in revisions]
+            if record.get("state") == "running":
+                transition(record, outcome.state, outcome.reason, now)
+            else:
+                record["updated_at"] = now
+            steps = handle.facts.steps()
+            runstore.write_record(handle.directory, record)
+            runstore.write_checkpoint(
+                handle.directory,
+                runstore.new_checkpoint(
+                    handle.run_id, handle.attempt, last_sequence=handle.last_sequence,
+                    sidecar_offset=handle.writer.offset, native_session_id=handle.native_session_id,
+                    repo_revisions=revisions if revisions is not None else handle.prepared.repo_revisions,
+                    step_open=steps.open_step, ran_anything=handle.ran_anything,
+                    state_changing_part_ids=handle.state_changing, clock=self._clock,
+                ),
+            )
+            handle.outcome = outcome
+            handle.finalized = True
+
+    def _abort(self, handle: RuntimeHandle, exc: BaseException) -> None:
+        """Stop the child and record the attempt `interrupted` after an
+        exception or an abandoned observer. Never raises."""
+        reason = "observer-closed" if isinstance(exc, GeneratorExit) else "driver-error"
+        try:
+            self._terminate_once(handle, "abort")
+        except Exception:  # noqa: BLE001
+            self._kill_now(handle)
+        if handle.finalized:
+            return
+        code = handle.proc.poll()
+        exit_code = code if code is not None and code >= 0 else None
+        exit_signal = -code if code is not None and code < 0 else None
+        outcome = AttemptOutcome(
+            state="interrupted", reason=reason, exit_code=exit_code, signal=exit_signal,
+            new_native_events=handle.facts.new_native_events,
+        )
+        try:
+            self._emit_driver(
+                handle, EventType.STOPPED,
+                ev.StoppedPayload(
+                    state="interrupted", exit_code=exit_code, signal=exit_signal, reason=reason,
+                    evidence="none", step_summary=handle.facts.steps().to_dict(),
+                ),
+            )
+        except Exception:  # noqa: BLE001 - the sidecar may be the thing that failed
+            pass
+        try:
+            self._write_final(handle, outcome, None, None)
+        except Exception:  # noqa: BLE001
+            handle.outcome = outcome
+
+    def _close(self, handle: RuntimeHandle) -> None:
+        """Release pipes, threads and the sidecar. Never raises."""
+        handle.closing.set()
+        try:
+            for thread in (handle.stdout_thread, handle.stderr_thread):
+                self._join(thread, 1.0)
+            for thread, stream in ((handle.stdout_thread, handle.proc.stdout), (handle.stderr_thread, handle.proc.stderr)):
+                if stream is not None and (thread is None or not thread.is_alive()):
+                    try:
+                        stream.close()
+                    except (OSError, ValueError):
+                        pass
+            try:
+                handle.writer.close()
+            except OSError:
+                pass
+            handle.proc.poll()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ----------------------------------------------------- descendants
+
+    def _expand_tracked(self, handle: RuntimeHandle, table: Mapping[int, Any]) -> List[Identity]:
+        """Add every descendant of the child and of tracked live processes,
+        and every live member of the run group, to the tracked set."""
+        added: List[Identity] = []
+        me = os.getpid()
+
+        def track(info: Any) -> None:
+            if info.pid == me or info.pid <= 1:
+                return
+            known = handle.tracked.get(info.pid)
+            if known is None or known.start != info.start:
+                ident = Identity(info.pid, info.start)
+                handle.tracked[info.pid] = ident
+                added.append(ident)
+
+        with handle.tracked_lock:
+            roots: List[int] = []
+            child = handle.proc
+            if child.poll() is None:
+                info = table.get(child.pid)
+                if info is not None and (handle.child_start is None or info.start == handle.child_start):
+                    track(info)
+                    roots.append(child.pid)
+            for ident in list(handle.tracked.values()):
+                if ident.pid != child.pid and self._proc.alive(ident, table):
+                    roots.append(ident.pid)
+            for root in roots:
+                for info in self._proc.descendants(root, table):
+                    track(info)
+            if not handle.finalized and handle.pgid:
+                for info in self._proc.group_members(handle.pgid, table):
+                    track(info)
+        return added
+
+    def _maybe_rescan(self, handle: RuntimeHandle) -> None:
+        now = self._monotonic()
+        if now - handle.last_scan < self._descendant_scan_s:
+            return
+        handle.last_scan = now
+        table = self._proc.snapshot()
+        if table is None:
+            return
+        if self._expand_tracked(handle, table):
+            with handle.record_lock:
+                if handle.finalized:
+                    return
+                with handle.tracked_lock:
+                    handle.entry["descendants"] = sorted(
+                        ({"pid": i.pid, "start": i.start} for i in handle.tracked.values() if i.pid != handle.proc.pid),
+                        key=lambda d: d["pid"],
+                    )
+                runstore.write_record(handle.directory, handle.record)
+
+    def _reap_leftovers(self, handle: RuntimeHandle) -> int:
+        """Terminate anything of this attempt still alive after the child
+        exited. Returns how many processes were found."""
+        table = self._proc.snapshot()
+        if table is None:
+            return 0
+        self._expand_tracked(handle, table)
+        remaining = self._remaining(handle, table)
+        if not remaining:
+            return 0
+        self._terminate(handle, self._leftover_grace_s)
+        return len(remaining)
+
+    # ------------------------------------------------------ termination
+
+    def _terminate_once(
+        self, handle: RuntimeHandle, reason: str, grace_s: Optional[float] = None
+    ) -> CancellationResult:
+        """The single reaper. The first caller terminates and stores the
+        result; every later caller gets the same result."""
+        with handle.cancel_lock:
+            if handle.cancel_result is not None:
+                return handle.cancel_result
+            flag = _REASON_FLAGS.get(reason)
+            if flag is not None:
+                setattr(handle.facts, flag, True)
+            result = self._terminate(handle, self._grace_s if grace_s is None else grace_s)
+            handle.terminated_reason = reason
+            handle.cancel_result = result
+            return result
+
+    def _remaining(self, handle: RuntimeHandle, table: Mapping[int, Any]) -> List[int]:
+        with handle.tracked_lock:
+            live = {i.pid for i in handle.tracked.values() if self._proc.alive(i, table)}
+        if not handle.finalized and handle.pgid:
+            live.update(m.pid for m in self._proc.group_members(handle.pgid, table))
+        live.discard(os.getpid())
+        return sorted(live)
+
+    def _killpg(self, pgid: int, sig: int) -> None:
+        try:
+            os.killpg(pgid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def _kill(self, pid: int, sig: int) -> None:
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def _send(self, handle: RuntimeHandle, table: Mapping[int, Any], sig: int,
+              only: Optional[Sequence[Identity]] = None) -> bool:
+        """Signal every group that still holds a live tracked process, and
+        the run group while it has live members. A process whose group is the
+        driver's own is signalled by pid."""
+        with handle.tracked_lock:
+            idents = list(handle.tracked.values()) if only is None else list(only)
+        groups: Dict[int, List[Identity]] = {}
+        for ident in idents:
+            if ident.pid != os.getpid() and self._proc.alive(ident, table):
+                groups.setdefault(table[ident.pid].pgid, []).append(ident)
+        if only is None and not handle.finalized and handle.pgid and self._proc.group_members(handle.pgid, table):
+            groups.setdefault(handle.pgid, [])
+        own = os.getpgrp()
+        for pgid, members in groups.items():
+            if pgid == own or pgid <= 1:
+                for ident in members:
+                    self._kill(ident.pid, sig)
+            else:
+                self._killpg(pgid, sig)
+        return bool(groups)
+
+    def _terminate(
+        self, handle: RuntimeHandle, grace_s: float = 5.0, kill_grace_s: Optional[float] = None
+    ) -> CancellationResult:
+        """Stop the child and every descendant found by walking the process
+        table: SIGTERM, wait up to `grace_s`, then SIGKILL what remains.
+
+        Zombies count as dead. A group is signalled only while a live member
+        is verified in a fresh snapshot, so a recycled group id is not hit.
+        With no trustworthy process table it falls back to killing the run
+        group and reports the remaining descendants as unknown.
+        """
+        kill_grace = self._kill_grace_s if kill_grace_s is None else kill_grace_s
+        proc = handle.proc
+        started = self._monotonic()
+        proc.poll()
+        table = self._proc.snapshot()
+        if table is None:
+            return self._terminate_group_only(handle, grace_s, kill_grace, started)
+        self._expand_tracked(handle, table)
+        signalled = self._send(handle, table, _signal.SIGTERM)
+        found = self._descendants_found(handle)
+        started = self._monotonic()
+        deadline = started + grace_s
+        escalated = False
+        remaining: List[int] = self._remaining(handle, table)
+        while remaining:
+            time.sleep(self._poll_s)
+            proc.poll()
+            table = self._proc.snapshot()
+            if table is None:
+                break
+            added = self._expand_tracked(handle, table)
+            if added:
+                self._send(handle, table, _signal.SIGTERM, only=added)
+            remaining = self._remaining(handle, table)
+            if not remaining or self._monotonic() >= deadline:
+                break
+        if remaining and table is not None:
+            escalated = True
+            self._send(handle, table, _signal.SIGKILL)
+            kill_deadline = self._monotonic() + kill_grace
+            while remaining and self._monotonic() < kill_deadline:
+                time.sleep(self._poll_s)
+                proc.poll()
+                table = self._proc.snapshot()
+                if table is None:
+                    break
+                self._expand_tracked(handle, table)
+                remaining = self._remaining(handle, table)
+                if remaining:
+                    self._send(handle, table, _signal.SIGKILL)
+        try:
+            proc.wait(timeout=kill_grace)
+        except subprocess.TimeoutExpired:
+            pass
+        final = self._proc.snapshot()
+        if final is None:
+            return CancellationResult(
+                signalled_term=signalled, escalated_kill=escalated, group_empty=False,
+                descendants_found=self._descendants_found(handle), descendants_remaining=None,
+                exit_code=proc.returncode, duration_s=self._monotonic() - started,
+            )
+        self._expand_tracked(handle, final)
+        left = [pid for pid in self._remaining(handle, final) if pid != proc.pid]
+        return CancellationResult(
+            signalled_term=signalled,
+            escalated_kill=escalated,
+            group_empty=not self._proc.group_members(handle.pgid, final) if handle.pgid else True,
+            descendants_found=max(found, self._descendants_found(handle)),
+            descendants_remaining=len(left),
+            exit_code=proc.returncode,
+            duration_s=self._monotonic() - started,
+        )
+
+    def _descendants_found(self, handle: RuntimeHandle) -> int:
+        with handle.tracked_lock:
+            return len([p for p in handle.tracked if p != handle.proc.pid])
+
+    def _terminate_group_only(
+        self, handle: RuntimeHandle, grace_s: float, kill_grace: float, started: float
+    ) -> CancellationResult:
+        proc = handle.proc
+        signalled = False
+        escalated = False
+        if proc.poll() is None and handle.pgid:
+            signalled = True
+            self._killpg(handle.pgid, _signal.SIGTERM)
+            deadline = self._monotonic() + grace_s
+            while proc.poll() is None and self._monotonic() < deadline:
+                time.sleep(self._poll_s)
+            if proc.poll() is None:
+                escalated = True
+                self._killpg(handle.pgid, _signal.SIGKILL)
+        try:
+            proc.wait(timeout=kill_grace)
+        except subprocess.TimeoutExpired:
+            pass
+        empty = False
+        if handle.pgid:
+            try:
+                os.killpg(handle.pgid, 0)
+            except ProcessLookupError:
+                empty = True
+            except PermissionError:
+                empty = False
+        return CancellationResult(
+            signalled_term=signalled, escalated_kill=escalated, group_empty=empty,
+            descendants_found=self._descendants_found(handle), descendants_remaining=None,
+            exit_code=proc.returncode, duration_s=self._monotonic() - started,
+        )
+
+    def cancel(self, handle: RuntimeHandle, grace_s: float = 5.0) -> CancellationResult:
+        """Stop the attempt and return how it went. Thread-safe and
+        idempotent: a second call returns the stored first result.
+
+        While an observer is active the observer writes the terminal record;
+        otherwise this call does. It blocks for up to `grace_s` plus the kill
+        grace, so signal handlers must use `handle.request_cancel()`.
+        Releasing any phase lock stays with the caller.
+        """
+        result = self._terminate_once(handle, "cancel", grace_s)
+        if handle.finalized:
+            return result
+        take = False
+        with handle.record_lock:
+            if not handle.observer_active and not handle.finalizing and not handle.finalized:
+                handle.finalizing = True
+                take = True
+        if take:
+            try:
+                self._finish(handle)
+            except BaseException as exc:
+                self._abort(handle, exc)
+                raise
+            finally:
+                self._close(handle)
+        return result
