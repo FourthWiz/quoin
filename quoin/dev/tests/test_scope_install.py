@@ -1142,3 +1142,63 @@ def test_install_sh_forwards_autocompact_flags(tmp_path):
     )
     for flag in ("--autocompact-pct", "--autocompact-window", "--clear-autocompact-env"):
         assert flag not in result5.stdout, result5.stdout + result5.stderr
+
+
+def _write_python_stub_matching_version(tmp_path: Path, version: str) -> dict:
+    """Variant of `_write_python_stub` where the local source version and the
+    already-installed version agree, so install.sh's Tier-1 branch fires
+    (`$PYTHON -m quoin "${INSTALL_ARGS[@]}"` directly, no PYTHONPATH, no pip).
+    Same fake-interpreter technique, only the two version probes differ."""
+    stub = tmp_path / "_pystub"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        'if [[ "$1" == "-c" ]]; then\n'
+        '  case "$2" in\n'
+        '    *sys.version_info*) echo 3013 ;;\n'
+        f'    *__about__*) echo "{version}" ;;\n'
+        '    *) exit 0 ;;\n'
+        '  esac\n'
+        '  exit 0\n'
+        "fi\n"
+        'if [[ "$1" == "-m" && "$2" == "quoin" && "$3" == "--version" ]]; then\n'
+        f'  echo "quoin {version}"\n'
+        "  exit 0\n"
+        "fi\n"
+        'echo "ARGV:$*"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    names = ["python3.13", "python3.12", "python3.11", "python3.10", "python3", "python"]
+    for name in names:
+        link = tmp_path / name
+        if not link.exists():
+            link.symlink_to(stub)
+    return {"PATH": f"{tmp_path}:{os.environ.get('PATH', '')}"}
+
+
+def test_install_sh_tier1_execs_module_directly_on_version_match(tmp_path):
+    """When the probed `$PYTHON -m quoin --version` already matches the
+    local source tree's version, install.sh's Tier-1 branch execs `$PYTHON
+    -m quoin install ...` directly — no PYTHONPATH fallback, no pip. This is
+    the shape a globally importable quoin (a normal editable/non-editable
+    install on the probed interpreter's own `$PATH`) takes; the isolated-
+    tool and same-version-shadowing cases in `test_install_record_tiers.py`
+    are invisible to this probe entirely and are documented, not
+    exercised, at the shell level."""
+    import subprocess
+
+    install_sh = QUOIN_SRC / "install.sh"
+    stub_env_overrides = _write_python_stub_matching_version(tmp_path, "9.9.9")
+    env = {**os.environ, **stub_env_overrides}
+
+    result = subprocess.run(
+        ["bash", str(install_sh), "--scope", "project"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert result.stdout.startswith("ARGV:-m quoin install"), result.stdout + result.stderr
+    assert "--scope project" in result.stdout

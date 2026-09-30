@@ -32,8 +32,21 @@ def _load_module():
 
 
 @pytest.fixture()
-def ar(monkeypatch):
-    return _load_module()
+def ar(monkeypatch, tmp_path):
+    module = _load_module()
+    # Hermeticity: no test should read a real install record or a
+    # real HOME, and none should spawn a real process via _popen.
+    monkeypatch.setattr(module, "_runtime_record_path", lambda: tmp_path / "absent-quoin-runtime.json")
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
+    popen_calls = []
+
+    def _guard_popen(argv, **kw):
+        popen_calls.append(argv)
+        raise AssertionError(f"unexpected real _popen call: {argv!r}")
+
+    monkeypatch.setattr(module, "_popen", _guard_popen)
+    yield module
+    assert popen_calls == [], f"_popen was called without a fake override: {popen_calls!r}"
 
 
 @pytest.fixture()
@@ -229,6 +242,32 @@ def test_stop_no_forward_progress_halts(ar, project, monkeypatch, capsys):
     _write_record(memory, "demo", "sid-1")
     _arm(memory, "sid-1")
     counter = ar._default_counter("demo", _recent_iso())
+    counter["consecutive_no_progress"] = 1
+    counter["last_done_count"] = 0
+    counter["last_phase"] = ["implement", 3]
+    ar._write_counter(memory, "demo", counter)
+    _stop_stdin(monkeypatch, {"session_id": "sid-1"})
+
+    rc = ar._cmd_stop(_Args(project_root=str(project)))
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+    halt = (memory / "autonomous-halt-demo.md").read_text()
+    assert "reason: no forward progress" in halt
+
+
+def test_stop_no_forward_progress_halts_even_when_cli_is_genuinely_missing(ar, project, monkeypatch, capsys):
+    """The no-progress check runs, and can halt, before `_do_handoff` ever
+    resolves a CLI — the old code additionally gated it behind a
+    `_which('quoin')` pre-check that no longer exists now that CLI
+    resolution goes through the shared install-record resolver. This pins
+    that a genuinely missing CLI can't mask or replace the no-progress
+    halt: it still wins, matching the code's own predicate order."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    _arm(memory, "sid-1")
+    monkeypatch.setattr(ar, "_which", lambda name: None)
+    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
     counter["consecutive_no_progress"] = 1
     counter["last_done_count"] = 0
     counter["last_phase"] = ["implement", 3]
@@ -980,3 +1019,36 @@ def test_main_always_exits_zero_on_garbage_argv(ar):
     assert ar.main(["--not-a-real-flag"]) == 0
     assert ar.main([]) == 0
     assert ar.main(["bogus-command"]) == 0
+
+
+def test_main_resolves_relative_project_root_before_dispatch(ar, tmp_path, monkeypatch):
+    """A relative --project-root must resolve against the caller's actual
+    cwd before any handler runs — not against whatever cwd a later
+    probe/spawn switches into."""
+    captured = {}
+
+    def _capture(args):
+        captured["project_root"] = args.project_root
+        return 0
+
+    monkeypatch.setattr(ar, "_HANDLERS", {**ar._HANDLERS, "status": _capture})
+    (tmp_path / "sub").mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    rc = ar.main(["status", "--project-root", "sub", "--task", "demo"])
+
+    assert rc == 0
+    assert captured["project_root"] == str((tmp_path / "sub").resolve())
+
+
+def test_main_resets_cli_memo_before_dispatch(ar, tmp_path, monkeypatch):
+    """The resolver memo is process-lifetime, not call-lifetime — a stale
+    entry from an earlier `main()` invocation in the same process must
+    never leak into a later, unrelated one."""
+    ar._CLI_MEMO[("stale", "start")] = {"status": "usable"}
+    monkeypatch.setattr(ar, "_HANDLERS", {**ar._HANDLERS, "status": lambda args: 0})
+
+    rc = ar.main(["status", "--project-root", str(tmp_path), "--task", "demo"])
+
+    assert rc == 0
+    assert ar._CLI_MEMO == {}

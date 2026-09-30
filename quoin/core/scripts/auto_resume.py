@@ -25,6 +25,8 @@ Subcommands
 - ``pause``   — the in-session "stop the run" verb: writes a halt sentinel
   and removes the arm.
 - ``status``  — prints the counter, lock, arm and owner-liveness state.
+- ``cli-check`` — read-only: prints the interpreter resolver's verdict
+  (install record vs legacy PATH lookup) as one JSON line.
 
 State files (all under ``.workflow_artifacts/memory/``, outside the task
 folder so they survive `/end_of_task`'s archival move):
@@ -42,6 +44,8 @@ import json
 import os
 import re
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -50,6 +54,7 @@ import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Sibling import: quoin/core/scripts/run_state.py (same directory) for
@@ -738,10 +743,11 @@ def _do_handoff(
     counter: dict,
     record,
     halt_on_cap: bool = True,
+    probe_caller: str = "handoff",
 ):
     """Attempt a detached `quoin run --autonomous` hand-off. Returns one of
-    ``HANDOFF|<pid>|<n>/<cap>``, ``NO_CLI|``, ``LOCKED|<pid>``,
-    ``OWNER_LIVE|<sid>``, ``DENIED|<reason>``.
+    ``HANDOFF|<pid>|<n>/<cap>``, ``NO_CLI|``, ``STALE_CLI|<kind>|<message>``,
+    ``LOCKED|<pid>``, ``OWNER_LIVE|<sid>``, ``DENIED|<reason>``.
 
     `halt_on_cap` gates only the cap-exhausted branch: the `handoff`
     subcommand and a startup hand-off have no cheaper fallback, so they
@@ -782,13 +788,28 @@ def _do_handoff(
             _write_halt(memory_dir, task, record, "no forward progress")
             _write_counter(memory_dir, task, counter)
             return "DENIED|no-progress"
-    quoin_bin = _which("quoin")
-    if not quoin_bin:
-        fallback = _home() / ".local" / "bin" / "quoin"
-        if fallback.exists() and os.access(str(fallback), os.X_OK):
-            quoin_bin = str(fallback)
-        else:
-            return "NO_CLI|"
+    res = resolve_cli(project_root, probe_caller)
+    if res["status"] == "missing":
+        return "NO_CLI|"
+    if res["status"] == "stale":
+        phase = record.get("phase", "") if record else ""
+        append_note(
+            memory_dir, task,
+            f"[quoin-auto-resume] task={task} phase={phase} reason={reason} "
+            f"cli=stale kind={res['kind']}: {res['message']}",
+        )
+        return f"STALE_CLI|{res['kind']}|{res['message']}"
+    # Decided before the lock is reserved below, so a failure here can never
+    # strand a reservation under this process's pid.
+    neutral_cwd = _neutral_cwd()
+    if res["source"] == "legacy":
+        # The console-script launch never puts its cwd on sys.path, so it
+        # needs no safe cwd; a no-record install must hand off exactly as
+        # it did before records existed, never be refused for this reason.
+        if neutral_cwd is None:
+            neutral_cwd = str(Path(project_root).resolve())
+    elif neutral_cwd is None:
+        return "DENIED|cwd"
     # The hand-off's own charge (below, attempts += 1) plus this grant must
     # together stay within cap: grant = cap - attempts_before - 1 (D-01).
     remaining = max(cap - attempts - 1, 1)
@@ -843,19 +864,30 @@ def _do_handoff(
         except OSError:
             pass
         return "DENIED|log"
-    argv = [
-        quoin_bin, "run", "--autonomous", task,
-        "--project-root", str(project_root),
+    # Resolved to absolute here rather than trusted as given: the child no
+    # longer runs with project_root (or the caller's cwd) as its own cwd,
+    # so a relative value would resolve against whatever _neutral_cwd()
+    # picks instead of what the caller meant.
+    argv = res["argv"] + [
+        "run", "--autonomous", task,
+        "--project-root", str(Path(project_root).resolve()),
         "--halt-on-abort", "--max-relaunch", str(remaining),
     ]
     # D-06: the child adopts this lock (rather than racing to create its own)
     # by presenting the same token back via `QUOIN_SUPERVISOR_LOCK_TOKEN`.
     child_env = dict(os.environ)
+    child_env.update(res["env_extra"])
     child_env["QUOIN_SUPERVISOR_LOCK_TOKEN"] = token
     try:
         proc = _popen(
             argv,
-            cwd=str(project_root),
+            # Not project_root: the argv above runs quoin via a small
+            # bootstrap (see _SPAWN_BOOTSTRAP) that drops the working
+            # directory from sys.path before importing anything, and the
+            # cwd itself is one no other user can write to (see
+            # _neutral_cwd). The child still learns the real project root
+            # from --project-root above.
+            cwd=neutral_cwd,
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
             stderr=log_fh,
@@ -892,6 +924,484 @@ def _do_handoff(
     notice = _notice_line(task, record, reason, attempts, cap, f"supervisor pid={proc.pid}")
     append_note(memory_dir, task, notice)
     return f"HANDOFF|{proc.pid}|{attempts}/{cap}"
+
+
+# ---------------------------------------------------------------------------
+# Shared interpreter resolver: prefers the installer's own record
+# of what interpreter and package tree it deployed from, falling back to a
+# legacy PATH lookup when no record exists. Used by every hand-off caller
+# (Stop, SessionStart, the `handoff` subcommand) and by `cli-check`, so a
+# venv/pipx/uv-tool install relaunches the same interpreter it was deployed
+# from instead of guessing via `PATH`.
+# ---------------------------------------------------------------------------
+
+RUNTIME_RECORD_FILENAME = "quoin-runtime.json"
+RUNTIME_RECORD_SCHEMA = 1
+_RECORD_MAX_BYTES = 16384
+# Shared prologue of the two child-interpreter snippets below. `-c` and
+# `-m` both put the working directory on sys.path ahead of the recorded
+# interpreter's own site-packages — as `''` at index 0, and again as the
+# absolute cwd wherever the inherited PYTHONPATH has an empty element
+# (the common `PYTHONPATH=$PYTHONPATH:/x` idiom with it unset yields
+# `:/x`). Every entry that names the cwd is dropped, not only index 0.
+# The filesystem-root cwd (see _neutral_cwd) is the primary control: with
+# an empty PYTHONPATH element the absolute cwd sits on sys.path during
+# interpreter start-up, so sitecustomize.py, and os.py before 3.11, could
+# load from it before any of this `-c` code runs — a root-owned,
+# non-writable cwd is what makes that safe. This strip is the second
+# layer: it covers every import made after start-up (`runpy`, `quoin`).
+# Only `sys` and `os` may be imported before the strip runs, since
+# `runpy` is not frozen before 3.11 and would be resolved through the
+# still-unstripped path. The recorded interpreter may be any Python
+# version quoin supports, so this can't lean on `-P`/PYTHONSAFEPATH
+# (3.11+ only) or `-I` (which would also drop the recorded PYTHONPATH a
+# Tier-2 install depends on).
+_SYS_PATH_STRIP = (
+    "import sys, os\n"
+    "_cwd = os.path.realpath(os.getcwd())\n"
+    "sys.path[:] = [p for p in sys.path"
+    " if p not in ('', '.') and os.path.realpath(p) != _cwd]\n"
+)
+_PROBE_SNIPPET = _SYS_PATH_STRIP + (
+    "import quoin, quoin.cli\n"
+    "sys.stdout.write('\\nQUOIN_VERSION=' + quoin.__version__ + '\\n')\n"
+)
+# Used instead of `-m quoin` for the detached supervisor spawn, so the same
+# strip runs first on every supported version.
+_SPAWN_BOOTSTRAP = _SYS_PATH_STRIP + (
+    "import runpy\n"
+    "runpy.run_module('quoin', run_name='__main__', alter_sys=True)\n"
+)
+_VERSION_TOKEN_RE = re.compile(r"^QUOIN_VERSION=(\S+)\s*$", re.M)
+_REMEDY = "re-run 'quoin install' (same scope) and check 'quoin doctor'"
+_NO_SAFE_CWD_REMEDY = (
+    "make the filesystem root owned by root and not group- or other-writable "
+    "(for example 'chmod go-w /'); reinstalling will not help"
+)
+# Start/stop callers act on a live knob, so the remedy names it. Handoff and
+# cli-check ignore the knob (fixed 8 s budget), so naming it would mislead.
+_TIMEOUT_REMEDY_KNOB = (
+    "the machine was slow; retry the auto-resume hand-off or raise "
+    "QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS (reinstalling will not help)"
+)
+_TIMEOUT_REMEDY_FIXED = (
+    "the machine was slow; retry the auto-resume hand-off and check for a slow or "
+    "cloud-synced filesystem (reinstalling will not help)"
+)
+
+_CLI_MEMO: dict = {}
+
+
+def _reset_cli_memo() -> None:
+    _CLI_MEMO.clear()
+
+
+def _neutral_cwd() -> Optional[str]:
+    """cwd for the probe and the supervisor spawn: the filesystem root.
+
+    This is the primary control against import shadowing: with an empty
+    PYTHONPATH element the absolute cwd sits on sys.path during
+    interpreter start-up, before any code in _SYS_PATH_STRIP runs, so it
+    must be a directory that no other local user can write to and that is
+    never repository or user content. The child's own sys.path strip is
+    the second layer, covering every import made after start-up. The caller's project
+    root fails the second test (a checkout can ship a ``quoin/`` package),
+    the system temp directory fails the first (world-writable by default
+    on Linux, and on macOS whenever TMPDIR is unset), and the deploy root
+    fails both in some legitimate setups: under project scope it lives
+    inside the checkout, and on hosts with user-private groups and a 002
+    umask it is group-writable by the user's own group, which is harmless
+    but indistinguishable here from a real exposure. The filesystem root
+    is root-owned and not group- or other-writable on every sane host,
+    needs no per-launch creation or cleanup (the supervisor spawn is
+    detached and outlives this process), and can never be repository
+    content. It is still verified rather than assumed: a real directory,
+    owned by root or by the current user, with no group or other write
+    bit. Returns ``None`` if that check fails; callers treat that as a
+    resolver failure and never fall back to a shared directory.
+    ``--project-root`` is still passed to the spawned process explicitly,
+    so it learns the real project root without needing it as its cwd."""
+    root = os.path.abspath(os.sep)
+    try:
+        st = os.lstat(root)
+    except OSError:
+        return None
+    if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+        return None
+    getuid = getattr(os, "getuid", None)
+    allowed_owners = (0,) if getuid is None else (0, getuid())
+    if st.st_uid not in allowed_owners:
+        return None
+    if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
+        return None
+    return root
+
+
+def _deploy_root() -> Optional[Path]:
+    p = Path(os.path.abspath(__file__))
+    if p.parent.name == "scripts" and p.parents[1].name == "core":
+        return p.parents[2]
+    return None
+
+
+def _runtime_record_path() -> Optional[Path]:
+    root = _deploy_root()
+    if root is None:
+        return None
+    return root / RUNTIME_RECORD_FILENAME
+
+
+def _probe_budget_ms(caller: str) -> int:
+    if caller == "start":
+        # Baseline + default + 1s kill slack must stay under the 5s
+        # SessionStart stanza budget (measured against the worst case, not
+        # a healthy probe).
+        return _clamp_int("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", 1500, 250, 3000)
+    if caller == "stop":
+        return _clamp_int("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", 3000, 250, 7000)
+    return 8000  # handoff / cli-check: fixed budget, knob ignored
+
+
+def _probe_retries(caller: str) -> int:
+    return 1 if caller == "handoff" else 0
+
+
+def _remedy(kind: str, caller: str) -> str:
+    if kind == "probe-timeout":
+        if caller in ("start", "stop"):
+            return _TIMEOUT_REMEDY_KNOB
+        return _TIMEOUT_REMEDY_FIXED
+    return _REMEDY
+
+
+_CONTROL_RE = re.compile(r"[\r\n\t\x00-\x1f]")
+_MULTISPACE_RE = re.compile(r" {2,}")
+_MESSAGE_MAX = 300
+# Caps the composed detail sentence (well under _MESSAGE_MAX so the fixed
+# remedy that follows always fits) as a defensive backstop — in practice
+# each interpolated value inside it is already bounded by _VALUE_MAX below.
+_DETAIL_MAX = 160
+# Caps one interpolated value (an interpreter path, a version string, a
+# stderr line, an exception message) *before* it's embedded in a sentence.
+# A Drive-synced interpreter path or a chatty stderr line can be much
+# longer than the fixed wording around it, so truncating the finished
+# sentence from the right risks cutting the literal wording that comes
+# after the value (e.g. "...no longer exists") instead of the value
+# itself — capping the value first keeps the sentence's own wording, and
+# the remedy that follows it, intact.
+_VALUE_MAX = 100
+
+
+def _clean_text(s: str) -> str:
+    s = _CONTROL_RE.sub(" ", s)
+    return _MULTISPACE_RE.sub(" ", s).strip()
+
+
+def _cap_value(s: str) -> str:
+    """Caps a single value before it's interpolated into a message
+    sentence, keeping the tail (a path's filename end, or the more
+    specific part of an exception message)."""
+    s = _clean_text(s)
+    if len(s) <= _VALUE_MAX:
+        return s
+    return "…" + s[-(_VALUE_MAX - 1):]
+
+
+def _sanitize_msg(s: str) -> str:
+    """Cleans and caps a whole message with no separate detail/remedy
+    split (the resolver-error and cli-check exception paths)."""
+    return _clean_text(s)[:_MESSAGE_MAX]
+
+
+def _build_message(detail: str, remedy: str) -> str:
+    """Composes a stale/failure message from a `detail` sentence (its own
+    interpolated values already capped via `_cap_value`) and a fixed
+    `remedy`, capping only the detail's overall length as a backstop.
+    Every stale message must end with its remedy — a message whose remedy
+    got truncated away tells the user there's a problem without telling
+    them what to do about it."""
+    detail = _clean_text(detail)[:_DETAIL_MAX]
+    remedy = _clean_text(remedy)
+    return (detail + "; " + remedy)[:_MESSAGE_MAX]
+
+
+def _probe(argv0: str, env: dict, cwd: str, timeout_s: float) -> dict:
+    """Runs the version probe in its own process group, with output
+    captured to temp files rather than pipes — a grandchild holding a pipe
+    open past the timeout would otherwise defeat the bound. Never raises;
+    every failure mode maps to a status string the caller inspects."""
+    try:
+        out_fd, out_name = tempfile.mkstemp(prefix=".quoin-probe-out.")
+        err_fd, err_name = tempfile.mkstemp(prefix=".quoin-probe-err.")
+    except OSError:
+        return {"status": "oserror-tmp", "rc": None, "stdout": "", "stderr_tail": ""}
+    out_path = Path(out_name)
+    err_path = Path(err_name)
+    try:
+        with os.fdopen(out_fd, "wb") as out_fh, os.fdopen(err_fd, "wb") as err_fh:
+            try:
+                proc = subprocess.Popen(
+                    [argv0, "-c", _PROBE_SNIPPET],
+                    env=env,
+                    cwd=cwd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=out_fh,
+                    stderr=err_fh,
+                    start_new_session=True,
+                )
+            except OSError:
+                return {"status": "oserror", "rc": None, "stdout": "", "stderr_tail": ""}
+            try:
+                rc = proc.wait(timeout=timeout_s)
+                status = "ok" if rc == 0 else "exit"
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    pass
+                try:
+                    proc.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+                rc = None
+                status = "timeout"
+        stdout_text = out_path.read_text(encoding="utf-8", errors="replace")
+        stderr_text = err_path.read_text(encoding="utf-8", errors="replace")
+    finally:
+        for p in (out_path, err_path):
+            try:
+                p.unlink()
+            except OSError:
+                pass
+    stripped_err = stderr_text.strip()
+    stderr_tail = stripped_err.splitlines()[-1] if stripped_err else ""
+    return {"status": status, "rc": rc, "stdout": stdout_text, "stderr_tail": stderr_tail}
+
+
+def _load_runtime_record(path: Path) -> tuple[Optional[dict], Optional[str]]:
+    """Returns ``(record_dict, None)`` on a valid record or ``(None, kind)``
+    on any validation failure. Never raises — permission errors and other
+    ``OSError`` subclasses on the read map to ``record-invalid``, same as
+    a garbled or oversized file."""
+    try:
+        if path.stat().st_size > _RECORD_MAX_BYTES:
+            return None, "record-invalid"
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None, "record-invalid"
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return None, "record-invalid"
+    if not isinstance(data, dict):
+        return None, "record-invalid"
+    schema = data.get("schema")
+    python = data.get("python")
+    version = data.get("version")
+    pythonpath = data.get("pythonpath")
+    source_version = data.get("source_version")
+    if not isinstance(schema, int) or schema != RUNTIME_RECORD_SCHEMA:
+        return None, "record-invalid"
+    if not isinstance(python, str) or not python or not os.path.isabs(python):
+        return None, "record-invalid"
+    if not isinstance(version, str) or not version:
+        return None, "record-invalid"
+    if pythonpath is not None and (not isinstance(pythonpath, str) or not os.path.isabs(pythonpath)):
+        return None, "record-invalid"
+    if source_version is not None and not isinstance(source_version, str):
+        return None, "record-invalid"
+    return data, None
+
+
+def _resolve_cli_uncached(project_root, caller: str) -> dict:
+    rp = _runtime_record_path()
+    base = {
+        "source": None, "status": None, "argv": None, "env_extra": {}, "kind": None,
+        "message": None, "record_path": str(rp) if rp is not None else None,
+        "record": None, "probed_version": None, "pythonpath": None,
+    }
+    if rp is None or not os.path.exists(str(rp)):
+        binpath = _which("quoin")
+        if not binpath:
+            fallback = _home() / ".local" / "bin" / "quoin"
+            if fallback.exists() and os.access(str(fallback), os.X_OK):
+                binpath = str(fallback)
+        if binpath:
+            # shutil.which() can return a relative path when PATH contains
+            # "." or an empty entry; the probe/spawn no longer run with the
+            # caller's own cwd, so a relative argv[0] would resolve against
+            # whatever directory _neutral_cwd() picks instead of the
+            # caller's intent. Absolutize it here, once.
+            base.update(source="legacy", status="usable", argv=[os.path.abspath(binpath)])
+        else:
+            base.update(source="legacy", status="missing")
+        return base
+
+    record, err_kind = _load_runtime_record(rp)
+    if err_kind:
+        base.update(
+            source="record", status="stale", kind=err_kind,
+            message=_build_message("the install record is missing or invalid", _remedy(err_kind, caller)),
+        )
+        return base
+    assert record is not None  # err_kind is None only when _load_runtime_record returned data
+    base["record"] = record
+    python = record["python"]
+    version = record["version"]
+    pythonpath = record.get("pythonpath")
+    source_version = record.get("source_version")
+
+    if source_version is not None and source_version != version:
+        base.update(
+            source="record", status="stale", kind="version-mismatch",
+            message=_build_message(
+                f"deployed files are at version {_cap_value(source_version)} but the recorded "
+                f"CLI is {_cap_value(version)}",
+                _remedy("version-mismatch", caller),
+            ),
+        )
+        return base
+    if not os.path.exists(python):
+        base.update(
+            source="record", status="stale", kind="interpreter-missing",
+            message=_build_message(
+                f"recorded interpreter {_cap_value(python)} no longer exists",
+                _remedy("interpreter-missing", caller),
+            ),
+        )
+        return base
+    if not os.access(python, os.X_OK):
+        base.update(
+            source="record", status="stale", kind="interpreter-not-executable",
+            message=_build_message(
+                f"recorded interpreter {_cap_value(python)} is not executable",
+                _remedy("interpreter-not-executable", caller),
+            ),
+        )
+        return base
+
+    env = dict(os.environ)
+    env_extra: dict = {}
+    if pythonpath:
+        old = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = pythonpath + (os.pathsep + old if old else "")
+        env_extra = {"PYTHONPATH": env["PYTHONPATH"], "QUOIN_HANDOFF_PYTHONPATH": pythonpath}
+    base["pythonpath"] = pythonpath
+
+    cwd = _neutral_cwd()
+    if cwd is None:
+        base.update(
+            source="record", status="stale", kind="no-safe-cwd",
+            message=_build_message(
+                "the filesystem root is not a safe directory to run the version probe from "
+                "(it must be a real directory owned by root or by you, with no group or "
+                "other write permission)",
+                _NO_SAFE_CWD_REMEDY,
+            ),
+        )
+        return base
+
+    budget_ms = _probe_budget_ms(caller)
+    timeout_s = budget_ms / 1000.0
+    tries = 1 + _probe_retries(caller)
+    result = {"status": "timeout", "rc": None, "stdout": "", "stderr_tail": ""}
+    for _ in range(tries):
+        result = _probe(python, env, cwd, timeout_s)
+        if result["status"] != "timeout":
+            break
+
+    status = result["status"]
+    if status == "timeout":
+        base.update(
+            source="record", status="stale", kind="probe-timeout",
+            message=_build_message("the version probe timed out", _remedy("probe-timeout", caller)),
+        )
+        return base
+    if status == "oserror-tmp":
+        base.update(
+            source="record", status="stale", kind="resolver-error",
+            message=_build_message(
+                "auto-resume could not check the installed quoin (could not create a temp file for the probe)",
+                _REMEDY,
+            ),
+        )
+        return base
+    if status == "oserror":
+        base.update(
+            source="record", status="stale", kind="interpreter-not-executable",
+            message=_build_message(
+                f"recorded interpreter {_cap_value(python)} could not be started",
+                _remedy("interpreter-not-executable", caller),
+            ),
+        )
+        return base
+    if status == "exit":
+        tail = result.get("stderr_tail") or "no error output"
+        base.update(
+            source="record", status="stale", kind="import-failed",
+            message=_build_message(
+                f"the version probe exited with an error ({_cap_value(tail)})",
+                _remedy("import-failed", caller),
+            ),
+        )
+        return base
+
+    # status == "ok"
+    token_match = None
+    for token_match in _VERSION_TOKEN_RE.finditer(result["stdout"]):
+        pass
+    if token_match is None:
+        base.update(
+            source="record", status="stale", kind="import-failed",
+            message=_build_message(
+                "the version probe produced no version token",
+                _remedy("import-failed", caller),
+            ),
+        )
+        return base
+    probed_version = token_match.group(1)
+    base["probed_version"] = probed_version
+    if probed_version != version:
+        base.update(
+            source="record", status="stale", kind="version-mismatch",
+            message=_build_message(
+                f"the probed CLI reports {_cap_value(probed_version)} but the record says "
+                f"{_cap_value(version)}",
+                _remedy("version-mismatch", caller),
+            ),
+        )
+        return base
+
+    base.update(source="record", status="usable", argv=[python, "-c", _SPAWN_BOOTSTRAP], env_extra=env_extra)
+    return base
+
+
+def resolve_cli(project_root, caller: str) -> dict:
+    """Finds the CLI to hand off to. Never raises: any unexpected exception
+    inside the uncached resolver becomes a stale ``resolver-error`` result
+    instead of escaping to the caller, since an escape here would silently
+    drop the Stop-hook nudge and skip writing a requested halt. That error
+    result is not memoized — a transient fault may clear on the next call."""
+    key = (str(Path(project_root)), caller)
+    if key in _CLI_MEMO:
+        return _CLI_MEMO[key]
+    try:
+        result = _resolve_cli_uncached(project_root, caller)
+    except Exception as exc:  # noqa: BLE001 — the resolver must be total
+        rp = _runtime_record_path()
+        return {
+            "source": "record", "status": "stale", "argv": None, "env_extra": {},
+            "kind": "resolver-error",
+            "message": _build_message(
+                f"auto-resume could not check the installed quoin "
+                f"({type(exc).__name__}: {_cap_value(str(exc))})",
+                _REMEDY,
+            ),
+            "record_path": str(rp) if rp is not None else None,
+            "record": None, "probed_version": None, "pythonpath": None,
+        }
+    _CLI_MEMO[key] = result
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -940,9 +1450,11 @@ def _cmd_stop(args) -> int:
         counter["chain_blocks"] = 1
 
     cap = _max_attempts()
-    if counter["chain_blocks"] >= _handoff_at() and _which("quoin"):
+    stale_msg = None
+    if counter["chain_blocks"] >= _handoff_at():
         handoff_result = _do_handoff(
-            memory_dir, Path(args.project_root), task, "stop-cap", counter, record, halt_on_cap=False
+            memory_dir, Path(args.project_root), task, "stop-cap", counter, record,
+            halt_on_cap=False, probe_caller="stop",
         )
         if handoff_result.startswith("HANDOFF|"):
             return 0
@@ -955,9 +1467,11 @@ def _cmd_stop(args) -> int:
             # already driving the task, so this session must not also keep
             # blocking on it in-session.
             return 0
+        if handoff_result.startswith("STALE_CLI|"):
+            stale_msg = handoff_result.split("|", 2)[2]
         # DENIED|cap (no halt written — halt_on_cap=False) / NO_CLI| /
-        # OWNER_LIVE| / DENIED|opt-out: fall through to a plain in-session
-        # block, still bounded by the attempts+1 <= cap check
+        # OWNER_LIVE| / DENIED|opt-out / STALE_CLI|: fall through to a plain
+        # in-session block, still bounded by the attempts+1 <= cap check
         # `_evaluate_gate` already applied before returning this candidate.
 
     attempts = counter.get("attempts", 0) + 1
@@ -973,10 +1487,11 @@ def _cmd_stop(args) -> int:
     notice = _notice_line(task, record, counter["last_reason"], attempts, cap, "in-session")
     append_note(memory_dir, task, notice)
     resume_command = record.get("resume_command") or f"/run --resume {task}"
+    system_message = notice if stale_msg is None else notice + " | auto-resume hand-off skipped: " + stale_msg
     print(json.dumps({
         "decision": "block",
         "reason": _reason_text(task, resume_command),
-        "systemMessage": notice,
+        "systemMessage": system_message,
     }))
     return 0
 
@@ -1001,7 +1516,9 @@ def _cmd_start(args) -> int:
     task = result["task"]
     record = result["record"]
     counter = result["counter"]
-    handoff_result = _do_handoff(memory_dir, Path(args.project_root), task, "startup", counter, record)
+    handoff_result = _do_handoff(
+        memory_dir, Path(args.project_root), task, "startup", counter, record, probe_caller="start"
+    )
 
     if handoff_result.startswith("HANDOFF|"):
         pid = handoff_result.split("|")[1]
@@ -1016,6 +1533,18 @@ def _cmd_start(args) -> int:
         advisory = (
             f"[quoin-auto-resume] task={task} reason=startup: the quoin CLI was not "
             f"found on PATH; resume manually: {resume_command}"
+        )
+        print(json.dumps({
+            "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": advisory}
+        }))
+        return 0
+    if handoff_result.startswith("STALE_CLI|"):
+        message = handoff_result.split("|", 2)[2]
+        stored_resume_command = record.get("resume_command") if isinstance(record, dict) else None
+        resume_command = stored_resume_command or f"/run --resume {task}"
+        advisory = (
+            f"[quoin-auto-resume] task={task} reason=startup: auto-resume hand-off "
+            f"skipped: {message}; resume manually: {resume_command}"
         )
         print(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": advisory}
@@ -1110,7 +1639,10 @@ def _cmd_handoff(args) -> int:
     marker_ts = marker.get("timestamp") if marker else None
     record = _load_record(memory_dir, args.task)
     counter = _get_or_reset_counter(memory_dir, args.task, marker_ts)
-    result = _do_handoff(memory_dir, Path(args.project_root), args.task, args.reason, counter, record)
+    result = _do_handoff(
+        memory_dir, Path(args.project_root), args.task, args.reason, counter, record,
+        probe_caller="handoff",
+    )
     print(result)
     # A `LOCKED|` refusal means a live supervisor is already driving this
     # task — that is success from the caller's point of view, not a failure
@@ -1119,7 +1651,10 @@ def _cmd_handoff(args) -> int:
     # under the supervisor that holds the lock.
     if not result.startswith("HANDOFF|") and not result.startswith("LOCKED|") and args.on_fail_halt:
         if not _sentinel_exists(memory_dir, HALT_TEMPLATE, args.task):
-            _write_halt(memory_dir, args.task, record, args.on_fail_halt)
+            halt_reason = args.on_fail_halt
+            if result.startswith("STALE_CLI|"):
+                halt_reason = f"{args.on_fail_halt}: {result.split('|', 2)[2]}"
+            _write_halt(memory_dir, args.task, record, halt_reason)
     return 0
 
 
@@ -1159,6 +1694,18 @@ def _cmd_status(args) -> int:
         "needs_decision": _sentinel_exists(memory_dir, NEEDS_DECISION_TEMPLATE, task),
     }
     print(json.dumps(out, sort_keys=True))
+    return 0
+
+
+def _cmd_cli_check(args) -> int:
+    """Read-only diagnostic: prints the resolver's verdict as one JSON
+    line. Touches nothing under the project memory dir (no lock, no
+    counter, no notes) — safe to run from `quoin doctor` at any time."""
+    try:
+        res = resolve_cli(Path(args.project_root), "cli-check")
+        print(json.dumps(res, sort_keys=True))
+    except Exception as exc:  # noqa: BLE001 — never crash the caller
+        print(json.dumps({"status": "error", "message": _sanitize_msg(str(exc))}, sort_keys=True))
     return 0
 
 
@@ -1205,6 +1752,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_status.add_argument("--project-root", required=True, dest="project_root")
     p_status.add_argument("--task", required=True)
 
+    p_cli_check = sub.add_parser("cli-check")
+    p_cli_check.add_argument("--project-root", required=True, dest="project_root")
+
     return parser
 
 
@@ -1215,6 +1765,7 @@ _HANDLERS = {
     "handoff": _cmd_handoff,
     "pause": _cmd_pause,
     "status": _cmd_status,
+    "cli-check": _cmd_cli_check,
 }
 
 
@@ -1264,6 +1815,22 @@ def main(argv=None) -> int:
             args = parser.parse_args(argv)
         except SystemExit:
             return 0
+        # Resolved once, here, before any handler runs: every subcommand
+        # feeds --project-root into a memory-dir path, and the `handoff`
+        # subcommand also forwards it into a detached child's argv. Neither
+        # the memory dir nor the child run with the caller's own cwd, so a
+        # relative value would silently resolve against the wrong
+        # directory once it got there.
+        project_root = getattr(args, "project_root", None)
+        if project_root:
+            try:
+                args.project_root = str(Path(project_root).resolve())
+            except OSError:
+                pass  # fail open — handlers already cope with a bad path
+        # The memo is process-lifetime, not call-lifetime; reset it per
+        # `main()` invocation so a long-lived process (or a test) never
+        # serves a stale resolver result to a later, unrelated call.
+        _reset_cli_memo()
         command = getattr(args, "command", None)
         if not command:
             return 0

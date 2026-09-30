@@ -9,6 +9,7 @@ import pathlib
 import runpy
 import shutil
 import signal
+import subprocess
 import sys
 import textwrap
 import time
@@ -334,6 +335,14 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         return 1
     print("Prerequisites OK")
 
+    # Remove any previous install record before the first deploy step, so a
+    # failed or partial install (below) never leaves an older install's
+    # record sitting next to a partially deployed hook tree — see
+    # runtime_record.remove_existing_record.
+    from quoin import runtime_record
+
+    runtime_record.remove_existing_record(dest_root)
+
     # T-04
     installer.deploy_memory(source_dir, dest_root)
     installer.deploy_quickstart(source_dir, dest_root)
@@ -438,6 +447,15 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         print("  Install with: pip install pyyaml", file=sys.stderr)
+
+    # Records the interpreter and package tree this install deployed from,
+    # so an auto-resume hand-off can relaunch the exact same CLI instead of
+    # guessing via PATH. Never fails the install.
+    from quoin import runtime_record
+
+    record_path = runtime_record.write_runtime_record(dest_root, source_dir)
+    if record_path is not None:
+        print(f"Wrote install record {record_path}")
 
     return 0
 
@@ -806,6 +824,109 @@ def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
     )
 
 
+def _doctor_auto_resume_cli(
+    dest_root: pathlib.Path,
+    project_root: pathlib.Path,
+    errors: list[str],
+    warnings: list[str],
+    *,
+    run=subprocess.run,
+    which=shutil.which,
+) -> None:
+    """Verify the auto-resume hand-off CLI the same way the hooks do: via
+    the deployed resolver's read-only ``cli-check``, in a scrubbed env. This
+    matches a hook running with a clean environment; a hook inherits the
+    caller's PYTHONPATH and probes on a tighter budget, so the two can still
+    differ on an unusual host."""
+    dest_label = str(dest_root)
+    print(f"Auto-resume CLI ({dest_label}/quoin-runtime.json):")
+
+    record_path = dest_root / "quoin-runtime.json"
+    if not record_path.exists():
+        print("  ✗ no install record")
+        errors.append(
+            f"no install record at {record_path}; re-run 'quoin install' (same scope)"
+        )
+    else:
+        resolver = dest_root / "core" / "scripts" / "auto_resume.py"
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "QUOIN_HANDOFF_PYTHONPATH")}
+        env["PATH"] = "/usr/bin:/bin"
+        predates_msg = (
+            "deployed auto_resume.py could not report the hand-off CLI "
+            "(predates the install record or failed); re-run 'quoin install'"
+        )
+        parsed = None
+        try:
+            proc = run(
+                [sys.executable, str(resolver), "cli-check", "--project-root", str(project_root)],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                stdin=subprocess.DEVNULL,
+            )
+            lines = [ln for ln in proc.stdout.splitlines() if ln.strip()]
+            if lines:
+                candidate = json.loads(lines[-1])
+                if isinstance(candidate, dict):
+                    parsed = candidate
+        except (subprocess.TimeoutExpired, OSError, ValueError):
+            parsed = None
+
+        if parsed is None or "source" not in parsed or "status" not in parsed:
+            print("  ✗ could not report the hand-off CLI")
+            errors.append(predates_msg)
+        elif parsed.get("status") == "error":
+            print("  ✗ could not report the hand-off CLI")
+            errors.append(f"{predates_msg}: {parsed.get('message')}")
+        elif parsed.get("source") != "record":
+            print("  ✗ resolver ignored the install record")
+            errors.append(predates_msg)
+        elif parsed.get("status") == "stale":
+            kind = parsed.get("kind")
+            message = parsed.get("message")
+            print(f"  ✗ not usable ({kind})")
+            errors.append(f"auto-resume hand-off CLI is not usable ({kind}): {message}")
+        else:
+            probed_version = parsed.get("probed_version")
+            if probed_version is not None and probed_version != __version__:
+                print("  ✗ recorded interpreter runs a different quoin version")
+                errors.append(
+                    f"recorded interpreter runs quoin {probed_version} but this CLI is "
+                    f"{__version__}; re-run 'quoin install' with the CLI you use"
+                )
+            else:
+                print("  ✓ hand-off CLI is usable")
+
+            pythonpath = parsed.get("pythonpath")
+            if pythonpath:
+                print(f"  · hand-off relies on PYTHONPATH={pythonpath}")
+                warnings.append(
+                    f"hand-off relies on PYTHONPATH={pythonpath} (install.sh source-tree "
+                    "fallback); installing the package (pip install -e, uv tool, pipx) and "
+                    "re-running 'quoin install' from it avoids this"
+                )
+
+    # Project scope gets a plain warning; user scope already errors on this
+    # earlier in _cmd_doctor's prerequisites block, so avoid a duplicate.
+    is_project_mode = dest_root.parent == project_root
+    found = which("claude")
+    if found is None:
+        if is_project_mode:
+            print("  ✗ claude not found on PATH")
+            warnings.append(
+                "claude not found on PATH; an auto-resume supervisor cannot relaunch a session"
+            )
+    else:
+        if which("claude", path="/usr/bin:/bin") is None:
+            print(
+                "  · claude resolves only outside /usr/bin:/bin; a supervisor started "
+                "from a minimal-PATH hook may not find it"
+            )
+
+    print()
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     if getattr(args, "json", False) and args.runtime != "opencode":
         _abort("quoin: --json is only valid with --runtime opencode")
@@ -992,6 +1113,10 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     else:
         print(f"  ✗ {claude_md_label} — not found")
         errors.append(f"CLAUDE.md not found at {claude_md_label}; run 'quoin install'")
+
+    print()
+    doctor_project_root = dest_root.parent if is_project_mode else pathlib.Path.cwd()
+    _doctor_auto_resume_cli(dest_root, doctor_project_root, errors, warnings)
 
     # Open-model router probe (user-scope only — home CCR paths are not project-scoped)
     if not is_project_mode:
@@ -1292,6 +1417,26 @@ def _acquire_supervisor_lock(
     )
 
 
+def _strip_handoff_pythonpath() -> None:
+    """Removes the `PYTHONPATH` entry an auto-resume hand-off prepended so
+    it could relaunch the recorded interpreter, before this process
+    relaunches `claude` — the relaunched `claude` subprocess inherits
+    `os.environ`, and it must see the user's own `PYTHONPATH`, not the
+    hand-off's."""
+    marker = os.environ.pop("QUOIN_HANDOFF_PYTHONPATH", None)
+    if not marker:
+        return
+    entries = os.environ.get("PYTHONPATH", "").split(os.pathsep)
+    try:
+        entries.remove(marker)
+    except ValueError:
+        return
+    if entries:
+        os.environ["PYTHONPATH"] = os.pathsep.join(entries)
+    else:
+        del os.environ["PYTHONPATH"]
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """`quoin run --autonomous <task>` — external supervisor entrypoint (T-08).
 
@@ -1315,6 +1460,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     project_root = pathlib.Path(args.project_root).resolve()
     paths = _supervisor_paths(project_root, args.task)
+
+    # Strips an auto-resume hand-off's PYTHONPATH prepend before any launch
+    # so the relaunched `claude` subprocess (which inherits os.environ) sees
+    # the user's own PYTHONPATH, not the hand-off's.
+    _strip_handoff_pythonpath()
 
     # Popped immediately after the lock decision so a relaunch child this
     # process itself spawns never inherits our own adoption token.
