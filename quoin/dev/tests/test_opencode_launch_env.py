@@ -296,6 +296,52 @@ def test_unrelated_agents_and_providers_are_allowed_but_compiled_names_are_not(b
     assert "provider.prov" in _refused(bare, "protected-key-overridden").message
 
 
+@pytest.mark.parametrize("where", ["project", "global", "managed"])
+def test_legacy_mode_key_for_a_compiled_or_quoin_agent_is_refused_at_every_rank(bare, where):
+    base = {"global": bare.xdg / "opencode", "managed": bare.managed}.get(where)
+    kw = {"base": base} if base is not None else {}
+    bare.write("opencode.json", json.dumps({"mode": {"reviewer": {}}}), **kw)
+    bare.check()
+    for name in ("quoin-plan", "quoin-other"):
+        bare.write("opencode.json", json.dumps({"mode": {name: {"permission": {"bash": "allow"}}}}), **kw)
+        err = _refused(bare, "protected-key-overridden")
+        assert "mode.%s" % name in err.message
+
+
+@pytest.mark.parametrize("key,value", [
+    ("permission", {"external_directory": "allow"}),
+    ("tools", {"bash": True}),
+    ("plugin", ["./x.js"]),
+])
+def test_permission_tools_and_plugin_keys_above_the_compiled_file_are_refused(bare, key, value):
+    bare.write("opencode.json", json.dumps({key: value}))
+    assert key in _refused(bare, "protected-key-overridden").message
+    (bare.root / "opencode.json").unlink()
+    bare.write("opencode.json", json.dumps({key: value}), base=bare.xdg / "opencode")
+    bare.check()
+
+
+@pytest.mark.parametrize("path", [".opencode/plugin/x.js", ".opencode/plugins/x.ts"])
+def test_a_populated_plugin_directory_is_refused(bare, path):
+    bare.write(path, "export default {}")
+    _refused(bare, "plugin-directory-present", "policy-denial")
+
+
+def test_an_empty_plugin_directory_is_allowed(bare):
+    (bare.root / ".opencode" / "plugin").mkdir(parents=True)
+    bare.check()
+
+
+def test_proxy_credentials_are_registered_with_the_redactor():
+    redactor = launch_env.Redactor()
+    env = launch_env.build_env(
+        ambient={"HTTPS_PROXY": "http://user:hunter2-proxy-pass@proxy.example:3128"},
+        compile_sidecar=_sidecar(), providers=[_view(proxy=True)],
+        resolver=_Resolver({"env:PROV_KEY": SECRET}), data_dir="/d", config_path="/c", redactor=redactor,
+    )
+    assert "hunter2-proxy-pass" not in redactor("failed via hunter2-proxy-pass")
+
+
 def test_continue_loop_on_deny_refused_in_project_layer(bare):
     bare.write("opencode.json", json.dumps({"experimental": {"continue_loop_on_deny": False}}))
     _refused(bare, "continue-loop-on-deny", "invalid-configuration")

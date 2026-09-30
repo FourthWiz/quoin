@@ -43,6 +43,7 @@ _ALLOWED_ENV = frozenset(
 )
 _PROXY_ENV = ("HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY")
 _AGENT_SUBDIRS = ("agent", "agents", "mode", "modes")
+_PLUGIN_SUBDIRS = ("plugin", "plugins")
 _COMMAND_SUBDIRS = ("command", "commands")
 _OWNED_PREFIX = "quoin-"
 _REDACTED = "<redacted>"
@@ -132,6 +133,21 @@ def _providers_by_id(providers: Union[Mapping[str, Any], Iterable[Any]]) -> Dict
     return {view.id: view for view in providers}
 
 
+def _register_proxy_secret(redactor: Redactor, value: str) -> None:
+    """Proxy URLs may carry ``user:pass@``; keep the password out of logs."""
+    if "@" not in value:
+        return
+    authority = value.split("://", 1)[-1].split("/", 1)[0]
+    userinfo = authority.rsplit("@", 1)[0] if "@" in authority else ""
+    if not userinfo:
+        return
+    redactor.add(userinfo)
+    if ":" in userinfo:
+        password = userinfo.split(":", 1)[1]
+        if password:
+            redactor.add(password)
+
+
 def build_env(
     *,
     ambient: Mapping[str, str],
@@ -158,6 +174,7 @@ def build_env(
             for name in (base, base.lower()):
                 if name in ambient and isinstance(ambient[name], str):
                     values[name] = ambient[name]
+                    _register_proxy_secret(redactor, ambient[name])
 
     values["OPENCODE_CONFIG"] = str(config_path)
     values["XDG_DATA_HOME"] = str(data_dir)
@@ -286,6 +303,25 @@ def _check_layer(
                     "command-key-overridden",
                     "%s defines command.%s, which would alter an installed command" % (shown, name),
                 )
+    # OpenCode folds every legacy ``mode.NAME`` into ``agent.NAME`` after all
+    # layers merge, so the fold applies at every rank, the global one included.
+    modes = doc.get("mode")
+    if isinstance(modes, dict):
+        compiled_agents = compiled_doc.get("agent")
+        compiled_agent_names = compiled_agents if isinstance(compiled_agents, dict) else {}
+        for name in modes:
+            if name in compiled_agent_names or str(name).startswith(_OWNED_PREFIX):
+                raise _refuse(
+                    "policy-denial",
+                    "protected-key-overridden",
+                    "%s overrides mode.%s, which the compiled configuration controls" % (shown, name),
+                )
+    elif "mode" in doc and compiled_doc.get("agent"):
+        raise _refuse(
+            "policy-denial",
+            "protected-key-overridden",
+            "%s sets mode to a non-object value" % shown,
+        )
     if below_compiled:
         return
 
@@ -303,7 +339,17 @@ def _check_layer(
             "%s sets $schema to a value other than the expected %s"
             % (shown, compiler.CONFIG_SCHEMA_URL),
         )
-    for dotted in ("model", "small_model", "share", "autoupdate", "enabled_providers", "experimental.policies"):
+    for dotted in (
+        "model",
+        "small_model",
+        "share",
+        "autoupdate",
+        "enabled_providers",
+        "experimental.policies",
+        "permission",
+        "tools",
+        "plugin",
+    ):
         if _dotted_present(doc, dotted):
             raise overridden(dotted)
     for key in ("agent", "provider"):
@@ -472,6 +518,26 @@ def _check_markdown(
             "owned-file-drift",
             "%s differs from the installed copy; reinstall or restore it" % shown(path),
         )
+
+    # Plugin files under a config directory load automatically and can hook
+    # permission requests, so any of them defeats the approval contract.
+    for base in unique + [managed_root]:
+        for sub in _PLUGIN_SUBDIRS:
+            directory = base / sub
+            try:
+                populated = os.path.isdir(str(directory)) and any(True for _ in os.scandir(str(directory)))
+            except OSError:
+                raise _refuse(
+                    "invalid-configuration",
+                    "config-layer-unreadable",
+                    "%s could not be read" % shown(directory),
+                ) from None
+            if populated:
+                raise _refuse(
+                    "policy-denial",
+                    "plugin-directory-present",
+                    "%s holds plugin files, which could loosen permission handling" % shown(directory),
+                )
 
     for base in unique:
         for path, _name in _markdown_files(base, _AGENT_SUBDIRS, shown):
