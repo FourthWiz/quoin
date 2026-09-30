@@ -472,39 +472,82 @@ def test_neutral_cwd_never_the_shared_temp_dir(ar, tmp_path, monkeypatch):
     assert cwd != str(fake_shared_tmp)
 
 
-def test_neutral_cwd_accepts_a_private_deploy_root(tmp_path):
+def test_neutral_cwd_is_the_filesystem_root(ar):
+    """The cwd is the filesystem root: root-owned, never group- or
+    other-writable on a sane host, and never repository or user content."""
+    assert ar._neutral_cwd() == os.path.abspath(os.sep)
+
+
+def test_neutral_cwd_unaffected_by_a_group_writable_deploy_root(tmp_path):
+    """Hosts with user-private groups and a 002 umask leave ~/.claude
+    group-writable by the user's own group. That is not an exposure, and it
+    must not stop the hand-off: the deploy root is simply not the cwd."""
     ar_at, deploy_root = _ar_at_deploy(tmp_path)
-    os.chmod(deploy_root, 0o700)
-    assert ar_at._neutral_cwd() == str(deploy_root)
+    os.chmod(deploy_root, 0o775)
+    assert ar_at._neutral_cwd() == os.path.abspath(os.sep)
 
 
-def test_neutral_cwd_rejects_group_or_world_writable_deploy_root(tmp_path):
-    """A deploy root a hand-off's own user doesn't fully control (e.g. a
-    shared project checkout with a lax umask) must never be used as cwd —
-    that's the same hazard as the world-writable temp dir this fix closes."""
-    ar_at, deploy_root = _ar_at_deploy(tmp_path)
-    os.chmod(deploy_root, 0o777)
-    assert ar_at._neutral_cwd() is None
-
-
-def test_neutral_cwd_rejects_deploy_root_that_is_a_symlink(tmp_path):
+def test_neutral_cwd_unaffected_by_a_symlinked_deploy_root(tmp_path):
     ar_at, deploy_root = _ar_at_deploy(tmp_path)
     real_dir = tmp_path / "real-elsewhere"
     real_dir.mkdir()
-    os.chmod(real_dir, 0o700)
     import shutil as _shutil
     _shutil.rmtree(deploy_root)
     deploy_root.symlink_to(real_dir)
-    assert ar_at._neutral_cwd() is None
+    assert ar_at._neutral_cwd() == os.path.abspath(os.sep)
 
 
-def test_neutral_cwd_none_when_deploy_root_missing(ar):
-    """_deploy_root() returns None outside the deploy layout (e.g. this
-    module loaded ad hoc, as most tests in this file do via `ar`) —
-    _neutral_cwd() must fail closed, never fall back to a shared dir."""
+def test_neutral_cwd_independent_of_deploy_root(ar):
     import unittest.mock
     with unittest.mock.patch.object(ar, "_deploy_root", return_value=None):
-        assert ar._neutral_cwd() is None
+        assert ar._neutral_cwd() == os.path.abspath(os.sep)
+
+
+def _fake_stat(mode: int, uid: int):
+    return os.stat_result((mode, 1, 1, 1, uid, 0, 4096, 0, 0, 0))
+
+
+def test_neutral_cwd_rejects_a_root_other_users_can_write(ar, monkeypatch):
+    """Fail closed, never fall back to a shared directory, if the root
+    itself is writable by group or other (or is not a plain directory)."""
+    monkeypatch.setattr(ar.os, "lstat", lambda p: _fake_stat(stat.S_IFDIR | 0o777, 0))
+    assert ar._neutral_cwd() is None
+    monkeypatch.setattr(ar.os, "lstat", lambda p: _fake_stat(stat.S_IFDIR | 0o775, 0))
+    assert ar._neutral_cwd() is None
+    monkeypatch.setattr(ar.os, "lstat", lambda p: _fake_stat(stat.S_IFLNK | 0o755, 0))
+    assert ar._neutral_cwd() is None
+
+
+def test_neutral_cwd_rejects_a_root_owned_by_another_ordinary_user(ar, monkeypatch):
+    other_uid = os.getuid() + 1 if os.getuid() != 0 else 1234
+    monkeypatch.setattr(ar.os, "lstat", lambda p: _fake_stat(stat.S_IFDIR | 0o755, other_uid))
+    assert ar._neutral_cwd() is None
+    monkeypatch.setattr(ar.os, "lstat", lambda p: _fake_stat(stat.S_IFDIR | 0o755, os.getuid()))
+    assert ar._neutral_cwd() == os.path.abspath(os.sep)
+
+
+def test_snippets_import_nothing_but_sys_and_os_before_the_path_strip(ar):
+    """`runpy` is not frozen before Python 3.11, so importing it before the
+    strip would resolve it through the cwd; only the start-up modules
+    `sys` and `os` may be imported first, and the strip must precede every
+    other statement."""
+    import ast
+    for snippet in (ar._PROBE_SNIPPET, ar._SPAWN_BOOTSTRAP):
+        tree = ast.parse(snippet)
+        stripped = False
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Subscript) and isinstance(t.value, ast.Attribute)
+                and t.value.attr == "path" for t in node.targets
+            ):
+                stripped = True
+                continue
+            if stripped:
+                continue
+            assert isinstance(node, (ast.Import, ast.Assign)), ast.dump(node)
+            if isinstance(node, ast.Import):
+                assert {a.name for a in node.names} <= {"sys", "os"}, ast.dump(node)
+        assert stripped, snippet
 
 
 def test_resolve_cli_stale_when_no_safe_cwd_available(ar, tmp_path, monkeypatch):
@@ -521,7 +564,8 @@ def test_resolve_cli_stale_when_no_safe_cwd_available(ar, tmp_path, monkeypatch)
 
     assert res["status"] == "stale"
     assert res["kind"] == "no-safe-cwd"
-    assert "quoin install" in res["message"]
+    assert "chmod go-w /" in res["message"]
+    assert "quoin install" not in res["message"]
 
 
 def test_probe_project_root_is_quoin_repo_itself_still_resolves(ar, tmp_path, monkeypatch):

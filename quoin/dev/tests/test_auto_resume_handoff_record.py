@@ -14,6 +14,13 @@ from pathlib import Path
 
 import pytest
 
+
+def _fresh_updated_at() -> str:
+    """A run-state record is only considered live for a limited window, so
+    a fixed timestamp would silently expire and turn these tests red."""
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _CORE_PATH = REPO_ROOT / "quoin" / "core" / "scripts" / "auto_resume.py"
 
@@ -67,7 +74,7 @@ def _write_record(memory_dir: Path, task: str, session_id: str, **overrides) -> 
         "at_stage_boundary": False, "route": "", "profile": "", "artifacts": [],
         "next_action": "", "resume_command": f"/run --resume {task}",
         "notes_path": str(memory_dir / f"run-notes-{task}.md"),
-        "updated_at": overrides.pop("updated_at", "2026-09-29T00:00:00+00:00"),
+        "updated_at": overrides.pop("updated_at", _fresh_updated_at()),
     }
     record.update(overrides)
     (memory_dir / f"run-state-{task}.json").write_text(json.dumps(record), encoding="utf-8")
@@ -221,12 +228,13 @@ def test_handoff_spawn_cwd_is_not_project_root(ar, project, monkeypatch, capsys)
     assert argv[argv.index("--project-root") + 1] == str(project.resolve())
 
 
-def test_handoff_spawn_cwd_is_owned_by_current_user_and_not_group_or_world_writable(
+def test_handoff_spawn_cwd_is_not_writable_by_other_users(
     ar, project, monkeypatch, capsys,
 ):
     """The directory the detached supervisor actually spawns into must be
-    the same private, verified directory _neutral_cwd() picks — never
-    something an attacker-controlled other local user could write into."""
+    the verified directory _neutral_cwd() picks: owned by root or by the
+    current user, never writable by group or other, never repository
+    content."""
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
@@ -247,9 +255,11 @@ def test_handoff_spawn_cwd_is_owned_by_current_user_and_not_group_or_world_writa
     assert rc == 0
     assert capsys.readouterr().out.strip().startswith("HANDOFF|")
     cwd = captured[0]
+    assert cwd == os.path.abspath(os.sep)
+    assert not cwd.startswith(str(project))
     st = os.lstat(cwd)
     assert not stat.S_ISLNK(st.st_mode)
-    assert st.st_uid == os.getuid()
+    assert st.st_uid in (0, os.getuid())
     assert not st.st_mode & (stat.S_IWGRP | stat.S_IWOTH)
 
 
@@ -281,6 +291,28 @@ def test_handoff_denied_when_no_safe_cwd_available(ar, project, monkeypatch, cap
     assert rc == 0
     assert capsys.readouterr().out.strip() == "DENIED|cwd"
     assert not (memory / "run-supervisor-demo.pid").exists()
+
+
+def test_handoff_legacy_launch_is_never_denied_for_the_cwd(ar, project, monkeypatch, capsys):
+    """A no-record install launches the console script, which never puts
+    its cwd on sys.path, so it needs no safe cwd: even when none can be
+    found it must hand off exactly as it did before records existed."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    monkeypatch.setattr(ar, "_which", lambda name: "/usr/bin/quoin")
+    monkeypatch.setattr(ar, "_neutral_cwd", lambda: None)
+
+    captured = []
+
+    class _FakeProc:
+        pid = 778
+
+    monkeypatch.setattr(ar, "_popen", lambda argv, **kw: captured.append(kw.get("cwd")) or _FakeProc())
+    rc = ar._cmd_handoff(_Args(project_root=str(project), task="demo", reason="budget", on_fail_halt=None))
+    assert rc == 0
+    assert capsys.readouterr().out.strip().startswith("HANDOFF|")
+    assert captured[0] == str(project.resolve())
 
 
 def test_handoff_budget_reason_no_halt_writes_notes_only(ar, project, monkeypatch, capsys):

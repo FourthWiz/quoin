@@ -176,6 +176,50 @@ def test_spawn_bootstrap_ignores_hostile_package_in_cwd(tmp_path):
     assert proc.stdout.strip() == f"quoin {quoin.__version__}"
 
 
+def test_snippets_ignore_hostile_cwd_reached_through_empty_pythonpath_element(tmp_path):
+    """An empty PYTHONPATH element (`:/x`, the usual result of appending to
+    an unset variable) puts the absolute cwd on sys.path a second time,
+    after index 0. Both snippets must drop every cwd entry, so a hostile
+    `quoin/` package and a planted `runpy.py` in the cwd are never
+    imported by either the probe or the spawn bootstrap."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "auto_resume_e2e_empty_pythonpath", QUOIN_SRC / "core" / "scripts" / "auto_resume.py"
+    )
+    ar = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ar)
+
+    hostile_dir = tmp_path / "hostile-cwd"
+    hostile_dir.mkdir()
+    marker = tmp_path / "marker.txt"
+    (hostile_dir / "quoin").mkdir()
+    (hostile_dir / "quoin" / "__init__.py").write_text(
+        f"open({str(marker)!r}, 'w').write('quoin')\n", encoding="utf-8",
+    )
+    (hostile_dir / "quoin" / "__main__.py").write_text("print('HOSTILE MAIN RAN')\n", encoding="utf-8")
+    (hostile_dir / "runpy.py").write_text(
+        f"open({str(marker)!r}, 'w').write('runpy')\n", encoding="utf-8",
+    )
+    env = {"PATH": "/usr/bin:/bin", "PYTHONPATH": os.pathsep + str(SRC)}
+
+    probe = subprocess.run(
+        [sys.executable, "-c", ar._PROBE_SNIPPET],
+        cwd=str(hostile_dir), env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert not marker.exists(), marker.read_text() if marker.exists() else ""
+    assert probe.returncode == 0, probe.stderr
+    assert f"QUOIN_VERSION={quoin.__version__}" in probe.stdout
+
+    spawn = subprocess.run(
+        [sys.executable, "-c", ar._SPAWN_BOOTSTRAP, "--version"],
+        cwd=str(hostile_dir), env=env, capture_output=True, text=True, timeout=10,
+    )
+    assert not marker.exists(), marker.read_text() if marker.exists() else ""
+    assert "HOSTILE MAIN RAN" not in spawn.stdout
+    assert spawn.returncode == 0, spawn.stderr
+    assert spawn.stdout.strip() == f"quoin {quoin.__version__}"
+
+
 # ── real venv: pip/uv-venv/uv-tool/pipx-style install ───────────────────────
 
 
@@ -254,7 +298,7 @@ def test_stop_hook_stays_within_budget_when_interpreter_hangs(tmp_path):
         "at_stage_boundary": False, "route": "", "profile": "", "artifacts": [],
         "next_action": "", "resume_command": "/run --resume demo",
         "notes_path": str(memory / "run-notes-demo.md"),
-        "updated_at": "2026-09-29T00:00:00+00:00",
+        "updated_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
     }), encoding="utf-8")
     (memory / "run-continue-arm-sid-1.txt").touch()
     counter = {

@@ -863,7 +863,13 @@ def _do_handoff(
         "--halt-on-abort", "--max-relaunch", str(remaining),
     ]
     neutral_cwd = _neutral_cwd()
-    if neutral_cwd is None:
+    if res["source"] == "legacy":
+        # The console-script launch never puts its cwd on sys.path, so it
+        # needs no safe cwd; a no-record install must hand off exactly as
+        # it did before records existed, never be refused for this reason.
+        if neutral_cwd is None:
+            neutral_cwd = str(Path(project_root).resolve())
+    elif neutral_cwd is None:
         try:
             log_fh.close()
         except OSError:
@@ -882,11 +888,11 @@ def _do_handoff(
         proc = _popen(
             argv,
             # Not project_root: the argv above runs quoin via a small
-            # bootstrap (see _SPAWN_BOOTSTRAP) rather than `python -m
-            # quoin` directly, but both forms put the working directory
-            # first on sys.path, ahead of the recorded interpreter's own
-            # site-packages (see _neutral_cwd). The child still learns the
-            # real project root from --project-root above.
+            # bootstrap (see _SPAWN_BOOTSTRAP) that drops the working
+            # directory from sys.path before importing anything, and the
+            # cwd itself is one no other user can write to (see
+            # _neutral_cwd). The child still learns the real project root
+            # from --project-root above.
             cwd=neutral_cwd,
             stdin=subprocess.DEVNULL,
             stdout=log_fh,
@@ -938,28 +944,41 @@ def _do_handoff(
 RUNTIME_RECORD_FILENAME = "quoin-runtime.json"
 RUNTIME_RECORD_SCHEMA = 1
 _RECORD_MAX_BYTES = 16384
-_PROBE_SNIPPET = (
-    "import sys\n"
-    "if sys.path and sys.path[0] in ('', '.'):\n"
-    "    del sys.path[0]\n"
+# Shared prologue of the two child-interpreter snippets below. `-c` and
+# `-m` both put the working directory on sys.path ahead of the recorded
+# interpreter's own site-packages — as `''` at index 0, and again as the
+# absolute cwd wherever the inherited PYTHONPATH has an empty element
+# (the common `PYTHONPATH=$PYTHONPATH:/x` idiom with it unset yields
+# `:/x`). Every entry that names the cwd is dropped, not only index 0.
+# Only `sys` and `os` may be imported before the strip: both are loaded
+# during interpreter start-up, so they can't be shadowed from the cwd,
+# whereas `runpy` is not frozen before 3.11 and would be resolved through
+# the still-unstripped path. The recorded interpreter may be any Python
+# version quoin supports, so this can't lean on `-P`/PYTHONSAFEPATH
+# (3.11+ only) or `-I` (which would also drop the recorded PYTHONPATH a
+# Tier-2 install depends on).
+_SYS_PATH_STRIP = (
+    "import sys, os\n"
+    "_cwd = os.path.realpath(os.getcwd())\n"
+    "sys.path[:] = [p for p in sys.path"
+    " if p not in ('', '.') and os.path.realpath(p) != _cwd]\n"
+)
+_PROBE_SNIPPET = _SYS_PATH_STRIP + (
     "import quoin, quoin.cli\n"
     "sys.stdout.write('\\nQUOIN_VERSION=' + quoin.__version__ + '\\n')\n"
 )
-# Used instead of `-m quoin` for the detached supervisor spawn. `-m`, like
-# `-c` above, puts the working directory first on sys.path; the recorded
-# interpreter may be any Python version quoin supports, so this can't lean
-# on `-P`/PYTHONSAFEPATH (3.11+ only) or `-I` (which would also drop the
-# recorded PYTHONPATH a Tier-2 install depends on). Running the same
-# sys.path strip through `-c` before handing off to runpy keeps the fix
-# identical on every supported version.
-_SPAWN_BOOTSTRAP = (
-    "import sys, runpy\n"
-    "if sys.path and sys.path[0] in ('', '.'):\n"
-    "    del sys.path[0]\n"
+# Used instead of `-m quoin` for the detached supervisor spawn, so the same
+# strip runs first on every supported version.
+_SPAWN_BOOTSTRAP = _SYS_PATH_STRIP + (
+    "import runpy\n"
     "runpy.run_module('quoin', run_name='__main__', alter_sys=True)\n"
 )
 _VERSION_TOKEN_RE = re.compile(r"^QUOIN_VERSION=(\S+)\s*$", re.M)
 _REMEDY = "re-run 'quoin install' (same scope) and check 'quoin doctor'"
+_NO_SAFE_CWD_REMEDY = (
+    "fix the permissions on the filesystem root (for example 'chmod go-w /'); "
+    "reinstalling will not help"
+)
 # Start/stop callers act on a live knob, so the remedy names it. Handoff and
 # cli-check ignore the knob (fixed 8 s budget), so naming it would mislead.
 _TIMEOUT_REMEDY_KNOB = (
@@ -979,47 +998,40 @@ def _reset_cli_memo() -> None:
 
 
 def _neutral_cwd() -> Optional[str]:
-    """cwd for the probe and the supervisor spawn — never the caller's own
-    project root, and never a directory any other local user can write to.
-    ``-c`` and ``-m`` both put the working directory first on ``sys.path``,
-    ahead of the recorded interpreter's own site-packages, so a
-    project-supplied ``quoin.py`` or ``quoin/`` package sitting at the
-    project root would otherwise be imported (and run) instead of the real
-    installed package — and the system temp directory has the same
-    problem on a shared host: it's world-writable by default on Linux, and
-    on macOS too whenever TMPDIR is unset, so another local user could
-    plant a package there for every hand-off to pick up.
+    """cwd for the probe and the supervisor spawn: the filesystem root.
 
-    Uses the quoin deploy root instead (the directory ``quoin install``
-    created, e.g. ``~/.claude/``): it already exists, was created by
-    whoever ran the install, holds no ``quoin`` module or package of its
-    own (so it can't shadow the import itself), and needs no per-launch
-    creation or cleanup — unlike a fresh ``mkdtemp()`` per launch, which
-    would have to keep living after this function returns, since the
-    supervisor spawn is detached and outlives this process. Before
-    trusting it, verify by ``lstat`` that it is a real directory (not a
-    symlink another user could have swapped in), owned by the current
-    user, and not writable by group or other — the same properties that
-    make the shared temp dir unsafe. Returns ``None`` if the deploy root
-    can't be found or fails that check; callers must treat that as a
+    The child's own sys.path strip (see _SYS_PATH_STRIP) is what stops the
+    working directory from being imported; the cwd choice is a second
+    layer, so it must be a directory that no other local user can write
+    to and that is never repository or user content. The caller's project
+    root fails the second test (a checkout can ship a ``quoin/`` package),
+    the system temp directory fails the first (world-writable by default
+    on Linux, and on macOS whenever TMPDIR is unset), and the deploy root
+    fails both in some legitimate setups: under project scope it lives
+    inside the checkout, and on hosts with user-private groups and a 002
+    umask it is group-writable by the user's own group, which is harmless
+    but indistinguishable here from a real exposure. The filesystem root
+    is root-owned and not group- or other-writable on every sane host,
+    needs no per-launch creation or cleanup (the supervisor spawn is
+    detached and outlives this process), and can never be repository
+    content. It is still verified rather than assumed: a real directory,
+    owned by root or by the current user, with no group or other write
+    bit. Returns ``None`` if that check fails; callers treat that as a
     resolver failure and never fall back to a shared directory.
     ``--project-root`` is still passed to the spawned process explicitly,
     so it learns the real project root without needing it as its cwd."""
-    root = _deploy_root()
-    if root is None:
-        return None
-    root_str = str(root)
+    root = os.path.abspath(os.sep)
     try:
-        st = os.lstat(root_str)
+        st = os.lstat(root)
     except OSError:
         return None
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
         return None
-    if st.st_uid != os.getuid():
+    if st.st_uid not in (0, os.getuid()):
         return None
     if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         return None
-    return root_str
+    return root
 
 
 def _deploy_root() -> Optional[Path]:
@@ -1278,8 +1290,10 @@ def _resolve_cli_uncached(project_root, caller: str) -> dict:
         base.update(
             source="record", status="stale", kind="no-safe-cwd",
             message=_build_message(
-                "could not find a private, user-owned directory to run the version probe from",
-                _REMEDY,
+                "the filesystem root is not a safe directory to run the version probe from "
+                "(it must be a real directory owned by root or by you, with no group or "
+                "other write permission)",
+                _NO_SAFE_CWD_REMEDY,
             ),
         )
         return base
