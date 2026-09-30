@@ -327,7 +327,7 @@ class LaunchResult:
 #: Prefix of the run-notes line that records each headless child launch.
 CHILD_NOTE_PREFIX = "[quoin-autonomous-child]"
 
-_SPACE_RUN_RE = re.compile(r"\s{2,}")
+_SPACE_RUN_RE = re.compile(r" {2,}")
 
 
 def is_child_session_id(s: object) -> bool:
