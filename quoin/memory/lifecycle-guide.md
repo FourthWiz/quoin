@@ -155,7 +155,7 @@ Detail relocated from `cleanup/SKILL.md` to keep it under its byte ceiling (IVG-
 
 | Dimension | /cleanup | /sleep --purge --sentinels |
 |---|---|---|
-| Delete mechanism | `trash_move` (recoverable, to `trash/<date>/`) | `rm -f` (permanent delete) |
+| Delete mechanism | `trash_move` (recoverable, to `trash/<date>/`) | permanent delete (`fsops.py rm`) |
 | Selection logic | keep-freshest (UUID skip) + age (`QUOIN_CLEANUP_SENTINEL_WINDOW`, default 1d) | age-only (`--older-than Nd`, explicit argument required) |
 | Current session | always preserved (UUID-suffix skip BEFORE age check) | no special protection |
 | Auto-fire | yes (from `/checkpoint` Step 1.47, default-on) | no (requires explicit invocation) |

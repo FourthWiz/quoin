@@ -128,7 +128,7 @@ def test_discover_suppression_guard_phrase():
 def test_discover_self_clear_step_present():
     text = _read(DISCOVER_SKILL_MD)
     assert "DELETE the marker" in text
-    assert f"rm -f {MARKER_PATH}" in text
+    assert f'fsops.py rm "{MARKER_PATH}"' in text
 
 
 def test_discover_absent_draft_and_exists_refresh_diff_branches():
@@ -144,7 +144,7 @@ def test_discover_absent_draft_and_exists_refresh_diff_branches():
 # de-dup AND stale-recovery wiring (not just prose) by asserting the shared
 # marker-path literal appears at every mechanism site in BOTH adapter
 # SKILL.md files, and that discover's occurrence includes the RECOVERY
-# (rm -f / self-clear) step specifically — not merely a marker CHECK.
+# (fsops.py rm / self-clear) step specifically — not merely a marker CHECK.
 # ===========================================================================
 
 def test_marker_token_occurrence_floor_init_workflow():
@@ -171,12 +171,12 @@ def test_discover_recovery_token_present_not_check_only():
     """A marker-check-only discover (no self-clear) MUST fail this test.
 
     This asserts the RECOVERY token specifically: the literal
-    `rm -f .workflow_artifacts/.init-bootstrap-active` co-located with the
+    `fsops.py rm ".workflow_artifacts/.init-bootstrap-active"` co-located with the
     marker path, proving discover actually consumes-and-clears the marker
     rather than merely checking for its presence.
     """
     text = _read(DISCOVER_SKILL_MD)
-    recovery_token = f"rm -f {MARKER_PATH}"
+    recovery_token = f'fsops.py rm "{MARKER_PATH}"'
     assert recovery_token in text, (
         "discover SKILL.md is missing the marker self-clear (recovery) step — "
         f"expected literal '{recovery_token}'. A discover that only CHECKS the "

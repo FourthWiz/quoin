@@ -531,7 +531,7 @@ the authoritative source.
 
 **Suppression guard FIRST (self-clear-on-honor):** check for the bootstrap marker file `.workflow_artifacts/.init-bootstrap-active`. If it EXISTS:
 1. Suppress this entire offer.
-2. Immediately DELETE the marker as part of this same step: `rm -f .workflow_artifacts/.init-bootstrap-active`.
+2. Immediately DELETE the marker as part of this same step: `python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"`.
 
 This self-clear IS the stale-recovery mechanism — it bounds the marker's lifetime to exactly one `/discover` invocation, so even if a prior `/init_workflow` aborted before its Step-6.7 cleanup (e.g. the Step-6.5 Serena "Install Serena" session-restart path), the NEXT `/discover` consumes-and-clears the marker instead of suppressing the offer forever. After clearing, print one advisory line that does NOT assert an active bootstrap (accurate whether the marker came from a live bootstrap or was consumed as stale):
 
@@ -539,7 +539,7 @@ This self-clear IS the stale-recovery mechanism — it bounds the marker's lifet
 [quoin: repo-spec offer suppressed — bootstrap marker present; marker cleared]
 ```
 
-Then proceed to the "Tell the user" summary below. This is a file-existence check, so it works whether `/discover` runs inline or is dispatched as a subagent. (Init's Step-6.7 `rm -f` remains a harmless belt-and-suspenders no-op.)
+Then proceed to the "Tell the user" summary below. This is a file-existence check, so it works whether `/discover` runs inline or is dispatched as a subagent. (Init's Step-6.7 marker removal remains a harmless belt-and-suspenders no-op.)
 
 Only when the marker is ABSENT does the offer proceed:
 
@@ -547,10 +547,10 @@ Only when the marker is ABSENT does the offer proceed:
 
 - If `.workflow_artifacts/spec.md` is ABSENT: `AskUserQuestion` offering to DRAFT a repo main spec from the freshly discovered structure plus a short user prompt ("what is this repo about?").
   - Decline → one-line advisory, no file, no error.
-  - Accept → compose the five repo-spec headings (`## Context`, `## Goals`, `## Capabilities`, `## Acceptance criteria`, `## Non-goals`) grounded in the just-written inventory files, write via `<path>.tmp` + atomic `mv` to `.workflow_artifacts/spec.md`, then `python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0.
+  - Accept → compose the five repo-spec headings (`## Context`, `## Goals`, `## Capabilities`, `## Acceptance criteria`, `## Non-goals`) grounded in the just-written inventory files, write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then `python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0.
 - If `.workflow_artifacts/spec.md` EXISTS: `AskUserQuestion` offering to REFRESH it from the current structure.
   - On accept, draft the updated spec, surface a DIFF against the existing file, and require explicit confirmation before writing — never overwrite silently.
-  - On confirm, write via `<path>.tmp` + atomic `mv`, then `validate_artifact.py` exit 0.
+  - On confirm, write `<path>.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"`, then `validate_artifact.py` exit 0.
   - Decline → one-line advisory, no write, no error.
 
 Tell the user:

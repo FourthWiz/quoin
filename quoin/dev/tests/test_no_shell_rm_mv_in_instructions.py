@@ -194,3 +194,38 @@ def test_corpus_is_large_and_includes_known_files():
     assert len(files) >= 30
     assert "quoin/adapters/claude/skills/plan/SKILL.md" in files
     assert "quoin/memory/cost-ledger-format.md" in files
+
+
+# ---------------------------------------------------------------- corpus checks
+
+
+def _allowlisted(finding) -> bool:
+    return any(
+        finding.relpath == rel and literal in finding.raw
+        for rel, literal in HUMAN_RUN_COMMAND_HINTS + DESCRIBES_HOOK_OR_HUMAN_BEHAVIOR
+    )
+
+
+def test_instruction_corpus_has_no_shell_rm_mv():
+    left = [f for f in scan_corpus() if not _allowlisted(f)]
+    assert not left, "shell rm/rmdir/mv in instruction files:\n" + "\n".join(
+        f"{f.relpath}:{f.line}: {f.segment}" for f in left
+    )
+
+
+def test_allowlist_entries_are_live():
+    findings = scan_corpus()
+    for rel, literal in HUMAN_RUN_COMMAND_HINTS + DESCRIBES_HOOK_OR_HUMAN_BEHAVIOR:
+        path = REPO_ROOT / rel
+        assert path.exists(), f"allowlist file missing: {rel}"
+        assert literal in path.read_text(encoding="utf-8"), f"allowlist literal gone: {rel}: {literal}"
+        assert any(f.relpath == rel and literal in f.raw for f in findings), (
+            f"stale allowlist entry (no finding uses it): {rel}: {literal}"
+        )
+
+
+def test_appending_a_shell_rm_to_any_scanned_file_is_caught():
+    for path in corpus_files():
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        assert len(scan_text(rel, text + "\nrm -f x\n")) == len(scan_text(rel, text)) + 1, rel

@@ -424,8 +424,7 @@ resumable on the next `/thorough_plan` invocation:
 
 ```bash
 _MEM="{project-root}/.workflow_artifacts/memory"
-rm -f "$_MEM/checkpoints/thorough-plan-progress-$_TPCKPT_SID.md" || true
-rm -f "$_MEM/pending-restore-$_TPCKPT_SID.txt" || true
+python3 __QUOIN_HOME__/scripts/fsops.py rm "$_MEM/checkpoints/thorough-plan-progress-$_TPCKPT_SID.md" "$_MEM/pending-restore-$_TPCKPT_SID.txt" || true
 ```
 
 If cleanup fails, log a one-line warning and continue — fail-OPEN. (`$_TPCKPT_SID` is the SID

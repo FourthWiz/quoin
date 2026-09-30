@@ -467,7 +467,7 @@ This deletes only the sentinel pointer; the underlying checkpoint file (if any) 
 [y / n]
 ```
 
-On `y`: `rm -f <path>`; emit "deleted <path>". On `n`: emit "skipped <path>".
+On `y`: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>"`; emit "deleted <path>". On `n`: emit "skipped <path>".
 
 At end: emit "Done. <deleted_count> deleted, <skipped_count> skipped."
 
