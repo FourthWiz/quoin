@@ -39,6 +39,7 @@ def _fake_launch_fn(project_root: Path, task: str):
     """Writes the done sentinel on its first call and snapshots the
     environment `claude` would have inherited at launch time."""
     seen = {}
+    seen["launcher_kwargs"] = {}
 
     def fn(t):
         seen["environ"] = dict(os.environ)
@@ -50,8 +51,17 @@ def _fake_launch_fn(project_root: Path, task: str):
 
 def _run(monkeypatch, project, task="demo"):
     fn = _fake_launch_fn(project, task)
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fn)
+    def _make(project_root, permission_mode=None, **kwargs):
+        fn.seen["launcher_kwargs"] = kwargs
+        return fn
+
+    monkeypatch.setattr(sup, "make_launch_fn", _make)
     code = cli.main(["run", "--autonomous", task, "--project-root", str(project)])
+    # The env handed to the launcher is a snapshot taken after the strip, so
+    # it must agree with what the launch saw in os.environ.
+    passed = fn.seen["launcher_kwargs"]["env"]
+    assert passed.get("PYTHONPATH") == fn.seen["environ"].get("PYTHONPATH")
+    assert passed["QUOIN_HEADLESS_CHILD"] == "1"
     return code, fn.seen["environ"]
 
 
