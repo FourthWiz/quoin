@@ -66,6 +66,8 @@ def test_entry_names_both_points_and_keys_on_plan(entry):
     assert "plan_tasks.py" in entry and "`ALLDONE|`" in entry
     assert "implement.done` is absent" in entry
     assert "alone never qualifies" in entry
+    condition = entry[entry.index("Condition:"):entry.index("The marker")]
+    assert "implement.tasks.done" not in condition
 
 
 def test_second_point_return_shapes(entry):
@@ -118,6 +120,7 @@ def test_uniqueness_of_headings(text):
 def test_escalation_sites_enumerate_python_side(escalation_step4, text):
     assert "implement.*.done" in escalation_step4 and "glob" in escalation_step4
     assert "implement.tasks.done" in escalation_step4
+    assert "and any other `implement.*.done`" in " ".join(escalation_step4.split())
     for marker in ("AND `autonomous-progress-{task}/implement.done`", "AND `autonomous-progress-{task}/implement.done`"):
         assert marker in text
     phase5 = text[text.index("## Phase 5 — Review"):text.index("## Phase 6 — End of Task")]
