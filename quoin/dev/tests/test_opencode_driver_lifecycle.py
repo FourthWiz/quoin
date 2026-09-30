@@ -294,15 +294,35 @@ def test_spawn_failure_leaves_the_run_interrupted(tmp_path):
 
 
 def test_seeded_secret_never_persisted(tmp_path):
+    import hashlib
+    import json
+
     secret = "sk-FAKEECHOSECRET0123456789"
     prepared = h.make_prepared(tmp_path, "secret_echo", secret=secret)
     assert secret not in repr(prepared)
     drv = h.make_driver(tmp_path)
     handle, events = h.run_to_end(drv, prepared)
     store = h.store_of(tmp_path)
-    for path in store.iterdir():
+    files = list(store.iterdir())
+    assert files
+    for path in files:
         assert secret not in path.read_text(), path.name
+    for ev_ in events:
+        assert secret not in json.dumps(ev_.to_dict(), default=str)
+    record = h.load_record(tmp_path, prepared.run_id)
+    assert secret not in json.dumps(record, default=str)
     assert secret not in "\n".join(map(str, prepared.argv))
+    state = h.state_of(tmp_path)
+    invocations = (state / "invocations.jsonl").read_text()
+    assert secret not in invocations
+    recorded = json.loads(invocations.splitlines()[0])
+    assert secret not in " ".join(recorded["argv"]) and "PROV_KEY" in recorded["env_names"]
+    # The value reached the child (only its hash was written), and nowhere else.
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    assert ("PROV_KEY %s" % digest) in (state / "env-hashes.txt").read_text().splitlines()
+    for path in state.rglob("*"):
+        if path.is_file() and path.name != "scenario.json":
+            assert secret not in path.read_text(errors="replace"), path.name
 
 
 def test_a_late_stderr_notice_is_read_before_the_attempt_is_classified(tmp_path):

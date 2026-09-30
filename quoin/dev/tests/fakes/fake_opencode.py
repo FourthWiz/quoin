@@ -23,6 +23,7 @@ kind should exercise it.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -191,6 +192,7 @@ def _transient_error_then_continue() -> Dict[str, Any]:
 def _secret_echo(secret: str = "sk-FAKEECHOSECRET0123456789") -> Dict[str, Any]:
     return _scenario(
         _step_start("prt_s1"),
+        {"do": "hash_env", "name": "PROV_KEY"},
         _text("prt_t1", "text carries " + secret),
         _tool_done("prt_b1", "bash", title="title carries " + secret),
         {"do": "stderr", "text": "stderr carries " + secret},
@@ -544,6 +546,11 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
             (state / "stop").write_text("", encoding="utf-8")
         elif verb == "stderr":
             _err(step["text"] + ("\n" if step.get("newline", True) else ""))
+        elif verb == "hash_env":
+            value = os.environ.get(step["name"], "")
+            digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+            with open(state / "env-hashes.txt", "a", encoding="utf-8") as fh:
+                fh.write("%s %s\n" % (step["name"], digest))
         elif verb == "sleep":
             time.sleep(float(step["seconds"]))
         elif verb == "hang":

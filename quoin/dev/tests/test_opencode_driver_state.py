@@ -314,3 +314,24 @@ def test_prepared_run_hides_secrets_and_exceptions_carry_fields(tmp_path):
     assert (err.category, err.code, err.message, err.run_id, str(err)) == ("policy-denial", "code", "msg", RUN_ID, "msg")
     blocked = d.ResumeBlocked("effect-uncertain", RUN_ID)
     assert (blocked.reason, blocked.run_id) == ("effect-uncertain", RUN_ID)
+
+
+@pytest.mark.parametrize("module", ["proctree", "runstore", "launch_env", "driver"])
+def test_new_modules_do_not_import_the_cli_or_the_supervisor(module):
+    import ast
+
+    path = Path(d.__file__).with_name(module + ".py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            base = "." * node.level + (node.module or "")
+            imported.add(base)
+            imported.update(base + "." + alias.name if base and not base.endswith(".") else base + alias.name
+                            for alias in node.names)
+    for name in imported:
+        leaf = name.lstrip(".")
+        assert not (leaf in ("cli", "supervisor") or leaf.endswith((".cli", ".supervisor"))
+                    or leaf.startswith(("quoin.cli", "quoin.supervisor"))), (module, name)
