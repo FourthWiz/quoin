@@ -1004,11 +1004,11 @@ Unless `QUOIN_INLINE_COST_CAPTURE=0`, the on-behalf write per "On-behalf cost ca
 - (a) Phase 4 entry, fresh or resumed. True: skip the `/implement` dispatch and go to the gate below. `PENDING|`: under `AUTONOMOUS` delete a stale `implement.tasks.done`, then dispatch as usual. `UNKNOWN|`, empty output or a missing helper: dispatch as usual and write or delete nothing.
 - (b) After the primary `/implement` dispatch returns, only when the return is COMPLETE or the envelope is missing or unparseable (the lost-envelope case). A NEEDS-DECISION or BLOCKED return keeps its routing (`## Routing a NEEDS-DECISION phase return`, the hard stops) and never reaches this check; a PARTIAL return keeps the within-phase continuation under `## Error handling`, and this check runs only once that continuation ends in COMPLETE or a lost envelope. When the condition is false at this point, proceed exactly as before for that return.
 
-When the condition is true: under `AUTONOMOUS` write or refresh `implement.tasks.done` (content `tasks-complete <UTC ISO timestamp> total=<n>`, atomic write); run the inline post-implement gate at the profile's level (Full under `AUTONOMOUS`, per the depth section), then Checkpoint C as usual; write `implement.done` only on gate PASS; then the existing boundary write for the review phase. The Checkpoint C fix path is not an evaluation point and never re-enters this entry. Without `AUTONOMOUS` the skip applies too, but no marker is written or deleted.
+When the condition is true: under `AUTONOMOUS` write or refresh `implement.tasks.done` (content `tasks-complete <UTC ISO timestamp> total=<n>`, atomic write); run the inline post-implement gate at the profile's level (Full under `AUTONOMOUS`, per the depth section; under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe), then Checkpoint C as usual; write `implement.done` only on gate PASS; then the existing boundary write for the review phase. The Checkpoint C fix path is not an evaluation point and never re-enters this entry. Without `AUTONOMOUS` the skip applies too, but no marker is written or deleted.
 
 Under `AUTONOMOUS`, once Checkpoint C confirms (gate passed, continuing to review), also write the phase's completion sentinel `autonomous-progress-{task}/implement.done` (atomic write — T-05/T-10 write-site map).
 
-After implement completes, run `/gate` inline (read `/gate/SKILL.md` from the same session and execute the gate process directly — do not spawn a subagent). Step 5 audit-log persistence applies in inline mode per the gate skill's existing rule.
+After implement completes, run `/gate` inline (read `/gate/SKILL.md` from the same session and execute the gate process directly — do not spawn a subagent). Step 5 audit-log persistence applies in inline mode per the gate skill's existing rule. For this gate, under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe.
 - Standard level for Small/Medium
 - Full level for Large
 
@@ -1026,7 +1026,7 @@ Continue to review? (yes / no / show changes)
 ```
 
 If the gate **failed**: present the failures and ask "Fix and retry, or stop?"
-- "fix" → spawn `/implement` again for the failing items, with a `Fix scope: gate <gate audit path>` line in the prompt naming the failing checks (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above), then re-run `/gate` inline (post-implement boundary — same inline mechanism as the primary path; audit-log persistence applies per `/gate/SKILL.md`). Re-dispatch inherits the dispatch envelope (above), unchanged.
+- "fix" → spawn `/implement` again for the failing items, with a `Fix scope: gate <gate audit path>` line in the prompt naming the failing checks (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above), then re-run `/gate` inline (post-implement boundary — same inline mechanism as the primary path; audit-log persistence applies per `/gate/SKILL.md`). Re-dispatch inherits the dispatch envelope (above), unchanged. For this re-run, under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe.
 - "stop" → halt, preserve artifacts
 
 **(fast route only)** a third option, "escalate to full", is also offered here. Escalation is ONE
@@ -1157,7 +1157,7 @@ its own value, at the point where that branch's outcome is final:
 
 **If APPROVED:** run `/gate` inline (Full level, post-review — read `/gate/SKILL.md` from the same
 session and execute the gate process directly). Step 5 audit-log persistence applies in inline mode
-per the gate skill's existing rule. Once — and only once — that gate PASSES, proceed to Checkpoint D
+per the gate skill's existing rule. For this gate, under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe. Once — and only once — that gate PASSES, proceed to Checkpoint D
 (the phase-boundary write itself is deferred to the point where Checkpoint D resolves to continue —
 see below the checkpoint, never here). If the post-review gate instead FAILS, do not proceed to
 Checkpoint D — "Gates are blocking" below applies.
@@ -1176,7 +1176,7 @@ Checkpoint D — "Gates are blocking" below applies.
    ```
    Then spawn `/implement` again with the review issues as the spec, adding a `Fix scope: review <review file path>` line naming the requested changes (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above). Re-dispatch
    inherits the dispatch envelope (above), unchanged. After fix-implement completes, re-run the post-implementation gate inline (same level as before; audit-log persistence per
-   `/gate/SKILL.md`). Then re-spawn `/review`. Cap at 3 review rounds to prevent infinite cycling.
+   `/gate/SKILL.md`; under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe). Then re-spawn `/review`. Cap at 3 review rounds to prevent infinite cycling.
 2. **"accept"** → treat as approved despite requested changes. Log this decision in session state.
    Proceed to Checkpoint D — accepting is the same terminal outcome as an approved verdict for
    resume purposes, so it reaches the same deferred write below the checkpoint as the APPROVED
@@ -1725,6 +1725,7 @@ the threshold values themselves live in `hooks/_lib.sh`'s
   and standing down behind every hard-stop sentinel. The Stop hook's block
   response is a continue instruction to the model, never a stop signal, so
   the "no block to catch" rule above still holds.
+- **No yield with pending work.** Under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe — a headless child that ends its turn with a long command still running loses that command's result.
 - **Hard constraint.** Autonomous mode NEVER writes to any file under
   `hooks/`, and NEVER modifies or lowers a `QUOIN_*_BPS` constant or any
   other hook threshold — anywhere, under any condition. The cooperation

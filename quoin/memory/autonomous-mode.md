@@ -421,6 +421,22 @@ lock and its outcome).
 the install level rather than via the opt-out knob above): see the Hooks
 Guide's reference entry for the ninth stanza.
 
+### Headless children never yield with pending work
+
+**Trigger.** Any tool result saying a command is running in, or was moved to, the background, or that it timed out: an explicit background launch, or the harness moving a long foreground command to the background on its own (about 120 s by default; the exact threshold and wording are not pinned here).
+
+**Why.** A headless `claude -p` process may exit as soon as the session ends its turn, so the pending command's result is never seen. A headless child may or may not be re-invoked afterwards; never rely on it. An orphaned command may still finish later, which is why every run is keyed by a token that keeps a stale result from being read.
+
+**Rule.** Under `AUTONOMOUS` the session must not end its turn while such work is pending. For a headless child this holds without exception: when `QUOIN_HEADLESS_CHILD=1` is present in the environment, the session is such a child. The variable is set by the supervisor once its launch-time change lands, and the prose rule applies whether or not it is set. The only exemption is an interactive session that deliberately ends its turn after a hand-off. Plain foreground calls are fine only for commands known to finish well under 120 s. `Monitor` is not available to headless children.
+
+**Mechanism.** Start the command detached with `python3 __QUOIN_HOME__/scripts/wait_for.py start --rc-file F --token TOK --log L -- CMD...` (no trailing `&`, no `nohup`; the helper detaches). Then repeat FOREGROUND calls of `python3 __QUOIN_HOME__/scripts/wait_for.py wait --file F --token TOK --max-secs 540`, each with the Bash tool `timeout` set to 600000, until a terminal line:
+- `READY|<rc>` continues with that exit code.
+- `WAITING|<secs>` means call `wait` again.
+- `DEAD|<secs>`, `EXPIRED|<secs>` or `ERROR|<reason>` are terminal failures: stop waiting, record FAIL with the tail of the log file, never retry the wait loop.
+The overall budget is `QUOIN_WAIT_BUDGET_SECS` (default 3600). If the environment sets `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` these are only an extra layer; the prose rule stays the guarantee.
+
+**Headless full-suite recipe.** Token = the gate session id plus the UTC start stamp. Name the rc, log and junit files with the token under `.workflow_artifacts/cache/`. Start `python3 -m pytest -rA --junitxml="$JUNIT" quoin/` through `wait_for.py start` with the log as `"$RA"`, wait as above, and read the result only after `READY`. Then run `known_red.py` and `gate_fullsuite_sidecar.py record` exactly as the gate's foreground recipe does, on the same files, taking `RC` from `READY|<rc>`. The same rule covers every long test command in an autonomous run, the affected-area suite included.
+
 ### Taking over a headless child
 
 Each headless child the supervisor launches gets a session id chosen in

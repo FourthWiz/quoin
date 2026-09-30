@@ -262,7 +262,7 @@ Identify what the *next* phase would be.
 
 ### Step 2: Run automated checks
 
-Based on what exists and what's next, run the appropriate checks:
+Based on what exists and what's next, run the appropriate checks. Under autonomous every long test command (the affected-area suite included) follows the same no-yield rule as the full suite below.
 
 **After /specify → before /architect (spec gate — no gate level concept — always full spec check):**
 - [ ] `spec.md` exists and is non-empty
@@ -349,6 +349,7 @@ Based on what exists and what's next, run the appropriate checks:
     --project-root "$PROJECT_ROOT" --format text; KR_RC=$?
   python3 __QUOIN_HOME__/scripts/gate_fullsuite_sidecar.py record --project-root "$PROJECT_ROOT" --rc "$RC" --known-red-exit "$KR_RC" --task-profile "<small|medium|large>" --run-token "<gate session UUID>" --gate-phase "post-implement" --format text
   ```
+  **Headless variant (autonomous):** a headless session must not end its turn with the suite running. Token = gate session id plus UTC start stamp; name the rc, log and junit files with it under `.workflow_artifacts/cache/`. Start: `python3 __QUOIN_HOME__/scripts/wait_for.py start --rc-file "$RCF" --token "$TOK" --log "$RA" -- python3 -m pytest -rA --junitxml="$JUNIT" quoin/`. Then run `python3 __QUOIN_HOME__/scripts/wait_for.py wait --file "$RCF" --token "$TOK" --max-secs 540` in the foreground, with the Bash tool `timeout` set to 600000, repeating until a terminal line. `DEAD`, `EXPIRED` or `ERROR` = FAIL with the log tail. On `READY|<rc>` run the `known_red.py` and sidecar lines above on the same files with `RC` taken from `READY|<rc>`. Detail: `memory/autonomous-mode.md` `### Headless children never yield with pending work`.
   `RC=$?` MUST be captured on the line directly after the pytest invocation, and `KR_RC=$?` likewise on the line directly after the `known_red.py` invocation (before any other command clobbers `$?`). `--task-profile` is the same profile value resolved in "Determining the gate level" above (`:229`), re-read at this call site; if undeterminable, pass `--task-profile medium` (never `large` — that would silently re-enable the Small/Medium auto-pass this size scoping exists to close). `--project-root` here is the outer project root that owns `.workflow_artifacts/` — the same convention `branch_hygiene.py`/`deploy_drift_check.py` above already take as `$(pwd)` — never the git repo root when the two differ; `/end_of_task`'s `check --project-root` must resolve to the identical directory or reuse silently never fires. Result mapping (branch on `known_red.py`'s exit, every branch one row):
   - full suite green (RC 0), `known_red.py` exit 0 with `downgrade=false` → ✓ PASS (genuinely clean; no warning needed).
   - full suite red (RC≠0), `known_red.py` exit 0 with `downgrade=true` (ALL red are known-baseline, reconciled) → ✓ PASS as **known-baseline WARN** — record the downgraded failures (name/reason/date) and any staleness WARN in the audit log `## Warnings (non-blocking)` (⚠️), embedding the `known_red.py --format text` block VERBATIM.

@@ -64,6 +64,7 @@ The skill also updates the session-state file under
 - The audit log MUST be written after user approval and MUST NOT be
   written if the user rejects the gate.
 - The skill MUST NOT invoke the next workflow phase — it stops and waits.
+- A non-interactive session MUST wait on long test runs in the foreground rather than ending its turn with work pending.
 - Cost-ledger writes are conditional: record only when a task context is
   determinable from the surrounding artifacts.
 - The skill MUST tolerate missing optional inputs (architecture.md, spec.md,
