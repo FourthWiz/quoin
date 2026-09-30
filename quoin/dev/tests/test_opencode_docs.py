@@ -470,12 +470,23 @@ def _parity_matrix_opencode_cells():
 def _clean_content_corpus():
     texts = {}
     for rel in _shipped_files():
-        if rel.endswith((".py", ".json", ".md")):
+        if rel.endswith((".py", ".json", ".md", ".jsonl")):
             texts[rel] = (REPO_ROOT / rel).read_text(encoding="utf-8")
+        elif rel.endswith(".txt"):
+            raw = (REPO_ROOT / rel).read_text(encoding="utf-8")
+            texts[rel] = re.sub(r"\x1b\[[0-9;]*m", "", raw)
     texts["<status page OpenCode section>"] = _opencode_status_section()
     texts["<adapters README OpenCode bullet>"] = _opencode_adapters_bullet()
     texts.update(_parity_matrix_opencode_cells())
     return texts
+
+
+def test_clean_content_corpus_covers_runtime_fixtures():
+    corpus = _clean_content_corpus()
+    prefix = "quoin/adapters/opencode/fixtures/runtime-events/"
+    assert any(k.startswith(prefix) and k.endswith(".jsonl") for k in corpus)
+    for name in ("stderr-approval-notice.txt", "stderr-agent-fallback.txt"):
+        assert prefix + name in corpus, name
 
 
 def test_clean_content_over_shipped_tree():

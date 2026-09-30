@@ -1,0 +1,2 @@
+{"type": "step_start", "timestamp": 0, "sessionID": "ses_fixture01", "part": {"id": "prt_s1", "messageID": "msg_fixture01", "sessionID": "ses_fixture01", "type": "step-start"}}
+{"type": "error", "timestamp": 500, "sessionID": "ses_fixture01", "error": {"name": "ProviderAuthError", "data": {"providerID": "fixture-provider", "message": "Authentication failed"}}}
