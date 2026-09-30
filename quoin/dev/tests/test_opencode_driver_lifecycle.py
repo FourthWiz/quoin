@@ -324,3 +324,32 @@ def test_a_detached_leftover_is_reaped_at_the_end_of_a_clean_attempt(tmp_path):
     attempt = h.load_record(tmp_path, prepared.run_id)["attempts"][0]
     assert attempt["leftovers_reaped"] is True and attempt["leftovers_reaped_count"] >= 1
     assert h.stray_pids(tmp_path) == []
+
+
+def test_a_slow_consumer_back_pressures_through_a_bounded_queue(tmp_path):
+    steps = [h.fake._step_start("prt_s0")]
+    steps += [h.fake._text("prt_t%d" % i, "line %d" % i) for i in range(120)]
+    steps += [h.fake._step_finish("prt_f1", "stop"), {"do": "exit", "code": 0}]
+    prepared = h.make_prepared(tmp_path, {"attempts": [{"steps": steps}]})
+    drv = h.make_driver(tmp_path, queue_size=2)
+    handle = drv.start(prepared)
+    biggest = 0
+    seen = 0
+    for _event in drv.observe(handle):
+        biggest = max(biggest, handle.stdout_q.qsize())
+        seen += 1
+        if seen < 30:
+            time.sleep(0.02)
+    assert biggest <= 2
+    assert handle.outcome.state == "completed"
+    texts = [e for e in h.read_events(prepared) if e.origin == "native"]
+    assert len(texts) == 122
+
+
+def test_the_line_cap_is_configurable_and_counted_once_per_line(tmp_path):
+    drv, prepared, handle, events = _run(
+        tmp_path, ("endless_line", {"nbytes": 200_000}), drv_kw={"max_line_bytes": 1024}
+    )
+    counters = h.load_record(tmp_path, prepared.run_id)["counters_total"]
+    assert counters["oversized"] == 1
+    assert handle.outcome.state == "completed"

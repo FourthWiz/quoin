@@ -304,7 +304,7 @@ SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "task_denied_tail_then_boundary_crash": lambda: _task_then_boundary_crash(_DENIED_TAIL_TASK_STATE),
     "grandchild_detached_finish": lambda: _scenario(
         _step_start("prt_s1"), {"do": "spawn_grandchild", "ignore_term": False, "detach": True},
-        _step_finish("prt_f1", "stop"), {"do": "exit", "code": 0}),
+        {"do": "sleep", "seconds": 0.8}, _step_finish("prt_f1", "stop"), {"do": "exit", "code": 0}),
     "step_closed_then_hang": lambda: _scenario(
         {"do": "write_file", "path": "effect.txt", "content": "written once\n"},
         _step_start("prt_s1"), _step_finish("prt_f1", "tool-calls"), {"do": "hang"}),
