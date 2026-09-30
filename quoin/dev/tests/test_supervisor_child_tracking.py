@@ -395,3 +395,207 @@ def test_on_pid_fn_receives_launch_sid():
     fn = _tracker(base, on_pid_fn=lambda sid, pid: pids.append((sid, pid)))
     fn("demo")
     assert pids == [(fn.last.session_id, 99)]
+
+
+# ---------------------------------------------------------------------------
+# CLI wiring
+# ---------------------------------------------------------------------------
+
+import json
+import os
+
+from quoin import cli
+
+RS_KEYS = ("child_session_id", "child_cwd", "child_started_at")
+
+
+def _mem(project):
+    return project / ".workflow_artifacts" / "memory"
+
+
+@pytest.fixture
+def project(tmp_path):
+    root = tmp_path / "project"
+    (_mem(root)).mkdir(parents=True)
+    return root
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    monkeypatch.setattr(sup._RealClock, "sleep", staticmethod(lambda s: None))
+    monkeypatch.delenv("QUOIN_FIRST_CHILD_SESSION_ID", raising=False)
+    monkeypatch.delenv("QUOIN_SUPERVISOR_LOCK_TOKEN", raising=False)
+
+
+def _active_record(project, task="demo"):
+    mem = _mem(project)
+    rec = {
+        "schema": 1, "task": task, "session_id": "s", "active": True, "phase": "implement",
+        "phase_index": 3, "subphase": "", "step": "", "at_stage_boundary": False, "route": "",
+        "profile": "", "artifacts": [], "next_action": "", "resume_command": f"/run --resume {task}",
+        "notes_path": str(mem / f"run-notes-{task}.md"), "updated_at": "2026-09-30T00:00:00+00:00",
+    }
+    (mem / f"run-state-{task}.json").write_text(json.dumps(rec))
+
+
+def _lock(project):
+    return _mem(project) / "run-supervisor-demo.pid"
+
+
+class TaggedFake:
+    """Tagged launcher that writes the done sentinel on call ``done_on``."""
+
+    supports_child_tracking = True
+
+    def __init__(self, project, done_on=1, pid=4242, inspect=None):
+        self.project, self.done_on, self.pid, self.inspect = project, done_on, pid, inspect
+        self.n = 0
+        self.kwargs = []
+
+    def __call__(self, task, **kw):
+        self.n += 1
+        self.kwargs.append(kw)
+        if self.inspect:
+            self.inspect(self.n, kw)
+        kw["on_spawn"](self.pid)
+        prog = _mem(self.project) / "autonomous-progress-demo"
+        prog.mkdir(exist_ok=True)
+        (prog / f"p{self.n}.done").write_text("x")
+        if self.n == self.done_on:
+            (_mem(self.project) / "autonomous-done-demo.md").write_text("done")
+        return sup.LaunchResult(0)
+
+
+def _run(project, monkeypatch, fake, *extra):
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake)
+    return cli.main(["run", "--autonomous", "demo", "--project-root", str(project), *extra])
+
+
+def test_one_arg_fake_launcher_records_nothing(project, monkeypatch):
+    _active_record(project)
+    calls = []
+    monkeypatch.setattr(sup, "make_launch_fn",
+                        lambda project_root, permission_mode=None: (lambda t: calls.append(t) or (
+                            _mem(project) / "autonomous-done-demo.md").write_text("d")))
+    assert cli.main(["run", "--autonomous", "demo", "--project-root", str(project)]) == 0
+    assert calls == ["demo"]
+    assert "child_" not in (_mem(project) / "run-state-demo.json").read_text()
+
+
+def test_end_to_end_records_child_before_launch(project, monkeypatch):
+    _active_record(project)
+    monkeypatch.setenv("QUOIN_FIRST_CHILD_SESSION_ID", U)
+    monkeypatch.setenv("QUOIN_SUPERVISOR_LOCK_TOKEN", "tok")
+    _lock(project).write_text(json.dumps(
+        {"pid": os.getpid(), "started_at": "x", "granted": 5, "writer": "handoff", "token": "tok"}))
+    seen = {}
+
+    def inspect(n, kw):
+        rec = json.loads((_mem(project) / "run-state-demo.json").read_text())
+        lock = json.loads(_lock(project).read_text())
+        seen["rec"], seen["lock"], seen["kw"] = rec, lock, kw
+        seen["notes"] = (_mem(project) / "run-notes-demo.md").read_text()
+
+    fake = TaggedFake(project, inspect=inspect)
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake)
+    lock_after = {}
+    orig = cli._release_supervisor_lock
+
+    def spy(lock_path, pid):
+        lock_after.update(json.loads(lock_path.read_text()))
+        orig(lock_path, pid)
+
+    monkeypatch.setattr(cli, "_release_supervisor_lock", spy)
+    assert cli.main(["run", "--autonomous", "demo", "--project-root", str(project)]) == 0
+    assert seen["rec"]["child_session_id"] == U
+    assert seen["lock"]["child_session_id"] == U
+    assert seen["lock"]["child_cwd"] == seen["kw"]["cwd"]
+    assert f"[quoin-autonomous-child] task=demo launch=1 session={U}" in seen["notes"]
+    assert "quoin run --takeover demo --project-root" in seen["notes"]
+    assert lock_after["child_pid"] == 4242
+    assert "QUOIN_FIRST_CHILD_SESSION_ID" not in os.environ
+
+
+def test_second_launch_clears_then_sets_pid(project, monkeypatch):
+    _active_record(project)
+    pids_at_record = []
+
+    def inspect(n, kw):
+        pids_at_record.append(json.loads(_lock(project).read_text()).get("child_pid"))
+
+    fake = TaggedFake(project, done_on=2, inspect=inspect)
+    assert _run(project, monkeypatch, fake) == 0
+    assert fake.n == 2
+    assert pids_at_record == [None, None]
+    ids = [k["session_id"] for k in fake.kwargs]
+    assert ids[0] != ids[1]
+
+
+def test_notes_pointer_for_space_and_apostrophe_roots(tmp_path, monkeypatch):
+    for parts, full in ((("My Drive", "p"), True), (("it's",), False)):
+        root = tmp_path.joinpath(*parts)
+        _mem(root).mkdir(parents=True)
+        _active_record(root)
+        assert _run(root, monkeypatch, TaggedFake(root)) == 0
+        line = [l for l in (_mem(root) / "run-notes-demo.md").read_text().splitlines()
+                if "quoin-autonomous-child" in l][0]
+        assert ("--project-root" in line) is full
+        if not full:
+            assert line.rstrip().endswith("takeover: quoin run --takeover demo")
+
+
+def test_halt_revert_appends_no_note(project, monkeypatch):
+    _active_record(project)
+    calls = {"n": 0}
+    real_read_halt = sup.read_halt
+
+    def halt_fn(task, root):
+        calls["n"] += 1
+        return "stop" if calls["n"] >= 2 else None
+
+    monkeypatch.setattr(sup, "read_halt", real_read_halt)
+    fake = TaggedFake(project)
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake)
+    orig = sup.make_tracked_launch_fn
+    monkeypatch.setattr(sup, "make_tracked_launch_fn",
+                        lambda *a, **k: orig(*a, halt_fn=halt_fn, **k))
+    cli.main(["run", "--autonomous", "demo", "--project-root", str(project)])
+    notes = (_mem(project) / "run-notes-demo.md").read_text() if (_mem(project) / "run-notes-demo.md").exists() else ""
+    assert fake.n == 0
+    assert notes.count("[quoin-autonomous-child]") == 1
+    assert "child_" not in (_mem(project) / "run-state-demo.json").read_text()
+
+
+def test_core_script_unavailable_still_runs(project, monkeypatch, capsys):
+    _active_record(project)
+    monkeypatch.setattr(cli, "_load_core_script", lambda name: None)
+    seen = {}
+    fake = TaggedFake(project, inspect=lambda n, kw: seen.update(json.loads(_lock(project).read_text())))
+    assert _run(project, monkeypatch, fake) == 0
+    assert seen["child_session_id"] == fake.kwargs[0]["session_id"]
+    assert "run-state module unavailable" in capsys.readouterr().err
+
+
+def test_invalid_env_id_is_ignored(project, monkeypatch, capsys):
+    _active_record(project)
+    monkeypatch.setenv("QUOIN_FIRST_CHILD_SESSION_ID", "not-a-uuid")
+    fake = TaggedFake(project)
+    assert _run(project, monkeypatch, fake) == 0
+    assert fake.kwargs[0]["session_id"] != "not-a-uuid"
+    assert sup.is_child_session_id(fake.kwargs[0]["session_id"])
+    assert "ignoring invalid QUOIN_FIRST_CHILD_SESSION_ID" in capsys.readouterr().err
+
+
+def test_takeover_and_autonomous_conflict(project):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["run", "--takeover", "--autonomous", "demo", "--project-root", str(project)])
+    assert exc.value.code == 2
+
+
+def test_update_supervisor_lock_refuses_foreign_lock(project):
+    paths = cli._supervisor_paths(project, "demo")
+    _lock(project).write_text(json.dumps({"pid": 2**22 + 999, "token": "a"}))
+    assert cli._update_supervisor_lock(paths, None, child_pid=1) is False
+    assert cli._update_supervisor_lock(paths, "b", child_pid=1) is False
+    assert cli._update_supervisor_lock(paths, "a", child_pid=1) is True
+    assert json.loads(_lock(project).read_text())["child_pid"] == 1

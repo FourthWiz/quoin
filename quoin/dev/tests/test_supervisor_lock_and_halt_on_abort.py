@@ -511,3 +511,40 @@ def test_sigterm_under_flag_writes_stopped_result_and_halt(monkeypatch, project)
     result = json.loads(_result_path(project, "demo").read_text())
     assert result["status"] == "STOPPED"
     assert "reason: supervisor stopped by signal" in _halt_path(project, "demo").read_text()
+
+
+# ---------------------------------------------------------------------------
+# Takeover hints on abort halts and terminal output
+# ---------------------------------------------------------------------------
+
+
+def test_abort_halt_keeps_original_lines_and_adds_pointer(monkeypatch, project, capsys):
+    fn = _make_fake_launch_fn(project, "demo", progress_calls=100)
+    _patch_make_launch_fn(monkeypatch, fn)
+    code = cli.main(["run", "--autonomous", "demo", "--project-root", str(project),
+                     "--halt-on-abort", "--max-relaunch", "2"])
+    assert code == 2
+    lines = _halt_path(project, "demo").read_text().splitlines()
+    assert lines[0] == "task: demo" and lines[1] == "phase: run"
+    assert lines[2] == "reason: relaunch cap"
+    assert lines[4] == "resume_hint: /run --resume demo"
+    assert lines[5].startswith("takeover_hint: quoin run --takeover demo --project-root")
+    assert "claude --resume" not in "\n".join(lines)
+    assert "  takeover: quoin run --takeover demo --project-root" in capsys.readouterr().out
+
+
+def test_refused_prints_takeover_pointer(monkeypatch, project, capsys):
+    _lock_path(project, "demo").write_text(
+        json.dumps({"pid": os.getpid(), "started_at": "x", "granted": 5, "writer": "cli"}))
+    _patch_make_launch_fn(monkeypatch, _make_fake_launch_fn(project, "demo"))
+    assert cli.main(["run", "--autonomous", "demo", "--project-root", str(project)]) == 3
+    assert "  takeover: quoin run --takeover demo --project-root" in capsys.readouterr().out
+
+
+def test_write_abort_halt_never_overwrites(project):
+    mem = _memory_dir(project)
+    halt = _halt_path(project, "demo")
+    assert cli._write_abort_halt(mem, halt, "demo", "first") is True
+    before = halt.read_text()
+    assert cli._write_abort_halt(mem, halt, "demo", "second", takeover_hint="x") is False
+    assert halt.read_text() == before

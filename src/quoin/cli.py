@@ -7,6 +7,7 @@ import json
 import os
 import pathlib
 import runpy
+import shlex
 import shutil
 import signal
 import subprocess
@@ -1222,18 +1223,104 @@ def _write_supervisor_result(memory_dir: pathlib.Path, result_path: pathlib.Path
     _atomic_write_json(memory_dir, result_path, data)
 
 
-def _write_abort_halt(memory_dir: pathlib.Path, halt_path: pathlib.Path, task: str, reason: str) -> None:
-    """Write the halt sentinel unless one already exists (never overwritten, D-22)."""
+def _write_abort_halt(
+    memory_dir: pathlib.Path,
+    halt_path: pathlib.Path,
+    task: str,
+    reason: str,
+    takeover_hint: "str | None" = None,
+) -> bool:
+    """Write the halt sentinel unless one already exists (never overwritten, D-22).
+
+    Returns True when a halt was written, False when one was already there.
+    """
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+
     if halt_path.exists():
-        return
+        return False
+    project_root = memory_dir.parent.parent
+    hint = takeover_hint or _supervisor.takeover_pointer(task, project_root)
     content = (
         f"task: {task}\n"
         "phase: run\n"
         f"reason: {reason}\n"
         f"timestamp: {_iso_now()}\n"
         f"resume_hint: /run --resume {task}\n"
+        f"takeover_hint: {hint}\n"
     )
     _atomic_write_text(memory_dir, halt_path, content)
+    return True
+
+
+_FIRST_CHILD_ENV = "QUOIN_FIRST_CHILD_SESSION_ID"
+_CORE_SCRIPT_MEMO: dict = {}
+
+
+def _load_core_script(name: str):
+    """Load a bundled portable script (``core/scripts/<name>.py``) by path.
+
+    Looks in the packaged data tree first, then the source checkout layout.
+    Returns None when it cannot be loaded; never raises or exits.
+    """
+    if name in _CORE_SCRIPT_MEMO:
+        return _CORE_SCRIPT_MEMO[name]
+    module = None
+    try:
+        import importlib.util  # noqa: PLC0415
+        import quoin as _quoin_pkg  # noqa: PLC0415
+
+        candidates = []
+        try:
+            candidates.append(
+                pathlib.Path(str(importlib.resources.files("quoin") / "data" / "core" / "scripts" / f"{name}.py"))
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        candidates.append(
+            pathlib.Path(_quoin_pkg.__file__).resolve().parent.parent.parent
+            / "quoin" / "core" / "scripts" / f"{name}.py"
+        )
+        for path in candidates:
+            if path.is_file():
+                spec = importlib.util.spec_from_file_location(f"_quoin_cli_core_{name}", path)
+                if spec is None or spec.loader is None:
+                    continue
+                mod = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(mod)
+                module = mod
+                break
+    except Exception:  # noqa: BLE001
+        module = None
+    _CORE_SCRIPT_MEMO[name] = module
+    return module
+
+
+def _update_supervisor_lock(paths: dict, token: "str | None", **fields) -> bool:
+    """Merge ``fields`` into our supervisor lock (a None value deletes the key).
+
+    Only touches a lock that names this process or carries our adoption
+    token; anything else is left alone. Returns True when the lock was written.
+    """
+    try:
+        data = _read_json(paths["lock"])
+        if not isinstance(data, dict):
+            return False
+        try:
+            held = int(data.get("pid", -1))
+        except (TypeError, ValueError):
+            held = -1
+        if held != os.getpid() and not (token and data.get("token") == token):
+            return False
+        for key, value in fields.items():
+            if value is None:
+                data.pop(key, None)
+            else:
+                data[key] = value
+        data["pid"] = os.getpid()
+        _atomic_write_json(paths["memory_dir"], paths["lock"], data)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _release_supervisor_lock(lock_path: pathlib.Path, our_pid: int) -> None:
@@ -1461,6 +1548,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
     project_root = pathlib.Path(args.project_root).resolve()
     paths = _supervisor_paths(project_root, args.task)
 
+    if getattr(args, "takeover", False):
+        from quoin import takeover as _takeover  # noqa: PLC0415
+
+        return _takeover.run_takeover(args.task, project_root)
+
     # Strips an auto-resume hand-off's PYTHONPATH prepend before any launch
     # so the relaunched `claude` subprocess (which inherits os.environ) sees
     # the user's own PYTHONPATH, not the hand-off's.
@@ -1469,12 +1561,17 @@ def _cmd_run(args: argparse.Namespace) -> int:
     # Popped immediately after the lock decision so a relaunch child this
     # process itself spawns never inherits our own adoption token.
     token = os.environ.pop("QUOIN_SUPERVISOR_LOCK_TOKEN", None)
+    first_sid = os.environ.pop(_FIRST_CHILD_ENV, None)
+    if first_sid and not _supervisor.is_child_session_id(first_sid):
+        print(f"quoin run: ignoring invalid {_FIRST_CHILD_ENV}", file=sys.stderr)
+        first_sid = None
     acquired, held_pid = _acquire_supervisor_lock(
         paths["memory_dir"], paths["lock"], paths["result"], args.task, args.max_relaunch, token
     )
     if not acquired:
         print(f"quoin run: REFUSED (supervisor lock held by pid {held_pid})")
         print(f"  task: {args.task}")
+        print(f"  takeover: {_supervisor.takeover_pointer(args.task, project_root)}")
         return 3
 
     launch_fn = _supervisor.make_launch_fn(
@@ -1482,16 +1579,80 @@ def _cmd_run(args: argparse.Namespace) -> int:
         permission_mode=args.permission_mode,
     )
     launches = 0
+    memory_dir = paths["memory_dir"]
+    run_state = _load_core_script("run_state")
+    if run_state is None:
+        print("quoin run: run-state module unavailable; child id recorded in the lock only", file=sys.stderr)
+
+    def _warn(what: str, exc: BaseException) -> None:
+        print(f"quoin run: could not {what}: {exc}", file=sys.stderr)
+
+    def _record_child(entry, forward):
+        if run_state is not None:
+            try:
+                if entry is None:
+                    run_state.set_child_fields(memory_dir, args.task, "", "", "")
+                else:
+                    run_state.set_child_fields(
+                        memory_dir, args.task, entry.session_id, entry.cwd, entry.started_at
+                    )
+            except Exception as exc:  # noqa: BLE001
+                _warn("record the child in run-state", exc)
+        try:
+            # child_pid is cleared: a pid recorded for an earlier launch must
+            # never be read as belonging to this one.
+            _update_supervisor_lock(
+                paths, token,
+                child_session_id=entry.session_id if entry else None,
+                child_cwd=entry.cwd if entry else None,
+                child_started_at=entry.started_at if entry else None,
+                child_pid=None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            _warn("record the child in the lock", exc)
+        if forward and entry is not None and run_state is not None:
+            try:
+                run_state.append_note(
+                    memory_dir, args.task,
+                    f"{_supervisor.CHILD_NOTE_PREFIX} task={args.task} launch={entry.launch_no} "
+                    f"session={entry.session_id} cwd={shlex.quote(entry.cwd)} "
+                    f"takeover: {_supervisor.takeover_notice_pointer(args.task, project_root)}",
+                )
+            except Exception as exc:  # noqa: BLE001
+                _warn("note the child launch", exc)
+
+    def _record_pid(sid, pid):
+        lock = _read_json(paths["lock"])
+        if isinstance(lock, dict) and lock.get("child_session_id") == sid:
+            _update_supervisor_lock(paths, token, child_pid=pid)
+
+    tracked = _supervisor.make_tracked_launch_fn(
+        args.task,
+        project_root,
+        launch_fn,
+        first_session_id=first_sid,
+        record_fn=_record_child,
+        on_pid_fn=_record_pid,
+    )
 
     def _counting_launch_fn(task):
         nonlocal launches
         launches += 1
-        return launch_fn(task)
+        return tracked(task)
+
+    def _abort_hint():
+        last = tracked.last
+        return _supervisor.takeover_hint(
+            args.task, project_root, last.session_id if last else None
+        )
 
     old_handlers = None
     if args.halt_on_abort:
         def _on_signal(signum, _frame):
-            _write_abort_halt(paths["memory_dir"], paths["halt"], args.task, "supervisor stopped by signal")
+            _write_abort_halt(
+                paths["memory_dir"], paths["halt"], args.task, "supervisor stopped by signal",
+                takeover_hint=_abort_hint(),
+            )
             _write_supervisor_result(paths["memory_dir"], paths["result"], "STOPPED", launches)
             _release_supervisor_lock(paths["lock"], os.getpid())
             raise SystemExit(143 if signum == signal.SIGTERM else 130)
@@ -1512,7 +1673,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
         raise
     except BaseException:
         if args.halt_on_abort:
-            _write_abort_halt(paths["memory_dir"], paths["halt"], args.task, "supervisor error")
+            _write_abort_halt(
+                paths["memory_dir"], paths["halt"], args.task, "supervisor error",
+                takeover_hint=_abort_hint(),
+            )
             _write_supervisor_result(paths["memory_dir"], paths["result"], "ERROR", launches)
         _release_supervisor_lock(paths["lock"], os.getpid())
         raise
@@ -1523,7 +1687,10 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     if args.halt_on_abort:
         if result.status == "ABORTED":
-            _write_abort_halt(paths["memory_dir"], paths["halt"], args.task, result.reason or "aborted")
+            _write_abort_halt(
+                paths["memory_dir"], paths["halt"], args.task, result.reason or "aborted",
+                takeover_hint=_abort_hint(),
+            )
         _write_supervisor_result(paths["memory_dir"], paths["result"], result.status, launches)
     _release_supervisor_lock(paths["lock"], os.getpid())
 
@@ -1533,6 +1700,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     print(f"quoin run: {label}")
     print(f"  task: {args.task}")
     print(f"  relaunches: {result.relaunches}")
+    if result.status != "SUCCESS":
+        last = tracked.last
+        if last is not None:
+            print(f"  takeover: {_supervisor.takeover_command(last.cwd, last.session_id)}")
+        else:
+            print(f"  takeover: {_supervisor.takeover_pointer(args.task, project_root)}")
 
     if result.status == "SUCCESS":
         return 0
@@ -2092,6 +2265,15 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     run_p.add_argument(
+        "--takeover",
+        action="store_true",
+        help=(
+            "Stop the supervisor and headless child for <task>, confirm both "
+            "are dead, then print the command that resumes the child "
+            "interactively."
+        ),
+    )
+    run_p.add_argument(
         "--budget",
         default=None,
         help=(
@@ -2166,6 +2348,8 @@ def main(argv: list[str] | None = None) -> int:
         # Bare 'quoin models' → show mapping.
         return _models._cmd_models_show(args)
     elif args.command == "run":
+        if args.takeover and args.autonomous:
+            run_p.error("--takeover cannot be combined with --autonomous")
         return _cmd_run(args)
 
     parser.print_help()
