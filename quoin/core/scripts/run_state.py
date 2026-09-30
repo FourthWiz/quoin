@@ -82,7 +82,14 @@ _FIELD_ORDER = (
     "resume_command",
     "notes_path",
     "updated_at",
+    "child_session_id",
+    "child_cwd",
+    "child_started_at",
 )
+
+# Trailing keys written only when set, so a record from a run that never
+# tracked a child stays byte-identical to the original 16-key layout.
+_OPTIONAL_TRAILING = frozenset(("child_session_id", "child_cwd", "child_started_at"))
 
 # Strings sanitized before serialization: substitute the four json.dumps
 # escape classes away so the emitted record contains zero backslash bytes,
@@ -149,8 +156,9 @@ def _render(value) -> str:
 def _serialize_record(record: dict) -> str:
     """Hand-rolled, one-key-per-line, fixed-field-order, valid-JSON writer."""
     lines = ["{"]
-    last_index = len(_FIELD_ORDER) - 1
-    for i, key in enumerate(_FIELD_ORDER):
+    keys = [k for k in _FIELD_ORDER if k not in _OPTIONAL_TRAILING or record.get(k)]
+    last_index = len(keys) - 1
+    for i, key in enumerate(keys):
         value = record.get(key)
         comma = "," if i != last_index else ""
         lines.append(f'  "{key}": {_render(value)}{comma}')
@@ -321,6 +329,13 @@ def _do_write(args) -> int:
     notes_path = _notes_path(memory_dir, args.task)
 
     existing = _load_record(path) if path.exists() else None
+    # Child-tracking fields belong to the supervisor, not to whoever refreshes
+    # the record, so every rewrite carries them forward.
+    carried = {
+        k: existing.get(k)
+        for k in _OPTIONAL_TRAILING
+        if existing and existing.get(k)
+    }
 
     # A probe-fallback id ("unknown"...) is never stored by ANY write path:
     # storing it at creation would permanently anchor the record to an id
@@ -467,6 +482,7 @@ def _do_write(args) -> int:
         "notes_path": str(notes_path),
         "updated_at": updated_at,
     }
+    record.update(carried)
 
     content = _serialize_record(record)
     _atomic_write_record(memory_dir, args.task, path, content)
@@ -481,6 +497,51 @@ def _do_write(args) -> int:
         _append_notes(notes_path, block, max_bytes)
 
     return 0
+
+
+_UUID4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
+
+def set_child_fields(memory_dir: Path, task: str, sid: str, cwd: str, started_at: str) -> bool:
+    """Record (or, with a falsy ``sid``, clear) the headless child of a run.
+
+    Touches only the three child fields of an active record: ``updated_at``,
+    the notes log and the file's timestamps stay as they were, so recording a
+    child never looks like run progress. Returns False when nothing was
+    written (invalid task, missing/inactive record, malformed ``sid``).
+    ``child_cwd`` is stored only when sanitizing would leave it unchanged;
+    otherwise it is stored empty so no reader ever sees an altered path.
+    """
+    memory_dir = Path(memory_dir)
+    if not _valid_task(task):
+        return False
+    path = _record_path(memory_dir, task)
+    if not path.exists():
+        return False
+    record = _load_record(path)
+    if record is None or record.get("active") is not True:
+        return False
+    if sid and not _UUID4_RE.match(sid):
+        return False
+    try:
+        st = path.stat()
+    except OSError:
+        return False
+    if sid:
+        record["child_session_id"] = sid
+        record["child_cwd"] = cwd if _sanitize(cwd) == cwd else ""
+        record["child_started_at"] = _sanitize(started_at)
+    else:
+        for key in _OPTIONAL_TRAILING:
+            record.pop(key, None)
+    _atomic_write_record(memory_dir, task, path, _serialize_record(record))
+    try:
+        os.utime(str(path), (st.st_atime, st.st_mtime))
+    except OSError:
+        pass
+    return True
 
 
 def _do_clear(args) -> int:

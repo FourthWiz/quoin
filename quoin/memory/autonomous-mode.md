@@ -277,7 +277,9 @@ is itself a git repo.
 `--budget` — a nice-to-have cross-session cost ceiling that is a
 **no-op stub this release: NOT YET ENFORCED — cost is bounded by
 `--max-relaunch` + backoff only.** Exits 0 on SUCCESS, 1 on HALTED, 2
-on ABORTED.
+on ABORTED. `--takeover` (see "Taking over a headless child" below) stops
+a running supervisor and child instead of starting a run, and cannot be
+combined with `--autonomous`.
 
 **Sub-phase-granular idempotent resume.** Each fresh relaunch is a
 `/run --resume --autonomous <task>` that MUST land at the correct phase
@@ -377,8 +379,8 @@ sign the budget itself needs raising, not a bug to route around.
 
 **Halt reasons** (any of these is terminal — no further continuation):
 `auto-resume cap`, `no forward progress`, `relaunch cap`, `session age cap`,
-`context exhaustion`, `paused by user`, `supervisor stopped by signal`,
-`supervisor error`.
+`context exhaustion`, `paused by user`, `taken over by user`,
+`supervisor stopped by signal`, `supervisor error`.
 
 **The harness's own block cap is an independent outer bound.** Claude
 Code itself stops honoring a Stop hook's `"decision": "block"` response
@@ -419,3 +421,148 @@ lock and its outcome).
 **Un-registering the continuation hook** (if you need to disable it at
 the install level rather than via the opt-out knob above): see the Hooks
 Guide's reference entry for the ninth stanza.
+
+### Taking over a headless child
+
+Each headless child the supervisor launches gets a session id chosen in
+advance (`claude -p ... --session-id <uuid>`), recorded before the child
+starts: in the run-state record (`child_session_id`, `child_cwd`,
+`child_started_at`), in the supervisor lock (plus `child_pid` once the
+process exists) and as a `[quoin-autonomous-child]` line in the run notes.
+A hand-off pre-generates the first child's id, passes it to the
+supervisor through `QUOIN_FIRST_CHILD_SESSION_ID`, and returns it as a
+fourth field of the `HANDOFF|<pid>|<n>/<cap>|<uuid>` result.
+
+To work on the run yourself, run `quoin run --takeover <task>`
+(`--project-root` as usual). It:
+
+1. writes a halt (`taken over by user`) so nothing relaunches, keeping any
+   halt already present;
+2. stops the supervisor, then the child (SIGTERM, then SIGKILL after
+   `QUOIN_TAKEOVER_GRACE_SECS`, default 5, range 1..60; the wait after
+   SIGKILL is `QUOIN_TAKEOVER_WAIT_SECS`, default 20, range 1..300);
+3. confirms nothing carrying the child's session id is still running;
+4. prints `cd '<cwd>' && claude --resume <uuid>`.
+
+Exit codes: 0 the resume command was printed; 1 no child was recorded or
+none ever started; 2 invalid task name; 4 a process survived or could not
+be verified, in which case no resume command is printed. Only the
+processes that carry the child's session id are signalled (no
+process-group kill), after their command line has been checked.
+
+Hand-off notices and halt files carry the child's session id and the
+`quoin run --takeover <task>` pointer. The concrete `cd ... && claude
+--resume` command appears only in the supervisor's terminal output (the
+loop has ended, so no child is alive) and after `--takeover` has confirmed
+the child is stopped. `relaunches` in the run result still counts launch
+attempts, including one skipped because a halt appeared first.
+
+### How the hand-off finds the CLI
+
+Every hand-off above that starts a detached supervisor — the Stop hook's
+escalation, the SessionStart hand-off for a run whose owner is gone, and
+`/run`'s own `handoff` subcommand — needs to run the `quoin` CLI as a
+real subprocess, without knowing in advance how it was
+installed (a plain venv, `pip install --user -e`, `uv tool install`,
+`pipx`, or a bare source checkout on `PYTHONPATH`). It does this by reading
+an install record instead of guessing via `PATH`.
+
+**The record.** `quoin install` writes `quoin-runtime.json` at the deploy
+root (`~/.claude/` in user scope, `<project>/.claude/` in project scope)
+as its last step, atomically (write-temp-then-rename). Fields: `schema`
+(currently `1`), `python` (`sys.executable`, verbatim — a venv's own
+symlink, not resolved), `version` (the installed `quoin.__version__`),
+`pythonpath` (the directory to add to `PYTHONPATH` before importing
+`quoin`, or `null` when the recorded interpreter can import it unaided),
+`quoin_file` (the resolved path `quoin.__file__` pointed at when the
+record was written), `source_dir` (the source tree the install ran from),
+`source_version` (the version string in that source tree's
+`__about__.py`, when it differs from the installed CLI's own — for
+example a deployed release running against a newer checkout), and
+`installed_at`.
+
+**The launch.** A hand-off relaunches `<python> -c <bootstrap> run
+--autonomous …` from the filesystem root (never the caller's own cwd —
+see the neutral-cwd note in the resolver's own module docstring), passing
+`--project-root` explicitly since the relaunch's cwd is no longer the
+project. Legacy PATH lookup (`shutil.which("quoin")`, falling back to
+`~/.local/bin/quoin`) fires only when NO record exists at all — a record
+that exists but fails validation is never treated as "no record"; it
+refuses instead (below), so a bad record can never silently fall back to
+whatever happens to be on `PATH`.
+
+**Refusal: `STALE_CLI|<kind>|<message>`.** When the record exists but the
+resolver can't stand behind it, every caller sees the same
+`STALE_CLI|<kind>|<message>` shape, with `<kind>` one of:
+
+- `record-invalid` — the record file is missing, unreadable, or not
+  valid JSON with the expected fields. Remedy: reinstall.
+- `interpreter-missing` — the recorded `python` path no longer exists.
+  Remedy: reinstall.
+- `interpreter-not-executable` — the recorded `python` exists but isn't
+  executable, or the probe subprocess itself couldn't start. Remedy:
+  reinstall (fix the interpreter's permissions, or reinstall from a
+  working one).
+- `import-failed` — the version probe ran but exited non-zero, or
+  produced no parseable version token. Remedy: reinstall.
+- `version-mismatch` — either the recorded `source_version` disagrees
+  with the recorded `version` (checked before any probe runs, since no
+  probe result could change that answer), or the live probe's reported
+  version disagrees with the record. Remedy: reinstall with the source
+  tree you actually mean to run.
+- `probe-timeout` — the version probe didn't answer within its budget
+  (the `handoff` caller retries once before giving up). Remedy: retry,
+  or raise `QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS` if this interpreter is
+  reliably slow to start.
+- `no-safe-cwd` — the filesystem root isn't a safe place to run the
+  probe from (it must be a real directory owned by root or by you, with
+  no group- or other-write bit). Remedy: fix `/`'s ownership or
+  permissions (for example `chmod go-w /`); reinstalling will not help.
+- `resolver-error` — any other unexpected failure inside the resolver
+  itself (for example a temp-file creation error), caught so the caller
+  always gets a `STALE_CLI` shape instead of an unhandled exception.
+  Remedy: reinstall; if it recurs, it's a resolver bug.
+
+Each caller surfaces a stale record differently: the in-session hand-off
+path treats it as a halt reason (see the halt-reasons list above); the
+`SessionStart` hook turns it into an advisory (never blocks startup); the
+`Stop` hook includes it in its `systemMessage` alongside the ordinary
+in-session continuation nudge — the nudge itself is unchanged, since a
+stale CLI only affects the detached-hand-off path, not staying in the
+current session; and a hand-off attempt logs the halt line to the run
+notes. `quoin doctor`'s "Auto-resume CLI" block (see the Hooks Guide)
+runs the same deployed resolver in a scrubbed environment (no inherited
+`PYTHONPATH`, minimal `PATH`), so its verdict matches a hook running with
+a clean environment. Two differences remain: a hook inherits Claude
+Code's environment, which may carry a `PYTHONPATH` doctor scrubs, and
+doctor probes with the 8 s hand-off budget, so a slow interpreter can
+pass doctor yet time out under SessionStart's 1.5 s or the Stop hook's
+3 s budget.
+
+**Probe budgets.** Each caller gets its own time-bounded budget for the
+version probe, controlled by one knob,
+`QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS`, which sets both hook-bound values
+at once: `start` (`SessionStart`) defaults to 1500 ms, clamped to
+250–3000 ms; `stop` (`Stop`) defaults to 3000 ms, clamped to 250–7000 ms.
+The `handoff`/`cli-check` budget is a fixed 8000 ms and ignores the knob
+entirely — a hand-off is already a deliberate, one-time transition, not a
+per-turn hook, so it can afford to wait longer, and it retries a timed-out
+probe once before refusing.
+
+**The version-bump trade-off.** Every `quoin` version bump makes existing
+hand-offs refuse with `version-mismatch` until `quoin install` is re-run
+— the install record is a snapshot, not a live pointer, so a bump alone
+(even with no source-tree change otherwise) invalidates it. This is
+deliberate: it's the only way to guarantee a hand-off relaunches the CLI
+version it actually validated. The `Stop` nudge keeps working regardless,
+since it stays in-session and only the detached hand-off path consults
+the record.
+
+**Scope leakage.** A `pythonpath` from a Tier-2-style record reaches only
+the detached supervisor process itself — `quoin run` strips
+`PYTHONPATH`/`QUOIN_HANDOFF_PYTHONPATH` from its own environment before
+relaunching `claude`, so the child Claude session never inherits it.
+Project-scope records hold machine-specific absolute paths (the
+interpreter, the source tree); they're written under `<project>/.claude/`
+and, like the rest of that tree, aren't meant to be portable across
+machines or committed.
