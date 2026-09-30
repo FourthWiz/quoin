@@ -799,6 +799,17 @@ def _do_handoff(
             f"cli=stale kind={res['kind']}: {res['message']}",
         )
         return f"STALE_CLI|{res['kind']}|{res['message']}"
+    # Decided before the lock is reserved below, so a failure here can never
+    # strand a reservation under this process's pid.
+    neutral_cwd = _neutral_cwd()
+    if res["source"] == "legacy":
+        # The console-script launch never puts its cwd on sys.path, so it
+        # needs no safe cwd; a no-record install must hand off exactly as
+        # it did before records existed, never be refused for this reason.
+        if neutral_cwd is None:
+            neutral_cwd = str(Path(project_root).resolve())
+    elif neutral_cwd is None:
+        return "DENIED|cwd"
     # The hand-off's own charge (below, attempts += 1) plus this grant must
     # together stay within cap: grant = cap - attempts_before - 1 (D-01).
     remaining = max(cap - attempts - 1, 1)
@@ -862,23 +873,6 @@ def _do_handoff(
         "--project-root", str(Path(project_root).resolve()),
         "--halt-on-abort", "--max-relaunch", str(remaining),
     ]
-    neutral_cwd = _neutral_cwd()
-    if res["source"] == "legacy":
-        # The console-script launch never puts its cwd on sys.path, so it
-        # needs no safe cwd; a no-record install must hand off exactly as
-        # it did before records existed, never be refused for this reason.
-        if neutral_cwd is None:
-            neutral_cwd = str(Path(project_root).resolve())
-    elif neutral_cwd is None:
-        try:
-            log_fh.close()
-        except OSError:
-            pass
-        try:
-            lock_path.unlink()
-        except OSError:
-            pass
-        return "DENIED|cwd"
     # D-06: the child adopts this lock (rather than racing to create its own)
     # by presenting the same token back via `QUOIN_SUPERVISOR_LOCK_TOKEN`.
     child_env = dict(os.environ)
@@ -950,10 +944,15 @@ _RECORD_MAX_BYTES = 16384
 # absolute cwd wherever the inherited PYTHONPATH has an empty element
 # (the common `PYTHONPATH=$PYTHONPATH:/x` idiom with it unset yields
 # `:/x`). Every entry that names the cwd is dropped, not only index 0.
-# Only `sys` and `os` may be imported before the strip: both are loaded
-# during interpreter start-up, so they can't be shadowed from the cwd,
-# whereas `runpy` is not frozen before 3.11 and would be resolved through
-# the still-unstripped path. The recorded interpreter may be any Python
+# The filesystem-root cwd (see _neutral_cwd) is the primary control: with
+# an empty PYTHONPATH element the absolute cwd sits on sys.path during
+# interpreter start-up, so sitecustomize.py, and os.py before 3.11, could
+# load from it before any of this `-c` code runs — a root-owned,
+# non-writable cwd is what makes that safe. This strip is the second
+# layer: it covers every import made after start-up (`runpy`, `quoin`).
+# Only `sys` and `os` may be imported before the strip runs, since
+# `runpy` is not frozen before 3.11 and would be resolved through the
+# still-unstripped path. The recorded interpreter may be any Python
 # version quoin supports, so this can't lean on `-P`/PYTHONSAFEPATH
 # (3.11+ only) or `-I` (which would also drop the recorded PYTHONPATH a
 # Tier-2 install depends on).
@@ -976,8 +975,8 @@ _SPAWN_BOOTSTRAP = _SYS_PATH_STRIP + (
 _VERSION_TOKEN_RE = re.compile(r"^QUOIN_VERSION=(\S+)\s*$", re.M)
 _REMEDY = "re-run 'quoin install' (same scope) and check 'quoin doctor'"
 _NO_SAFE_CWD_REMEDY = (
-    "fix the permissions on the filesystem root (for example 'chmod go-w /'); "
-    "reinstalling will not help"
+    "make the filesystem root owned by root and not group- or other-writable "
+    "(for example 'chmod go-w /'); reinstalling will not help"
 )
 # Start/stop callers act on a live knob, so the remedy names it. Handoff and
 # cli-check ignore the knob (fixed 8 s budget), so naming it would mislead.
@@ -1000,10 +999,12 @@ def _reset_cli_memo() -> None:
 def _neutral_cwd() -> Optional[str]:
     """cwd for the probe and the supervisor spawn: the filesystem root.
 
-    The child's own sys.path strip (see _SYS_PATH_STRIP) is what stops the
-    working directory from being imported; the cwd choice is a second
-    layer, so it must be a directory that no other local user can write
-    to and that is never repository or user content. The caller's project
+    This is the primary control against import shadowing: with an empty
+    PYTHONPATH element the absolute cwd sits on sys.path during
+    interpreter start-up, before any code in _SYS_PATH_STRIP runs, so it
+    must be a directory that no other local user can write to and that is
+    never repository or user content. The child's own sys.path strip is
+    the second layer, covering every import made after start-up. The caller's project
     root fails the second test (a checkout can ship a ``quoin/`` package),
     the system temp directory fails the first (world-writable by default
     on Linux, and on macOS whenever TMPDIR is unset), and the deploy root
@@ -1027,7 +1028,9 @@ def _neutral_cwd() -> Optional[str]:
         return None
     if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
         return None
-    if st.st_uid not in (0, os.getuid()):
+    getuid = getattr(os, "getuid", None)
+    allowed_owners = (0,) if getuid is None else (0, getuid())
+    if st.st_uid not in allowed_owners:
         return None
     if st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
         return None

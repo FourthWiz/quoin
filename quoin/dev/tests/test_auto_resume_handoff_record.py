@@ -293,6 +293,32 @@ def test_handoff_denied_when_no_safe_cwd_available(ar, project, monkeypatch, cap
     assert not (memory / "run-supervisor-demo.pid").exists()
 
 
+def test_handoff_cwd_decision_failure_leaves_no_lock_or_counter_change(ar, project, monkeypatch, capsys):
+    """The cwd decision now runs before the lock is reserved, so a failure
+    there (any exception, not just a None result) must never strand a
+    reservation under this process's pid or advance the attempt counter."""
+    memory = project / ".workflow_artifacts" / "memory"
+    _write_marker(memory, "demo")
+    _write_record(memory, "demo", "sid-1")
+    interp = _fake_interpreter(project / "fakebin", mode="ok")
+    _write_runtime_record(ar._runtime_record_path(), python=str(interp), version="9.9.9")
+    counter_path = memory / "auto-resume-demo.json"
+    assert not counter_path.exists()
+
+    def _boom():
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ar, "_neutral_cwd", _boom)
+
+    rc = ar.main([
+        "handoff", "--project-root", str(project), "--task", "demo", "--reason", "budget",
+    ])
+
+    assert rc == 0  # main()'s fail-open contract swallows the exception
+    assert not (memory / "run-supervisor-demo.pid").exists()
+    assert not counter_path.exists()
+
+
 def test_handoff_legacy_launch_is_never_denied_for_the_cwd(ar, project, monkeypatch, capsys):
     """A no-record install launches the console script, which never puts
     its cwd on sys.path, so it needs no safe cwd: even when none can be

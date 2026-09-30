@@ -565,7 +565,43 @@ def test_resolve_cli_stale_when_no_safe_cwd_available(ar, tmp_path, monkeypatch)
     assert res["status"] == "stale"
     assert res["kind"] == "no-safe-cwd"
     assert "chmod go-w /" in res["message"]
+    assert "owned by root" in res["message"]
     assert "quoin install" not in res["message"]
+
+
+def test_neutral_cwd_without_getuid_does_not_raise(ar, monkeypatch):
+    """Some platforms have no os.getuid at all (e.g. Windows); the check
+    must still run (falling back to root-only ownership) rather than
+    raising AttributeError."""
+    monkeypatch.delattr(os, "getuid", raising=False)
+
+    result = ar._neutral_cwd()
+
+    assert result is None or isinstance(result, str)
+
+
+def test_neutral_cwd_root_owned_and_locked_down_is_safe(ar, monkeypatch):
+    root = os.path.abspath(os.sep)
+
+    class _FakeStat:
+        st_mode = stat.S_IFDIR | 0o755
+        st_uid = 0
+
+    monkeypatch.setattr(os, "lstat", lambda path: _FakeStat())
+    monkeypatch.delattr(os, "getuid", raising=False)
+
+    assert ar._neutral_cwd() == root
+
+
+def test_neutral_cwd_owned_by_other_user_is_unsafe(ar, monkeypatch):
+    class _FakeStat:
+        st_mode = stat.S_IFDIR | 0o755
+        st_uid = 501
+
+    monkeypatch.setattr(os, "lstat", lambda path: _FakeStat())
+    monkeypatch.setattr(os, "getuid", lambda: 502, raising=False)
+
+    assert ar._neutral_cwd() is None
 
 
 def test_probe_project_root_is_quoin_repo_itself_still_resolves(ar, tmp_path, monkeypatch):
