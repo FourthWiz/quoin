@@ -1178,15 +1178,14 @@ def _write_python_stub_matching_version(tmp_path: Path, version: str) -> dict:
 
 
 def test_install_sh_tier1_execs_module_directly_on_version_match(tmp_path):
-    """IVG-281 stage 2 T-05: when the probed `$PYTHON -m quoin --version`
-    already matches the local source tree's version, install.sh's Tier-1
-    branch execs `$PYTHON -m quoin install ...` directly — no PYTHONPATH
-    fallback, no pip. This is the shape a globally importable quoin (a
-    normal editable/non-editable install on the probed interpreter's own
-    `$PATH`) takes; the isolated-tool and same-version-shadowing cases in
-    `test_install_record_tiers.py` are invisible to this probe entirely and
-    are documented, not exercised, at the shell level (see current-plan.md
-    T-05)."""
+    """When the probed `$PYTHON -m quoin --version` already matches the
+    local source tree's version, install.sh's Tier-1 branch execs `$PYTHON
+    -m quoin install ...` directly — no PYTHONPATH fallback, no pip. This is
+    the shape a globally importable quoin (a normal editable/non-editable
+    install on the probed interpreter's own `$PATH`) takes; the isolated-
+    tool and same-version-shadowing cases in `test_install_record_tiers.py`
+    are invisible to this probe entirely and are documented, not
+    exercised, at the shell level."""
     import subprocess
 
     install_sh = QUOIN_SRC / "install.sh"

@@ -57,6 +57,19 @@ non-interactive environments (CI, pipes), it defaults to global without promptin
 `quoin install` and bare `quoin` remain backward-compatible aliases for the
 Claude install path.
 
+### Auto-resume and the install record
+
+`quoin install` records the interpreter and source tree it ran from
+(`quoin-runtime.json`, next to the installed `.claude/` tree), so an
+autonomous run's detached hand-off can relaunch the exact CLI you meant to
+run instead of guessing via `PATH`. Run `quoin install` with whichever
+interpreter or tool you actually use day to day — for a `uv tool install`
+or `pipx install` setup, that means running that tool's own `quoin
+install`, not a system Python's. Re-run `quoin install` after every
+upgrade, recreated virtualenv, or Python version change; a stale record
+makes hand-offs refuse rather than run the wrong code. `quoin doctor`
+checks the record and names the exact fix when it's missing or stale.
+
 ### Claude install scope: user vs project
 
 The Claude adapter can be installed at two scopes:
