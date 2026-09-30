@@ -23,12 +23,12 @@ Subcommands
   rm [-r|--recursive] PATH...
       Delete files and symbolic links (a link is removed, never its target).
       A missing path is not an error. A directory needs -r, and -r only deletes
-      directories inside a the workflow-artifacts directory tree: the the workflow-artifacts directory
+      directories inside a workflow-artifacts tree: the workflow-artifacts directory
       directory itself and everything under its `memory/` directory are
       refused (exit 3). Confinement is decided on the fully resolved path and
       compares names without regard to case, so `MEMORY` or a symlink alias
       cannot slip through. On a case-sensitive filesystem this also treats a
-      directory spelled `.Workflow_Artifacts` as a the workflow-artifacts directory root.
+      directory spelled `.Workflow_Artifacts` as a workflow-artifacts root.
       Every path is attempted; the exit code is the worst per-path outcome.
 
   write-atomic [--parents] DST
