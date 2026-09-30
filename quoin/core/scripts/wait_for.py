@@ -13,7 +13,7 @@ Subcommands
       STARTED|<runner pid> (exit 0) or ERROR|<reason> (exit 2). Any older rc
       file and start file for F are removed first.
 
-  wait --file F [--token TOK] [--max-secs N] [--poll-secs P] [--budget-secs B]
+  wait --file F --token TOK [--max-secs N] [--poll-secs P] [--budget-secs B]
       Poll F until it holds `TOK <rc>`. Prints one line:
         READY|<rc>        exit 0  the command ended with that code
         WAITING|<secs>    exit 1  per-call deadline reached; call wait again
@@ -38,7 +38,7 @@ import sys
 import time
 from typing import Callable, List, Optional, Tuple
 
-_TOKEN_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+_TOKEN_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 _RC_LINE = re.compile(r"^(\S+)\s+(-?\d+)$")
 
 
@@ -71,8 +71,8 @@ def _run(rc_file: str, token: str, log: str, cwd: Optional[str], cmd: List[str])
     def write_rc(rc: int) -> None:
         if state["written"]:
             return
-        state["written"] = True
         _atomic_write(rc_file, "%s %d\n" % (token, rc))
+        state["written"] = True
 
     def on_term(signum, frame):  # noqa: ANN001
         try:
@@ -117,6 +117,10 @@ def do_start(rc_file: str, token: str, log: str, cwd: Optional[str], cmd: List[s
         return "ERROR|empty command", 2
     if cwd is not None and not os.path.isdir(cwd):
         return "ERROR|cwd is not a directory", 2
+    for target in (rc_file, log):
+        parent = os.path.dirname(os.path.abspath(target))
+        if not os.path.isdir(parent):
+            return "ERROR|directory missing for " + os.path.basename(target), 2
     _remove(rc_file)
     _remove(rc_file + ".start")
     _remove(rc_file + ".tmp")
@@ -135,7 +139,14 @@ def do_start(rc_file: str, token: str, log: str, cwd: Optional[str], cmd: List[s
         )
     except OSError:
         return "ERROR|spawn", 2
-    _atomic_write(rc_file + ".start", "%s %d %d\n" % (token, proc.pid, int(time.time())))
+    try:
+        _atomic_write(rc_file + ".start", "%s %d %d\n" % (token, proc.pid, int(time.time())))
+    except OSError:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except OSError:
+            pass
+        return "ERROR|start record", 2
     return "STARTED|%d" % proc.pid, 0
 
 
@@ -184,6 +195,23 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _terminate_group(pid: int, sleep: Callable[[float], None]) -> None:
+    """SIGTERM the runner's group, then SIGKILL it if it is still there.
+
+    Only a group led by `pid` is signalled, so a reused pid that now belongs to
+    an unrelated process is left alone.
+    """
+    try:
+        if os.getpgid(pid) != pid:
+            return
+        os.killpg(pid, signal.SIGTERM)
+        sleep(2)
+        if os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 def do_wait(
     rc_file: str,
     token: Optional[str],
@@ -201,6 +229,8 @@ def do_wait(
             return "READY|%d" % rc, 0
         elapsed = int(clock() - began)
         start = _read_start(rc_file + ".start", token) if token is not None else None
+        if start is not None and start[0] <= 1:
+            start = None
         if start is not None:
             pid, start_epoch = start
             if not pid_alive(pid):
@@ -210,10 +240,7 @@ def do_wait(
                     return "READY|%d" % rc, 0
                 return "DEAD|%d" % elapsed, 3
             if clock() - start_epoch > budget_secs:
-                try:
-                    os.killpg(pid, signal.SIGTERM)
-                except (ProcessLookupError, PermissionError, OSError):
-                    pass
+                _terminate_group(pid, sleep)
                 return "EXPIRED|%d" % elapsed, 4
         if elapsed >= max_secs:
             return "WAITING|%d" % elapsed, 1
@@ -276,6 +303,9 @@ def main(argv: Optional[List[str]] = None) -> int:
         target = _opt(rest, "--file")
         if not target:
             _emit("ERROR|missing --file")
+            return 2
+        if not _opt(rest, "--token"):
+            _emit("ERROR|missing --token")
             return 2
         try:
             env_budget = int(os.environ.get("QUOIN_WAIT_BUDGET_SECS", "3600"))

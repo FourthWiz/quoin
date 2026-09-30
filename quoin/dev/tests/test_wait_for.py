@@ -107,15 +107,15 @@ def test_clamps_and_env_budget(monkeypatch, tmp_path):
         return "WAITING|0", 1
 
     monkeypatch.setattr(wf, "do_wait", fake_wait)
-    wf.main(["wait", "--file", str(tmp_path / "x"), "--max-secs", "9999", "--poll-secs", "0", "--budget-secs", "1"])
+    wf.main(["wait", "--token", "t1", "--file", str(tmp_path / "x"), "--max-secs", "9999", "--poll-secs", "0", "--budget-secs", "1"])
     assert seen == {"max": 570, "poll": 1, "budget": 60}
-    wf.main(["wait", "--file", str(tmp_path / "x")])
+    wf.main(["wait", "--token", "t1", "--file", str(tmp_path / "x")])
     assert seen == {"max": 540, "poll": 5, "budget": 3600}
     monkeypatch.setenv("QUOIN_WAIT_BUDGET_SECS", "99999")
-    wf.main(["wait", "--file", str(tmp_path / "x")])
+    wf.main(["wait", "--token", "t1", "--file", str(tmp_path / "x")])
     assert seen["budget"] == 14400
     monkeypatch.setenv("QUOIN_WAIT_BUDGET_SECS", "junk")
-    wf.main(["wait", "--file", str(tmp_path / "x")])
+    wf.main(["wait", "--token", "t1", "--file", str(tmp_path / "x")])
     assert seen["budget"] == 3600
 
 
@@ -194,7 +194,7 @@ def test_budget_exceeded_expires_and_stops_group(tmp_path):
     rc, pid = _spawn_sleeper(tmp_path)
     try:
         start_epoch = int(Path(str(rc) + ".start").read_text().split()[2])
-        line, code = wf.do_wait(str(rc), "tok1", 5, 1, 60, clock=lambda: start_epoch + 1000.0, sleep=lambda s: None)
+        line, code = wf.do_wait(str(rc), "tok1", 5, 1, 60, clock=lambda: start_epoch + 1000.0, sleep=time.sleep)
         assert code == 4 and line.startswith("EXPIRED|")
         # the runner's SIGTERM handler leaves an rc of 143
         out = _wait_ready(rc, limit=10)
@@ -248,3 +248,40 @@ def test_core_imports_under_python_38(tmp_path):
     r = subprocess.run([exe, "-c", code, str(CORE_PATH)], capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == "ok"
+
+
+def test_wait_requires_token(tmp_path):
+    out = _cli("wait", "--file", str(tmp_path / "x.rc"))
+    assert out.stdout.strip() == "ERROR|missing --token"
+    assert out.returncode == 2
+
+
+def test_token_must_start_alphanumeric(tmp_path):
+    line, code = wf.do_start(str(tmp_path / "a.rc"), "-bad", str(tmp_path / "a.log"), None, ["true"])
+    assert (line, code) == ("ERROR|bad token", 2)
+
+
+def test_start_refuses_missing_directory_without_spawning(tmp_path):
+    line, code = wf.do_start(str(tmp_path / "nodir" / "a.rc"), "tok1", str(tmp_path / "a.log"), None, ["true"])
+    assert code == 2 and line.startswith("ERROR|directory missing")
+    line, code = wf.do_start(str(tmp_path / "a.rc"), "tok1", str(tmp_path / "nodir" / "a.log"), None, ["true"])
+    assert code == 2 and line.startswith("ERROR|directory missing")
+
+
+@pytest.mark.parametrize("pid", [0, 1])
+def test_start_record_with_unsafe_pid_is_ignored(tmp_path, pid):
+    rc = tmp_path / "a.rc"
+    Path(str(rc) + ".start").write_text("tok1 %d 1\n" % pid)
+    called = []
+    ticks = iter(range(10**9, 10**9 + 100))
+    res = wf.do_wait(str(rc), "tok1", 1, 1, 60, clock=lambda: next(ticks), sleep=lambda s: None,
+                     pid_alive=lambda p: called.append(p) or False)
+    assert res[1] == 1 and not called
+
+
+def test_terminate_group_skips_foreign_group(monkeypatch):
+    sent = []
+    monkeypatch.setattr(wf.os, "getpgid", lambda pid: pid + 1)
+    monkeypatch.setattr(wf.os, "killpg", lambda pid, sig: sent.append((pid, sig)))
+    wf._terminate_group(4242, lambda s: None)
+    assert sent == []
