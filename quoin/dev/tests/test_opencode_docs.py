@@ -308,7 +308,8 @@ REQUIRED_RUNTIME_KEYS = (
     "task-failure-text, task-background-metadata, native-error-shape, internal-retry, "
     "retry-after, signal-handling, grandchildren, continuation-flags, continuation-agent, "
     "step-settling, part-reemission, version-output, npm-wrapper, non-git-discovery, "
-    "question-override, permission-ask-outside-tool, halt-error-shape, tool-hidden-by-deny"
+    "question-override, permission-ask-outside-tool, halt-error-shape, tool-hidden-by-deny, "
+    "continuation-no-replay, managed-config-layers, data-dir-state"
 ).split(", ")
 
 
@@ -328,6 +329,20 @@ def test_headless_runtime_rows_cite_lines():
             assert re.search(r"L\d+", evidence), evidence
     assert len(keys) == len(set(keys)), "duplicate keys"
     assert set(REQUIRED_RUNTIME_KEYS) <= set(keys), set(REQUIRED_RUNTIME_KEYS) - set(keys)
+
+
+def test_driver_capability_flags_match_rows():
+    from quoin.opencode_adapter import driver
+
+    status = {}
+    for _claim, row_status, _evidence, note in _runtime_rows():
+        match = re.match(r"^`key: ([a-z0-9-]+)`", note)
+        status[match.group(1)] = row_status == "verified"
+    for key in driver.DRIVER_CITED_CAPABILITIES:
+        assert status.get(key) is True, "%s is cited by the driver but not verified" % key
+    assert driver.STEP_SETTLING_VERIFIED is status["step-settling"]
+    assert driver.CONTINUATION_NO_REPLAY_VERIFIED is status["continuation-no-replay"]
+    assert driver.NON_GIT_DISCOVERY_VERIFIED is status["non-git-discovery"]
 
 
 def test_compatibility_release_lines():
