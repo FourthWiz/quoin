@@ -175,6 +175,14 @@ that folder's later archival:
   (`autonomous-halt-{task}.md`); a resuming supervisor checks it after
   the done sentinel, before deciding whether to relaunch again.
 
+A phase MAY record a completion marker (`{phase}.tasks.done`) meaning its
+work is done and its gate is pending. The marker counts toward the union
+glob, is never a resumable sub-phase, and never substitutes for
+`{phase}.done`. A resume into a phase whose plan reports every task done
+runs that phase's gate directly and writes `{phase}.done` only after the
+gate passes. A spent automatic gate retry survives a relaunch and is reset
+only when the run halts for a human.
+
 An adapter supervisor SHOULD give each headless child a session id it
 chose itself, record that id before the child starts, and offer a
 stop-then-attach verb (for example `quoin run --takeover <task>`) that

@@ -275,6 +275,7 @@ Under `AUTONOMOUS`, the completion of each of the 9 resumable phases below is re
   8. **review** (Phase 5) → writes `autonomous-progress-{task}/review.done`.
   9. **end_of_task** (Phase 6) → writes `autonomous-progress-{task}/end_of_task.done`.
 - **Sub-phase granularity (optional):** a phase MAY additionally write `autonomous-progress-{task}/{phase}.{subphase}.done` for finer-grained progress within itself (e.g. a long `implement` phase checkpointing partial task batches). The counting glob `autonomous-progress-{task}/*.done` is the UNION of both forms.
+  - `implement.tasks.done` is a completion marker ("tasks done, gate pending") written by the implement skill or by Phase 4's tasks-complete entry, and `implement.batch-N.done` markers may exist (written ad hoc by earlier runs; no current write site); both count toward the union glob, and neither is `implement.done`.
 - **Marker:** `autonomous-run-{task}.marker`, written once at autonomous-span entry (Setup, right after `AUTONOMOUS` is set) — the read/re-establish-on-resume side of this contract is Stage-2 groundwork, documented alongside the later "Resume" section.
 - **Done sentinel:** `autonomous-done-{task}.md`, written by `end_of_task` LAST, after its other terminal side effects, outside the archived folder — same rationale as the halt-sentinel.
 
@@ -999,6 +1000,12 @@ section below for the honest net-cost direction per profile.
 
 Unless `QUOIN_INLINE_COST_CAPTURE=0`, the on-behalf write per "On-behalf cost capture" above (phase=implement, model=opus on the fast route, sonnet otherwise) runs FIRST. Either way (on-behalf write above, or under opt-out the child's own self-write), THEN verify the cost ledger has a new entry for the `implement` phase. If still not present, append a best-effort entry with `unknown-implement-<timestamp>`.
 
+**Tasks-complete entry.** Condition: `autonomous-progress-{task}/implement.done` is absent AND `python3 __QUOIN_HOME__/scripts/plan_tasks.py status --plan "<task_dir>/current-plan.md"` prints a line beginning `ALLDONE|`. The marker `implement.tasks.done` alone never qualifies; the plan decides, in both directions. Evaluate this at exactly two points:
+- (a) Phase 4 entry, fresh or resumed. True: skip the `/implement` dispatch and go to the gate below. `PENDING|`: under `AUTONOMOUS` delete a stale `implement.tasks.done`, then dispatch as usual. `UNKNOWN|`, empty output or a missing helper: dispatch as usual and write or delete nothing.
+- (b) After the primary `/implement` dispatch returns, only when the return is COMPLETE or the envelope is missing or unparseable (the lost-envelope case). A NEEDS-DECISION or BLOCKED return keeps its routing (`## Routing a NEEDS-DECISION phase return`, the hard stops) and never reaches this check; a PARTIAL return keeps the within-phase continuation under `## Error handling`, and this check runs only once that continuation ends in COMPLETE or a lost envelope. When the condition is false at this point, proceed exactly as before for that return.
+
+When the condition is true: under `AUTONOMOUS` write or refresh `implement.tasks.done` (content `tasks-complete <UTC ISO timestamp> total=<n>`, atomic write); run the inline post-implement gate at the profile's level (Full under `AUTONOMOUS`, per the depth section), then Checkpoint C as usual; write `implement.done` only on gate PASS; then the existing boundary write for the review phase. The Checkpoint C fix path is not an evaluation point and never re-enters this entry. Without `AUTONOMOUS` the skip applies too, but no marker is written or deleted.
+
 Under `AUTONOMOUS`, once Checkpoint C confirms (gate passed, continuing to review), also write the phase's completion sentinel `autonomous-progress-{task}/implement.done` (atomic write — T-05/T-10 write-site map).
 
 After implement completes, run `/gate` inline (read `/gate/SKILL.md` from the same session and execute the gate process directly — do not spawn a subagent). Step 5 audit-log persistence applies in inline mode per the gate skill's existing rule.
@@ -1019,7 +1026,7 @@ Continue to review? (yes / no / show changes)
 ```
 
 If the gate **failed**: present the failures and ask "Fix and retry, or stop?"
-- "fix" → spawn `/implement` again for the failing items (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above), then re-run `/gate` inline (post-implement boundary — same inline mechanism as the primary path; audit-log persistence applies per `/gate/SKILL.md`). Re-dispatch inherits the dispatch envelope (above), unchanged.
+- "fix" → spawn `/implement` again for the failing items, with a `Fix scope: gate <gate audit path>` line in the prompt naming the failing checks (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above), then re-run `/gate` inline (post-implement boundary — same inline mechanism as the primary path; audit-log persistence applies per `/gate/SKILL.md`). Re-dispatch inherits the dispatch envelope (above), unchanged.
 - "stop" → halt, preserve artifacts
 
 **(fast route only)** a third option, "escalate to full", is also offered here. Escalation is ONE
@@ -1053,10 +1060,14 @@ implement with no plan to dispatch against):
    delete a
    `current-plan.md` that lacks the provenance marker — that means a real plan already superseded
    the stub, and this escalation path does not apply to it.
-4. DELETE `autonomous-progress-{task}/architect.done` and `autonomous-progress-{task}/thorough_plan.done`.
+4. DELETE `autonomous-progress-{task}/architect.done` and `autonomous-progress-{task}/thorough_plan.done`,
+   plus `autonomous-progress-{task}/implement.tasks.done` and any other `implement.*.done`
+   sub-sentinels. Enumerate them python-side, never with a bare shell glob (zsh aborts when
+   nothing matches): `python3 -c 'import pathlib,sys; [print(p) for p in pathlib.Path(sys.argv[1]).glob("implement.*.done")]' "<progress dir>"`,
+   then pass each printed path to `python3 __QUOIN_HOME__/scripts/fsops.py rm`.
    `implement.done` does not exist yet at this site — this escalation offer sits in the gate-FAILED
-   branch of Checkpoint C, strictly before Phase 4 writes `implement.done` — so there is nothing to
-   delete here; the two review-phase escalation sites below (Phase 5) fire AFTER `implement.done`
+   branch of Checkpoint C, strictly before Phase 4 writes `implement.done` — so it is not in this
+   delete set; the two review-phase escalation sites below (Phase 5) fire AFTER `implement.done`
    exists and must delete it too, see there.
 5. (optional cleanup) delete the stripped stub `current-plan.md` outright — safe now that the
    completion sentinels are gone. Same provenance condition as step 3: this delete applies ONLY
@@ -1077,6 +1088,28 @@ Completed implementation work is preserved. On the full path this option does no
 existing "fix" / "stop" choice above is unchanged.
 
 Under `AUTONOMOUS`: auto-select "fix" and retry once (retry cap = 1 automatic retry). If the gate still fails after that one retry, this is Hard-stop #2 (Gate FAIL after the retry cap) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop. Never fall back to a silent proceed, and never ask. **On a fast-route run, this same escalation option ALSO routes through the existing NEEDS-DECISION return path** (`needs-decision-{task}.md`), writing it in addition to the halt-sentinel already written above — never instead of it — rather than a silent auto-select — no seventh hard-stop, same NEEDS-DECISION mechanism used elsewhere under `[autonomous]`. **Writer, named:** this NEEDS-DECISION sentinel is not written by a spawned subagent here — the `/run` orchestrator itself, inline, invokes the shared guard directly: `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-checkpoint-c --reason "<gate-failure summary>" --resume-hint "re-run /run --resume <task-name>"`, echoes its `gate-result: NEEDS-DECISION` block, and stops — so an autonomous fast run hitting this branch always leaves a terminal signal on disk, never a silent stall. Once escalation's atomic unit above (route flip, sentinel/stub cleanup) has been performed, this is the durable record of WHY the run stopped and WHERE to resume it.
+
+**Automatic-retry budget (autonomous).** The one automatic retry survives a relaunch. Before the retry is dispatched, persist it by rewriting the boundary record as a full boundary write (Checkpoint B form, only `--step` changed). Pass every field: a plain `--write` resets each omitted field to empty, and the merge-on-write mode is reserved for the Resume adoption write.
+
+```
+python3 __QUOIN_HOME__/scripts/run_state.py --write \
+  --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
+  --phase "thorough_plan" --phase-index 3 --subphase "" --step gate-retry-1 \
+  --at-stage-boundary true --route "{route}" --profile "{profile}" \
+  --next-action "start implement" --artifact "{task_dir}/current-plan.md" || true
+```
+
+The record stays at a stage boundary (`thorough_plan`, index 3, `start implement`): the gate has not passed, so a relaunch re-enters Phase 4, whose tasks-complete entry routes to the gate. The fix re-dispatch then proceeds. At any Checkpoint C gate failure, first read `python3 __QUOIN_HOME__/scripts/run_state.py --read --project-root "$PROJECT_ROOT" --task "{task}" --max-age-days "$_RUN_STATE_STALE_DAYS" --fields step,at_stage_boundary || true`. A `step` of `gate-retry-1` means the retry is already spent (a relaunch never grants a fresh one): go straight to Hard-stop #2 with a reason saying the retry budget was already spent. An absent or stale record reads back empty and counts as an unspent budget, accepted by design because it means no recent relaunch. Clear the budget at Hard-stop #2, right after the halt-sentinel is written, with the same write carrying an empty step (the supervisor never relaunches while the halt-sentinel exists, so the next run is a human's):
+
+```
+python3 __QUOIN_HOME__/scripts/run_state.py --write \
+  --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" \
+  --phase "thorough_plan" --phase-index 3 --subphase "" --step "" \
+  --at-stage-boundary true --route "{route}" --profile "{profile}" \
+  --next-action "start implement" --artifact "{task_dir}/current-plan.md" || true
+```
+
+The gate-PASS boundary write and the escalation rewind also clear it. A kill between the halt-sentinel write and this clear leaves the budget spent; the Hard-stop #2 reason then names it, and a human clears it with the same empty-step write.
 
 If the user says "show changes": run `git diff --stat` and display, then re-ask.
 
@@ -1141,7 +1174,7 @@ Checkpoint D — "Gates are blocking" below applies.
      --at-stage-boundary true --route "{route}" --profile "{profile}" \
      --next-action "start implement" --artifact "{task_dir}/current-plan.md" || true
    ```
-   Then spawn `/implement` again with the review issues as the spec (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above). Re-dispatch
+   Then spawn `/implement` again with the review issues as the spec, adding a `Fix scope: review <review file path>` line naming the requested changes (on the fast route, same model-opus / leading-`[no-redispatch]` dispatch as the primary Phase 4 spawn above). Re-dispatch
    inherits the dispatch envelope (above), unchanged. After fix-implement completes, re-run the post-implementation gate inline (same level as before; audit-log persistence per
    `/gate/SKILL.md`). Then re-spawn `/review`. Cap at 3 review rounds to prevent infinite cycling.
 2. **"accept"** → treat as approved despite requested changes. Log this decision in session state.
@@ -1160,7 +1193,7 @@ shape:` line and its `Route:` line together — never the review-shape line alon
 outright delete at this step); THEN, once both
 route-recovery sources agree, DELETE `autonomous-progress-{task}/architect.done`,
 `autonomous-progress-{task}/thorough_plan.done`, AND `autonomous-progress-{task}/implement.done`
-plus any `implement.*.done` sub-sentinels — `implement.done` already exists by this point (Phase 4
+plus `implement.tasks.done` and any `implement.*.done` sub-sentinels, enumerated python-side with `pathlib.Path(...).glob` (never a bare shell glob) as in Checkpoint C step 4 — `implement.done` already exists by this point (Phase 4
 wrote it once Checkpoint C confirmed), unlike at the Checkpoint C site above, so it must be deleted
 here too, or a resumed escalated run would skip re-implementation entirely and jump straight into
 re-reviewing the untouched fast-route code; optionally delete the stripped stub outright now that
@@ -1198,7 +1231,7 @@ python3 __QUOIN_HOME__/scripts/run_state.py --write \
 own `fast_path_triage` rewind — write it here regardless, since the user may choose the bare stop
 instead of escalating.) Tell the user: "Review found blocking
 issues. The workflow cannot continue until these are resolved. Artifacts are preserved at
-`.workflow_artifacts/<task-name>/`." **(fast route only)** this bare stop is the full-path behavior; on the fast route, "escalate to full" is offered alongside it instead — the same atomic unit as the Checkpoint C escalation above, same crash-safe order (in-session `route` flip to `full`; rewrite `triage-decision.md`; strip the stub's `Review shape:` and `Route:` lines per the same provenance-conditioned rule — no outright delete yet; THEN DELETE `autonomous-progress-{task}/architect.done`, `autonomous-progress-{task}/thorough_plan.done`, AND `autonomous-progress-{task}/implement.done` plus any `implement.*.done` sub-sentinels, since it already exists at this site too; optionally delete the stripped stub outright once the sentinels are gone (provenance-marked stubs only — same condition as Checkpoint C step 5); then rewind the run-state record so a resumed session re-enters at architect, not wherever the run actually halted: `python3 __QUOIN_HOME__/scripts/run_state.py --write --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" --phase fast_path_triage --phase-index 1 --subphase "" --step "" --at-stage-boundary true --route full --profile "{profile}" --next-action "start architect" || true`; only then re-enter at the architect phase). Completed implementation work is preserved.
+`.workflow_artifacts/<task-name>/`." **(fast route only)** this bare stop is the full-path behavior; on the fast route, "escalate to full" is offered alongside it instead — the same atomic unit as the Checkpoint C escalation above, same crash-safe order (in-session `route` flip to `full`; rewrite `triage-decision.md`; strip the stub's `Review shape:` and `Route:` lines per the same provenance-conditioned rule — no outright delete yet; THEN DELETE `autonomous-progress-{task}/architect.done`, `autonomous-progress-{task}/thorough_plan.done`, AND `autonomous-progress-{task}/implement.done` plus `implement.tasks.done` and any `implement.*.done` sub-sentinels, enumerated python-side with `pathlib.Path(...).glob` (never a bare shell glob) as in Checkpoint C step 4, since `implement.done` already exists at this site too; optionally delete the stripped stub outright once the sentinels are gone (provenance-marked stubs only — same condition as Checkpoint C step 5); then rewind the run-state record so a resumed session re-enters at architect, not wherever the run actually halted: `python3 __QUOIN_HOME__/scripts/run_state.py --write --project-root "$PROJECT_ROOT" --task "{task}" --session-id "$CLAUDE_CODE_SESSION_ID" --phase fast_path_triage --phase-index 1 --subphase "" --step "" --at-stage-boundary true --route full --profile "{profile}" --next-action "start architect" || true`; only then re-enter at the architect phase). Completed implementation work is preserved.
 
 Under `AUTONOMOUS`: this is Hard-stop #1 (Review BLOCKED) — write the halt-sentinel per "## Autonomous hard stops" before exit, then stop (no `AskUserQuestion`, no silent proceed). **On a fast-route run, offer escalation rather than a bare stop — same mechanism as the Checkpoint C escalation above**, performed per the atomic unit above; under `[autonomous]` this ALSO routes through the NEEDS-DECISION return path, writing it in addition to the halt-sentinel already written above — never instead of it: the halt-sentinel is what the Stage-2 supervisor reads, and a supervised autonomous fast run hitting review BLOCKED always terminates for a human rather than relaunching unattended into the full path — named writer (same shared guard as Checkpoint C): `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill run --site fast-route-escalation-blocked --reason "<BLOCKED summary>" --resume-hint "re-run /run --resume <task-name>"`. On the full path this branch is unchanged — still a bare stop, since the full path never skipped the phases escalation would recover.
 
@@ -1376,6 +1409,13 @@ directory) for `<task-name>`:
   long `implement` phase that checkpointed partial task batches), resume that phase
   at the first sub-phase lacking its own completion sentinel, rather than
   restarting the whole phase from scratch.
+- `implement.tasks.done` and `implement.batch-N.done` are progress markers, not resumable
+  sub-phases — never "resume at" them. When Step 1 selects `implement` (its `implement.done` is
+  absent), Phase 4 always restarts through its tasks-complete entry, which decides between
+  dispatching `/implement` and going straight to the gate from `plan_tasks.py` over the plan,
+  never from the marker alone. A resume into Phase 4 with no pending tasks is this supported
+  path. A stored `step: gate-retry-1` is a retry-budget record read only at the Checkpoint C
+  failure point, never a re-entry position.
 - **Field invariant (stated once here, applies to every read of this record anywhere in this
   file):** `phase`'s meaning is keyed on `at_stage_boundary` — two cases, not one. At
   `at_stage_boundary: true`, `phase` names the LAST COMPLETED phase — every boundary write sets
@@ -1393,6 +1433,9 @@ directory) for `<task-name>`:
   `next_action`, never `phase` — `phase` alone is ambiguous between "resume here" and "this
   already ran," and `phase_index` is informational only (it is not injective — several phases
   share an index — so it never decides anything by itself).
+- On an `at_stage_boundary: true` record, `step` is never a re-entry position; its only value
+  today is Phase 4's `gate-retry-1` retry-budget marker, read solely at the Checkpoint C failure
+  point.
 - If NO `autonomous-progress-{task}/` directory exists for the task (a resume that
   predates the sentinel contract, or a non-autonomous run that never wrote one), check for
   a fresh active run-state record next: `python3 __QUOIN_HOME__/scripts/run_state.py --read
