@@ -23,11 +23,6 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 CEILING_BYTES = 153000
 # Raised deliberately for the tasks-complete entry, the automatic-retry budget and the
 # headless no-yield references: measured about 139 KB after those additions, times 1.10.
-# S-5 ratchet (T-12): measured 128662 B, candidate 128662*1.10=141529 B > prior
-# ceiling 135919 B -> HOLD; number unchanged. This is the ceiling surface the
-# round-1 tally initially dropped; restored here as its own recorded decision,
-# not folded into test_footprint_ceilings.py's skill: keys (this file guards
-# an orchestrator excluded from that dict's scope).
 
 
 def test_run_skill_md_byte_ceiling():

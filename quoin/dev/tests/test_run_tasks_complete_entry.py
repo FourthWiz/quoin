@@ -192,3 +192,23 @@ def test_core_doc_completion_marker():
     doc = RUN_CORE_DOC.read_text(encoding="utf-8")
     assert "`{phase}.tasks.done`" in doc
     assert "never substitutes" in doc.replace("\n", " ")
+
+
+def test_budget_read_command_from_text_sees_the_spent_retry(budget, tmp_path, monkeypatch):
+    # Each Bash call is a fresh shell: the read must not lean on variables set elsewhere.
+    monkeypatch.delenv("_RUN_STATE_STALE_DAYS", raising=False)
+    monkeypatch.delenv("QUOIN_RUN_STATE_STALE_DAYS", raising=False)
+    (tmp_path / ".workflow_artifacts" / "memory").mkdir(parents=True)
+    budget_call, _reset = _run_calls(budget, tmp_path)
+    assert subprocess.run(budget_call, capture_output=True, text=True, timeout=60).returncode == 0
+    found = re.findall(r"`(python3 \S*run_state\.py --read [^`]*)`", budget)
+    assert len(found) == 1
+    cmd = found[0].replace(" || true", "")
+    assert "$_" not in cmd
+    cmd = cmd.replace("__QUOIN_HOME__/scripts", shlex.quote(str(CORE_SCRIPTS)))
+    cmd = cmd.replace("$PROJECT_ROOT", shlex.quote(str(tmp_path))).replace("{task}", "demo")
+    argv = shlex.split(cmd)
+    argv[0] = sys.executable
+    r = subprocess.run(argv, capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    assert "step=gate-retry-1" in r.stdout
