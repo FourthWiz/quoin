@@ -30,6 +30,7 @@ dev = [
     "pytest-timeout",
     "build",
     "pyyaml>=6.0",
+    "jsonschema>=4.18",
 ]
 
 [tool.hatch.version]

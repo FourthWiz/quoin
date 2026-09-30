@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "policy": {
+    "allowed_hosts": [
+      "gateway-c.example.invalid"
+    ]
+  }
+}

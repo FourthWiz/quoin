@@ -1,0 +1,308 @@
+{
+  "$id": "urn:quoin:opencode:native-config:1.18.32",
+  "$comment": "Derived by hand on 2026-09-30 from the V1 configuration schema of OpenCode at tag v1.18.32; it covers exactly the keys the compiler emits and is stricter than OpenCode, which ignores unknown keys. Sources (git blob SHA in parentheses): https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/v1/config/config.ts (7ebb4b69b023a252e1234a02c420e03b30bdbcde); https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/v1/config/provider.ts (5b6a8133c45e0f3ce515333e746ca228da10cbb7); https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/v1/config/agent.ts (b220bd7ef87d7e34598673fdb5ec8fa9c7a3146c); https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/policy.ts (a2adebb54e4e90706de5cfee99d286537b3865e8); https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/catalog.ts (1945024b54e8c755a4f110d4bf4444ae10a10844); https://github.com/anomalyco/opencode/blob/v1.18.32/packages/core/src/config/experimental.ts (12a02635db658e0d42fb7cf72f2596fe755f7f97). Keyword set restricted to the subset the in-package validator supports.",
+  "title": "OpenCode 1.18.32 configuration subset",
+  "$defs": {
+    "native_id": {
+      "type": "string",
+      "pattern": "^(openrouter|quoin-[a-z0-9][a-z0-9_-]{0,62})$",
+      "$comment": "Provider id: the built-in openrouter id or a reserved quoin- prefixed id; a config provider named like another built-in id would inherit that id's loader (provider.ts L1482-1491, L1629-1645)."
+    },
+    "native_model_ref": {
+      "type": "string",
+      "pattern": "^(openrouter|quoin-[a-z0-9][a-z0-9_-]{0,62})/\\S+$",
+      "$comment": "provider/model reference split at the first slash (provider.ts L2058-2064); the pattern cannot exclude a trailing newline, so the compiler rejects whitespace in model ids before building."
+    },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ],
+      "$comment": "The three effort levels the compiler maps; max is never emitted."
+    },
+    "variant": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reasoningEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high"
+          ],
+          "$comment": "OpenAI-compatible variant option (transform.ts L981-989); variants are free-form records, core provider.ts L69-79."
+        },
+        "reasoning": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "effort"
+          ],
+          "properties": {
+            "effort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "$comment": "Nested effort level of the OpenRouter variant shape (transform.ts L858-864)."
+            }
+          },
+          "$comment": "OpenRouter variant option, nested reasoning.effort (transform.ts L858-864)."
+        }
+      },
+      "$comment": "Variant options: core/src/v1/config/provider.ts L69-79."
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "core/src/v1/config/provider.ts L15."
+        },
+        "variants": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^quoin-(low|medium|high)$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/variant"
+          },
+          "$comment": "core/src/v1/config/provider.ts L69-79; an emptiness check is a compile gate because minProperties is unavailable."
+        }
+      },
+      "$comment": "Model entry: core/src/v1/config/provider.ts L13-80."
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "npm",
+        "name",
+        "options",
+        "whitelist",
+        "models"
+      ],
+      "properties": {
+        "npm": {
+          "type": "string",
+          "enum": [
+            "@ai-sdk/openai-compatible",
+            "@ai-sdk/openai",
+            "@openrouter/ai-sdk-provider"
+          ],
+          "$comment": "core/src/v1/config/provider.ts L87; bundled package map provider.ts L114-140."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "core/src/v1/config/provider.ts L84."
+        },
+        "options": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "baseURL",
+            "apiKey"
+          ],
+          "properties": {
+            "baseURL": {
+              "type": "string",
+              "pattern": "^https?://",
+              "$comment": "core/src/v1/config/provider.ts L94."
+            },
+            "apiKey": {
+              "type": "string",
+              "pattern": "^\\{env:QUOIN_[A-Z0-9_]+_API_KEY\\}$",
+              "$comment": "core/src/v1/config/provider.ts L93; only the environment placeholder form is allowed, never a value."
+            }
+          },
+          "$comment": "core/src/v1/config/provider.ts L90-129."
+        },
+        "whitelist": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string"
+          },
+          "$comment": "core/src/v1/config/provider.ts L88; matched against the models-table key, provider.ts L1695-1699."
+        },
+        "models": {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/model"
+          },
+          "$comment": "core/src/v1/config/provider.ts L130."
+        }
+      },
+      "$comment": "Provider entry: core/src/v1/config/provider.ts L82-131."
+    },
+    "agent_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model"
+      ],
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/native_model_ref"
+        },
+        "variant": {
+          "type": "string",
+          "pattern": "^quoin-(low|medium|high)$",
+          "$comment": "core/src/v1/config/agent.ts L15-17; applies only with the agent's own model, session/prompt.ts L646-654."
+        }
+      },
+      "$comment": "Agent entry: core/src/v1/config/agent.ts L12-17."
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "action",
+        "effect",
+        "resource"
+      ],
+      "properties": {
+        "action": {
+          "type": "string",
+          "const": "provider.use",
+          "$comment": "core/src/catalog.ts L20; core/src/config/experimental.ts L9-14."
+        },
+        "effect": {
+          "type": "string",
+          "enum": [
+            "allow",
+            "deny"
+          ],
+          "$comment": "core/src/policy.ts L8."
+        },
+        "resource": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "core/src/policy.ts L11-15."
+        }
+      },
+      "$comment": "Policy statement: core/src/policy.ts L8-15."
+    },
+    "config": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "$schema",
+        "model",
+        "small_model",
+        "agent",
+        "share",
+        "autoupdate",
+        "enabled_providers",
+        "provider",
+        "experimental"
+      ],
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "const": "https://opencode.ai/config.json",
+          "$comment": "core/src/v1/config/config.ts L33-35."
+        },
+        "model": {
+          "$ref": "#/$defs/native_model_ref",
+          "$comment": "core/src/v1/config/config.ts L74-76."
+        },
+        "small_model": {
+          "$ref": "#/$defs/native_model_ref",
+          "$comment": "core/src/v1/config/config.ts L77-79."
+        },
+        "agent": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "enum": [
+              "quoin-coordinator",
+              "quoin-investigator",
+              "quoin-architect",
+              "quoin-planner",
+              "quoin-implementer",
+              "quoin-critic",
+              "quoin-reviewer",
+              "quoin-gate",
+              "title",
+              "compaction"
+            ]
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/agent_entry"
+          },
+          "$comment": "core/src/v1/config/config.ts L96-109; the summary agent is deliberately excluded because nothing reads it."
+        },
+        "share": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "auto",
+            "disabled"
+          ],
+          "$comment": "core/src/v1/config/config.ts L57-60."
+        },
+        "autoupdate": {
+          "enum": [
+            true,
+            false,
+            "notify"
+          ],
+          "$comment": "core/src/v1/config/config.ts L64-67."
+        },
+        "enabled_providers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/native_id"
+          },
+          "$comment": "core/src/v1/config/config.ts L71-73."
+        },
+        "provider": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^(openrouter|quoin-[a-z0-9][a-z0-9_-]{0,62})$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/provider"
+          },
+          "$comment": "core/src/v1/config/config.ts L110-112."
+        },
+        "experimental": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "policies"
+          ],
+          "properties": {
+            "policies": {
+              "type": "array",
+              "minItems": 2,
+              "items": {
+                "$ref": "#/$defs/policy"
+              },
+              "$comment": "core/src/v1/config/config.ts L185-187."
+            }
+          },
+          "$comment": "core/src/v1/config/config.ts L185-187 (experimental block; only policies is emitted)."
+        }
+      },
+      "$comment": "Entry point: the top-level keys the compiler emits."
+    }
+  }
+}

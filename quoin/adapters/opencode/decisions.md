@@ -112,6 +112,26 @@ Owner: maintainer
 Blocks: session mode selection
 Value: not set
 
+## Adapter design decisions
+
+Decisions the adapter has already made. Unlike the maintainer decisions above, these
+carry no `Value:` line: nothing here depends on a value only the maintainer can supply.
+
+### Provider access in compiled configuration
+
+Status: decided
+Decision: the compiled configuration sets `enabled_providers` to exactly the providers in
+use and pins each provider to its model ids with `whitelist`. It also emits
+`experimental.policies` with a deny-all `provider.use` rule first and one allow rule per
+provider, so the last matching rule wins.
+Rationale: an unmatched provider is allowed by default. `enabled_providers` and
+`whitelist` are enforced by the provider loader on the pinned run path, while policy
+statements are evaluated only by the newer catalog service, so the policies are
+supplementary and harmless rather than the enforced control.
+Scope: this supplements credential and network isolation and never replaces them. Later
+configuration layers can override the compiled keys, so the launcher verifies them at
+launch.
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.

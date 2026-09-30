@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "roles": {
+    "planner": {
+      "model": "work-planner"
+    }
+  },
+  "policy": {
+    "allowed_hosts": [
+      "gateway.example.invalid"
+    ]
+  }
+}

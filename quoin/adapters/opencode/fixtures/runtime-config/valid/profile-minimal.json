@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "minimal",
+  "classification": "work",
+  "providers": {
+    "local-gw": {
+      "kind": "openai-compatible",
+      "endpoint_family": "chat-completions",
+      "base_url": "http://127.0.0.1:8080/v1",
+      "credential_ref": "env:LOCAL_GW_TOKEN"
+    }
+  },
+  "models": {
+    "local-model": {
+      "provider": "local-gw",
+      "model_id": "example-vendor/example-local",
+      "qualification_ref": "local:local-model"
+    }
+  },
+  "default_model": "local-model"
+}

@@ -223,6 +223,30 @@ def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
         "quoin/opencode_adapter/install.py",
         "quoin/opencode_adapter/scripts.py",
         "quoin/opencode_adapter/doctor.py",
+        # runtime configuration schema, fixtures and loader modules
+        "quoin/data/adapters/opencode/schemas/runtime-config.schema.json",
+        "quoin/data/adapters/opencode/fixtures/runtime-config/cases.json",
+        "quoin/opencode_adapter/errors.py",
+        "quoin/opencode_adapter/paths.py",
+        "quoin/opencode_adapter/jsonio.py",
+        "quoin/opencode_adapter/schema_check.py",
+        "quoin/opencode_adapter/secrets.py",
+        "quoin/opencode_adapter/config.py",
+        "quoin/opencode_adapter/merge.py",
+        "quoin/opencode_adapter/qualification.py",
+        "quoin/opencode_adapter/roles.py",
+        # native configuration compiler, its explain renderer, the vendored
+        # subset schema and the three compiled reference documents
+        "quoin/opencode_adapter/compiler.py",
+        "quoin/opencode_adapter/explain.py",
+        # probe wiring, import preview and retry policy
+        "quoin/opencode_adapter/probe_cli.py",
+        "quoin/opencode_adapter/import_preview.py",
+        "quoin/opencode_adapter/retry.py",
+        "quoin/data/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
+        "quoin/data/adapters/opencode/fixtures/compiled/work.opencode.json",
+        "quoin/data/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
+        "quoin/data/adapters/opencode/fixtures/compiled/personal.opencode.json",
     ]
     required += [
         f"quoin/data/core/skills/{skill_id}.md" for skill_id in supported_ids
@@ -317,6 +341,45 @@ def test_wheel_opencode_install_and_doctor_in_clean_venv(built_wheel, tmp_path):
     assert len(probe_lines) == 2, f"expected two printed paths, got: {result.stdout!r}"
     for line in probe_lines:
         assert str(venv_dir) in line, f"path not under the clean venv: {line}"
+
+    # Both packaged schemas resolve from the installed wheel.
+    result = subprocess.run(
+        [
+            str(venv_python), "-c",
+            "from quoin.opencode_adapter import paths; "
+            "a = paths.runtime_config_schema_path(); b = paths.native_schema_path(); "
+            "assert a.is_file() and b.is_file(); print(a); print(b)",
+        ],
+        env=env,
+        cwd=str(proj_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"schema locators failed:\n{result.stdout}\n{result.stderr}"
+    for line in [line for line in result.stdout.splitlines() if line.strip()]:
+        assert str(venv_dir) in line, f"schema not resolved from the clean venv: {line}"
+
+    # The probe script loads from the installed data directory without adding
+    # bytecode there (the installer may already have compiled it).
+    result = subprocess.run(
+        [
+            str(venv_python), "-c",
+            "import os, sys; assert not sys.dont_write_bytecode; "
+            "from quoin.opencode_adapter import paths, probe_cli; "
+            "snap = lambda: sorted(os.path.join(r, n) for r, d, f in os.walk(str(paths.adapter_data_dir())) for n in d + f); "
+            "before = snap(); mod = probe_cli.load_probe_module(); assert callable(mod.execute); "
+            "assert snap() == before; print('ok')",
+        ],
+        env=env,
+        cwd=str(proj_dir),
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0 and result.stdout.strip() == "ok", (
+        f"probe load failed:\n{result.stdout}\n{result.stderr}"
+    )
 
     def run_quoin(*args: str) -> subprocess.CompletedProcess:
         return subprocess.run(

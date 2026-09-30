@@ -1,0 +1,96 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "quoin-corp-gw-b/example-vendor/example-planner",
+  "small_model": "quoin-corp-gw-b/example-vendor/example-planner",
+  "agent": {
+    "quoin-coordinator": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    },
+    "quoin-investigator": {
+      "model": "quoin-corp-gw/example-vendor/example-coder"
+    },
+    "quoin-architect": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    },
+    "quoin-planner": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    },
+    "quoin-implementer": {
+      "model": "quoin-corp-gw/example-vendor/example-coder"
+    },
+    "quoin-critic": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    },
+    "quoin-reviewer": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    },
+    "quoin-gate": {
+      "model": "quoin-corp-gw/example-vendor/example-coder"
+    },
+    "title": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    },
+    "compaction": {
+      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+    }
+  },
+  "share": "disabled",
+  "autoupdate": false,
+  "enabled_providers": [
+    "quoin-corp-gw",
+    "quoin-corp-gw-b"
+  ],
+  "provider": {
+    "quoin-corp-gw": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Corporate gateway",
+      "options": {
+        "baseURL": "https://gateway.example.invalid/v1",
+        "apiKey": "{env:QUOIN_CORP_GW_API_KEY}"
+      },
+      "whitelist": [
+        "example-vendor/example-coder"
+      ],
+      "models": {
+        "example-vendor/example-coder": {
+          "name": "work-coder"
+        }
+      }
+    },
+    "quoin-corp-gw-b": {
+      "npm": "@ai-sdk/openai",
+      "name": "corp-gw-b",
+      "options": {
+        "baseURL": "https://gateway-b.example.invalid/v1",
+        "apiKey": "{env:QUOIN_CORP_GW_B_API_KEY}"
+      },
+      "whitelist": [
+        "example-vendor/example-planner"
+      ],
+      "models": {
+        "example-vendor/example-planner": {
+          "name": "work-planner"
+        }
+      }
+    }
+  },
+  "experimental": {
+    "policies": [
+      {
+        "action": "provider.use",
+        "effect": "deny",
+        "resource": "*"
+      },
+      {
+        "action": "provider.use",
+        "effect": "allow",
+        "resource": "quoin-corp-gw"
+      },
+      {
+        "action": "provider.use",
+        "effect": "allow",
+        "resource": "quoin-corp-gw-b"
+      }
+    ]
+  }
+}

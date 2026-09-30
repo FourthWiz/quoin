@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "roles": {
+    "implementer": {
+      "model": "work-coder"
+    }
+  },
+  "policy": {
+    "allowed_providers": [
+      "corp-gw"
+    ]
+  },
+  "limits": {
+    "max_tool_calls": 100
+  },
+  "providers": {
+    "corp-gw": {
+      "kind": "openai-compatible",
+      "endpoint_family": "chat-completions",
+      "base_url": "https://gateway.example.invalid/v2",
+      "credential_ref": "keychain:quoin/work-gateway",
+      "name": "Corporate gateway"
+    }
+  }
+}

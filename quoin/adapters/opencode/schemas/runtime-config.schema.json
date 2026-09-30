@@ -1,0 +1,379 @@
+{
+  "$id": "urn:quoin:opencode:runtime-config:1",
+  "$comment": "Draft 2020-12 vocabulary restricted to the keyword subset the in-package validator supports; no other keyword may appear in a schema position. Entry points are the profile, project and managed definitions.",
+  "title": "Runtime configuration",
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]{0,62}$"
+    },
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "runtime": {
+      "type": "string",
+      "enum": [
+        "opencode"
+      ]
+    },
+    "classification_profile": {
+      "type": "string",
+      "enum": [
+        "work",
+        "personal"
+      ]
+    },
+    "host": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9.:-]{1,253}$"
+    },
+    "url": {
+      "type": "string",
+      "minLength": 1
+    },
+    "credential_ref": {
+      "type": "string",
+      "pattern": "^(?:env:[A-Z_][A-Z0-9_]{0,127}|keychain:[A-Za-z0-9._-]{1,128}/[A-Za-z0-9._@/+-]{1,256})$"
+    },
+    "role_name": {
+      "type": "string",
+      "enum": [
+        "coordinator",
+        "investigator",
+        "architect",
+        "planner",
+        "implementer",
+        "critic",
+        "reviewer",
+        "gate"
+      ]
+    },
+    "effort": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high",
+        "max"
+      ]
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "endpoint_family",
+        "base_url",
+        "credential_ref"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "openai-compatible",
+            "openrouter"
+          ]
+        },
+        "endpoint_family": {
+          "type": "string",
+          "enum": [
+            "chat-completions",
+            "responses"
+          ]
+        },
+        "base_url": {
+          "$ref": "#/$defs/url"
+        },
+        "credential_ref": {
+          "$ref": "#/$defs/credential_ref"
+        },
+        "name": {
+          "type": "string"
+        },
+        "ca_file": {
+          "type": "string"
+        },
+        "use_env_proxy": {
+          "type": "boolean"
+        }
+      }
+    },
+    "providers": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/provider"
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model_id",
+        "qualification_ref"
+      ],
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/identifier"
+        },
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "qualification_ref": {
+          "type": "string",
+          "pattern": "^local:[a-z0-9][a-z0-9_-]{0,62}$"
+        }
+      }
+    },
+    "models": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/identifier"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/model"
+      }
+    },
+    "role_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "$ref": "#/$defs/identifier"
+        },
+        "effort": {
+          "$ref": "#/$defs/effort"
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/role_name"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/role_entry"
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "allowed_providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "denied_providers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/identifier"
+          },
+          "uniqueItems": true
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/host"
+          },
+          "uniqueItems": true
+        },
+        "denied_hosts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/host"
+          },
+          "uniqueItems": true
+        },
+        "sharing": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "manual"
+          ]
+        },
+        "external_writes": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "approval-required"
+          ]
+        },
+        "isolation": {
+          "type": "string",
+          "enum": [
+            "managed",
+            "convenience"
+          ]
+        },
+        "cross_profile_fallback": {
+          "type": "boolean",
+          "const": false
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_run_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_tool_calls": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_context_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_output_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_transient_retries": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "integrations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/identifier"
+        },
+        "enabled": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "jira",
+              "slack",
+              "mail"
+            ]
+          },
+          "uniqueItems": true
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "read-only",
+            "approved-write"
+          ]
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "runtime",
+        "profile",
+        "classification",
+        "providers",
+        "models",
+        "default_model"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/schema_version"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "profile": {
+          "$ref": "#/$defs/identifier"
+        },
+        "classification": {
+          "$ref": "#/$defs/classification_profile"
+        },
+        "providers": {
+          "$ref": "#/$defs/providers"
+        },
+        "models": {
+          "$ref": "#/$defs/models"
+        },
+        "default_model": {
+          "$ref": "#/$defs/identifier"
+        },
+        "auxiliary_model": {
+          "$ref": "#/$defs/identifier"
+        },
+        "roles": {
+          "$ref": "#/$defs/roles"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "integrations": {
+          "$ref": "#/$defs/integrations"
+        }
+      }
+    },
+    "project": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "runtime",
+        "profile"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/schema_version"
+        },
+        "runtime": {
+          "$ref": "#/$defs/runtime"
+        },
+        "profile": {
+          "$ref": "#/$defs/identifier"
+        },
+        "classification": {},
+        "roles": {
+          "$ref": "#/$defs/roles"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        },
+        "integrations": {
+          "$ref": "#/$defs/integrations"
+        }
+      }
+    },
+    "managed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version"
+      ],
+      "properties": {
+        "schema_version": {
+          "$ref": "#/$defs/schema_version"
+        },
+        "policy": {
+          "$ref": "#/$defs/policy"
+        },
+        "limits": {
+          "$ref": "#/$defs/limits"
+        }
+      }
+    }
+  }
+}
