@@ -11,7 +11,7 @@ Subcommands
       into. An existing file at DST is replaced. An existing empty directory at
       DST is replaced by a directory SRC. A non-empty directory at DST is
       refused (exit 3) unless --overwrite is given, the destination is inside a
-      `.workflow_artifacts` tree outside `memory/`, and SRC is a directory. With
+      the workflow-artifacts directory tree outside `memory/`, and SRC is a directory. With
       --overwrite the old directory is renamed to `DST.fsops-old-<pid>`, the
       move is made, and the old directory is deleted; if the move fails the old
       directory is put back. If the helper dies between the two renames, the
@@ -23,12 +23,12 @@ Subcommands
   rm [-r|--recursive] PATH...
       Delete files and symbolic links (a link is removed, never its target).
       A missing path is not an error. A directory needs -r, and -r only deletes
-      directories inside a `.workflow_artifacts` tree: the `.workflow_artifacts`
+      directories inside a the workflow-artifacts directory tree: the the workflow-artifacts directory
       directory itself and everything under its `memory/` directory are
       refused (exit 3). Confinement is decided on the fully resolved path and
       compares names without regard to case, so `MEMORY` or a symlink alias
       cannot slip through. On a case-sensitive filesystem this also treats a
-      directory spelled `.Workflow_Artifacts` as a `.workflow_artifacts` root.
+      directory spelled `.Workflow_Artifacts` as a the workflow-artifacts directory root.
       Every path is attempted; the exit code is the worst per-path outcome.
 
   write-atomic [--parents] DST
@@ -98,7 +98,7 @@ def _samefile_or_false(a: str, b: str) -> bool:
 def is_confined(resolved: str) -> bool:
     """True when `resolved` (a realpath) may be deleted recursively.
 
-    It must lie strictly inside a `.workflow_artifacts` directory and not under
+    It must lie strictly inside a the workflow-artifacts directory directory and not under
     that directory's `memory/` child. Names are compared case-insensitively and
     any prefix that is the same file as the root or its `memory/` directory
     (for example through a Unicode-normalization alias) also refuses.

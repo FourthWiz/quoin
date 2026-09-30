@@ -171,7 +171,7 @@ def test_discover_recovery_token_present_not_check_only():
     """A marker-check-only discover (no self-clear) MUST fail this test.
 
     This asserts the RECOVERY token specifically: the literal
-    `fsops.py rm ".workflow_artifacts/.init-bootstrap-active"` co-located with the
+    `fsops.py rm` on the bootstrap marker path, co-located with the
     marker path, proving discover actually consumes-and-clears the marker
     rather than merely checking for its presence.
     """
