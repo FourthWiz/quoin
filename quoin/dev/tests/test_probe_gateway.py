@@ -1011,6 +1011,14 @@ def test_affected_tests_self_check():
         runtime_files.update((case.get("companions") or {}).values())
     for rel in runtime_files:
         per_file_expected[runtime_dir + rel] = {"test_opencode_runtime_config.py"}
+    # Likewise the runtime-events fixtures: every file, including the case
+    # inventory itself, is replayed by the fixture tests and scanned by the docs
+    # tests.
+    events_dir = "quoin/adapters/opencode/fixtures/runtime-events/"
+    events_cases = json.loads((repo_root / events_dir / "cases.json").read_text(encoding="utf-8"))
+    events_files = {"cases.json"} | {case["file"] for case in events_cases["cases"]}
+    for rel in events_files:
+        per_file_expected[events_dir + rel] = {"test_opencode_event_fixtures.py", "test_opencode_docs.py"}
     per_file_expected["quoin/adapters/opencode/schemas/runtime-config.schema.json"] = {
         "test_opencode_runtime_config.py",
         "test_opencode_schema_check.py",
