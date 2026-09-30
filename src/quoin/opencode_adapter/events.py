@@ -29,7 +29,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from quoin.opencode_adapter.retry import FAILURE_KINDS
+from quoin.opencode_adapter.retry import FAILURE_KINDS, Usage
 
 SCHEMA_VERSION = 1
 RUN_ID_RE = re.compile(r"^oc-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$")
@@ -634,11 +634,17 @@ def _safe_ident(value: object, redact: Callable[[str], str]) -> Optional[str]:
     """An identifier as-is when well formed and untouched by redaction, else a digest.
 
     Deterministic for a given redactor, so a dedup key computed from the raw
-    line matches the id later persisted on the event.
+    line matches the id later persisted on the event. An input that already
+    looks like a digest (``h-`` prefix) is digested too, so a literal id can
+    never collide with the digest of another id.
     """
     if not isinstance(value, str):
         return None
-    if _SAFE_IDENT_RE.fullmatch(value) and redact(value) == value:
+    if (
+        _SAFE_IDENT_RE.fullmatch(value)
+        and not value.startswith("h-")
+        and redact(value) == value
+    ):
         return value
     digest = hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
     return "h-" + digest[:32]
@@ -745,6 +751,33 @@ def parse_stderr_line(line: str) -> Optional[StderrSignal]:
     return None
 
 
+def approval_from_stderr(
+    signal: StderrSignal,
+    *,
+    redact: Callable[[str], str] = _identity,
+    limit: int = 256,
+    max_patterns: int = 16,
+) -> ApprovalRequiredPayload:
+    """Bounded, redacted approval payload for a permission notice on stderr.
+
+    The permission name and every kept pattern are redacted and then
+    truncated; at most ``max_patterns`` patterns are kept, and a final
+    ``"…[N more]"`` entry says how many were dropped.
+    """
+    kept = [
+        _bound(pattern, redact, limit) or ""
+        for pattern in signal.patterns[:max_patterns]
+    ]
+    dropped = len(signal.patterns) - len(kept)
+    if dropped > 0:
+        kept.append("…[%d more]" % dropped)
+    return ApprovalRequiredPayload(
+        evidence_source="stderr_notice",
+        permission=_bound(signal.name, redact, limit),
+        patterns=tuple(kept),
+    )
+
+
 # ---------------------------------------------------------------------------
 # translation
 # ---------------------------------------------------------------------------
@@ -820,9 +853,15 @@ def _fallback_event(obj, run_id, attempt, observed_at, redact) -> RuntimeEvent:
             redact=redact,
         )
     except Exception:  # noqa: BLE001 - last resort drops everything line-derived
+        # The shaped type is kept when it can still be computed, so a rebuilt
+        # deduper keys the persisted event the way the live line was keyed.
+        try:
+            shaped_type = _native_type(source, _identity)
+        except Exception:  # noqa: BLE001
+            shaped_type = "unknown"
         return _event(
             {}, run_id, attempt, observed_at, EventType.PROGRESS, payload, None,
-            redact=_identity,
+            redact=_identity, native_type=shaped_type,
         )
 
 
@@ -837,6 +876,7 @@ def _event(
     parent_id: Optional[str] = None,
     *,
     redact: Callable[[str], str],
+    native_type: Optional[str] = None,
 ) -> RuntimeEvent:
     return RuntimeEvent(
         schema_version=SCHEMA_VERSION,
@@ -850,7 +890,8 @@ def _event(
         type=etype,
         origin="native",
         native=NativeRef(
-            type=_native_type(obj, redact), id=native_id, revision=1, content_sha256=None
+            type=native_type if native_type is not None else _native_type(obj, redact),
+            id=native_id, revision=1, content_sha256=None
         ),
         payload=payload,
     )
@@ -1269,3 +1310,17 @@ def usage_totals(events: Iterable[RuntimeEvent]) -> UsagePayload:
         cost = format(sum((Decimal(c) for c in costs), Decimal(0)), "f")
     last = chosen[-1].payload.finish_reason
     return UsagePayload(cost=cost, finish_reason=last, **sums)
+
+
+def to_retry_usage(usage: UsagePayload) -> Usage:
+    """Usage in the retry policy's terms.
+
+    Tokens are input plus output plus reasoning when all three are known, else
+    unknown. Cache reads and writes are left out: they describe cache traffic
+    that the provider's input count already covers. Cost is the exact decimal
+    or unknown. An empty payload maps to unknown values, never zero.
+    """
+    parts = (usage.input_tokens, usage.output_tokens, usage.reasoning_tokens)
+    tokens = None if any(part is None for part in parts) else sum(parts)
+    cost = Decimal(usage.cost) if usage.cost is not None else None
+    return Usage(tokens=tokens, cost=cost)
