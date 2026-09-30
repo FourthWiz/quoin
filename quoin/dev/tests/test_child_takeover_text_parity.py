@@ -96,4 +96,7 @@ def test_docs_name_the_takeover_command(rel):
 def test_version_bumped():
     from quoin.__about__ import __version__
 
-    assert __version__ == "0.36.0"
+    # The takeover text shipped in 0.36.0; assert that floor rather than an
+    # exact pin, which would break on every later release.
+    version = tuple(int(part) for part in __version__.split(".")[:3])
+    assert version >= (0, 36, 0)
