@@ -288,6 +288,7 @@ def test_halt_and_result_text(monkeypatch, project):
     assert (mem / "autonomous-halt-demo.md").read_text() == (
         "task: demo\nphase: run\nreason: relaunch cap\n"
         f"timestamp: {ISO}\nresume_hint: /run --resume demo\n"
+        f"takeover_hint: quoin run --takeover demo --project-root {project}\n"
     )
     assert (mem / "run-supervisor-demo.result").read_text() == json.dumps(
         {"finished_at": ISO, "relaunches": 3, "status": "ABORTED"}, sort_keys=True
@@ -349,5 +350,6 @@ def test_live_foreign_lock_refuses(monkeypatch, project, capsys):
     assert cli.main(["run", "demo", "--project-root", str(project)]) == 3
     assert capsys.readouterr().out == (
         f"quoin run: REFUSED (supervisor lock held by pid {ppid})\n  task: demo\n"
+        f"  takeover: quoin run --takeover demo --project-root {project}\n"
     )
     assert sup_calls == []
