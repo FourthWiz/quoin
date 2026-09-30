@@ -155,13 +155,26 @@ def test_session_continuation_end_to_end(tmp_path, monkeypatch, flag):
     assert len(runs) == 2
     second = runs[1]["argv"]
     assert "--agent" in second and "--command" not in second
-    assert "--session=" + runs[0]["session_id"] in second
+    assert second[second.index("--session") + 1] == runs[0]["session_id"]
     assert len(_effects(tmp_path)) == 1
     _no_duplicate_parts(prepared)
     _sequences_continue(prepared)
     totals = h.load_record(tmp_path, prepared.run_id)["usage_totals"]
     assert totals["input_tokens"] == 20
     assert totals == ev.usage_totals(h.read_events(prepared)).to_dict()
+
+
+def test_an_unsafe_session_id_blocks_the_resume_with_its_own_reason(tmp_path, monkeypatch):
+    monkeypatch.setattr(driver, "STEP_SETTLING_VERIFIED", True)
+    drv, prepared, _h1, _e = _first_attempt(tmp_path, "session_continuation")
+    directory = _directory(prepared)
+    checkpoint = runstore.load_checkpoint(directory, prepared.run_id)
+    checkpoint["native_session_id"] = "ses.odd:1"
+    runstore.write_checkpoint(directory, checkpoint)
+    # The checkpoint still loads; only the argv-safety check refuses it.
+    assert _handoff(prepared).native_session_id == "ses.odd:1"
+    _blocked(drv, prepared, "session-invalid")
+    assert len(_runs(tmp_path)) == 1
 
 
 def test_a_replayed_part_is_dropped(tmp_path, monkeypatch):

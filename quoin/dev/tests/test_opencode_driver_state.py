@@ -298,9 +298,12 @@ def test_handoff_from_checkpoint():
                 {"run_id": RUN_ID, "last_sequence": True}, "nope"):
         with pytest.raises(ValueError):
             d.Handoff.from_checkpoint(bad)
-    for session in ("--agent", "-x", "a b", "ses\n1", "", "s" * 200, 5):
-        with pytest.raises(ValueError):
-            d.Handoff.from_checkpoint(dict(cp, native_session_id=session))
+    # Any text id loads (the writer can produce "." and ":"); resume() decides
+    # whether it may reach argv.
+    for session in ("ses.1:2", "--agent", "a b", ""):
+        assert d.Handoff.from_checkpoint(dict(cp, native_session_id=session)).native_session_id == session
+    with pytest.raises(ValueError):
+        d.Handoff.from_checkpoint(dict(cp, native_session_id=5))
 
 
 def test_prepared_run_hides_secrets_and_exceptions_carry_fields(tmp_path):

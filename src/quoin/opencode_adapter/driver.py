@@ -214,8 +214,9 @@ class Handoff:
         if isinstance(last_sequence, bool) or not isinstance(last_sequence, int) or last_sequence < 0:
             raise ValueError("the checkpoint sequence must be a non-negative integer")
         session = checkpoint.get("native_session_id")
-        if session is not None and not (isinstance(session, str) and NATIVE_SESSION_RE.fullmatch(session)):
-            raise ValueError("the checkpoint session id has the wrong shape")
+        # Any text id loads; whether it is safe for argv is decided by resume().
+        if session is not None and not isinstance(session, str):
+            raise ValueError("the checkpoint session id must be text")
         revisions = checkpoint.get("repo_revisions") or []
         if not isinstance(revisions, (list, tuple)) or not all(isinstance(r, Mapping) for r in revisions):
             raise ValueError("the checkpoint revisions must be a list of objects")
@@ -1474,7 +1475,9 @@ class OpenCodeDriver:
             and facts.new_native_events == 0 and not facts.cancelled and not facts.timeout
         ):
             facts.session_lost = True
-        after = self._hash_now(handle)
+        after = self._hash_now(
+            handle, runstore.SHORT_HASH_TOTAL_BYTES if (facts.timeout or facts.cancelled) else None
+        )
         revisions = self._revisions_now(
             handle, runstore.SHORT_REVISIONS_BUDGET_S if (facts.timeout or facts.cancelled) else None
         )
@@ -1529,10 +1532,13 @@ class OpenCodeDriver:
         if thread is not None and thread.is_alive():
             thread.join(timeout)
 
-    def _hash_now(self, handle: RuntimeHandle) -> Optional[Dict[str, Any]]:
+    def _hash_now(
+        self, handle: RuntimeHandle, max_total_bytes: Optional[int] = None
+    ) -> Optional[Dict[str, Any]]:
+        extra = {} if max_total_bytes is None else {"max_total_bytes": max_total_bytes}
         try:
             return runstore.hash_inputs(
-                self.project_root, handle.task, handle.prepared.request.context_refs
+                self.project_root, handle.task, handle.prepared.request.context_refs, **extra
             )
         except (runstore.RunStoreError, OSError):
             return None
@@ -1803,14 +1809,20 @@ class OpenCodeDriver:
         is verified in a fresh snapshot, so a recycled group id is not hit.
         With no trustworthy process table it falls back to killing the run
         group and reports the remaining descendants as unknown.
+
+        Residual: once the leader has been reaped its group id could in
+        principle be reused by an unrelated group. The group is therefore
+        signalled before the leader is reaped, and never after the handle is
+        finalized; a reuse within the grace window remains theoretically
+        possible and is accepted.
         """
         kill_grace = self._kill_grace_s if kill_grace_s is None else kill_grace_s
         proc = handle.proc
         started = self._monotonic()
-        proc.poll()
         table = self._proc.snapshot()
         if table is None:
             return self._terminate_group_only(handle, grace_s, kill_grace, started)
+        proc.poll()
         self._expand_tracked(handle, table)
         signalled = self._send(handle, table, _signal.SIGTERM)
         found = self._descendants_found(handle)
@@ -1885,12 +1897,15 @@ class OpenCodeDriver:
             return False
         try:
             os.killpg(pgid, 0)
-        except (ProcessLookupError, PermissionError):
+        except ProcessLookupError:
             return False
+        except PermissionError:
+            # The group exists but cannot be probed: treat it as alive.
+            return True
         return True
 
     def _force_kill(self, handle: RuntimeHandle) -> None:
-        if handle.pgid and handle.pgid > 1 and handle.pgid != os.getpgrp():
+        if handle.pgid and handle.pgid > 1 and handle.pgid != os.getpgrp() and not handle.finalized:
             self._killpg(handle.pgid, _signal.SIGKILL)
         try:
             handle.proc.kill()
@@ -1903,10 +1918,10 @@ class OpenCodeDriver:
         proc = handle.proc
         signalled = False
         escalated = False
-        proc.poll()
         if self._group_alive(handle.pgid):
             signalled = True
             self._killpg(handle.pgid, _signal.SIGTERM)
+            proc.poll()
             deadline = self._monotonic() + grace_s
             while self._group_alive(handle.pgid) and self._monotonic() < deadline:
                 time.sleep(self._poll_s)
@@ -2079,7 +2094,8 @@ class OpenCodeDriver:
         session = handoff.native_session_id
         if session is None:
             session = next((e.session_id for e in reversed(events) if e.origin == "native" and e.session_id), None)
-        if session is not None and not NATIVE_SESSION_RE.fullmatch(session):
+        session_invalid = session is not None and not NATIVE_SESSION_RE.fullmatch(session)
+        if session_invalid:
             session = None
         blocked: Optional[str] = None
         if any(a.get("driver_lost") for a in record.get("attempts") or []):
@@ -2091,6 +2107,8 @@ class OpenCodeDriver:
                 blocked = "effect-uncertain"
             elif not STEP_SETTLING_VERIFIED:
                 blocked = "effect-uncertain"
+            elif session_invalid:
+                blocked = "session-invalid"
             elif session is None:
                 blocked = "effect-uncertain"
         if blocked is not None:
@@ -2098,7 +2116,7 @@ class OpenCodeDriver:
 
         if facts.ran_anything:
             argv = [
-                prepared.argv[0], "run", "--format", "json", "--session=" + session,
+                prepared.argv[0], "run", "--format", "json", "--session", session,
                 "--agent", prepared.agent or names.role_agent_name(prepared.role), "--", RESUME_MESSAGE,
             ]
             mode = "session"

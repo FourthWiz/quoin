@@ -8,7 +8,7 @@ import time
 import pytest
 
 import _opencode_driver_helpers as h
-from quoin.opencode_adapter import proctree
+from quoin.opencode_adapter import driver, proctree, runstore
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
 
@@ -214,6 +214,46 @@ def test_untrusted_process_listing_falls_back_to_the_group(tmp_path, monkeypatch
     assert result.group_empty
     assert handle.proc.poll() is not None
     assert _alive_pids(tmp_path) == []
+
+
+def test_an_unprobeable_group_counts_as_alive(tmp_path, monkeypatch):
+    drv = h.make_driver(tmp_path)
+
+    def denied(pgid, sig):
+        raise PermissionError()
+
+    monkeypatch.setattr(driver.os, "killpg", denied)
+    assert drv._group_alive(os.getpid() + 100000) is True  # noqa: SLF001
+
+
+def test_force_kill_leaves_the_group_alone_once_the_handle_is_finalized(tmp_path, monkeypatch):
+    drv, prepared, handle = _start(tmp_path, "grandchild")
+    _wait(lambda: _ready(tmp_path))
+    sent = []
+    monkeypatch.setattr(drv, "_killpg", lambda pgid, sig: sent.append((pgid, sig)))
+    handle.finalized = True
+    drv._force_kill(handle)  # noqa: SLF001
+    assert sent == []
+    handle.finalized = False
+    drv._force_kill(handle)  # noqa: SLF001
+    assert sent and sent[0][0] == handle.pgid
+    monkeypatch.undo()
+    drv.cancel(handle)
+
+
+def test_cancel_path_hashes_with_the_short_byte_cap(tmp_path, monkeypatch):
+    drv, prepared, handle = _start(tmp_path, "grandchild")
+    _wait(lambda: _ready(tmp_path))
+    seen = []
+    real = runstore.hash_inputs
+
+    def spy(*a, **kw):
+        seen.append(kw.get("max_total_bytes"))
+        return real(*a, **kw)
+
+    monkeypatch.setattr(runstore, "hash_inputs", spy)
+    _cancel_with_observer(drv, handle, 0.2)
+    assert seen and seen[-1] == runstore.SHORT_HASH_TOTAL_BYTES
 
 
 def test_cancel_is_idempotent_and_safe_from_two_threads(tmp_path):

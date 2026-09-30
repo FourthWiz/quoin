@@ -314,10 +314,39 @@ def test_legacy_mode_key_for_a_compiled_or_quoin_agent_is_refused_at_every_rank(
     ("plugin", ["./x.js"]),
 ])
 def test_permission_tools_and_plugin_keys_above_the_compiled_file_are_refused(bare, key, value):
+    # The global layer is user-owned: permission and tools deep-merge there
+    # (recorded residual), while plugin is refused at every rank.
     bare.write("opencode.json", json.dumps({key: value}))
     assert key in _refused(bare, "protected-key-overridden").message
     (bare.root / "opencode.json").unlink()
     bare.write("opencode.json", json.dumps({key: value}), base=bare.xdg / "opencode")
+    if key == "plugin":
+        assert "plugin" in _refused(bare, "protected-key-overridden").message
+    else:
+        bare.check()
+
+
+@pytest.mark.parametrize("where", ["global", "managed"])
+def test_plugin_key_is_refused_below_the_compiled_file_too(bare, where):
+    base = {"global": bare.xdg / "opencode", "managed": bare.managed}[where]
+    bare.write("opencode.json", json.dumps({"plugin": ["pkg"]}), base=base)
+    assert "plugin" in _refused(bare, "protected-key-overridden").message
+
+
+def test_a_global_plugin_directory_with_a_script_is_refused(bare):
+    bare.write("plugin/x.ts", "export default {}", base=bare.xdg / "opencode")
+    _refused(bare, "plugin-directory-present", "policy-denial")
+
+
+@pytest.mark.parametrize("name", [".DS_Store", "README.md", "notes.txt"])
+def test_non_script_files_in_plugin_directories_are_ignored(bare, name):
+    bare.write("plugin/" + name, "x", base=bare.xdg / "opencode")
+    bare.write(".opencode/plugins/" + name, "x")
+    bare.check()
+
+
+def test_nested_script_files_in_plugin_directories_are_ignored(bare):
+    bare.write(".opencode/plugin/lib/x.ts", "x")
     bare.check()
 
 
@@ -340,6 +369,20 @@ def test_proxy_credentials_are_registered_with_the_redactor():
         resolver=_Resolver({"env:PROV_KEY": SECRET}), data_dir="/d", config_path="/c", redactor=redactor,
     )
     assert "hunter2-proxy-pass" not in redactor("failed via hunter2-proxy-pass")
+
+
+@pytest.mark.parametrize("proxy,secret", [
+    ("http://u:short@proxy.example:3128", "http://u:short@proxy.example:3128"),
+    ("http://user:pa/ss-word-123@proxy.example:3128", "pa/ss-word-123"),
+    ("http://user:hunter2-proxy-pass@proxy.example:3128", "hunter2-proxy-pass"),
+])
+def test_proxy_value_and_odd_credentials_are_redacted(proxy, secret):
+    redactor = launch_env.Redactor()
+    launch_env.build_env(
+        ambient={"HTTPS_PROXY": proxy}, compile_sidecar=_sidecar(), providers=[_view(proxy=True)],
+        resolver=_Resolver({"env:PROV_KEY": SECRET}), data_dir="/d", config_path="/c", redactor=redactor,
+    )
+    assert secret not in redactor("failed via %s now" % secret)
 
 
 def test_continue_loop_on_deny_refused_in_project_layer(bare):

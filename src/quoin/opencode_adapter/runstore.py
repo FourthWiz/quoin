@@ -47,6 +47,8 @@ DEFAULT_MAX_FILE_BYTES = 64 * 1024 * 1024
 DEFAULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024
 REVISIONS_BUDGET_S = 60.0
 SHORT_REVISIONS_BUDGET_S = 10.0
+# End-of-attempt hashing after a timeout or cancel must not hold the caller.
+SHORT_HASH_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_SUBREPOS = 64
 GIT_TIMEOUT_S = 30.0
 _HASH_CHUNK = 1024 * 1024
@@ -469,12 +471,18 @@ def _sha256_file(path: str, max_bytes: int) -> Any:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
         return None
+    # Read no more than the size that was measured and charged against the
+    # caps; a file that keeps growing is reported as changed instead.
+    remaining = info.st_size
     with os.fdopen(fd, "rb") as handle:
-        while True:
-            chunk = handle.read(_HASH_CHUNK)
+        while remaining > 0:
+            chunk = handle.read(min(_HASH_CHUNK, remaining))
             if not chunk:
                 break
+            remaining -= len(chunk)
             digest.update(chunk)
+        if remaining == 0 and handle.read(1):
+            return {"skipped": "changed"}
     return digest.hexdigest()
 
 
@@ -538,12 +546,19 @@ def _sha_of(value: Any) -> Optional[str]:
 
 def diff_hashes(before: Mapping[str, Any], after: Mapping[str, Any]) -> List[ArtifactReferencePayload]:
     out: List[ArtifactReferencePayload] = []
+    # A capped snapshot does not cover every file, so absence on either side
+    # proves nothing: only report changes to files present in both.
+    incomplete = "<truncated>" in before or "<truncated>" in after
     for path in sorted(set(before) | set(after)):
         if path == "<truncated>":
             continue
         if path not in before:
+            if incomplete:
+                continue
             change = "created"
         elif path not in after:
+            if incomplete:
+                continue
             change = "deleted"
         elif before[path] != after[path]:
             change = "modified"

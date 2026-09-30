@@ -310,6 +310,42 @@ def test_hash_inputs_total_byte_cap_truncates(project):
     assert "<truncated>" not in rs.hash_inputs(project, "t1")
 
 
+def test_hash_reads_no_more_than_the_measured_size_and_flags_growth(project, monkeypatch):
+    task = project / ".workflow_artifacts" / "t1"
+    task.mkdir()
+    f = task / "grow"
+    f.write_bytes(b"x" * 10)
+    real_lstat = rs.os.lstat
+
+    grown = []
+
+    def stale_lstat(path, *a, **k):
+        info = real_lstat(path, *a, **k)
+        if str(path).endswith("grow") and len(grown) < 2:
+            grown.append(True)
+            if len(grown) < 2:
+                return info
+            # grows after the last measurement, before the read
+            with open(str(path), "ab") as out:
+                out.write(b"x" * 40)
+        return info
+
+    monkeypatch.setattr(rs.os, "lstat", stale_lstat)
+    assert rs.hash_inputs(project, "t1")[".workflow_artifacts/t1/grow"] == {"skipped": "changed"}
+
+
+def test_diff_hashes_suppresses_created_and_deleted_when_a_snapshot_is_truncated():
+    trunc = {"<truncated>": {"skipped": "byte-cap"}}
+    before = {"a": "1", "b": "2"}
+    after = {"a": "9", "c": "3", **trunc}
+    changes = {(p.path, p.change) for p in rs.diff_hashes(before, after)}
+    assert changes == {("a", "modified")}
+    changes = {(p.path, p.change) for p in rs.diff_hashes({**before, **trunc}, {"a": "1", "c": "3"})}
+    assert changes == set()
+    full = {(p.path, p.change) for p in rs.diff_hashes(before, {"a": "9", "c": "3"})}
+    assert full == {("a", "modified"), ("b", "deleted"), ("c", "created")}
+
+
 # ------------------------------------------------------------------ revisions
 
 

@@ -22,6 +22,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import compiler, doctor, errors, jsonio, paths
@@ -137,15 +138,27 @@ def _register_proxy_secret(redactor: Redactor, value: str) -> None:
     """Proxy URLs may carry ``user:pass@``; keep the password out of logs."""
     if "@" not in value:
         return
-    authority = value.split("://", 1)[-1].split("/", 1)[0]
-    userinfo = authority.rsplit("@", 1)[0] if "@" in authority else ""
-    if not userinfo:
-        return
-    redactor.add(userinfo)
-    if ":" in userinfo:
-        password = userinfo.split(":", 1)[1]
-        if password:
-            redactor.add(password)
+    # The whole value is registered too: short or oddly delimited credentials
+    # (an unencoded ``/`` in the password) escape the structured parse.
+    redactor.add(value)
+    try:
+        parts = urlsplit(value)
+        userinfo = parts.netloc.rsplit("@", 1)[0] if "@" in parts.netloc else ""
+        username, password = parts.username, parts.password
+    except ValueError:
+        userinfo, username, password = "", None, None
+    # An unencoded ``/`` in the password ends the authority early, so also cut
+    # at the last ``@`` of the raw text.
+    raw = value.split("://", 1)[-1].rsplit("@", 1)[0]
+    redactor.add(raw)
+    if ":" in raw:
+        redactor.add(raw.split(":", 1)[1])
+    if userinfo:
+        redactor.add(userinfo)
+    if username:
+        redactor.add(username)
+    if password:
+        redactor.add(password)
 
 
 def build_env(
@@ -322,8 +335,6 @@ def _check_layer(
             "protected-key-overridden",
             "%s sets mode to a non-object value" % shown,
         )
-    if below_compiled:
-        return
 
     def overridden(dotted: str) -> LaunchRefused:
         return _refuse(
@@ -331,6 +342,13 @@ def _check_layer(
             "protected-key-overridden",
             "%s overrides %s, which the compiled configuration controls" % (shown, dotted),
         )
+
+    # OpenCode concatenates ``plugin`` arrays across layers, so a plugin from
+    # any layer (the global one included) can hook permission requests.
+    if _dotted_present(doc, "plugin"):
+        raise overridden("plugin")
+    if below_compiled:
+        return
 
     if "$schema" in doc and doc["$schema"] != compiler.CONFIG_SCHEMA_URL:
         raise _refuse(
@@ -348,7 +366,6 @@ def _check_layer(
         "experimental.policies",
         "permission",
         "tools",
-        "plugin",
     ):
         if _dotted_present(doc, dotted):
             raise overridden(dotted)
@@ -525,7 +542,10 @@ def _check_markdown(
         for sub in _PLUGIN_SUBDIRS:
             directory = base / sub
             try:
-                populated = os.path.isdir(str(directory)) and any(True for _ in os.scandir(str(directory)))
+                populated = os.path.isdir(str(directory)) and any(
+                    entry.name.endswith((".ts", ".js")) and not entry.is_dir(follow_symlinks=False)
+                    for entry in os.scandir(str(directory))
+                )
             except OSError:
                 raise _refuse(
                     "invalid-configuration",
