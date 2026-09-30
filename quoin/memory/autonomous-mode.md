@@ -257,9 +257,25 @@ relaunch loop: on each iteration, check the done sentinel (exit
 SUCCESS if present), then the halt sentinel (exit HALTED with the
 recorded reason, no further relaunch), then the relaunch cap
 (`MAX_RELAUNCH`, exit ABORTED "relaunch cap" if reached). Otherwise it
-counts completion sentinels, relaunches a fresh headless session, and
-re-counts; two consecutive relaunches that produce zero new completion
-sentinels (by the union glob above) abort with "no forward progress".
+counts completion sentinels and snapshots the task-branch commits,
+relaunches a fresh headless session, and re-checks. A launch made
+progress when a new completion sentinel appeared (by the union glob
+above) or a new commit landed on the task branch. The commit probe looks
+at repos with their own `.git` entry at the project root or in its
+immediate child dirs whose current branch equals the task name or ends
+with `/` plus it, under one 5 s budget; any failure reads as no commit
+signal, and a branch switch or a repo appearing or disappearing never
+counts. `QUOIN_SUPERVISOR_HEAD_PROBE=0` disables the commit signal.
+Two consecutive launches without progress abort with
+"no forward progress". A phase that has its completion marker
+(`implement.tasks.done`) but not `{phase}.done` gets up to
+`QUOIN_SUPERVISOR_REPAIR_RELAUNCHES` (default 2, clamp 0..5, `0`
+restores the old timing) extra relaunches first; if it is still
+unrepaired the abort reason is `phase completion not repaired: <phase>`.
+The supervisor never writes any `.done` file, and the relaunch cap
+still bounds everything. Each launch has a timeout of
+`QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS` (default 5400, clamp 900..14400),
+and every child's environment carries `QUOIN_HEADLESS_CHILD=1`.
 Backoff between relaunches is exponential, capped. `MAX_RELAUNCH` alone
 guarantees termination even under continual sub-phase progress. The
 relaunch string always carries `--autonomous` (belt) alongside the
@@ -374,12 +390,22 @@ sign the budget itself needs raising, not a bug to route around.
 
 **Knobs and defaults:** `QUOIN_AUTO_RESUME` (`0` disables; default on),
 `QUOIN_AUTO_RESUME_MAX` (default 10, clamp 1..100), `QUOIN_AUTO_RESUME_IDLE_SECS`
-(default 900, min 60), `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6, clamp 1..7).
+(default 900, min 60), `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6, clamp 1..7);
+supervisor knobs `QUOIN_SUPERVISOR_REPAIR_RELAUNCHES` (default 2, clamp 0..5),
+`QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS` (default 5400, clamp 900..14400),
+`QUOIN_SUPERVISOR_HEAD_PROBE` (`0` disables the commit signal).
+
+The Stop and hand-off gates apply the same progress and repair rules as
+the supervisor. The Stop hook and the SessionStart path skip the commit
+probe to stay inside their hook time budgets; only the `handoff`
+subcommand probes. The counter file gains `last_heads` and
+`repairs_used`, reset only by the consent rule.
 
 **Halt reasons** (any of these is terminal — no further continuation):
 `auto-resume cap`, `no forward progress`, `relaunch cap`, `session age cap`,
 `context exhaustion`, `paused by user`, `taken over by user`,
-`supervisor stopped by signal`, `supervisor error`.
+`supervisor stopped by signal`, `supervisor error`,
+`phase completion not repaired: <phase>`.
 
 **The harness's own block cap is an independent outer bound.** Claude
 Code itself stops honoring a Stop hook's `"decision": "block"` response
@@ -427,7 +453,7 @@ Guide's reference entry for the ninth stanza.
 
 **Why.** A headless `claude -p` process may exit as soon as the session ends its turn, so the pending command's result is never seen. A headless child may or may not be re-invoked afterwards; never rely on it. An orphaned command may still finish later, which is why every run is keyed by a token that keeps a stale result from being read.
 
-**Rule.** Under `AUTONOMOUS` the session must not end its turn while such work is pending. For a headless child this holds without exception: when `QUOIN_HEADLESS_CHILD=1` is present in the environment, the session is such a child. The variable is set by the supervisor once its launch-time change lands, and the prose rule applies whether or not it is set. The only exemption is an interactive session that deliberately ends its turn after a hand-off. Plain foreground calls are fine only for commands known to finish well under 120 s. `Monitor` is not available to headless children.
+**Rule.** Under `AUTONOMOUS` the session must not end its turn while such work is pending. For a headless child this holds without exception: when `QUOIN_HEADLESS_CHILD=1` is present in the environment, the session is such a child. The supervisor sets it for every headless child it launches; the prose rule applies whether or not it is set. The only exemption is an interactive session that deliberately ends its turn after a hand-off. Plain foreground calls are fine only for commands known to finish well under 120 s. `Monitor` is not available to headless children.
 
 **Mechanism.** Start the command detached with `python3 __QUOIN_HOME__/scripts/wait_for.py start --rc-file F --token TOK --log L -- CMD...` (no trailing `&`, no `nohup`; the helper detaches). Then repeat FOREGROUND calls of `python3 __QUOIN_HOME__/scripts/wait_for.py wait --file F --token TOK --max-secs 540`, each with the Bash tool `timeout` set to 600000, until a terminal line:
 - `READY|<rc>` continues with that exit code.

@@ -128,6 +128,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
     (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_supervisor_progress_docs.py",
+    ),
+    (
         "quoin/memory/cost-ledger-format.md",
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),

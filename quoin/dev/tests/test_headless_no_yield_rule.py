@@ -34,7 +34,8 @@ def test_subsection_contents(subsection):
     ):
         assert needle in flat, needle
     assert flat.index("wait_for.py wait") < flat.index("`known_red.py`")
-    assert "is set by the supervisor once its launch-time change lands" in flat
+    assert "The supervisor sets it for every headless child it launches" in flat
+    assert "once its launch-time change lands" not in flat
 
 
 def test_start_command_has_no_shell_background_or_nohup(subsection):
