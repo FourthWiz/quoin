@@ -1,0 +1,948 @@
+{
+ "schema": 1,
+ "cases": [
+  {
+   "name": "doom-loop-denied",
+   "file": "doom-loop-denied.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/processor.ts L370-380, L590-606, L613-639",
+    "packages/opencode/src/permission/index.ts L72-79"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "progress"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [
+     "denied"
+    ],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "doom-loop-rejected",
+   "file": "doom-loop-rejected.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/processor.ts L370-380, L590-606, L613-639",
+    "packages/opencode/src/cli/cmd/run.ts L781-790, L801-821"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "approval_required",
+     "progress"
+    ],
+    "approval": true,
+    "approval_source": "error_event",
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "duplicate-lines",
+   "file": "duplicate-lines.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L678-691"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 2,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "malformed",
+   "file": "malformed.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L678-691"
+   ],
+   "expected": {
+    "types": [],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {
+     "non-json": 1,
+     "non-object": 1,
+     "missing-type": 1,
+     "empty": 1
+    },
+    "step_summary": {
+     "starts": 0,
+     "finishes": 0,
+     "open_step": false,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "native-error-auth",
+   "file": "native-error-auth.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/message-v2.ts L624-631",
+    "packages/core/src/v1/session.ts L49"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "error"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [
+     "auth"
+    ],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "native-error-connect",
+   "file": "native-error-connect.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/message-v2.ts L632-644"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "error"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [
+     "connect"
+    ],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "native-error-http-429",
+   "file": "native-error-http-429.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/message-v2.ts L683-708",
+    "packages/core/src/v1/session.ts L55-62"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "error"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [
+     "http"
+    ],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "native-error-http-503",
+   "file": "native-error-http-503.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/message-v2.ts L683-708"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "error"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [
+     "http"
+    ],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "native-error-unknown",
+   "file": "native-error-unknown.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/message-v2.ts L709-710",
+    "packages/opencode/src/cli/cmd/run.ts L781-790"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "error"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [
+     "config"
+    ],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "plain-complete",
+   "file": "plain-complete.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L720-790",
+    "packages/opencode/src/session/processor.ts L455-469"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "progress",
+     "usage",
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 200,
+     "output_tokens": 40,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.003",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 2,
+     "finishes": 2,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "reasoning",
+   "file": "reasoning.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L766-778"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "replayed-stream",
+   "file": "replayed-stream.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L678-691"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "progress",
+     "usage",
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 7,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 200,
+     "output_tokens": 40,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.003",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 2,
+     "finishes": 2,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "revised-part",
+   "file": "revised-part.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/session/processor.ts L455-469"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "usage",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 1,
+    "usage_totals": {
+     "input_tokens": 250,
+     "output_tokens": 40,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.002",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "stderr-agent-fallback",
+   "file": "stderr-agent-fallback.txt",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L595-619, L621-659"
+   ],
+   "expected": {
+    "signals": [
+     [
+      "agent_fallback",
+      "ghost",
+      [],
+      false
+     ],
+     [
+      "agent_fallback",
+      "helper",
+      [],
+      false
+     ]
+    ]
+   }
+  },
+  {
+   "name": "stderr-approval-notice",
+   "file": "stderr-approval-notice.txt",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L801-821",
+    "packages/opencode/src/cli/ui.ts L14-39"
+   ],
+   "expected": {
+    "signals": [
+     [
+      "approval",
+      "bash",
+      [
+       "rm -rf build"
+      ],
+      true
+     ],
+     [
+      "approval",
+      "edit",
+      [
+       "src/app.py"
+      ],
+      true
+     ],
+     [
+      "approval",
+      "bash",
+      [
+       "echo one"
+      ],
+      false
+     ]
+    ]
+   }
+  },
+  {
+   "name": "task-background",
+   "file": "task-background.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L258-262, L333-338"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [
+     "background"
+    ],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "task-errored-denied-tail",
+   "file": "task-errored-denied-tail.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L220-223",
+    "packages/core/src/v1/permission.ts L21-27"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [
+     "denied-tail"
+    ],
+    "permission_outcomes": [
+     "denied"
+    ],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "task-errored-nested-rejection",
+   "file": "task-errored-nested-rejection.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L213-223"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "approval_required"
+    ],
+    "approval": true,
+    "approval_source": "task_error",
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "task-errored-other",
+   "file": "task-errored-other.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L213-223, L338-340"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [
+     "failed",
+     "failed",
+     "failed"
+    ],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "task-errored-rejection",
+   "file": "task-errored-rejection.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L213-223",
+    "packages/core/src/background-job.ts L108-111"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "approval_required"
+    ],
+    "approval": true,
+    "approval_source": "task_error",
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "task-promoted",
+   "file": "task-promoted.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L333-338"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [
+     "background"
+    ],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "task-sync-completed",
+   "file": "task-sync-completed.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/tool/task.ts L338-342"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [
+     "completed"
+    ],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "tool-denied-adversarial",
+   "file": "tool-denied-adversarial.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/core/src/v1/permission.ts L21-27"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [
+     "denied"
+    ],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "tool-denied-then-finish",
+   "file": "tool-denied-then-finish.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/core/src/v1/permission.ts L21-27",
+    "packages/opencode/src/permission/index.ts L72-79",
+    "packages/opencode/src/session/processor.ts L647, L694"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "progress",
+     "progress",
+     "usage"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [
+     "denied"
+    ],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": {
+     "input_tokens": 100,
+     "output_tokens": 20,
+     "reasoning_tokens": 0,
+     "cache_read_tokens": 0,
+     "cache_write_tokens": 0,
+     "cost": "0.001",
+     "finish_reason": "stop"
+    },
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 1,
+     "open_step": false,
+     "last_finish_reason": "stop",
+     "last_finish_terminal": true
+    }
+   }
+  },
+  {
+   "name": "tool-rejected",
+   "file": "tool-rejected.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/core/src/v1/permission.ts L7-11",
+    "packages/opencode/src/session/processor.ts L186-202, L694"
+   ],
+   "expected": {
+    "types": [
+     "progress",
+     "approval_required"
+    ],
+    "approval": true,
+    "approval_source": "tool_error",
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 1,
+     "finishes": 0,
+     "open_step": true,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  },
+  {
+   "name": "unknown-type",
+   "file": "unknown-type.jsonl",
+   "provenance": "source-derived",
+   "sources": [
+    "packages/opencode/src/cli/cmd/run.ts L720-790"
+   ],
+   "expected": {
+    "types": [
+     "progress"
+    ],
+    "approval": false,
+    "approval_source": null,
+    "delegation": [],
+    "permission_outcomes": [],
+    "failure_kinds": [],
+    "dropped_duplicates": 0,
+    "revisions": 0,
+    "usage_totals": null,
+    "diagnostics": {},
+    "step_summary": {
+     "starts": 0,
+     "finishes": 0,
+     "open_step": false,
+     "last_finish_reason": null,
+     "last_finish_terminal": null
+    }
+   }
+  }
+ ]
+}

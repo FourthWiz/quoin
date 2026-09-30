@@ -1,0 +1,2 @@
+{"type": "step_start", "timestamp": 0, "sessionID": "ses_fixture01", "part": {"id": "prt_s1", "messageID": "msg_fixture01", "sessionID": "ses_fixture01", "type": "step-start"}}
+{"type": "error", "timestamp": 600, "sessionID": "ses_fixture01", "error": {"name": "APIError", "data": {"message": "Connection reset by server", "isRetryable": true, "metadata": {"code": "ECONNRESET", "syscall": "read", "message": "read ECONNRESET"}}}}

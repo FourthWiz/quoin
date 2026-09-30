@@ -1,0 +1,4 @@
+[93m[1m![0m agent "ghost" not found. Falling back to default agent
+[93m[1m![0m agent "helper" is a subagent, not a primary agent. Falling back to default agent
+installing dependencies
+The user has specified a rule which prevents you from using this specific tool call. Here are some of the relevant rules [{"permission": "bash", "pattern": "rm *", "action": "deny"}]

@@ -1,0 +1,3 @@
+{"type": "step_start", "timestamp": 0, "sessionID": "ses_fixture01", "part": {"id": "prt_s1", "messageID": "msg_fixture01", "sessionID": "ses_fixture01", "type": "step-start"}}
+{"type": "reasoning", "timestamp": 100, "sessionID": "ses_fixture01", "part": {"id": "prt_r1", "messageID": "msg_fixture01", "sessionID": "ses_fixture01", "type": "reasoning", "text": "Considering the options.", "time": {"start": 1, "end": 2}}}
+{"type": "step_finish", "timestamp": 200, "sessionID": "ses_fixture01", "part": {"id": "prt_f1", "reason": "stop", "messageID": "msg_fixture01", "sessionID": "ses_fixture01", "type": "step-finish", "tokens": {"input": 100, "output": 20, "reasoning": 0, "cache": {"read": 0, "write": 0}}, "cost": 0.001}}

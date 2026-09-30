@@ -1,0 +1,4 @@
+[93m[1m! [0mpermission requested: bash (rm -rf build); auto-rejecting
+[93m[1m! [0mpermission requested: edit (src/app.py); auto-rejecting
+[93m[1m! [0mpermission requested: bash (echo one
+two); auto-rejecting
