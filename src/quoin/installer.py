@@ -153,6 +153,7 @@ DEPLOYED_SCRIPTS = (
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
     "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "task_bookkeeping.py",  # task-folder bookkeeping classifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "fsops.py",  # file-operations helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
 )
 
 # T-05: obsolete artifacts to remove from prior installs
@@ -462,6 +463,7 @@ CORE_SCRIPTS = (
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator core impl; required by ~/.claude/scripts/handoff_validate.py parents[1] loader
     "comment_cleanup.py",  # pre-PR comment cleanup core impl; required by the wrapper's parents[1] loader
     "task_bookkeeping.py",  # task-folder bookkeeping classifier core impl; required by ~/.claude/scripts/task_bookkeeping.py parents[1] loader
+    "fsops.py",  # file-operations helper core impl; required by the wrapper's parents[1] loader
 )
 
 
