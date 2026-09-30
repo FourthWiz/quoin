@@ -43,6 +43,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import stat
@@ -387,12 +388,76 @@ def _supervisor_lock_live(memory_dir: Path, task: str) -> bool:
     return pid > 0 and _pid_alive(pid)
 
 
+# Env var carrying the pre-generated session id of the first headless child
+# from the hand-off parent to the supervisor (mirrors quoin.cli).
+_CHILD_ENV = "QUOIN_FIRST_CHILD_SESSION_ID"
+
+_UUID4_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+)
+
+
+def _is_child_session_id(s) -> bool:
+    """Canonical lowercase UUID4 (mirrors quoin.supervisor.is_child_session_id)."""
+    return isinstance(s, str) and _UUID4_RE.match(s) is not None
+
+
+def _takeover_pointer(task: str, project_root) -> str:
+    return f"quoin run --takeover {task} --project-root {shlex.quote(str(project_root))}"
+
+
+def _takeover_hint(task: str, project_root, sid=None) -> str:
+    pointer = _takeover_pointer(task, project_root)
+    if _is_child_session_id(sid):
+        return f"child_session={sid} {pointer}"
+    return pointer
+
+
+def _sanitize_safe(text: str) -> bool:
+    """True when run_state._sanitize would leave ``text`` unchanged."""
+    if '"' in text or "\\" in text:
+        return False
+    if any(ord(c) < 32 or ord(c) == 127 for c in text):
+        return False
+    return re.search(r" {2,}", text) is None
+
+
+def _takeover_notice_pointer(task: str, project_root) -> str:
+    """Pointer for sanitized one-line surfaces; bare form when the full one
+    would be rewritten by the sanitizer."""
+    pointer = _takeover_pointer(task, project_root)
+    if _sanitize_safe(pointer):
+        return pointer
+    return f"quoin run --takeover {task}"
+
+
+def _handoff_notice_extra(task: str, project_root, sid: str) -> str:
+    pointer = _takeover_notice_pointer(task, project_root)
+    extra = f"child_session={sid} takeover: {pointer}" if sid else f"takeover: {pointer}"
+    # The SessionStart hook extracts the task with a greedy sed keyed on the
+    # last "task=" before "via=supervisor"; text after it must not add one.
+    if "task=" in extra:
+        return ""
+    return extra
+
+
 def _write_lock(
     memory_dir: Path, task: str, pid: int, granted: int, writer: str, token: "str | None" = None
 ) -> None:
     data = {"pid": pid, "started_at": _iso_now(), "granted": granted, "writer": writer}
     if token:
         data["token"] = token
+        # Keep the child identity the supervisor already recorded under this
+        # reservation. The read-merge-write is not atomic against the
+        # supervisor's first lock update; the window is tiny (the parent
+        # rewrites right after spawning, the child needs interpreter start-up
+        # before its first record) and a lost merge is covered by the run
+        # record and the process scan at takeover.
+        prev = _load_json(_lock_path(memory_dir, task)) or {}
+        if prev.get("token") == token:
+            for key, value in prev.items():
+                if key.startswith("child_"):
+                    data[key] = value
     content = json.dumps(data, sort_keys=True) + "\n"
     _atomic_write_text(memory_dir, f"{LOCK_TEMPLATE.format(task=task)}.", _lock_path(memory_dir, task), content)
 
@@ -619,20 +684,29 @@ def _write_halt(memory_dir: Path, task: str, record, reason: str) -> None:
     record = record or {}
     phase = record.get("phase", "") or ""
     resume_hint = record.get("resume_command") or f"/run --resume {task}"
+    project_root = memory_dir.parent.parent
+    sid = record.get("child_session_id")
+    if not _is_child_session_id(sid):
+        lock = _load_json(_lock_path(memory_dir, task)) or {}
+        sid = lock.get("child_session_id")
     content = (
         f"task: {task}\n"
         f"phase: {phase}\n"
         f"reason: {reason}\n"
         f"timestamp: {_iso_now()}\n"
         f"resume_hint: {resume_hint}\n"
+        f"takeover_hint: {_takeover_hint(task, project_root, sid)}\n"
     )
     path = memory_dir / HALT_TEMPLATE.format(task=task)
     _atomic_write_text(memory_dir, f"{HALT_TEMPLATE.format(task=task)}.", path, content)
 
 
-def _notice_line(task: str, record, reason: str, attempt: int, cap: int, via: str) -> str:
+def _notice_line(task: str, record, reason: str, attempt: int, cap: int, via: str, extra: str = "") -> str:
     phase = (record or {}).get("phase", "") or ""
-    return f"[quoin-auto-resume] task={task} phase={phase} reason={reason} attempt={attempt}/{cap} via={via}"
+    line = f"[quoin-auto-resume] task={task} phase={phase} reason={reason} attempt={attempt}/{cap} via={via}"
+    if extra:
+        line += " " + extra
+    return line
 
 
 def _reason_text(task: str, resume_command: str) -> str:
@@ -878,6 +952,10 @@ def _do_handoff(
     child_env = dict(os.environ)
     child_env.update(res["env_extra"])
     child_env["QUOIN_SUPERVISOR_LOCK_TOKEN"] = token
+    first_sid = ""
+    if res["source"] == "record":
+        first_sid = str(uuid.uuid4())
+        child_env[_CHILD_ENV] = first_sid
     try:
         proc = _popen(
             argv,
@@ -921,8 +999,13 @@ def _do_handoff(
     counter["last_reason"] = reason
     counter["last_session_id"] = record.get("session_id", "") or ""
     _write_counter(memory_dir, task, counter)
-    notice = _notice_line(task, record, reason, attempts, cap, f"supervisor pid={proc.pid}")
+    notice = _notice_line(
+        task, record, reason, attempts, cap, f"supervisor pid={proc.pid}",
+        extra=_handoff_notice_extra(task, Path(project_root).resolve(), first_sid),
+    )
     append_note(memory_dir, task, notice)
+    if first_sid:
+        return f"HANDOFF|{proc.pid}|{attempts}/{cap}|{first_sid}"
     return f"HANDOFF|{proc.pid}|{attempts}/{cap}"
 
 
@@ -1521,9 +1604,14 @@ def _cmd_start(args) -> int:
     )
 
     if handoff_result.startswith("HANDOFF|"):
-        pid = handoff_result.split("|")[1]
+        parts = handoff_result.split("|")
+        pid = parts[1]
+        first = parts[3] if len(parts) > 3 and _is_child_session_id(parts[3]) else ""
         cap = _max_attempts()
-        notice = _notice_line(task, record, "startup", counter.get("attempts", 0), cap, f"supervisor pid={pid}")
+        notice = _notice_line(
+            task, record, "startup", counter.get("attempts", 0), cap, f"supervisor pid={pid}",
+            extra=_handoff_notice_extra(task, Path(args.project_root).resolve(), first),
+        )
         print(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": notice}
         }))
@@ -1692,6 +1780,7 @@ def _cmd_status(args) -> int:
         "done": _sentinel_exists(memory_dir, DONE_TEMPLATE, task),
         "halted": _sentinel_exists(memory_dir, HALT_TEMPLATE, task),
         "needs_decision": _sentinel_exists(memory_dir, NEEDS_DECISION_TEMPLATE, task),
+        "child_session_id": (record or {}).get("child_session_id", "") or "",
     }
     print(json.dumps(out, sort_keys=True))
     return 0

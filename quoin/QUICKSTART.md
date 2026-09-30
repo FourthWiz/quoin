@@ -29,6 +29,7 @@
 | `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs in /checkpoint |
 | `/next-steps` | Append-only queue for future work items (`add` / `list` / `done N`) |
 | `/run` | End-to-end pipeline: discover → architect → plan → implement → review → end_of_task |
+| `quoin run --takeover <task>` | Shell command: stops an autonomous run's supervisor and headless child, then prints the `claude --resume` command to continue that session yourself |
 | `/cost_snapshot` | Shows today's cost, project lifetime cost, and per-task breakdown |
 | `/status` | Renders the workflow pipeline graph with the active phase marked (read-only) |
 | `/triage` | Suggests which skill fits your request; type the command to confirm |

@@ -277,7 +277,9 @@ is itself a git repo.
 `--budget` — a nice-to-have cross-session cost ceiling that is a
 **no-op stub this release: NOT YET ENFORCED — cost is bounded by
 `--max-relaunch` + backoff only.** Exits 0 on SUCCESS, 1 on HALTED, 2
-on ABORTED.
+on ABORTED. `--takeover` (see "Taking over a headless child" below) stops
+a running supervisor and child instead of starting a run, and cannot be
+combined with `--autonomous`.
 
 **Sub-phase-granular idempotent resume.** Each fresh relaunch is a
 `/run --resume --autonomous <task>` that MUST land at the correct phase
@@ -377,8 +379,8 @@ sign the budget itself needs raising, not a bug to route around.
 
 **Halt reasons** (any of these is terminal — no further continuation):
 `auto-resume cap`, `no forward progress`, `relaunch cap`, `session age cap`,
-`context exhaustion`, `paused by user`, `supervisor stopped by signal`,
-`supervisor error`.
+`context exhaustion`, `paused by user`, `taken over by user`,
+`supervisor stopped by signal`, `supervisor error`.
 
 **The harness's own block cap is an independent outer bound.** Claude
 Code itself stops honoring a Stop hook's `"decision": "block"` response
@@ -419,6 +421,41 @@ lock and its outcome).
 **Un-registering the continuation hook** (if you need to disable it at
 the install level rather than via the opt-out knob above): see the Hooks
 Guide's reference entry for the ninth stanza.
+
+### Taking over a headless child
+
+Each headless child the supervisor launches gets a session id chosen in
+advance (`claude -p ... --session-id <uuid>`), recorded before the child
+starts: in the run-state record (`child_session_id`, `child_cwd`,
+`child_started_at`), in the supervisor lock (plus `child_pid` once the
+process exists) and as a `[quoin-autonomous-child]` line in the run notes.
+A hand-off pre-generates the first child's id, passes it to the
+supervisor through `QUOIN_FIRST_CHILD_SESSION_ID`, and returns it as a
+fourth field of the `HANDOFF|<pid>|<n>/<cap>|<uuid>` result.
+
+To work on the run yourself, run `quoin run --takeover <task>`
+(`--project-root` as usual). It:
+
+1. writes a halt (`taken over by user`) so nothing relaunches, keeping any
+   halt already present;
+2. stops the supervisor, then the child (SIGTERM, then SIGKILL after
+   `QUOIN_TAKEOVER_GRACE_SECS`, default 5, range 1..60; the wait after
+   SIGKILL is `QUOIN_TAKEOVER_WAIT_SECS`, default 20, range 1..300);
+3. confirms nothing carrying the child's session id is still running;
+4. prints `cd '<cwd>' && claude --resume <uuid>`.
+
+Exit codes: 0 the resume command was printed; 1 no child was recorded or
+none ever started; 2 invalid task name; 4 a process survived or could not
+be verified, in which case no resume command is printed. Only the
+processes that carry the child's session id are signalled (no
+process-group kill), after their command line has been checked.
+
+Hand-off notices and halt files carry the child's session id and the
+`quoin run --takeover <task>` pointer. The concrete `cd ... && claude
+--resume` command appears only in the supervisor's terminal output (the
+loop has ended, so no child is alive) and after `--takeover` has confirmed
+the child is stopped. `relaunches` in the run result still counts launch
+attempts, including one skipped because a halt appeared first.
 
 ### How the hand-off finds the CLI
 

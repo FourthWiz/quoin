@@ -351,7 +351,9 @@ _cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-roo
        --task <task-name> --reason budget
      ```
      `HANDOFF|...` → print the notice and end the turn (the Stop hook stands
-     down behind the supervisor lock this hand-off just took). Any other result
+     down behind the supervisor lock this hand-off just took). If the result has
+     a fourth `|` field, it is the child session id: also print `child session
+     <uuid>; take over with quoin run --takeover <task>`. Any other result
      → continue in-session; never stop on a printed instruction.
 - Exit 1 but `$_cbg_out` does NOT start with `OVER|` (helper crashed before
   reaching its own fail-OPEN try/except — e.g. empty output or a traceback, never
