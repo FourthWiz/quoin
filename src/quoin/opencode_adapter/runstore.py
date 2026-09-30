@@ -1,6 +1,6 @@
 """On-disk run store: ids, the event sidecar, atomic records, hashes, revisions.
 
-Layout, under `PROJECT/.workflow_artifacts/memory/runtime/opencode/`:
+Layout, under `memory/runtime/opencode/` in the project's artifact root:
 
     RUN_ID.jsonl            append-only event sidecar
     RUN_ID.run.json         run record (rewritten atomically)
@@ -8,7 +8,7 @@ Layout, under `PROJECT/.workflow_artifacts/memory/runtime/opencode/`:
     task-TASK.json          pointer from a task to its latest run
 
 The directory is created mode 700 and every component from
-`.workflow_artifacts` down must be a real directory, never a symlink. Files
+the artifact root down must be a real directory, never a symlink. Files
 are mode 600. A record is replaced with a temporary file plus rename, so a
 crash leaves either the old or the new record and never a partial one.
 """
@@ -76,7 +76,7 @@ def _reject_symlink_or_file(path: Path) -> bool:
 def store_dir(project_root, *, create: bool = False) -> Path:
     """The run store directory for a project.
 
-    Every component from `.workflow_artifacts` down is checked with `lstat`;
+    Every component from the artifact root down is checked with `lstat`;
     a symlink anywhere refuses with `RunStoreError("unsafe-path")`. With
     `create`, missing components are made (mode 700)."""
     current = Path(project_root)
