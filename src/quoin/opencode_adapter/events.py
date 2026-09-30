@@ -53,8 +53,26 @@ DENIED_PREFIX = (
 QUESTION_DISMISSED_PREFIX: Optional[str] = None
 
 _SUBAGENT_PREFIX_RE = re.compile(r"^(?:Subagent failed \(task_id: [^)]*\): )*")
-_FIRST_SUBAGENT_RE = re.compile(r"^Subagent failed \(task_id: ([^)]*)\): ")
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+# A task id longer than this is not captured at all rather than persisted in full.
+_FIRST_SUBAGENT_RE = re.compile(r"^Subagent failed \(task_id: ([^)]{0,128})\): ")
+# Terminal control sequences: OSC (title and hyperlink), CSI (colour, erase,
+# cursor movement), escapes with intermediate bytes (character-set selection),
+# two-byte escapes, and carriage returns used to redraw a line.
+_ANSI_RE = re.compile(
+    r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?"
+    r"|\x1b\[[0-?]*[ -/]*[@-~]"
+    r"|\x1b[ -/]+[0-~]"
+    r"|\x1b[@-Z\\-_]"
+    r"|\r"
+)
+# Identifiers (session, message, part and task ids, native type names) are
+# persisted verbatim only when they have this shape; anything else is replaced
+# by a short digest so it stays bounded and cannot carry free text.
+_SAFE_IDENT_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+_SURROGATE_RE = re.compile("[\ud800-\udfff]")
+MAX_JSON_DEPTH = 128
+_MAX_COST_ADJUSTED_EXPONENT = 30
+_MIN_COST_EXPONENT = -64
 
 CITED_CAPABILITIES: Dict[str, str] = {
     "json-envelope": "every stdout line is a JSON object with type, timestamp and sessionID",
@@ -482,11 +500,40 @@ class ParsedLine:
     diagnostic: Optional[str] = None
 
 
-DIAGNOSTIC_CODES = ("oversized", "non-utf8", "non-json", "non-object", "missing-type", "empty")
+# ``unhashable`` is counted by the pipeline, the others by ``parse_line``.
+DIAGNOSTIC_CODES = (
+    "oversized", "non-utf8", "non-json", "non-object", "missing-type", "empty",
+    "too-deep", "unhashable",
+)
 
 
-def parse_line(raw: bytes, *, max_bytes: int = 1_048_576) -> ParsedLine:
-    """Decode one stdout line. Never raises, whatever the input."""
+def _nesting_exceeds(obj: object, limit: int) -> bool:
+    """Iterative depth check, so a deep value cannot exhaust the call stack."""
+    stack = [(obj, 1)]
+    while stack:
+        value, depth = stack.pop()
+        if isinstance(value, dict):
+            children: Iterable[Any] = value.values()
+        elif isinstance(value, list):
+            children = value
+        else:
+            continue
+        if depth > limit:
+            return True
+        for child in children:
+            if isinstance(child, (dict, list)):
+                stack.append((child, depth + 1))
+    return False
+
+
+def parse_line(
+    raw: bytes, *, max_bytes: int = 1_048_576, max_depth: int = MAX_JSON_DEPTH
+) -> ParsedLine:
+    """Decode one stdout line. Never raises, whatever the input.
+
+    Nesting deeper than ``max_depth`` is rejected here, because later steps
+    (canonical hashing, event serialisation) recurse over the value.
+    """
     try:
         if isinstance(raw, str):
             raw = raw.encode("utf-8", "replace")
@@ -506,6 +553,8 @@ def parse_line(raw: bytes, *, max_bytes: int = 1_048_576) -> ParsedLine:
             return ParsedLine(diagnostic="non-json")
         if not isinstance(obj, dict):
             return ParsedLine(diagnostic="non-object")
+        if _nesting_exceeds(obj, max_depth):
+            return ParsedLine(diagnostic="too-deep")
         if not isinstance(obj.get("type"), str):
             return ParsedLine(diagnostic="missing-type")
         return ParsedLine(obj=obj)
@@ -515,9 +564,11 @@ def parse_line(raw: bytes, *, max_bytes: int = 1_048_576) -> ParsedLine:
 
 def _canonical_bytes(obj: Mapping[str, Any]) -> bytes:
     body = {k: v for k, v in obj.items() if k != "timestamp"}
+    # JSON escapes can decode to lone surrogates; surrogatepass hashes them
+    # instead of failing, and leaves every other string's bytes unchanged.
     return json.dumps(
         body, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
-    ).encode("utf-8")
+    ).encode("utf-8", "surrogatepass")
 
 
 def content_hash(obj: Mapping[str, Any]) -> str:
@@ -547,9 +598,9 @@ def classify_permission_error(text: str) -> Optional[str]:
     return None
 
 
-def _first_task_id(text: str) -> Optional[str]:
+def _first_task_id(text: str, redact: Callable[[str], str]) -> Optional[str]:
     match = _FIRST_SUBAGENT_RE.match(text)
-    return match.group(1) if match else None
+    return _safe_ident(match.group(1), redact) if match else None
 
 
 # ---------------------------------------------------------------------------
@@ -561,17 +612,36 @@ def _identity(text: str) -> str:
     return text
 
 
+def _scrub(text: str) -> str:
+    """Replace lone surrogates so the text is always UTF-8 encodable."""
+    return _SURROGATE_RE.sub("\ufffd", text)
+
+
 def _bound(text: object, redact: Callable[[str], str], limit: int) -> Optional[str]:
     """Redact first, then truncate on a UTF-8 boundary."""
     if not isinstance(text, str):
         return None
-    clean = redact(text)
+    clean = _scrub(redact(_scrub(text)))
     data = clean.encode("utf-8")
     if len(data) <= limit:
         return clean
     head = data[:limit].decode("utf-8", "ignore")
     dropped = len(data) - len(head.encode("utf-8"))
     return "%s…[truncated %d bytes]" % (head, dropped)
+
+
+def _safe_ident(value: object, redact: Callable[[str], str]) -> Optional[str]:
+    """An identifier as-is when well formed and untouched by redaction, else a digest.
+
+    Deterministic for a given redactor, so a dedup key computed from the raw
+    line matches the id later persisted on the event.
+    """
+    if not isinstance(value, str):
+        return None
+    if _SAFE_IDENT_RE.fullmatch(value) and redact(value) == value:
+        return value
+    digest = hashlib.sha256(value.encode("utf-8", "surrogatepass")).hexdigest()
+    return "h-" + digest[:32]
 
 
 # ---------------------------------------------------------------------------
@@ -698,6 +768,12 @@ def _decimal_text(value: object) -> Optional[str]:
             return None
         if not dec.is_finite() or dec < 0:
             return None
+        # Plain-notation text grows with the exponent, so a short literal such
+        # as 1e100000000 would expand to a huge string; such values are not costs.
+        if dec.adjusted() > _MAX_COST_ADJUSTED_EXPONENT:
+            return None
+        if dec.as_tuple().exponent < _MIN_COST_EXPONENT:  # type: ignore[operator]
+            return None
         return format(dec, "f")
     except (InvalidOperation, ValueError):
         return None
@@ -730,13 +806,23 @@ def translate(
     try:
         return _translate(obj, run_id, attempt, observed_at, redact, summary_limit)
     except Exception:  # noqa: BLE001 - translation must not raise
-        return (
-            _event(
-                obj if isinstance(obj, Mapping) else {}, run_id, attempt, observed_at,
-                EventType.PROGRESS,
-                ProgressPayload(kind="unknown", raw_type="unparseable"),
-                None,
-            ),
+        return (_fallback_event(obj, run_id, attempt, observed_at, redact),)
+
+
+def _fallback_event(obj, run_id, attempt, observed_at, redact) -> RuntimeEvent:
+    """Progress ``unknown`` that keeps the part id, so a rebuilt deduper keys it the same way."""
+    payload = ProgressPayload(kind="unknown", raw_type="unparseable")
+    source = obj if isinstance(obj, Mapping) else {}
+    try:
+        part_id = _safe_ident(_mapping(source.get("part")).get("id"), redact)
+        return _event(
+            source, run_id, attempt, observed_at, EventType.PROGRESS, payload, part_id,
+            redact=redact,
+        )
+    except Exception:  # noqa: BLE001 - last resort drops everything line-derived
+        return _event(
+            {}, run_id, attempt, observed_at, EventType.PROGRESS, payload, None,
+            redact=_identity,
         )
 
 
@@ -749,36 +835,48 @@ def _event(
     payload: Any,
     native_id: Optional[str],
     parent_id: Optional[str] = None,
+    *,
+    redact: Callable[[str], str],
 ) -> RuntimeEvent:
-    raw_type = obj.get("type") if isinstance(obj.get("type"), str) else "unknown"
-    session = obj.get("sessionID")
     return RuntimeEvent(
         schema_version=SCHEMA_VERSION,
         run_id=run_id,
         attempt=attempt,
         sequence=0,
-        session_id=session if isinstance(session, str) else None,
+        session_id=_safe_ident(obj.get("sessionID"), redact),
         parent_id=parent_id,
         timestamp=_iso_from_envelope(obj, observed_at),
         observed_at=observed_at,
         type=etype,
         origin="native",
-        native=NativeRef(type=raw_type, id=native_id, revision=1, content_sha256=None),
+        native=NativeRef(
+            type=_native_type(obj, redact), id=native_id, revision=1, content_sha256=None
+        ),
         payload=payload,
     )
+
+
+def _native_type(obj: Mapping[str, Any], redact: Callable[[str], str]) -> str:
+    return _safe_ident(obj.get("type"), redact) or "unknown"
 
 
 def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[RuntimeEvent, ...]:
     raw_type = obj.get("type")
     part = _mapping(obj.get("part"))
-    part_id = part.get("id") if isinstance(part.get("id"), str) else None
-    message_id = part.get("messageID") if isinstance(part.get("messageID"), str) else None
+    part_id = _safe_ident(part.get("id"), redact)
+    message_id = _safe_ident(part.get("messageID"), redact)
+    shown_type = _native_type(obj, redact)
 
     def make(etype: EventType, payload: Any) -> Tuple[RuntimeEvent, ...]:
-        return (_event(obj, run_id, attempt, observed_at, etype, payload, part_id, message_id),)
+        return (
+            _event(
+                obj, run_id, attempt, observed_at, etype, payload, part_id, message_id,
+                redact=redact,
+            ),
+        )
 
     def progress(**kw: Any) -> Tuple[RuntimeEvent, ...]:
-        return make(EventType.PROGRESS, ProgressPayload(raw_type=raw_type, **kw))
+        return make(EventType.PROGRESS, ProgressPayload(raw_type=shown_type, **kw))
 
     if raw_type == "step_start":
         return progress(kind="step_start")
@@ -809,12 +907,13 @@ def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[Runtim
     if raw_type == "error":
         err = _mapping(obj.get("error"))
         data = _mapping(err.get("data"))
+        # Only the message that the error mapping would report is classified,
+        # and never one carrying an HTTP status: a provider response is a
+        # failure to report, whatever its text says.
+        message = data.get("message") if isinstance(data.get("message"), str) else err.get("message")
         outcome = None
-        for candidate in (data.get("message"), err.get("message")):
-            if isinstance(candidate, str):
-                outcome = classify_permission_error(candidate)
-                if outcome is not None:
-                    break
+        if isinstance(message, str) and data.get("statusCode") is None:
+            outcome = classify_permission_error(message)
         if outcome == "rejected":
             return make(
                 EventType.APPROVAL_REQUIRED,
@@ -830,10 +929,11 @@ def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[Runtim
 
 
 def _translate_tool(part, make, redact, limit) -> Tuple[RuntimeEvent, ...]:
-    tool = part.get("tool") if isinstance(part.get("tool"), str) else None
+    raw_tool = part.get("tool")
+    is_task = raw_tool == "task"
+    tool = _bound(raw_tool, redact, 256)
     state = _mapping(part.get("state"))
     status = state.get("status")
-    is_task = tool == "task"
 
     def progress(**kw: Any):
         return make(EventType.PROGRESS, ProgressPayload(raw_type="tool_use", **kw))
@@ -860,7 +960,7 @@ def _translate_tool(part, make, redact, limit) -> Tuple[RuntimeEvent, ...]:
                 ApprovalRequiredPayload(
                     evidence_source="task_error" if is_task else "tool_error",
                     tool=tool,
-                    task_id=_first_task_id(text) if is_task else None,
+                    task_id=_first_task_id(text, redact) if is_task else None,
                 ),
             )
         if is_task:
@@ -868,19 +968,19 @@ def _translate_tool(part, make, redact, limit) -> Tuple[RuntimeEvent, ...]:
                 return progress(
                     kind="tool", tool=tool, status="error", summary=summary,
                     delegation="denied-tail", permission_outcome="denied",
-                    task_id=_first_task_id(text),
+                    task_id=_first_task_id(text, redact),
                 )
             return progress(
                 kind="tool", tool=tool, status="error", summary=summary,
                 delegation="failed",
-                task_id=_first_task_id(text) if isinstance(text, str) else None,
+                task_id=_first_task_id(text, redact) if isinstance(text, str) else None,
             )
         return progress(
             kind="tool", tool=tool, status="error", summary=summary,
             permission_outcome="denied" if outcome == "denied" else None,
         )
 
-    return progress(kind="tool", tool=tool, status=status if isinstance(status, str) else None)
+    return progress(kind="tool", tool=tool, status=_bound(status, redact, 256))
 
 
 # ---------------------------------------------------------------------------
@@ -890,14 +990,27 @@ def _translate_tool(part, make, redact, limit) -> Tuple[RuntimeEvent, ...]:
 Key = Tuple[str, str]
 
 
-def native_key(obj: Mapping[str, Any]) -> Key:
-    """Dedup key: ``(type, part id)`` when a part id exists, else a content hash."""
-    raw_type = obj.get("type") if isinstance(obj.get("type"), str) else "unknown"
-    part = _mapping(obj.get("part"))
-    part_id = part.get("id")
-    if isinstance(part_id, str):
+def native_key(
+    obj: Mapping[str, Any],
+    *,
+    attempt: int,
+    redact: Callable[[str], str] = _identity,
+    digest: Optional[str] = None,
+) -> Key:
+    """Dedup key: ``(type, part id)`` when a part id exists, else a content hash.
+
+    A line without a part id is keyed per attempt: an identical native error
+    on a later attempt of the same session is a new failure, not a replay.
+    Type and id go through the same shaping as the persisted event, so
+    ``Deduper.from_events`` rebuilds exactly these keys.
+    """
+    raw_type = _native_type(obj, redact)
+    part_id = _safe_ident(_mapping(obj.get("part")).get("id"), redact)
+    if part_id is not None:
         return (raw_type, part_id)
-    return (raw_type, "sha256:" + content_hash(obj))
+    if digest is None:
+        digest = content_hash(obj)
+    return (raw_type, "sha256:%s:%d" % (digest, attempt))
 
 
 def _driver_key(event: RuntimeEvent) -> Key:
@@ -915,7 +1028,13 @@ def _payload_hash(payload: Any) -> str:
 
 
 class Deduper:
-    """Exact repeats are dropped; changed content becomes a new revision."""
+    """Exact repeats are dropped; changed content becomes a new revision.
+
+    One entry is kept per distinct key for the deduper's lifetime, which is
+    one run. ``dropped_duplicates`` and ``revisions`` count what this instance
+    saw: a deduper rebuilt with ``from_events`` starts them at zero, so a
+    caller reporting run-wide totals must carry them across attempts.
+    """
 
     def __init__(self) -> None:
         self._seen: Dict[Key, Tuple[int, str]] = {}
@@ -941,7 +1060,10 @@ class Deduper:
         for event in events:
             if event.native is not None:
                 native = event.native
-                ident = native.id if native.id is not None else "sha256:%s" % native.content_sha256
+                if native.id is not None:
+                    ident = native.id
+                else:
+                    ident = "sha256:%s:%d" % (native.content_sha256, event.attempt)
                 key: Key = (native.type, ident)
                 digest = native.content_sha256 or ""
                 revision = native.revision
@@ -956,7 +1078,14 @@ class Deduper:
 
 
 class EventPipeline:
-    """parse, translate, dedup and stamp; no I/O."""
+    """parse, translate, dedup and stamp; no I/O.
+
+    ``max_line_bytes`` classifies a line the caller has already read; it does
+    not bound the read itself. A reader must use a bounded
+    ``readline(max_line_bytes + 1)`` and discard up to the next newline when
+    the limit is hit, otherwise one endless line is buffered in full.
+    ``feed_line`` never raises for any input bytes.
+    """
 
     def __init__(
         self,
@@ -970,6 +1099,14 @@ class EventPipeline:
         summary_limit: int = 2048,
         max_line_bytes: int = 1_048_576,
     ) -> None:
+        # Validated here so a bad argument fails at construction instead of on
+        # the first stdout line, inside the reader loop.
+        if not isinstance(run_id, str) or not RUN_ID_RE.match(run_id):
+            raise ValueError("run_id has the wrong shape")
+        if not _is_int(attempt) or attempt < 1:
+            raise ValueError("attempt must be a positive integer")
+        if not _is_int(start_sequence) or start_sequence < 0:
+            raise ValueError("start_sequence must be a non-negative integer")
         self.run_id = run_id
         self.attempt = attempt
         self._redact = redact
@@ -1002,8 +1139,12 @@ class EventPipeline:
             self.counters[parsed.diagnostic or "non-json"] += 1
             return []
         obj = parsed.obj
-        key = native_key(obj)
-        digest = content_hash(obj)
+        try:
+            digest = content_hash(obj)
+            key = native_key(obj, attempt=self.attempt, redact=self._redact, digest=digest)
+        except Exception:  # noqa: BLE001 - one bad line must not stop the reader
+            self.counters["unhashable"] += 1
+            return []
         verdict, revision = self._deduper.admit(key, digest)
         self._sync_counters()
         if verdict == "duplicate":
@@ -1070,16 +1211,21 @@ def summarize_steps(events: Iterable[RuntimeEvent]) -> StepSummary:
     """Report step boundaries seen in stream order; the state decision is not made here."""
     starts = set()
     finishes: Dict[Tuple[str, Any], RuntimeEvent] = {}
-    last_reason: Optional[str] = None
-    for event in events:
+    first_seen: Dict[Tuple[str, Any], int] = {}
+    for index, event in enumerate(events):
         if event.type is EventType.PROGRESS and event.payload.kind == "step_start":
             starts.add(_identity_of(event))
         elif event.type is EventType.USAGE:
             ident = _identity_of(event)
+            first_seen.setdefault(ident, index)
             previous = finishes.get(ident)
             if previous is None or event.revision >= previous.revision:
                 finishes[ident] = event
-            last_reason = event.payload.finish_reason
+    # The last step is the one that appeared last, not the one revised last.
+    last_reason: Optional[str] = None
+    if finishes:
+        last_ident = max(first_seen, key=first_seen.__getitem__)
+        last_reason = finishes[last_ident].payload.finish_reason
     terminal = None
     if last_reason is not None:
         terminal = last_reason not in ("tool-calls", "unknown")
@@ -1093,7 +1239,12 @@ def summarize_steps(events: Iterable[RuntimeEvent]) -> StepSummary:
 
 
 def usage_totals(events: Iterable[RuntimeEvent]) -> UsagePayload:
-    """Sum the last revision per part; any unknown value makes that field unknown."""
+    """Sum the last revision per part; any unknown value makes that field unknown.
+
+    Empty input gives every field ``None`` (unknown) rather than zero. The five
+    token fields are kept apart; a caller converting to ``retry.Usage`` must
+    decide how they add up to its single token count.
+    """
     latest: Dict[Tuple[str, Any], RuntimeEvent] = {}
     for event in events:
         if event.type is not EventType.USAGE:

@@ -645,3 +645,198 @@ class TestDenyIsNeverFailureOrApproval:
             candidates += [tool_use(tool, "error", error=text) for tool in ("bash", "task", "question")]
             for obj in candidates:
                 assert ET.ERROR not in types(tr(obj))
+
+
+# ---------------------------------------------------------------------------
+# hostile and unusual input reaching the pipeline
+# ---------------------------------------------------------------------------
+
+SURROGATE_LINES = [
+    b'{"type":"text","sessionID":"ses_a","part":{"id":"prt_t","text":"hi \\ud800 there"}}',
+    b'{"type":"error","sessionID":"ses_a","error":{"name":"UnknownError","data":{"message":"boom \\udfff"}}}',
+    b'{"type":"text","sessionID":"ses_\\ud800","part":{"id":"prt_u","text":"x"}}',
+    b'{"type":"tool_use","sessionID":"ses_a","part":{"id":"prt_\\ud800","tool":"b\\ud800sh",'
+    b'"state":{"status":"error","error":"fail \\ud800"}}}',
+    b'{"type":"t\\ud800","sessionID":"ses_a"}',
+    b'{"\\ud800":1,"type":"step_start","sessionID":"ses_a"}',
+]
+
+
+def _deep_line(depth):
+    return b'{"type":"text","a":' + b"[" * depth + b"]" * depth + b"}"
+
+
+def _assert_encodable(events):
+    for e in events:
+        e.to_json().encode("utf-8")
+        assert ev.RuntimeEvent.from_json(e.to_json()) == e
+
+
+def test_feed_line_survives_surrogates_and_deep_nesting():
+    pipe = pipeline()
+    for raw in SURROGATE_LINES:
+        out = pipe.feed_line(raw)
+        assert out, raw
+        _assert_encodable(out)
+    for depth in (ev.MAX_JSON_DEPTH + 5, 5000, 100_000):
+        assert pipe.feed_line(_deep_line(depth)) == []
+    assert pipe.counters["too-deep"] + pipe.counters["non-json"] == 3
+    assert pipe.feed_line(_deep_line(ev.MAX_JSON_DEPTH - 3))
+
+
+def test_surrogate_error_is_still_an_error_and_denial_still_denied():
+    (e,) = pipeline().feed_line(SURROGATE_LINES[1])
+    assert e.type is ET.ERROR and "�" in e.payload.message
+    rules = json.dumps([{"permission": "bash", "pattern": "x\ud800", "action": "deny"}])
+    text = DENIED.split("Here are")[0] + "Here are some of the relevant rules " + rules
+    raw = json.dumps(tool_use("bash", "error", error=text)).encode("utf-8", "surrogatepass")
+    (e,) = pipeline().feed_line(raw)
+    assert e.type is ET.PROGRESS and e.payload.permission_outcome == "denied"
+
+
+def test_parse_line_depth_bound():
+    assert ev.parse_line(_deep_line(ev.MAX_JSON_DEPTH + 1)).diagnostic in ("too-deep", "non-json")
+    assert ev.parse_line(_deep_line(3), max_depth=4).obj is not None
+    assert ev.parse_line(_deep_line(3), max_depth=3).diagnostic == "too-deep"
+
+
+def test_feed_line_never_raises_on_fuzz():
+    rng = random.Random(11)
+    pieces = [b'{"type":"text"', b',"part":{"id":"p","text":"', b"\\ud800", b"\\udc00", b'"}',
+              b"}", b"[", b"]", b'"x"', b",", b":", b"1e999999", b"\xff", b"\\u0000", b'{"a":']
+    pipe = pipeline()
+    for _ in range(800):
+        raw = b"".join(rng.choice(pieces) for _ in range(rng.randrange(0, 12)))
+        _assert_encodable(pipe.feed_line(raw))
+    for raw in SURROGATE_LINES:
+        mutated = raw.replace(b'"prt_', b'"q')
+        _assert_encodable(pipe.feed_line(mutated))
+
+
+def test_hashing_failure_is_counted_not_raised(monkeypatch):
+    pipe = pipeline()
+
+    def boom(obj):
+        raise RecursionError("too deep")
+
+    monkeypatch.setattr(ev, "content_hash", boom)
+    assert pipe.feed_line(line(step_start())) == []
+    assert pipe.counters["unhashable"] == 1
+
+
+def test_identical_error_on_a_later_attempt_is_not_dropped():
+    err = {"type": "error", "timestamp": 1, "sessionID": "ses_a",
+           "error": {"name": "APIError", "data": {"message": "Rate limit", "statusCode": 429}}}
+    first = pipeline()
+    out1 = first.feed_line(line(err))
+    assert types(out1) == [ET.ERROR]
+    later = dict(err, timestamp=99)
+    second = ev.EventPipeline(RUN_ID, 2, redact=redact, observed_clock=lambda: 2.0,
+                              deduper=ev.Deduper.from_events(out1), start_sequence=2)
+    out2 = second.feed_line(line(later))
+    assert types(out2) == [ET.ERROR] and out2[0].attempt == 2 and out2[0].sequence == 2
+    assert second.counters["dropped_duplicates"] == 0
+    same = pipeline(deduper=ev.Deduper.from_events(out1), start_sequence=2)
+    assert same.feed_line(line(later)) == []
+    again = ev.EventPipeline(RUN_ID, 2, redact=redact, observed_clock=lambda: 2.0,
+                             deduper=ev.Deduper.from_events(out1 + out2), start_sequence=3)
+    assert again.feed_line(line(err)) == []
+
+
+@pytest.mark.parametrize("literal", [
+    b"1e100000000", b"1e999999999", b"1e-100000000", b"0E-100000", b"1e31",
+    b"0." + b"1" * 100,
+])
+def test_extreme_cost_becomes_unknown(literal):
+    raw = b'{"type":"step_finish","part":{"id":"p","reason":"stop","cost":' + literal + b"}}"
+    (e,) = pipeline().feed_line(raw)
+    assert e.payload.cost is None
+    assert len(e.to_json()) < 1000
+
+
+def test_ordinary_costs_are_kept():
+    for value, text in ((Decimal("0.000123"), "0.000123"), (Decimal("12345"), "12345"), (0, "0")):
+        assert tr(step_finish(cost=value))[0].payload.cost == text
+
+
+def test_id_tool_and_task_fields_are_bounded_and_redacted():
+    huge_tool = "t" * 200_000
+    huge_task = "Subagent failed (task_id: " + "k" * 300_000 + "): " + REJECTED
+    objs = [
+        {"type": "tool_use", "sessionID": "ses_" + SECRET, "part": {
+            "id": "prt_" + SECRET, "messageID": "m" * 5000, "tool": huge_tool + SECRET,
+            "state": {"status": "s" * 50_000 + SECRET}}},
+        {"type": "x" * 200_000, "sessionID": "ses_a", "part": {"id": "p" * 200}},
+        tool_use("task", "error", error=huge_task),
+        tool_use("task", "error", error="Subagent failed (task_id: ses_" + SECRET + "): boom"),
+    ]
+    for obj in objs:
+        (e,) = tr(obj)
+        dumped = e.to_json()
+        assert SECRET not in dumped
+        assert len(dumped.encode()) < 4000, len(dumped)
+    (e,) = tr(objs[2])
+    assert e.type is ET.APPROVAL_REQUIRED and e.payload.task_id is None
+    (e,) = tr(objs[0])
+    assert e.native.id.startswith("h-") and e.session_id.startswith("h-")
+    assert e.payload.tool.endswith("bytes]")
+
+
+def test_shaped_ids_survive_and_rebuild_matches_live_keys():
+    pipe = pipeline()
+    secret_part = {"type": "text", "sessionID": "ses_a", "part": {"id": "prt_" + SECRET, "text": "a"}}
+    out = pipe.feed_line(line(secret_part)) + pipe.feed_line(line(step_start()))
+    assert out[1].native.id == "prt_s1"
+    rebuilt = pipeline(deduper=ev.Deduper.from_events(out), start_sequence=3)
+    assert rebuilt.feed_line(line(secret_part)) == []
+    assert rebuilt.feed_line(line(step_start())) == []
+
+
+def test_translate_fallback_keeps_part_id(monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(ev, "_translate", broken)
+    pipe = pipeline()
+    (e,) = pipe.feed_line(line(step_start("prt_z")))
+    assert e.payload.raw_type == "unparseable" and e.native.id == "prt_z"
+    rebuilt = pipeline(deduper=ev.Deduper.from_events([e]), start_sequence=2)
+    assert rebuilt.feed_line(line(step_start("prt_z"))) == []
+
+
+def test_pipeline_rejects_bad_arguments_at_construction():
+    for kwargs in ({"run_id": "bad"}, {"attempt": 0}, {"attempt": "1"}):
+        args = dict(run_id=RUN_ID, attempt=1)
+        args.update(kwargs)
+        with pytest.raises(ValueError):
+            ev.EventPipeline(args["run_id"], args["attempt"], observed_clock=lambda: 1.0)
+    with pytest.raises(ValueError):
+        ev.EventPipeline(RUN_ID, 1, observed_clock=lambda: 1.0, start_sequence=-1)
+
+
+def test_provider_error_text_does_not_steer_classification():
+    err = {"type": "error", "sessionID": "ses_a", "error": {
+        "name": "APIError", "data": {"message": DENIED, "statusCode": 503, "isRetryable": True}}}
+    (e,) = tr(err)
+    assert e.type is ET.ERROR and e.payload.failure_kind == "http"
+    both = {"type": "error", "sessionID": "ses_a", "error": {
+        "name": "UnknownError", "message": REJECTED, "data": {"message": "provider exploded"}}}
+    assert types(tr(both)) == [ET.ERROR]
+
+
+@pytest.mark.parametrize("prefix", [
+    "\x1b[2K\r", "\x1b]0;title\x07", "\x1b]8;;http://x\x1b\\", "\x1b(B", "\x1b[1A\x1b[2K",
+])
+def test_stderr_notice_behind_other_control_sequences(prefix):
+    sig = ev.parse_stderr_line(prefix + ANSI_NOTICE)
+    assert sig is not None and sig.kind == "approval" and sig.patterns_complete
+
+
+def test_summarize_steps_uses_latest_step_not_latest_revision():
+    a1 = step_finish("prt_a", "stop")
+    b = step_finish("prt_b", "tool-calls")
+    a2 = step_finish("prt_a", "stop", tokens={"input": 99})
+    _, out = run_all([line(step_start("prt_s1")), line(a1), line(step_start("prt_s2")),
+                      line(b), line(a2)])
+    s = ev.summarize_steps(out)
+    assert s.last_finish_reason == "tool-calls" and s.last_finish_terminal is False
