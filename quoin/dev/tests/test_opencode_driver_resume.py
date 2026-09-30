@@ -154,8 +154,8 @@ def test_session_continuation_end_to_end(tmp_path, monkeypatch, flag):
     runs = _runs(tmp_path)
     assert len(runs) == 2
     second = runs[1]["argv"]
-    assert "--session" in second and "--agent" in second and "--command" not in second
-    assert second[second.index("--session") + 1] == runs[0]["session_id"]
+    assert "--agent" in second and "--command" not in second
+    assert "--session=" + runs[0]["session_id"] in second
     assert len(_effects(tmp_path)) == 1
     _no_duplicate_parts(prepared)
     _sequences_continue(prepared)

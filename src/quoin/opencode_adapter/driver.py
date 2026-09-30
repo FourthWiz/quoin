@@ -175,6 +175,7 @@ class PreparedRun:
     artifact_paths: Optional[runstore.RunPaths]
     input_hashes: Mapping[str, Any] = field(default_factory=dict)
     repo_revisions: Tuple[Mapping[str, Any], ...] = ()
+    agent: str = ""
     # Secrets live only here; never shown and never part of equality.
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
 
@@ -213,8 +214,8 @@ class Handoff:
         if isinstance(last_sequence, bool) or not isinstance(last_sequence, int) or last_sequence < 0:
             raise ValueError("the checkpoint sequence must be a non-negative integer")
         session = checkpoint.get("native_session_id")
-        if session is not None and not isinstance(session, str):
-            raise ValueError("the checkpoint session id must be text")
+        if session is not None and not (isinstance(session, str) and NATIVE_SESSION_RE.fullmatch(session)):
+            raise ValueError("the checkpoint session id has the wrong shape")
         revisions = checkpoint.get("repo_revisions") or []
         if not isinstance(revisions, (list, tuple)) or not all(isinstance(r, Mapping) for r in revisions):
             raise ValueError("the checkpoint revisions must be a list of objects")
@@ -226,6 +227,10 @@ class Handoff:
             step_open=bool(checkpoint.get("step_open", False)),
             ran_anything=bool(checkpoint.get("ran_anything", False)),
         )
+
+
+# The id goes into argv, so it must be unable to read as a flag.
+NATIVE_SESSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 
 @dataclass(frozen=True)
@@ -938,6 +943,7 @@ class OpenCodeDriver:
             artifact_paths=runstore.run_paths(directory, state.run_id or ""),
             input_hashes=input_hashes,
             repo_revisions=revisions,
+            agent=agent,
             launch_env=child_env,
         )
 
@@ -1469,7 +1475,9 @@ class OpenCodeDriver:
         ):
             facts.session_lost = True
         after = self._hash_now(handle)
-        revisions = self._revisions_now(handle)
+        revisions = self._revisions_now(
+            handle, runstore.SHORT_REVISIONS_BUDGET_S if (facts.timeout or facts.cancelled) else None
+        )
         if after is not None:
             for payload in runstore.diff_hashes(handle.hashes_before, after):
                 event = self._emit_driver(handle, EventType.ARTIFACT_REFERENCE, payload)
@@ -1529,9 +1537,13 @@ class OpenCodeDriver:
         except (runstore.RunStoreError, OSError):
             return None
 
-    def _revisions_now(self, handle: RuntimeHandle) -> Optional[List[Dict[str, Any]]]:
+    def _revisions_now(
+        self, handle: RuntimeHandle, budget_s: Optional[float] = None
+    ) -> Optional[List[Dict[str, Any]]]:
         try:
-            return runstore.repo_revisions(self.project_root)
+            if budget_s is None:
+                return runstore.repo_revisions(self.project_root)
+            return runstore.repo_revisions(self.project_root, budget_s=budget_s)
         except Exception:  # noqa: BLE001 - revisions are advisory
             return None
 
@@ -1818,7 +1830,12 @@ class OpenCodeDriver:
             remaining = self._remaining(handle, table)
             if not remaining or self._monotonic() >= deadline:
                 break
-        if remaining and table is not None:
+        if table is None:
+            # No trustworthy process table: kill the run group and the child
+            # outright rather than waiting on a view that cannot be refreshed.
+            escalated = True
+            self._force_kill(handle)
+        elif remaining:
             escalated = True
             self._send(handle, table, _signal.SIGKILL)
             kill_deadline = self._monotonic() + kill_grace
@@ -1827,6 +1844,7 @@ class OpenCodeDriver:
                 proc.poll()
                 table = self._proc.snapshot()
                 if table is None:
+                    self._force_kill(handle)
                     break
                 self._expand_tracked(handle, table)
                 remaining = self._remaining(handle, table)
@@ -1839,7 +1857,8 @@ class OpenCodeDriver:
         final = self._proc.snapshot()
         if final is None:
             return CancellationResult(
-                signalled_term=signalled, escalated_kill=escalated, group_empty=False,
+                signalled_term=signalled, escalated_kill=escalated,
+                group_empty=not self._group_alive(handle.pgid),
                 descendants_found=self._descendants_found(handle), descendants_remaining=None,
                 exit_code=proc.returncode, duration_s=self._monotonic() - started,
             )
@@ -1859,35 +1878,49 @@ class OpenCodeDriver:
         with handle.tracked_lock:
             return len([p for p in handle.tracked if p != handle.proc.pid])
 
+    def _group_alive(self, pgid: Optional[int]) -> bool:
+        """Whether the group still has a member. Probes the group itself, so
+        it stays correct after the direct child has exited."""
+        if not pgid or pgid <= 1 or pgid == os.getpgrp():
+            return False
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError):
+            return False
+        return True
+
+    def _force_kill(self, handle: RuntimeHandle) -> None:
+        if handle.pgid and handle.pgid > 1 and handle.pgid != os.getpgrp():
+            self._killpg(handle.pgid, _signal.SIGKILL)
+        try:
+            handle.proc.kill()
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+
     def _terminate_group_only(
         self, handle: RuntimeHandle, grace_s: float, kill_grace: float, started: float
     ) -> CancellationResult:
         proc = handle.proc
         signalled = False
         escalated = False
-        if proc.poll() is None and handle.pgid:
+        proc.poll()
+        if self._group_alive(handle.pgid):
             signalled = True
             self._killpg(handle.pgid, _signal.SIGTERM)
             deadline = self._monotonic() + grace_s
-            while proc.poll() is None and self._monotonic() < deadline:
+            while self._group_alive(handle.pgid) and self._monotonic() < deadline:
                 time.sleep(self._poll_s)
-            if proc.poll() is None:
+                proc.poll()
+            if self._group_alive(handle.pgid):
                 escalated = True
-                self._killpg(handle.pgid, _signal.SIGKILL)
+        if escalated or (not handle.pgid and proc.poll() is None):
+            self._force_kill(handle)
         try:
             proc.wait(timeout=kill_grace)
         except subprocess.TimeoutExpired:
             pass
-        empty = False
-        if handle.pgid:
-            try:
-                os.killpg(handle.pgid, 0)
-            except ProcessLookupError:
-                empty = True
-            except PermissionError:
-                empty = False
         return CancellationResult(
-            signalled_term=signalled, escalated_kill=escalated, group_empty=empty,
+            signalled_term=signalled, escalated_kill=escalated, group_empty=not self._group_alive(handle.pgid),
             descendants_found=self._descendants_found(handle), descendants_remaining=None,
             exit_code=proc.returncode, duration_s=self._monotonic() - started,
         )
@@ -2046,6 +2079,8 @@ class OpenCodeDriver:
         session = handoff.native_session_id
         if session is None:
             session = next((e.session_id for e in reversed(events) if e.origin == "native" and e.session_id), None)
+        if session is not None and not NATIVE_SESSION_RE.fullmatch(session):
+            session = None
         blocked: Optional[str] = None
         if any(a.get("driver_lost") for a in record.get("attempts") or []):
             blocked = "effect-uncertain"
@@ -2063,8 +2098,8 @@ class OpenCodeDriver:
 
         if facts.ran_anything:
             argv = [
-                prepared.argv[0], "run", "--format", "json", "--session", session,
-                "--agent", names.role_agent_name(prepared.role), "--", RESUME_MESSAGE,
+                prepared.argv[0], "run", "--format", "json", "--session=" + session,
+                "--agent", prepared.agent or names.role_agent_name(prepared.role), "--", RESUME_MESSAGE,
             ]
             mode = "session"
         else:

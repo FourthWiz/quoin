@@ -374,6 +374,11 @@ def _parse_run(args: List[str]) -> Dict[str, Any]:
         if token == "--":
             parsed["message"].extend(args[i + 1:])
             break
+        flag, eq, inline = token.partition("=")
+        if eq and flag in _VALUE_FLAGS:
+            parsed[flag[2:]] = inline
+            i += 1
+            continue
         if token in _VALUE_FLAGS and i + 1 < len(args):
             parsed[token[2:]] = args[i + 1]
             i += 2

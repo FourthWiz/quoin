@@ -69,6 +69,9 @@ _ANSI_RE = re.compile(
 # persisted verbatim only when they have this shape; anything else is replaced
 # by a short digest so it stays bounded and cannot carry free text.
 _SAFE_IDENT_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+_KNOWN_NATIVE_TYPES = frozenset(
+    ("tool_use", "step_start", "step_finish", "text", "reasoning", "error", "unknown")
+)
 _SURROGATE_RE = re.compile("[\ud800-\udfff]")
 MAX_JSON_DEPTH = 128
 _MAX_COST_ADJUSTED_EXPONENT = 30
@@ -857,6 +860,9 @@ def _fallback_event(obj, run_id, attempt, observed_at, redact) -> RuntimeEvent:
         # deduper keys the persisted event the way the live line was keyed.
         try:
             shaped_type = _native_type(source, _identity)
+            if shaped_type not in _KNOWN_NATIVE_TYPES:
+                # Free-form types are persisted only in their redacted, digested form.
+                shaped_type = _native_type(source, redact)
         except Exception:  # noqa: BLE001
             shaped_type = "unknown"
         return _event(

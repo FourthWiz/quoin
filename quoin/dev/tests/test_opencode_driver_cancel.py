@@ -121,6 +121,40 @@ def test_a_listed_zombie_never_forces_the_kill_escalation(tmp_path):
     assert result.descendants_remaining == 0
 
 
+class _ProcFailingAfterFirst:
+    """The real process table, except every listing after the first one
+    taken once armed fails, as a transient `ps` error would."""
+
+    def __init__(self):
+        self.armed = False
+        self.calls = 0
+
+    def __getattr__(self, name):
+        return getattr(proctree, name)
+
+    def snapshot(self, *args, **kwargs):
+        if self.armed:
+            self.calls += 1
+            if self.calls > 1:
+                return None
+        return proctree.snapshot(*args, **kwargs)
+
+
+def test_ps_failure_mid_grace_still_kills_a_term_ignoring_child(tmp_path):
+    stub = _ProcFailingAfterFirst()
+    prepared = h.make_prepared(tmp_path, "ignore_term")
+    drv = h.make_driver(tmp_path, grace_s=GRACE, kill_grace_s=KILL_GRACE, proc=stub)
+    handle = drv.start(prepared)
+    time.sleep(0.5)
+    stub.armed = True
+    started = time.monotonic()
+    result, _ = _cancel_with_observer(drv, handle)
+    assert result.escalated_kill
+    assert result.descendants_remaining is None or result.descendants_remaining == 0
+    assert handle.proc.poll() is not None
+    assert time.monotonic() - started < GRACE + KILL_GRACE + 1
+
+
 def test_hang_obeys_term(tmp_path):
     drv, prepared, handle = _start(tmp_path, "hang")
     time.sleep(0.3)
