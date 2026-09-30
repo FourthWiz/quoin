@@ -137,6 +137,10 @@ def _popen(argv, **kwargs):
     return subprocess.Popen(argv, **kwargs)
 
 
+def _git_run(argv, **kwargs):
+    return subprocess.run(argv, **kwargs)
+
+
 def _home() -> Path:
     raw = os.environ.get("HOME")
     if raw:
@@ -308,6 +312,173 @@ def _count_done(memory_dir: Path, task: str) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Progress and repair rules. These mirror src/quoin/supervisor.py (this script
+# runs standalone and cannot import it); test_progress_predicate_parity.py
+# keeps the two in step.
+# ---------------------------------------------------------------------------
+
+COMPLETION_SIGNALS = {"implement": "tasks"}
+HEAD_PROBE_BUDGET_SECS = 5.0
+_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
+_TASK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_MAX_PROBE_CANDIDATES = 50
+
+
+def _repair_allowance() -> int:
+    return _clamp_int("QUOIN_SUPERVISOR_REPAIR_RELAUNCHES", 2, 0, 5)
+
+
+def _head_probe_enabled() -> bool:
+    return str(_env("QUOIN_SUPERVISOR_HEAD_PROBE", "")).strip() != "0"
+
+
+def heads_changed(before, after) -> bool:
+    if not before or not after:
+        return False
+    old = dict(before)
+    for key, sha in after:
+        if key in old and old[key] != sha:
+            return True
+    return False
+
+
+def repair_pending_phases(progress_dir_path) -> tuple:
+    d = Path(progress_dir_path)
+    try:
+        return tuple(
+            sorted(
+                phase
+                for phase, sub in COMPLETION_SIGNALS.items()
+                if (d / "{}.{}.done".format(phase, sub)).is_file()
+                and not (d / "{}.done".format(phase)).is_file()
+            )
+        )
+    except OSError:
+        return ()
+
+
+def next_streak(progressed, repair_phases, streak, repairs_used, allowance) -> tuple:
+    if progressed:
+        return (0, 0, "progress")
+    if repair_phases and repairs_used < allowance:
+        return (streak, repairs_used + 1, "repair")
+    return (streak + 1, repairs_used, "stall")
+
+
+def abort_reason(streak, repair_phases):
+    if streak < 2:
+        return None
+    if not repair_phases:
+        return "no forward progress"
+    return "phase completion not repaired: " + ", ".join(repair_phases)
+
+
+def _probe_task_heads(task, project_root, budget_secs=HEAD_PROBE_BUDGET_SECS, runner=None, clock=None) -> tuple:
+    """Snapshot of (repo_key, sha) for repos on the task branch; () on any
+    failure. Same algorithm as the supervisor's probe."""
+    try:
+        if not _head_probe_enabled() or not _TASK_NAME_RE.match(task):
+            return ()
+        root = Path(project_root)
+        if (root / ".git").exists():
+            candidates = [(".", root)]
+        else:
+            candidates = []
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and (child / ".git").exists():
+                    candidates.append((child.name, child))
+            candidates = candidates[:_MAX_PROBE_CANDIDATES]
+        if not candidates:
+            return ()
+        run = _git_run if runner is None else runner
+        now = time.monotonic if clock is None else clock
+        env = dict(os.environ)
+        env["GIT_OPTIONAL_LOCKS"] = "0"
+        env["GIT_TERMINAL_PROMPT"] = "0"
+        deadline = now() + budget_secs
+        pairs = []
+        for key, directory in candidates:
+            remaining = deadline - now()
+            if remaining <= 0:
+                return ()
+            result = run(
+                ["git", "-C", str(directory), "rev-parse", "HEAD", "--abbrev-ref", "HEAD"],
+                timeout=max(remaining, 0.1),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+            if result.returncode != 0:
+                continue
+            lines = result.stdout.splitlines()
+            if len(lines) < 2:
+                continue
+            sha, branch = lines[0].strip(), lines[1].strip()
+            if not _SHA_RE.match(sha):
+                continue
+            if branch == task or branch.endswith("/" + task):
+                pairs.append((key, sha))
+        return tuple(sorted(pairs))
+    except Exception:  # noqa: BLE001 — the script is fail-open by contract
+        return ()
+
+
+def _heads_from_json(value) -> tuple:
+    if not isinstance(value, list):
+        return ()
+    out = []
+    for entry in value:
+        if (
+            isinstance(entry, (list, tuple))
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and isinstance(entry[1], str)
+        ):
+            out.append((entry[0], entry[1]))
+    return tuple(sorted(out))
+
+
+def _progress_outcome(memory_dir: Path, task: str, counter: dict, record, heads) -> dict:
+    record = record or {}
+    done_now = _count_done(memory_dir, task)
+    cur_phase = [record.get("phase"), record.get("phase_index")]
+    progressed = (
+        done_now > (counter.get("last_done_count") or 0)
+        or counter.get("last_phase") != cur_phase
+        or heads_changed(_heads_from_json(counter.get("last_heads")), tuple(heads))
+    )
+    repair = repair_pending_phases(memory_dir / PROGRESS_DIR_TEMPLATE.format(task=task))
+    streak, repairs_used, _verdict = next_streak(
+        progressed,
+        repair,
+        counter.get("consecutive_no_progress", 0),
+        counter.get("repairs_used", 0),
+        _repair_allowance(),
+    )
+    return {
+        "done_now": done_now,
+        "cur_phase": cur_phase,
+        "progressed": progressed,
+        "repair": repair,
+        "streak": streak,
+        "repairs_used": repairs_used,
+        "reason": abort_reason(streak, repair),
+        "heads": tuple(heads),
+    }
+
+
+def _apply_progress(counter: dict, outcome: dict, full: bool) -> None:
+    counter["consecutive_no_progress"] = outcome["streak"]
+    counter["repairs_used"] = outcome["repairs_used"]
+    if full:
+        counter["last_done_count"] = outcome["done_now"]
+        counter["last_phase"] = outcome["cur_phase"]
+        if outcome["heads"]:
+            counter["last_heads"] = [[k, v] for k, v in outcome["heads"]]
+
+
+# ---------------------------------------------------------------------------
 # Continuation counter
 # ---------------------------------------------------------------------------
 
@@ -325,6 +496,8 @@ def _default_counter(task: str, marker_timestamp) -> dict:
         "consecutive_no_progress": 0,
         "last_done_count": 0,
         "last_phase": None,
+        "last_heads": [],
+        "repairs_used": 0,
         "chain_blocks": 0,
         "last_session_id": "",
         "in_flight": False,
@@ -753,7 +926,7 @@ def _evaluate_gate(memory_dir: Path, mode: str, candidates):
     """Runs the shared gate order over `candidates`. Returns a dict:
     ``{"action": "none"}``, ``{"action": "halt", "task", "reason"}`` (halt
     already written), or ``{"action": "candidate", "task", "record",
-    "counter", "progressed", "done_now", "cur_phase"}`` (counter NOT yet
+    "counter", "outcome"}`` (counter NOT yet
     persisted — the caller finishes the mutation and writes it)."""
     for task, marker, record in candidates:
         if record.get("active") is not True:
@@ -781,24 +954,18 @@ def _evaluate_gate(memory_dir: Path, mode: str, candidates):
             _write_halt(memory_dir, task, record, "auto-resume cap")
             _write_counter(memory_dir, task, counter)
             return {"action": "halt", "task": task, "reason": "auto-resume cap"}
-        done_now = _count_done(memory_dir, task)
-        last_phase = counter.get("last_phase")
-        cur_phase = [record.get("phase"), record.get("phase_index")]
-        progressed = done_now > (counter.get("last_done_count") or 0) or last_phase != cur_phase
-        if not progressed:
-            if counter.get("consecutive_no_progress", 0) + 1 >= 2:
-                counter["consecutive_no_progress"] = counter.get("consecutive_no_progress", 0) + 1
-                _write_halt(memory_dir, task, record, "no forward progress")
-                _write_counter(memory_dir, task, counter)
-                return {"action": "halt", "task": task, "reason": "no forward progress"}
+        outcome = _progress_outcome(memory_dir, task, counter, record, ())
+        if outcome["reason"] is not None:
+            _apply_progress(counter, outcome, False)
+            _write_halt(memory_dir, task, record, outcome["reason"])
+            _write_counter(memory_dir, task, counter)
+            return {"action": "halt", "task": task, "reason": outcome["reason"]}
         return {
             "action": "candidate",
             "task": task,
             "record": record,
             "counter": counter,
-            "progressed": progressed,
-            "done_now": done_now,
-            "cur_phase": cur_phase,
+            "outcome": outcome,
         }
     return {"action": "none"}
 
@@ -818,6 +985,7 @@ def _do_handoff(
     record,
     halt_on_cap: bool = True,
     probe_caller: str = "handoff",
+    heads=None,
 ):
     """Attempt a detached `quoin run --autonomous` hand-off. Returns one of
     ``HANDOFF|<pid>|<n>/<cap>``, ``NO_CLI|``, ``STALE_CLI|<kind>|<message>``,
@@ -852,16 +1020,16 @@ def _do_handoff(
             _write_halt(memory_dir, task, record, "auto-resume cap")
             _write_counter(memory_dir, task, counter)
         return "DENIED|cap"
-    done_now = _count_done(memory_dir, task)
-    last_phase = counter.get("last_phase")
-    cur_phase = [record.get("phase"), record.get("phase_index")]
-    progressed = done_now > (counter.get("last_done_count") or 0) or last_phase != cur_phase
-    if not progressed:
-        if counter.get("consecutive_no_progress", 0) + 1 >= 2:
-            counter["consecutive_no_progress"] = counter.get("consecutive_no_progress", 0) + 1
-            _write_halt(memory_dir, task, record, "no forward progress")
-            _write_counter(memory_dir, task, counter)
-            return "DENIED|no-progress"
+    # The commit probe runs only here, after the cheap early returns; the
+    # hook paths pass heads=() so they never spawn git inside a hook budget.
+    if heads is None:
+        heads = _probe_task_heads(task, project_root)
+    outcome = _progress_outcome(memory_dir, task, counter, record, heads)
+    if outcome["reason"] is not None:
+        _apply_progress(counter, outcome, False)
+        _write_halt(memory_dir, task, record, outcome["reason"])
+        _write_counter(memory_dir, task, counter)
+        return "DENIED|no-progress"
     res = resolve_cli(project_root, probe_caller)
     if res["status"] == "missing":
         return "NO_CLI|"
@@ -992,9 +1160,7 @@ def _do_handoff(
     _write_lock(memory_dir, task, proc.pid, remaining, "handoff", token=token)
     attempts += 1
     counter["attempts"] = attempts
-    counter["consecutive_no_progress"] = 0 if progressed else counter.get("consecutive_no_progress", 0) + 1
-    counter["last_done_count"] = done_now
-    counter["last_phase"] = cur_phase
+    _apply_progress(counter, outcome, True)
     counter["in_flight"] = True
     counter["last_reason"] = reason
     counter["last_session_id"] = record.get("session_id", "") or ""
@@ -1537,7 +1703,7 @@ def _cmd_stop(args) -> int:
     if counter["chain_blocks"] >= _handoff_at():
         handoff_result = _do_handoff(
             memory_dir, Path(args.project_root), task, "stop-cap", counter, record,
-            halt_on_cap=False, probe_caller="stop",
+            halt_on_cap=False, probe_caller="stop", heads=(),
         )
         if handoff_result.startswith("HANDOFF|"):
             return 0
@@ -1559,9 +1725,7 @@ def _cmd_stop(args) -> int:
 
     attempts = counter.get("attempts", 0) + 1
     counter["attempts"] = attempts
-    counter["consecutive_no_progress"] = 0 if result["progressed"] else counter.get("consecutive_no_progress", 0) + 1
-    counter["last_done_count"] = result["done_now"]
-    counter["last_phase"] = result["cur_phase"]
+    _apply_progress(counter, result["outcome"], True)
     counter["in_flight"] = True
     counter["last_session_id"] = session_id
     counter["last_reason"] = "compact" if (memory_dir / COMPACT_TEMPLATE.format(sid=session_id)).exists() else "stop"
@@ -1600,7 +1764,8 @@ def _cmd_start(args) -> int:
     record = result["record"]
     counter = result["counter"]
     handoff_result = _do_handoff(
-        memory_dir, Path(args.project_root), task, "startup", counter, record, probe_caller="start"
+        memory_dir, Path(args.project_root), task, "startup", counter, record, probe_caller="start",
+        heads=(),
     )
 
     if handoff_result.startswith("HANDOFF|"):
@@ -1711,6 +1876,8 @@ def _cmd_arm(args) -> int:
         counter["chain_blocks"] = 0
         counter["last_done_count"] = 0
         counter["last_phase"] = None
+        counter["repairs_used"] = 0
+        counter["last_heads"] = []
     counter["in_flight"] = False
     counter["marker_timestamp"] = marker_ts
     _write_counter(memory_dir, args.task, counter)
