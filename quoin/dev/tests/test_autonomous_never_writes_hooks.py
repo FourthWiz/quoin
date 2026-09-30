@@ -52,6 +52,7 @@ WRITE_VERB_PATTERN = re.compile(
     r'|write_bytes\('
     r'|>\s*[^\n]*hooks[/\\]'  # shell redirect into hooks/
     r'|mv\s+[^\n]*hooks[/\\]'  # mv ... hooks/...
+    r'|fsops\.py\s+(?:mv|write-atomic|finalize|trash)\b[^\n]*hooks[/\\]'  # helper writes into hooks/
     r'|sed\s+-i[^\n]*hooks[/\\]'  # sed -i ... hooks/...
     r')',
     re.IGNORECASE,
@@ -91,6 +92,17 @@ def test_scanned_file_set_is_non_empty() -> None:
     assert "SKILL.md" in names
 
 
+def _writes_into_hooks(line: str) -> bool:
+    return any(marker in line for marker in HOOK_WRITE_MARKERS) and bool(WRITE_VERB_PATTERN.search(line))
+
+
+def test_fsops_writes_into_hooks_are_detected() -> None:
+    assert _writes_into_hooks("printf 'x' | python3 ~/.claude/scripts/fsops.py write-atomic \"~/.claude/hooks/stop.sh\"")
+    assert _writes_into_hooks('python3 fsops.py mv "a" "hooks/b.sh"')
+    assert _writes_into_hooks('python3 fsops.py finalize "a.tmp" "hooks/a" --cleanup "a.tmp"')
+    assert not _writes_into_hooks('python3 fsops.py write-atomic ".workflow_artifacts/memory/x"')
+
+
 def test_no_scanned_file_writes_into_hooks_dir() -> None:
     """No file-write pattern in the supervisor module, CLI, or the
     autonomous-tagged run/end_of_task SKILL text targets a path under
@@ -99,7 +111,7 @@ def test_no_scanned_file_writes_into_hooks_dir() -> None:
     for path in _existing_scanned_files():
         text = path.read_text(encoding="utf-8")
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if any(marker in line for marker in HOOK_WRITE_MARKERS) and WRITE_VERB_PATTERN.search(line):
+            if _writes_into_hooks(line):
                 offenders.append(f"{path.relative_to(REPO_ROOT)}:{lineno}: {line.strip()!r}")
     assert not offenders, (
         f"found a write-shaped pattern targeting hooks/: {offenders} — "

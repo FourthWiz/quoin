@@ -16,7 +16,7 @@ Layer 2 — critic/SKILL.md assertions:
   (h) Contains "if it exists" or "if present" or "if absent" near the breadcrumb step.
 
 Layer 3 — end_of_task/SKILL.md assertion:
-  (i) Contains "planner-trace.md" and "rm -f" in Sub-phase C steps.
+  (i) Contains "planner-trace.md" and "fsops.py rm" in Sub-phase C steps.
 
 Layer 4 — quoin/CLAUDE.md assertion:
   (j) Contains ".planner-trace.md" with "ephemeral" nearby in the Tier-1 section.
@@ -170,19 +170,20 @@ def test_critic_bootstrap_graceful_absence():
 # --- Layer 3: end_of_task/SKILL.md ---
 
 def test_end_of_task_deletes_breadcrumb():
-    """end_of_task/SKILL.md Sub-phase C must delete .planner-trace.md with rm -f fail-silently."""
+    """end_of_task/SKILL.md Sub-phase C must delete .planner-trace.md through the fsops helper, fail-silently."""
     text = _read(EOT_SKILL)
     assert "planner-trace.md" in text, (
         "'planner-trace.md' not found in end_of_task/SKILL.md"
     )
-    assert "rm -f" in text, (
-        "'rm -f' not found in end_of_task/SKILL.md"
+    section = text[text.index("**Step 8: Dispatch Sub-phase C"):text.index("## Important behaviors")]
+    assert 'fsops.py rm "<task_dir>/.planner-trace.md"' in section, (
+        "Sub-phase C does not delete the planner trace with fsops.py rm"
     )
-    # Verify both appear near each other (within 500 chars)
+    # The marker name and the helper call appear near each other (within 500 chars).
     idx_trace = text.find("planner-trace.md")
-    idx_rm = text.find("rm -f")
+    idx_rm = text.find("fsops.py rm")
     assert abs(idx_trace - idx_rm) < 500, (
-        "'planner-trace.md' and 'rm -f' are not near each other in end_of_task/SKILL.md "
+        "'planner-trace.md' and 'fsops.py rm' are not near each other in end_of_task/SKILL.md "
         f"(positions: {idx_trace}, {idx_rm})"
     )
 

@@ -44,11 +44,8 @@ alike — because the write is idempotent (an overwrite is a no-op-equivalent), 
 there is no need to distinguish fresh-vs-resumed at this site:
 
 ```bash
-mkdir -p .workflow_artifacts/memory
 printf 'task: <task-name>\ntimestamp: <ISO-8601 now>\nautonomous: true\n' \
-  > .workflow_artifacts/memory/autonomous-run-<task-name>.marker.tmp \
-  && mv .workflow_artifacts/memory/autonomous-run-<task-name>.marker.tmp \
-        .workflow_artifacts/memory/autonomous-run-<task-name>.marker
+  | python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents ".workflow_artifacts/memory/autonomous-run-<task-name>.marker"
 ```
 
 Plain `/run` (no `--autonomous`, `AUTONOMOUS=false`) never writes this marker — the
@@ -267,7 +264,7 @@ Under `AUTONOMOUS`, every hard stop writes a halt-sentinel **before exit**, then
 Under `AUTONOMOUS`, the completion of each of the 9 resumable phases below is recorded by a per-phase completion sentinel, so a future resumed session (or an external supervisor relaunching one) can tell exactly which phases already finished without re-deriving it from session-state prose. This section is the T-05 contract declaration — the entry-marker write (Setup) and the resume-side read/idempotency logic (the later "Resume" section) land in a later Stage-2 task; this section fixes the write-site map they both consume.
 
 - **Directory:** `.workflow_artifacts/memory/autonomous-progress-{task}/` — same OUTSIDE-the-task-folder rationale as the halt-sentinel above.
-- **Write-site map** (phase → completion sentinel, all 9 resumable phases, atomic write `printf > f.tmp && mv f.tmp f`):
+- **Write-site map** (phase → completion sentinel, all 9 resumable phases, atomic write `printf '…' | python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`):
   1. **discover** (Phase 1) → writes `autonomous-progress-{task}/discover.done`.
   2. **enrich** (Phase 1.4) → writes `autonomous-progress-{task}/enrich.done`.
   3. **specify** (Phase 1.5) → writes `autonomous-progress-{task}/specify.done`.
@@ -408,7 +405,7 @@ ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
           --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
 [ -z "$ATTR" ] && ATTR="src=unresolved"   # MIN-1: key on empty stdout, not exit code
 [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-[ "$_ERR" != "/dev/null" ] && rm -f "$_ERR"
+[ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
 printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
   "$AID" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" \
   "on-behalf: PHASE via /run" "0" "$ATTR" >> "$LEDGER"

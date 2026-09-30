@@ -290,7 +290,7 @@ Reference files (apply HERE at the body-generation WRITE-SITE — per format-kit
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-**Step 1 pre-write sweep:** Before writing, clear stale leftovers from any prior aborted run: `(rm -f <plan-path>.body.tmp <plan-path>.tmp 2>/dev/null || true)`.
+**Step 1 pre-write sweep:** Before writing, clear stale leftovers from any prior aborted run: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<plan-path>.body.tmp" "<plan-path>.tmp"`.
 Compose the format-aware body per format-kit.md §2 `current-plan.md` enumeration. Include the `## Revision history` section (terse numbered list or table per format-kit.md §2) with the new round's changelog appended inside it. DO NOT include the `## For human` block in the body — that's Steps 2–3. Write the body to `<plan-path>.body.tmp` using the Bash tool.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
@@ -334,10 +334,10 @@ Exit code 0 = PASS; non-zero = at least one invariant failed (stderr names which
   - **Step 2 failure:** re-run Step 2 once (re-spawn the Haiku Agent subagent); if still fails → English-fallback.
   - **V-06/V-07 failures:** re-run Steps 2–4 once.
   - **V-02/V-03/V-05 failures:** re-run Steps 1–4 once with explicit body-discipline instruction.
-  - **English-fallback:** v2-style write (no `## For human` block). Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log `format-kit-skipped` warning. Clean up body.tmp: `(rm -f <plan-path>.body.tmp 2>/dev/null || true)`.
+  - **English-fallback:** v2-style write (no `## For human` block). Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log `format-kit-skipped` warning. Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<plan-path>.body.tmp"`.
 
 **Step 6: Atomic rename.**
-  `mv <plan-path>.tmp <plan-path>; (rm -f <plan-path>.body.tmp <plan-path>.tmp 2>/dev/null || true)`
+  `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<plan-path>.tmp" "<plan-path>" --cleanup "<plan-path>.body.tmp" "<plan-path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed.
 
 The final `current-plan.md` contains the revised body. Do NOT write a `.original.md` side-file.
 

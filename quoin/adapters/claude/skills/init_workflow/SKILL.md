@@ -202,8 +202,8 @@ If `memory/` exists at the project root (but `.workflow_artifacts/` does not), o
 Migration commands (on yes):
 ```bash
 mkdir -p .workflow_artifacts
-mv memory .workflow_artifacts/memory
-[ -d finalized ] && mv finalized .workflow_artifacts/finalized
+python3 __QUOIN_HOME__/scripts/fsops.py mv "memory" ".workflow_artifacts/memory"
+[ -d finalized ] && python3 __QUOIN_HOME__/scripts/fsops.py mv "finalized" ".workflow_artifacts/finalized"
 ```
 
 **Task folder detection** — also scan the project root for task folders to migrate:
@@ -211,7 +211,7 @@ mv memory .workflow_artifacts/memory
 - Qualifies as a task folder if it contains BOTH `current-plan.md` AND at least one of `critic-response-*.md` or `review-*.md`
 - Also qualifies: any non-git-repo directory containing a `finalized/` subdirectory (parent task container)
 - Present detected list to user, ask confirmation per folder before moving
-- Move confirmed folders: `mv <task-name> .workflow_artifacts/<task-name>`
+- Move confirmed folders: `python3 __QUOIN_HOME__/scripts/fsops.py mv "<task-name>" ".workflow_artifacts/<task-name>"`
 
 **Legacy detection:** Check for `quoin/memory/` — this is the old layout where memory was nested inside quoin. If found:
 
@@ -226,7 +226,7 @@ mv memory .workflow_artifacts/memory
 If the user confirms, run:
 ```bash
 mkdir -p .workflow_artifacts
-mv quoin/memory .workflow_artifacts/memory
+python3 __QUOIN_HOME__/scripts/fsops.py mv "quoin/memory" ".workflow_artifacts/memory"
 ```
 
 If `.workflow_artifacts/memory/` already exists (partial migration), merge by copying missing files only — never overwrite existing ones.
@@ -234,7 +234,7 @@ If `.workflow_artifacts/memory/` already exists (partial migration), merge by co
 **Old symlinks cleanup:** Check for `.claude/skills/` containing symlinks into `quoin/skills/`. If found, remove them — skills are now global at `__QUOIN_HOME__/skills/`:
 ```bash
 for f in .claude/skills/*/; do
-  [ -L "${f%/}" ] && rm "${f%/}"
+  [ -L "${f%/}" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "${f%/}"
 done
 ```
 
@@ -379,7 +379,7 @@ This ensures `.workflow_artifacts/` is gitignored in every project.
 ### Step 6: Run /discover
 
 Before invoking `/discover`, handle the bootstrap marker (crash-safe de-dup with `/discover`'s repo-spec offer, D-05):
-1. **Stale pre-clear:** drop any marker left by a prior aborted bootstrap: `rm -f .workflow_artifacts/.init-bootstrap-active`
+1. **Stale pre-clear:** drop any marker left by a prior aborted bootstrap: `python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"`
 2. **Write a fresh marker:** `: > .workflow_artifacts/.init-bootstrap-active` (create empty; `.workflow_artifacts/` is already gitignored)
 
 This marker signals to `/discover` that repo-spec seeding is owned by `/init_workflow` Step 6.7, so `/discover` MUST suppress its own repo-spec draft/refresh offer while the marker is present AND self-clear it after honoring — the concrete, crash-safe de-dup mechanism for R-04/R-31/R-38 (see D-05). The marker path is the shared signal both skills key on.
@@ -539,7 +539,7 @@ On **"Describe it now"**: elicit the repo's purpose, goals, core capabilities, a
   - `## Acceptance criteria`
   - `## Non-goals`
 
-Write via `<path>.tmp` + atomic `mv` to `.workflow_artifacts/spec.md`, then validate:
+Write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then validate:
 
 ```bash
 python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md
@@ -550,10 +550,10 @@ Expect exit 0 — this auto-detects artifact type `spec` (required sections `[##
 **Marker cleanup (last action of Step 6.7, run on EVERY branch — describe, skip, or already-exists):**
 
 ```bash
-rm -f .workflow_artifacts/.init-bootstrap-active
+python3 __QUOIN_HOME__/scripts/fsops.py rm ".workflow_artifacts/.init-bootstrap-active"
 ```
 
-This is a belt-and-suspenders no-op: `/discover` self-clears the marker when it honors it during Step 6, so the marker is normally already gone by the time Step 6.7 runs. `rm -f` is safe when the file is already absent.
+This is a belt-and-suspenders no-op: `/discover` self-clears the marker when it honors it during Step 6, so the marker is normally already gone by the time Step 6.7 runs. `fsops.py rm` is a no-op when the file is already absent.
 
 ### Step 7: Copy quickstart guide + legacy detection
 

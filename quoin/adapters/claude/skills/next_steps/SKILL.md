@@ -157,7 +157,7 @@ and stop. Target file: `<project-root>/next-steps.md`.
 2. Read the full content of `next-steps.md` (create empty if it doesn't exist).
 3. If `## Queue` heading is absent from any line: ensure the file ends with a single newline, then append `\n## Queue\n\n`.
 4. Append the line: `- ⏳ YYYY-MM-DD: <text>` where date is the output of `date -u +%Y-%m-%d`.
-5. Write back atomically: write full content to `<path>.tmp`, then `mv <path>.tmp <path>`.
+5. Write back atomically: write full content to `<path>.tmp`, then `python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"`.
 6. Confirm: `Queued: ⏳ YYYY-MM-DD: <text>`
 
 ### list [--all]
@@ -197,7 +197,7 @@ print(f"match: line {matched_idx + 1}: {matched_line}")
 new_line = matched_line.replace("⏳", "✓", 1)
 lines[matched_idx] = new_line
 write '\n'.join(lines) + '\n' to <path>.tmp
-mv <path>.tmp <path>
+run: python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"
 print(f"Marked done: {new_line}")
 ```
 
@@ -205,6 +205,6 @@ print(f"Marked done: {new_line}")
 
 - **Fast.** This skill completes in seconds. One read, one write.
 - **Bracket is non-negotiable.** Never edit lines above the `## Queue` heading. If the heading is absent when `done N` is called, refuse with an error — do not fall back to a global search.
-- **Atomic writes.** Always write to `<path>.tmp` then `mv <path>.tmp <path>` for all mutations.
+- **Atomic writes.** Always write to `<path>.tmp` then `python3 __QUOIN_HOME__/scripts/fsops.py mv "<path>.tmp" "<path>"` for all mutations.
 - **Show the match before editing.** For `done N`, always print the matched line before mutating the file so the user sees what will change.
 - **Reject empty text.** For `add`, reject empty or whitespace-only text with a one-line error.

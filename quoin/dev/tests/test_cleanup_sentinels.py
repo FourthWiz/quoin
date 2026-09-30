@@ -16,7 +16,7 @@ Layer 2 — negative safety test:
     (a) 'hardcoded' (or 'hardcoded allow-list') is present (drift guard).
     (b) No catch-all glob ('*.txt' or 'pending-*.txt' alone) is the sweep target.
     (c) 'lessons-learned.md' and 'forgotten/' do NOT appear as sweep targets.
-    (d) 'trash_move' appears in the allow-list/sweep section; 'rm -f' does NOT.
+    (d) 'trash_move' appears in the allow-list/sweep section; a hard delete ('rm -f' or 'fsops.py rm') does NOT.
     (e) 'find' lines in the section target named family globs, not bare '*.txt'.
 
 Both layers must pass. Exit 0 on success, non-zero on failure.
@@ -33,6 +33,15 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent  # quoin/ git repo root
 _SKILL_MD = _PROJECT_ROOT / "quoin" / "adapters" / "claude" / "skills" / "cleanup" / "SKILL.md"
 
+
+def _has_hard_delete(text: str) -> bool:
+    """True if the text contains a permanent-delete form (shell rm -f or the fsops helper)."""
+    return "rm -f" in text or "fsops.py rm" in text
+
+
+# Synthetic check: the predicate must catch the helper form too.
+assert _has_hard_delete('python3 fsops.py rm "x"')
+assert not _has_hard_delete("trash_move x")
 
 def _extract_cleanup_section(content: str) -> str:
     """Extract the body of the ## Hardcoded sentinel allow-list section (scope-bounded)."""
@@ -230,11 +239,11 @@ def _run_layer2_negative_safety() -> bool:
         )
         failures += 1
 
-    if "rm -f" not in combined:
+    if not _has_hard_delete(combined):
         _pass("Layer 2f: 'rm -f' NOT present in sweep section (trash-move vs hard-delete distinction)")
     else:
         _fail(
-            "Layer 2f: 'rm -f' found in sweep section — "
+            "Layer 2f: hard delete ('rm -f' or 'fsops.py rm') found in sweep section — "
             "/cleanup must use trash_move, not rm. "
             "/sleep --purge uses rm; /cleanup does not."
         )

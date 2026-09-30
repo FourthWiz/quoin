@@ -164,7 +164,7 @@ Analyze the raw prompt against the grounding context gathered above (real repo s
 
 Write a single artifact, `<task-root>/enriched-prompt.md`, as a **Class A** artifact (always-English; no terse body).
 
-**Write mechanism:** compose the full file content and write to `<task-root>/enriched-prompt.md.tmp` via the Write tool, then atomically rename: `mv <task-root>/enriched-prompt.md.tmp <task-root>/enriched-prompt.md`. No validator schema exists for this filename (confirmed inert on `detect_type()` — falls through to `default`); this is a Class A always-English doc, not a Class B validated artifact.
+**Write mechanism:** compose the full file content and write to `<task-root>/enriched-prompt.md.tmp` via the Write tool, then atomically rename: `python3 __QUOIN_HOME__/scripts/fsops.py mv "<task-root>/enriched-prompt.md.tmp" "<task-root>/enriched-prompt.md"`. No validator schema exists for this filename (confirmed inert on `detect_type()` — falls through to `default`); this is a Class A always-English doc, not a Class B validated artifact.
 
 Sections, in this order:
 - `## Enriched prompt` — the sharpened task description, ready to feed into `/specify` or `/architect`.

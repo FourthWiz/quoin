@@ -23,7 +23,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/architect/SKILL.md",
-      "line_hash": "65412cf326cb939fbcf719e29b511b1b23a44d27c79bace368aaa2f3c81591f7",
+      "line_hash": "b70218b859999295fdc4f488c686b47e676d56edff72fc11e1a603d90b131c6a",
       "heading_disposition": "known-exception",
       "path_form": "repo_source",
       "note": "names '### Session state tracking' (drop row); valid under the full CLAUDE.md variant (content unmoved by T-02), not guaranteed reachable under the slim project-scope pilot; shared fallback boilerplate repeated in 6 other planning skills.",
@@ -193,7 +193,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/plan/SKILL.md",
-      "line_hash": "b770526b4d0aec1b489bff17acbfc4a24ba19941aa87fbdf79712dc8325ab64a",
+      "line_hash": "1dd04e5d7d573736259050068fed547a7468389cd17807059a52f3af7ca356ad",
       "heading_disposition": "known-exception",
       "path_form": "repo_source",
       "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
@@ -209,7 +209,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/review/SKILL.md",
-      "line_hash": "b0191dd521c53f6b5781c50cf2f4caf06d5994146941f60f90a813122c3bad5b",
+      "line_hash": "19a6a022f1359eab7b36360c4b606d261232ef5744c2e6007ff8f11ff4a21fec",
       "heading_disposition": "known-exception",
       "path_form": "repo_source",
       "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
@@ -225,7 +225,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/revise-fast/SKILL.md",
-      "line_hash": "5650a631c986c582df603a0a2ca2a6b0de3b0a6c6c87e21c6a22de465202964a",
+      "line_hash": "01d2dcf55fa86a1456f7728def2283fa39031cba90074483f04ed983dd7982c3",
       "heading_disposition": "known-exception",
       "path_form": "repo_source",
       "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
@@ -233,7 +233,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/revise/SKILL.md",
-      "line_hash": "5650a631c986c582df603a0a2ca2a6b0de3b0a6c6c87e21c6a22de465202964a",
+      "line_hash": "01d2dcf55fa86a1456f7728def2283fa39031cba90074483f04ed983dd7982c3",
       "heading_disposition": "known-exception",
       "path_form": "repo_source",
       "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
@@ -272,7 +272,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/security_review/SKILL.md",
-      "line_hash": "b0191dd521c53f6b5781c50cf2f4caf06d5994146941f60f90a813122c3bad5b",
+      "line_hash": "19a6a022f1359eab7b36360c4b606d261232ef5744c2e6007ff8f11ff4a21fec",
       "heading_disposition": "known-exception",
       "path_form": "repo_source",
       "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",

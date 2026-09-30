@@ -250,8 +250,7 @@ each survives `/end_of_task`'s later move of that folder into
   The supervisor checks the done sentinel first, then the halt
   sentinel, before deciding whether to relaunch.
 
-All sentinel writes are atomic: `printf > f.tmp && mv f.tmp f` — the
-same idiom the hooks already use.
+All sentinel writes are atomic: `printf '…' | python3 __QUOIN_HOME__/scripts/fsops.py write-atomic "<f>"` (writes `<f>.tmp`, then renames it over `<f>`).
 
 **Supervisor loop.** `quoin run --autonomous <task>` runs a pure
 relaunch loop: on each iteration, check the done sentinel (exit

@@ -43,6 +43,13 @@ def test_sweep_uses_trash_move_not_rm():
     step5c = _text(CLEANUP_SKILL).split("Step 5c", 1)[1].split("Step 6", 1)[0]
     assert "trash_move" in step5c
     assert "rm -f" not in step5c
+    assert "fsops.py rm" not in step5c
+
+
+def test_hard_delete_check_catches_helper_form():
+    fake = "Step 5c: trash_move a\npython3 fsops.py rm \"a\"\nStep 6"
+    fake_step5c = fake.split("Step 5c", 1)[1].split("Step 6", 1)[0]
+    assert "fsops.py rm" in fake_step5c
 
 
 def test_window_knob_default_is_30():

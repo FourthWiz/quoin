@@ -231,7 +231,7 @@ Do NOT include a `## For human` heading — `spec.md` has no summary/body split;
 
 **Write mechanism:**
 1. Compose the full file content (frontmatter + the five sections) and write it to `<task-root>/spec.md.tmp` using the Write tool.
-2. Atomically rename: `mv <task-root>/spec.md.tmp <task-root>/spec.md`.
+2. Atomically rename: `python3 __QUOIN_HOME__/scripts/fsops.py mv "<task-root>/spec.md.tmp" "<task-root>/spec.md"`.
 3. Validate: run `python3 __QUOIN_HOME__/scripts/validate_artifact.py <task-root>/spec.md`. Filename auto-detection identifies the type as `spec`. Expect exit code 0.
 4. If validation fails, re-read the failing invariant from the tool output, fix the specific section(s) named, rewrite via the same `.tmp` + atomic-rename mechanism, and re-validate once. If it still fails after one retry, tell the user which invariant is failing and ask whether to proceed with the file as-is or keep iterating — do not silently ship an invalid spec.
 
@@ -269,7 +269,7 @@ untouched. This is a `safe-degrade` boundary, NOT a fail-closed helper STOP: the
 degrade for a human-owned artifact is to do nothing to it (auto-Reject), so no needs-decision
 sentinel is written. The gate never proceeds on a default write in any mode.
 
-On Approve: write via `<path>.tmp` + atomic `mv` to `.workflow_artifacts/spec.md`, then `python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0. On Reject (including the autonomous auto-Reject above): leave the repo spec untouched. Either way, the task spec written earlier is unaffected.
+On Approve: write `.workflow_artifacts/spec.md.tmp` with the Write tool, then run `python3 __QUOIN_HOME__/scripts/fsops.py mv ".workflow_artifacts/spec.md.tmp" ".workflow_artifacts/spec.md"`, then `python3 __QUOIN_HOME__/scripts/validate_artifact.py .workflow_artifacts/spec.md` → expect exit 0. On Reject (including the autonomous auto-Reject above): leave the repo spec untouched. Either way, the task spec written earlier is unaffected.
 
 ## Important behaviors
 

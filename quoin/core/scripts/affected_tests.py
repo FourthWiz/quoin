@@ -121,6 +121,76 @@ _EXCLUDE_NAMES: frozenset[str] = frozenset({
 #   test_rel   — path of the test file, relative to the quoin/ git repo root.
 # The guard is applied as: posix == src_suffix OR posix.endswith("/" + src_suffix).
 _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
+    # Instruction files must not bring back shell rm, rmdir or mv; the six artifact
+    # writers also carry the temp-file cleanup contract.
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/memory/cost-ledger-format.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/memory/lifecycle-guide.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/memory/cleanup-task-bookkeeping.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/memory/checkpoint-spec.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/plan/SKILL.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/plan/SKILL.md",
+        "quoin/dev/tests/test_tmp_cleanup_contract.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/architect/SKILL.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/architect/SKILL.md",
+        "quoin/dev/tests/test_tmp_cleanup_contract.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/review/SKILL.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/review/SKILL.md",
+        "quoin/dev/tests/test_tmp_cleanup_contract.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/revise/SKILL.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/revise/SKILL.md",
+        "quoin/dev/tests/test_tmp_cleanup_contract.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/revise-fast/SKILL.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/revise-fast/SKILL.md",
+        "quoin/dev/tests/test_tmp_cleanup_contract.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/security_review/SKILL.md",
+        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/security_review/SKILL.md",
+        "quoin/dev/tests/test_tmp_cleanup_contract.py",
+    ),
     (
         "quoin/CLAUDE.md",
         "quoin/dev/tests/test_claude_md_size_ceiling.py",

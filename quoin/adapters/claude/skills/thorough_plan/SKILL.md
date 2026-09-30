@@ -335,7 +335,7 @@ ATTR="$(python3 __QUOIN_HOME__/scripts/agent_transcript_cost.py \
           --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
 [ -z "$ATTR" ] && ATTR="src=unresolved"   # MIN-1: key on empty stdout, not exit code
 [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-[ "$_ERR" != "/dev/null" ] && rm -f "$_ERR"
+[ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
 printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
   "$AID" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" \
   "on-behalf: PHASE via /thorough_plan" "0" "$ATTR" >> "$LEDGER"
@@ -424,8 +424,7 @@ resumable on the next `/thorough_plan` invocation:
 
 ```bash
 _MEM="{project-root}/.workflow_artifacts/memory"
-rm -f "$_MEM/checkpoints/thorough-plan-progress-$_TPCKPT_SID.md" || true
-rm -f "$_MEM/pending-restore-$_TPCKPT_SID.txt" || true
+python3 __QUOIN_HOME__/scripts/fsops.py rm "$_MEM/checkpoints/thorough-plan-progress-$_TPCKPT_SID.md" "$_MEM/pending-restore-$_TPCKPT_SID.txt" || true
 ```
 
 If cleanup fails, log a one-line warning and continue — fail-OPEN. (`$_TPCKPT_SID` is the SID
