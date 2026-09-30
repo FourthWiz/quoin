@@ -458,3 +458,50 @@ def test_transcript_exists_honours_config_dir(tmp_path, monkeypatch):
     assert takeover._real_transcript_exists(A) is False
     (d / f"{A}.jsonl").write_text("")
     assert takeover._real_transcript_exists(A) is True
+
+
+def test_child_only_in_post_halt_lock_is_stopped(root):
+    """A child recorded only in the lock snapshot taken after the halt is killed."""
+    _write(root, lock={"pid": SUP, "started_at": "2026-09-30T10:00:00Z", "child_session_id": A,
+                       "child_cwd": "/work/a", "child_started_at": "2026-09-30T10:00:00Z"})
+    f = FakeOps(procs={SUP: _sup_proc(), CHILD: _child_proc(B)}, transcripts=[A, B])
+    real_kill = f.kill
+
+    def kill(pid, sig):
+        real_kill(pid, sig)
+        if pid == SUP and sig == TERM:  # supervisor spawns B as it dies
+            _write(root, lock={"pid": SUP, "started_at": "2026-09-30T10:00:00Z",
+                               "child_session_id": B, "child_cwd": "/work/b",
+                               "child_pid": CHILD, "child_started_at": "2026-09-30T10:05:00Z"})
+
+    f.kill = kill
+    assert _go(root, f) == 0
+    assert ("kill", CHILD, TERM) in f.calls
+    assert f.outs == ["cd /work/b && claude --resume " + B]
+
+
+@pytest.mark.parametrize("cmd", ["npm run demo", "cargo run demo", "quoin run --takeover demo",
+                                 "python -m quoin run demo"])
+def test_unrelated_reused_supervisor_pid_never_signalled(root, cmd):
+    f = _standard(root)
+    f.procs[SUP]["cmdline"] = cmd
+    assert _go(root, f) == 0
+    assert not any(c[0] == "kill" and c[1] == SUP for c in f.calls)
+
+
+def test_newest_started_session_is_resumed(root):
+    _write(root,
+           lock={"pid": SUP, "started_at": "2026-09-30T10:00:00Z", "child_session_id": A,
+                 "child_cwd": "/work/a", "child_started_at": "2026-09-30T10:00:00Z"},
+           rec={"child_session_id": B, "child_cwd": "/work/b",
+                "child_started_at": "2026-09-30T10:05:00Z"})
+    f = FakeOps(procs={SUP: _sup_proc()}, transcripts=[A, B])
+    assert _go(root, f) == 0
+    assert f.outs == ["cd /work/b && claude --resume " + B]
+
+
+def test_recorded_child_pid_needs_adjacent_session_pair(root):
+    f = _standard(root)
+    f.procs[CHILD]["cmdline"] = f"claude --resume {A}"
+    assert _go(root, f) == 0
+    assert not any(c[0] == "kill" and c[1] == CHILD for c in f.calls)

@@ -207,6 +207,22 @@ def _tokens(cmdline: Optional[str]) -> "list[str]":
     return (cmdline or "").split()
 
 
+def _is_supervisor_cmd(toks: "list[str]", task: str) -> bool:
+    """True for ``... run --autonomous <task> ...`` (flag order after ``run`` free)."""
+    if "run" not in toks:
+        return False
+    rest = toks[toks.index("run") + 1:]
+    positional = [t for t in rest if not t.startswith("-")]
+    return "--autonomous" in rest and bool(positional) and positional[0] == task
+
+
+def _has_session_pair(toks: "list[str]", sid: Optional[str]) -> bool:
+    """True when ``--session-id <sid>`` appears as an adjacent pair."""
+    if not sid:
+        return False
+    return any(a == "--session-id" and b == sid for a, b in zip(toks, toks[1:]))
+
+
 def _int_pid(value: object) -> Optional[int]:
     try:
         pid = int(value)  # type: ignore[call-overload]
@@ -305,7 +321,7 @@ def run_takeover(task: str, project_root: Path, ops: Optional[TakeoverOps] = Non
             sup_state = "unverifiable" if ops.pid_alive(sup_pid) else "dead"
         else:
             toks = _tokens(cl)
-            if "run" in toks and task in toks:
+            if _is_supervisor_cmd(toks, task):
                 term_then_kill(sup_pid)
                 sup_state = "survivor" if ops.pid_alive(sup_pid) else "dead"
             else:
@@ -321,29 +337,45 @@ def run_takeover(task: str, project_root: Path, ops: Optional[TakeoverOps] = Non
     # -- child ----------------------------------------------------------
     rec1 = read(record_path)
     lock1 = read(paths["lock"])
-    sids: List[str] = []
-    for candidate in (lock0.get("child_session_id"), rec1.get("child_session_id")):
-        s = valid_sid(candidate)
-        if s and s not in sids:
-            sids.append(s)
+    # Newest started session first; ties keep lock0, lock1, record order.
+    seen: dict = {}
+    for snap in (lock0, lock1, rec1):
+        s = valid_sid(snap.get("child_session_id"))
+        if not s:
+            continue
+        ts = _parse_ts(snap.get("child_started_at"))
+        prev = seen.get(s)
+        if prev is None:
+            seen[s] = [snap.get("child_started_at"), ts]
+        elif prev[1] is None and ts is not None:
+            seen[s] = [snap.get("child_started_at"), ts]
+    order = list(seen)
+    order.sort(key=lambda x: (seen[x][1] is not None,
+                              seen[x][1].timestamp() if seen[x][1] is not None else 0.0),
+               reverse=True)
+    sids: List[str] = order
     if not sids:
         ops.err(f"no child session recorded for {task}")
         return EXIT_NO_CHILD
 
-    lock_child_pid = _int_pid(lock0.get("child_pid"))
-    lock_child_sid = valid_sid(lock0.get("child_session_id"))
-    if lock_child_pid is not None and ops.pid_alive(lock_child_pid):
-        cl = ops.cmdline(lock_child_pid)
+    handled: List[int] = []
+    for snap in (lock0, lock1):
+        cpid = _int_pid(snap.get("child_pid"))
+        csid = valid_sid(snap.get("child_session_id"))
+        if cpid is None or cpid in handled or not ops.pid_alive(cpid):
+            continue
+        handled.append(cpid)
+        cl = ops.cmdline(cpid)
         if cl is None:
-            if ops.pid_alive(lock_child_pid):
-                ops.err(f"cannot verify recorded child pid {lock_child_pid}")
+            if ops.pid_alive(cpid):
+                ops.err(f"cannot verify recorded child pid {cpid}")
                 return EXIT_UNSAFE
-        elif lock_child_sid and lock_child_sid in _tokens(cl):
-            term_then_kill(lock_child_pid)
+        elif _has_session_pair(_tokens(cl), csid):
+            term_then_kill(cpid)
 
     for s in sids:
         for pid in ops.find_pids_with_arg(s) or []:
-            if ops.pid_alive(pid) and s in _tokens(ops.cmdline(pid)):
+            if ops.pid_alive(pid) and _has_session_pair(_tokens(ops.cmdline(pid)), s):
                 term_then_kill(pid)
 
     for s in sids:
@@ -378,10 +410,7 @@ def run_takeover(task: str, project_root: Path, ops: Optional[TakeoverOps] = Non
 
     ops.out(_supervisor.takeover_command(cwd, sid))
 
-    if lock0.get("child_session_id") == sid:
-        started_at = lock0.get("child_started_at")
-    else:
-        started_at = rec1.get("child_started_at")
+    started_at = seen[sid][0]
     label = ""
     child_ts = _parse_ts(started_at)
     lock_ts = _parse_ts(lock0.get("started_at"))
