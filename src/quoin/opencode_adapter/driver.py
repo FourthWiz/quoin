@@ -473,6 +473,7 @@ class AttemptSeed:
     native_session_id: Optional[str] = None
     ran_anything: bool = False
     record: Optional[Dict[str, Any]] = None
+    state_changing: Iterable[str] = ()
 
 
 class RuntimeHandle:
@@ -598,6 +599,9 @@ class OpenCodeDriver:
         self._checkpoint_every = checkpoint_every
         self._max_line_bytes = max_line_bytes
         self._stderr_read_delay_s = stderr_read_delay_s
+        # Guards record writes made before any handle exists (reconciliation
+        # and blocked resumes). Never taken from a signal handler.
+        self._record_lock = threading.Lock()
 
     # ------------------------------------------------------------- probe
 
@@ -1131,7 +1135,7 @@ class OpenCodeDriver:
             deadline=self._monotonic() + float(deadline_value),
             hashes_before=hashes_before, counters_base=dict(record.get("counters_total") or {}),
             resume_mode=seed.resume_mode, native_session_id=seed.native_session_id,
-            ran_anything=seed.ran_anything, state_changing=set(), start_sequence=seed.start_sequence,
+            ran_anything=seed.ran_anything, state_changing=set(seed.state_changing), start_sequence=seed.start_sequence,
             task=prepared.request.task, started_event=None, stdout_thread=None, stderr_thread=None,
         )
         try:
@@ -1914,3 +1918,168 @@ class OpenCodeDriver:
             finally:
                 self._close(handle)
         return result
+
+    # ------------------------------------------------- orphans and resume
+
+    def reconcile_run(self, record: Dict[str, Any]) -> bool:
+        """Deal with a run recorded as running whose driver process is gone.
+
+        The recorded child, its descendants and the members of its group are
+        stopped (SIGTERM, a grace period, then SIGKILL), the open attempt is
+        marked `driver_lost` and the attempt and the run become
+        `interrupted(driver-lost)`. A run whose driver is alive, or a process
+        listing that cannot be trusted, changes nothing. Returns true when the
+        run was reconciled.
+        """
+        table = self._proc.snapshot()
+        if runstore.orphan_state(record, table) != "driver-lost":
+            return False
+        self._reap_identities(runstore.live_identities(record, table))
+        directory = runstore.store_dir(self.project_root)
+        with self._record_lock:
+            if record.get("state") != "running":
+                return False
+            now = _iso(self._clock)
+            attempt = next(
+                (a for a in reversed(record.get("attempts") or []) if a.get("state") == "running"), None
+            )
+            if attempt is not None:
+                attempt.update(driver_lost=True, state="interrupted", reason="driver-lost", ended_at=now)
+            transition(record, "interrupted", "driver-lost", now)
+            runstore.write_record(directory, record)
+        return True
+
+    def reconcile_task(self, task: str) -> Optional[Dict[str, Any]]:
+        """Reconcile the run the task's pointer names. Returns the record, or
+        `None` when the task has no run."""
+        directory = runstore.store_dir(self.project_root)
+        pointer = runstore.load_pointer(directory, task)
+        if not pointer:
+            return None
+        record = runstore.load_record(directory, pointer["run_id"])
+        if record is None:
+            return None
+        self.reconcile_run(record)
+        return record
+
+    def _reap_identities(self, identities: Sequence[Identity]) -> None:
+        """Terminate recorded processes. A group is signalled only while a
+        member whose identity still matches is alive in a fresh snapshot."""
+        if not identities:
+            return
+        for sig, wait in ((_signal.SIGTERM, self._grace_s), (_signal.SIGKILL, self._kill_grace_s)):
+            table = self._proc.snapshot()
+            if table is None:
+                return
+            live = [i for i in identities if self._proc.alive(i, table)]
+            if not live:
+                return
+            groups: Dict[int, List[Identity]] = {}
+            for ident in live:
+                groups.setdefault(table[ident.pid].pgid, []).append(ident)
+            own = os.getpgrp()
+            for pgid, members in groups.items():
+                if pgid == own or pgid <= 1:
+                    for ident in members:
+                        self._kill(ident.pid, sig)
+                else:
+                    self._killpg(pgid, sig)
+            end = self._monotonic() + wait
+            while self._monotonic() < end:
+                time.sleep(self._poll_s)
+                table = self._proc.snapshot()
+                if table is None or not any(self._proc.alive(i, table) for i in identities):
+                    break
+        return
+
+    def _block_resume(self, record: Dict[str, Any], directory: Path, reason: str) -> ResumeBlocked:
+        """Record why a resume was refused, without changing the run state."""
+        with self._record_lock:
+            now = _iso(self._clock)
+            record["resume_blocked"] = reason
+            record["updated_at"] = now
+            attempts = record.get("attempts") or []
+            if attempts and attempts[-1].get("state") == _STAGED:
+                attempts[-1]["reason"] = "resume-blocked: " + reason
+            try:
+                runstore.write_record(directory, record)
+            except (OSError, runstore.RunStoreError):
+                pass
+        return ResumeBlocked(reason, record.get("run_id"))
+
+    def resume(
+        self, handoff: Handoff, prepared: PreparedRun, *, deadline_s: Optional[float] = None
+    ) -> RuntimeHandle:
+        """Start the next attempt of an interrupted or failed run.
+
+        `prepared` comes from `prepare(..., resume_run_id=...)`, which staged
+        the attempt. The choice, in order: a run that ever lost its driver, a
+        run with an open step, an unverified step-settling capability or a
+        missing session is blocked (`ResumeBlocked`, nothing spawned); a run in
+        which nothing ran starts over as a fresh attempt; anything else
+        continues the native session. Continuation attempts carry the whole
+        run's history: the deduper, the next sequence number, the counters and
+        the evidence-downgrading facts.
+        """
+        if prepared.artifact_paths is None or prepared.launch_env is None:
+            raise ValueError("the prepared run has no launch environment")
+        if prepared.run_id != handoff.run_id:
+            raise ValueError("the handoff belongs to a different run")
+        directory = prepared.artifact_paths.sidecar.parent
+        record = runstore.load_record(directory, prepared.run_id)
+        if record is None:
+            raise ValueError("the run has no record")
+        self.reconcile_run(record)
+        if record.get("state") not in ("interrupted", "failed"):
+            raise IllegalTransition("a run in state %s cannot be resumed" % record.get("state"))
+
+        read = runstore.read_sidecar(prepared.artifact_paths.sidecar, repair=True)
+        if read.torn_tail:
+            counters = record.setdefault("counters_total", {})
+            counters["torn-tail"] = counters.get("torn-tail", 0) + 1
+        events = read.events
+        last_sequence = events[-1].sequence if events else 0
+        if last_sequence < handoff.last_sequence:
+            raise self._block_resume(record, directory, "sidecar-behind-checkpoint")
+
+        facts = runstore.run_facts(events)
+        session = handoff.native_session_id
+        if session is None:
+            session = next((e.session_id for e in reversed(events) if e.origin == "native" and e.session_id), None)
+        blocked: Optional[str] = None
+        if any(a.get("driver_lost") for a in record.get("attempts") or []):
+            blocked = "effect-uncertain"
+        elif record.get("resume_blocked") == "session-lost":
+            blocked = "session-lost"
+        elif facts.ran_anything:
+            if facts.last_attempt_step_open or handoff.step_open:
+                blocked = "effect-uncertain"
+            elif not STEP_SETTLING_VERIFIED:
+                blocked = "effect-uncertain"
+            elif session is None:
+                blocked = "effect-uncertain"
+        if blocked is not None:
+            raise self._block_resume(record, directory, blocked)
+
+        if facts.ran_anything:
+            argv = [
+                prepared.argv[0], "run", "--format", "json", "--session", session,
+                "--agent", names.role_agent_name(prepared.role), "--", RESUME_MESSAGE,
+            ]
+            mode = "session"
+        else:
+            argv = list(prepared.argv)
+            mode = "fresh"
+            session = None
+        checkpoint = runstore.load_checkpoint(directory, prepared.run_id) or {}
+        seed = AttemptSeed(
+            resume_mode=mode, start_sequence=last_sequence + 1, deduper=ev.Deduper.from_events(events),
+            facts=AttemptFacts.seed(facts), native_session_id=session, ran_anything=facts.ran_anything,
+            record=record, state_changing=checkpoint.get("state_changing_part_ids") or (),
+        )
+        launch_env.verify_compiled(prepared.config_path, prepared.native_sha256)
+        with self._record_lock:
+            record["resume_blocked"] = None
+            transition(record, "running", None, _iso(self._clock))
+            runstore.write_record(directory, record)
+        return self._spawn_attempt(prepared, argv, deadline_s=deadline_s, seed=seed)
