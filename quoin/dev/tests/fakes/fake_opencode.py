@@ -148,6 +148,9 @@ SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "grandchild": lambda: _scenario(
         _step_start("prt_s1"), {"do": "spawn_grandchild", "ignore_term": False}, {"do": "hang"}),
     "ignore_term": lambda: _scenario(_step_start("prt_s1"), {"do": "ignore_term"}, {"do": "hang"}),
+    "grandchild_detached": lambda: _scenario(
+        _step_start("prt_s1"), {"do": "spawn_grandchild", "ignore_term": False, "detach": True},
+        {"do": "hang"}),
     "grandchild_ignore_term": lambda: _scenario(
         _step_start("prt_s1"), {"do": "ignore_term"},
         {"do": "spawn_grandchild", "ignore_term": True}, {"do": "hang"}),
@@ -248,15 +251,23 @@ def _prior_runs(state: Path) -> int:
     return count
 
 
-def _grandchild(state: Path, ignore_term: bool) -> None:
-    code = "import signal, time\n"
+def _grandchild(state: Path, ignore_term: bool, detach: bool = False) -> None:
+    """Start a long-lived descendant and record its pid.
+
+    The descendant touches ``grandchild-PID.ready`` once its signal handling
+    is in place, so a test never signals it before it can ignore TERM. With
+    ``detach`` it starts its own session and process group, as the real
+    runtime's shell tool does, so a signal to the run's group misses it.
+    """
+    code = "import os, signal, sys, time\n"
     if ignore_term:
         code += "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    code += "open(os.path.join(sys.argv[1], 'grandchild-%d.ready' % os.getpid()), 'w').close()\n"
     code += "while True:\n    time.sleep(0.1)\n"
     proc = subprocess.Popen(
-        [sys.executable, "-c", code],
+        [sys.executable, "-c", code, str(state)],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        close_fds=True,
+        close_fds=True, start_new_session=detach,
     )
     with open(state / "grandchildren.txt", "a", encoding="utf-8") as fh:
         fh.write("%d\n" % proc.pid)
@@ -307,7 +318,7 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path) -> int:
             with open(state / "effects.log", "a", encoding="utf-8") as fh:
                 fh.write("%s\n" % step["path"])
         elif verb == "spawn_grandchild":
-            _grandchild(state, bool(step.get("ignore_term")))
+            _grandchild(state, bool(step.get("ignore_term")), bool(step.get("detach")))
         elif verb == "ignore_term":
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
         elif verb == "crash":

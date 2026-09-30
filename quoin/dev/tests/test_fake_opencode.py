@@ -122,11 +122,14 @@ def make(tmp_path):
 
 
 def _alive(pid):
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    return True
+    """Running, not merely present: a zombie still answers signal 0."""
+    res = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    stat = res.stdout.strip()
+    return bool(stat) and not stat.startswith("Z")
+
+
+def _ready(h, pid):
+    return (h.state / ("grandchild-%d.ready" % pid)).exists()
 
 
 def _strip_ts(lines):
@@ -196,6 +199,7 @@ def test_grandchild_shares_group_and_group_kill_removes_both(make):
     h = make("grandchild")
     proc = h.start("run", "--", "x")
     (gpid,) = h.wait_for(h.grandchildren)
+    h.wait_for(lambda: _ready(h, gpid))
     record = h.wait_for(h.invocations)[0]
     assert os.getpgid(gpid) == record["pgid"] == proc.pid
     os.killpg(record["pgid"], signal.SIGKILL)
@@ -207,11 +211,27 @@ def test_ignore_term_child_survives_sigterm_then_dies_to_sigkill(make):
     h = make("grandchild_ignore_term")
     proc = h.start("run", "--", "x")
     (gpid,) = h.wait_for(h.grandchildren)
+    h.wait_for(lambda: _ready(h, gpid))
     os.killpg(proc.pid, signal.SIGTERM)
     time.sleep(0.5)
     assert proc.poll() is None and _alive(gpid)
     os.killpg(proc.pid, signal.SIGKILL)
     proc.wait(timeout=5)
+    h.wait_for(lambda: not _alive(gpid))
+
+
+def test_detached_grandchild_escapes_the_group_kill(make):
+    h = make("grandchild_detached")
+    proc = h.start("run", "--", "x")
+    (gpid,) = h.wait_for(h.grandchildren)
+    h.wait_for(lambda: _ready(h, gpid))
+    record = h.wait_for(h.invocations)[0]
+    assert os.getpgid(gpid) != record["pgid"] and os.getsid(gpid) == gpid
+    os.killpg(record["pgid"], signal.SIGKILL)
+    proc.wait(timeout=5)
+    time.sleep(0.3)
+    assert _alive(gpid)
+    os.kill(gpid, signal.SIGKILL)
     h.wait_for(lambda: not _alive(gpid))
 
 
