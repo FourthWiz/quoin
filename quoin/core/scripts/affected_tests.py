@@ -1603,6 +1603,35 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/core/skills/thorough_plan.md",
         "quoin/dev/tests/test_opencode_generate.py",
     ),
+    # Completion-marker, retry-budget and headless no-yield prose guards.
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_run_tasks_complete_entry.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/implement/SKILL.md",
+        "quoin/dev/tests/test_implement_autonomous.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/gate/SKILL.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/core/skills/gate.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/core/skills/run.md",
+        "quoin/dev/tests/test_run_tasks_complete_entry.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):
