@@ -197,7 +197,7 @@ Compose the format-aware body per the `security-review` artifact-type sections i
 - `## Recommendations` — terse list: what to do next.
 - `## Scope` — one line: branch name + diff basis used.
 
-Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `(rm -f <path>.body.tmp <path>.tmp 2>/dev/null || true)` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
+Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
 
@@ -244,9 +244,9 @@ Filename auto-detection identifies type as `security-review` (matches `^security
   - **Step 4 V-06/V-07 failures:** Re-run Steps 2-4 once.
   - **Step 4 V-02/V-03/V-05 failures:** Re-run Steps 1-4 once with body-discipline instruction prepended.
   - **Step 4 V-01/V-04 failures:** Treat as body issues; re-run Steps 1-4.
-  - **English-fallback (after retry also fails):** Fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning with the failing invariant ID(s). Clean up body.tmp: `(rm -f <path>.body.tmp 2>/dev/null || true)`.
+  - **English-fallback (after retry also fails):** Fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning with the failing invariant ID(s). Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp"`.
 
-**Step 6: Atomic rename.** `mv <path>.tmp <path>; (rm -f <path>.body.tmp <path>.tmp 2>/dev/null || true)`. Do NOT write a `.original.md` side-file.
+**Step 6: Atomic rename.** `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. Do NOT write a `.original.md` side-file.
 
 ## After the review
 

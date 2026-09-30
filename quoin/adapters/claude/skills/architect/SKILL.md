@@ -393,7 +393,7 @@ Compose the format-aware body for `architecture.md` per format-kit.md §2 enumer
 - `## Appendix` — any supplementary material (optional).
 - `## Revision history` — terse changelog if this is a revision (optional).
 
-Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `(rm -f <path>.body.tmp <path>.tmp 2>/dev/null || true)` — clear stale leftovers before writing. Write the body to a temp file: `<path>.body.tmp`.
+Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to a temp file: `<path>.body.tmp`.
 
 **Step 2: Summary generation (Agent subagent, with empty-output check).**
 
@@ -445,9 +445,9 @@ Filename auto-detection identifies the type as `architecture` (matches `^archite
     (b) **V-02 / V-03 / V-05 failures** (body-section issues): re-run Steps 1–4 once with body-discipline instruction prepended.
     (c) **V-01 / V-04 failures** (frontmatter / code-fence): treat as body issues; re-run Steps 1–4.
 
-  - **English-fallback (after retry also fails):** fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning to the user with the failing invariant ID(s). Clean up body.tmp: `(rm -f <path>.body.tmp 2>/dev/null || true)`.
+  - **English-fallback (after retry also fails):** fall back to v2-style write — regenerate body using terse-rubric only (no format-kit, no `## For human` block). Write to `<path>.tmp` directly. Skip Step 4. Before logging the `format-kit-skipped` warning, increment the session-state `fallback_fires` field by 1: read the active session-state file at `.workflow_artifacts/memory/sessions/{today}-{task}.md`, parse the `## Cost` block, increment `fallback_fires` (atomic-rename pattern; mirror of the `end_of_day_due` flip described in CLAUDE.md "Session state tracking"), then proceed. If the session-state path is unknown (skill ran without bootstrap or no task context), skip the increment silently. Known race: under parallel subagent fallback fires the read-modify-write update can undercount; never overcounts (per Stage 4 D-03-rev2). Log a `format-kit-skipped` warning to the user with the failing invariant ID(s). Clean up body.tmp: `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp"`.
 
-**Step 6: Atomic rename.** `mv <path>.tmp <path>; (rm -f <path>.body.tmp <path>.tmp 2>/dev/null || true)`. The final file at `<path>` IS what `/critic`, `/thorough_plan`, `/gate` will read. Do NOT write a `.original.md` side-file.
+**Step 6: Atomic rename.** `python3 __QUOIN_HOME__/scripts/fsops.py finalize "<path>.tmp" "<path>" --cleanup "<path>.body.tmp" "<path>.tmp"`. It renames over any existing file, always removes both temp files, and exits non-zero if the rename failed. The final file at `<path>` IS what `/critic`, `/thorough_plan`, `/gate` will read. Do NOT write a `.original.md` side-file.
 
 ### Phase 4: Critic loop (max 2 rounds default; max 4 in strict mode)
 
@@ -539,7 +539,7 @@ while round <= max_rounds:
         #             --sid "$SID" --agent-id "$AID" --tool-use-id "$TUID" 2>"$_ERR")"
         #   [ -z "$ATTR" ] && ATTR="src=unresolved"   # MIN-1: key on empty stdout, not exit code
         #   [ -s "$_ERR" ] && printf 'cost-attr WARN: %s\n' "$(head -c 500 "$_ERR" | tr '\011\012\015' '   ' | tr -d '\000-\037\177')"
-        #   [ "$_ERR" != "/dev/null" ] && rm -f "$_ERR"
+        #   [ "$_ERR" != "/dev/null" ] && python3 __QUOIN_HOME__/scripts/fsops.py rm "$_ERR"
         #   printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
         #     "$AID" "$(date -u +%Y-%m-%d)" "critic" "opus" \
         #     "on-behalf: critic via /architect" "0" "$ATTR" >> "$LEDGER"
