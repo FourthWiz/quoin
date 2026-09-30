@@ -44,6 +44,9 @@ STORE_PARTS = (".workflow_artifacts", "memory", "runtime", "opencode")
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_FILES = 5000
 DEFAULT_MAX_FILE_BYTES = 64 * 1024 * 1024
+DEFAULT_MAX_TOTAL_BYTES = 256 * 1024 * 1024
+REVISIONS_BUDGET_S = 60.0
+SHORT_REVISIONS_BUDGET_S = 10.0
 MAX_SUBREPOS = 64
 GIT_TIMEOUT_S = 30.0
 _HASH_CHUNK = 1024 * 1024
@@ -485,6 +488,7 @@ def _walk_files(top: str) -> Iterable[str]:
 def hash_inputs(
     project_root, task: str, context_refs: Sequence[str] = (), *,
     max_files: int = DEFAULT_MAX_FILES, max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
 ) -> Dict[str, Any]:
     """sha256 of every regular file under the task folder and each context
     reference, keyed by project-relative path. Symlinks are skipped."""
@@ -496,6 +500,7 @@ def hash_inputs(
             raise RunStoreError("unsafe-path")
         tops.append(os.path.join(root, ref))
     result: Dict[str, Any] = {}
+    total = 0
     for top in tops:
         if os.path.islink(top):
             continue
@@ -512,6 +517,15 @@ def hash_inputs(
             if len(result) >= max_files:
                 result["<truncated>"] = {"skipped": "file-cap"}
                 return dict(sorted(result.items()))
+            try:
+                size = os.lstat(path).st_size
+            except OSError:
+                continue
+            if size <= max_file_bytes:
+                if total + size > max_total_bytes:
+                    result["<truncated>"] = {"skipped": "byte-cap"}
+                    return dict(sorted(result.items()))
+                total += size
             value = _sha256_file(path, max_file_bytes)
             if value is not None:
                 result[rel] = value
@@ -560,16 +574,25 @@ def _default_git_runner(argv: Sequence[str], timeout_s: float) -> Tuple[int, str
     return proc.returncode, proc.stdout.decode("utf-8", "replace")
 
 
-def _repo_entry(repo: str, project_root: str, run: GitRunner) -> Dict[str, Any]:
+def _repo_entry(repo: str, project_root: str, run: GitRunner, deadline: float) -> Dict[str, Any]:
     rel = os.path.relpath(repo, project_root).replace(os.sep, "/")
     entry: Dict[str, Any] = {"path": rel, "head": None, "dirty": None, "error": None}
+    def timeout() -> float:
+        return min(GIT_TIMEOUT_S, deadline - time.monotonic())
+
+    if timeout() <= 0:
+        entry["error"] = "budget"
+        return entry
     try:
-        code, out = run(("git", "-C", repo, "rev-parse", "HEAD"), GIT_TIMEOUT_S)
+        code, out = run(("git", "-C", repo, "rev-parse", "HEAD"), timeout())
         if code != 0 or not out.strip():
             entry["error"] = "rev-parse-failed"
             return entry
         entry["head"] = out.strip()
-        code, out = run(("git", "-C", repo, "status", "--porcelain"), GIT_TIMEOUT_S)
+        if timeout() <= 0:
+            entry["error"] = "budget"
+            return entry
+        code, out = run(("git", "-C", repo, "status", "--porcelain"), timeout())
         if code != 0:
             entry["error"] = "status-failed"
             return entry
@@ -579,7 +602,9 @@ def _repo_entry(repo: str, project_root: str, run: GitRunner) -> Dict[str, Any]:
     return entry
 
 
-def repo_revisions(project_root, *, runner: Optional[GitRunner] = None) -> List[Dict[str, Any]]:
+def repo_revisions(
+    project_root, *, runner: Optional[GitRunner] = None, budget_s: float = REVISIONS_BUDGET_S,
+) -> List[Dict[str, Any]]:
     """Head and dirtiness of the worktree holding the project root plus each
     immediate subdirectory that holds its own `.git`."""
     run = runner or _default_git_runner
@@ -599,7 +624,8 @@ def repo_revisions(project_root, *, runner: Optional[GitRunner] = None) -> List[
                 repos.append(child)
         if len(repos) >= MAX_SUBREPOS:
             break
-    return [_repo_entry(repo, root, run) for repo in repos]
+    deadline = time.monotonic() + budget_s
+    return [_repo_entry(repo, root, run, deadline) for repo in repos]
 
 
 # ---------------------------------------------------------------------------

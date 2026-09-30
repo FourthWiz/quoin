@@ -299,7 +299,33 @@ def test_hash_inputs_refuses_escape_and_caps(project, tmp_path):
     assert rs.hash_inputs(project, "missing-task") == {}
 
 
+def test_hash_inputs_total_byte_cap_truncates(project):
+    task = project / ".workflow_artifacts" / "t1"
+    task.mkdir()
+    for i in range(5):
+        (task / ("f%d" % i)).write_bytes(b"x" * 10)
+    capped = rs.hash_inputs(project, "t1", max_total_bytes=25)
+    assert capped["<truncated>"] == {"skipped": "byte-cap"}
+    assert len([k for k in capped if k != "<truncated>"]) == 2
+    assert "<truncated>" not in rs.hash_inputs(project, "t1")
+
+
 # ------------------------------------------------------------------ revisions
+
+
+def test_repo_revisions_budget_marks_remaining_repos(project):
+    (project / "a").mkdir()
+    (project / "a" / ".git").mkdir()
+    (project / "b").mkdir()
+    (project / "b" / ".git").mkdir()
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(timeout)
+        return 0, "abc\n"
+
+    out = rs.repo_revisions(project, runner=runner, budget_s=0)
+    assert calls == [] and {r["error"] for r in out} == {"budget"}
 
 
 def test_repo_revisions_with_fake_runner(project):
