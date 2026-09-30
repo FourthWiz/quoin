@@ -835,7 +835,9 @@ def _doctor_auto_resume_cli(
 ) -> None:
     """Verify the auto-resume hand-off CLI the same way the hooks do: via
     the deployed resolver's read-only ``cli-check``, in a scrubbed env. This
-    keeps what doctor reports identical to what SessionStart/Stop would see."""
+    matches a hook running with a clean environment; a hook inherits the
+    caller's PYTHONPATH and probes on a tighter budget, so the two can still
+    differ on an unusual host."""
     dest_label = str(dest_root)
     print(f"Auto-resume CLI ({dest_label}/quoin-runtime.json):")
 

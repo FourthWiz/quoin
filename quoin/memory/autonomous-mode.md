@@ -422,9 +422,10 @@ Guide's reference entry for the ninth stanza.
 
 ### How the hand-off finds the CLI
 
-Every hand-off above — the in-session Stop nudge escalating to a detached
-supervisor, and the detached supervisor's own relaunch — needs to run the
-`quoin` CLI as a real subprocess, without knowing in advance how it was
+Every hand-off above that starts a detached supervisor — the Stop hook's
+escalation, the SessionStart hand-off for a run whose owner is gone, and
+`/run`'s own `handoff` subcommand — needs to run the `quoin` CLI as a
+real subprocess, without knowing in advance how it was
 installed (a plain venv, `pip install --user -e`, `uv tool install`,
 `pipx`, or a bare source checkout on `PYTHONPATH`). It does this by reading
 an install record instead of guessing via `PATH`.
@@ -493,8 +494,13 @@ in-session continuation nudge — the nudge itself is unchanged, since a
 stale CLI only affects the detached-hand-off path, not staying in the
 current session; and a hand-off attempt logs the halt line to the run
 notes. `quoin doctor`'s "Auto-resume CLI" block (see the Hooks Guide)
-runs the same deployed resolver in a scrubbed environment so its verdict
-matches what a real hook would see.
+runs the same deployed resolver in a scrubbed environment (no inherited
+`PYTHONPATH`, minimal `PATH`), so its verdict matches a hook running with
+a clean environment. Two differences remain: a hook inherits Claude
+Code's environment, which may carry a `PYTHONPATH` doctor scrubs, and
+doctor probes with the 8 s hand-off budget, so a slow interpreter can
+pass doctor yet time out under SessionStart's 1.5 s or the Stop hook's
+3 s budget.
 
 **Probe budgets.** Each caller gets its own time-bounded budget for the
 version probe, controlled by one knob,

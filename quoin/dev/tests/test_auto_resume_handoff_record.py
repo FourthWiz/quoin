@@ -294,9 +294,12 @@ def test_handoff_denied_when_no_safe_cwd_available(ar, project, monkeypatch, cap
 
 
 def test_handoff_cwd_decision_failure_leaves_no_lock_or_counter_change(ar, project, monkeypatch, capsys):
-    """The cwd decision now runs before the lock is reserved, so a failure
+    """The cwd decision runs before the lock is reserved, so a failure
     there (any exception, not just a None result) must never strand a
-    reservation under this process's pid or advance the attempt counter."""
+    reservation under this process's pid or advance the attempt counter.
+    The resolver makes its own probe-time cwd call first and would swallow
+    an exception there, so only the second call — the one made right
+    before the spawn — raises here."""
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
@@ -305,10 +308,17 @@ def test_handoff_cwd_decision_failure_leaves_no_lock_or_counter_change(ar, proje
     counter_path = memory / "auto-resume-demo.json"
     assert not counter_path.exists()
 
-    def _boom():
+    real_neutral_cwd = ar._neutral_cwd()
+    assert real_neutral_cwd is not None
+    calls = {"n": 0}
+
+    def _second_call_raises():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_neutral_cwd
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(ar, "_neutral_cwd", _boom)
+    monkeypatch.setattr(ar, "_neutral_cwd", _second_call_raises)
 
     rc = ar.main([
         "handoff", "--project-root", str(project), "--task", "demo", "--reason", "budget",
