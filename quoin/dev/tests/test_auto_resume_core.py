@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -43,7 +44,20 @@ def project(tmp_path):
     return root
 
 
-def _write_marker(memory_dir: Path, task: str, timestamp: str = "2026-09-29T00:00:00+00:00") -> None:
+# Fixture timestamps are derived from one clock reading taken at import so
+# armed records never age past the run-state staleness window, and equal
+# offsets stay equal within a test run.
+_NOW = datetime.now(timezone.utc)
+
+
+def _recent_iso(offset_seconds: int = 0) -> str:
+    """ISO timestamp `offset_seconds` before the module's clock reading."""
+    return (_NOW - timedelta(seconds=offset_seconds)).isoformat()
+
+
+def _write_marker(memory_dir: Path, task: str, timestamp: str | None = None) -> None:
+    if timestamp is None:
+        timestamp = _recent_iso()
     (memory_dir / f"autonomous-run-{task}.marker").write_text(
         f"task: {task}\ntimestamp: {timestamp}\nautonomous: true\n", encoding="utf-8"
     )
@@ -66,7 +80,7 @@ def _write_record(memory_dir: Path, task: str, session_id: str, **overrides) -> 
         "next_action": "",
         "resume_command": f"/run --resume {task}",
         "notes_path": str(memory_dir / f"run-notes-{task}.md"),
-        "updated_at": overrides.pop("updated_at", "2026-09-29T00:00:00+00:00"),
+        "updated_at": overrides.pop("updated_at", _recent_iso()),
     }
     record.update(overrides)
     (memory_dir / f"run-state-{task}.json").write_text(json.dumps(record), encoding="utf-8")
@@ -197,7 +211,7 @@ def test_stop_cap_halts_and_stays_silent(ar, project, monkeypatch, capsys):
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
     _arm(memory, "sid-1")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 10
     ar._write_counter(memory, "demo", counter)
     _stop_stdin(monkeypatch, {"session_id": "sid-1"})
@@ -214,7 +228,7 @@ def test_stop_no_forward_progress_halts(ar, project, monkeypatch, capsys):
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
     _arm(memory, "sid-1")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["consecutive_no_progress"] = 1
     counter["last_done_count"] = 0
     counter["last_phase"] = ["implement", 3]
@@ -238,7 +252,7 @@ def test_stop_counter_survives_marker_rewrite_across_reentries(ar, project, monk
     memory = project / ".workflow_artifacts" / "memory"
     _arm(memory, "sid-1")
     for i in range(3):
-        _write_marker(memory, "demo", timestamp=f"2026-09-29T0{i}:00:00+00:00")
+        _write_marker(memory, "demo", timestamp=_recent_iso((3 - i) * 3600))
         _write_record(memory, "demo", "sid-1", phase_index=i)
         _stop_stdin(monkeypatch, {"session_id": "sid-1"})
         rc = ar._cmd_stop(_Args(project_root=str(project)))
@@ -299,7 +313,7 @@ def test_stop_cap_handoff_denied_falls_through_to_in_session_block(ar, project, 
     _write_record(memory, "demo", "sid-1", phase_index=9)
     _arm(memory, "sid-1")
     monkeypatch.setenv("QUOIN_AUTO_RESUME_MAX", "10")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 9  # MAX - 1
     counter["chain_blocks"] = ar._handoff_at() - 1
     counter["last_phase"] = ["implement", 3]
@@ -338,8 +352,8 @@ def test_arm_without_consent_keeps_counter_despite_marker_rewrite(ar, project):
     bare re-arm with no consent stamp on file must never reset the budget
     on that rewrite alone."""
     memory = project / ".workflow_artifacts" / "memory"
-    _write_marker(memory, "demo", timestamp="2026-09-29T01:00:00+00:00")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    _write_marker(memory, "demo", timestamp=_recent_iso(-3600))
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 5
     ar._write_counter(memory, "demo", counter)
 
@@ -354,7 +368,7 @@ def test_arm_without_consent_keeps_counter_despite_marker_rewrite(ar, project):
 def test_arm_with_consent_and_no_live_lock_resets_counter(ar, project):
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 5
     counter["consecutive_no_progress"] = 1
     counter["chain_blocks"] = 3
@@ -386,7 +400,7 @@ def test_arm_with_consent_then_stop_survives_the_reset_through_main(ar, project,
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 5
     counter["last_done_count"] = 3
     ar._write_counter(memory, "demo", counter)
@@ -445,7 +459,7 @@ def test_unexpected_gate_error_is_logged_to_observable_file(ar, project, monkeyp
 def test_arm_with_consent_but_live_lock_keeps_counter_and_consumes_consent(ar, project, monkeypatch):
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 4
     ar._write_counter(memory, "demo", counter)
     monkeypatch.setattr(ar, "_pid_alive", lambda pid: True)
@@ -465,7 +479,7 @@ def test_arm_stale_consent_older_than_prior_arm_is_ignored(ar, project):
     for."""
     memory = project / ".workflow_artifacts" / "memory"
     _write_marker(memory, "demo")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 5
     ar._write_counter(memory, "demo", counter)
 
@@ -638,7 +652,7 @@ def test_handoff_grant_is_cap_minus_attempts_minus_one(ar, project, monkeypatch,
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
     monkeypatch.setenv("QUOIN_AUTO_RESUME_MAX", "10")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 8
     ar._write_counter(memory, "demo", counter)
 
@@ -664,7 +678,7 @@ def test_handoff_refused_at_cap_minus_one_remaining(ar, project, monkeypatch, ca
     _write_marker(memory, "demo")
     _write_record(memory, "demo", "sid-1")
     monkeypatch.setenv("QUOIN_AUTO_RESUME_MAX", "10")
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     counter["attempts"] = 9
     ar._write_counter(memory, "demo", counter)
 
@@ -687,7 +701,7 @@ def test_handoff_lock_create_race_refuses_instead_of_overwriting(ar, project, mo
     _write_marker(memory, "demo")
     record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
               "resume_command": "/run --resume demo"}
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
 
     winner_pid = os.getpid()  # our own pid is always alive
     winner_lock = {"pid": winner_pid, "started_at": "x", "granted": 3, "writer": "handoff", "token": "winner-token"}
@@ -747,7 +761,7 @@ def test_do_handoff_refuses_fresh_empty_lock_instead_of_clobbering(ar, project, 
     _write_marker(memory, "demo")
     record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
               "resume_command": "/run --resume demo"}
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     monkeypatch.setattr(ar, "_supervisor_lock_live", lambda mem, task: False)
     lock_path = memory / "run-supervisor-demo.pid"
     lock_path.write_text("")  # empty — unparseable, and freshly written
@@ -768,7 +782,7 @@ def test_do_handoff_reclaims_old_empty_lock_and_spawns(ar, project, monkeypatch)
     _write_marker(memory, "demo")
     record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
               "resume_command": "/run --resume demo"}
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     monkeypatch.setattr(ar, "_supervisor_lock_live", lambda mem, task: False)
     lock_path = memory / "run-supervisor-demo.pid"
     lock_path.write_text("")
@@ -813,12 +827,12 @@ def test_settle_supervisor_charges_a_dead_lock_exactly_once(ar, project, monkeyp
     monkeypatch.setattr(ar, "_pid_alive", lambda pid: False)
     ar._write_lock(memory, "demo", pid=999, granted=3, writer="handoff")
 
-    counter_a = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter_a = ar._default_counter("demo", _recent_iso())
     counter_a = ar.settle_supervisor(memory, "demo", counter_a)
     assert counter_a["attempts"] == 3
     assert not (memory / "run-supervisor-demo.pid").exists()
 
-    counter_b = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter_b = ar._default_counter("demo", _recent_iso())
     counter_b = ar.settle_supervisor(memory, "demo", counter_b)
     assert counter_b["attempts"] == 0
 
@@ -830,7 +844,7 @@ def test_do_handoff_live_lock_is_never_reclaimed(ar, project, monkeypatch):
     _write_marker(memory, "demo")
     record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
               "resume_command": "/run --resume demo"}
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
     monkeypatch.setattr(ar, "_pid_alive", lambda pid: True)
     monkeypatch.setattr(ar, "_supervisor_lock_live", lambda mem, task: False)  # force past the early check
     live_lock = {"pid": 999, "started_at": "x", "granted": 3, "writer": "handoff"}
@@ -859,7 +873,7 @@ def test_handoff_releases_reservation_on_non_oserror_spawn_failure(ar, project, 
     _write_marker(memory, "demo")
     record = {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
               "resume_command": "/run --resume demo"}
-    counter = ar._default_counter("demo", "2026-09-29T00:00:00+00:00")
+    counter = ar._default_counter("demo", _recent_iso())
 
     result = ar._do_handoff(memory, project, "demo", "budget", counter, record)
 
