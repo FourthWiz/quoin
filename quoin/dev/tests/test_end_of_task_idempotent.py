@@ -3,7 +3,7 @@ autonomous resume.
 
 Verified terminal ordering: push (Sub-phase A) -> Sub-phase B (lessons +
 session-state + cost) -> archive (Sub-phase C) -> done-sentinel (LAST, after
-the archive mv AND the final report). A kill at ANY boundary and re-run must
+the archive move AND the final report). A kill at ANY boundary and re-run must
 not duplicate work:
 
 (a) push is a no-op if HEAD == origin/branch after fetch.
@@ -11,8 +11,8 @@ not duplicate work:
     sentinel (autonomous only) AND a lessons-append idempotency guard keyed
     on task+stage (not task alone, MINOR fix) AND re-runnable cost
     aggregation (recompute/overwrite, never a second total row).
-(c) archive skips the mv if the `finalized/` target already exists.
-(d) the done-sentinel is written LAST — after the archive mv and the report
+(c) archive skips the move if the `finalized/` target already exists.
+(d) the done-sentinel is written LAST — after the archive move and the report
     print — atomically, outside the archived folder.
 (e) the kill-after-push-before-done case is explicitly named safe with no
     duplicate lessons entry.
@@ -126,9 +126,11 @@ def test_archive_skips_if_target_already_exists(eot_text: str) -> None:
     section = text[idx:end]
 
     assert "Archive (idempotent, T-11)" in section
-    assert "before the mv, check whether the target directory" in section
+    assert "before the move, check whether the target directory" in section
     assert "already archived" in section
-    assert "SKIP the mv as a" in section
+    assert "SKIP the move as a" in section
+    assert "fsops.py mv --parents" in section
+    assert "create the target dir with `mkdir -p`" not in section
 
 
 # ---------------------------------------------------------------------------
@@ -144,10 +146,10 @@ def test_done_sentinel_written_last_after_archive_and_report(eot_text: str) -> N
 
     assert "autonomous-done-<task_name>.md" in section
     assert "Write the done-sentinel (T-11, `_AUTONOMOUS` only) — LAST" in section
-    assert "after the archive mv (step 4) AND the report print (step 5)" in section
+    assert "after the archive move (step 4) AND the report print (step 5)" in section
     assert "OUTSIDE the just-archived task folder" in section
-    # Atomic write idiom.
-    assert ".tmp" in section and "mv f.tmp f" in section
+    # Atomic write through the helper.
+    assert "fsops.py write-atomic" in section
 
 
 # ---------------------------------------------------------------------------

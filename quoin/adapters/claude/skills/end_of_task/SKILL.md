@@ -351,7 +351,7 @@ project root):
    and flag any file matching these patterns:
    - `*.tmp`, `*.bak`, `*.orig`, `*.swp`, `*.swo`
    - `* 2.*`, `* 3.*` (macOS/iCloud duplicates, e.g., "README 2.md")
-   - `.planner-trace.md` (Tier-3 ephemeral — deleted by `/end_of_task` before archive, per `__QUOIN_HOME__/memory/tier1-files.md`'s closing paragraph; run `rm -f .planner-trace.md` to clean up)
+   - `.planner-trace.md` (Tier-3 ephemeral — deleted by `/end_of_task` before archive, per `__QUOIN_HOME__/memory/tier1-files.md`'s closing paragraph; run `python3 __QUOIN_HOME__/scripts/fsops.py rm ".planner-trace.md"` to clean up)
    - `.expanded-*.md` (expand --save scratch output)
    - `.DS_Store` (if not gitignored)
    - `__pycache__/` directories or `*.pyc` files (if not gitignored)
@@ -750,7 +750,7 @@ Spawn an Agent subagent:
     7. **Write the Sub-phase B entry-skip sentinel (T-11, `_AUTONOMOUS` only) — LAST, after
        everything above succeeds:** atomically write
        `autonomous-progress-<task_name>/end_of_task.subphaseB.done`
-       (`mkdir -p` the dir first; `printf > f.tmp && mv f.tmp f`). Inert when
+       (pipe the content into `python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`). Inert when
        `_AUTONOMOUS` is false — plain (non-autonomous) `/end_of_task` never writes it,
        matching every other autonomous-only sentinel write in this workflow.
 
@@ -768,26 +768,26 @@ Spawn an Agent subagent:
 
     Hand-off files:
     - `<absolute-path-to-task-dir>/eot-preflights.json` (for archive_type, task_name)
-    - `<absolute-path-to-task-dir>/cost-summary.json` (read BEFORE the mv — it lives
+    - `<absolute-path-to-task-dir>/cost-summary.json` (read BEFORE the move — it lives
       inside the task folder which you are about to move)
     Task dir: `<absolute-path-to-task-dir>`
     Done sentinel (autonomous only, T-11): `.workflow_artifacts/memory/autonomous-done-<task_name>.md`
 
     Steps:
-    1. Read `cost-summary.json` from the task dir (BEFORE any mv).
+    1. Read `cost-summary.json` from the task dir (BEFORE any move).
     2. Read `eot-preflights.json` for `archive_type` and `task_name`.
     3. Delete planner trace breadcrumb (if present):
-       Run: rm -f "<task_dir>/.planner-trace.md" 2>/dev/null || true
-       Tier-3 ephemeral — must not persist in the finalized archive; runs BEFORE the archive mv.
+       Run: python3 __QUOIN_HOME__/scripts/fsops.py rm "<task_dir>/.planner-trace.md" || true
+       Tier-3 ephemeral — must not persist in the finalized archive; runs BEFORE the archive move.
     4. **Archive (idempotent, T-11)** based on `archive_type`:
        - `"subtask"`: target = `.workflow_artifacts/<parent>/finalized/<subtask>/`.
        - `"feature"`: target = `.workflow_artifacts/finalized/<task_name>/`.
-       - `"none"`: skip the mv entirely — no target, nothing to check.
-       For `"subtask"`/`"feature"`: **before the mv, check whether the target directory
+       - `"none"`: skip the move entirely — no target, nothing to check.
+       For `"subtask"`/`"feature"`: **before the move, check whether the target directory
        already exists** (the task folder was already archived on a prior attempt — e.g.
-       a kill-after-archive-before-done-sentinel resume). If it exists, SKIP the mv as a
+       a kill-after-archive-before-done-sentinel resume). If it exists, SKIP the move as a
        no-op (do not double-move or error) and note "already archived" in the report.
-       Otherwise create the target dir with `mkdir -p` and perform the mv.
+       Otherwise move the folder: `python3 __QUOIN_HOME__/scripts/fsops.py mv --parents "<task_dir>" "<target>"` (the target is the final path; `--parents` creates only its parent).
     5. Print the final report:
        ```
        Task finalized: <task_name>
@@ -814,13 +814,13 @@ Spawn an Agent subagent:
 
        Next: when you're ready, create a PR from the branch.
        ```
-    6. **Write the done-sentinel (T-11, `_AUTONOMOUS` only) — LAST, after the archive mv
+    6. **Write the done-sentinel (T-11, `_AUTONOMOUS` only) — LAST, after the archive move
        (step 4) AND the report print (step 5) above, never before either:** atomically
        write `.workflow_artifacts/memory/autonomous-done-<task_name>.md`
-       (`mkdir -p` the memory dir first; `printf > f.tmp && mv f.tmp f`), deliberately
-       OUTSIDE the just-archived task folder so the record survives the mv. This is the
+       (pipe the content into `python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`), deliberately
+       OUTSIDE the just-archived task folder so the record survives the move. This is the
        final terminal signal an external supervisor's relaunch loop checks for SUCCESS —
-       anchoring it here (after both the mv and the report, not attached to any earlier
+       anchoring it here (after both the move and the report, not attached to any earlier
        step) means a kill at any prior boundary in this 8-step process — including
        after-push-before-Sub-phase-B, after-Sub-phase-B-before-archive, and
        after-archive-before-done — safely re-runs from where it left off with no

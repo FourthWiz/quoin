@@ -192,7 +192,7 @@ def test_marker_written_on_autonomous_entry(run_skill_text: str) -> None:
     assert "autonomous-run-{task}.marker" in section or "autonomous-run-<task-name>.marker" in section
     assert "AUTONOMOUS=true" in section
     # Atomic-write idiom.
-    assert ".tmp" in section and "mv " in section
+    assert "fsops.py write-atomic" in section
     # Inert for plain /run.
     assert "AUTONOMOUS=false" in section
 
