@@ -524,3 +524,124 @@ def test_cited_capabilities_are_verified_rows():
     keys = _verified_keys()
     for key in ev.CITED_CAPABILITIES:
         assert keys.get(key) == "verified", key
+
+
+# ---------------------------------------------------------------------------
+# permission sentences are never a failure and a denial is never an approval
+# ---------------------------------------------------------------------------
+
+FIXTURES_DIR = REPO_ROOT / "quoin" / "adapters" / "opencode" / "fixtures" / "runtime-events"
+
+_MATRIX_TEXTS = {
+    "rejected": REJECTED,
+    "corrected": CORRECTED,
+    "denied": DENIED,
+    "denied-with-rejected-in-rules": DENIED_ADVERSARIAL,
+    "nested-task-denied": "Subagent failed (task_id: ses_a): Subagent failed (task_id: ses_b): " + DENIED,
+    "nested-task-rejected": "Subagent failed (task_id: ses_a): Subagent failed (task_id: ses_b): " + REJECTED,
+    "generic": "Tool execution failed",
+}
+
+
+def _expected_outcome(text):
+    """Independent restatement of the rule: strip prefixes, compare the start."""
+    rest = text
+    while rest.startswith("Subagent failed (task_id: "):
+        rest = rest.split("): ", 1)[1]
+    if rest.startswith("The user rejected permission to use this specific tool call"):
+        return "rejected"
+    if rest.startswith("The user has specified a rule which prevents you from using this specific tool call"):
+        return "denied"
+    return None
+
+
+def _fixture_events(name):
+    pipe = pipeline()
+    out = []
+    for raw in (FIXTURES_DIR / name).read_bytes().split(b"\n"):
+        out.extend(pipe.feed_line(raw))
+    return out
+
+
+class TestDenyIsNeverFailureOrApproval:
+    def test_denied_tool_then_finish(self):
+        out = _fixture_events("tool-denied-then-finish.jsonl")
+        denied = [e for e in out if e.type is ET.PROGRESS and e.payload.permission_outcome == "denied"]
+        assert len(denied) == 1
+        assert not [e for e in out if e.type in (ET.APPROVAL_REQUIRED, ET.ERROR)]
+
+    def test_adversarial_ruleset_stays_denied(self):
+        out = _fixture_events("tool-denied-adversarial.jsonl")
+        assert [e.payload.permission_outcome for e in out if e.type is ET.PROGRESS
+                and e.payload.permission_outcome] == ["denied"]
+        assert not [e for e in out if e.type in (ET.APPROVAL_REQUIRED, ET.ERROR)]
+
+    def test_denied_tail_of_a_task(self):
+        out = _fixture_events("task-errored-denied-tail.jsonl")
+        assert [e.payload.delegation for e in out if e.type is ET.PROGRESS and e.payload.delegation] == ["denied-tail"]
+        assert not [e for e in out if e.type in (ET.APPROVAL_REQUIRED, ET.ERROR)]
+
+    @pytest.mark.parametrize("tool", ["bash", "edit", "question", "plan_enter", "plan_exit", "task"])
+    @pytest.mark.parametrize("label", list(_MATRIX_TEXTS))
+    def test_tool_use_matrix(self, tool, label):
+        text = _MATRIX_TEXTS[label]
+        for status in ("error", "completed"):
+            state = {"error": text} if status == "error" else {"title": "ok", "metadata": {}}
+            out = tr(tool_use(tool, status, **state))
+            assert set(types(out)) <= {ET.PROGRESS, ET.APPROVAL_REQUIRED}
+            wants_approval = status == "error" and _expected_outcome(text) == "rejected"
+            assert (ET.APPROVAL_REQUIRED in types(out)) == wants_approval
+
+    @pytest.mark.parametrize("name", ["UnknownError", "APIError"])
+    @pytest.mark.parametrize("where", ["data", "message"])
+    @pytest.mark.parametrize("label", list(_MATRIX_TEXTS))
+    def test_error_event_matrix(self, name, where, label):
+        text = _MATRIX_TEXTS[label]
+        out = tr(error_event(text, where, name))
+        assert len(out) == 1
+        outcome = _expected_outcome(text)
+        if outcome == "denied":
+            assert out[0].type is ET.PROGRESS
+            assert out[0].payload.kind == "halted" and out[0].payload.permission_outcome == "denied"
+        elif outcome == "rejected":
+            assert out[0].type is ET.APPROVAL_REQUIRED
+            assert out[0].payload.evidence_source == "error_event"
+        else:
+            assert out[0].type is ET.ERROR
+
+    def test_doom_loop_fixtures(self):
+        rejected = _fixture_events("doom-loop-rejected.jsonl")
+        assert [e.payload.evidence_source for e in rejected if e.type is ET.APPROVAL_REQUIRED] == ["error_event"]
+        assert not [e for e in rejected if e.type is ET.ERROR]
+        denied = _fixture_events("doom-loop-denied.jsonl")
+        halted = [e for e in denied if e.type is ET.PROGRESS and e.payload.kind == "halted"]
+        assert len(halted) == 1 and halted[0].payload.permission_outcome == "denied"
+        assert not [e for e in denied if e.type in (ET.ERROR, ET.APPROVAL_REQUIRED)]
+
+    def test_policy_is_not_a_failure_kind(self):
+        assert "policy" not in ev.TRANSLATABLE_FAILURE_KINDS
+        with pytest.raises(ValueError):
+            ev.ErrorPayload("n", "m", failure_kind="policy")
+
+    def test_stderr_denial_sentence_is_no_signal(self):
+        for text in (DENIED, "\x1b[93m! \x1b[0m" + DENIED, DENIED_ADVERSARIAL):
+            assert ev.parse_stderr_line(text) is None
+
+    def test_native_error_mapping_never_policy(self):
+        errors = [json.loads(l)["error"] for f in sorted(FIXTURES_DIR.glob("native-error-*.jsonl"))
+                  for l in f.read_text().splitlines() if '"type": "error"' in l]
+        assert len(errors) == 5
+        errors += [{}, {"name": 5}, {"data": 5}, {"name": "X", "data": {"statusCode": "429"}},
+                   {"name": "APIError", "data": {"statusCode": 418, "isRetryable": True}}]
+        for err in errors:
+            assert ev.map_native_error(err).failure_kind != "policy"
+
+    def test_no_permission_sentence_produces_an_error_payload(self):
+        for text in _MATRIX_TEXTS.values():
+            if _expected_outcome(text) is None:
+                continue
+            candidates = [error_event(text, where, name) for where in ("data", "message")
+                          for name in ("UnknownError", "APIError")]
+            candidates += [tool_use(tool, "error", error=text) for tool in ("bash", "task", "question")]
+            for obj in candidates:
+                assert ET.ERROR not in types(tr(obj))
