@@ -34,6 +34,7 @@ CLAIM_HEADINGS = (
     "Instructions, rules and AGENTS.md",
     "Provider policy and tool permissions",
     "Plugins and events",
+    "Headless run events and process lifecycle",
 )
 
 DECISION_HEADINGS = (
@@ -297,6 +298,36 @@ def test_compatibility_claim_rows():
             assert len(cells) == 4, (heading, cells)
             _claim, status, evidence, _note = cells
             assert claim_row_ok(status, evidence, pinned_tuple, owner, repo), (heading, cells)
+
+
+RUNTIME_SECTION = "Headless run events and process lifecycle"
+REQUIRED_RUNTIME_KEYS = (
+    "json-envelope, json-event-types, child-events-filtered, no-native-stop, exit-code, "
+    "headless-deny-rules, auto-reject-asks, stderr-notice-format, agent-fallback-notice, "
+    "deny-vs-reject, continue-loop-on-deny, step-finish-shape, finish-reason-terminal, "
+    "task-failure-text, task-background-metadata, native-error-shape, internal-retry, "
+    "retry-after, signal-handling, grandchildren, continuation-flags, continuation-agent, "
+    "step-settling, part-reemission, version-output, npm-wrapper, non-git-discovery, "
+    "question-override, permission-ask-outside-tool, halt-error-shape, tool-hidden-by-deny"
+).split(", ")
+
+
+def _runtime_rows():
+    text = COMPAT_PATH.read_text(encoding="utf-8")
+    return _table_rows(_sections(text, 2)[RUNTIME_SECTION])
+
+
+def test_headless_runtime_rows_cite_lines():
+    keys = []
+    for _claim, status, evidence, note in _runtime_rows():
+        match = re.match(r"^`key: ([a-z0-9-]+)`", note)
+        assert match, note
+        keys.append(match.group(1))
+        if status == "verified":
+            assert "blob/v1.18.32/" in evidence, evidence
+            assert re.search(r"L\d+", evidence), evidence
+    assert len(keys) == len(set(keys)), "duplicate keys"
+    assert set(REQUIRED_RUNTIME_KEYS) <= set(keys), set(REQUIRED_RUNTIME_KEYS) - set(keys)
 
 
 def test_compatibility_release_lines():
