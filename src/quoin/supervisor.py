@@ -266,7 +266,7 @@ def next_streak(
     repairs_used: int,
     allowance: int,
 ) -> tuple:
-    """Advance the no-progress streak; returns (streak, repairs_used, verdict)."""
+    """Advance the no-progress streak; returns (streak, repairs_used, outcome)."""
     if progressed:
         return (0, 0, "progress")
     if repair_phases and repairs_used < allowance:
