@@ -1514,6 +1514,113 @@ def _lock_runtime(data) -> str:
     return value if isinstance(value, str) and value else "claude"
 
 
+
+def _make_opencode_driver(project_root):
+    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
+
+    return _driver.OpenCodeDriver(project_root)
+
+
+def _opencode_backoff(n: int) -> float:
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+
+    return _supervisor.default_backoff(n)
+
+
+def _cmd_run_opencode(args: argparse.Namespace) -> int:
+    """Run one workflow phase on the OpenCode runtime and print a JSON summary.
+
+    The task lock is held for every write of task state (driver calls, the
+    resume hint in the run record, the ``.result`` file); only the printed
+    summary follows the release.
+    """
+    import signal  # noqa: PLC0415
+
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
+    from quoin.opencode_adapter import phase_loop, runstore  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    ident = {
+        "task": args.task, "stage": args.stage, "phase": args.phase, "profile": args.profile,
+    }
+
+    def refusal(category, code, message):
+        return phase_loop.PhaseResult(
+            outcome="REFUSED", reason=code,
+            refusal={"category": category, "code": code, "message": message},
+        )
+
+    def emit(result, hint=None) -> int:
+        print(json.dumps(phase_loop.summary(result, ident, hint), sort_keys=True))
+        return phase_loop.exit_code(result)
+
+    if not args.phase:
+        return emit(refusal(
+            "workflow-validation", "whole-task-unavailable", _supervisor.WHOLE_TASK_UNAVAILABLE
+        ))
+    try:
+        runstore.check_task_name(args.task)
+    except runstore.RunStoreError:
+        return emit(refusal("workflow-validation", "invalid-task-name", "the task name is not valid"))
+
+    cancel = phase_loop.CancelToken()
+
+    def _on_signal(signum, _frame):
+        cancel.cancel(signum)
+
+    previous = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[sig] = signal.signal(sig, _on_signal)
+        except ValueError:  # not the main thread: no handlers, no cancel by signal
+            break
+
+    hint = None
+    try:
+        paths = _supervisor_paths(project_root, args.task)
+        acquired, held_pid = _acquire_supervisor_lock(
+            paths["memory_dir"], paths["lock"], paths["result"], args.task,
+            args.max_relaunch, None, runtime="opencode",
+        )
+        if not acquired:
+            holder = _read_json(paths["lock"])
+            runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
+            result = refusal(
+                None, "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})"
+            )
+        else:
+            try:
+                try:
+                    drv = _make_opencode_driver(project_root)
+                    request = _driver.RunRequest(
+                        project_root=project_root, task=args.task, stage=args.stage,
+                        phase=args.phase, profile=args.profile, budget=args.budget,
+                    )
+                    result = phase_loop.run_phase(
+                        drv, request, max_relaunch=args.max_relaunch, cancel=cancel,
+                        new_run=args.new_run, backoff_fn=_opencode_backoff,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result = phase_loop.PhaseResult(
+                        outcome="ERROR", reason="driver-error: " + type(exc).__name__
+                    )
+                hint = phase_loop.resume_hint(result, ident, project_root)
+                if result.run_id and hint:
+                    try:
+                        phase_loop.annotate_record(project_root, result.run_id, hint)
+                    except Exception:  # noqa: BLE001 - the hint still reaches the summary
+                        pass
+                if args.halt_on_abort and not paths["result"].exists():
+                    _write_supervisor_result(paths["memory_dir"], paths["result"], result.outcome, 0)
+            finally:
+                _release_supervisor_lock(paths["lock"], os.getpid())
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+    return emit(result, hint)
+
+
 def _strip_handoff_pythonpath() -> None:
     """Removes the `PYTHONPATH` entry an auto-resume hand-off prepended so
     it could relaunch the recorded interpreter, before this process
@@ -2226,7 +2333,9 @@ def main(argv: list[str] | None = None) -> int:
             "Run the external autonomous supervisor: relaunches "
             '`claude -p "/run --resume --autonomous <task>"` in fresh '
             "headless sessions until the task's done- or halt-sentinel "
-            "appears, bounded by --max-relaunch and exponential backoff."
+            "appears, bounded by --max-relaunch and exponential backoff. "
+            "With --runtime opencode it instead runs one workflow phase "
+            "headlessly on OpenCode and prints a JSON summary."
         ),
         help="Run the external autonomous supervisor for a task (relaunch loop)",
     )
@@ -2281,6 +2390,38 @@ def main(argv: list[str] | None = None) -> int:
             "Stop the supervisor and headless child for <task>, confirm both "
             "are dead, then print the command that resumes the child "
             "interactively."
+        ),
+    )
+    run_p.add_argument(
+        "--runtime",
+        choices=("claude", "opencode"),
+        default="claude",
+        help="Runtime that drives the run (default: claude).",
+    )
+    run_p.add_argument(
+        "--profile",
+        default=None,
+        help="Only with --runtime opencode: runtime profile to launch with.",
+    )
+    run_p.add_argument(
+        "--phase",
+        default=None,
+        help=(
+            "Only with --runtime opencode: the single workflow phase to run, "
+            "for example plan or review."
+        ),
+    )
+    run_p.add_argument(
+        "--stage",
+        default=None,
+        help="Only with --runtime opencode: stage number for a multi-stage task.",
+    )
+    run_p.add_argument(
+        "--new-run",
+        action="store_true",
+        help=(
+            "Only with --runtime opencode: start the phase over instead of "
+            "resuming an interrupted run."
         ),
     )
     run_p.add_argument(
@@ -2360,7 +2501,32 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "run":
         if args.takeover and args.autonomous:
             run_p.error("--takeover cannot be combined with --autonomous")
-        return _cmd_run(args)
+        if args.runtime != "opencode":
+            for flag, value in (
+                ("--profile", args.profile), ("--phase", args.phase),
+                ("--stage", args.stage), ("--new-run", args.new_run),
+            ):
+                if value:
+                    _abort(f"quoin: {flag} is only valid with --runtime opencode")
+            return _cmd_run(args)
+        if args.takeover:
+            _abort(
+                "quoin: --takeover is only valid with --runtime claude; "
+                "stop an opencode run with SIGTERM"
+            )
+        if not args.profile:
+            _abort(
+                "quoin: --runtime opencode needs --profile NAME "
+                "(a profile from your OpenCode runtime configuration)"
+            )
+        if args.permission_mode == "bypassPermissions":
+            _abort(
+                "quoin: --permission-mode bypassPermissions is not available with "
+                "--runtime opencode; approval prompts are never skipped"
+            )
+        if args.max_relaunch < 0:
+            _abort("quoin: --max-relaunch must be 0 or more")
+        return _cmd_run_opencode(args)
 
     parser.print_help()
     return 1
