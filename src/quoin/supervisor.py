@@ -32,6 +32,10 @@ that folder's later archival into ``finalized/``.
 This module keeps its imports lean (stdlib only) so it stays safe to
 import from the CLI's lazy-import dispatch path (mirrors the
 ``router``/``models`` lazy-import convention in ``cli.py``).
+
+A small runtime launch seam (``launcher_for``) sits at the end of the module;
+whole-task OpenCode runs will plug into ``supervise()`` through it once an
+orchestrator command exists.
 """
 from __future__ import annotations
 
@@ -41,7 +45,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Optional, Protocol, Union
 
 PathLike = Union[str, Path]
 
@@ -660,3 +664,47 @@ def make_tracked_launch_fn(
     launch_fn.skipped = 0  # type: ignore[attr-defined]
     launch_fn.launches = 0  # type: ignore[attr-defined]
     return launch_fn
+
+
+# ---------------------------------------------------------------------------
+# Runtime launch seam
+# ---------------------------------------------------------------------------
+
+RUNTIMES: tuple = ("claude", "opencode")
+
+WHOLE_TASK_UNAVAILABLE = (
+    "whole-task orchestration is not available for the opencode runtime yet; "
+    "run one phase with: quoin run --runtime opencode --profile PROFILE "
+    "--phase PHASE TASK"
+)
+
+
+class RuntimeUnavailable(ValueError):
+    """The requested runtime cannot drive a whole-task run."""
+
+
+class RuntimeLauncher(Protocol):
+    runtime: str
+
+    def make_launch_fn(
+        self, project_root: PathLike, **opts: object
+    ) -> Callable[..., object]: ...
+
+
+class ClaudeLauncher:
+    runtime = "claude"
+
+    def make_launch_fn(
+        self, project_root: PathLike, **opts: object
+    ) -> Callable[..., object]:
+        # Resolved from the module globals at call time so a patched
+        # ``make_launch_fn`` is the one that runs.
+        return make_launch_fn(project_root, **opts)  # type: ignore[arg-type]
+
+
+def launcher_for(runtime: str) -> RuntimeLauncher:
+    if runtime == "claude":
+        return ClaudeLauncher()
+    if runtime == "opencode":
+        raise RuntimeUnavailable(WHOLE_TASK_UNAVAILABLE)
+    raise ValueError("unknown runtime: %r" % (runtime,))
