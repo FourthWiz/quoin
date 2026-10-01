@@ -128,8 +128,9 @@ def test_not_installed_is_refused(world, monkeypatch, capsys):
     assert "(workflow-validation/not-installed)" in refusal(capsys)
 
 
-def test_owned_file_drift_is_refused(world, capsys):
-    rel = next(r for r, rec in install.load_metadata(world.root).owned.items() if rec["kind"] == "agent")
+@pytest.mark.parametrize("kind", ["agent", "command", "config", "skill"])
+def test_owned_file_drift_is_refused(world, capsys, kind):
+    rel = next(r for r, rec in sorted(install.load_metadata(world.root).owned.items()) if rec["kind"] == kind)
     path = world.root / rel
     path.write_bytes(path.read_bytes() + b"\n# local edit\n")
     assert start(world) == 3
