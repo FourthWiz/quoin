@@ -156,6 +156,7 @@ DEPLOYED_SCRIPTS = (
     "fsops.py",  # file-operations helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "plan_tasks.py",  # plan pending-task check wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "wait_for.py",  # detached-start and bounded foreground wait helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "child_watch.py",  # handed-off child observer wrapper (wrapped portable-core — also in CORE_SCRIPTS)
 )
 
 # T-05: obsolete artifacts to remove from prior installs
@@ -468,6 +469,7 @@ CORE_SCRIPTS = (
     "fsops.py",  # file-operations helper core impl; required by the wrapper's parents[1] loader
     "plan_tasks.py",  # plan pending-task check core impl; required by the wrapper's parents[1] loader
     "wait_for.py",  # detached-start and bounded foreground wait helper core impl; required by the wrapper's parents[1] loader
+    "child_watch.py",  # handed-off child observer core impl; required by the wrapper's parents[1] loader
 )
 
 
