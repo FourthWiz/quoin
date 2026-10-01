@@ -221,9 +221,16 @@ def render_text(findings: List[Finding], status: str) -> str:
 
 
 def render_json(findings: List[Finding], status: str) -> str:
+    from . import categories  # noqa: PLC0415 - kept lazy; see categories.py
+
     finding_objs = []
     for f in sorted(findings, key=_sort_key):
-        obj = {"id": f.id, "severity": f.severity, "message": f.message}
+        obj = {
+            "id": f.id,
+            "severity": f.severity,
+            "message": f.message,
+            "category": categories.category_for(f.id),
+        }
         if f.path is not None:
             obj["path"] = f.path
         if f.remediation is not None:
