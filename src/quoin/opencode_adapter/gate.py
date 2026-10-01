@@ -357,3 +357,328 @@ def critic_status(
     if len(used) > cap:
         out.append(("FAIL", "critic-not-converged", "%d critic rounds exceed the cap of %d" % (len(used), cap)))
     return out or [("PASS", "", "")]
+
+
+# ---------------------------------------------------------------------------
+# evaluation
+# ---------------------------------------------------------------------------
+
+CHECK_STATUSES = ("PASS", "FAIL", "WARN", "SKIP")
+Item = Tuple[str, str, str]  # (status, code, detail)
+
+
+@dataclass(frozen=True)
+class Check:
+    name: str
+    status: str
+    codes: Tuple[str, ...] = ()
+    details: Tuple[str, ...] = ()
+    warn_codes: Tuple[str, ...] = ()
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "name": self.name, "status": self.status, "codes": list(self.codes),
+            "warn_codes": list(self.warn_codes), "details": list(self.details),
+        }
+
+
+@dataclass(frozen=True)
+class GateResult:
+    task: str
+    stage: Optional[int]
+    phase: str
+    verdict: str
+    checks: Tuple[Check, ...]
+    reasons: Tuple[str, ...]
+    warnings: Tuple[str, ...]
+    origin: Optional[str]
+    evidence_ref: Optional[Mapping[str, Any]]
+    explanation: Optional[str]
+    evaluated_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task": self.task, "stage": self.stage, "phase": self.phase, "verdict": self.verdict,
+            "checks": [c.to_dict() for c in self.checks], "reasons": list(self.reasons),
+            "warnings": list(self.warnings), "origin": self.origin,
+            "evidence_ref": dict(self.evidence_ref) if self.evidence_ref else None,
+            "explanation": self.explanation, "evaluated_at": self.evaluated_at,
+        }
+
+
+def _check(name: str, items: Sequence[Item]) -> Check:
+    """Fold a check's items into one result: any failure fails it, else any
+    warning warns it, else it passes."""
+    fails = [i for i in items if i[0] == "FAIL"]
+    warns = [i for i in items if i[0] == "WARN"]
+    status = "FAIL" if fails else ("WARN" if warns else "PASS")
+    return Check(
+        name, status,
+        tuple(sorted({c for _s, c, _d in fails})),
+        tuple(d for _s, _c, d in fails + warns if d),
+        tuple(sorted({c for _s, c, _d in warns})),
+    )
+
+
+def _skip(name: str, why: str) -> Check:
+    return Check(name, "SKIP", (), (why,))
+
+
+def _fail(code: str, detail: str = "") -> Item:
+    return ("FAIL", code, detail)
+
+
+def adopt_command(task: str, stage: Optional[int], phase: str, project_root) -> str:
+    stage_part = "" if stage is None else " --stage %d" % stage
+    return "quoin opencode adopt --task %s%s --phase %s --project-root %s" % (task, stage_part, phase, project_root)
+
+
+def _now_iso(clock: Callable[[], float]) -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
+
+
+def _settings(state: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
+    value = (state or {}).get("settings")
+    return value if isinstance(value, Mapping) else {}
+
+
+def _check_evidence(task, stage, phase, project_root, state_error, entry) -> Check:
+    if state_error is not None:
+        return _check("evidence", [_fail("state-invalid", state_error)])
+    if entry is None:
+        return _check("evidence", [_fail("evidence-missing", adopt_command(task, stage, phase, project_root))])
+    snapshot = entry.get("evidence")
+    if not evidence.well_formed(snapshot) or snapshot.get("coverage") != "full":
+        return _check("evidence", [_fail("evidence-incomplete", "the recorded evidence does not cover every file")])
+    return _check("evidence", [("PASS", "", "")])
+
+
+def _check_run_outcome(task, phase, entry, directory) -> Check:
+    origin = entry["origin"]
+    if origin == "adopted":
+        return _check("run-outcome", [("WARN", "run-evidence-absent", "adopted evidence has no recorded run")])
+    if origin == "continuation":
+        if entry.get("continuation_validation") != "PASS":
+            return _check("run-outcome", [_fail("continuation-not-validated", "the continuation was not validated")])
+        return _check("run-outcome", [("PASS", "", "")])
+    runs = [r for r in (entry.get("runs") or []) if isinstance(r, str)]
+    if not runs:
+        return _check("run-outcome", [_fail("run-not-completed", "the entry lists no run")])
+    items: List[Item] = []
+    producers = 0
+    for run_id in runs:
+        try:
+            record = runstore.load_record(directory, run_id) if directory is not None else None
+        except runstore.RunStoreError as exc:
+            items.append(_fail("run-not-completed", "%s: %s" % (run_id, exc.code)))
+            continue
+        why = _mismatch(record, task, entry.get("stage"), phase)
+        if why is not None:
+            items.append(_fail("run-not-completed", "%s: %s" % (run_id, why)))
+            continue
+        if runstore.normalize_phase(record["request"]["phase"]) in runstore.PLAN_PRODUCER_PHASES:
+            producers += 1
+        outcome = record.get("outcome") if isinstance(record.get("outcome"), Mapping) else {}
+        if outcome.get("state") != "completed":
+            items.append(_fail("run-not-completed", "%s: outcome is %s" % (run_id, outcome.get("state"))))
+        elif outcome.get("evidence") != "full":
+            items.append(_fail("run-evidence-partial", "%s: evidence is %s" % (run_id, outcome.get("evidence"))))
+    if phase == "plan" and producers == 0:
+        items.append(_fail("run-not-completed", "no plan or thorough_plan run is listed"))
+    return _check("run-outcome", items or [("PASS", "", "")])
+
+
+def _mismatch(record: Optional[Mapping[str, Any]], task: str, stage: Optional[int], phase: str) -> Optional[str]:
+    """Why a run record is not a run of this entry, or None when it is."""
+    if record is None:
+        return "no run record"
+    request = record.get("request")
+    if record.get("task") != task or not isinstance(request, Mapping):
+        return "task differs"
+    try:
+        if runstore.normalize_stage(request.get("stage")) != stage:
+            return "stage differs"
+    except ValueError:
+        return "stage differs"
+    if runstore.normalize_phase(request.get("phase")) not in runstore.RUN_PHASES_FOR[phase]:
+        return "phase differs"
+    return None
+
+
+def _check_boundary(entry) -> Check:
+    origin, boundary = entry["origin"], entry.get("boundary")
+    if boundary == "violation":
+        return _check("boundary", [_fail("boundary-violation", "a run touched a path it may not")])
+    if boundary == "ok":
+        return _check("boundary", [("PASS", "", "")])
+    if origin == "coordinator":
+        return _check("boundary", [_fail("boundary-unrecorded", "no boundary result was recorded")])
+    return _check("boundary", [("WARN", "boundary-unverified", "no boundary result was recorded")])
+
+
+
+def evaluate(
+    project_root, task: str, stage: Optional[int], phase: str, *, source_dir,
+    explanation: Optional[str] = None,
+    runner: Optional[runstore.GitRunner] = None,
+    bytes_runner: Optional[runstore.GitBytesRunner] = None,
+    clock: Callable[[], float] = time.time,
+) -> GateResult:
+    """Run every check for one gated phase and return the verdict.
+
+    `explanation` is stored on the result after redaction and truncation; it is
+    never passed to a check, so it cannot change the verdict."""
+    phase = runstore.normalize_phase(phase)
+    try:
+        runstore.check_task_name(task)
+    except runstore.RunStoreError:
+        raise GateRefused("invalid-task-name") from None
+    if phase not in runstore.GATED_PHASES:
+        raise GateRefused("phase-not-gated")
+    info = _lstat(Path(project_root) / ".workflow_artifacts" / task)
+    if info is None or not stat.S_ISDIR(info.st_mode):
+        raise GateRefused("task-missing")
+    try:
+        stage = runstore.normalize_stage(stage)
+    except ValueError:
+        raise GateRefused("invalid-stage") from None
+    if stage is not None and phase in runstore.STAGELESS_PHASES:
+        raise GateRefused("invalid-stage")
+
+    state_error: Optional[str] = None
+    state: Optional[Dict[str, Any]] = None
+    directory: Optional[Path] = None
+    try:
+        directory = runstore.inspect_store(project_root)
+        if directory is not None:
+            state = runstore.load_workflow_state(directory, task)
+    except runstore.RunStoreError as exc:
+        state_error = exc.code
+    except OSError as exc:
+        state_error = type(exc).__name__
+    entry = runstore.current_entry(state, stage, phase) if state is not None else None
+    settings = _settings(state)
+
+    checks: List[Check] = []
+    checks.append(_check_evidence(task, stage, phase, project_root, state_error, entry))
+    have = entry is not None and state_error is None
+    snapshot = entry.get("evidence") if have else None
+
+    checks.append(_check_run_outcome(task, phase, entry, directory) if have else _skip("run-outcome", "no evidence entry"))
+    checks.append(_check_boundary(entry) if have else _skip("boundary", "no evidence entry"))
+
+    sdir: Optional[Path] = None
+    path_error: Optional[str] = None
+    try:
+        sdir = stage_dir(project_root, task, stage, source_dir)
+    except PathUnresolved as exc:
+        path_error = exc.detail
+    paths: List[Path] = []
+    if have and path_error is None:
+        paths, missing = expected_artifacts(project_root, task, stage, phase, entry, sdir)
+        exist_items: List[Item] = [_fail("artifact-missing", m) for m in missing]
+        checks.append(_check("artifacts-exist", exist_items or ([("PASS", "", "")] if paths else [])) if (paths or missing)
+                      else _skip("artifacts-exist", "this phase has no required artifact"))
+    elif have:
+        checks.append(_check("artifacts-exist", [_fail("path-unresolved", path_error or "")]))
+    else:
+        checks.append(_skip("artifacts-exist", "no evidence entry"))
+
+    if paths:
+        invalid: List[Item] = []
+        for path in paths:
+            detail = run_validator(project_root, source_dir, path)
+            if detail is not None:
+                invalid.append(_fail("artifact-invalid", "%s: %s" % (_rel(Path(project_root), path), detail)))
+        checks.append(_check("artifacts-valid", invalid or [("PASS", "", "")]))
+    else:
+        checks.append(_skip("artifacts-valid", "no artifact to validate"))
+
+    if have:
+        fresh = evidence.take_snapshot(project_root, task, phase, runner=runner, bytes_runner=bytes_runner, clock=clock)
+        task_findings, repo_findings = evidence.compare(snapshot, fresh)
+        checks.append(_check("artifact-hashes", [_fail(f.code, f.detail) for f in task_findings] or [("PASS", "", "")]))
+        checks.append(_check("repo-state", [_fail(f.code, f.detail) for f in repo_findings] or [("PASS", "", "")]))
+    else:
+        checks.append(_skip("artifact-hashes", "no evidence entry"))
+        checks.append(_skip("repo-state", "no evidence entry"))
+
+    checks.append(_check_envelope(project_root, source_dir, entry) if have else _skip("envelope", "no evidence entry"))
+    checks.append(_check_verdict(project_root, phase, entry, origin_of(entry), sdir, settings, paths) if have
+                  else _skip("phase-verdict", "no evidence entry"))
+    checks.append(_check_tests(phase, entry, settings) if have else _skip("tests", "no evidence entry"))
+    checks.append(_check_ledger(entry) if have else _skip("ledger", "no evidence entry"))
+
+    reasons = tuple(sorted({c for ch in checks if ch.status == "FAIL" for c in ch.codes}))
+    warnings = tuple(sorted({c for ch in checks for c in ch.warn_codes}))
+    verdict = "FAIL" if any(ch.status == "FAIL" for ch in checks) else "PASS"
+    shown = None
+    if explanation is not None:
+        shown = _redact(explanation).encode("utf-8")[:MAX_EXPLANATION_BYTES].decode("utf-8", "ignore")
+    ref = None
+    if have:
+        ref = {"recorded_at": entry.get("recorded_at"), "taken_at": (snapshot or {}).get("taken_at")}
+    return GateResult(
+        task=task, stage=stage, phase=phase, verdict=verdict, checks=tuple(checks), reasons=reasons,
+        warnings=warnings, origin=entry.get("origin") if have else None, evidence_ref=ref,
+        explanation=shown, evaluated_at=_now_iso(clock),
+    )
+
+
+def origin_of(entry: Optional[Mapping[str, Any]]) -> Optional[str]:
+    return entry.get("origin") if entry else None
+
+
+def _check_envelope(project_root, source_dir, entry) -> Check:
+    recorded = entry.get("envelope_path")
+    if not recorded:
+        return _skip("envelope", "no envelope was recorded")
+    path = _resolve_recorded(project_root, recorded)
+    text = _read_text(path, MAX_ENVELOPE_BYTES)
+    if text is None:
+        return _check("envelope", [_fail("envelope-invalid", "the envelope file cannot be read")])
+    try:
+        messages = load_core(source_dir, "handoff_validate").validate(text, "return")
+    except Exception:  # noqa: BLE001 - a validator that cannot run is a refusal
+        return _check("envelope", [_fail("envelope-invalid", "validator-unavailable")])
+    failures = [m for m in messages if m.startswith("FAIL")]
+    if failures:
+        return _check("envelope", [_fail("envelope-invalid", _redact(failures[0])[:300])])
+    return _check("envelope", [("PASS", "", "")])
+
+
+def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths) -> Check:
+    if phase == "plan":
+        if sdir is None:
+            return _skip("phase-verdict", "the stage folder is unresolved")
+        items = critic_status(entry, origin or "", sdir, settings, project_root=project_root)
+        return _check("phase-verdict", [(s, c, d) for s, c, d in items])
+    if phase == "review":
+        if not paths:
+            return _skip("phase-verdict", "no review file")
+        text = _read_text(paths[0], MAX_TEXT_BYTES)
+        verdict = parse_verdict(text, REVIEW_VERDICTS) if text is not None else None
+        if verdict is None:
+            return _check("phase-verdict", [_fail("verdict-unparseable", paths[0].name)])
+        if verdict != "APPROVED":
+            return _check("phase-verdict", [_fail("review-not-approved", "the review verdict is %s" % verdict)])
+        return _check("phase-verdict", [("PASS", "", "")])
+    return _skip("phase-verdict", "this phase has no verdict file")
+
+
+def _check_tests(phase, entry, settings) -> Check:
+    if phase not in ("implement", "review"):
+        return _skip("tests", "this phase does not run tests")
+    if not settings.get("test_command"):
+        return _check("tests", [("WARN", "tests-not-configured", "no test command is configured")])
+    tests = entry.get("tests")
+    code = tests.get("exit_code") if isinstance(tests, Mapping) else None
+    if not isinstance(code, int) or isinstance(code, bool) or code != 0:
+        return _check("tests", [_fail("tests-failed", "the recorded test run did not exit 0")])
+    return _check("tests", [("PASS", "", "")])
+
+
+def _check_ledger(entry) -> Check:
+    if entry.get("ledger_lines_appended_during_run"):
+        return _check("ledger", [("WARN", "ledger-appended-during-run", "the ledger grew while the run was active")])
+    return _check("ledger", [("PASS", "", "")])

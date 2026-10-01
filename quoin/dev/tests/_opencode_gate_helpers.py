@@ -126,7 +126,9 @@ def build_task(root, task="t1", *, critic=CRITIC_PASS, review=REVIEW, discover=F
 
 def run_request(root, task, stage, phase):
     """The request mapping exactly as the driver stores it."""
-    request = driver.RunRequest(project_root=Path(root), task=task, stage=stage, phase=phase, profile="p")
+    request = driver.RunRequest(
+        project_root=Path(root), task=task, stage=stage, phase=phase, profile="p", budget=None,
+    )
     return {
         "task": request.task, "stage": request.stage, "phase": request.phase, "profile": request.profile,
         "effort": request.effort, "timeout_s": request.timeout_s, "budget": request.budget,
@@ -148,3 +150,51 @@ def make_run(root, task="t1", *, stage="1", phase="plan", state="completed", evi
     }
     runstore.write_record(directory, record)
     return run_id
+
+
+# ---------------------------------------------------------------------------
+# recorded evidence
+# ---------------------------------------------------------------------------
+
+
+class Fixture:
+    """A git project holding a complete multi-stage task."""
+
+    def __init__(self, tmp_path, monkeypatch):
+        isolate_git(monkeypatch, tmp_path / "home")
+        self.root = make_repo(tmp_path / "proj")
+        self.task = "t1"
+        self.clock = clock_at()
+        self.base = build_task(self.root, self.task, discover=True)
+
+    def snapshot(self, phase):
+        from quoin.opencode_adapter import evidence
+
+        return evidence.take_snapshot(self.root, self.task, phase)
+
+    def record(self, phase, *, stage=1, origin="coordinator", runs=None, boundary="ok", **fields):
+        from quoin.opencode_adapter import evidence
+
+        critic = self.base / "stage-1" / "critic-response-1.md"
+        if phase == "plan" and origin == "coordinator" and "critic_responses" not in fields and critic.exists():
+            fields["critic_responses"] = [str(critic)]
+        if runs is None and origin in ("coordinator", "phase-run"):
+            runs = [make_run(self.root, self.task, stage=None if stage is None else str(stage), phase=phase)]
+        return evidence.record_evidence(
+            self.root, self.task, stage, phase, origin, self.snapshot(phase),
+            runs=runs or (), boundary=boundary, clock=self.clock, **fields,
+        )
+
+    def settings(self, **values):
+        directory = runstore.store_dir(self.root, create=True)
+        state = runstore.load_workflow_state(directory, self.task) or runstore.new_workflow_state(self.task, self.clock)
+        state["settings"].update(values)
+        runstore.write_workflow_state(directory, state)
+
+    def evaluate(self, phase, *, stage=1, **kw):
+        from quoin.opencode_adapter import gate
+
+        from pathlib import Path as _P
+
+        source = _P(__file__).resolve().parent.parent.parent
+        return gate.evaluate(self.root, self.task, stage, phase, source_dir=source, clock=self.clock, **kw)
