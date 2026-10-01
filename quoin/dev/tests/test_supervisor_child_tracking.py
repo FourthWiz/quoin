@@ -467,7 +467,7 @@ class TaggedFake:
 
 
 def _run(project, monkeypatch, fake, *extra):
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake)
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: fake)
     return cli.main(["run", "--autonomous", "demo", "--project-root", str(project), *extra])
 
 
@@ -475,7 +475,7 @@ def test_one_arg_fake_launcher_records_nothing(project, monkeypatch):
     _active_record(project)
     calls = []
     monkeypatch.setattr(sup, "make_launch_fn",
-                        lambda project_root, permission_mode=None: (lambda t: calls.append(t) or (
+                        lambda project_root, permission_mode=None, **kwargs: (lambda t: calls.append(t) or (
                             _mem(project) / "autonomous-done-demo.md").write_text("d")))
     assert cli.main(["run", "--autonomous", "demo", "--project-root", str(project)]) == 0
     assert calls == ["demo"]
@@ -497,7 +497,7 @@ def test_end_to_end_records_child_before_launch(project, monkeypatch):
         seen["notes"] = (_mem(project) / "run-notes-demo.md").read_text()
 
     fake = TaggedFake(project, inspect=inspect)
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake)
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: fake)
     lock_after = {}
     orig = cli._release_supervisor_lock
 
@@ -555,7 +555,7 @@ def test_halt_revert_appends_no_note(project, monkeypatch):
 
     monkeypatch.setattr(sup, "read_halt", real_read_halt)
     fake = TaggedFake(project)
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake)
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: fake)
     orig = sup.make_tracked_launch_fn
     monkeypatch.setattr(sup, "make_tracked_launch_fn",
                         lambda *a, **k: orig(*a, halt_fn=halt_fn, **k))

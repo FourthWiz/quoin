@@ -25,6 +25,10 @@ path templates):
 - Halt sentinel: ``autonomous-halt-{task}.md`` — Stage 1, unchanged;
   read-only from this module's perspective.
 
+The supervisor only reads these files: a completion marker such as
+``implement.tasks.done`` is counted as progress and can earn a bounded
+repair allowance, but the supervisor never writes any ``.done`` itself.
+
 All four templates resolve under ``.workflow_artifacts/memory/``,
 deliberately outside the task-scoped artifact folder, so each survives
 that folder's later archival into ``finalized/``.
@@ -35,13 +39,14 @@ import from the CLI's lazy-import dispatch path (mirrors the
 """
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional, Union
+from typing import Callable, Mapping, Optional, Tuple, Union
 
 PathLike = Union[str, Path]
 
@@ -161,6 +166,198 @@ def count_completion_sentinels(task: str, project_root: PathLike) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Progress and repair predicates
+# ---------------------------------------------------------------------------
+
+#: Phases whose finer-grained completion marker (``{phase}.{sub}.done``) means
+#: the phase's work is finished and only its ``{phase}.done`` write is missing.
+COMPLETION_SIGNALS = {"implement": "tasks"}
+
+DEFAULT_REPAIR_RELAUNCHES = 2
+REPAIR_RELAUNCHES_ENV = "QUOIN_SUPERVISOR_REPAIR_RELAUNCHES"
+
+#: A sha whose repo moved on the task branch counts as forward progress; set
+#: this knob to ``0`` to ignore commits and count completion sentinels only.
+HEAD_PROBE_ENV = "QUOIN_SUPERVISOR_HEAD_PROBE"
+HEAD_PROBE_BUDGET_SECS = 5.0
+
+#: Set to ``1`` in every headless child's environment.
+HEADLESS_CHILD_ENV = "QUOIN_HEADLESS_CHILD"
+
+_SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
+_TASK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+_MAX_PROBE_CANDIDATES = 50
+
+
+def _clamped_env_int(
+    environ: Mapping[str, str], name: str, default: int, lo: int, hi: int
+) -> int:
+    """Read an int env knob; absent or non-int -> default, else clamp to lo..hi."""
+    raw = environ.get(name)
+    if raw is None:
+        return default
+    try:
+        value = int(str(raw).strip())
+    except ValueError:
+        return default
+    return max(lo, min(hi, value))
+
+
+def repair_allowance_from_env(environ: Optional[Mapping[str, str]] = None) -> int:
+    """Extra relaunches allowed for a phase missing only its ``.done`` write."""
+    env = os.environ if environ is None else environ
+    return _clamped_env_int(env, REPAIR_RELAUNCHES_ENV, DEFAULT_REPAIR_RELAUNCHES, 0, 5)
+
+
+def launch_timeout_from_env(environ: Optional[Mapping[str, str]] = None) -> float:
+    """Per-launch timeout in seconds (default 5400, clamped 900..14400)."""
+    env = os.environ if environ is None else environ
+    return float(
+        _clamped_env_int(
+            env, LAUNCH_TIMEOUT_ENV, int(DEFAULT_LAUNCH_TIMEOUT_SECONDS), 900, 14400
+        )
+    )
+
+
+def head_probe_enabled(environ: Optional[Mapping[str, str]] = None) -> bool:
+    """False only when the commit-progress probe is switched off with ``0``."""
+    env = os.environ if environ is None else environ
+    return str(env.get(HEAD_PROBE_ENV, "")).strip() != "0"
+
+
+def heads_changed(before: tuple, after: tuple) -> bool:
+    """True when both snapshots are non-empty and a shared repo moved."""
+    if not before or not after:
+        return False
+    old = dict(before)
+    for key, sha in after:
+        if key in old and old[key] != sha:
+            return True
+    return False
+
+
+def progress_made(
+    done_before: int, done_after: int, heads_before: tuple, heads_after: tuple
+) -> bool:
+    """New completion sentinel, or a task-branch commit, since the snapshot."""
+    return done_after > done_before or heads_changed(heads_before, heads_after)
+
+
+def repair_pending_phases(progress_dir_path: PathLike) -> tuple:
+    """Phases that have their completion marker but not their ``.done``."""
+    d = Path(progress_dir_path)
+    try:
+        return tuple(
+            sorted(
+                phase
+                for phase, sub in COMPLETION_SIGNALS.items()
+                if (d / f"{phase}.{sub}.done").is_file()
+                and not (d / f"{phase}.done").is_file()
+            )
+        )
+    except OSError:
+        return ()
+
+
+def next_streak(
+    progressed: bool,
+    repair_phases: tuple,
+    streak: int,
+    repairs_used: int,
+    allowance: int,
+) -> tuple:
+    """Advance the no-progress streak; returns (streak, repairs_used, outcome)."""
+    if progressed:
+        return (0, 0, "progress")
+    if repair_phases and repairs_used < allowance:
+        return (streak, repairs_used + 1, "repair")
+    return (streak + 1, repairs_used, "stall")
+
+
+def abort_reason(streak: int, repair_phases: tuple) -> Optional[str]:
+    """Abort reason once the streak reaches two, else None."""
+    if streak < 2:
+        return None
+    if not repair_phases:
+        return "no forward progress"
+    return "phase completion not repaired: " + ", ".join(repair_phases)
+
+
+# Inherited repository-selection variables override `git -C`, so the probe drops them.
+_GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CEILING_DIRECTORIES")
+
+
+def probe_task_heads(
+    task: str,
+    project_root: PathLike,
+    *,
+    budget_secs: float = HEAD_PROBE_BUDGET_SECS,
+    runner: Optional[Callable[..., object]] = None,
+    clock: Optional[Callable[[], float]] = None,
+    environ: Optional[Mapping[str, str]] = None,
+) -> tuple:
+    """Snapshot of ``(repo_key, sha)`` for repos currently on the task branch.
+
+    Candidates are directories holding their own ``.git`` entry: the project
+    root, else its immediate children. Only repos whose current branch equals
+    the task name or ends with ``/<task>`` are included, so a branch switch
+    drops a repo from the snapshot instead of reading as a commit. Any
+    failure yields ``()``; with no candidate no process is spawned.
+    """
+    try:
+        env_in = os.environ if environ is None else environ
+        if not head_probe_enabled(env_in) or not _TASK_NAME_RE.match(task):
+            return ()
+        root = Path(project_root)
+        if (root / ".git").exists():
+            candidates = [(".", root)]
+        else:
+            candidates = []
+            for child in sorted(root.iterdir()):
+                if child.is_dir() and (child / ".git").exists():
+                    candidates.append((child.name, child))
+            candidates = candidates[:_MAX_PROBE_CANDIDATES]
+        if not candidates:
+            return ()
+        import subprocess  # local import — keeps module-top import-lean
+
+        run = subprocess.run if runner is None else runner
+        now = time.monotonic if clock is None else clock
+        child_env = dict(env_in)
+        for _name in _GIT_ENV_DROP:
+            child_env.pop(_name, None)
+        child_env["GIT_OPTIONAL_LOCKS"] = "0"
+        child_env["GIT_TERMINAL_PROMPT"] = "0"
+        deadline = now() + budget_secs
+        pairs = []
+        for key, directory in candidates:
+            remaining = deadline - now()
+            if remaining <= 0:
+                return ()
+            result = run(
+                ["git", "-C", str(directory), "rev-parse", "HEAD", "--abbrev-ref", "HEAD"],
+                timeout=max(remaining, 0.1),
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                env=child_env,
+            )
+            if result.returncode != 0:
+                continue
+            lines = result.stdout.splitlines()
+            if len(lines) < 2:
+                continue
+            sha, branch = lines[0].strip(), lines[1].strip()
+            if not _SHA_RE.match(sha):
+                continue
+            if branch == task or branch.endswith("/" + task):
+                pairs.append((key, sha))
+        return tuple(sorted(pairs))
+    except Exception:
+        return ()
+
+
+# ---------------------------------------------------------------------------
 # Backoff + clock
 # ---------------------------------------------------------------------------
 
@@ -202,6 +399,8 @@ def supervise(
     max_relaunch: int = DEFAULT_MAX_RELAUNCH,
     backoff_fn: Callable[[int], float] = default_backoff,
     clock: object = None,
+    repair_allowance: int = DEFAULT_REPAIR_RELAUNCHES,
+    progress_probe: Optional[Callable[[], tuple]] = None,
 ) -> SuperviseResult:
     """Run the relaunch loop for ``task`` until a terminal condition.
 
@@ -211,11 +410,15 @@ def supervise(
     2. Halt-sentinel present -> ``HALTED``, reason surfaced, no relaunch.
     3. ``relaunches >= max_relaunch`` -> ``ABORTED("relaunch cap")``.
 
-    Otherwise: count completion sentinels, call ``launch_fn(task)``,
-    re-count. Two consecutive relaunches producing NO NET INCREASE in
-    completion sentinels (``count_after <= count_before``, by
-    :func:`count_completion_sentinels`'s union glob) -> ``ABORTED("no
-    forward progress")``. A net DECREASE counts as non-progress too — a
+    Otherwise: snapshot the completion-sentinel count and the task-branch
+    HEADs, call ``launch_fn(task)``, snapshot again. A launch made progress
+    when the count rose (union glob of :func:`count_completion_sentinels`) or
+    a task-branch commit appeared (:func:`probe_task_heads`). Two consecutive
+    launches without progress -> ``ABORTED("no forward progress")``, except
+    that a phase holding its completion marker but not its ``{phase}.done``
+    gets up to ``repair_allowance`` extra launches first; if that phase is
+    still unrepaired the reason is ``phase completion not repaired: <phase>``.
+    This loop never writes any ``.done`` file. A net DECREASE counts as non-progress too — a
     mid-flight fast-route escalation deletes `.done` sentinels as part of
     its atomic unit (see `run/SKILL.md`), and a strict `==` comparison
     would have misread that net-negative relaunch as forward progress and
@@ -232,8 +435,18 @@ def supervise(
     if clock is None:
         clock = _RealClock()
 
+    if progress_probe is None:
+        progress_probe = lambda: probe_task_heads(task, project_root)  # noqa: E731
+
+    def _heads() -> tuple:
+        try:
+            return tuple(progress_probe())
+        except Exception:
+            return ()
+
     relaunches = 0
     zero_progress_streak = 0
+    repairs_used = 0
 
     while True:
         if read_done(task, project_root):
@@ -251,19 +464,22 @@ def supervise(
             )
 
         count_before = count_completion_sentinels(task, project_root)
+        heads_before = _heads()
         launch_fn(task)
         count_after = count_completion_sentinels(task, project_root)
-
-        if count_after <= count_before:
-            zero_progress_streak += 1
-        else:
-            zero_progress_streak = 0
-
-        if zero_progress_streak >= 2:
+        heads_after = _heads()
+        repair = repair_pending_phases(progress_dir(task, project_root))
+        zero_progress_streak, repairs_used, _ = next_streak(
+            progress_made(count_before, count_after, heads_before, heads_after),
+            repair,
+            zero_progress_streak,
+            repairs_used,
+            repair_allowance,
+        )
+        reason = abort_reason(zero_progress_streak, repair)
+        if reason is not None:
             return SuperviseResult(
-                status="ABORTED",
-                reason="no forward progress",
-                relaunches=relaunches,
+                status="ABORTED", reason=reason, relaunches=relaunches
             )
 
         relaunches += 1
@@ -301,9 +517,11 @@ DEFAULT_ALLOWED_TOOLS = (
     "TaskUpdate",
 )
 
-#: Generous timeout for the relaunch subprocess — cloud-mounted FS has been
-#: observed at 2x+ a local baseline (lesson 2026-07-04).
-DEFAULT_LAUNCH_TIMEOUT_SECONDS = 1800.0
+#: Timeout for one relaunch subprocess. One launch can run implement plus a
+#: full gate, which takes 45-60 minutes on a slow synced file system, so the
+#: default leaves headroom above that.
+DEFAULT_LAUNCH_TIMEOUT_SECONDS = 5400.0
+LAUNCH_TIMEOUT_ENV = "QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS"
 
 
 @dataclass
@@ -445,6 +663,7 @@ def make_launch_fn(
     permission_mode: str = DEFAULT_PERMISSION_MODE,
     allowed_tools: "tuple[str, ...]" = DEFAULT_ALLOWED_TOOLS,
     timeout: float = DEFAULT_LAUNCH_TIMEOUT_SECONDS,
+    env: Optional[Mapping[str, str]] = None,
 ) -> Callable[[str], LaunchResult]:
     """Build the real headless ``launch_fn`` for :func:`supervise` (T-07).
 
@@ -473,9 +692,12 @@ def make_launch_fn(
         )
         if on_spawn is not None:
             return _launch_with_spawn_hook(
-                subprocess, argv, repo_root, timeout, on_spawn
+                subprocess, argv, repo_root, timeout, on_spawn, env
             )
         try:
+            run_kwargs: "dict[str, object]" = {}
+            if env is not None:
+                run_kwargs["env"] = dict(env)
             proc = subprocess.run(
                 argv,
                 cwd=str(repo_root),
@@ -483,6 +705,7 @@ def make_launch_fn(
                 capture_output=True,
                 text=True,
                 timeout=timeout,
+                **run_kwargs,
             )
             return LaunchResult(
                 returncode=proc.returncode,
@@ -512,6 +735,7 @@ def _launch_with_spawn_hook(
     repo_root: Path,
     timeout: float,
     on_spawn: Callable[[int], object],
+    env: Optional[Mapping[str, str]] = None,
 ) -> LaunchResult:
     """Popen-based launch that reports the child pid right after spawn.
 
@@ -520,6 +744,9 @@ def _launch_with_spawn_hook(
     ``communicate()`` because grandchildren holding the pipes open would make
     it block forever.
     """
+    popen_kwargs: "dict[str, object]" = {}
+    if env is not None:
+        popen_kwargs["env"] = dict(env)
     try:
         proc = subprocess.Popen(  # type: ignore[attr-defined]
             argv,
@@ -528,6 +755,7 @@ def _launch_with_spawn_hook(
             stdout=subprocess.PIPE,  # type: ignore[attr-defined]
             stderr=subprocess.PIPE,  # type: ignore[attr-defined]
             text=True,
+            **popen_kwargs,
         )
     except OSError as exc:
         return LaunchResult(returncode=-1, stderr=str(exc))

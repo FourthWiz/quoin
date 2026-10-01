@@ -394,7 +394,9 @@ This skill uses Sonnet for fast, high-quality implementation. The architectural 
 
 4. **Confirm the task.** Use AskUserQuestion to ask the user which task(s) from the plan they want you to implement. Dynamically populate options from the pending tasks (⏳) in `current-plan.md`:
 
-   **`[autonomous]` branch:** if `_AUTONOMOUS` is set (Session bootstrap step 0), skip `AskUserQuestion` entirely and auto-select "All remaining tasks" — implement every pending (⏳) task in `current-plan.md` in plan order, with no wait for user input. If 0 pending tasks: inform the user "All tasks already implemented." and stop (same as the interactive path below).
+   **Fix scope (checked first, interactive and `[autonomous]`):** when the dispatch prompt carries a line beginning `Fix scope:` followed by `gate <gate audit path>` or `review <review file path>` (plus the failing checks or review issues), skip task selection and the zero-pending stop, fix only the listed items, commit, and return COMPLETE / PASS with `summary` beginning `gate fix applied` or `review fix applied`. The plan check and marker below never run on a scoped dispatch.
+
+   **`[autonomous]` branch:** if `_AUTONOMOUS` is set (Session bootstrap step 0), skip `AskUserQuestion` entirely and auto-select "All remaining tasks" — implement every pending (⏳) task in `current-plan.md` in plan order, with no wait for user input. If 0 pending tasks, run `python3 __QUOIN_HOME__/scripts/plan_tasks.py status --plan "<task_dir>/current-plan.md"` and key on the stdout prefix, never the exit code alone. `ALLDONE|n`: write the marker `$PROJECT_ROOT/.workflow_artifacts/memory/autonomous-progress-{task}/implement.tasks.done` (content `tasks-complete <UTC ISO timestamp> total=<n>`, via `fsops.py write-atomic --parents`) and finish with the COMPLETE / PASS envelope whose `summary` begins `all plan tasks complete`; do NOT write `implement.done` (only the orchestrator writes it, after its gate). `PENDING|`, `UNKNOWN|` or empty output: inform the user "All tasks already implemented." and stop (same as the interactive path below); with an envelope requested, return COMPLETE / PASS with `summary` beginning `no selectable tasks`, and write nothing.
 
    - If 0 pending tasks: inform the user "All tasks already implemented." and stop.
    - If 1 pending task: present it with "Yes, implement it" / "Skip for now".
@@ -738,7 +740,9 @@ This is what `/end_of_day` reads to consolidate the day's work. Without it, this
 
 When all requested tasks are complete:
 1. Run `/gate` **inline** — read `/gate/SKILL.md` from the same session and execute the gate process directly (do not spawn a subagent). The post-implement boundary keeps the parent's cache hot. Step 5 audit-log persistence applies; write `gate-implement-<date>.md` per `/gate/SKILL.md` before yielding control.
-2. **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: __QUOIN_HOME__/core/workflow/handoff-format.md (the shapes below are inlined so a compliant emission rarely needs it):
+2. **Completion marker.** Under `[autonomous]`, after a clean finish (never on the PARTIAL path, never on a scoped dispatch), run the same `plan_tasks.py` check and on `ALLDONE` write the same marker before the envelope, `summary` beginning `all plan tasks complete`.
+
+3. **Final-message branch.** If the dispatch carried `return: envelope`, emit the return envelope as the final message instead of the inline summary below — the orchestrator authors its own checkpoint from the artifacts it re-reads. Full contract: __QUOIN_HOME__/core/workflow/handoff-format.md (the shapes below are inlined so a compliant emission rarely needs it):
 
    Clean finish:
    ```text
@@ -768,5 +772,5 @@ When all requested tasks are complete:
    - **Any deviations from the plan** — brief rationale; "none" if clean.
    - **What remains** — if the §0a scope cap was hit, name the deferred tasks (⏳) and that a fresh `/implement` dispatch is needed; if the clean-finish (no-cap) path, state "nothing — all requested tasks complete."
    - **Artifact location** — `<task_dir>/current-plan.md` — note task status is tracked there and the body is terse and can be `/expand`-ed.
-3. **STOP and wait** — the user must explicitly invoke `/review` to proceed
-4. If the user wants to undo anything, `/rollback` can safely revert specific tasks or the entire phase
+4. **STOP and wait** — the user must explicitly invoke `/review` to proceed
+5. If the user wants to undo anything, `/rollback` can safely revert specific tasks or the entire phase

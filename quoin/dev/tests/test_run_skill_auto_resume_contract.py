@@ -238,7 +238,7 @@ def test_hard_constraint_bullet_no_new_hook_script_wording():
 
 
 # ---------------------------------------------------------------------------
-# autonomous-mode.md coverage: all four knobs, the bound formula, all eight
+# autonomous-mode.md coverage: all four knobs, the bound formula, all nine
 # halt reasons.
 # ---------------------------------------------------------------------------
 
@@ -258,6 +258,7 @@ _HALT_REASONS = (
     "paused by user",
     "supervisor stopped by signal",
     "supervisor error",
+    "phase completion not repaired: <phase>",
 )
 
 

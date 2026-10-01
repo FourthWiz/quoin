@@ -175,12 +175,22 @@ that folder's later archival:
   (`autonomous-halt-{task}.md`); a resuming supervisor checks it after
   the done sentinel, before deciding whether to relaunch again.
 
+A phase MAY record a completion marker (`{phase}.tasks.done`) meaning its
+work is done and its gate is pending. The marker counts toward the union
+glob, is never a resumable sub-phase, and never substitutes for
+`{phase}.done`. A resume into a phase whose plan reports every task done
+runs that phase's gate directly and writes `{phase}.done` only after the
+gate passes. A spent automatic gate retry survives a relaunch and is reset
+only when the run halts for a human.
+
 An adapter supervisor SHOULD give each headless child a session id it
 chose itself, record that id before the child starts, and offer a
 stop-then-attach verb (for example `quoin run --takeover <task>`) that
 confirms the child is stopped before printing the command that resumes it
 interactively. Halt files MAY carry a `takeover_hint:` line pointing at
 that verb; the five-field halt schema is otherwise unchanged.
+
+An adapter that hands a span off from a live interactive session SHOULD let that session watch the child observe-only at a bounded cadence (completion, halt, decision-needed, new completion sentinels, new task-branch commits, process liveness), report terminal conditions and stalls promptly with the takeover pointer, and never drive the run itself; without a background mechanism it prints a one-shot manual check command.
 
 This document fixes only the path templates and the phase-roster
 coverage rule, so independently implemented supervisors and resumers

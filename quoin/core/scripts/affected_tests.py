@@ -128,6 +128,22 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
     (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_supervisor_progress_docs.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_child_watch_contract.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_child_watch_contract.py",
+    ),
+    (
+        "quoin/core/skills/run.md",
+        "quoin/dev/tests/test_child_watch_contract.py",
+    ),
+    (
         "quoin/memory/cost-ledger-format.md",
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
@@ -1602,6 +1618,35 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/core/skills/thorough_plan.md",
         "quoin/dev/tests/test_opencode_generate.py",
+    ),
+    # Completion-marker, retry-budget and headless no-yield prose guards.
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_run_tasks_complete_entry.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/implement/SKILL.md",
+        "quoin/dev/tests/test_implement_autonomous.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/gate/SKILL.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/core/skills/gate.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_headless_no_yield_rule.py",
+    ),
+    (
+        "quoin/core/skills/run.md",
+        "quoin/dev/tests/test_run_tasks_complete_entry.py",
     ),
 )
 

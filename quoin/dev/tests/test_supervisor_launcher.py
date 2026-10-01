@@ -231,7 +231,10 @@ def test_supervise_with_real_launch_fn_reaches_success(tmp_path: Path, monkeypat
     """Wires make_launch_fn into supervise() end-to-end (mocked subprocess.run
     only) to prove the T-06 loop and T-07 launcher compose correctly."""
 
+    recorded = []
+
     def fake_run(argv, **kwargs):
+        recorded.append(list(argv))
         if argv[:2] == ["git", "rev-parse"]:
             return _FakeCompleted(returncode=0, stdout=str(tmp_path) + "\n")
         # Simulate the relaunch doing real work: write a completion sentinel,
@@ -256,3 +259,6 @@ def test_supervise_with_real_launch_fn_reaches_success(tmp_path: Path, monkeypat
         "demo-task", tmp_path, launch_fn=launch_fn, max_relaunch=5, clock=_FakeClock()
     )
     assert result.status == "SUCCESS"
+    # The progress probe must not spawn git on a root without a .git entry.
+    assert not [a for a in recorded if a[:2] == ["git", "-C"]]
+    assert len([a for a in recorded if a and a[0] == "claude"]) == 2

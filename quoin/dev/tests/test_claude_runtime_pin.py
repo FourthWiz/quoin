@@ -77,7 +77,8 @@ def test_module_constants():
         "Read", "Write", "Edit", "Bash", "Glob", "Grep",
         "Agent", "Skill", "TaskCreate", "TaskUpdate",
     )
-    assert sup.DEFAULT_LAUNCH_TIMEOUT_SECONDS == 1800.0
+    assert sup.DEFAULT_LAUNCH_TIMEOUT_SECONDS == 5400.0
+    assert sup.LAUNCH_TIMEOUT_ENV == "QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS"
     assert sup.DEFAULT_MAX_RELAUNCH == 10
     fields = [(f.name, f.default) for f in dataclasses.fields(sup.LaunchResult)]
     assert fields[0][0] == "returncode"
@@ -125,7 +126,7 @@ def test_launch_kwargs_exact(monkeypatch, tmp_path, mode):
         "stdin": subprocess.DEVNULL,
         "capture_output": True,
         "text": True,
-        "timeout": 1800.0,
+        "timeout": 5400.0,
     }
     assert resolved == [tmp_path / "proj"]
     assert (res.returncode, res.stdout, res.stderr, res.timed_out) == (0, "o", "e", False)
@@ -227,6 +228,8 @@ def _patch_run(monkeypatch, supervise_fn):
 
 @pytest.mark.parametrize("mode", ["allowedTools", "bypassPermissions"])
 def test_run_wiring(monkeypatch, project, mode):
+    for name in ("QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS", "QUOIN_SUPERVISOR_REPAIR_RELAUNCHES", "QUOIN_SUPERVISOR_HEAD_PROBE"):
+        monkeypatch.delenv(name, raising=False)
     made, sup_calls = _patch_run(
         monkeypatch, lambda *a, **k: sup.SuperviseResult("SUCCESS")
     )
@@ -234,11 +237,18 @@ def test_run_wiring(monkeypatch, project, mode):
     if mode != "allowedTools":
         argv += ["--permission-mode", mode]
     assert cli.main(argv) == 0
-    assert made == [((project.resolve(),), {"permission_mode": mode})]
+    assert len(made) == 1
+    made_args, made_kwargs = made[0]
+    assert made_args == (project.resolve(),)
+    assert set(made_kwargs) == {"permission_mode", "timeout", "env"}
+    assert made_kwargs["permission_mode"] == mode
+    assert made_kwargs["timeout"] == 5400.0
+    assert made_kwargs["env"]["QUOIN_HEADLESS_CHILD"] == "1"
     args, kwargs = sup_calls[0]
     assert args == ("demo", project.resolve())
-    assert set(kwargs) == {"launch_fn", "max_relaunch"}
+    assert set(kwargs) == {"launch_fn", "max_relaunch", "repair_allowance"}
     assert kwargs["max_relaunch"] == 10
+    assert kwargs["repair_allowance"] == 2
 
 
 def test_run_max_relaunch_passthrough(monkeypatch, project):
@@ -268,7 +278,7 @@ def test_lock_payload_bytes(monkeypatch, project):
 def test_halt_and_result_text(monkeypatch, project):
     made_calls = {"n": 0}
 
-    def fake_supervise(task, root, *, launch_fn, max_relaunch):
+    def fake_supervise(task, root, *, launch_fn, max_relaunch, **kwargs):
         for _ in range(3):
             launch_fn(task)
         return sup.SuperviseResult("ABORTED", "relaunch cap", 7)
@@ -297,7 +307,7 @@ def test_halt_and_result_text(monkeypatch, project):
 
 
 def test_relaunch_counter_vs_stdout_counter(monkeypatch, project, capsys):
-    def fake_supervise(task, root, *, launch_fn, max_relaunch):
+    def fake_supervise(task, root, *, launch_fn, max_relaunch, **kwargs):
         for _ in range(3):
             launch_fn(task)
         return sup.SuperviseResult("ABORTED", "relaunch cap", 7)
