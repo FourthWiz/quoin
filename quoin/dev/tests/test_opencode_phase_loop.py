@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
 import signal
 
 import pytest
@@ -277,6 +278,31 @@ def test_first_signal_number_is_kept():
     assert token.signum == 15 and token.is_set()
 
 
+def test_second_cancel_never_reenters_the_handle():
+    token = phase_loop.CancelToken()
+    calls = []
+
+    class Handle:
+        def request_cancel(self):
+            calls.append(1)
+            token.cancel(signal.SIGINT)  # a nested signal during the request
+
+    token.attach(Handle())
+    token.cancel(signal.SIGTERM)
+    token.cancel(signal.SIGINT)
+    assert calls == [1] and token.signum == signal.SIGTERM
+
+
+def test_request_cancel_touches_no_threading_primitive():
+    handle = driver.RuntimeHandle(start_sequence=1)
+    assert handle.cancel_requested is False
+    handle.record_lock = handle.cancel_lock = handle.tracked_lock = None
+    handle.closing = None
+    handle.request_cancel()
+    assert handle.cancel_requested is True
+    assert "Event" not in inspect.getsource(driver.RuntimeHandle.request_cancel).split('"""')[-1]
+
+
 # --- refusals -------------------------------------------------------------------
 
 
@@ -293,6 +319,16 @@ def test_prepare_refused_on_resume_prepare(tmp_path):
     drv.prepare_errors[1] = driver.PrepareRefused("invalid-configuration", "changed", "config changed")
     r, *_ = go(tmp_path, [], drv=drv)
     assert r.outcome == "REFUSED" and r.refusal["code"] == "changed" and r.run_id
+
+
+def test_prepare_refused_message_is_redacted(tmp_path):
+    token = "sk-" + "aB3" * 10
+    drv = ScriptedDriver(tmp_path, [])
+    drv.prepare_errors[0] = driver.PrepareRefused(
+        "invalid-configuration", "bad-layer", "layer says " + token)
+    r, *_ = go(tmp_path, [], drv=drv)
+    assert r.outcome == "REFUSED"
+    assert token not in r.refusal["message"] and "<redacted>" in r.refusal["message"]
 
 
 @pytest.mark.parametrize("where", ["start", "resume"])
@@ -404,7 +440,16 @@ def test_corrupt_checkpoint_is_interrupted(tmp_path):
     runstore.write_checkpoint(drv.directory, {"schema_version": 1, "run_id": run_id})
     r, drv, *_ = go(tmp_path, [], drv=drv)
     assert (r.outcome, r.reason) == ("INTERRUPTED", "checkpoint-invalid")
+    assert r.resume_blocked == "checkpoint-invalid"
+    assert "checkpoint-invalid" in phase_loop.LOOP_BLOCK_REASONS
+    assert "checkpoint-invalid" not in driver.RESUME_BLOCK_REASONS
     assert "resume" not in drv.names()
+    ident = {"task": TASK, "stage": None, "phase": "plan", "profile": "work"}
+    hint = phase_loop.resume_hint(r, ident, tmp_path)
+    assert hint.endswith(" --new-run")
+    phase_loop.annotate_record(tmp_path, r.run_id, hint, r.resume_blocked)
+    stored = runstore.load_record(drv.directory, r.run_id)
+    assert stored["resume_blocked"] == "checkpoint-invalid" and stored["resume_hint"] == hint
 
 
 def test_valid_checkpoint_reaches_resume(tmp_path):
@@ -544,7 +589,7 @@ def test_exit_codes():
 
 def test_resume_hint_text():
     ident = {"task": "demo", "stage": None, "phase": "plan", "profile": "work"}
-    interrupted = phase_loop.PhaseResult("INTERRUPTED")
+    interrupted = phase_loop.PhaseResult("INTERRUPTED", run_state="interrupted")
     assert phase_loop.resume_hint(interrupted, ident, "/p q") == (
         "quoin run --runtime opencode --profile work --phase plan demo --project-root '/p q'"
     )
@@ -554,6 +599,39 @@ def test_resume_hint_text():
     assert phase_loop.resume_hint(blocked, ident, "/p").endswith(" --new-run")
     assert phase_loop.resume_hint(phase_loop.PhaseResult("COMPLETED"), ident, "/p") is None
     assert phase_loop.resume_hint(phase_loop.PhaseResult("REFUSED"), ident, "/p") is None
+
+
+def _result(outcome, run_state=None, blocked=None):
+    return phase_loop.PhaseResult(outcome, run_state=run_state, resume_blocked=blocked)
+
+
+@pytest.mark.parametrize("result,new_run", [
+    (_result("FAILED", "failed"), True),
+    (_result("ABORTED", "failed"), True),
+    (_result("CANCELLED", "cancelled"), True),
+    (_result("CANCELLED", "interrupted"), False),
+    (_result("AWAITING_APPROVAL", "awaiting_approval"), True),
+    (_result("COMPLETED_UNVERIFIED", "completed"), True),
+    (_result("ERROR", "interrupted"), False),
+    (_result("ERROR", None), True),
+    (_result("INTERRUPTED", "interrupted", "session-lost"), True),
+    (_result("INTERRUPTED", "interrupted"), False),
+])
+def test_resume_hint_appends_new_run_only_when_the_next_run_would_not_resume(result, new_run):
+    ident = {"task": "demo", "stage": None, "phase": "plan", "profile": "work"}
+    assert phase_loop.resume_hint(result, ident, "/p").endswith(" --new-run") is new_run
+
+
+@pytest.mark.parametrize("record", [
+    {"pid": 5, "pgid": 0}, {"pid": 5, "pgid": 1}, {"pid": 1, "pgid": None},
+    {"pid": True, "pgid": True}, {"pid": 5, "pgid": os.getpgrp()},
+])
+def test_stale_message_never_hints_a_dangerous_kill(record):
+    message = phase_loop._stale_run_message({"run_id": "r", "task": "t", "attempts": [record]})
+    if record["pid"] == 5:
+        assert "kill -TERM -" not in message and "kill -TERM 5" in message
+    else:
+        assert "kill" not in message
 
 
 def test_summary_key_set():

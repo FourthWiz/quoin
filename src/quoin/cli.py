@@ -1608,7 +1608,9 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                 hint = phase_loop.resume_hint(result, ident, project_root)
                 if result.run_id and hint:
                     try:
-                        phase_loop.annotate_record(project_root, result.run_id, hint)
+                        phase_loop.annotate_record(
+                            project_root, result.run_id, hint, result.resume_blocked
+                        )
                     except Exception:  # noqa: BLE001 - the hint still reaches the summary
                         pass
                 if args.halt_on_abort and not paths["result"].exists():

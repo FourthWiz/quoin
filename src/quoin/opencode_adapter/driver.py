@@ -504,7 +504,7 @@ class RuntimeHandle:
         # Serialises termination so it runs once.
         self.cancel_lock = threading.Lock()
         self.tracked_lock = threading.Lock()
-        self.cancel_event = threading.Event()
+        self.cancel_requested = False
         self.closing = threading.Event()
         self.cancel_result: Optional[CancellationResult] = None
         self.terminated_reason: Optional[str] = None
@@ -523,9 +523,11 @@ class RuntimeHandle:
         self.started_yielded = False
 
     def request_cancel(self) -> None:
-        """Ask for cancellation without blocking or taking any lock; safe from
-        a signal handler. The observer (or `cancel`) does the terminating."""
-        self.cancel_event.set()
+        """Ask for cancellation by setting a plain attribute. It touches no
+        lock and no threading primitive, so it is safe from a signal handler
+        that interrupted code holding either. The observer (or `cancel`) does
+        the terminating."""
+        self.cancel_requested = True
 
     @property
     def terminated(self) -> bool:
@@ -1420,7 +1422,7 @@ class OpenCodeDriver:
                 yield handle.started_event
         while True:
             if not handle.terminated:
-                if handle.cancel_event.is_set():
+                if handle.cancel_requested:
                     self._terminate_once(handle, "cancel")
                 elif self._monotonic() >= handle.deadline:
                     self._terminate_once(handle, "timeout")

@@ -12,6 +12,7 @@ lazily, and only to reach the default backoff.
 """
 from __future__ import annotations
 
+import os
 import shlex
 import signal as _signal
 import time
@@ -31,6 +32,9 @@ OUTCOMES: Tuple[str, ...] = (
     "REFUSED",
     "ERROR",
 )
+
+# Block reasons the phase loop itself reports; the driver owns its own set.
+LOOP_BLOCK_REASONS: Tuple[str, ...] = ("checkpoint-invalid",)
 
 _WAIT_SLICE_S = 0.2
 
@@ -69,6 +73,9 @@ class CancelToken:
     def cancel(self, signum: Optional[int] = None) -> None:
         if self.signum is None and signum is not None:
             self.signum = signum
+        if self._flag:
+            # A second signal must not re-enter the handle's cancel path.
+            return
         self._flag = True
         handle = self._handle
         if handle is not None:
@@ -133,20 +140,31 @@ def artifact_coverage(record: Optional[Mapping[str, Any]]) -> str:
     return "full"
 
 
-def annotate_record(project_root: Any, run_id: str, hint: str) -> None:
-    """Store the resume hint in the run record. Call only while holding the
-    task lock: the driver takes no record lock of its own."""
+def annotate_record(
+    project_root: Any, run_id: str, hint: str, resume_blocked: Optional[str] = None
+) -> None:
+    """Store the resume hint (and the block reason, when there is one) in the
+    run record. Call only while holding the task lock: the driver takes no
+    record lock of its own."""
     directory = runstore.store_dir(project_root)
     record = runstore.load_record(directory, run_id)
     if record is None:
         return
     record["resume_hint"] = hint
+    if resume_blocked:
+        record["resume_blocked"] = resume_blocked
     runstore.write_record(directory, record)
 
 
 def _last_attempt(record: Optional[Mapping[str, Any]]) -> Mapping[str, Any]:
     attempts = (record or {}).get("attempts") or []
     return attempts[-1] if attempts and isinstance(attempts[-1], Mapping) else {}
+
+
+def _is_pid(value: Any) -> bool:
+    """A real process or group id worth naming in a kill hint: an int above 1
+    (0 and 1 would address the caller's group or init)."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 1
 
 
 def _stale_run_message(record: Mapping[str, Any]) -> str:
@@ -158,13 +176,13 @@ def _stale_run_message(record: Mapping[str, Any]) -> str:
         "run %s for %s still reads running, but the quoin run that drove it has exited"
         % (run_id, task)
     )
-    if isinstance(pgid, int) and not isinstance(pgid, bool):
+    if _is_pid(pgid) and pgid != os.getpgrp():
         return (
             "%s; its opencode child may still be alive (pid %s, process group %d). "
             "Check with: ps -o pid,command -g %d; stop it with: kill -TERM -%d; "
             "then start over with --new-run" % (head, pid, pgid, pgid, pgid)
         )
-    if isinstance(pid, int) and not isinstance(pid, bool):
+    if _is_pid(pid):
         return (
             "%s; its opencode child may still be alive (pid %d). "
             "Check with: ps -p %d; stop it with: kill -TERM %d; "
@@ -308,9 +326,12 @@ def run_phase(
             else:
                 handle = drv.resume(handoff, prepared, deadline_s=deadline)
         except _CheckpointInvalid:
-            return finish("INTERRUPTED", "checkpoint-invalid")
+            return finish("INTERRUPTED", "checkpoint-invalid", resume_blocked="checkpoint-invalid")
         except driver.PrepareRefused as exc:
-            return refused(exc.category, exc.code, exc.message, exc.run_id)
+            redact = getattr(getattr(prepared, "launch_env", None), "redactor", None)
+            if redact is None:
+                redact = launch_env.Redactor()
+            return refused(exc.category, exc.code, redact(exc.message), exc.run_id)
         except launch_env.LaunchRefused as exc:
             redact = getattr(getattr(prepared, "launch_env", None), "redactor", None)
             if redact is None:
@@ -419,7 +440,8 @@ def resume_hint(result: PhaseResult, ident: Mapping[str, Any], project_root: Any
     if ident.get("stage") is not None:
         parts += ["--stage", shlex.quote(str(ident["stage"]))]
     parts += [shlex.quote(str(ident["task"])), "--project-root", shlex.quote(str(project_root))]
-    if result.resume_blocked:
+    resumable = result.run_state == "interrupted" and result.resume_blocked is None
+    if not resumable:
         parts.append("--new-run")
     return " ".join(parts)
 
