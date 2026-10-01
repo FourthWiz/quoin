@@ -815,6 +815,7 @@ def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
     source_dir = _resolve_source_dir(args.source_dir)
     from quoin.opencode_adapter import doctor
 
+    profile = getattr(args, "profile", None)
     return doctor.run_doctor(
         args.project_root,
         source_dir,
@@ -822,6 +823,8 @@ def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
         args.json,
         sys.stdout,
         sys.stderr,
+        profile=profile,
+        config_env=_opencode_config_env() if profile is not None else None,
     )
 
 
@@ -935,6 +938,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     scope: str = getattr(args, "scope", None) or "user"
     if scope.startswith("project") and args.runtime == "opencode":
         _abort("quoin: --scope project is only valid with --runtime claude")
+    if getattr(args, "profile", None) is not None:
+        if args.runtime != "opencode":
+            _abort("quoin: --profile is only valid with --runtime opencode")
+        if getattr(args, "smoke", False):
+            _abort(
+                "quoin: --profile cannot be combined with --smoke; "
+                "the smoke checks are offline and read no profile"
+            )
 
     if args.runtime == "opencode":
         return _cmd_opencode_doctor(args)
@@ -2052,6 +2063,16 @@ def main(argv: list[str] | None = None) -> int:
         "--json",
         action="store_true",
         help="Only valid with --runtime opencode: print a machine-readable report.",
+    )
+    doctor_p.add_argument(
+        "--profile",
+        default=None,
+        metavar="PROFILE",
+        help=(
+            "Only valid with --runtime opencode (not with --smoke): also evaluate this "
+            "profile's configuration the way a phase run does and report what would "
+            "refuse it. Credentials are never resolved."
+        ),
     )
 
     codex_p = sub.add_parser(

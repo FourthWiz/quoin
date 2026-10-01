@@ -434,3 +434,127 @@ def test_pid_alive_rule():
     assert runstore.pid_alive(7, table) is False
     assert runstore.pid_alive(True, table) is False
     assert runstore.pid_alive(5, None) is None
+
+
+# --- optional profile checks ------------------------------------------------------
+
+
+from types import SimpleNamespace as _NS  # noqa: E402
+
+from _opencode_merge_helpers import (  # noqa: E402
+    NOW, PROFILE_PERSONAL, World,
+)
+from quoin.opencode_adapter import categories, compiler, paths as adapter_paths  # noqa: E402
+
+
+@pytest.fixture
+def profiled(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", _which_none)
+    w = World(tmp_path, agents=False)
+    (w.root / ".git").mkdir(exist_ok=True)
+    source_dir = helpers.copy_source_subset(tmp_path / "src")
+    rendered = generate.render_source_dir(source_dir)
+    assert install.run_install(w.root, source_dir, None, False, _Sink(), _Sink(), rendered=rendered) == 0
+    w.source = source_dir
+    return w
+
+
+def profile_run(w, profile="work", **kw):
+    return doctor.run_host(
+        w.root, w.source, dict(w.env, HOME=str(w.home)), w.home, _which_none, None,
+        proc_snapshot=lambda: None, profile=profile, config_env=w.env, now=NOW, **kw)
+
+
+def profile_ids(findings):
+    return {f.id: f for f in findings if f.id.startswith(("runtime-config", "runtime-gateway", "runtime-compile", "runtime-profile", "runtime-adapter"))}
+
+
+def test_clean_profile_is_launchable(profiled):
+    found = profile_ids(profile_run(profiled))
+    assert set(found) == {"runtime-profile-launchable"} and found["runtime-profile-launchable"].severity == "ok"
+
+
+def test_no_profile_flag_emits_no_profile_findings(profiled):
+    findings = doctor.run_host(profiled.root, profiled.source, dict(profiled.env, HOME=str(profiled.home)),
+                               profiled.home, _which_none, None, proc_snapshot=lambda: None)
+    assert profile_ids(findings) == {}
+
+
+def test_unknown_profile_is_invalid_configuration(profiled):
+    found = profile_ids(profile_run(profiled, profile="nope"))
+    f = found["runtime-config-invalid"]
+    assert f.severity == "error" and "profile-not-found" in f.message
+    assert categories.category_for(f.id) == "invalid-configuration"
+
+
+def test_policy_class_is_a_policy_denial(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", _which_none)
+    project = {"schema_version": 1, "runtime": "opencode", "profile": "personal", "classification": "work"}
+    w = World(tmp_path, profile=PROFILE_PERSONAL, project=project, agents=False, records=False)
+    (w.root / ".git").mkdir(exist_ok=True)
+    w.source = helpers.copy_source_subset(tmp_path / "src")
+    found = profile_ids(profile_run(w, profile=w.profile["profile"]))
+    f = found["runtime-config-policy-denied"]
+    assert "personal-profile-for-work" in f.message
+    assert categories.category_for(f.id) == "policy-denial"
+
+
+def test_missing_qualification_is_an_unqualified_gateway(profiled):
+    for path in list((profiled.tmp / "xdg" / "quoin" / "opencode" / "qualifications").glob("*.json")):
+        path.unlink()
+    found = profile_ids(profile_run(profiled))
+    assert set(found) == {"runtime-gateway-unqualified"}
+    assert categories.category_for("runtime-gateway-unqualified") == "unqualified-gateway"
+
+
+@pytest.mark.parametrize("reason", ["provider-excluded", "classification-incompatible"])
+def test_role_blocks_report_as_compile_blocked_like_the_driver(profiled, monkeypatch, reason):
+    blocker = _NS(code="role-blocked", subject=("planner", reason))
+    monkeypatch.setattr(compiler, "launchable", lambda ev: False)
+    monkeypatch.setattr(compiler, "compile_blockers", lambda ev: (blocker,))
+    found = profile_ids(profile_run(profiled))
+    assert set(found) == {"runtime-compile-blocked"} and "role-blocked" in found["runtime-compile-blocked"].message
+    assert categories.category_for("runtime-compile-blocked") == "invalid-configuration"
+
+
+def test_missing_adapter_data_never_escapes(profiled, monkeypatch):
+    def gone(**kw):
+        raise adapter_paths.AdapterDataMissing()
+
+    monkeypatch.setattr(compiler, "evaluate", gone)
+    found = profile_ids(profile_run(profiled))
+    assert set(found) == {"runtime-adapter-data-missing"}
+
+
+def test_profile_findings_carry_no_configuration_values(profiled, tmp_path):
+    secret = "sk-" + "Zq9" * 10
+    profiled.profile["note"] = secret
+    profiled.write()
+    text = doctor.render_text(profile_run(profiled), "warnings")
+    assert secret not in text
+
+
+def test_every_message_has_a_category_after_the_profile_ids():
+    assert set(doctor.MESSAGES) == set(categories.FINDING_CATEGORIES)
+
+
+def test_profile_flag_is_rejected_with_smoke_and_other_runtimes(capsys, tmp_path):
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["doctor", "--runtime", "opencode", "--smoke", "--profile", "work"])
+    assert raised.value.code == 2 and "--smoke" in capsys.readouterr().err
+    with pytest.raises(SystemExit) as raised:
+        cli.main(["doctor", "--runtime", "claude", "--profile", "work"])
+    assert raised.value.code == 2 and "--runtime opencode" in capsys.readouterr().err
+
+
+def test_cli_profile_check_through_main(profiled, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", profiled.env["XDG_CONFIG_HOME"])
+    monkeypatch.setenv("XDG_STATE_HOME", profiled.env["XDG_STATE_HOME"])
+    monkeypatch.setenv("HOME", str(profiled.home))
+    monkeypatch.setattr(Path, "home", lambda: profiled.home)
+    code = cli.main(["doctor", "--runtime", "opencode", "--json", "--profile", "nope",
+                     "--project-root", str(profiled.root), "--source-dir", str(profiled.source)])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1
+    assert any(f["id"] == "runtime-config-invalid" and f["category"] == "invalid-configuration"
+               for f in payload["findings"])

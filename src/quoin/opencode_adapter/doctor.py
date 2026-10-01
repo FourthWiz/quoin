@@ -108,6 +108,12 @@ MESSAGES: Dict[str, str] = {
     "runtime-stale-lock": "the supervisor lock for task %(name)s names an OpenCode run that is no longer alive",
     "runtime-command-agent-not-primary": "an installed phase command does not select an installed primary agent",
     "runtime-plugin-directory-present": "an OpenCode plugin directory holds plugin files, so phase runs are refused while it does",
+    "runtime-config-invalid": "the profile's configuration has %(count)s error(s) of class %(name)s",
+    "runtime-config-policy-denied": "the profile's configuration was refused by policy (class %(name)s, %(count)s occurrence(s))",
+    "runtime-adapter-data-missing": "the packaged adapter data was not found",
+    "runtime-gateway-unqualified": "a role's model has no valid gateway qualification",
+    "runtime-compile-blocked": "the profile cannot be compiled for OpenCode (%(names)s)",
+    "runtime-profile-launchable": "the profile's configuration compiles and is launchable",
 }
 
 _REMEDIATIONS: Dict[str, str] = {
@@ -138,6 +144,11 @@ _REMEDIATIONS: Dict[str, str] = {
     "runtime-stale-lock": "re-run the phase with `quoin run --runtime opencode ...`, which reclaims a dead lock, or remove the lock file",
     "runtime-command-agent-not-primary": "re-run `quoin install --runtime opencode` to restore the command and agent files",
     "runtime-plugin-directory-present": "move the plugin files out of the OpenCode plugin directories for the duration of a run, or run with a separate XDG_CONFIG_HOME; the launcher refuses rather than trust plugin code with the approval flow",
+    "runtime-config-invalid": "run `quoin opencode config explain --profile PROFILE` to see where each value comes from",
+    "runtime-config-policy-denied": "run `quoin opencode config explain --profile PROFILE`; a policy refusal is not worked around by editing the profile",
+    "runtime-adapter-data-missing": "reinstall quoin",
+    "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the pinned OpenCode version",
+    "runtime-compile-blocked": "run `quoin opencode config explain --profile PROFILE` to see the blocking findings",
     "permission-loosened": "a generated role's own permission can override a stricter user config while that role runs directly; narrow the role's own permission map instead of the user config",
 }
 
@@ -504,6 +515,9 @@ def run_doctor(
     which=None,
     version_runner=None,
     proc_snapshot=None,
+    profile=None,
+    config_env=None,
+    now=None,
 ) -> int:
     """Run the doctor and print a report to `out`. `env`, `home`, `which`
     and `version_runner` default at call time (not at definition time), so
@@ -526,6 +540,9 @@ def run_doctor(
                 __import__("shutil").which if which is None else which,
                 version_runner,
                 proc_snapshot=proc_snapshot,
+                profile=profile,
+                config_env=config_env,
+                now=now,
             )
     except (ValueError, OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         # Last-resort boundary: nothing here may reach `out`/`err` except
@@ -1114,7 +1131,62 @@ def _runtime_findings(root: Path, env, home, roots, proc_snapshot=None) -> List[
     return findings
 
 
-def run_host(project_root, source_dir, env, home, which, version_runner, *, proc_snapshot=None) -> List[Finding]:
+def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> List[Finding]:
+    """Evaluate one profile's configuration the way a phase run does and
+    report what would refuse it. Opt-in, configuration only: credentials are
+    never resolved, and the text is built only from closed sets (class names,
+    finding codes, counts), never from a configuration value."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from . import categories, compiler, roles  # noqa: PLC0415
+    from . import paths as adapter_paths  # noqa: PLC0415
+    from .errors import ConfigErrors  # noqa: PLC0415
+
+    try:
+        evaluation = compiler.evaluate(
+            project_root=root, profile=profile, env=dict(config_env), home=home,
+            now=now if now is not None else datetime.now(timezone.utc),
+        )
+    except ConfigErrors as exc:
+        by_class: Dict[str, int] = {}
+        for error in exc.errors:
+            cls = error.rejection_class
+            if cls not in categories.CONFIG_CLASS_CATEGORIES:
+                cls = "config-invalid"
+            by_class[cls] = by_class.get(cls, 0) + 1
+        if not by_class:
+            by_class["config-invalid"] = 1
+        found: List[Finding] = []
+        for cls in sorted(by_class):
+            policy = categories.CONFIG_CLASS_CATEGORIES.get(cls) == "policy-denial"
+            found.append(make_finding(
+                "runtime-config-policy-denied" if policy else "runtime-config-invalid",
+                "error", name=cls, count=by_class[cls],
+            ))
+        return found
+    except roles.AllowUnqualifiedRefused:
+        return [make_finding("runtime-config-policy-denied", "error", name="allow-unqualified-refused", count=1)]
+    except adapter_paths.AdapterDataMissing:
+        return [make_finding("runtime-adapter-data-missing", "error")]
+
+    if compiler.launchable(evaluation):
+        return [make_finding("runtime-profile-launchable", "ok")]
+    blockers = compiler.compile_blockers(evaluation)
+    unqualified = all(
+        f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
+        for f in blockers
+    )
+    if blockers and not unqualified:
+        return [make_finding(
+            "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
+        )]
+    return [make_finding("runtime-gateway-unqualified", "error")]
+
+
+def run_host(
+    project_root, source_dir, env, home, which, version_runner, *,
+    proc_snapshot=None, profile=None, config_env=None, now=None,
+) -> List[Finding]:
     """Host-environment checks: install state, manifest drift, config,
     rules fallback, skill-discovery census, flags and PATH/binary, and the
     runtime-driver checks. `proc_snapshot` replaces the process-table read
@@ -1152,6 +1224,8 @@ def run_host(project_root, source_dir, env, home, which, version_runner, *, proc
     findings.extend(_path_findings(which))
     findings.extend(_binary_findings(which, version_runner, source_dir))
     findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
+    if profile is not None:
+        findings.extend(_profile_findings(root, profile, config_env or {}, Path(home), now))
 
     return findings
 

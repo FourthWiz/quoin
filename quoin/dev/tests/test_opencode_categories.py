@@ -21,7 +21,7 @@ def test_categories_match_the_driver_refusal_categories():
 
 
 def test_every_finding_id_has_a_category():
-    assert set(doctor.MESSAGES) <= set(categories.FINDING_CATEGORIES)
+    assert set(doctor.MESSAGES) == set(categories.FINDING_CATEGORIES)
     assert set(categories.FINDING_CATEGORIES.values()) <= set(categories.CATEGORIES)
     for finding_id in doctor.MESSAGES:
         assert categories.category_for(finding_id) in categories.CATEGORIES
