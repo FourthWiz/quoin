@@ -6,6 +6,7 @@ Layout, under `memory/runtime/opencode/` in the project's artifact root:
     RUN_ID.run.json         run record (rewritten atomically)
     RUN_ID.checkpoint.json  resume checkpoint (rewritten atomically)
     task-TASK.json          pointer from a task to its latest run
+    workflow-TASK.json      workflow evidence record for a task's gated phases
 
 The directory is created mode 700 and every component from
 the artifact root down must be a real directory, never a symlink. Files
@@ -960,6 +961,175 @@ def repo_revisions(
             "max_source_bytes": max_source_bytes, "max_untracked_files": max_untracked_files,
         }
     return [_repo_entry(repo, root, run, deadline, options) for repo in repos]
+
+
+# ---------------------------------------------------------------------------
+# workflow state
+# ---------------------------------------------------------------------------
+
+WORKFLOW_KIND = "quoin-opencode-workflow"
+WORKFLOW_PHASES = ("discover", "architect", "plan", "critic", "implement", "review")
+GATED_PHASES = ("discover", "architect", "plan", "implement", "review")
+EVIDENCE_ORIGINS = ("coordinator", "phase-run", "adopted", "continuation")
+STAGELESS_PHASES = ("discover", "architect")
+
+# Run phases each gated phase accepts, taken from the commands the shipped
+# feature manifest marks supported. A plan is produced by `plan` or by
+# `thorough_plan` and may also list the critic runs of its loop; `revise` has
+# no supported command, so a run of it never completes and is not listed.
+RUN_PHASES_FOR = {
+    "discover": frozenset({"discover"}),
+    "architect": frozenset({"architect"}),
+    "plan": frozenset({"plan", "thorough_plan", "critic"}),
+    "implement": frozenset({"implement"}),
+    "review": frozenset({"review"}),
+}
+PLAN_PRODUCER_PHASES = frozenset({"plan", "thorough_plan"})
+
+# These phases have a supported OpenCode command and run under `--phase`, but
+# never record a gated entry: a gate run evaluates entries, checkpoint and
+# continue_work only save or restore session state, and end_of_task ships work
+# that was already gated. A phase added to the manifest as runnable must be
+# mapped by `entry_phase_for_run` or listed here.
+UNMAPPED_RUN_PHASES = ("gate", "checkpoint", "continue_work", "end_of_task")
+
+_ENTRY_PHASE_FOR_RUN = {
+    "discover": "discover",
+    "architect": "architect",
+    "plan": "plan",
+    "thorough_plan": "plan",
+    "critic": "plan",
+    "implement": "implement",
+    "review": "review",
+}
+
+
+def normalize_phase(phase: Any) -> str:
+    """The run phase spelling used everywhere: hyphens become underscores."""
+    return str(phase).replace("-", "_")
+
+
+def normalize_stage(value: Any) -> Optional[int]:
+    """A stage as an int or None. The CLI passes `--stage` through as text,
+    so digit strings are accepted; anything else raises `ValueError`."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("invalid stage")
+    if isinstance(value, int):
+        if value >= 1:
+            return value
+        raise ValueError("invalid stage")
+    if isinstance(value, str) and value.isascii() and value.isdigit() and int(value) >= 1:
+        return int(value)
+    raise ValueError("invalid stage")
+
+
+def entry_phase_for_run(run_phase: Any) -> Optional[str]:
+    """The gated entry a single-phase run records, or None when it records
+    none. A critic run changes the plan stage's evidence, so it maps to plan."""
+    return _ENTRY_PHASE_FOR_RUN.get(normalize_phase(run_phase))
+
+
+def workflow_state_path(directory: Path, task: str) -> Path:
+    return _checked(directory, "workflow-%s.json" % check_task_name(task))
+
+
+def new_workflow_state(task: str, clock: Callable[[], float] = time.time) -> Dict[str, Any]:
+    now = _now(clock)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": WORKFLOW_KIND,
+        "task": check_task_name(task),
+        "created_at": now,
+        "updated_at": now,
+        "settings": {},
+        "entries": [],
+    }
+
+
+def load_workflow_state(directory: Path, task: str) -> Optional[Dict[str, Any]]:
+    """The task's workflow state, `None` when absent. A damaged, foreign or
+    other-task file is an error, never silently replaced."""
+    data = read_json(workflow_state_path(directory, task))
+    if data is None:
+        return None
+    if (
+        data.get("kind") != WORKFLOW_KIND
+        or not isinstance(data.get("entries"), list)
+        or not isinstance(data.get("settings"), dict)
+    ):
+        raise RunStoreError("corrupt-record")
+    if data.get("task") != task:
+        raise RunStoreError("state-task-mismatch")
+    return data
+
+
+def write_workflow_state(directory: Path, state: Mapping[str, Any]) -> None:
+    atomic_write_json(workflow_state_path(directory, state["task"]), state)
+
+
+def _new_entry(entry: Mapping[str, Any], clock: Callable[[], float]) -> Dict[str, Any]:
+    phase = entry.get("phase")
+    origin = entry.get("origin")
+    if phase not in WORKFLOW_PHASES:
+        raise ValueError("invalid phase")
+    if origin not in EVIDENCE_ORIGINS:
+        raise ValueError("invalid origin")
+    stage = normalize_stage(entry.get("stage"))
+    if phase in STAGELESS_PHASES and stage is not None:
+        raise ValueError("stage not allowed for this phase")
+    full: Dict[str, Any] = {
+        "stage": stage,
+        "phase": phase,
+        "origin": origin,
+        "recorded_at": _now(clock),
+        "superseded": False,
+        "runs": [],
+        "boundary": None,
+        "critic_responses": [],
+        "harvested": [],
+        "envelope_path": None,
+        "tests": None,
+        "continuation_validation": None,
+        "ledger_uuids": [],
+        "ledger_lines_appended_during_run": [],
+        "evidence": {},
+        "gate": None,
+    }
+    for key, value in entry.items():
+        if key not in ("stage", "phase", "origin", "superseded"):
+            full[key] = value
+    return full
+
+
+def record_phase_entry(
+    state: Dict[str, Any], entry: Mapping[str, Any], clock: Callable[[], float] = time.time,
+) -> Dict[str, Any]:
+    """Append an entry; every earlier live entry for the same stage and phase
+    is kept as history and marked superseded."""
+    new = _new_entry(entry, clock)
+    for old in state["entries"]:
+        if old.get("stage") == new["stage"] and old.get("phase") == new["phase"] and not old.get("superseded"):
+            old["superseded"] = True
+    state["entries"].append(new)
+    state["updated_at"] = _now(clock)
+    return new
+
+
+def current_entry(state: Mapping[str, Any], stage: Optional[int], phase: str) -> Optional[Dict[str, Any]]:
+    """The latest non-superseded entry for a stage and phase."""
+    for entry in reversed(state.get("entries") or []):
+        if entry.get("stage") == stage and entry.get("phase") == phase and not entry.get("superseded"):
+            return entry
+    return None
+
+
+def update_current_entry(state: Dict[str, Any], stage: Optional[int], phase: str, **fields: Any) -> Optional[Dict[str, Any]]:
+    entry = current_entry(state, stage, phase)
+    if entry is not None:
+        entry.update(fields)
+    return entry
 
 
 # ---------------------------------------------------------------------------
