@@ -292,6 +292,24 @@ def run_takeover(task: str, project_root: Path, ops: Optional[TakeoverOps] = Non
     def valid_sid(value: object) -> Optional[str]:
         return value if _supervisor.is_child_session_id(value) else None
 
+    lock_runtime = lock0.get("runtime")
+    if isinstance(lock_runtime, str) and lock_runtime and lock_runtime != "claude":
+        # Takeover resumes Claude sessions; refuse before writing a halt.
+        owner_pid = _int_pid(lock0.get("pid"))
+        if owner_pid is not None and ops.pid_alive(owner_pid):
+            ops.err(
+                f"the run for {task} is an {lock_runtime} phase run (pid {owner_pid}); "
+                "takeover resumes Claude sessions only. "
+                f"Stop it with: kill -TERM {owner_pid}"
+            )
+        else:
+            ops.err(
+                f"the {lock_runtime} phase run for {task} is no longer running "
+                f"(pid {owner_pid}); its lock is stale. Clear it by re-running the phase "
+                "with quoin run --runtime opencode, or with quoin run " + task
+            )
+        return EXIT_NO_CHILD
+
     sid_hint = valid_sid(lock0.get("child_session_id")) or valid_sid(rec0.get("child_session_id"))
 
     # Halt first: it keeps every relauncher (supervisor loop, Stop hook,

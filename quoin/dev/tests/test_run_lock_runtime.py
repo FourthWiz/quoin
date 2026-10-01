@@ -139,3 +139,247 @@ def test_dead_opencode_lock_is_reclaimed_by_claude_run(monkeypatch, project):
     assert cli.main(["run", "demo", "--project-root", str(project)]) == 0
     assert len(calls) == 1
     assert not _paths(project)["lock"].exists()
+
+
+# --- readers of the lock: auto_resume and takeover -------------------------
+
+import importlib.util
+import signal
+from datetime import datetime, timezone
+from pathlib import Path
+
+from quoin import takeover
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+_CORE_PATH = REPO_ROOT / "quoin" / "core" / "scripts" / "auto_resume.py"
+
+
+@pytest.fixture()
+def ar(monkeypatch, tmp_path):
+    spec = importlib.util.spec_from_file_location("auto_resume_runtime_under_test", _CORE_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    monkeypatch.setattr(module, "_runtime_record_path", lambda: tmp_path / "absent-runtime.json")
+    monkeypatch.setenv("HOME", str(tmp_path / "fake-home"))
+    popen_calls = []
+
+    def guard(argv, **kw):
+        popen_calls.append(argv)
+        raise AssertionError("no child may be spawned: %r" % (argv,))
+
+    monkeypatch.setattr(module, "_popen", guard)
+    yield module
+    assert popen_calls == []
+
+
+class _Args:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+
+def _now_iso():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _foreign_lock(memory, pid, runtime="opencode", **extra):
+    data = {"pid": pid, "writer": "cli", "task": "demo", "granted": 3, "runtime": runtime}
+    data.update(extra)
+    path = memory / "run-supervisor-demo.pid"
+    path.write_text(json.dumps(data, sort_keys=True) + "\n")
+    return path
+
+
+def _arm_task(memory, sid="sid-1"):
+    (memory / "autonomous-run-demo.marker").write_text(
+        "task: demo\ntimestamp: %s\nautonomous: true\n" % _now_iso()
+    )
+    (memory / "run-state-demo.json").write_text(json.dumps({
+        "schema": 1, "task": "demo", "session_id": sid, "active": True,
+        "phase": "implement", "phase_index": 3, "subphase": "", "step": "",
+        "at_stage_boundary": False, "route": "", "profile": "", "artifacts": [],
+        "next_action": "", "resume_command": "/run --resume demo",
+        "notes_path": str(memory / "run-notes-demo.md"), "updated_at": _now_iso(),
+    }))
+    (memory / ("run-continue-arm-%s.txt" % sid)).touch()
+
+
+def _counter_attempts(memory):
+    path = memory / "auto-resume-demo.json"
+    if not path.exists():
+        return 0
+    return json.loads(path.read_text()).get("attempts", 0)
+
+
+def _record():
+    return {"session_id": "sid-1", "phase": "implement", "phase_index": 3,
+            "resume_command": "/run --resume demo"}
+
+
+def test_handoff_over_dead_foreign_lock_reports_runtime(ar, project):
+    memory = _memory(project)
+    lock = _foreign_lock(memory, _dead_pid())
+    before = lock.read_bytes()
+    counter = ar._default_counter("demo", _now_iso())
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, _record())
+    assert result == "RUNTIME|opencode"
+    assert lock.read_bytes() == before
+    assert counter.get("attempts", 0) == 0
+    assert not (memory / "run-supervisor-demo.result").exists()
+
+
+def test_handoff_over_live_foreign_lock_is_still_locked(ar, project):
+    memory = _memory(project)
+    _foreign_lock(memory, os.getppid())
+    counter = ar._default_counter("demo", _now_iso())
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, _record())
+    assert result == "LOCKED|%d" % os.getppid()
+
+
+def test_handoff_create_race_with_dead_foreign_lock(ar, project, monkeypatch):
+    memory = _memory(project)
+    lock = memory / "run-supervisor-demo.pid"
+    dead = _dead_pid()
+    monkeypatch.setattr(ar, "_which", lambda name: "/bin/quoin")
+    monkeypatch.setattr(
+        ar, "resolve_cli", lambda root, caller: {"status": "ok", "source": "legacy", "argv": ["quoin"]}
+    )
+
+    def racing_create(path, payload):
+        _foreign_lock(memory, dead)
+        return False
+
+    monkeypatch.setattr(ar, "_create_lock_exclusive", racing_create)
+    counter = ar._default_counter("demo", _now_iso())
+    result = ar._do_handoff(memory, project, "demo", "budget", counter, _record())
+    assert result == "RUNTIME|opencode"
+    assert lock.exists()
+
+
+def test_settle_keeps_dead_foreign_lock_and_charges_nothing(ar, project):
+    memory = _memory(project)
+    lock = _foreign_lock(memory, _dead_pid())
+    counter = ar.settle_supervisor(memory, "demo", {"attempts": 1})
+    assert counter["attempts"] == 1
+    assert lock.exists()
+
+
+@pytest.mark.parametrize("extra", [{}, {"runtime": "claude"}])
+def test_settle_charges_and_removes_dead_claude_lock(ar, project, extra):
+    memory = _memory(project)
+    data = {"pid": _dead_pid(), "writer": "cli", "granted": 3}
+    data.update(extra)
+    lock = memory / "run-supervisor-demo.pid"
+    lock.write_text(json.dumps(data))
+    counter = ar.settle_supervisor(memory, "demo", {"attempts": 1})
+    assert counter["attempts"] == 4
+    assert not lock.exists()
+
+
+def test_phase_result_with_zero_relaunches_charges_nothing(ar, project):
+    memory = _memory(project)
+    (memory / "run-supervisor-demo.result").write_text(
+        json.dumps({"status": "INTERRUPTED", "relaunches": 0, "finished_at": ISO})
+    )
+    counter = ar.settle_supervisor(memory, "demo", {"attempts": 2})
+    assert counter["attempts"] == 2
+
+
+def test_handoff_subcommand_never_halts_for_foreign_lock(ar, project, capsys):
+    memory = _memory(project)
+    _arm_task(memory)
+    _foreign_lock(memory, _dead_pid())
+    rc = ar._cmd_handoff(_Args(
+        project_root=str(project), task="demo", reason="budget", on_fail_halt="x",
+    ))
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "RUNTIME|opencode"
+    assert not (memory / "autonomous-halt-demo.md").exists()
+
+
+def test_stop_is_silent_for_foreign_lock(ar, project, monkeypatch, capsys):
+    memory = _memory(project)
+    _arm_task(memory)
+    _foreign_lock(memory, _dead_pid())
+    data = json.dumps({"session_id": "sid-1"}).encode()
+
+    class _Buf:
+        def read(self, n):
+            return data[:n]
+
+    class _Stdin:
+        buffer = _Buf()
+
+    monkeypatch.setattr("sys.stdin", _Stdin())
+    assert ar._cmd_stop(_Args(project_root=str(project))) == 0
+    assert capsys.readouterr().out == ""
+    assert _counter_attempts(memory) == 0
+
+
+def test_start_is_silent_for_foreign_lock(ar, project, capsys):
+    memory = _memory(project)
+    _arm_task(memory)
+    _foreign_lock(memory, _dead_pid())
+    rc = ar._cmd_start(_Args(project_root=str(project), source="startup", session_id="sid-2"))
+    assert rc == 0
+    assert capsys.readouterr().out == ""
+
+
+# takeover ------------------------------------------------------------------
+
+
+class _Ops:
+    def __init__(self, alive):
+        self.alive = alive
+        self.calls = []
+        self.errs = []
+
+    def build(self):
+        return takeover.TakeoverOps(
+            pid_alive=lambda pid: self.alive, cmdline=lambda pid: None,
+            find_pids_with_arg=lambda sid: [], transcript_exists=lambda sid: False,
+            kill=lambda pid, sig: self.calls.append(("kill", pid, sig)),
+            sleep=lambda s: None, monotonic=lambda: 0.0,
+            write_halt=lambda content: self.calls.append(("write_halt",)) or True,
+            remove_arm=lambda: None, out=lambda m: None, err=self.errs.append,
+            repo_root=lambda root: Path("/repo"), read_halt_reason=lambda: None,
+        )
+
+
+def _takeover_lock(project, **extra):
+    data = {"pid": 4321, "writer": "cli", "task": "demo"}
+    data.update(extra)
+    (_memory(project) / "run-supervisor-demo.pid").write_text(json.dumps(data))
+
+
+@pytest.fixture()
+def _no_real_kill(monkeypatch):
+    def boom(*a, **k):
+        raise AssertionError("real kill")
+
+    monkeypatch.setattr(os, "kill", boom)
+
+
+def test_takeover_refuses_live_opencode_lock(project, _no_real_kill):
+    _takeover_lock(project, runtime="opencode")
+    ops = _Ops(alive=True)
+    rc = takeover.run_takeover("demo", project, ops.build())
+    assert rc == takeover.EXIT_NO_CHILD
+    assert ops.calls == []
+    assert "kill -TERM 4321" in " ".join(ops.errs)
+
+
+def test_takeover_refuses_dead_opencode_lock(project, _no_real_kill):
+    _takeover_lock(project, runtime="opencode")
+    ops = _Ops(alive=False)
+    rc = takeover.run_takeover("demo", project, ops.build())
+    assert rc == takeover.EXIT_NO_CHILD
+    assert ops.calls == []
+    text = " ".join(ops.errs)
+    assert "no longer running" in text and "kill -TERM" not in text
+
+
+def test_takeover_guard_is_keyed_on_the_runtime_field(project, _no_real_kill):
+    _takeover_lock(project)
+    ops = _Ops(alive=False)
+    takeover.run_takeover("demo", project, ops.build())
+    assert ("write_halt",) in ops.calls

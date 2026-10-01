@@ -549,6 +549,21 @@ def _claim_lock_for_removal(lock_path: Path):
     return data
 
 
+def _foreign_runtime(lock) -> Optional[str]:
+    """The runtime named by a parsed lock when it is not claude, else None.
+    A lock without the key, or naming claude, belongs to the Claude path."""
+    if not isinstance(lock, dict):
+        return None
+    runtime = lock.get("runtime")
+    if isinstance(runtime, str) and runtime and runtime != "claude":
+        return runtime
+    return None
+
+
+def _lock_foreign_runtime(memory_dir: Path, task: str) -> Optional[str]:
+    return _foreign_runtime(_load_json(_lock_path(memory_dir, task)))
+
+
 def settle_supervisor(memory_dir: Path, task: str, counter: dict) -> dict:
     """Consume a finished supervisor's `.result`, or charge a crashed
     supervisor's full grant when its lock names a dead pid (D-19).
@@ -574,6 +589,9 @@ def settle_supervisor(memory_dir: Path, task: str, counter: dict) -> dict:
         return counter
     lock_path = _lock_path(memory_dir, task)
     lock = _load_json(lock_path)
+    if _foreign_runtime(lock):
+        # Another runtime owns the task: nothing to charge, nothing to remove.
+        return counter
     if lock is not None:
         try:
             pid = int(lock.get("pid", -1))
@@ -772,6 +790,9 @@ def _evaluate_gate(memory_dir: Path, mode: str, candidates):
             continue
         counter = _get_or_reset_counter(memory_dir, task, marker.get("timestamp"))
         counter = settle_supervisor(memory_dir, task, counter)
+        if _lock_foreign_runtime(memory_dir, task):
+            # Another runtime owns this task; stay quiet.
+            continue
         if _supervisor_lock_live(memory_dir, task):
             continue
         if mode == "start":
@@ -821,7 +842,8 @@ def _do_handoff(
 ):
     """Attempt a detached `quoin run --autonomous` hand-off. Returns one of
     ``HANDOFF|<pid>|<n>/<cap>``, ``NO_CLI|``, ``STALE_CLI|<kind>|<message>``,
-    ``LOCKED|<pid>``, ``OWNER_LIVE|<sid>``, ``DENIED|<reason>``.
+    ``LOCKED|<pid>``, ``RUNTIME|<runtime>``, ``OWNER_LIVE|<sid>``,
+    ``DENIED|<reason>``.
 
     `halt_on_cap` gates only the cap-exhausted branch: the `handoff`
     subcommand and a startup hand-off have no cheaper fallback, so they
@@ -841,6 +863,9 @@ def _do_handoff(
     if _supervisor_lock_live(memory_dir, task):
         lock = _load_json(_lock_path(memory_dir, task)) or {}
         return f"LOCKED|{lock.get('pid', '')}"
+    foreign = _lock_foreign_runtime(memory_dir, task)
+    if foreign:
+        return f"RUNTIME|{foreign}"
     counter = settle_supervisor(memory_dir, task, counter)
     cap = _max_attempts()
     attempts = counter.get("attempts", 0)
@@ -911,6 +936,9 @@ def _do_handoff(
         if not _lock_is_stale(lock_path):
             lock = _load_json(lock_path) or {}
             return f"LOCKED|{lock.get('pid', '')}"
+        foreign = _lock_foreign_runtime(memory_dir, task)
+        if foreign:
+            return f"RUNTIME|{foreign}"
         counter = settle_supervisor(memory_dir, task, counter)
         _claim_lock_for_removal(lock_path)
         if not _create_lock_exclusive(lock_path, reservation):
@@ -1550,6 +1578,9 @@ def _cmd_stop(args) -> int:
             # already driving the task, so this session must not also keep
             # blocking on it in-session.
             return 0
+        if handoff_result.startswith("RUNTIME|"):
+            # Another runtime owns the task; this session is not its driver.
+            return 0
         if handoff_result.startswith("STALE_CLI|"):
             stale_msg = handoff_result.split("|", 2)[2]
         # DENIED|cap (no halt written — halt_on_cap=False) / NO_CLI| /
@@ -1737,7 +1768,12 @@ def _cmd_handoff(args) -> int:
     # to halt on. Halting here would stop a supervised child's own turn
     # (e.g. on context exhaustion) even though the run is progressing fine
     # under the supervisor that holds the lock.
-    if not result.startswith("HANDOFF|") and not result.startswith("LOCKED|") and args.on_fail_halt:
+    if (
+        not result.startswith("HANDOFF|")
+        and not result.startswith("LOCKED|")
+        and not result.startswith("RUNTIME|")
+        and args.on_fail_halt
+    ):
         if not _sentinel_exists(memory_dir, HALT_TEMPLATE, args.task):
             halt_reason = args.on_fail_halt
             if result.startswith("STALE_CLI|"):
