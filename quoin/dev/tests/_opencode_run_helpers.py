@@ -235,3 +235,92 @@ class ScriptedDriver:
         if record is not None:
             runstore.set_state(record, step.state, step.reason)
             runstore.write_record(self.directory, record)
+
+
+# --------------------------------------------------------------------------
+# End-to-end world: a real install, the real driver, a fake opencode shim
+# --------------------------------------------------------------------------
+
+SEEDED_SECRET = "sk-FAKEECHOSECRET0123456789"
+
+
+class InstalledProject:
+    """A git-worktree project with a fresh install and a shim for the fake
+    opencode executable running `scenario`. `driver_factory` builds the real
+    `OpenCodeDriver` with short timing knobs; patch it over
+    `cli._make_opencode_driver`."""
+
+    def __init__(self, tmp_path: Path, monkeypatch: Any, scenario: Any, *,
+                 version: str = "1.18.32") -> None:
+        import io
+        import os
+
+        import _opencode_driver_helpers as dh
+        import _opencode_helpers as helpers
+        from _opencode_merge_helpers import World
+        from quoin.opencode_adapter import install
+        from quoin.opencode_adapter import secrets as credential_refs
+
+        self.tmp = Path(tmp_path)
+        self.dh = dh
+        self.world = World(self.tmp, agents=False, root=None)
+        self.root = self.world.root.resolve()
+        (self.root / ".git").mkdir(exist_ok=True)
+        code = install.run_install(
+            str(self.root), helpers.SOURCE_DIR, None, False, io.StringIO(), io.StringIO())
+        assert code == 0
+        monkeypatch.setattr(Path, "home", classmethod(lambda cls: self.world.home))
+        scenario_path = dh.fake.write_scenario(self.tmp / "s.json", dh.scenario_dict(scenario))
+        self.shim = dh.fake.write_shim(self.tmp / "bin", scenario_path, dh.state_of(self.tmp))
+        self.version = version
+        self._os = os
+
+        class _Resolver:
+            def resolve(self, ref: Any) -> Any:
+                return credential_refs.SecretValue(SEEDED_SECRET)
+
+        self._resolver = _Resolver()
+        self.drivers = 0
+
+    def driver_factory(self) -> Callable[[Any], Any]:
+        from _opencode_merge_helpers import NOW
+
+        def factory(root: Any) -> Any:
+            self.drivers += 1
+            return driver.OpenCodeDriver(
+                root,
+                env=dict(self.world.env, PATH=self._os.environ.get("PATH", "")),
+                home=self.world.home, which=lambda name: str(self.shim),
+                version_runner=lambda path: self.version,
+                resolver_factory=lambda environ, platform: self._resolver,
+                clock=lambda: NOW.timestamp(),
+                descendant_scan_s=0.2, eof_grace_s=1.0, exit_drain_s=0.5,
+                grace_s=2.0, kill_grace_s=1.0, leftover_grace_s=1.0,
+            )
+
+        return factory
+
+    # -- observations ------------------------------------------------------
+    def invocations(self) -> List[dict]:
+        import json
+
+        path = self.dh.state_of(self.tmp) / "invocations.jsonl"
+        if not path.exists():
+            return []
+        return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+    def effects(self) -> List[str]:
+        path = self.dh.state_of(self.tmp) / "effects.log"
+        return path.read_text().splitlines() if path.exists() else []
+
+    def stray(self) -> List[int]:
+        return self.dh.stray_pids(self.tmp)
+
+    def cleanup(self) -> None:
+        self.dh.cleanup_fakes(self.tmp)
+
+    def store(self) -> Path:
+        return runstore.store_dir(self.root)
+
+    def record(self, run_id: str) -> Optional[Dict[str, Any]]:
+        return runstore.load_record(self.store(), run_id)
