@@ -1041,6 +1041,12 @@ def check_prerequisites() -> list[str]:
         missing.append("claude (Claude Code CLI)")
     if shutil.which("git") is None:
         missing.append("git")
+    if shutil.which("python3") is None:
+        print(
+            "Warning: no python3 on PATH — quoin's skills and hooks call bare "
+            f"python3; link or alias {sys.executable} as python3.",
+            file=sys.stderr,
+        )
     if shutil.which("gh") is None:
         print(
             "Warning: gh (GitHub CLI) not found — /end_of_task push will still work, but PR creation won't.",
@@ -1350,17 +1356,27 @@ def assert_no_placeholders(dest_root: pathlib.Path) -> list[str]:
 
 
 def install_dev_deps() -> None:
-    """Install dev Python dependencies via pip (uses quoin[dev] extras)."""
-    if shutil.which("pip3") is None and shutil.which("pip") is None:
+    """Install dev Python dependencies via pip (uses quoin[dev] extras).
+
+    Runs pip through the interpreter that is running quoin, not whichever
+    pip is first on PATH (which can belong to a different Python), and drops
+    --user inside a virtual environment where pip rejects it.
+    """
+    pip_check = subprocess.run(
+        [sys.executable, "-m", "pip", "--version"],
+        capture_output=True,
+    )
+    if pip_check.returncode != 0:
         print(
-            "Warning: pip not found — install quoin[dev] manually for dev tests",
+            "Warning: pip not found for "
+            f"{sys.executable} — install quoin[dev] manually for dev tests",
             file=sys.stderr,
         )
         return
-    pip_cmd = shutil.which("pip3") or shutil.which("pip")
-    assert pip_cmd is not None  # guaranteed: early return above covers the both-None case
+    in_venv = sys.prefix != getattr(sys, "base_prefix", sys.prefix)
+    user_flag = [] if in_venv else ["--user"]
     result = subprocess.run(
-        [pip_cmd, "install", "--user", "--upgrade", "quoin[dev]"],
+        [sys.executable, "-m", "pip", "install", *user_flag, "--upgrade", "quoin[dev]"],
     )
     if result.returncode != 0:
         print(
