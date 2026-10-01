@@ -90,6 +90,14 @@ REFUSAL_CATEGORIES: Tuple[str, ...] = (
     "workflow-validation",
 )
 
+# Reasons a run refuses to continue on its own; the operator starts it over.
+RESUME_BLOCK_REASONS: Tuple[str, ...] = (
+    "effect-uncertain",
+    "session-lost",
+    "sidecar-behind-checkpoint",
+    "session-invalid",
+)
+
 RESUME_MESSAGE = "Continue the task from where you stopped. Do not repeat tool calls that already completed."
 
 WRITABLE_TOOLS: Tuple[str, ...] = ("write", "edit", "patch", "multiedit", "bash")
