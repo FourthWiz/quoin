@@ -1579,6 +1579,90 @@ def _cmd_opencode_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def _is_posix() -> bool:
+    return os.name == "posix"
+
+
+def _exec_tui(argv, cwd, env) -> int:
+    """Default launcher for `quoin opencode start`.
+
+    On POSIX the TUI replaces this process, so it keeps the terminal and the
+    process group, receives Ctrl-C, SIGQUIT and SIGTSTP directly and restores
+    its own terminal state; its exit status is the command's. Nothing here
+    needs to run afterwards (no lock, no run state). Returns only when the
+    program could not be started."""
+    import signal  # noqa: PLC0415
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if _is_posix():
+        try:
+            os.chdir(cwd)
+            # Python ignores these two at startup and an ignored signal stays
+            # ignored across exec; the TUI must see the default behaviour.
+            for name in ("SIGPIPE", "SIGXFSZ"):
+                number = getattr(signal, name, None)
+                if number is not None:
+                    signal.signal(number, signal.SIG_DFL)
+            os.execve(argv[0], list(argv), env)
+        except OSError as exc:
+            print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
+            return 3
+    # No exec here: keep Python alive but let the TUI own Ctrl-C.
+    previous = None
+    try:
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:  # not the main thread
+        pass
+    try:
+        try:
+            child = subprocess.Popen(list(argv), cwd=cwd, env=env)
+        except OSError as exc:
+            print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
+            return 3
+        return child.wait()
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+
+
+_opencode_tui_launcher = _exec_tui
+
+
+def _cmd_opencode_start(args: argparse.Namespace) -> int:
+    """`quoin opencode start`: open the OpenCode TUI with the compiled profile.
+
+    Takes no task lock and writes no run state; the interface is interactive
+    and nothing is captured."""
+    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
+    from quoin.opencode_adapter import launch_env  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    redact = launch_env.Redactor()
+    try:
+        launch = _make_opencode_driver(project_root).prepare_interactive(args.profile)
+    except _driver.PrepareRefused as exc:
+        print(
+            "quoin: opencode start refused (%s/%s): %s" % (exc.category, exc.code, redact(exc.message)),
+            file=sys.stderr,
+        )
+        return 3
+    except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
+        print("quoin: opencode start failed: %s" % type(exc).__name__, file=sys.stderr)
+        return 3
+    if args.dry_run:
+        print(json.dumps({
+            "argv": [redact(a) for a in launch.argv],
+            "cwd": redact(str(launch.cwd)),
+            "config_path": redact(str(launch.config_path)),
+            "env_names": list(launch.env_names),
+            "runtime_version": launch.runtime_version,
+        }, sort_keys=True))
+        return 0
+    env = launch.launch_env.materialize()
+    return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
+
+
 def _make_opencode_driver(project_root):
     from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
 
@@ -2312,6 +2396,25 @@ def main(argv: list[str] | None = None) -> int:
     status_target.add_argument("--run-id", help="Report this run id instead of a task's latest run.")
     opencode_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
 
+    opencode_start_p = opencode_sub.add_parser(
+        "start",
+        description=(
+            "Open the OpenCode terminal interface in a project with the compiled profile "
+            "configuration, an isolated data directory and the same checks as a phase run. "
+            "The interface replaces this process; no events are captured and no task lock "
+            "or run record is written."
+        ),
+        help="Open the OpenCode terminal interface with a compiled profile",
+    )
+    opencode_start_p.add_argument(
+        "--project-root", default=".", help="Project to open; defaults to the current directory."
+    )
+    opencode_start_p.add_argument("--profile", required=True, help="Runtime profile to launch with.")
+    opencode_start_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate and print the command, directory and environment variable names without starting.",
+    )
+
     dashboard_p = sub.add_parser(
         "dashboard",
         description=(
@@ -2562,6 +2665,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_probe(args)
         if args.opencode_command == "status":
             return _cmd_opencode_status(args)
+        if args.opencode_command == "start":
+            return _cmd_opencode_start(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)

@@ -309,7 +309,7 @@ REQUIRED_RUNTIME_KEYS = (
     "retry-after, signal-handling, grandchildren, continuation-flags, continuation-agent, "
     "step-settling, part-reemission, version-output, npm-wrapper, non-git-discovery, "
     "question-override, permission-ask-outside-tool, halt-error-shape, tool-hidden-by-deny, "
-    "continuation-no-replay, managed-config-layers, data-dir-state"
+    "continuation-no-replay, managed-config-layers, data-dir-state, tui-project-argument"
 ).split(", ")
 
 

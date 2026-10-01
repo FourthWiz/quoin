@@ -56,6 +56,10 @@ DRIVER_CITED_CAPABILITIES: Dict[str, str] = {
         "credentials, session storage and remote config live under the data "
         "directory, which the launcher isolates and reuses across attempts"
     ),
+    "tui-project-argument": (
+        "the default command takes the project directory as its positional "
+        "argument and changes into it before starting the interface"
+    ),
     "continuation-flags": (
         "resume selects a session with --session and treats an unknown "
         "session as exit 1 with no native events"
@@ -185,6 +189,22 @@ class PreparedRun:
     repo_revisions: Tuple[Mapping[str, Any], ...] = ()
     agent: str = ""
     # Secrets live only here; never shown and never part of equality.
+    launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
+
+
+@dataclass(frozen=True)
+class InteractiveLaunch:
+    """A validated interactive (TUI) launch. Secrets live only in
+    `launch_env`; nothing about a run is recorded."""
+
+    binary: Path
+    runtime_version: str
+    argv: Tuple[str, ...]
+    cwd: Path
+    config_path: Path
+    config_digest: str
+    env_names: Tuple[str, ...]
+    profile: str
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
 
 
@@ -806,57 +826,12 @@ class OpenCodeDriver:
         command_name = names.normalize(phase_id)
 
         # 4. binary and version
-        binary = self._which("opencode")
-        if not binary:
-            raise refuse("missing-binary", "opencode-binary-absent", "the opencode executable was not found on PATH")
-        version = self._read_version(binary)
-        try:
-            pinned = qualification.pinned_version()
-        except adapter_paths.AdapterDataMissing:
-            raise refuse("workflow-validation", "adapter-data-missing", "the pinned runtime version was not found; reinstall quoin") from None
-        if version != pinned:
-            raise refuse(
-                "unsupported-version", "opencode-version",
-                "the opencode executable reports %s; this adapter is pinned to %s" % (version or "no version", pinned),
-            )
+        binary, version = self._check_binary()
 
-        # 5. evaluate configuration
+        # 5. evaluate configuration, 6. launchable
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
-        try:
-            evaluation = compiler.evaluate(
-                project_root=root, profile=request.profile, env=cfg_env, home=self._home,
-                now=datetime.fromtimestamp(self._clock(), timezone.utc),
-            )
-        except ConfigErrors as exc:
-            first = exc.errors[0] if exc.errors else None
-            code = first.rejection_class if first is not None else "config-invalid"
-            category = "policy-denial" if code in _POLICY_CLASSES else "invalid-configuration"
-            text = "; ".join(e.message for e in exc.errors[:3]) or "the configuration is invalid"
-            raise refuse(category, code, base_redact(text)) from None
-        except roles.AllowUnqualifiedRefused as exc:
-            raise refuse("policy-denial", "allow-unqualified-refused", base_redact(str(exc))) from None
-        except adapter_paths.AdapterDataMissing:
-            raise refuse("workflow-validation", "adapter-data-missing", "the packaged adapter data was not found; reinstall quoin") from None
-
-        # 6. launchable
-        if not compiler.launchable(evaluation):
-            blockers = compiler.compile_blockers(evaluation)
-            # A role blocked only because its model lacks a valid gateway
-            # qualification is the gateway's problem, not the configuration's.
-            unqualified = all(
-                f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
-                for f in blockers
-            )
-            if blockers and not unqualified:
-                raise refuse(
-                    "invalid-configuration", "compile-blocked",
-                    "the configuration cannot be compiled: " + ", ".join(sorted({f.code for f in blockers})),
-                )
-            raise refuse(
-                "unqualified-gateway", "not-launchable",
-                "a role model lacks a valid gateway qualification; run the qualification probe",
-            )
+        evaluation = self._evaluate_launchable(request.profile, cfg_env, base_redact)
 
         # 7. compiled pair
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
@@ -864,24 +839,12 @@ class OpenCodeDriver:
         config_path = compiled_dir / compiler.NATIVE_FILE
 
         # 8. install record and owned files
-        try:
-            metadata = install.load_metadata(root)
-        except install.InstallError as exc:
-            raise refuse("workflow-validation", "install-record-invalid", base_redact("the install record is unusable: %s" % exc)) from None
-        if metadata is None:
-            raise refuse("workflow-validation", "not-installed", "the Quoin OpenCode files are not installed in this project")
+        metadata = self._load_install(root, base_redact)
         command_rel = ".opencode/commands/%s.md" % command_name
         if command_rel not in metadata.owned:
             raise refuse("workflow-validation", "not-installed", "the command file for %s is not part of the installed set" % phase_id)
-        for rel in sorted(metadata.owned):
-            if not launch_env.verify_owned_file(root, rel, metadata.owned[rel]["sha256"]):
-                raise refuse(
-                    "workflow-validation", "owned-file-drift",
-                    "the installed file %s changed or cannot be read; reinstall with quoin opencode install" % rel,
-                )
+        self._verify_owned(root, metadata)
         agent = self._command_agent(root, command_rel, metadata)
-        owned_agents = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "agent"}
-        owned_commands = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "command"}
 
         # 8a. non-git roots
         if adapter_paths.git_worktree_root(root, home=None) is None and not NON_GIT_DISCOVERY_VERIFIED:
@@ -900,20 +863,9 @@ class OpenCodeDriver:
         effective_model = compiler.native_model_ref(resolution)
 
         # 10. configuration layers and environment
-        scan_env = {"OPENCODE_CONFIG": str(config_path)}
-        if "XDG_CONFIG_HOME" in cfg_env:
-            scan_env["XDG_CONFIG_HOME"] = cfg_env["XDG_CONFIG_HOME"]
-        launch_env.check_config_layers(
-            cwd=root, env=scan_env, home=self._home, compiled_doc=fresh.document,
-            owned_agents=owned_agents, owned_commands=owned_commands,
-        )
         redactor = launch_env.Redactor()
-        data = launch_env.data_dir(cfg_env, self._home, evaluation.profile)
-        child_env = launch_env.build_env(
-            ambient=self._env, compile_sidecar=fresh.sidecar,
-            providers=evaluation.effective.providers,
-            resolver=self._resolver_factory(self._env, platform=self._platform),
-            data_dir=data, config_path=config_path, redactor=redactor,
+        child_env = self._scan_and_build_env(
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor
         )
 
         # 11. limits, hashes, revisions, argv
@@ -1001,6 +953,155 @@ class OpenCodeDriver:
             record["updated_at"] = now
             runstore.write_record(directory, record)
         return prepared
+
+    # ------------------------------------------- steps shared with start
+
+    def _check_binary(self) -> Tuple[str, Optional[str]]:
+        """The resolved executable and its version, refusing when it is
+        missing or is not the pinned release."""
+        refuse = self._refusal
+        binary = self._which("opencode")
+        if not binary:
+            raise refuse("missing-binary", "opencode-binary-absent", "the opencode executable was not found on PATH")
+        version = self._read_version(binary)
+        try:
+            pinned = qualification.pinned_version()
+        except adapter_paths.AdapterDataMissing:
+            raise refuse("workflow-validation", "adapter-data-missing", "the pinned runtime version was not found; reinstall quoin") from None
+        if version != pinned:
+            raise refuse(
+                "unsupported-version", "opencode-version",
+                "the opencode executable reports %s; this adapter is pinned to %s" % (version or "no version", pinned),
+            )
+        return binary, version
+
+    def _evaluate_launchable(self, profile: str, cfg_env: Mapping[str, str], base_redact: Any) -> Any:
+        """Evaluate the configuration for a profile and refuse unless it can
+        be launched."""
+        refuse = self._refusal
+        try:
+            evaluation = compiler.evaluate(
+                project_root=self.project_root, profile=profile, env=cfg_env, home=self._home,
+                now=datetime.fromtimestamp(self._clock(), timezone.utc),
+            )
+        except ConfigErrors as exc:
+            first = exc.errors[0] if exc.errors else None
+            code = first.rejection_class if first is not None else "config-invalid"
+            category = "policy-denial" if code in _POLICY_CLASSES else "invalid-configuration"
+            text = "; ".join(e.message for e in exc.errors[:3]) or "the configuration is invalid"
+            raise refuse(category, code, base_redact(text)) from None
+        except roles.AllowUnqualifiedRefused as exc:
+            raise refuse("policy-denial", "allow-unqualified-refused", base_redact(str(exc))) from None
+        except adapter_paths.AdapterDataMissing:
+            raise refuse("workflow-validation", "adapter-data-missing", "the packaged adapter data was not found; reinstall quoin") from None
+
+        if not compiler.launchable(evaluation):
+            blockers = compiler.compile_blockers(evaluation)
+            # A role blocked only because its model lacks a valid gateway
+            # qualification is the gateway's problem, not the configuration's.
+            unqualified = all(
+                f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
+                for f in blockers
+            )
+            if blockers and not unqualified:
+                raise refuse(
+                    "invalid-configuration", "compile-blocked",
+                    "the configuration cannot be compiled: " + ", ".join(sorted({f.code for f in blockers})),
+                )
+            raise refuse(
+                "unqualified-gateway", "not-launchable",
+                "a role model lacks a valid gateway qualification; run the qualification probe",
+            )
+        return evaluation
+
+    def _load_install(self, root: Path, redact: Any) -> Any:
+        try:
+            metadata = install.load_metadata(root)
+        except install.InstallError as exc:
+            raise self._refusal(
+                "workflow-validation", "install-record-invalid", redact("the install record is unusable: %s" % exc)
+            ) from None
+        if metadata is None:
+            raise self._refusal(
+                "workflow-validation", "not-installed", "the Quoin OpenCode files are not installed in this project"
+            )
+        return metadata
+
+    def _verify_owned(self, root: Path, metadata: Any) -> None:
+        for rel in sorted(metadata.owned):
+            if not launch_env.verify_owned_file(root, rel, metadata.owned[rel]["sha256"]):
+                raise self._refusal(
+                    "workflow-validation", "owned-file-drift",
+                    "the installed file %s changed or cannot be read; reinstall with quoin opencode install" % rel,
+                )
+
+    def _scan_and_build_env(
+        self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
+        evaluation: Any, metadata: Any, redactor: Any,
+    ) -> Any:
+        """Refuse on a configuration layer that would change the compiled
+        pair, then build the child environment. May raise `LaunchRefused`."""
+        owned_agents = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "agent"}
+        owned_commands = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "command"}
+        scan_env = {"OPENCODE_CONFIG": str(config_path)}
+        if "XDG_CONFIG_HOME" in cfg_env:
+            scan_env["XDG_CONFIG_HOME"] = cfg_env["XDG_CONFIG_HOME"]
+        launch_env.check_config_layers(
+            cwd=root, env=scan_env, home=self._home, compiled_doc=fresh.document,
+            owned_agents=owned_agents, owned_commands=owned_commands,
+        )
+        data = launch_env.data_dir(cfg_env, self._home, evaluation.profile)
+        return launch_env.build_env(
+            ambient=self._env, compile_sidecar=fresh.sidecar,
+            providers=evaluation.effective.providers,
+            resolver=self._resolver_factory(self._env, platform=self._platform),
+            data_dir=data, config_path=config_path, redactor=redactor,
+        )
+
+    def prepare_interactive(self, profile: str) -> "InteractiveLaunch":
+        """Validate a profile for an interactive TUI session, or refuse.
+
+        Runs the same checks as `prepare` in the same order, minus the ones
+        that only matter for a headless run (run store, phase command, role
+        and process groups). Creates no run store, record, pointer, sidecar
+        or lock; it may write the compiled configuration pair, as `prepare`
+        does."""
+        try:
+            return self._prepare_interactive(profile)
+        except launch_env.LaunchRefused as exc:
+            raise PrepareRefused(exc.category, exc.code, exc.message) from None
+
+    def _prepare_interactive(self, profile: str) -> "InteractiveLaunch":
+        refuse = self._refusal
+        root = self.project_root
+        if not root.is_dir():
+            raise refuse("workflow-validation", "invalid-project-root", "the project root is not a directory")
+        if adapter_paths.adapter_data_dir() is None:
+            raise refuse(
+                "workflow-validation", "adapter-data-missing",
+                "the packaged adapter data was not found; reinstall quoin",
+            )
+        binary, version = self._check_binary()
+        cfg_env = self._config_env()
+        base_redact = launch_env.Redactor()
+        evaluation = self._evaluate_launchable(profile, cfg_env, base_redact)
+        fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
+        config_path = compiled_dir / compiler.NATIVE_FILE
+        metadata = self._load_install(root, base_redact)
+        self._verify_owned(root, metadata)
+        redactor = launch_env.Redactor()
+        child_env = self._scan_and_build_env(root, cfg_env, config_path, fresh, evaluation, metadata, redactor)
+        return InteractiveLaunch(
+            binary=Path(binary),
+            runtime_version=version or "",
+            argv=(str(binary), str(root)),
+            cwd=root,
+            config_path=config_path,
+            config_digest=fresh.digest,
+            env_names=tuple(child_env.names()),
+            launch_env=child_env,
+            profile=evaluation.profile,
+        )
 
     def _compile_pair(self, evaluation: Any, cfg_env: Mapping[str, str]) -> Tuple[Any, Path]:
         """Make sure the compiled pair on disk matches a fresh build; write it
