@@ -196,7 +196,7 @@ def _s_unparseable(fx):
 
 
 def _s_envelope(fx):
-    path = h.write(fx.root / "env.txt", "not an envelope\n")
+    path = h.write(fx.base / "env.txt", "not an envelope\n")
     fx.record("plan", envelope_path=str(path), critic_responses=[str(fx.base / "stage-1" / "critic-response-1.md")])
     return "plan", 1, "envelope-invalid"
 

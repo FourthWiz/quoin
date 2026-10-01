@@ -236,3 +236,14 @@ def test_run_phase_constants_match_the_shipped_manifest():
             run_id, runstore.entry_phase_for_run(run_id))
     for run_id in other:
         assert run_id not in accepted | set(runstore.PLAN_PRODUCER_PHASES) | mapped | unmapped, run_id
+
+
+@pytest.mark.parametrize("entries", [["not-a-dict"], [{"phase": "plan"}], [{"origin": "adopted"}], [{"origin": 3, "phase": "plan"}]])
+def test_malformed_entries_are_a_corrupt_record(tmp_path, entries):
+    directory = runstore.store_dir(tmp_path, create=True)
+    state = runstore.new_workflow_state("t1")
+    state["entries"] = entries
+    runstore.write_workflow_state(directory, state)
+    with pytest.raises(runstore.RunStoreError) as caught:
+        runstore.load_workflow_state(directory, "t1")
+    assert caught.value.code == "corrupt-record"

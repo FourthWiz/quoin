@@ -10,6 +10,7 @@ import runpy
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import textwrap
@@ -1602,15 +1603,23 @@ def _gate_refusal(code: str, message: str, exit_code: int = 2) -> int:
 
 
 def _read_explanation(path: str) -> "str | None":
-    """The explanation file, at most 64 KiB, never through a symlink."""
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-    with os.fdopen(fd, "rb") as handle:
-        return handle.read(_GATE_EXPLANATION_MAX_BYTES).decode("utf-8", "replace")
+    """The explanation file, at most 64 KiB, never through a symlink. Opened
+    non-blocking and checked on the open descriptor so a pipe or device is an
+    error rather than a hang."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise OSError("not a regular file")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            return handle.read(_GATE_EXPLANATION_MAX_BYTES).decode("utf-8", "replace")
+    finally:
+        os.close(fd)
 
 
 def _with_task_lock(project_root: pathlib.Path, task: str, body):
     """Run `body()` holding the task lock; `None` plus the holder's pid when it
-    is held. The `.result` file belongs to the phase run and is never written."""
+    is held. A dead holder's lock is replaced the way the run path replaces it
+    (which may leave an `ORPHANED` result file); the lock is released on exit."""
     paths = _supervisor_paths(project_root, task)
     acquired, held_pid = _acquire_supervisor_lock(
         paths["memory_dir"], paths["lock"], paths["result"], task, 0, None, runtime="opencode"
@@ -1643,7 +1652,10 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
             explanation = _read_explanation(args.explanation_file)
         except OSError:
             return _gate_refusal("explanation-unreadable", "the explanation file cannot be read")
-    source_dir = _resolve_source_dir(args.source_dir)
+    try:
+        source_dir = _resolve_source_dir(args.source_dir)
+    except SystemExit:
+        return _gate_refusal("source-unavailable", "the quoin source directory cannot be resolved")
     try:
         stage, phase = gate.precheck(project_root, args.task, args.stage, args.phase)
     except gate.GateRefused as exc:
@@ -1667,8 +1679,15 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
             except gate.GateArtifactError as exc:
                 payload["artifact_error"] = {"code": exc.code, "message": exc.message}
                 return payload, 8
+            except OSError as exc:
+                payload["artifact_error"] = {"code": "artifact-write-failed", "message": type(exc).__name__}
+                return payload, 8
             payload["artifact"] = os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
-            gate.record_gate(project_root, args.task, stage, phase, result, path)
+            try:
+                gate.record_gate(project_root, args.task, stage, phase, result, path)
+            except (runstore.RunStoreError, OSError) as exc:
+                payload["record_error"] = {"code": getattr(exc, "code", type(exc).__name__)}
+                return payload, 8
         return payload, code
 
     try:
@@ -1678,6 +1697,8 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
                 return _lock_refusal(project_root, args.task, held_pid)
         else:
             outcome = work()
+    except gate.GateRefused as exc:
+        return _gate_refusal(exc.code, "the request cannot be gated")
     except (runstore.RunStoreError, OSError) as exc:
         return _gate_refusal("store-unreadable", "the run store cannot be read (%s)" % getattr(exc, "code", type(exc).__name__))
     payload, code = outcome
@@ -1706,13 +1727,14 @@ def _cmd_opencode_adopt(args: argparse.Namespace) -> int:
     if entry is None:
         return _lock_refusal(project_root, args.task, held_pid)
     stage_part = "" if stage is None else f" --stage {stage}"
+    quoted_root = shlex.quote(str(project_root))
     return _gate_json({
         "outcome": "ADOPTED",
         "entry": {
             "task": args.task, "stage": stage, "phase": phase, "origin": entry["origin"],
             "recorded_at": entry["recorded_at"], "coverage": entry["evidence"]["coverage"],
         },
-        "next": f"quoin opencode gate --task {args.task}{stage_part} --phase {phase} --write",
+        "next": f"quoin opencode gate --task {shlex.quote(args.task)}{stage_part} --phase {phase} --write --project-root {quoted_root}",
     }, 0)
 
 

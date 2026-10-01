@@ -239,7 +239,10 @@ no live OpenCode run or corporate gateway has been qualified.
   `.pytest_cache` from a test run) changes the source digest and makes the
   gate refuse. Repositories are found as immediate subdirectories only; edits
   inside a deeper untracked repository or a submodule are not reflected in the
-  digest.
+  digest. Edits hidden from git itself (`--assume-unchanged`, `--skip-worktree`,
+  `.git/info/exclude`) are not seen either; a repository's `core.fsmonitor` and
+  untracked-cache settings are overridden for the digest. The audit file is
+  named with the UTC date.
 - `quoin opencode adopt --task NAME --phase PHASE [--stage N] [--project-root PATH]`
   is a human step that records evidence for a phase finished outside a
   recorded run (for example in the terminal interface), from the tree as it is

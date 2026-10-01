@@ -24,7 +24,24 @@ REVIEW = ("APPROVED", "CHANGES_REQUESTED", "BLOCKED")
     ("## Verdict\n\n`<verdict>PASS</verdict>`\n", CRITIC, "PASS"),
     ("## Verdict: REVISE\n\ntext\n", CRITIC, "REVISE"),
     ("## Verdict: REVISE\n\n## Summary\n\n`<verdict>PASS</verdict>`\n", CRITIC, "REVISE"),
-    ("## Verdict\n\n`<verdict>PASS</verdict>`\n\n## Summary\n\n## Verdict: REVISE\n", CRITIC, "PASS"),
+    ("## Verdict\n\n`<verdict>PASS</verdict>`\n\n## Summary\n\n## Verdict: REVISE\n", CRITIC, None),
+    ("## Verdict\n\n`<verdict>PASS</verdict>`\n\n## Summary\n\n## Verdict: PASS\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<verdict>APPROVED</verdict>\n", REVIEW, "APPROVED"),
+    ("## Verdict\n\n<verdict>PASS</verdict>\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<verdict>CHANGES_REQUESTED</verdict>\n\nThe plan needs work.\n", REVIEW, "CHANGES_REQUESTED"),
+    ("## Verdict\n\n<verdict>APPROVED</verdict> with one note on naming.\n", REVIEW, "APPROVED"),
+    ("## Verdict\n\n<verdict> PASS </verdict>\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<verdict>PASS</verdict> and <verdict>REVISE</verdict>\n", CRITIC, None),
+    ("## Verdict\n\n<verdict>PASS</verdict>\n<verdict>PASS</verdict>\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<verdict></verdict>\n", CRITIC, None),
+    ("## Verdict\n\nBLOCKED\n\n## Notes\n\n## Verdict: APPROVED\n", REVIEW, None),
+    ("## Verdict\n\nBLOCKED\n\n## Verdict: BLOCKED\n", REVIEW, "BLOCKED"),
+    ("## Verdict\n\n<verdict>BLOCKED</verdict>\n\n## Verdict: APPROVED\n", REVIEW, None),
+    ("## Verdict\n\n~~~\n<verdict>PASS</verdict>\n~~~\n", CRITIC, None),
+    ("## Verdict\n\n<!-- <verdict>REVISE</verdict> -->\n<verdict>PASS</verdict>\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<!--\n<verdict>REVISE</verdict>\n-->\n<verdict>PASS</verdict>\n", CRITIC, "PASS"),
+    ("## Verdict: PASS\n\n<!--\n## Verdict: REVISE\n-->\n", CRITIC, "PASS"),
+    ("## Verdict\n\n```\n## Verdict: REVISE\n```\n<verdict>PASS</verdict>\n", CRITIC, "PASS"),
     ("## Verdict\n\n`<verdict>PASS</verdict>` and `<verdict>REVISE</verdict>`\n", CRITIC, None),
     ("## Verdict\n\n```\n`<verdict>PASS</verdict>`\n```\n", CRITIC, None),
     ("## Summary\n\n`<verdict>PASS</verdict>`\n\n## Verdict\n\ntext\n", CRITIC, None),
@@ -44,6 +61,49 @@ REVIEW = ("APPROVED", "CHANGES_REQUESTED", "BLOCKED")
 ])
 def test_parse_verdict(text, allowed, expected):
     assert gate.parse_verdict(text, allowed) == expected
+
+
+REAL_REVIEW = """---
+task: demo
+stage: 1
+round: 1
+verdict: APPROVED
+---
+## For human
+
+Everything lines up.
+
+## Summary
+
+Stage one is done.
+
+## Verdict
+
+<verdict>APPROVED</verdict>
+
+## Plan Compliance
+
+- all tasks done
+"""
+
+REAL_CRITIC = """## Summary
+
+The plan holds up.
+
+## Verdict
+
+<verdict>PASS</verdict>
+
+## Issues Found
+
+None.
+"""
+
+
+def test_parse_verdict_real_skill_shapes():
+    assert gate.parse_verdict(REAL_REVIEW, REVIEW) == "APPROVED"
+    assert gate.parse_verdict(REAL_CRITIC, CRITIC) == "PASS"
+    assert gate.parse_verdict(REAL_REVIEW.replace("APPROVED</verdict>", "BLOCKED</verdict>"), REVIEW) == "BLOCKED"
 
 
 # -- critic status ---------------------------------------------------------
@@ -86,10 +146,45 @@ def test_disk_fallback_for_phase_run_passes(tmp_path):
 
 def test_recorded_responses_win_over_disk(tmp_path):
     sdir = sdir_with(tmp_path, (1, h.CRITIC_PASS))
-    other = tmp_path / "other.md"
+    other = sdir / "other.md"
     other.write_text(h.CRITIC_REVISE)
     result = status({"critic_responses": [str(other)]}, "coordinator", sdir)
     assert result[0][:2] == ("FAIL", "critic-not-converged")
+
+
+@pytest.mark.parametrize("where", ["outside", "dotdot", "relative-outside"])
+def test_recorded_response_outside_the_task_folder_is_refused(tmp_path, where):
+    sdir = sdir_with(tmp_path, (1, h.CRITIC_PASS))
+    outside = tmp_path.parent / (tmp_path.name + "-outside.md")
+    outside.write_text(h.CRITIC_PASS)
+    value = {
+        "outside": str(outside),
+        "dotdot": str(sdir / ".." / ".." / outside.name),
+        "relative-outside": "../" + outside.name,
+    }[where]
+    result = status({"critic_responses": [value]}, "coordinator", sdir, root=tmp_path)
+    assert [(s, c) for s, c, _ in result] == [("FAIL", "path-unresolved")]
+
+
+def test_recorded_response_through_a_symlink_is_refused(tmp_path):
+    sdir = sdir_with(tmp_path, (1, h.CRITIC_PASS))
+    real = tmp_path / "real"
+    real.mkdir()
+    (real / "r.md").write_text(h.CRITIC_PASS)
+    (sdir / "link").symlink_to(real)
+    result = status({"critic_responses": [str(sdir / "link" / "r.md")]}, "coordinator", sdir, root=tmp_path)
+    assert [(s, c) for s, c, _ in result] == [("FAIL", "path-unresolved")]
+
+
+def test_read_text_refuses_a_fifo_without_blocking(tmp_path):
+    fifo = tmp_path / "pipe"
+    os.mkfifo(str(fifo))
+    assert gate._read_text(fifo, 1024) is None
+
+
+def test_adopt_command_quotes_its_arguments():
+    text = gate.adopt_command("t1", 1, "plan", "/my path/with space")
+    assert "'/my path/with space'" in text
 
 
 def test_revise_last_does_not_converge(tmp_path):

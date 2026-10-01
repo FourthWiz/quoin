@@ -238,3 +238,44 @@ def test_gate_does_not_import_the_launcher_or_driver():
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert done.returncode == 0 and done.stdout.strip() == "[]", done.stdout + done.stderr
+
+
+def test_explanation_fifo_is_refused_without_blocking(fx, capsys, tmp_path):
+    fx.record("plan")
+    fifo = tmp_path / "pipe"
+    os.mkfifo(str(fifo))
+    code, data = run(capsys, "gate", fx, "--explanation-file", str(fifo))
+    assert code == 2 and data["refusal"]["code"] == "explanation-unreadable"
+
+
+def test_unusable_source_dir_is_a_json_refusal(fx, capsys, tmp_path):
+    fx.record("plan")
+    code, data = run(capsys, "gate", fx, "--source-dir", str(tmp_path / "missing"))
+    assert code == 2 and data["refusal"]["code"] == "source-unavailable"
+
+
+def test_unloadable_core_script_is_a_json_refusal(fx, capsys, tmp_path):
+    fx.record("plan")
+    (tmp_path / "skills").mkdir()
+    code, data = run(capsys, "gate", fx, "--source-dir", str(tmp_path))
+    assert code in (2, 7) and (code == 7 or data["refusal"]["code"] == "source-unavailable")
+
+
+def test_store_error_after_the_audit_file_keeps_the_result(fx, capsys, monkeypatch):
+    from quoin.opencode_adapter import gate
+
+    fx.record("plan")
+
+    def boom(*args, **kwargs):
+        raise runstore.RunStoreError("corrupt-record")
+
+    monkeypatch.setattr(gate, "record_gate", boom)
+    code, data = run(capsys, "gate", fx, "--write")
+    assert code == 8 and data["verdict"] == "PASS" and data["record_error"] == {"code": "corrupt-record"}
+    assert data["artifact"] and (fx.root / data["artifact"]).is_file()
+
+
+def test_adopt_next_command_is_quoted(fx, capsys):
+    code, data = run(capsys, "adopt", fx)
+    assert code == 0 and "--project-root " in data["next"]
+    assert data["next"].split("--project-root ", 1)[1].startswith("'") == (" " in str(fx.root))

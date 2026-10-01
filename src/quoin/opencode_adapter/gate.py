@@ -18,6 +18,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -81,19 +82,22 @@ _CORE_CACHE: Dict[str, Any] = {}
 
 
 def load_core(source_dir, name: str):
-    """A pure-function core script loaded by file path, cached per path."""
+    """A pure-function core script loaded by file path, cached per path.
+    `GateRefused("source-unavailable")` when it cannot be loaded."""
     path = Path(source_dir) / "core" / "scripts" / (name + ".py")
     key = str(path.resolve())
     module = _CORE_CACHE.get(key)
     if module is None:
         spec = importlib.util.spec_from_file_location("_quoin_core_" + name, str(path))
         if spec is None or spec.loader is None:
-            raise ImportError(name)
+            raise GateRefused("source-unavailable")
         module = importlib.util.module_from_spec(spec)
         old = sys.dont_write_bytecode
         sys.dont_write_bytecode = True
         try:
             spec.loader.exec_module(module)
+        except (ImportError, OSError, SyntaxError):
+            raise GateRefused("source-unavailable") from None
         finally:
             sys.dont_write_bytecode = old
         _CORE_CACHE[key] = module
@@ -156,6 +160,26 @@ def _safe_join(project_root, *parts: str) -> Path:
     return current
 
 
+def _confine(project_root, value: Any, within: Path) -> Path:
+    """The file a recorded path names, which must lie under `within` with no
+    symlink on the way. Absolute and project-relative spellings are accepted;
+    anything that climbs out, or is not a plain string, is `PathUnresolved`."""
+    if not isinstance(value, str) or not value or "\0" in value:
+        raise PathUnresolved("a recorded path is not a usable string")
+    if ".." in value.replace("\\", "/").split("/"):
+        raise PathUnresolved("a recorded path climbs out of the task folder")
+    root = str(project_root)
+    candidate = value if os.path.isabs(value) else os.path.join(root, value)
+    rel = os.path.relpath(os.path.normpath(candidate), root)
+    if rel == "." or rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+        raise PathUnresolved("a recorded path lies outside the project")
+    full = _safe_join(project_root, *rel.split(os.sep))
+    inside = os.path.relpath(str(full), str(within))
+    if inside == "." or inside == ".." or inside.startswith(".." + os.sep) or os.path.isabs(inside):
+        raise PathUnresolved("a recorded path lies outside the task folder")
+    return full
+
+
 def task_root(project_root, task: str) -> Path:
     return _safe_join(project_root, ".workflow_artifacts", task)
 
@@ -189,15 +213,26 @@ def stage_dir(project_root, task: str, stage: Optional[int], source_dir) -> Path
 
 
 def _read_text(path: Path, limit: int) -> Optional[str]:
+    """At most `limit` bytes of a regular file, never through a symlink and
+    never blocking on a pipe or device: the file is opened non-blocking and its
+    type is checked on the open descriptor."""
     info = _lstat(path)
     if info is None or not stat.S_ISREG(info.st_mode) or info.st_size > limit:
         return None
     try:
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-        with os.fdopen(fd, "rb") as handle:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or opened.st_size > limit:
+            return None
+        with os.fdopen(fd, "rb", closefd=False) as handle:
             return handle.read(limit).decode("utf-8", "replace")
     except OSError:
         return None
+    finally:
+        os.close(fd)
 
 
 def _numbered(directory: Path, pattern: "re.Pattern[str]") -> List[Tuple[int, Path]]:
@@ -237,7 +272,7 @@ def expected_artifacts(
         for item in entry.get("harvested") or []:
             candidate = item.get("path") if isinstance(item, Mapping) else None
             if isinstance(candidate, str) and _REVIEW_RE.match(os.path.basename(candidate)):
-                chosen = Path(candidate) if os.path.isabs(candidate) else root / candidate
+                chosen = _confine(project_root, candidate, task_root(project_root, task))
                 break
         if chosen is None:
             reviews = _numbered(sdir, _REVIEW_RE)
@@ -265,28 +300,57 @@ def _rel(root: Path, path: Path) -> str:
 # verdicts
 # ---------------------------------------------------------------------------
 
-_TAG_RE = re.compile(r"`<verdict>([^<>`]*)</verdict>`")
+_TAG_RE = re.compile(r"<verdict>\s*([^<>`]*?)\s*</verdict>")
 _HEADING_VERDICT_RE = re.compile(r"^## Verdict:\s*(\S+)\s*$")
 
 
 def _visible_lines(text: str) -> List[str]:
+    """The lines a reader sees as prose: fenced code (backtick or tilde) and
+    HTML comments are dropped."""
     lines: List[str] = []
-    in_fence = False
+    fence: Optional[str] = None
+    in_comment = False
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
-        if line.lstrip().startswith("```"):
-            in_fence = not in_fence
+        if fence is not None:
+            if line.lstrip().startswith(fence):
+                fence = None
             continue
-        if not in_fence:
-            lines.append(line)
+        if not in_comment:
+            marker = line.lstrip()[:3]
+            if marker in ("```", "~~~"):
+                fence = marker
+                continue
+        kept = ""
+        rest = line
+        while rest:
+            if in_comment:
+                end = rest.find("-->")
+                if end < 0:
+                    rest = ""
+                else:
+                    in_comment = False
+                    rest = rest[end + 3:]
+            else:
+                start = rest.find("<!--")
+                if start < 0:
+                    kept += rest
+                    rest = ""
+                else:
+                    kept += rest[:start]
+                    in_comment = True
+                    rest = rest[start + 4:]
+        lines.append(kept)
     return lines
 
 
 def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
     """The verdict an artifact states, or None when it does not state exactly
-    one allowed value. Three strict forms, tried in order, all ignoring fenced
-    code: a `<verdict>` tag inside the `## Verdict` section; a `## Verdict: X`
-    heading line; a `## Verdict` section whose only non-blank line is the value."""
+    one allowed value. Fenced code and comments are ignored. Three forms are
+    read together: a `<verdict>` tag (bare or inside a code span) in the
+    `## Verdict` section, a `## Verdict: X` heading line, and a `## Verdict`
+    section whose only non-blank line is the value. Every value found must be
+    the same single allowed value; two different values refuse."""
     lines = _visible_lines(text)
     body: List[str] = []
     found = False
@@ -297,13 +361,12 @@ def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
         if line.startswith("## "):
             break
         body.append(line)
-    if found:
-        tags = {m.group(1) for m in _TAG_RE.finditer("\n".join(body))}
-        if len(tags) == 1:
-            (only,) = tags
-            if only in allowed:
-                return only
     values = set()
+    if found:
+        values.update(m.group(1) for m in _TAG_RE.finditer("\n".join(body)))
+        meaningful = [ln.strip() for ln in body if ln.strip()]
+        if len(meaningful) == 1 and meaningful[0] in allowed:
+            values.add(meaningful[0])
     for line in lines:
         match = _HEADING_VERDICT_RE.match(line)
         if match:
@@ -312,30 +375,28 @@ def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
         (only,) = values
         if only in allowed:
             return only
-    if found:
-        meaningful = [ln.strip() for ln in body if ln.strip()]
-        if len(meaningful) == 1 and meaningful[0] in allowed:
-            return meaningful[0]
     return None
-
-
-def _resolve_recorded(project_root, value: str) -> Path:
-    return Path(value) if os.path.isabs(value) else Path(project_root) / value
 
 
 def critic_status(
     entry: Mapping[str, Any], origin: str, sdir: Path, settings: Mapping[str, Any], *, project_root=None,
+    task_dir: Optional[Path] = None,
 ) -> List[Tuple[str, str, str]]:
     """`(status, code, detail)` items for the plan's critic loop.
 
-    A coordinator entry trusts only the responses it recorded; any other origin
-    falls back to the responses on disk. No response is a refusal unless the
+    Recorded responses must lie under the task folder. A coordinator entry
+    trusts only the responses it recorded; any other origin falls back to the
+    responses on disk when none were recorded. No response is a refusal unless the
     settings say a critic is not required or the plan was adopted, which warns."""
     recorded = [r for r in (entry.get("critic_responses") or []) if isinstance(r, str)]
-    if origin == "coordinator":
-        used = [_resolve_recorded(project_root or sdir, r) for r in recorded]
-    elif recorded:
-        used = [_resolve_recorded(project_root or sdir, r) for r in recorded]
+    if recorded:
+        within = task_dir or sdir
+        try:
+            used = [_confine(project_root or sdir, r, within) for r in recorded]
+        except PathUnresolved as exc:
+            return [("FAIL", "path-unresolved", exc.detail)]
+    elif origin == "coordinator":
+        used = []
     else:
         used = [path for _n, path in _numbered(sdir, _CRITIC_RE)]
     if not used:
@@ -430,7 +491,8 @@ def _fail(code: str, detail: str = "") -> Item:
 
 def adopt_command(task: str, stage: Optional[int], phase: str, project_root) -> str:
     stage_part = "" if stage is None else " --stage %d" % stage
-    return "quoin opencode adopt --task %s%s --phase %s --project-root %s" % (task, stage_part, phase, project_root)
+    return "quoin opencode adopt --task %s%s --phase %s --project-root %s" % (
+        shlex.quote(task), stage_part, shlex.quote(phase), shlex.quote(str(project_root)))
 
 
 def _now_iso(clock: Callable[[], float]) -> str:
@@ -575,6 +637,7 @@ def evaluate(
     checks.append(_check_run_outcome(task, phase, entry, directory) if have else _skip("run-outcome", "no evidence entry"))
     checks.append(_check_boundary(entry) if have else _skip("boundary", "no evidence entry"))
 
+    tdir = Path(project_root) / ".workflow_artifacts" / task
     sdir: Optional[Path] = None
     path_error: Optional[str] = None
     try:
@@ -583,7 +646,11 @@ def evaluate(
         path_error = exc.detail
     paths: List[Path] = []
     if have and path_error is None:
-        paths, missing = expected_artifacts(project_root, task, stage, phase, entry, sdir)
+        try:
+            paths, missing = expected_artifacts(project_root, task, stage, phase, entry, sdir)
+        except PathUnresolved as exc:
+            paths, missing, path_error = [], [], exc.detail
+    if have and path_error is None:
         exist_items: List[Item] = [_fail("artifact-missing", m) for m in missing]
         checks.append(_check("artifacts-exist", exist_items or ([("PASS", "", "")] if paths else [])) if (paths or missing)
                       else _skip("artifacts-exist", "this phase has no required artifact"))
@@ -611,8 +678,9 @@ def evaluate(
         checks.append(_skip("artifact-hashes", "no evidence entry"))
         checks.append(_skip("repo-state", "no evidence entry"))
 
-    checks.append(_check_envelope(project_root, source_dir, entry) if have else _skip("envelope", "no evidence entry"))
-    checks.append(_check_verdict(project_root, phase, entry, origin_of(entry), sdir, settings, paths) if have
+    checks.append(_check_envelope(project_root, source_dir, entry, tdir) if have else _skip("envelope", "no evidence entry"))
+    checks.append(_check_verdict(project_root, phase, entry, origin_of(entry), sdir, settings, paths,
+                                  tdir) if have
                   else _skip("phase-verdict", "no evidence entry"))
     checks.append(_check_tests(phase, entry, settings) if have else _skip("tests", "no evidence entry"))
     checks.append(_check_ledger(entry) if have else _skip("ledger", "no evidence entry"))
@@ -637,11 +705,14 @@ def origin_of(entry: Optional[Mapping[str, Any]]) -> Optional[str]:
     return entry.get("origin") if entry else None
 
 
-def _check_envelope(project_root, source_dir, entry) -> Check:
+def _check_envelope(project_root, source_dir, entry, within) -> Check:
     recorded = entry.get("envelope_path")
     if not recorded:
         return _skip("envelope", "no envelope was recorded")
-    path = _resolve_recorded(project_root, recorded)
+    try:
+        path = _confine(project_root, recorded, within)
+    except PathUnresolved as exc:
+        return _check("envelope", [_fail("path-unresolved", exc.detail)])
     text = _read_text(path, MAX_ENVELOPE_BYTES)
     if text is None:
         return _check("envelope", [_fail("envelope-invalid", "the envelope file cannot be read")])
@@ -655,11 +726,11 @@ def _check_envelope(project_root, source_dir, entry) -> Check:
     return _check("envelope", [("PASS", "", "")])
 
 
-def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths) -> Check:
+def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths, task_dir=None) -> Check:
     if phase == "plan":
         if sdir is None:
             return _skip("phase-verdict", "the stage folder is unresolved")
-        items = critic_status(entry, origin or "", sdir, settings, project_root=project_root)
+        items = critic_status(entry, origin or "", sdir, settings, project_root=project_root, task_dir=task_dir)
         return _check("phase-verdict", [(s, c, d) for s, c, d in items])
     if phase == "review":
         if not paths:
@@ -785,7 +856,7 @@ def render_artifact(result: GateResult, *, date: str) -> str:
     if result.explanation is not None:
         lines += ["", "## Summary of what was produced", "",
                   "Explanation supplied with this gate (not evaluated by any check):", "", "```"]
-        lines += ["  " + ln for ln in _redact(result.explanation).splitlines()]
+        lines += ["    " + ln for ln in _redact(result.explanation).splitlines()]
         lines.append("```")
     return "\n".join(lines) + "\n"
 
@@ -826,7 +897,9 @@ def _written_by_gate(path: Path) -> bool:
 def write_artifact(project_root, result: GateResult, sdir: Path, *, source_dir, clock: Callable[[], float] = time.time) -> Path:
     """Write `gate-PHASE-DATE.md` into the stage folder (the task root for a
     stage-less phase), replacing a file this writer made on the same day.
-    Another tool's file of that name is never touched."""
+    The date is the UTC date; another runtime that names its audit file by
+    local date may pick a different file name near midnight. Another tool's
+    file of that name is never touched."""
     folder = _checked_dir(project_root, Path(sdir))
     date = time.strftime("%Y-%m-%d", time.gmtime(clock()))
     target = folder / ("gate-%s-%s.md" % (result.phase, date))

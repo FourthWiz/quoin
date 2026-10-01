@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -191,3 +192,43 @@ def test_bytes_runner_caps_output(tmp_path):
     assert code == 0 and data.startswith(b"git version") and cut is False
     code, data, cut = runstore._default_git_bytes_runner(("git", "--version"), 10.0, 3)
     assert cut is True and len(data) == 3
+
+
+def test_bytes_runner_timeout_stops_a_grandchild_holding_the_pipe():
+    import subprocess as sp
+    import time as t
+
+    started = t.monotonic()
+    with pytest.raises(sp.TimeoutExpired):
+        runstore._default_git_bytes_runner(("sh", "-c", "sleep 8 & wait"), 0.5, 1 << 20)
+    assert t.monotonic() - started < 5
+
+
+def test_bytes_runner_normal_exit_is_not_a_timeout():
+    code, data, cut = runstore._default_git_bytes_runner(("git", "--version"), 30.0, 1 << 20)
+    assert code == 0 and cut is False
+
+
+def test_source_git_calls_disable_repo_config_hooks():
+    seen = []
+
+    def runner(argv, timeout_s):
+        seen.append(tuple(argv))
+        return 0, " M a.py\0" if "status" in argv and "--porcelain=v1" in argv else "abc\n"
+
+    def bytes_runner(argv, timeout_s, max_bytes):
+        seen.append(tuple(argv))
+        return 0, b"", False
+
+    runstore._source_state("/r", "/r", ["/r"], runner, bytes_runner, time.monotonic() + 60, 1 << 20, 10)
+    scoped = [a for a in seen if "--porcelain=v1" in a or "diff" in a or "ls-files" in a]
+    assert scoped and all("core.fsmonitor=false" in a and "core.untrackedCache=false" in a for a in scoped)
+
+
+def test_too_many_untracked_files_refused_before_sorting():
+    listing = b"".join(b"f%d\0" % n for n in range(11))
+    digest, error = runstore._source_digest(
+        ".", ["."], lambda argv, t, m: (0, b"" if "diff" in argv else listing, False),
+        time.monotonic() + 60, 1 << 20, 10,
+    )
+    assert digest is None and error == "too-many-files"

@@ -20,6 +20,7 @@ import json
 import os
 import re
 import secrets as _secrets
+import signal
 import stat
 import subprocess
 import threading
@@ -58,6 +59,10 @@ SOURCE_EXCLUDED_DIRS = (".workflow_artifacts", ".opencode", ".quoin", ".workspac
 SOURCE_DIGEST_MAX_BYTES = 64 * 1024 * 1024
 SOURCE_MAX_UNTRACKED = 5000
 GIT_TIMEOUT_S = 30.0
+# A repository's own config must not be able to hide edits from the source
+# state (a file-system monitor hook can, and also runs a command) or serve a
+# stale untracked listing.
+_SOURCE_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false")
 _HASH_CHUNK = 1024 * 1024
 
 
@@ -703,22 +708,33 @@ GitBytesRunner = Callable[[Sequence[str], float, int], Tuple[int, bytes, bool]]
 def _default_git_bytes_runner(argv: Sequence[str], timeout_s: float, max_bytes: int) -> Tuple[int, bytes, bool]:
     """Run git and return `(exit code, stdout bytes, truncated)`. Output past
     `max_bytes` kills the process and sets `truncated`; running past
-    `timeout_s` raises `subprocess.TimeoutExpired`."""
+    `timeout_s` raises `subprocess.TimeoutExpired`. The child leads its own
+    session so the timeout also stops anything it started that still holds
+    the output pipe."""
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME")}
     env["LC_ALL"] = "C"
     env["GIT_OPTIONAL_LOCKS"] = "0"
     proc = subprocess.Popen(
         list(argv), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True,
     )
     fired = threading.Event()
 
+    def _stop() -> None:
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:  # pragma: no cover - non-POSIX
+                proc.kill()
+        except OSError:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
     def _expire() -> None:
         fired.set()
-        try:
-            proc.kill()
-        except OSError:
-            pass
+        _stop()
 
     timer = threading.Timer(max(timeout_s, 0.0), _expire)
     timer.daemon = True
@@ -736,7 +752,7 @@ def _default_git_bytes_runner(argv: Sequence[str], timeout_s: float, max_bytes: 
             size += len(chunk)
             if size > max_bytes:
                 truncated = True
-                proc.kill()
+                _stop()
                 break
         proc.wait()
     finally:
@@ -744,11 +760,12 @@ def _default_git_bytes_runner(argv: Sequence[str], timeout_s: float, max_bytes: 
         if proc.stdout is not None:
             proc.stdout.close()
         if proc.poll() is None:
-            proc.kill()
+            _stop()
             proc.wait()
-    if fired.is_set() and not truncated:
+    if fired.is_set() and not truncated and proc.returncode == -signal.SIGKILL:
         raise subprocess.TimeoutExpired(list(argv), timeout_s)
     data = b"".join(chunks)
+    del chunks
     if truncated:
         data = data[:max_bytes]
     return proc.returncode, data, truncated
@@ -787,7 +804,7 @@ def _source_digest(
         return None, "budget"
     try:
         code, diff, cut = bytes_run(
-            ("git", "-C", repo, "-c", "core.quotepath=off", "diff", "--binary", "--no-ext-diff",
+            ("git", "-C", repo, *_SOURCE_GIT_CONFIG, "-c", "core.quotepath=off", "diff", "--binary", "--no-ext-diff",
              "--no-textconv", "--no-color", "--no-renames", "HEAD", "--", *specs),
             timeout(), max_source_bytes,
         )
@@ -798,7 +815,7 @@ def _source_digest(
         if timeout() <= 0:
             return None, "budget"
         code, listing, cut = bytes_run(
-            ("git", "-C", repo, "ls-files", "-z", "--others", "--exclude-standard", "--", *specs),
+            ("git", "-C", repo, *_SOURCE_GIT_CONFIG, "ls-files", "-z", "--others", "--exclude-standard", "--", *specs),
             timeout(), max_source_bytes,
         )
     except subprocess.TimeoutExpired:
@@ -809,11 +826,15 @@ def _source_digest(
         return None, "too-large"
     if code != 0:
         return None, "git-failed"
+    if listing.count(b"\0") > max_untracked_files:
+        return None, "too-many-files"
     entries = sorted(item for item in listing.split(b"\0") if item)
     if len(entries) > max_untracked_files:
         return None, "too-many-files"
     digest = hashlib.sha256()
-    digest.update(b"quoin-source/1\0diff\0" + diff + b"\0untracked\0")
+    digest.update(b"quoin-source/1\0diff\0")
+    digest.update(diff)
+    digest.update(b"\0untracked\0")
     remaining = max_source_bytes - len(diff)
     for raw in entries:
         if timeout() <= 0:
@@ -858,7 +879,7 @@ def _source_state(
         return out
     try:
         code, text = run(
-            ("git", "-C", repo, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
+            ("git", "-C", repo, *_SOURCE_GIT_CONFIG, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
              "--ignore-submodules=none", "--", *specs),
             left,
         )
@@ -1060,6 +1081,9 @@ def load_workflow_state(directory: Path, task: str) -> Optional[Dict[str, Any]]:
         or not isinstance(data.get("settings"), dict)
     ):
         raise RunStoreError("corrupt-record")
+    for item in data["entries"]:
+        if not isinstance(item, dict) or not isinstance(item.get("origin"), str) or not isinstance(item.get("phase"), str):
+            raise RunStoreError("corrupt-record")
     if data.get("task") != task:
         raise RunStoreError("state-task-mismatch")
     return data
