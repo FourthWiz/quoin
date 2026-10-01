@@ -1841,9 +1841,13 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(f"  takeover: {_supervisor.takeover_pointer(args.task, project_root)}")
         return 3
 
+    child_env = dict(os.environ)
+    child_env[_supervisor.HEADLESS_CHILD_ENV] = "1"
     launch_fn = _supervisor.make_launch_fn(
         project_root,
         permission_mode=args.permission_mode,
+        timeout=_supervisor.launch_timeout_from_env(),
+        env=child_env,
     )
     launches = 0
     memory_dir = paths["memory_dir"]
@@ -1935,6 +1939,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             project_root,
             launch_fn=_counting_launch_fn,
             max_relaunch=args.max_relaunch,
+            repair_allowance=_supervisor.repair_allowance_from_env(),
         )
     except SystemExit:
         raise

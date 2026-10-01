@@ -76,7 +76,7 @@ def _make_fake_launch_fn(project_root: Path, task: str, progress_calls: int = 0,
 
 
 def _patch_make_launch_fn(monkeypatch, fake_fn):
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: fake_fn)
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: fake_fn)
 
 
 def _lock_path(project_root: Path, task: str) -> Path:
@@ -469,7 +469,7 @@ def test_launch_fn_raising_under_flag_writes_error_result_and_halt(monkeypatch, 
         raise RuntimeError("boom")
 
     monkeypatch.setattr(sup, "supervise", _raiser)
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: (lambda t: None))
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: (lambda t: None))
 
     with pytest.raises(RuntimeError):
         cli.main(["run", "--autonomous", "demo", "--project-root", str(project), "--halt-on-abort"])
@@ -485,7 +485,7 @@ def test_launch_fn_raising_without_flag_writes_nothing_but_releases_lock(monkeyp
         raise RuntimeError("boom")
 
     monkeypatch.setattr(sup, "supervise", _raiser)
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: (lambda t: None))
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: (lambda t: None))
 
     with pytest.raises(RuntimeError):
         cli.main(["run", "--autonomous", "demo", "--project-root", str(project)])
@@ -501,7 +501,7 @@ def test_sigterm_under_flag_writes_stopped_result_and_halt(monkeypatch, project)
         raise AssertionError("SIGTERM handler should have raised SystemExit before this line")
 
     monkeypatch.setattr(sup, "supervise", _fake_supervise)
-    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None: (lambda t: None))
+    monkeypatch.setattr(sup, "make_launch_fn", lambda project_root, permission_mode=None, **kwargs: (lambda t: None))
 
     with pytest.raises(SystemExit) as exc:
         cli.main(["run", "--autonomous", "demo", "--project-root", str(project), "--halt-on-abort"])

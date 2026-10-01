@@ -140,9 +140,13 @@ def test_explicit_claude_runtime_wires_like_the_default(monkeypatch, project):
 
     monkeypatch.setattr(sup, "make_launch_fn", fake_make)
     monkeypatch.setattr(sup, "supervise", fake_supervise)
+    assert cli.main(["run", "demo", "--project-root", str(project)]) == 0
     assert cli.main(["run", "demo", "--runtime", "claude", "--project-root", str(project)]) == 0
-    assert made == [((project,), {"permission_mode": "allowedTools"})]
-    assert calls[0][0] == ("demo", project) and calls[0][1]["max_relaunch"] == 10
+    default, explicit = made
+    assert explicit == default
+    assert explicit[0] == (project,) and explicit[1]["permission_mode"] == "allowedTools"
+    assert calls[1][0] == calls[0][0] == ("demo", project)
+    assert calls[1][1]["max_relaunch"] == calls[0][1]["max_relaunch"] == 10
 
 
 def test_claude_run_never_imports_the_opencode_adapter(project):

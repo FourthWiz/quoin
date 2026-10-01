@@ -134,3 +134,19 @@ def test_real_38_garbage_argv_exits_0(real_python38, tmp_path):
         capture_output=True, text=True, timeout=15, env=_SAFE_ENV,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_real_38_progress_rule_runs(real_python38):
+    program = (
+        "import importlib.util\n"
+        "spec = importlib.util.spec_from_file_location('quoin_auto_resume_py38rule', %r)\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        "print(mod.next_streak(False, ('implement',), 1, 0, 2))\n"
+    ) % (str(CORE_PATH),)
+    result = subprocess.run(
+        [real_python38, "-B", "-c", program],
+        capture_output=True, text=True, timeout=15, env=_SAFE_ENV,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "(1, 1, 'repair')"

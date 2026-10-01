@@ -265,9 +265,26 @@ relaunch loop: on each iteration, check the done sentinel (exit
 SUCCESS if present), then the halt sentinel (exit HALTED with the
 recorded reason, no further relaunch), then the relaunch cap
 (`MAX_RELAUNCH`, exit ABORTED "relaunch cap" if reached). Otherwise it
-counts completion sentinels, relaunches a fresh headless session, and
-re-counts; two consecutive relaunches that produce zero new completion
-sentinels (by the union glob above) abort with "no forward progress".
+counts completion sentinels and snapshots the task-branch commits,
+relaunches a fresh headless session, and re-checks. A launch made
+progress when a new completion sentinel appeared (by the union glob
+above) or a new commit landed on the task branch. The commit probe looks
+at repos with their own `.git` entry at the project root or in its
+immediate child dirs whose current branch equals the task name or ends
+with `/` plus it, under one 5 s budget; any failure reads as no commit
+signal, and a branch switch or a repo appearing or disappearing never
+counts. `QUOIN_SUPERVISOR_HEAD_PROBE=0` disables the commit signal.
+Two consecutive launches without progress abort with
+"no forward progress". A phase that has its completion marker
+(`implement.tasks.done`) but not `{phase}.done` gets up to
+`QUOIN_SUPERVISOR_REPAIR_RELAUNCHES` (default 2, clamp 0..5, `0`
+restores the old timing) extra relaunches first; if it is still
+unrepaired the abort reason is `phase completion not repaired: <phase>`.
+A run that hangs on every launch can hold the lock for up to the relaunch cap times the launch timeout, about 15 h at the defaults; the child watcher reports a stall after 30 min.
+The supervisor never writes any `.done` file, and the relaunch cap
+still bounds everything. Each launch has a timeout of
+`QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS` (default 5400, clamp 900..14400),
+and every child's environment carries `QUOIN_HEADLESS_CHILD=1`.
 Backoff between relaunches is exponential, capped. `MAX_RELAUNCH` alone
 guarantees termination even under continual sub-phase progress. The
 relaunch string always carries `--autonomous` (belt) alongside the
@@ -382,12 +399,22 @@ sign the budget itself needs raising, not a bug to route around.
 
 **Knobs and defaults:** `QUOIN_AUTO_RESUME` (`0` disables; default on),
 `QUOIN_AUTO_RESUME_MAX` (default 10, clamp 1..100), `QUOIN_AUTO_RESUME_IDLE_SECS`
-(default 900, min 60), `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6, clamp 1..7).
+(default 900, min 60), `QUOIN_AUTO_RESUME_HANDOFF_AT` (default 6, clamp 1..7);
+supervisor knobs `QUOIN_SUPERVISOR_REPAIR_RELAUNCHES` (default 2, clamp 0..5),
+`QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS` (default 5400, clamp 900..14400),
+`QUOIN_SUPERVISOR_HEAD_PROBE` (`0` disables the commit signal).
+
+The Stop and hand-off gates apply the same progress and repair rules as
+the supervisor. The Stop hook and the SessionStart path skip the commit
+probe to stay inside their hook time budgets; only the `handoff`
+subcommand probes. The counter file gains `last_heads` and
+`repairs_used`; `repairs_used` also resets on progress, and both otherwise reset only by the consent rule.
 
 **Halt reasons** (any of these is terminal — no further continuation):
 `auto-resume cap`, `no forward progress`, `relaunch cap`, `session age cap`,
 `context exhaustion`, `paused by user`, `taken over by user`,
-`supervisor stopped by signal`, `supervisor error`.
+`supervisor stopped by signal`, `supervisor error`,
+`phase completion not repaired: <phase>`.
 
 **The harness's own block cap is an independent outer bound.** Claude
 Code itself stops honoring a Stop hook's `"decision": "block"` response
@@ -423,11 +450,27 @@ ever written by it.
 the task folder): `run-continue-arm-<sid>.txt`, `run-continue-consent-<sid>.txt`,
 `session-ended-<sid>.txt`, `auto-resume-<task>.json` (the continuation
 counter), `run-supervisor-<task>.pid`/`.result`/`.log` (the single-driver
-lock and its outcome).
+lock and its outcome), `child-watch-<task>.json` (the parent's child-watch window state).
 
 **Un-registering the continuation hook** (if you need to disable it at
 the install level rather than via the opt-out knob above): see the Hooks
 Guide's reference entry for the ninth stanza.
+
+### Headless children never yield with pending work
+
+**Trigger.** Any tool result saying a command is running in, or was moved to, the background, or that it timed out: an explicit background launch, or the harness moving a long foreground command to the background on its own (about 120 s by default; the exact threshold and wording are not pinned here).
+
+**Why.** A headless `claude -p` process may exit as soon as the session ends its turn, so the pending command's result is never seen. A headless child may or may not be re-invoked afterwards; never rely on it. An orphaned command may still finish later, which is why every run is keyed by a token that keeps a stale result from being read.
+
+**Rule.** Under `AUTONOMOUS` the session must not end its turn while such work is pending. For a headless child this holds without exception: when `QUOIN_HEADLESS_CHILD=1` is present in the environment, the session is such a child. The supervisor sets it for every headless child it launches; the prose rule applies whether or not it is set. The only exemption is an interactive session that ends its turn after a hand-off with the child watcher armed. Plain foreground calls are fine only for commands known to finish well under 120 s. `Monitor` is not available to headless children.
+
+**Mechanism.** Start the command detached with `python3 __QUOIN_HOME__/scripts/wait_for.py start --rc-file F --token TOK --log L -- CMD...` (no trailing `&`, no `nohup`; the helper detaches). Then repeat FOREGROUND calls of `python3 __QUOIN_HOME__/scripts/wait_for.py wait --file F --token TOK --max-secs 540`, each with the Bash tool `timeout` set to 600000, until a terminal line:
+- `READY|<rc>` continues with that exit code.
+- `WAITING|<secs>` means call `wait` again.
+- `DEAD|<secs>`, `EXPIRED|<secs>` or `ERROR|<reason>` are terminal failures: stop waiting, record FAIL with the tail of the log file, never retry the wait loop.
+The overall budget is `QUOIN_WAIT_BUDGET_SECS` (default 3600). If the environment sets `BASH_DEFAULT_TIMEOUT_MS` and `BASH_MAX_TIMEOUT_MS` these are only an extra layer; the prose rule stays the guarantee.
+
+**Headless full-suite recipe.** Token = the gate session id plus the UTC start stamp. Name the rc, log and junit files with the token under `.workflow_artifacts/cache/`. Start `python3 -m pytest -rA --junitxml="$JUNIT" quoin/` through `wait_for.py start` with the log as `"$RA"`, wait as above, and read the result only after `READY`. Then run `known_red.py` and `gate_fullsuite_sidecar.py record` exactly as the gate's foreground recipe does, on the same files, taking `RC` from `READY|<rc>`. The same rule covers every long test command in an autonomous run, the affected-area suite included.
 
 ### Taking over a headless child
 
@@ -463,6 +506,26 @@ Hand-off notices and halt files carry the child's session id and the
 loop has ended, so no child is alive) and after `--takeover` has confirmed
 the child is stopped. `relaunches` in the run result still counts launch
 attempts, including one skipped because a halt appeared first.
+
+### Watching a handed-off child
+
+**Command.** `python3 __QUOIN_HOME__/scripts/child_watch.py --project-root <root> --task <task> --supervisor-pid <pid> [--child-session <uuid>] [--once]`. One call is one watch window (default 10 minutes): it polls the run's files, prints exactly one `WATCH|...` line and exits; the parent re-arms it with the `next=` command until a terminal state. `--once` checks without waiting and writes nothing. It compares progress against the watcher's stored baseline only when given the same `--supervisor-pid` as the armed watcher, because without it the key is the lock's current pid, which differs after a supervisor replacement, and the check then reports ALIVE without a progress comparison. A `--once` check may also report STALL one window early.
+
+**Signals.** Each window looks at six things: the done sentinel, the halt sentinel, the needs-decision sentinel (only a new or rewritten file counts), new `.done` completion sentinels under the progress directory, new commits on the task branch, and supervisor and child liveness.
+
+**States.** Terminal (exit 10, `next=report-and-stop`): DONE (done sentinel present), HALTED (halt sentinel, with its reason), NEEDS_DECISION (a new decision request), DEAD (no live supervisor or child), EXPIRED (watched longer than the max hours). Non-terminal (exit 0, `next=` is the exact re-arm command): PROGRESS (a new completion sentinel or task-branch commit), ALIVE (running, nothing new), STALL (nothing new for the stall window count). ERROR (exit 2) reports invalid input. Every line ends with the `observe-only` field and carries a `takeover=` pointer.
+
+**Liveness.** A pid counts only when the supervisor lock names it. Where `ps` works, the supervisor command line must contain `quoin` and the task name, and the child command line the lock's current child session id. DEAD is reported only after a 5 s grace re-read of the sentinels, so a late done or halt wins.
+
+**Stall.** No new `.done` and no task-branch commit for `QUOIN_CHILD_WATCH_STALL_WINDOWS` windows (default 3, so 30 minutes) is reported once as STALL and watching continues; any progress re-arms the report.
+
+**Observe-only.** The watcher and the parent never kill, relaunch, take over or do phase work; the supervisor lock owns the run. A message the user types in the parent ends re-arming.
+
+**No monitor tool.** A parent with no background-capable tool prints the notice plus a `--once` command to run by hand.
+
+**Knobs.** `QUOIN_CHILD_WATCH_INTERVAL_SECS` (default 600, clamp 60..1500), `QUOIN_CHILD_WATCH_STALL_WINDOWS` (default 3, clamp 1..48), `QUOIN_CHILD_WATCH_MAX_HOURS` (default 12, clamp 1..72).
+
+**Hooks.** While the watcher runs as a background command the Stop hook stands down because the stop payload lists background work; a watcher re-invocation arrives as a `<task-notification>` prompt and does not disarm the run. The Stop and SessionStart hand-offs have no parent turn to arm a watcher; use `--once` there.
 
 ### How the hand-off finds the CLI
 
