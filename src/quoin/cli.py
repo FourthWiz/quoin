@@ -1430,6 +1430,7 @@ def _acquire_supervisor_lock(
     max_relaunch: int,
     token: "str | None",
     _retried: bool = False,
+    runtime: "str | None" = None,
 ) -> tuple:
     """Best-effort single-driver lock (D-06/D-19).
 
@@ -1489,6 +1490,8 @@ def _acquire_supervisor_lock(
         "writer": "cli",
         "task": task,
     }
+    if runtime is not None:
+        content["runtime"] = runtime
     payload = (json.dumps(content, sort_keys=True) + "\n").encode("utf-8")
     if _create_lock_exclusive(lock_path, payload):
         return True, None
@@ -1500,8 +1503,15 @@ def _acquire_supervisor_lock(
             held_pid2 = -1
         return False, held_pid2
     return _acquire_supervisor_lock(
-        memory_dir, lock_path, result_path, task, max_relaunch, token, _retried=True
+        memory_dir, lock_path, result_path, task, max_relaunch, token,
+        _retried=True, runtime=runtime,
     )
+
+
+def _lock_runtime(data) -> str:
+    """Runtime that owns a parsed lock; a missing key means claude."""
+    value = data.get("runtime") if isinstance(data, dict) else None
+    return value if isinstance(value, str) and value else "claude"
 
 
 def _strip_handoff_pythonpath() -> None:
