@@ -29,13 +29,14 @@ def test_subsection_contents(subsection):
     for needle in (
         "wait_for.py start", "wait_for.py wait", "600000", "--max-secs 540", "--token",
         "`QUOIN_HEADLESS_CHILD=1` is present in the environment", "`DEAD", "`EXPIRED",
-        "QUOIN_WAIT_BUDGET_SECS", "must not end its turn", "The only exemption is an interactive session",
+        "QUOIN_WAIT_BUDGET_SECS", "must not end its turn", "The only exemption is an interactive session that ends its turn after a hand-off with the child watcher armed",
         "running in, or was moved to, the background",
     ):
         assert needle in flat, needle
     assert flat.index("wait_for.py wait") < flat.index("`known_red.py`")
     assert "The supervisor sets it for every headless child it launches" in flat
     assert "once its launch-time change lands" not in flat
+    assert "deliberately ends its turn after a hand-off." not in flat
 
 
 def test_start_command_has_no_shell_background_or_nohup(subsection):

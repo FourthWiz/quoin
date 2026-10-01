@@ -190,6 +190,8 @@ confirms the child is stopped before printing the command that resumes it
 interactively. Halt files MAY carry a `takeover_hint:` line pointing at
 that verb; the five-field halt schema is otherwise unchanged.
 
+An adapter that hands a span off from a live interactive session SHOULD let that session watch the child observe-only at a bounded cadence (completion, halt, decision-needed, new completion sentinels, new task-branch commits, process liveness), report terminal conditions and stalls promptly with the takeover pointer, and never drive the run itself; without a background mechanism it prints a one-shot manual check command.
+
 This document fixes only the path templates and the phase-roster
 coverage rule, so independently implemented supervisors and resumers
 agree on the contract shape; the supervisor loop mechanics themselves
