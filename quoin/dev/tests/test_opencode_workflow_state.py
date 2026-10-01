@@ -231,6 +231,8 @@ def test_run_phase_constants_match_the_shipped_manifest():
     assert accepted <= runnable
     assert runstore.PLAN_PRODUCER_PHASES <= runnable
     for run_id in mapped:
-        assert run_id in runstore.RUN_PHASES_FOR[runstore.entry_phase_for_run(run_id)], run_id
+        accepted_for = runstore.RUN_PHASES_FOR.get(runstore.entry_phase_for_run(run_id), frozenset())
+        assert run_id in accepted_for, "%s is mapped to %r, which does not accept it" % (
+            run_id, runstore.entry_phase_for_run(run_id))
     for run_id in other:
         assert run_id not in accepted | set(runstore.PLAN_PRODUCER_PHASES) | mapped | unmapped, run_id

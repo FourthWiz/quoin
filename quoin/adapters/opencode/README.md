@@ -233,8 +233,8 @@ no live OpenCode run or corporate gateway has been qualified.
   invariant. A verdict must be a `<verdict>` tag, a `## Verdict: X` line, or a
   lone value line under `## Verdict`; anything else is `verdict-unparseable`.
   A single `--phase plan` run is refused as `critic-missing` until a critic
-  has run: use `--phase thorough_plan` (also accepted as `thorough-plan`
-  on the run command), or `adopt` after the critic. Any untracked, non-ignored
+  has run: use `--phase thorough-plan` (the run command also accepts
+  `thorough_plan`), or `adopt` after the critic. Any untracked, non-ignored
   file created after evidence was recorded (for example `__pycache__` or
   `.pytest_cache` from a test run) changes the source digest and makes the
   gate refuse. Repositories are found as immediate subdirectories only; edits
