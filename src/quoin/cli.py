@@ -1579,6 +1579,143 @@ def _cmd_opencode_status(args: argparse.Namespace) -> int:
     return 0
 
 
+_GATED_PHASE_CHOICES = ("discover", "architect", "plan", "implement", "review")
+_GATE_EXPLANATION_MAX_BYTES = 64 * 1024
+
+
+def _gated_phase(value: str) -> str:
+    """Gated ids and run phases share one rule: a hyphen reads as an underscore
+    (argparse applies `type` before the `choices` check)."""
+    return value.replace("-", "_")
+
+
+def _gate_json(payload: dict, code: int) -> int:
+    payload["exit_code"] = code
+    print(json.dumps(payload, sort_keys=True))
+    return code
+
+
+def _gate_refusal(code: str, message: str, exit_code: int = 2) -> int:
+    return _gate_json(
+        {"outcome": "GATE_REFUSED", "refusal": {"code": code, "message": message}}, exit_code
+    )
+
+
+def _read_explanation(path: str) -> "str | None":
+    """The explanation file, at most 64 KiB, never through a symlink."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    with os.fdopen(fd, "rb") as handle:
+        return handle.read(_GATE_EXPLANATION_MAX_BYTES).decode("utf-8", "replace")
+
+
+def _with_task_lock(project_root: pathlib.Path, task: str, body):
+    """Run `body()` holding the task lock; `None` plus the holder's pid when it
+    is held. The `.result` file belongs to the phase run and is never written."""
+    paths = _supervisor_paths(project_root, task)
+    acquired, held_pid = _acquire_supervisor_lock(
+        paths["memory_dir"], paths["lock"], paths["result"], task, 0, None, runtime="opencode"
+    )
+    if not acquired:
+        return None, held_pid
+    try:
+        return body(), None
+    finally:
+        _release_supervisor_lock(paths["lock"], os.getpid())
+
+
+def _lock_refusal(project_root: pathlib.Path, task: str, held_pid) -> int:
+    holder = _read_json(_supervisor_paths(project_root, task)["lock"])
+    runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
+    return _gate_refusal("lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3)
+
+
+def _cmd_opencode_gate(args: argparse.Namespace) -> int:
+    """`quoin opencode gate`: evaluate one gated phase and print one JSON line.
+
+    No option approves, adopts or chooses evidence. Without `--write` nothing
+    is written and no lock is taken."""
+    from quoin.opencode_adapter import gate, runstore  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    explanation = None
+    if args.explanation_file:
+        try:
+            explanation = _read_explanation(args.explanation_file)
+        except OSError:
+            return _gate_refusal("explanation-unreadable", "the explanation file cannot be read")
+    source_dir = _resolve_source_dir(args.source_dir)
+    try:
+        stage, phase = gate.precheck(project_root, args.task, args.stage, args.phase)
+    except gate.GateRefused as exc:
+        return _gate_refusal(exc.code, "the request cannot be gated")
+
+    def work():
+        result = gate.evaluate(
+            project_root, args.task, stage, phase, source_dir=source_dir, explanation=explanation
+        )
+        payload = result.to_dict()
+        payload["outcome"] = "GATE_PASSED" if result.verdict == "PASS" else "GATE_REFUSED"
+        payload["artifact"] = None
+        code = 0 if result.verdict == "PASS" else 7
+        if args.write:
+            try:
+                sdir = gate.stage_dir(project_root, args.task, stage, source_dir)
+                path = gate.write_artifact(project_root, result, sdir, source_dir=source_dir)
+            except gate.PathUnresolved as exc:
+                payload["artifact_error"] = {"code": "path-unresolved", "message": exc.detail}
+                return payload, 8
+            except gate.GateArtifactError as exc:
+                payload["artifact_error"] = {"code": exc.code, "message": exc.message}
+                return payload, 8
+            payload["artifact"] = os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
+            gate.record_gate(project_root, args.task, stage, phase, result, path)
+        return payload, code
+
+    try:
+        if args.write:
+            outcome, held_pid = _with_task_lock(project_root, args.task, work)
+            if outcome is None:
+                return _lock_refusal(project_root, args.task, held_pid)
+        else:
+            outcome = work()
+    except (runstore.RunStoreError, OSError) as exc:
+        return _gate_refusal("store-unreadable", "the run store cannot be read (%s)" % getattr(exc, "code", type(exc).__name__))
+    payload, code = outcome
+    return _gate_json(payload, code)
+
+
+def _cmd_opencode_adopt(args: argparse.Namespace) -> int:
+    """`quoin opencode adopt`: a human step recording evidence for a phase that
+    finished outside a recorded run. The gate never treats it as run-verified."""
+    from quoin.opencode_adapter import evidence, gate, runstore  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    try:
+        stage, phase = gate.precheck(project_root, args.task, args.stage, args.phase)
+    except gate.GateRefused as exc:
+        return _gate_refusal(exc.code, "the request cannot be adopted")
+
+    def work():
+        snapshot = evidence.take_snapshot(project_root, args.task, phase)
+        return evidence.record_evidence(project_root, args.task, stage, phase, "adopted", snapshot)
+
+    try:
+        entry, held_pid = _with_task_lock(project_root, args.task, work)
+    except (runstore.RunStoreError, OSError) as exc:
+        return _gate_refusal("store-unreadable", "the run store cannot be read (%s)" % getattr(exc, "code", type(exc).__name__))
+    if entry is None:
+        return _lock_refusal(project_root, args.task, held_pid)
+    stage_part = "" if stage is None else f" --stage {stage}"
+    return _gate_json({
+        "outcome": "ADOPTED",
+        "entry": {
+            "task": args.task, "stage": stage, "phase": phase, "origin": entry["origin"],
+            "recorded_at": entry["recorded_at"], "coverage": entry["evidence"]["coverage"],
+        },
+        "next": f"quoin opencode gate --task {args.task}{stage_part} --phase {phase} --write",
+    }, 0)
+
+
 def _is_posix() -> bool:
     return os.name == "posix"
 
@@ -2420,6 +2557,48 @@ def main(argv: list[str] | None = None) -> int:
         help="Validate and print the command, directory and environment variable names without starting.",
     )
 
+    opencode_gate_p = opencode_sub.add_parser(
+        "gate",
+        description=(
+            "Evaluate one gated phase of a task with the deterministic checks and print one "
+            "JSON line. Without --write nothing is written and no lock is taken. Exit 0 PASS, "
+            "7 FAIL, 2 refused or unreadable store, 3 task lock held, 8 audit file not written."
+        ),
+        help="Evaluate a gated phase with the deterministic checks",
+    )
+    opencode_gate_p.add_argument("--task", required=True, help="Task name.")
+    opencode_gate_p.add_argument(
+        "--phase", required=True, type=_gated_phase, choices=_GATED_PHASE_CHOICES,
+        help="Gated phase: " + ", ".join(_GATED_PHASE_CHOICES) + ".",
+    )
+    opencode_gate_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
+    opencode_gate_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
+    opencode_gate_p.add_argument(
+        "--write", action="store_true",
+        help="Write the audit file into the stage folder and record the verdict (takes the task lock).",
+    )
+    opencode_gate_p.add_argument(
+        "--explanation-file", default=None,
+        help="Text to carry in the audit file; read up to 64 KiB, never evaluated.",
+    )
+    opencode_gate_p.add_argument("--source-dir", default=None, help="Quoin source tree; defaults to the installed one.")
+
+    opencode_adopt_p = opencode_sub.add_parser(
+        "adopt",
+        description=(
+            "Human-only step: record evidence for a phase that finished outside a recorded run, "
+            "from the tree as it is now. Takes the task lock. Exit 0, 2 refused, 3 lock held."
+        ),
+        help="Record evidence for a phase finished outside a recorded run",
+    )
+    opencode_adopt_p.add_argument("--task", required=True, help="Task name.")
+    opencode_adopt_p.add_argument(
+        "--phase", required=True, type=_gated_phase, choices=_GATED_PHASE_CHOICES,
+        help="Gated phase: " + ", ".join(_GATED_PHASE_CHOICES) + ".",
+    )
+    opencode_adopt_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
+    opencode_adopt_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
+
     dashboard_p = sub.add_parser(
         "dashboard",
         description=(
@@ -2672,6 +2851,10 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_status(args)
         if args.opencode_command == "start":
             return _cmd_opencode_start(args)
+        if args.opencode_command == "gate":
+            return _cmd_opencode_gate(args)
+        if args.opencode_command == "adopt":
+            return _cmd_opencode_adopt(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)

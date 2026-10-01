@@ -216,6 +216,37 @@ no live OpenCode run or corporate gateway has been qualified.
   opens the OpenCode terminal interface with the compiled profile.
   `--dry-run` validates and prints the command, directory and environment
   variable names without starting it. Exit 3 when a check refuses.
+- `quoin opencode gate --task NAME --phase PHASE [--stage N] [--project-root PATH] [--write] [--explanation-file PATH] [--source-dir PATH]`
+  evaluates one gated phase (`discover`, `architect`, `plan`, `implement`,
+  `review`) with a fixed list of deterministic checks and prints one JSON
+  line. No option approves, adopts or chooses evidence, and `--explanation-file`
+  text (up to 64 KiB) is only carried in the audit file, never evaluated.
+  Without `--write` it is read-only and takes no lock; with `--write` it takes
+  the task lock, writes `gate-PHASE-DATE.md` into the stage folder (the task
+  root for `discover` and `architect`), and records the verdict. A same-day
+  file this command wrote is replaced; a file of that name written by another
+  tool is never touched. Exit 0 passed, 7 refused by a check, 2 refused
+  request or unreadable store, 3 task lock held, 8 audit file not written or
+  not valid. Artifacts must pass `validate_artifact.py` strictly, so a plan or
+  review written through a skill's plain-English fallback (no `## For human`
+  section) or with extra headings is refused as `artifact-invalid` naming the
+  invariant. A verdict must be a `<verdict>` tag, a `## Verdict: X` line, or a
+  lone value line under `## Verdict`; anything else is `verdict-unparseable`.
+  A single `--phase plan` run is refused as `critic-missing` until a critic
+  has run: use `--phase thorough_plan` (also accepted as `thorough-plan`
+  on the run command), or `adopt` after the critic. Any untracked, non-ignored
+  file created after evidence was recorded (for example `__pycache__` or
+  `.pytest_cache` from a test run) changes the source digest and makes the
+  gate refuse. Repositories are found as immediate subdirectories only; edits
+  inside a deeper untracked repository or a submodule are not reflected in the
+  digest.
+- `quoin opencode adopt --task NAME --phase PHASE [--stage N] [--project-root PATH]`
+  is a human step that records evidence for a phase finished outside a
+  recorded run (for example in the terminal interface), from the tree as it is
+  now, and prints the `gate` command to run next. The gate never treats
+  adopted evidence as run-verified: it reports `run-evidence-absent` and
+  `boundary-unverified` as warnings, and still refuses any later change.
+  Takes the task lock. Exit 0, 2 refused request, 3 task lock held.
 - `quoin doctor --runtime opencode --profile NAME` adds the profile checks
   described under "Runtime driver".
 

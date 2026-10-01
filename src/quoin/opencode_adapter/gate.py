@@ -517,17 +517,10 @@ def _check_boundary(entry) -> Check:
 
 
 
-def evaluate(
-    project_root, task: str, stage: Optional[int], phase: str, *, source_dir,
-    explanation: Optional[str] = None,
-    runner: Optional[runstore.GitRunner] = None,
-    bytes_runner: Optional[runstore.GitBytesRunner] = None,
-    clock: Callable[[], float] = time.time,
-) -> GateResult:
-    """Run every check for one gated phase and return the verdict.
-
-    `explanation` is stored on the result after redaction and truncation; it is
-    never passed to a check, so it cannot change the verdict."""
+def precheck(project_root, task: str, stage: Any, phase: str) -> Tuple[Optional[int], str]:
+    """The normalized `(stage, phase)`, or `GateRefused` when the request cannot
+    name a gated phase of an existing task. Phases accept the hyphen spelling
+    the run path accepts, since both share one normalization rule."""
     phase = runstore.normalize_phase(phase)
     try:
         runstore.check_task_name(task)
@@ -544,6 +537,21 @@ def evaluate(
         raise GateRefused("invalid-stage") from None
     if stage is not None and phase in runstore.STAGELESS_PHASES:
         raise GateRefused("invalid-stage")
+    return stage, phase
+
+
+def evaluate(
+    project_root, task: str, stage: Optional[int], phase: str, *, source_dir,
+    explanation: Optional[str] = None,
+    runner: Optional[runstore.GitRunner] = None,
+    bytes_runner: Optional[runstore.GitBytesRunner] = None,
+    clock: Callable[[], float] = time.time,
+) -> GateResult:
+    """Run every check for one gated phase and return the verdict.
+
+    `explanation` is stored on the result after redaction and truncation; it is
+    never passed to a check, so it cannot change the verdict."""
+    stage, phase = precheck(project_root, task, stage, phase)
 
     state_error: Optional[str] = None
     state: Optional[Dict[str, Any]] = None
