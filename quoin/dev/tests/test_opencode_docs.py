@@ -345,6 +345,26 @@ def test_driver_capability_flags_match_rows():
     assert driver.NON_GIT_DISCOVERY_VERIFIED is status["non-git-discovery"]
 
 
+def test_no_unverified_runtime_row_is_a_driver_dependency():
+    from quoin.opencode_adapter import driver
+
+    unverified = []
+    for _claim, row_status, _evidence, note in _runtime_rows():
+        match = re.match(r"^`key: ([a-z0-9-]+)`", note)
+        if row_status.startswith("unverified"):
+            unverified.append(match.group(1))
+    assert unverified, "the table is expected to keep at least one open question"
+    for key in unverified:
+        assert key not in driver.DRIVER_CITED_CAPABILITIES, key
+    adapter = REPO_ROOT / "src" / "quoin" / "opencode_adapter"
+    for name in ("driver", "events", "runstore", "launch_env", "phase_loop", "status", "categories"):
+        for number, line in enumerate((adapter / (name + ".py")).read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            for key in unverified:
+                assert ('"%s"' % key) not in line and ("'%s'" % key) not in line, (name, number, key)
+
+
 def test_compatibility_release_lines():
     text = COMPAT_PATH.read_text(encoding="utf-8")
     sections = _sections(text, 2)
