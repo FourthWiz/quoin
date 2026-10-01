@@ -57,6 +57,18 @@ non-interactive environments (CI, pipes), it defaults to global without promptin
 `quoin install` and bare `quoin` remain backward-compatible aliases for the
 Claude install path.
 
+### Installing from a source checkout
+
+`bash quoin/install.sh` needs a Python that meets `requires-python` in
+`pyproject.toml` (3.10 or newer). It looks at `QUOIN_PYTHON` first, then every
+directory on `PATH` in order (any `python3.N`), then the usual Homebrew,
+python.org, pyenv, uv, asdf, mise, conda and MacPorts locations, and finally
+`uv python find`. `bash quoin/install.sh --print-python` prints the interpreter
+it would use without installing; set `QUOIN_PYTHON=/path/to/python3` to choose
+one yourself. A `.venv` synced from another computer usually has a dangling
+interpreter link: recreate it on this machine, or point `QUOIN_PYTHON` at a
+local interpreter. The affected-area test runner reports such a venv by name.
+
 ### Auto-resume and the install record
 
 `quoin install` records the interpreter and source tree it ran from
