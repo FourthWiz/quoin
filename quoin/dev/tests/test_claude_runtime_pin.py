@@ -228,6 +228,8 @@ def _patch_run(monkeypatch, supervise_fn):
 
 @pytest.mark.parametrize("mode", ["allowedTools", "bypassPermissions"])
 def test_run_wiring(monkeypatch, project, mode):
+    for name in ("QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS", "QUOIN_SUPERVISOR_REPAIR_RELAUNCHES", "QUOIN_SUPERVISOR_HEAD_PROBE"):
+        monkeypatch.delenv(name, raising=False)
     made, sup_calls = _patch_run(
         monkeypatch, lambda *a, **k: sup.SuperviseResult("SUCCESS")
     )

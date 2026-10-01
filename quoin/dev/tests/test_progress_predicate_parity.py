@@ -94,6 +94,8 @@ def _repo(d, branch):
 
 @needs_git
 def test_probe_parity_on_real_repos(sup, ar, tmp_path, monkeypatch):
+    for name in ("QUOIN_SUPERVISOR_LAUNCH_TIMEOUT_SECS", "QUOIN_SUPERVISOR_REPAIR_RELAUNCHES", "QUOIN_SUPERVISOR_HEAD_PROBE"):
+        monkeypatch.delenv(name, raising=False)
     wrap = tmp_path / "wrap"
     wrap.mkdir()
     _repo(wrap / "alpha", "feat/demo")
@@ -104,6 +106,47 @@ def test_probe_parity_on_real_repos(sup, ar, tmp_path, monkeypatch):
         assert got and got == ar._probe_task_heads("demo", p)
     monkeypatch.setenv(sup.HEAD_PROBE_ENV, "0")
     assert sup.probe_task_heads("demo", wrap) == () == ar._probe_task_heads("demo", wrap)
+
+
+_GIT_SELECTORS = (
+    "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+    "GIT_CONFIG_PARAMETERS", "GIT_CEILING_DIRECTORIES",
+)
+
+
+@needs_git
+def test_probe_ignores_inherited_git_selectors(sup, ar, tmp_path, monkeypatch):
+    monkeypatch.delenv("QUOIN_SUPERVISOR_HEAD_PROBE", raising=False)
+    wrap = tmp_path / "wrap"
+    wrap.mkdir()
+    _repo(wrap / "alpha", "feat/demo")
+    clean = sup.probe_task_heads("demo", wrap)
+    assert clean and clean == ar._probe_task_heads("demo", wrap)
+    for name in _GIT_SELECTORS:
+        monkeypatch.setenv(name, str(tmp_path / "nowhere"))
+    assert sup.probe_task_heads("demo", wrap) == clean
+    assert ar._probe_task_heads("demo", wrap) == clean
+
+
+def test_probe_env_has_no_git_selectors(sup, ar, tmp_path, monkeypatch):
+    (tmp_path / ".git").mkdir()
+    for name in _GIT_SELECTORS:
+        monkeypatch.setenv(name, "x")
+    envs = []
+
+    class _R:
+        returncode = 0
+        stdout = "c" * 40 + "\nfeat/demo\n"
+
+    def runner(argv, **kw):
+        envs.append(kw["env"])
+        return _R()
+
+    sup.probe_task_heads("demo", tmp_path, runner=runner, environ=dict(__import__("os").environ))
+    ar._probe_task_heads("demo", tmp_path, runner=runner)
+    assert len(envs) == 2
+    for env in envs:
+        assert not set(_GIT_SELECTORS) & set(env)
 
 
 def test_probe_issues_identical_argv(sup, ar, tmp_path, monkeypatch):

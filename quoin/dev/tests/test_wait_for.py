@@ -215,6 +215,42 @@ def test_budget_exceeded_expires_and_stops_group(tmp_path):
             pass
 
 
+def _group_gone(pid):
+    try:
+        os.killpg(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return True
+    return False
+
+
+@pytest.mark.skipif(not hasattr(os, "killpg"), reason="needs process groups")
+def test_expired_kills_term_ignoring_group_member_after_leader_exits(tmp_path):
+    marker = tmp_path / "ignore.up"
+    script = 'trap "" TERM; : > %s; exec sleep 120' % str(marker)
+    rc, r = _start(tmp_path, "sh", "-c", script)
+    assert r.stdout.startswith("STARTED|")
+    pid = int(r.stdout.strip().split("|")[1])
+    try:
+        end = time.time() + 15
+        while not marker.exists() and time.time() < end:
+            time.sleep(0.05)
+        assert marker.exists()
+        start_epoch = int(Path(str(rc) + ".start").read_text().split()[2])
+        line, code = wf.do_wait(str(rc), "tok1", 5, 1, 60, clock=lambda: start_epoch + 1000.0, sleep=time.sleep)
+        assert code == 4 and line.startswith("EXPIRED|")
+        # macOS reports EPERM for a group whose only members are unreaped
+        # zombies, so that counts as gone too.
+        end = time.time() + 10
+        while time.time() < end and not _group_gone(pid):
+            time.sleep(0.1)
+        assert _group_gone(pid)
+    finally:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def test_start_never_uses_a_shell():
     assert "shell=True" not in CORE_PATH.read_text(encoding="utf-8")
     assert "os.system" not in CORE_PATH.read_text(encoding="utf-8")

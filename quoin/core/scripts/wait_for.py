@@ -196,19 +196,26 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _terminate_group(pid: int, sleep: Callable[[float], None]) -> None:
-    """SIGTERM the runner's group, then SIGKILL it if it is still there.
+    """SIGTERM the runner's group, then SIGKILL the whole group.
 
-    Only a group led by `pid` is signalled, so a reused pid that now belongs to
-    an unrelated process is left alone.
+    The runner exits on SIGTERM, so after the grace period the leader is
+    usually gone while a TERM-ignoring member of its group is still running;
+    the group is killed anyway. Only a group led by `pid` is signalled before
+    the SIGTERM, so a reused pid that now belongs to an unrelated process is
+    left alone.
     """
     try:
         if os.getpgid(pid) != pid:
             return
         os.killpg(pid, signal.SIGTERM)
-        sleep(2)
-        if os.getpgid(pid) == pid:
-            os.killpg(pid, signal.SIGKILL)
     except OSError:
+        return
+    sleep(2)
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        # ProcessLookupError: the group is already empty; PermissionError: the
+        # pid now names a group this user cannot signal.
         pass
 
 

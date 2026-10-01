@@ -283,6 +283,10 @@ def abort_reason(streak: int, repair_phases: tuple) -> Optional[str]:
     return "phase completion not repaired: " + ", ".join(repair_phases)
 
 
+# Inherited repository-selection variables override `git -C`, so the probe drops them.
+_GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_CONFIG_PARAMETERS", "GIT_CEILING_DIRECTORIES")
+
+
 def probe_task_heads(
     task: str,
     project_root: PathLike,
@@ -320,6 +324,8 @@ def probe_task_heads(
         run = subprocess.run if runner is None else runner
         now = time.monotonic if clock is None else clock
         child_env = dict(env_in)
+        for _name in _GIT_ENV_DROP:
+            child_env.pop(_name, None)
         child_env["GIT_OPTIONAL_LOCKS"] = "0"
         child_env["GIT_TERMINAL_PROMPT"] = "0"
         deadline = now() + budget_secs
