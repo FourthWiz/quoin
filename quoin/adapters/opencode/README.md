@@ -227,11 +227,16 @@ no live OpenCode run or corporate gateway has been qualified.
   file this command wrote is replaced; a file of that name written by another
   tool is never touched. Exit 0 passed, 7 refused by a check, 2 refused
   request or unreadable store, 3 task lock held, 8 audit file not written or
-  not valid. Artifacts must pass `validate_artifact.py` strictly, so a plan or
+  not valid, or written but the verdict could not be recorded (the payload
+  keeps `outcome` and the verdict and adds `artifact_error` or `record_error`,
+  each with `code` and `message`; `outcome` is not a promise that the state
+  was updated). Artifacts must pass `validate_artifact.py` strictly, so a plan or
   review written through a skill's plain-English fallback (no `## For human`
   section) or with extra headings is refused as `artifact-invalid` naming the
   invariant. A verdict must be a `<verdict>` tag, a `## Verdict: X` line, or a
   lone value line under `## Verdict`; anything else is `verdict-unparseable`.
+  When several forms are present, or the section's lines lead with different
+  allowed values, all must agree: conflicting forms refuse.
   A single `--phase plan` run is refused as `critic-missing` until a critic
   has run: use `--phase thorough-plan` (the run command also accepts
   `thorough_plan`), or `adopt` after the critic. Any untracked, non-ignored

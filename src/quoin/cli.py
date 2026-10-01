@@ -1686,7 +1686,10 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
             try:
                 gate.record_gate(project_root, args.task, stage, phase, result, path)
             except (runstore.RunStoreError, OSError) as exc:
-                payload["record_error"] = {"code": getattr(exc, "code", type(exc).__name__)}
+                payload["record_error"] = {
+                    "code": getattr(exc, "code", type(exc).__name__),
+                    "message": type(exc).__name__,
+                }
                 return payload, 8
         return payload, code
 

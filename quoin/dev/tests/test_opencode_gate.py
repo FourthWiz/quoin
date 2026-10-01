@@ -58,6 +58,12 @@ REVIEW = ("APPROVED", "CHANGES_REQUESTED", "BLOCKED")
      REVIEW, "APPROVED"),
     ("", REVIEW, None),
     ("## Verdict\n\nBLOCKED\n", REVIEW, "BLOCKED"),
+    ("## Verdict\n\nCHANGES_REQUESTED\n\nOnce fixed this becomes\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n**CHANGES_REQUESTED**\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n    <verdict>APPROVED</verdict>\n\nCHANGES_REQUESTED\n", REVIEW, None),
+    ("## Verdict\n\nREVISE\n\nlater\n<verdict>PASS</verdict>\n", CRITIC, None),
+    ("## Verdict\n\n> REVISE\n<verdict>PASS</verdict>\n", CRITIC, None),
+    ("## Verdict\n\n<verdict>APPROVED</verdict>\n\nAPPROVED\n", REVIEW, "APPROVED"),
 ])
 def test_parse_verdict(text, allowed, expected):
     assert gate.parse_verdict(text, allowed) == expected
@@ -146,7 +152,7 @@ def test_disk_fallback_for_phase_run_passes(tmp_path):
 
 def test_recorded_responses_win_over_disk(tmp_path):
     sdir = sdir_with(tmp_path, (1, h.CRITIC_PASS))
-    other = sdir / "other.md"
+    other = sdir / "critic-response-9.md"
     other.write_text(h.CRITIC_REVISE)
     result = status({"critic_responses": [str(other)]}, "coordinator", sdir)
     assert result[0][:2] == ("FAIL", "critic-not-converged")
@@ -294,3 +300,15 @@ def test_core_loading_is_cached():
     first = gate.load_core(SOURCE, "path_resolve")
     assert gate.load_core(SOURCE, "path_resolve") is first
     assert hasattr(gate.load_core(SOURCE, "handoff_validate"), "validate")
+
+
+def test_recorded_critic_outside_stage_or_misnamed_is_refused(tmp_path):
+    sdir = sdir_with(tmp_path, (1, h.CRITIC_PASS))
+    sibling = sdir.parent / "stage-9"
+    sibling.mkdir(exist_ok=True)
+    (sibling / "critic-response-1.md").write_text(h.CRITIC_PASS)
+    result = status({"critic_responses": [str(sibling / "critic-response-1.md")]}, "coordinator", sdir)
+    assert result[0][:2] == ("FAIL", "path-unresolved")
+    (sdir / "notes.md").write_text(h.CRITIC_PASS)
+    result = status({"critic_responses": [str(sdir / "notes.md")]}, "coordinator", sdir)
+    assert result[0][:2] == ("FAIL", "path-unresolved")

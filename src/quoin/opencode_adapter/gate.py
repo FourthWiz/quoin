@@ -176,7 +176,7 @@ def _confine(project_root, value: Any, within: Path) -> Path:
     full = _safe_join(project_root, *rel.split(os.sep))
     inside = os.path.relpath(str(full), str(within))
     if inside == "." or inside == ".." or inside.startswith(".." + os.sep) or os.path.isabs(inside):
-        raise PathUnresolved("a recorded path lies outside the task folder")
+        raise PathUnresolved("a recorded path lies outside its folder")
     return full
 
 
@@ -212,12 +212,13 @@ def stage_dir(project_root, task: str, stage: Optional[int], source_dir) -> Path
     return folder
 
 
-def _read_text(path: Path, limit: int) -> Optional[str]:
+def _read_text(path: Path, limit: int, *, prefix: bool = False) -> Optional[str]:
     """At most `limit` bytes of a regular file, never through a symlink and
     never blocking on a pipe or device: the file is opened non-blocking and its
-    type is checked on the open descriptor."""
+    type is checked on the open descriptor. A file larger than `limit` yields
+    None unless `prefix` is set, which returns its first `limit` bytes."""
     info = _lstat(path)
-    if info is None or not stat.S_ISREG(info.st_mode) or info.st_size > limit:
+    if info is None or not stat.S_ISREG(info.st_mode) or (info.st_size > limit and not prefix):
         return None
     try:
         fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
@@ -225,7 +226,7 @@ def _read_text(path: Path, limit: int) -> Optional[str]:
         return None
     try:
         opened = os.fstat(fd)
-        if not stat.S_ISREG(opened.st_mode) or opened.st_size > limit:
+        if not stat.S_ISREG(opened.st_mode) or (opened.st_size > limit and not prefix):
             return None
         with os.fdopen(fd, "rb", closefd=False) as handle:
             return handle.read(limit).decode("utf-8", "replace")
@@ -233,6 +234,10 @@ def _read_text(path: Path, limit: int) -> Optional[str]:
         return None
     finally:
         os.close(fd)
+
+
+def _read_prefix(path: Path, limit: int) -> Optional[str]:
+    return _read_text(path, limit, prefix=True)
 
 
 def _numbered(directory: Path, pattern: "re.Pattern[str]") -> List[Tuple[int, Path]]:
@@ -272,7 +277,7 @@ def expected_artifacts(
         for item in entry.get("harvested") or []:
             candidate = item.get("path") if isinstance(item, Mapping) else None
             if isinstance(candidate, str) and _REVIEW_RE.match(os.path.basename(candidate)):
-                chosen = _confine(project_root, candidate, task_root(project_root, task))
+                chosen = _confine(project_root, candidate, sdir)
                 break
         if chosen is None:
             reviews = _numbered(sdir, _REVIEW_RE)
@@ -344,14 +349,30 @@ def _visible_lines(text: str) -> List[str]:
     return lines
 
 
+_LEADING_WORD_RE = re.compile(r"^[\s>*_`]*([A-Za-z_]+)")
+
+
+def _leading_word(line: str) -> Optional[str]:
+    """The first word of a line once tags are removed and blockquote, emphasis
+    and code-span markers are stripped, e.g. `CHANGES_REQUESTED` for
+    `> **CHANGES_REQUESTED** until fixed`."""
+    match = _LEADING_WORD_RE.match(_TAG_RE.sub(" ", line))
+    return match.group(1).strip("_") if match else None
+
+
 def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
     """The verdict an artifact states, or None when it does not state exactly
     one allowed value. Fenced code and comments are ignored. Three forms are
     read together: a `<verdict>` tag (bare or inside a code span) in the
     `## Verdict` section, a `## Verdict: X` heading line, and a `## Verdict`
     section whose only non-blank line is the value. Every value found must be
-    the same single allowed value; two different values refuse."""
+    the same single allowed value; two different values refuse. An allowed
+    value that leads any line of the `## Verdict` section must agree too, so a
+    standalone value line cannot be outvoted by a tag elsewhere in the section.
+    More than one exact `## Verdict` heading refuses."""
     lines = _visible_lines(text)
+    if sum(1 for line in lines if line.rstrip() == "## Verdict") > 1:
+        return None
     body: List[str] = []
     found = False
     for line in lines:
@@ -362,16 +383,18 @@ def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
             break
         body.append(line)
     values = set()
+    leading = set()
     if found:
         values.update(m.group(1) for m in _TAG_RE.finditer("\n".join(body)))
         meaningful = [ln.strip() for ln in body if ln.strip()]
         if len(meaningful) == 1 and meaningful[0] in allowed:
             values.add(meaningful[0])
+        leading = {w for w in (_leading_word(ln) for ln in body) if w in allowed}
     for line in lines:
         match = _HEADING_VERDICT_RE.match(line)
         if match:
             values.add(match.group(1))
-    if len(values) == 1:
+    if len(values) == 1 and not leading - values:
         (only,) = values
         if only in allowed:
             return only
@@ -380,19 +403,22 @@ def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
 
 def critic_status(
     entry: Mapping[str, Any], origin: str, sdir: Path, settings: Mapping[str, Any], *, project_root=None,
-    task_dir: Optional[Path] = None,
 ) -> List[Tuple[str, str, str]]:
     """`(status, code, detail)` items for the plan's critic loop.
 
-    Recorded responses must lie under the task folder. A coordinator entry
-    trusts only the responses it recorded; any other origin falls back to the
-    responses on disk when none were recorded. No response is a refusal unless the
-    settings say a critic is not required or the plan was adopted, which warns."""
+    Recorded responses must be `critic-response-N.md` files in the stage
+    folder. A coordinator entry trusts only the responses it recorded; any
+    other origin falls back to the responses on disk when none were recorded.
+    No response is a refusal unless the settings say a critic is not required
+    or the plan was adopted, which warns."""
     recorded = [r for r in (entry.get("critic_responses") or []) if isinstance(r, str)]
     if recorded:
-        within = task_dir or sdir
         try:
-            used = [_confine(project_root or sdir, r, within) for r in recorded]
+            used = []
+            for name in recorded:
+                if not _CRITIC_RE.match(os.path.basename(name.replace("\\", "/"))):
+                    raise PathUnresolved("a recorded critic response is not named critic-response-N.md")
+                used.append(_confine(project_root or sdir, name, sdir))
         except PathUnresolved as exc:
             return [("FAIL", "path-unresolved", exc.detail)]
     elif origin == "coordinator":
@@ -612,7 +638,10 @@ def evaluate(
     """Run every check for one gated phase and return the verdict.
 
     `explanation` is stored on the result after redaction and truncation; it is
-    never passed to a check, so it cannot change the verdict."""
+    never passed to a check, so it cannot change the verdict. Raises
+    `GateRefused("source-unavailable")` when a core script cannot be loaded,
+    which can happen after the pre-checks (while resolving the stage folder or
+    validating an envelope)."""
     stage, phase = precheck(project_root, task, stage, phase)
 
     state_error: Optional[str] = None
@@ -679,8 +708,7 @@ def evaluate(
         checks.append(_skip("repo-state", "no evidence entry"))
 
     checks.append(_check_envelope(project_root, source_dir, entry, tdir) if have else _skip("envelope", "no evidence entry"))
-    checks.append(_check_verdict(project_root, phase, entry, origin_of(entry), sdir, settings, paths,
-                                  tdir) if have
+    checks.append(_check_verdict(project_root, phase, entry, origin_of(entry), sdir, settings, paths) if have
                   else _skip("phase-verdict", "no evidence entry"))
     checks.append(_check_tests(phase, entry, settings) if have else _skip("tests", "no evidence entry"))
     checks.append(_check_ledger(entry) if have else _skip("ledger", "no evidence entry"))
@@ -726,11 +754,11 @@ def _check_envelope(project_root, source_dir, entry, within) -> Check:
     return _check("envelope", [("PASS", "", "")])
 
 
-def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths, task_dir=None) -> Check:
+def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths) -> Check:
     if phase == "plan":
         if sdir is None:
             return _skip("phase-verdict", "the stage folder is unresolved")
-        items = critic_status(entry, origin or "", sdir, settings, project_root=project_root, task_dir=task_dir)
+        items = critic_status(entry, origin or "", sdir, settings, project_root=project_root)
         return _check("phase-verdict", [(s, c, d) for s, c, d in items])
     if phase == "review":
         if not paths:
@@ -880,7 +908,7 @@ def _checked_dir(project_root, sdir: Path) -> Path:
 
 
 def _written_by_gate(path: Path) -> bool:
-    text = _read_text(path, 8 * 1024) if _lstat(path) else None
+    text = _read_prefix(path, 8 * 1024) if _lstat(path) else None
     if text is None:
         return False
     lines = text.splitlines()

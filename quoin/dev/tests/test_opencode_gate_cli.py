@@ -258,7 +258,7 @@ def test_unloadable_core_script_is_a_json_refusal(fx, capsys, tmp_path):
     fx.record("plan")
     (tmp_path / "skills").mkdir()
     code, data = run(capsys, "gate", fx, "--source-dir", str(tmp_path))
-    assert code in (2, 7) and (code == 7 or data["refusal"]["code"] == "source-unavailable")
+    assert code == 2 and data["refusal"]["code"] == "source-unavailable"
 
 
 def test_store_error_after_the_audit_file_keeps_the_result(fx, capsys, monkeypatch):
@@ -271,7 +271,7 @@ def test_store_error_after_the_audit_file_keeps_the_result(fx, capsys, monkeypat
 
     monkeypatch.setattr(gate, "record_gate", boom)
     code, data = run(capsys, "gate", fx, "--write")
-    assert code == 8 and data["verdict"] == "PASS" and data["record_error"] == {"code": "corrupt-record"}
+    assert code == 8 and data["verdict"] == "PASS" and data["record_error"] == {"code": "corrupt-record", "message": "RunStoreError"}
     assert data["artifact"] and (fx.root / data["artifact"]).is_file()
 
 

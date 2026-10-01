@@ -1084,6 +1084,14 @@ def load_workflow_state(directory: Path, task: str) -> Optional[Dict[str, Any]]:
     for item in data["entries"]:
         if not isinstance(item, dict) or not isinstance(item.get("origin"), str) or not isinstance(item.get("phase"), str):
             raise RunStoreError("corrupt-record")
+        for key in ("runs", "critic_responses", "harvested"):
+            if item.get(key) is not None and not isinstance(item[key], list):
+                raise RunStoreError("corrupt-record")
+        if item.get("evidence") is not None and not isinstance(item["evidence"], dict):
+            raise RunStoreError("corrupt-record")
+        stage = item.get("stage")
+        if stage is not None and (not isinstance(stage, int) or isinstance(stage, bool)):
+            raise RunStoreError("corrupt-record")
     if data.get("task") != task:
         raise RunStoreError("state-task-mismatch")
     return data
