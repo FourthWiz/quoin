@@ -4,6 +4,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import select
 import signal
 import subprocess
 import sys
@@ -44,6 +45,7 @@ class Harness:
         scenario_path = fake.write_scenario(tmp_path / "scenario.json", scenario)
         self.shim = fake.write_shim(tmp_path / "bin", scenario_path, self.state)
         self.procs = []
+        self._starts = {}
 
     def env(self):
         env = dict(os.environ)
@@ -72,11 +74,31 @@ class Harness:
             return []
         return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
-    def grandchildren(self):
-        path = self.state / "grandchildren.txt"
+    def _read_pids(self, name):
+        path = self.state / name
         if not path.exists():
             return []
         return [int(x) for x in path.read_text().split()]
+
+    def grandchildren(self):
+        """Grandchild pids; each is remembered with its start time the first time it is seen alive."""
+        pids = self._read_pids("grandchildren.txt")
+        for pid in pids:
+            if pid not in self._starts:
+                start = _start_time(pid)
+                if start is not None:
+                    self._starts[pid] = start
+        return pids
+
+    def intermediates(self):
+        return self._read_pids("intermediates.txt")
+
+    def touch_stop(self):
+        try:
+            self.state.mkdir(parents=True, exist_ok=True)
+            (self.state / "stop").write_text("")
+        except OSError:
+            pass
 
     def wait_for(self, predicate, seconds=10):
         deadline = time.time() + seconds
@@ -97,11 +119,22 @@ class Harness:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 pass
-        for pid in self.grandchildren():
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        # The stop marker ends every helper process on its own; a pid is
+        # signalled only when it is still alive with the start time recorded
+        # when it was first seen, so a recycled pid is never touched.
+        self.touch_stop()
+        for pid in self._read_pids("grandchildren.txt") + self._read_pids("intermediates.txt"):
+            start = self._starts.get(pid)
+            if start is None or not _alive(pid):
+                continue
+            deadline = time.time() + 2
+            while time.time() < deadline and _alive(pid):
+                time.sleep(0.05)
+            if _alive(pid) and _start_time(pid) == start:
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
 
 
 @pytest.fixture()
@@ -126,6 +159,17 @@ def _alive(pid):
     res = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
     stat = res.stdout.strip()
     return bool(stat) and not stat.startswith("Z")
+
+
+def _start_time(pid):
+    env = dict(os.environ, LC_ALL="C", TZ="UTC")
+    res = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)], capture_output=True, text=True, env=env)
+    return res.stdout.strip() or None
+
+
+def _ppid(pid):
+    res = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)], capture_output=True, text=True)
+    return int(res.stdout.strip()) if res.stdout.strip() else None
 
 
 def _ready(h, pid):
@@ -298,10 +342,18 @@ def test_approval_scenarios(make):
     )
     h.procs.append(proc)
     h.wait_for(lambda: h.invocations())
-    time.sleep(0.5)
+    seen = b""
+    deadline = time.time() + 10
+    while b"permission requested" not in seen and time.time() < deadline:
+        ready, _w, _x = select.select([proc.stderr], [], [], 0.2)
+        if ready:
+            chunk = os.read(proc.stderr.fileno(), 4096)
+            if not chunk:
+                break
+            seen += chunk
     os.killpg(proc.pid, signal.SIGKILL)
-    _out, err = proc.communicate(timeout=5)
-    assert b"permission requested" in err
+    proc.communicate(timeout=5)
+    assert b"permission requested" in seen
 
 
 @pytest.mark.parametrize("name", [
@@ -337,3 +389,300 @@ def test_stdout_raw_and_oversized_steps(tmp_path):
     lines = res.stdout.split(b"\n")
     assert lines[0] == b"not json" and len(lines[1]) == 5000
     assert res.stderr == b"warn\n"
+
+
+# ---------------------------------------------------------------------------
+# hardening and stage-2 scenarios
+# ---------------------------------------------------------------------------
+
+def _lines(data):
+    return [json.loads(l) for l in data.decode().splitlines() if l.strip().startswith("{")]
+
+
+def _popen(h, *args):
+    proc = subprocess.Popen(
+        [str(h.shim), *args], cwd=str(h.cwd), env=h.env(), stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
+    )
+    h.procs.append(proc)
+    return proc
+
+
+def _readable(stream, seconds):
+    ready, _w, _x = select.select([stream], [], [], seconds)
+    return bool(ready)
+
+
+@pytest.mark.parametrize("bad", ["../evil", "a/b", "x" * 129, "bad id", "ses.dot", "ses\n"])
+def test_session_ids_outside_the_safe_shape_are_unknown_sessions(make, bad):
+    h = make("record_only")
+    res = h.run("run", "--session", bad, "--", "x")
+    assert res.returncode == 1 and res.stdout == b"" and b"Session not found" in res.stderr
+    assert list((h.state / "sessions").iterdir()) == []
+    assert not (h.state / "evil.json").exists()
+
+
+def test_crash_steps_disable_core_dumps_first():
+    code = (
+        "import importlib.util, resource, sys\n"
+        "spec = importlib.util.spec_from_file_location('f', sys.argv[1])\n"
+        "m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)\n"
+        "m._no_core_dumps()\n"
+        "print(resource.getrlimit(resource.RLIMIT_CORE))\n"
+    )
+    res = subprocess.run([sys.executable, "-c", code, str(FAKE_PATH)], capture_output=True, text=True,
+                         timeout=TIMEOUT, env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    assert res.stdout.strip() == "(0, 0)", res.stderr
+
+
+def test_grandchild_writes_its_own_pid_before_the_ready_marker(make):
+    h = make("grandchild")
+    h.start("run", "--", "x")
+    ready = h.wait_for(lambda: sorted(h.state.glob("grandchild-*.ready")))
+    pid = int(ready[0].name[len("grandchild-"):-len(".ready")])
+    assert pid in h.grandchildren()
+    assert h.state.joinpath("grandchildren.txt").read_text().count("\n") == 1
+
+
+def test_grandchild_exits_after_its_lifetime_cap(tmp_path):
+    scenario = {"max_lifetime_s": 1, "attempts": [{"steps": [
+        fake._step_start("prt_s1"), {"do": "spawn_grandchild"}, {"do": "exit", "code": 0}]}]}
+    h = Harness(tmp_path, scenario)
+    try:
+        assert h.run("run", "--", "x").returncode == 0
+        (gpid,) = h.wait_for(h.grandchildren)
+        h.wait_for(lambda: not _alive(gpid), seconds=10)
+    finally:
+        h.cleanup()
+
+
+def test_touch_stop_ends_helper_processes(tmp_path):
+    scenario = {"attempts": [{"steps": [
+        {"do": "spawn_grandchild"}, {"do": "spawn_grandchild", "detach": True},
+        {"do": "sleep", "seconds": 0.5}, {"do": "touch_stop"}, {"do": "exit", "code": 0}]}]}
+    h = Harness(tmp_path, scenario)
+    try:
+        assert h.run("run", "--", "x").returncode == 0
+        assert (h.state / "stop").exists()
+        pids = h.wait_for(lambda: len(h.grandchildren()) == 2 and h.grandchildren())
+        for pid in pids:
+            h.wait_for(lambda pid=pid: not _alive(pid), seconds=10)
+    finally:
+        h.cleanup()
+
+
+def test_stdout_no_newline_leaves_the_line_open(tmp_path):
+    steps = [{"do": "stdout_no_newline", "text": "partial"}]
+    outputs = []
+    for index, extra in enumerate(([], [{"do": "stdout_raw", "text": "-tail"}])):
+        sub = tmp_path / ("s%d" % index)
+        sub.mkdir()
+        h = Harness(sub, {"attempts": [{"steps": steps + extra + [{"do": "exit", "code": 0}]}]})
+        try:
+            outputs.append(h.run("run", "--", "x").stdout)
+        finally:
+            h.cleanup()
+    assert outputs == [b"partial", b"partial-tail\n"]
+
+
+def test_close_stdout_ends_the_pipe_and_later_output_is_discarded(tmp_path):
+    scenario = {"attempts": [{"steps": [
+        fake._step_start("prt_s1"), {"do": "close_stdout"}, fake._step_finish("prt_f1", "stop"),
+        {"do": "stderr", "text": "after close"}, {"do": "exit", "code": 0}]}]}
+    h = Harness(tmp_path, scenario)
+    try:
+        res = h.run("run", "--", "x")
+    finally:
+        h.cleanup()
+    assert res.returncode == 0 and res.stderr == b"after close\n"
+    assert [e["type"] for e in _lines(res.stdout)] == ["step_start"]
+
+
+def test_stdout_closed_hang_reaches_eof_while_the_process_lives(make):
+    h = make("stdout_closed_hang")
+    proc = _popen(h, "run", "--", "x")
+    assert _readable(proc.stdout, 10)
+    data = proc.stdout.read()  # returns at EOF, i.e. once the pipe is closed
+    assert b"step_start" in data and proc.poll() is None
+    os.killpg(proc.pid, signal.SIGKILL)
+    proc.wait(timeout=5)
+
+
+def test_reparented_grandchild_outlives_its_intermediate(make):
+    h = make("grandchild_reparented")
+    proc = h.start("run", "--", "x")
+    (gpid,) = h.wait_for(h.grandchildren)
+    (ipid,) = h.wait_for(h.intermediates)
+    record = h.wait_for(h.invocations)[0]
+    h.wait_for(lambda: not _alive(ipid), seconds=10)
+    assert proc.poll() is None and _alive(gpid)
+    assert _ppid(gpid) not in (ipid, record["pid"])
+    assert os.getpgid(gpid) != record["pgid"] and os.getsid(gpid) == gpid
+
+
+def test_emit_session_error_writes_an_id_less_error_envelope(tmp_path):
+    scenario = {"attempts": [{"steps": [
+        {"do": "emit_session_error", "status": 429, "message": "Rate limit"},
+        {"do": "emit_session_error", "message": "boom"}, {"do": "exit", "code": 1}]}]}
+    h = Harness(tmp_path, scenario)
+    try:
+        res = h.run("run", "--", "x")
+    finally:
+        h.cleanup()
+    api, unknown = _lines(res.stdout)
+    assert api["type"] == "error" and api["sessionID"].startswith("ses_")
+    assert api["error"] == {"name": "APIError", "data": {
+        "message": "Rate limit", "statusCode": 429, "isRetryable": True}}
+    assert unknown["error"] == {"name": "UnknownError", "data": {"message": "boom"}}
+    assert "part" not in api and isinstance(api["timestamp"], int)
+
+
+def test_session_continuation_replay_reemits_attempt_one_lines(make):
+    h = make("session_continuation_replay")
+    first = h.run("run", "--", "go")
+    assert first.returncode == -signal.SIGKILL
+    (sid,) = [r["session_id"] for r in h.invocations() if r["attempt"] == 1]
+    second = h.run("run", "--session", sid, "--", "go")
+    assert second.returncode == 0
+    one, two = first.stdout.decode().splitlines(), second.stdout.decode().splitlines()
+    assert len(one) == 3 and two[:3] == one
+    assert [json.loads(l)["type"] for l in two[3:]] == ["step_start", "text", "step_finish"]
+    assert h.run("run", "--", "go").returncode == 97
+
+
+def test_transient_error_then_continue_replays_the_id_less_error(make):
+    h = make("transient_error_then_continue")
+    first = h.run("run", "--", "go")
+    assert first.returncode == 1
+    one = first.stdout.decode().splitlines()
+    assert json.loads(one[-1])["error"]["data"]["statusCode"] == 429
+    assert json.loads(one[-2])["part"]["reason"] == "tool-calls"
+    (sid,) = [r["session_id"] for r in h.invocations() if r["attempt"] == 1]
+    second = h.run("run", "--session", sid, "--", "go")
+    assert second.returncode == 0
+    two = second.stdout.decode().splitlines()
+    assert two[0] == one[-1]
+    assert json.loads(two[-1])["part"]["reason"] == "stop"
+
+
+def test_endless_line_has_no_newline_for_two_mebibytes(make):
+    h = make("endless_line")
+    res = h.run("run", "--", "x")
+    assert res.returncode == 0
+    assert res.stdout.index(b"\n") > 2 * 1024 * 1024
+    assert res.stdout.startswith(b"x" * 1024) and b"step_finish" in res.stdout
+
+
+def test_approval_notice_then_finish_writes_stderr_after_stdout_closes(make):
+    h = make("approval_notice_then_finish")
+    proc = _popen(h, "run", "--", "x")
+    data = proc.stdout.read()  # EOF once stdout is closed
+    assert b"step_finish" in data
+    assert not _readable(proc.stderr, 0)  # the notice comes later
+    err = proc.stderr.read()
+    proc.wait(timeout=10)
+    assert proc.returncode == 0 and b"permission requested" in err
+
+
+def test_secret_echo_puts_the_literal_in_every_channel(tmp_path):
+    secret = "sk-CUSTOMSECRET9876543210"
+    h = Harness(tmp_path, fake.SCENARIOS["secret_echo"](secret))
+    try:
+        res = h.run("run", "--", "x")
+    finally:
+        h.cleanup()
+    assert res.returncode == 1 and secret.encode() in res.stderr
+    events = _lines(res.stdout)
+    assert secret in events[1]["part"]["text"]
+    assert secret in events[2]["part"]["state"]["title"]
+    assert secret in events[3]["error"]["data"]["message"]
+
+
+def test_secret_echo_straddle_starts_four_bytes_before_the_boundary(make):
+    h = make("secret_echo_straddle")
+    res = h.run("run", "--", "x")
+    secret = b"sk-FAKESTRADDLE0123456789"
+    assert res.returncode == 0 and res.stderr.index(secret) == 8192 - 4
+
+
+def test_grandchild_holds_stdout_after_the_fake_exits(make):
+    h = make("grandchild_holds_stdout")
+    proc = _popen(h, "run", "--", "x")
+    assert proc.wait(timeout=10) == 0
+    (gpid,) = h.wait_for(h.grandchildren)
+    assert _alive(gpid)
+    os.set_blocking(proc.stdout.fileno(), False)
+    assert b"step_finish" in (proc.stdout.read() or b"")
+    assert _alive(gpid)  # the write end is still held: no EOF yet
+    h.touch_stop()
+    h.wait_for(lambda: not _alive(gpid), seconds=10)
+
+
+def test_slow_finish_takes_real_time(tmp_path):
+    h = Harness(tmp_path, fake.SCENARIOS["slow_finish"](0.25))
+    try:
+        started = time.time()
+        res = h.run("run", "--", "x")
+        elapsed = time.time() - started
+    finally:
+        h.cleanup()
+    assert res.returncode == 0 and elapsed >= 0.5 and b"step_finish" in res.stdout
+
+
+@pytest.mark.parametrize("name,marker", [
+    ("task_background_then_boundary_crash", b'"background": true'),
+    ("task_denied_tail_then_boundary_crash", b"The user has specified a rule"),
+])
+def test_task_then_boundary_crash_resumes_cleanly(make, name, marker):
+    h = make(name)
+    first = h.run("run", "--", "go")
+    assert first.returncode == -signal.SIGKILL
+    assert marker in first.stdout and b"step_finish" in first.stdout
+    (sid,) = [r["session_id"] for r in h.invocations() if r["attempt"] == 1]
+    second = h.run("run", "--session", sid, "--", "go")
+    assert second.returncode == 0 and b'"reason": "stop"' in second.stdout
+
+
+def test_grandchild_detached_finish_leaves_a_live_detached_process(make):
+    h = make("grandchild_detached_finish")
+    assert h.run("run", "--", "x").returncode == 0
+    (gpid,) = h.wait_for(h.grandchildren)
+    record = h.wait_for(h.invocations)[0]
+    assert _alive(gpid) and os.getpgid(gpid) != record["pgid"]
+
+
+def test_step_closed_then_hang_leaves_an_effect_and_a_live_process(make):
+    h = make("step_closed_then_hang")
+    proc = _popen(h, "run", "--", "x")
+    h.wait_for(lambda: (h.state / "effects.log").exists())
+    assert (h.cwd / "effect.txt").read_text() == "written once\n"
+    assert _readable(proc.stdout, 10)
+    lines = b""
+    while lines.count(b"\n") < 2:
+        lines += os.read(proc.stdout.fileno(), 4096)
+    assert [e["type"] for e in _lines(lines)] == ["step_start", "step_finish"]
+    assert proc.poll() is None
+
+
+def test_effect_before_first_line_prints_nothing(make):
+    h = make("effect_before_first_line")
+    proc = _popen(h, "run", "--", "x")
+    h.wait_for(lambda: (h.state / "effects.log").exists())
+    assert not _readable(proc.stdout, 0.5) and proc.poll() is None
+
+
+def test_five_repeated_scenario_runs_leave_no_stray_processes(make, tmp_path_factory):
+    for _ in range(5):
+        for name in ("grandchild_detached_finish", "grandchild_reparented", "grandchild_holds_stdout"):
+            h = make(name)
+            proc = _popen(h, "run", "--", "x")
+            h.wait_for(lambda: h.grandchildren())
+            h.cleanup()
+            if proc.poll() is not None:
+                proc.communicate(timeout=10)
+    time.sleep(0.5)
+    base = str(tmp_path_factory.getbasetemp())
+    listing = subprocess.run(["ps", "-A", "-o", "pid=,stat=,command="], capture_output=True, text=True).stdout
+    stray = [l for l in listing.splitlines()
+             if base in l and not l.split(None, 2)[1].startswith("Z")]
+    assert not stray, stray

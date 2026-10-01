@@ -132,6 +132,30 @@ Scope: this supplements credential and network isolation and never replaces them
 configuration layers can override the compiled keys, so the launcher verifies them at
 launch.
 
+### Headless phase runs first
+
+Status: decided
+Decision: the driver runs one workflow phase headlessly with `quoin run --runtime opencode --phase`; the terminal interface (`quoin opencode start`) is a minimal launcher that validates the profile and replaces the quoin process.
+Rationale: a headless phase has a bounded input and an observable event stream, so state, resume and cancellation can be verified offline; an interactive session cannot be observed or resumed the same way.
+
+### Whole-task runs on OpenCode
+
+Status: deferred
+Decision: `quoin run --runtime opencode` without `--phase` is refused.
+Rationale: a whole-task run needs a coordinator command that sequences the phases; that belongs with the workflow-parity work, not the driver.
+
+### Approval visibility for delegated work
+
+Status: deferred
+Decision: approval requests raised inside delegated (subagent) work are not visible to the driver, so such runs report partial evidence.
+Rationale: seeing them needs a server or plugin event path, and plugins are refused because they could loosen permission handling.
+
+### Installing OpenCode in CI
+
+Status: deferred
+Decision: binary contract tests stay opt-in and skip with a reason when no pinned executable is present.
+Rationale: installing the pinned release in CI is a distribution choice for the maintainer, tracked with the release and install channel decision.
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.

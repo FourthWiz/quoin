@@ -72,6 +72,14 @@ hard stop, never a silent proceed.
   run never enters Execution on a formulation that hasn't cleared the
   bar.
 
+## Runtime flag
+
+`quoin run --runtime opencode --phase PHASE TASK` runs a single phase on the
+OpenCode runtime and is not part of the autonomous span: it never writes the
+whole-task halt sentinel, and the task lock it takes carries `runtime:
+opencode`. Auto-resume and takeover treat a lock with that runtime as owned by
+another runtime, so a task driven this way is never continued on Claude.
+
 ## Halt-sentinel contract
 
 Every hard stop writes a halt-sentinel (with reason) **before exit**,

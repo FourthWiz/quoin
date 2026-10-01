@@ -308,7 +308,8 @@ REQUIRED_RUNTIME_KEYS = (
     "task-failure-text, task-background-metadata, native-error-shape, internal-retry, "
     "retry-after, signal-handling, grandchildren, continuation-flags, continuation-agent, "
     "step-settling, part-reemission, version-output, npm-wrapper, non-git-discovery, "
-    "question-override, permission-ask-outside-tool, halt-error-shape, tool-hidden-by-deny"
+    "question-override, permission-ask-outside-tool, halt-error-shape, tool-hidden-by-deny, "
+    "continuation-no-replay, managed-config-layers, data-dir-state, tui-project-argument"
 ).split(", ")
 
 
@@ -328,6 +329,40 @@ def test_headless_runtime_rows_cite_lines():
             assert re.search(r"L\d+", evidence), evidence
     assert len(keys) == len(set(keys)), "duplicate keys"
     assert set(REQUIRED_RUNTIME_KEYS) <= set(keys), set(REQUIRED_RUNTIME_KEYS) - set(keys)
+
+
+def test_driver_capability_flags_match_rows():
+    from quoin.opencode_adapter import driver
+
+    status = {}
+    for _claim, row_status, _evidence, note in _runtime_rows():
+        match = re.match(r"^`key: ([a-z0-9-]+)`", note)
+        status[match.group(1)] = row_status == "verified"
+    for key in driver.DRIVER_CITED_CAPABILITIES:
+        assert status.get(key) is True, "%s is cited by the driver but not verified" % key
+    assert driver.STEP_SETTLING_VERIFIED is status["step-settling"]
+    assert driver.CONTINUATION_NO_REPLAY_VERIFIED is status["continuation-no-replay"]
+    assert driver.NON_GIT_DISCOVERY_VERIFIED is status["non-git-discovery"]
+
+
+def test_no_unverified_runtime_row_is_a_driver_dependency():
+    from quoin.opencode_adapter import driver
+
+    unverified = []
+    for _claim, row_status, _evidence, note in _runtime_rows():
+        match = re.match(r"^`key: ([a-z0-9-]+)`", note)
+        if row_status.startswith("unverified"):
+            unverified.append(match.group(1))
+    assert unverified, "the table is expected to keep at least one open question"
+    for key in unverified:
+        assert key not in driver.DRIVER_CITED_CAPABILITIES, key
+    adapter = REPO_ROOT / "src" / "quoin" / "opencode_adapter"
+    for name in ("driver", "events", "runstore", "launch_env", "phase_loop", "status", "categories"):
+        for number, line in enumerate((adapter / (name + ".py")).read_text(encoding="utf-8").splitlines(), 1):
+            if line.lstrip().startswith("#"):
+                continue
+            for key in unverified:
+                assert ('"%s"' % key) not in line and ("'%s'" % key) not in line, (name, number, key)
 
 
 def test_compatibility_release_lines():
@@ -635,6 +670,7 @@ def test_readme_documents_every_cli_flag():
     for flag in (
         "--profile", "--project-root", "--redact", "--json", "--output", "--check", "--allow-unqualified",
         "--profile-name", "--apply", "--confirm-model-id", "--force", "--synthetic-only", "--model",
+        "--task", "--run-id", "--dry-run",
     ):
         assert flag in commands, flag
     parser_source = (REPO_ROOT / "src" / "quoin" / "cli.py").read_text(encoding="utf-8")

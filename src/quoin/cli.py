@@ -815,6 +815,7 @@ def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
     source_dir = _resolve_source_dir(args.source_dir)
     from quoin.opencode_adapter import doctor
 
+    profile = getattr(args, "profile", None)
     return doctor.run_doctor(
         args.project_root,
         source_dir,
@@ -822,6 +823,8 @@ def _cmd_opencode_doctor(args: argparse.Namespace) -> int:
         args.json,
         sys.stdout,
         sys.stderr,
+        profile=profile,
+        config_env=_opencode_config_env() if profile is not None else None,
     )
 
 
@@ -935,6 +938,14 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     scope: str = getattr(args, "scope", None) or "user"
     if scope.startswith("project") and args.runtime == "opencode":
         _abort("quoin: --scope project is only valid with --runtime claude")
+    if getattr(args, "profile", None) is not None:
+        if args.runtime != "opencode":
+            _abort("quoin: --profile is only valid with --runtime opencode")
+        if getattr(args, "smoke", False):
+            _abort(
+                "quoin: --profile cannot be combined with --smoke; "
+                "the smoke checks are offline and read no profile"
+            )
 
     if args.runtime == "opencode":
         return _cmd_opencode_doctor(args)
@@ -1430,6 +1441,7 @@ def _acquire_supervisor_lock(
     max_relaunch: int,
     token: "str | None",
     _retried: bool = False,
+    runtime: "str | None" = None,
 ) -> tuple:
     """Best-effort single-driver lock (D-06/D-19).
 
@@ -1489,6 +1501,8 @@ def _acquire_supervisor_lock(
         "writer": "cli",
         "task": task,
     }
+    if runtime is not None:
+        content["runtime"] = runtime
     payload = (json.dumps(content, sort_keys=True) + "\n").encode("utf-8")
     if _create_lock_exclusive(lock_path, payload):
         return True, None
@@ -1500,8 +1514,261 @@ def _acquire_supervisor_lock(
             held_pid2 = -1
         return False, held_pid2
     return _acquire_supervisor_lock(
-        memory_dir, lock_path, result_path, task, max_relaunch, token, _retried=True
+        memory_dir, lock_path, result_path, task, max_relaunch, token,
+        _retried=True, runtime=runtime,
     )
+
+
+def _lock_runtime(data) -> str:
+    """Runtime that owns a parsed lock; a missing key means claude and a
+    value outside the known runtimes reads as ``unknown``."""
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+
+    value = data.get("runtime") if isinstance(data, dict) else None
+    if not isinstance(value, str) or not value:
+        return "claude"
+    return value if value in _supervisor.RUNTIMES else "unknown"
+
+
+
+def _opencode_lock_reader(project_root: pathlib.Path):
+    """Reader for the task lock that never follows a symlink: a lock that is
+    present but unreadable reports no pid and no runtime."""
+    from quoin.opencode_adapter import jsonio, runstore  # noqa: PLC0415
+
+    def read(task: str):
+        if not runstore.TASK_RE.match(task or ""):
+            return None
+        path = _supervisor_paths(project_root, task)["lock"]
+        if not os.path.lexists(str(path)):
+            return None
+        got = jsonio.read_regular_bytes(path, max_bytes=4096)
+        if got is None:
+            return {"pid": None, "runtime": None}
+        try:
+            data = json.loads(got[0].decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {"pid": None, "runtime": "unknown"}
+        if not isinstance(data, dict):
+            return {"pid": None, "runtime": "unknown"}
+        pid = data.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool):
+            pid = None
+        return {"pid": pid, "runtime": _lock_runtime(data)}
+
+    return read
+
+
+def _cmd_opencode_status(args: argparse.Namespace) -> int:
+    """`quoin opencode status`: read-only report on the latest phase run."""
+    from quoin.opencode_adapter import status  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    try:
+        report = status.collect(
+            project_root, task=args.task, run_id=args.run_id,
+            lock_reader=_opencode_lock_reader(project_root),
+        )
+    except status.StatusError as exc:
+        print("quoin: opencode status: %s" % exc, file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        sys.stdout.write(status.render_text(report))
+    return 0
+
+
+def _is_posix() -> bool:
+    return os.name == "posix"
+
+
+def _exec_tui(argv, cwd, env) -> int:
+    """Default launcher for `quoin opencode start`.
+
+    On POSIX the TUI replaces this process, so it keeps the terminal and the
+    process group, receives Ctrl-C, SIGQUIT and SIGTSTP directly and restores
+    its own terminal state; its exit status is the command's. Nothing here
+    needs to run afterwards (no lock, no run state). Returns only when the
+    program could not be started."""
+    import signal  # noqa: PLC0415
+
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if _is_posix():
+        try:
+            os.chdir(cwd)
+            # Python ignores these two at startup and an ignored signal stays
+            # ignored across exec; the TUI must see the default behaviour.
+            for name in ("SIGPIPE", "SIGXFSZ"):
+                number = getattr(signal, name, None)
+                if number is not None:
+                    signal.signal(number, signal.SIG_DFL)
+            os.execve(argv[0], list(argv), env)
+        except OSError as exc:
+            print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
+            return 3
+    # No exec here: keep Python alive but let the TUI own Ctrl-C.
+    previous = None
+    try:
+        previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:  # not the main thread
+        pass
+    try:
+        try:
+            child = subprocess.Popen(list(argv), cwd=cwd, env=env)
+        except OSError as exc:
+            print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
+            return 3
+        return child.wait()
+    finally:
+        if previous is not None:
+            signal.signal(signal.SIGINT, previous)
+
+
+_opencode_tui_launcher = _exec_tui
+
+
+def _cmd_opencode_start(args: argparse.Namespace) -> int:
+    """`quoin opencode start`: open the OpenCode TUI with the compiled profile.
+
+    Takes no task lock and writes no run state; the interface is interactive
+    and nothing is captured."""
+    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
+    from quoin.opencode_adapter import launch_env  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    redact = launch_env.Redactor()
+    try:
+        launch = _make_opencode_driver(project_root).prepare_interactive(args.profile)
+    except _driver.PrepareRefused as exc:
+        print(
+            "quoin: opencode start refused (%s/%s): %s" % (exc.category, exc.code, redact(exc.message)),
+            file=sys.stderr,
+        )
+        return 3
+    except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
+        print("quoin: opencode start failed: %s" % type(exc).__name__, file=sys.stderr)
+        return 3
+    if args.dry_run:
+        print(json.dumps({
+            "argv": [redact(a) for a in launch.argv],
+            "cwd": redact(str(launch.cwd)),
+            "config_path": redact(str(launch.config_path)),
+            "env_names": list(launch.env_names),
+            "runtime_version": launch.runtime_version,
+        }, sort_keys=True))
+        return 0
+    env = launch.launch_env.materialize()
+    return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
+
+
+def _make_opencode_driver(project_root):
+    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
+
+    return _driver.OpenCodeDriver(project_root)
+
+
+def _opencode_backoff(n: int) -> float:
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+
+    return _supervisor.default_backoff(n)
+
+
+def _cmd_run_opencode(args: argparse.Namespace) -> int:
+    """Run one workflow phase on the OpenCode runtime and print a JSON summary.
+
+    The task lock is held for every write of task state (driver calls, the
+    resume hint in the run record, the ``.result`` file); only the printed
+    summary follows the release.
+    """
+    import signal  # noqa: PLC0415
+
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+    from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
+    from quoin.opencode_adapter import phase_loop, runstore  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    ident = {
+        "task": args.task, "stage": args.stage, "phase": args.phase, "profile": args.profile,
+    }
+
+    def refusal(category, code, message):
+        return phase_loop.PhaseResult(
+            outcome="REFUSED", reason=code,
+            refusal={"category": category, "code": code, "message": message},
+        )
+
+    def emit(result, hint=None) -> int:
+        print(json.dumps(phase_loop.summary(result, ident, hint), sort_keys=True))
+        return phase_loop.exit_code(result)
+
+    if not args.phase:
+        return emit(refusal(
+            "workflow-validation", "whole-task-unavailable", _supervisor.WHOLE_TASK_UNAVAILABLE
+        ))
+    try:
+        runstore.check_task_name(args.task)
+    except runstore.RunStoreError:
+        return emit(refusal("workflow-validation", "invalid-task-name", "the task name is not valid"))
+
+    cancel = phase_loop.CancelToken()
+
+    def _on_signal(signum, _frame):
+        cancel.cancel(signum)
+
+    previous = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[sig] = signal.signal(sig, _on_signal)
+        except ValueError:  # not the main thread: no handlers, no cancel by signal
+            break
+
+    hint = None
+    try:
+        paths = _supervisor_paths(project_root, args.task)
+        acquired, held_pid = _acquire_supervisor_lock(
+            paths["memory_dir"], paths["lock"], paths["result"], args.task,
+            args.max_relaunch, None, runtime="opencode",
+        )
+        if not acquired:
+            holder = _read_json(paths["lock"])
+            runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
+            result = refusal(
+                None, "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})"
+            )
+        else:
+            try:
+                try:
+                    drv = _make_opencode_driver(project_root)
+                    request = _driver.RunRequest(
+                        project_root=project_root, task=args.task, stage=args.stage,
+                        phase=args.phase, profile=args.profile, budget=args.budget,
+                    )
+                    result = phase_loop.run_phase(
+                        drv, request, max_relaunch=args.max_relaunch, cancel=cancel,
+                        new_run=args.new_run, backoff_fn=_opencode_backoff,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    result = phase_loop.PhaseResult(
+                        outcome="ERROR", reason="driver-error: " + type(exc).__name__
+                    )
+                hint = phase_loop.resume_hint(result, ident, project_root)
+                if result.run_id and hint:
+                    try:
+                        phase_loop.annotate_record(
+                            project_root, result.run_id, hint, result.resume_blocked
+                        )
+                    except Exception:  # noqa: BLE001 - the hint still reaches the summary
+                        pass
+                if args.halt_on_abort and not paths["result"].exists():
+                    _write_supervisor_result(paths["memory_dir"], paths["result"], result.outcome, 0)
+            finally:
+                _release_supervisor_lock(paths["lock"], os.getpid())
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+    return emit(result, hint)
 
 
 def _strip_handoff_pythonpath() -> None:
@@ -1934,6 +2201,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Only valid with --runtime opencode: print a machine-readable report.",
     )
+    doctor_p.add_argument(
+        "--profile",
+        default=None,
+        metavar="PROFILE",
+        help=(
+            "Only valid with --runtime opencode (not with --smoke): also evaluate this "
+            "profile's configuration the way a phase run does and report what would "
+            "refuse it. Credentials are never resolved."
+        ),
+    )
 
     codex_p = sub.add_parser(
         "codex",
@@ -2107,6 +2384,42 @@ def main(argv: list[str] | None = None) -> int:
         help="Also apply this project's classification and policy; it must be classified work or personal.",
     )
 
+    opencode_status_p = opencode_sub.add_parser(
+        "status",
+        description=(
+            "Report the latest OpenCode phase run of a task, or one run id: state, "
+            "child process, last event and the task lock. Read-only: nothing is "
+            "repaired, reconciled or signalled."
+        ),
+        help="Report the latest OpenCode phase run of a task (read-only)",
+    )
+    opencode_status_p.add_argument(
+        "--project-root", default=".", help="Project root the run belongs to; defaults to the current directory."
+    )
+    status_target = opencode_status_p.add_mutually_exclusive_group(required=True)
+    status_target.add_argument("--task", help="Task name; reports its latest run.")
+    status_target.add_argument("--run-id", help="Report this run id instead of a task's latest run.")
+    opencode_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
+    opencode_start_p = opencode_sub.add_parser(
+        "start",
+        description=(
+            "Open the OpenCode terminal interface in a project with the compiled profile "
+            "configuration, an isolated data directory and the same checks as a phase run. "
+            "The interface replaces this process; no events are captured and no task lock "
+            "or run record is written."
+        ),
+        help="Open the OpenCode terminal interface with a compiled profile",
+    )
+    opencode_start_p.add_argument(
+        "--project-root", default=".", help="Project to open; defaults to the current directory."
+    )
+    opencode_start_p.add_argument("--profile", required=True, help="Runtime profile to launch with.")
+    opencode_start_p.add_argument(
+        "--dry-run", action="store_true",
+        help="Validate and print the command, directory and environment variable names without starting.",
+    )
+
     dashboard_p = sub.add_parser(
         "dashboard",
         description=(
@@ -2221,7 +2534,9 @@ def main(argv: list[str] | None = None) -> int:
             "Run the external autonomous supervisor: relaunches "
             '`claude -p "/run --resume --autonomous <task>"` in fresh '
             "headless sessions until the task's done- or halt-sentinel "
-            "appears, bounded by --max-relaunch and exponential backoff."
+            "appears, bounded by --max-relaunch and exponential backoff. "
+            "With --runtime opencode it instead runs one workflow phase "
+            "headlessly on OpenCode and prints a JSON summary."
         ),
         help="Run the external autonomous supervisor for a task (relaunch loop)",
     )
@@ -2279,6 +2594,38 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     run_p.add_argument(
+        "--runtime",
+        choices=("claude", "opencode"),
+        default="claude",
+        help="Runtime that drives the run (default: claude).",
+    )
+    run_p.add_argument(
+        "--profile",
+        default=None,
+        help="Only with --runtime opencode: runtime profile to launch with.",
+    )
+    run_p.add_argument(
+        "--phase",
+        default=None,
+        help=(
+            "Only with --runtime opencode: the single workflow phase to run, "
+            "for example plan or review."
+        ),
+    )
+    run_p.add_argument(
+        "--stage",
+        default=None,
+        help="Only with --runtime opencode: stage number for a multi-stage task.",
+    )
+    run_p.add_argument(
+        "--new-run",
+        action="store_true",
+        help=(
+            "Only with --runtime opencode: start the phase over instead of "
+            "resuming an interrupted run."
+        ),
+    )
+    run_p.add_argument(
         "--budget",
         default=None,
         help=(
@@ -2321,6 +2668,10 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_script(args)
         if args.opencode_command == "probe":
             return _cmd_opencode_probe(args)
+        if args.opencode_command == "status":
+            return _cmd_opencode_status(args)
+        if args.opencode_command == "start":
+            return _cmd_opencode_start(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)
@@ -2355,7 +2706,32 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "run":
         if args.takeover and args.autonomous:
             run_p.error("--takeover cannot be combined with --autonomous")
-        return _cmd_run(args)
+        if args.runtime != "opencode":
+            for flag, value in (
+                ("--profile", args.profile), ("--phase", args.phase),
+                ("--stage", args.stage), ("--new-run", args.new_run),
+            ):
+                if value:
+                    _abort(f"quoin: {flag} is only valid with --runtime opencode")
+            return _cmd_run(args)
+        if args.takeover:
+            _abort(
+                "quoin: --takeover is only valid with --runtime claude; "
+                "stop an opencode run with SIGTERM"
+            )
+        if not args.profile:
+            _abort(
+                "quoin: --runtime opencode needs --profile NAME "
+                "(a profile from your OpenCode runtime configuration)"
+            )
+        if args.permission_mode == "bypassPermissions":
+            _abort(
+                "quoin: --permission-mode bypassPermissions is not available with "
+                "--runtime opencode; approval prompts are never skipped"
+            )
+        if args.max_relaunch < 0:
+            _abort("quoin: --max-relaunch must be 0 or more")
+        return _cmd_run_opencode(args)
 
     parser.print_help()
     return 1

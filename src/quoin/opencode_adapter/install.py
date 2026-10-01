@@ -19,7 +19,12 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
-from quoin.opencode_adapter import generate, manifest, names
+from quoin.opencode_adapter import frontmatter, generate, jsonio, manifest, names
+
+# Largest owned file the launcher or the doctor will read back for checks.
+MAX_OWNED_BYTES = 16 * 1024 * 1024
+
+_AGENT_NAME_RE = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 
 METADATA_RELPATH = ".quoin/opencode-install.json"
 METADATA_SCHEMA_VERSION = 1
@@ -939,3 +944,41 @@ def run_uninstall(project_root, dry_run, out, err) -> int:
             return 2
 
     return 4 if plan.kept else 0
+
+
+class CommandAgentError(Exception):
+    """A phase command does not select an installed primary agent."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+def command_agent(root, command_rel: str, metadata: "Metadata") -> str:
+    """The primary agent the installed command ``command_rel`` selects.
+
+    Raises ``CommandAgentError`` when the command or the agent cannot be read,
+    names no agent, names an agent outside the install, or names one that
+    cannot run as a primary agent. Shared by the driver's prepare step and
+    the doctor so both judge an install the same way."""
+    root = Path(root)
+
+    def parsed(rel: str) -> Dict[str, object]:
+        got = jsonio.read_regular_bytes(root / rel, max_bytes=MAX_OWNED_BYTES)
+        if got is None:
+            raise CommandAgentError("%s cannot be read" % rel)
+        try:
+            fields, _ = frontmatter.parse(got[0].decode("utf-8"))
+        except (UnicodeDecodeError, frontmatter.FrontmatterError):
+            raise CommandAgentError("%s has unreadable frontmatter" % rel) from None
+        return fields
+
+    agent = parsed(command_rel).get("agent")
+    if not isinstance(agent, str) or not _AGENT_NAME_RE.match(agent):
+        raise CommandAgentError("the phase command does not name an agent")
+    agent_rel = ".opencode/agents/%s.md" % agent
+    if agent_rel not in metadata.owned:
+        raise CommandAgentError("the agent %s is not part of the installed set" % agent)
+    if parsed(agent_rel).get("mode") not in ("primary", "all"):
+        raise CommandAgentError("the agent %s cannot run as a primary agent" % agent)
+    return agent

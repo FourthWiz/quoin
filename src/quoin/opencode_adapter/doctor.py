@@ -102,6 +102,18 @@ MESSAGES: Dict[str, str] = {
     "census-truncated": "the skill census stopped early after reaching its file or directory visit cap (%(count)s file(s) counted)",
     "permission-loosened": "a config file's user permission narrows the following tools, but a generated role allows them while it runs: %(names)s",
     "doctor-internal-error": "the doctor could not complete because of an unexpected host or config condition (%(name)s)",
+    "runtime-process-groups-unsupported": "this host cannot track process groups, so a phase run could not be cancelled or reaped reliably",
+    "runtime-sidecar-dir-unwritable": "the run store for OpenCode phase runs is unsafe or not writable",
+    "runtime-orphan-run": "%(count)s OpenCode phase run(s) read as running but the quoin run that drove them has exited",
+    "runtime-stale-lock": "the supervisor lock for task %(name)s names an OpenCode run that is no longer alive",
+    "runtime-command-agent-not-primary": "an installed phase command does not select an installed primary agent",
+    "runtime-plugin-directory-present": "an OpenCode plugin directory holds plugin files, so phase runs are refused while it does",
+    "runtime-config-invalid": "the profile's configuration has %(count)s error(s) of class %(name)s",
+    "runtime-config-policy-denied": "the profile's configuration was refused by policy (class %(name)s, %(count)s occurrence(s))",
+    "runtime-adapter-data-missing": "the packaged adapter data was not found",
+    "runtime-gateway-unqualified": "a role's model has no valid gateway qualification",
+    "runtime-compile-blocked": "the profile cannot be compiled for OpenCode (%(names)s)",
+    "runtime-profile-launchable": "the profile's configuration compiles and is launchable",
 }
 
 _REMEDIATIONS: Dict[str, str] = {
@@ -126,6 +138,17 @@ _REMEDIATIONS: Dict[str, str] = {
     "quoin-skill-outside-project": "a skill named this may shadow or be shadowed by the project's own generated skill; move it or rename it",
     "legacy-claude-skills": "set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS or OPENCODE_DISABLE_CLAUDE_CODE to stop OpenCode from scanning it; Quoin's generated roles already deny skills outside the quoin-* set",
     "skills-path-missing": "create the directory, or remove the entry from skills.paths",
+    "runtime-process-groups-unsupported": "run phases on a POSIX host; status and the other doctor checks still work here",
+    "runtime-sidecar-dir-unwritable": "make the run store directory a real directory you own and can write; run `quoin opencode status` for the task to see what the store holds",
+    "runtime-orphan-run": "run `quoin opencode status --task TASK` for the process ids, stop any child that is still alive, then start over with --new-run",
+    "runtime-stale-lock": "re-run the phase with `quoin run --runtime opencode ...`, which reclaims a dead lock, or remove the lock file",
+    "runtime-command-agent-not-primary": "re-run `quoin install --runtime opencode` to restore the command and agent files",
+    "runtime-plugin-directory-present": "move the plugin files out of the OpenCode plugin directories for the duration of a run, or run with a separate XDG_CONFIG_HOME; the launcher refuses rather than trust plugin code with the approval flow",
+    "runtime-config-invalid": "run `quoin opencode config explain --profile PROFILE` to see where each value comes from",
+    "runtime-config-policy-denied": "run `quoin opencode config explain --profile PROFILE`; a policy refusal is not worked around by editing the profile",
+    "runtime-adapter-data-missing": "reinstall quoin",
+    "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the pinned OpenCode version",
+    "runtime-compile-blocked": "run `quoin opencode config explain --profile PROFILE` to see the blocking findings",
     "permission-loosened": "a generated role's own permission can override a stricter user config while that role runs directly; narrow the role's own permission map instead of the user config",
 }
 
@@ -221,9 +244,16 @@ def render_text(findings: List[Finding], status: str) -> str:
 
 
 def render_json(findings: List[Finding], status: str) -> str:
+    from . import categories  # noqa: PLC0415 - kept lazy; see categories.py
+
     finding_objs = []
     for f in sorted(findings, key=_sort_key):
-        obj = {"id": f.id, "severity": f.severity, "message": f.message}
+        obj = {
+            "id": f.id,
+            "severity": f.severity,
+            "message": f.message,
+            "category": categories.category_for(f.id),
+        }
         if f.path is not None:
             obj["path"] = f.path
         if f.remediation is not None:
@@ -484,6 +514,10 @@ def run_doctor(
     home=None,
     which=None,
     version_runner=None,
+    proc_snapshot=None,
+    profile=None,
+    config_env=None,
+    now=None,
 ) -> int:
     """Run the doctor and print a report to `out`. `env`, `home`, `which`
     and `version_runner` default at call time (not at definition time), so
@@ -505,6 +539,10 @@ def run_doctor(
                 Path.home() if home is None else home,
                 __import__("shutil").which if which is None else which,
                 version_runner,
+                proc_snapshot=proc_snapshot,
+                profile=profile,
+                config_env=config_env,
+                now=now,
             )
     except (ValueError, OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         # Last-resort boundary: nothing here may reach `out`/`err` except
@@ -973,9 +1011,186 @@ def _subagent_depth_findings(docs: List[Tuple[Path, dict]], roots) -> List[Findi
     return findings
 
 
-def run_host(project_root, source_dir, env, home, which, version_runner) -> List[Finding]:
+_LOCK_TEMPLATE = "run-supervisor-{task}.pid"
+_LOCK_GLOB = "run-supervisor-*.pid"
+_MAX_RECORDS = 1000
+_MAX_LOCKS = 200
+_MAX_LOCK_BYTES = 4096
+
+
+def _read_locks(memory_dir: Path) -> List[Tuple[str, dict]]:
+    """The OpenCode supervisor locks under the memory directory as
+    ``(task, parsed)`` pairs: at most ``_MAX_LOCKS`` files in name order, each
+    read without following a symlink; anything unreadable is left out."""
+    from . import jsonio, runstore  # noqa: PLC0415
+
+    prefix, suffix = _LOCK_TEMPLATE.split("{task}")
+    try:
+        names_ = sorted(
+            entry.name for entry in os.scandir(str(memory_dir))
+            if entry.name.startswith(prefix) and entry.name.endswith(suffix)
+        )
+    except OSError:
+        return []
+    locks: List[Tuple[str, dict]] = []
+    for name in names_[:_MAX_LOCKS]:
+        task = name[len(prefix):len(name) - len(suffix)]
+        if not runstore.TASK_RE.match(task):
+            continue
+        got = jsonio.read_regular_bytes(memory_dir / name, max_bytes=_MAX_LOCK_BYTES)
+        if got is None:
+            continue
+        try:
+            data = json.loads(got[0].decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if isinstance(data, dict):
+            locks.append((task, data))
+    return locks
+
+
+def _runtime_findings(root: Path, env, home, roots, proc_snapshot=None) -> List[Finding]:
+    """Checks that only matter once phase runs are used: process-group
+    support, the run store, orphaned runs, stale locks, the phase commands and
+    plugin directories. Read-only: nothing is created, written or signalled,
+    and liveness comes from one process-table snapshot taken only when there
+    is something to check. Each check degrades to nothing on an I/O error."""
+    from . import launch_env, proctree, runstore  # noqa: PLC0415
+
+    findings: List[Finding] = []
+    if os.name != "posix" or not proctree.SUPPORTED:
+        findings.append(make_finding("runtime-process-groups-unsupported", "warn"))
+
+    snapshot_taken = []
+
+    def table():
+        if not snapshot_taken:
+            take = proc_snapshot if proc_snapshot is not None else proctree.snapshot
+            try:
+                snapshot_taken.append(take())
+            except Exception:  # noqa: BLE001 - liveness stays unknown
+                snapshot_taken.append(None)
+        return snapshot_taken[0]
+
+    # run store and orphaned runs
+    try:
+        directory = runstore.inspect_store(root)
+    except (runstore.RunStoreError, OSError):
+        directory = None
+        findings.append(make_finding("runtime-sidecar-dir-unwritable", "warn"))
+    if directory is not None:
+        if not os.access(str(directory), os.W_OK | os.X_OK):
+            findings.append(make_finding("runtime-sidecar-dir-unwritable", "warn"))
+        try:
+            records, _skipped = runstore.list_records(directory, limit=_MAX_RECORDS)
+        except (runstore.RunStoreError, OSError):
+            records = []
+        running = [r for r in records if r.get("state") == "running"]
+        if running:
+            snap = table()
+            if snap is not None:
+                lost = sum(1 for r in running if runstore.orphan_state(r, snap) == "driver-lost")
+                if lost:
+                    findings.append(make_finding("runtime-orphan-run", "warn", count=lost))
+
+    # supervisor locks left by a dead OpenCode run
+    for task, lock in _read_locks(root / ".workflow_artifacts" / "memory"):
+        if lock.get("runtime") != "opencode":
+            continue
+        snap = table()
+        if snap is not None and runstore.pid_alive(lock.get("pid"), snap) is False:
+            findings.append(make_finding("runtime-stale-lock", "warn", name=task))
+
+    # phase commands that cannot start a run
+    try:
+        metadata = install.load_metadata(root)
+    except (install.InstallError, OSError):
+        metadata = None
+    if metadata is not None:
+        for rel in sorted(metadata.owned):
+            record = metadata.owned[rel]
+            if record.get("kind") != "command" or not os.path.lexists(str(root / rel)):
+                continue
+            try:
+                install.command_agent(root, rel, metadata)
+            except install.CommandAgentError:
+                findings.append(make_finding("runtime-command-agent-not-primary", "error", path=rel))
+
+    # plugin directories the launcher refuses
+    try:
+        managed_root, _prefs = launch_env._managed_defaults(env)  # noqa: SLF001
+        entries = launch_env.plugin_directories(root, env, Path(home), managed_root)
+    except OSError:
+        entries = []
+    for directory_path, state in entries:
+        shown = display_path(directory_path, roots)
+        if state == "unreadable":
+            findings.append(make_finding("config-unreadable", "warn", path=shown))
+        else:
+            findings.append(make_finding("runtime-plugin-directory-present", "warn", path=shown))
+    return findings
+
+
+def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> List[Finding]:
+    """Evaluate one profile's configuration the way a phase run does and
+    report what would refuse it. Opt-in, configuration only: credentials are
+    never resolved, and the text is built only from closed sets (class names,
+    finding codes, counts), never from a configuration value."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from . import categories, compiler, roles  # noqa: PLC0415
+    from . import paths as adapter_paths  # noqa: PLC0415
+    from .errors import ConfigErrors  # noqa: PLC0415
+
+    try:
+        evaluation = compiler.evaluate(
+            project_root=root, profile=profile, env=dict(config_env), home=home,
+            now=now if now is not None else datetime.now(timezone.utc),
+        )
+    except ConfigErrors as exc:
+        by_class: Dict[str, int] = {}
+        for error in exc.errors:
+            cls = error.rejection_class
+            if cls not in categories.CONFIG_CLASS_CATEGORIES:
+                cls = "config-invalid"
+            by_class[cls] = by_class.get(cls, 0) + 1
+        if not by_class:
+            by_class["config-invalid"] = 1
+        found: List[Finding] = []
+        for cls in sorted(by_class):
+            policy = categories.CONFIG_CLASS_CATEGORIES.get(cls) == "policy-denial"
+            found.append(make_finding(
+                "runtime-config-policy-denied" if policy else "runtime-config-invalid",
+                "error", name=cls, count=by_class[cls],
+            ))
+        return found
+    except roles.AllowUnqualifiedRefused:
+        return [make_finding("runtime-config-policy-denied", "error", name="allow-unqualified-refused", count=1)]
+    except adapter_paths.AdapterDataMissing:
+        return [make_finding("runtime-adapter-data-missing", "error")]
+
+    if compiler.launchable(evaluation):
+        return [make_finding("runtime-profile-launchable", "ok")]
+    blockers = compiler.compile_blockers(evaluation)
+    unqualified = all(
+        f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
+        for f in blockers
+    )
+    if blockers and not unqualified:
+        return [make_finding(
+            "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
+        )]
+    return [make_finding("runtime-gateway-unqualified", "error")]
+
+
+def run_host(
+    project_root, source_dir, env, home, which, version_runner, *,
+    proc_snapshot=None, profile=None, config_env=None, now=None,
+) -> List[Finding]:
     """Host-environment checks: install state, manifest drift, config,
-    rules fallback, skill-discovery census, flags and PATH/binary."""
+    rules fallback, skill-discovery census, flags and PATH/binary, and the
+    runtime-driver checks. `proc_snapshot` replaces the process-table read
+    (tests inject one)."""
     root = Path(project_root)
     findings: List[Finding] = []
 
@@ -1008,6 +1223,9 @@ def run_host(project_root, source_dir, env, home, which, version_runner) -> List
     findings.extend(_flag_findings(env))
     findings.extend(_path_findings(which))
     findings.extend(_binary_findings(which, version_runner, source_dir))
+    findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
+    if profile is not None:
+        findings.extend(_profile_findings(root, profile, config_env or {}, Path(home), now))
 
     return findings
 

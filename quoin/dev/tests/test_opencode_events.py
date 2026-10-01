@@ -840,3 +840,127 @@ def test_summarize_steps_uses_latest_step_not_latest_revision():
                       line(b), line(a2)])
     s = ev.summarize_steps(out)
     assert s.last_finish_reason == "tool-calls" and s.last_finish_terminal is False
+
+
+# ---------------------------------------------------------------------------
+# carry-overs: id shaping, last-resort type, stderr approval, retry usage
+# ---------------------------------------------------------------------------
+
+def test_literal_digest_shaped_id_never_equals_another_ids_digest():
+    unsafe = "prt bad id with spaces"
+    digest = ev._safe_ident(unsafe, redact)
+    assert digest.startswith("h-") and len(digest) == 34
+    literal = digest  # sent as-is by a hostile or unlucky producer
+    assert ev._safe_ident(literal, redact) != digest
+    pipe = pipeline()
+    first = pipe.feed_line(line(step_start(literal)))
+    second = pipe.feed_line(line(step_start(unsafe)))
+    assert len(first) == 1 and len(second) == 1
+    assert first[0].revision == 1 and second[0].revision == 1
+    assert first[0].native.id != second[0].native.id
+
+
+def test_last_resort_fallback_keeps_shaped_type(monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("bug")
+
+    real_event = ev._event
+    calls = []
+
+    def fail_once(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("late failure")
+        return real_event(*a, **k)
+
+    monkeypatch.setattr(ev, "_translate", broken)
+    monkeypatch.setattr(ev, "_event", fail_once)
+    obj = {"type": "step_start", "timestamp": 1, "sessionID": "ses_a"}
+    odd = {"type": "x y" * 10, "sessionID": "ses_a"}
+    for source in (obj, odd):
+        del calls[:]
+        pipe = pipeline()
+        (e,) = pipe.feed_line(line(source))
+        assert len(calls) == 2  # the middle branch failed, the last resort answered
+        assert e.payload.raw_type == "unparseable" and e.native.id is None
+        assert e.native.type == ev._native_type(source, redact)
+        assert e.native.type != "unknown"
+        assert e.session_id is None
+        rebuilt = pipeline(deduper=ev.Deduper.from_events([e]), start_sequence=2)
+        del calls[:]
+        assert rebuilt.feed_line(line(source)) == []
+
+
+def test_last_resort_type_falls_back_to_unknown_when_shaping_fails(monkeypatch):
+    def broken(*a, **k):
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(ev, "_native_type", broken)
+    event = ev._fallback_event({"type": "step_start"}, RUN_ID, 1, OBSERVED, redact)
+    assert event.native.type == "unknown"
+
+
+def _approval_signal(perm="bash", patterns=()):
+    return ev.StderrSignal("approval", perm, tuple(patterns), True)
+
+
+def test_approval_from_stderr_bounds_pattern_count():
+    payload = ev.approval_from_stderr(
+        _approval_signal(patterns=["p%d" % i for i in range(1000)]), redact=redact
+    )
+    assert payload.evidence_source == "stderr_notice" and payload.native_decision == "rejected"
+    assert len(payload.patterns) == 17
+    assert payload.patterns[:16] == tuple("p%d" % i for i in range(16))
+    assert payload.patterns[16] == "…[984 more]"
+    few = ev.approval_from_stderr(_approval_signal(patterns=["a", "b"]), redact=redact)
+    assert few.patterns == ("a", "b")
+
+
+def test_approval_from_stderr_bounds_and_redacts_text():
+    huge = "x" * 300_000
+    payload = ev.approval_from_stderr(_approval_signal(patterns=[huge]), redact=redact)
+    assert len(payload.patterns[0].encode()) < 400
+    assert payload.patterns[0].endswith("bytes]")
+    seeded = ev.approval_from_stderr(
+        _approval_signal(perm="perm-" + SECRET, patterns=["cat " + SECRET, "ok"]), redact=redact
+    )
+    assert SECRET not in json.dumps(seeded.to_dict())
+    assert "[REDACTED]" in seeded.permission and "[REDACTED]" in seeded.patterns[0]
+    custom = ev.approval_from_stderr(
+        _approval_signal(patterns=["abcdefghij"] * 3), redact=redact, limit=4, max_patterns=2
+    )
+    assert len(custom.patterns) == 3 and custom.patterns[2] == "…[1 more]"
+    assert custom.patterns[0].startswith("abcd")
+
+
+def test_approval_from_stderr_round_trips_a_parsed_notice():
+    sig = ev.parse_stderr_line("! permission requested: bash (git push, rm -rf x); auto-rejecting")
+    payload = ev.approval_from_stderr(sig, redact=redact)
+    assert payload.permission == "bash" and payload.patterns == ("git push", "rm -rf x")
+
+
+def test_to_retry_usage_sums_input_output_reasoning_and_excludes_cache():
+    usage = ev.UsagePayload(
+        input_tokens=10, output_tokens=5, reasoning_tokens=2,
+        cache_read_tokens=1000, cache_write_tokens=500, cost="0.0123456789",
+    )
+    out = ev.to_retry_usage(usage)
+    assert out.tokens == 17
+    assert out.cost == Decimal("0.0123456789")
+
+
+@pytest.mark.parametrize("missing", ["input_tokens", "output_tokens", "reasoning_tokens"])
+def test_to_retry_usage_unknown_token_field_makes_tokens_unknown(missing):
+    fields = dict(input_tokens=1, output_tokens=2, reasoning_tokens=3, cost="1.5")
+    fields[missing] = None
+    out = ev.to_retry_usage(ev.UsagePayload(**fields))
+    assert out.tokens is None and out.cost == Decimal("1.5")
+
+
+def test_to_retry_usage_unknown_cost_and_empty_payload():
+    out = ev.to_retry_usage(ev.UsagePayload(input_tokens=1, output_tokens=1, reasoning_tokens=0))
+    assert out.tokens == 2 and out.cost is None
+    empty = ev.to_retry_usage(ev.usage_totals([]))
+    assert empty.tokens is None and empty.cost is None
+    zero_cost = ev.to_retry_usage(ev.UsagePayload(cost="0"))
+    assert zero_cost.cost == Decimal("0") and zero_cost.tokens is None
