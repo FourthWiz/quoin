@@ -25,10 +25,10 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
-from . import compiler, doctor, errors, jsonio, paths
+from . import compiler, doctor, errors, install, jsonio, paths
 from . import secrets as credential_refs
 
-MAX_OWNED_BYTES = 16 * 1024 * 1024
+MAX_OWNED_BYTES = install.MAX_OWNED_BYTES
 MIN_REDACTED_LENGTH = 8
 
 # The extra key the launcher refuses. It lives here rather than in the
@@ -505,17 +505,9 @@ def check_config_layers(
     _check_markdown(cwd, env, home, worktree, global_dir, managed_root, owned_agents, owned_commands, shown)
 
 
-def _check_markdown(
-    cwd: Path,
-    env: Mapping[str, str],
-    home: Path,
-    worktree: Path,
-    global_dir: Path,
-    managed_root: Path,
-    owned_agents: Mapping[str, str],
-    owned_commands: Mapping[str, str],
-    shown: Callable[[Path], str],
-) -> None:
+def _config_bases(cwd: Path, home: Path, worktree: Path, global_dir: Path) -> List[Path]:
+    """Every ``.opencode`` style base directory OpenCode scans for markdown
+    and plugin files, in scan order and without duplicates."""
     bases: List[Path] = [d / ".opencode" for d in doctor._project_config_dirs(worktree, cwd)]  # noqa: SLF001
     home_opencode = home / ".opencode"
     if os.path.isdir(str(home_opencode)):
@@ -528,6 +520,54 @@ def _check_markdown(
         if key not in seen:
             seen.add(key)
             unique.append(base)
+    return unique
+
+
+def _plugin_entries(bases: Sequence[Path]) -> List[Tuple[Path, str]]:
+    """Plugin directories that need attention, in the order the launch check
+    visits them: ``populated`` when one holds a top-level ``.ts`` or ``.js``
+    file that is not a directory, ``unreadable`` when listing it failed."""
+    found: List[Tuple[Path, str]] = []
+    for base in bases:
+        for sub in _PLUGIN_SUBDIRS:
+            directory = base / sub
+            try:
+                populated = os.path.isdir(str(directory)) and any(
+                    entry.name.endswith((".ts", ".js")) and not entry.is_dir(follow_symlinks=False)
+                    for entry in os.scandir(str(directory))
+                )
+            except OSError:
+                found.append((directory, "unreadable"))
+                continue
+            if populated:
+                found.append((directory, "populated"))
+    return found
+
+
+def plugin_directories(
+    cwd: Path, env: Mapping[str, str], home: Path, managed_root: Path
+) -> List[Tuple[Path, str]]:
+    """Ordered ``(path, "populated" | "unreadable")`` plugin directory
+    entries for a project, exactly as the launch check visits them. Shared
+    with the doctor so both report the same directory first."""
+    cwd, home = Path(cwd), Path(home)
+    worktree = doctor._worktree_root(cwd)  # noqa: SLF001
+    global_dir = doctor._xdg_config_dir(env, home)  # noqa: SLF001
+    return _plugin_entries(_config_bases(cwd, home, worktree, global_dir) + [Path(managed_root)])
+
+
+def _check_markdown(
+    cwd: Path,
+    env: Mapping[str, str],
+    home: Path,
+    worktree: Path,
+    global_dir: Path,
+    managed_root: Path,
+    owned_agents: Mapping[str, str],
+    owned_commands: Mapping[str, str],
+    shown: Callable[[Path], str],
+) -> None:
+    unique = _config_bases(cwd, home, worktree, global_dir)
 
     def drift(path: Path) -> LaunchRefused:
         return _refuse(
@@ -538,26 +578,18 @@ def _check_markdown(
 
     # Plugin files under a config directory load automatically and can hook
     # permission requests, so any of them defeats the approval contract.
-    for base in unique + [managed_root]:
-        for sub in _PLUGIN_SUBDIRS:
-            directory = base / sub
-            try:
-                populated = os.path.isdir(str(directory)) and any(
-                    entry.name.endswith((".ts", ".js")) and not entry.is_dir(follow_symlinks=False)
-                    for entry in os.scandir(str(directory))
-                )
-            except OSError:
-                raise _refuse(
-                    "invalid-configuration",
-                    "config-layer-unreadable",
-                    "%s could not be read" % shown(directory),
-                ) from None
-            if populated:
-                raise _refuse(
-                    "policy-denial",
-                    "plugin-directory-present",
-                    "%s holds plugin files, which could loosen permission handling" % shown(directory),
-                )
+    for directory, state in _plugin_entries(unique + [managed_root]):
+        if state == "unreadable":
+            raise _refuse(
+                "invalid-configuration",
+                "config-layer-unreadable",
+                "%s could not be read" % shown(directory),
+            )
+        raise _refuse(
+            "policy-denial",
+            "plugin-directory-present",
+            "%s holds plugin files, which could loosen permission handling" % shown(directory),
+        )
 
     for base in unique:
         for path, _name in _markdown_files(base, _AGENT_SUBDIRS, shown):

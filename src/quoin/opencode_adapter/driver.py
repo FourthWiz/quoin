@@ -1041,27 +1041,10 @@ class OpenCodeDriver:
 
     def _command_agent(self, root: Path, command_rel: str, metadata: Any) -> str:
         """The primary agent the phase command selects; refuses otherwise."""
-        refuse = self._refusal
-
-        def parsed(rel: str) -> Dict[str, Any]:
-            got = jsonio.read_regular_bytes(root / rel, max_bytes=launch_env.MAX_OWNED_BYTES)
-            if got is None:
-                raise refuse("workflow-validation", "command-agent-not-primary", "%s cannot be read" % rel)
-            try:
-                fields, _ = frontmatter.parse(got[0].decode("utf-8"))
-            except (UnicodeDecodeError, frontmatter.FrontmatterError):
-                raise refuse("workflow-validation", "command-agent-not-primary", "%s has unreadable frontmatter" % rel) from None
-            return fields
-
-        agent = parsed(command_rel).get("agent")
-        if not isinstance(agent, str) or not _AGENT_NAME_RE.match(agent):
-            raise refuse("workflow-validation", "command-agent-not-primary", "the phase command does not name an agent")
-        agent_rel = ".opencode/agents/%s.md" % agent
-        if agent_rel not in metadata.owned:
-            raise refuse("workflow-validation", "command-agent-not-primary", "the agent %s is not part of the installed set" % agent)
-        if parsed(agent_rel).get("mode") not in ("primary", "all"):
-            raise refuse("workflow-validation", "command-agent-not-primary", "the agent %s cannot run as a primary agent" % agent)
-        return agent
+        try:
+            return install.command_agent(root, command_rel, metadata)
+        except install.CommandAgentError as exc:
+            raise self._refusal("workflow-validation", "command-agent-not-primary", exc.message) from None
 
     # ------------------------------------------------------------- start
 

@@ -103,6 +103,23 @@ def store_dir(project_root, *, create: bool = False) -> Path:
     return current
 
 
+def inspect_store(project_root) -> Optional[Path]:
+    """The run store directory for read-only inspection, never creating or
+    changing anything.
+
+    `None` when the store does not exist. Refuses with
+    `RunStoreError("unsafe-path")` on a symlink or file component and, unlike
+    `store_dir(create=False)`, on a final directory owned by another user."""
+    directory = store_dir(project_root, create=False)
+    try:
+        info = os.lstat(str(directory))
+    except FileNotFoundError:
+        return None
+    if info.st_uid != os.getuid():
+        raise RunStoreError("unsafe-path")
+    return directory
+
+
 def _inside(directory: Path, path: Path) -> bool:
     base = os.path.realpath(str(directory))
     target = os.path.realpath(str(path))
@@ -142,6 +159,47 @@ def run_paths(directory: Path, run_id: str) -> RunPaths:
         record=_checked(directory, run_id + ".run.json"),
         checkpoint=_checked(directory, run_id + ".checkpoint.json"),
     )
+
+
+_RECORD_FILE_RE = re.compile(r"^(" + RUN_ID_RE.pattern.strip("^$") + r")\.run\.json$")
+
+
+def list_records(directory, task: Optional[str] = None, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
+    """Run records in the store, read-only: up to `limit` record files in name
+    order (filtered by task when given) and the number of files skipped.
+
+    A symlink, an unreadable or unparsable file, and every file beyond the
+    limit are skipped and counted; a record is never repaired or rewritten."""
+    records: List[Dict[str, Any]] = []
+    skipped = 0
+    try:
+        names_ = sorted(
+            entry.name for entry in os.scandir(str(directory)) if _RECORD_FILE_RE.match(entry.name)
+        )
+    except OSError:
+        return [], 0
+    read = 0
+    for name in names_:
+        if read >= limit:
+            skipped += 1
+            continue
+        read += 1
+        got = jsonio.read_regular_bytes(Path(directory) / name, max_bytes=MAX_RECORD_BYTES)
+        if got is None:
+            skipped += 1
+            continue
+        try:
+            data = json.loads(got[0].decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            skipped += 1
+            continue
+        if not isinstance(data, dict) or data.get("schema_version") != SCHEMA_VERSION:
+            skipped += 1
+            continue
+        if task is not None and data.get("task") != task:
+            continue
+        records.append(data)
+    return records, skipped
 
 
 def pointer_path(directory: Path, task: str) -> Path:
@@ -664,6 +722,18 @@ def orphan_state(record: Mapping[str, Any], table: Optional[Mapping[int, ProcInf
     if alive(Identity(attempt["driver_pid"], attempt["driver_start"]), table):
         return None
     return "driver-lost"
+
+
+def pid_alive(pid: Any, table: Optional[Mapping[int, ProcInfo]]) -> Optional[bool]:
+    """Whether `pid` is a live (non-zombie) entry of a process table taken
+    once for the whole invocation. `None` when there is no table: liveness is
+    then unknown, never guessed and never probed with a signal."""
+    if table is None:
+        return None
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        return False
+    info = table.get(pid)
+    return info is not None and not info.zombie
 
 
 def live_identities(record: Mapping[str, Any], table: Optional[Mapping[int, ProcInfo]]) -> List[Identity]:
