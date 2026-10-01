@@ -35,7 +35,7 @@ def _requires_python() -> str:
 def _tools_dir(tmp_path: Path) -> Path:
     tools = tmp_path / "tools"
     tools.mkdir(exist_ok=True)
-    for name in ("dirname", "awk", "env", "cat"):
+    for name in ("dirname", "awk", "env", "cat", "mktemp", "rm", "sleep"):
         found = shutil.which(name)
         assert found, name
         link = tools / name
@@ -62,8 +62,9 @@ def _run(tmp_path, path_dirs, search_dirs="", extra_env=None, args=None,
     env = {
         "PATH": ":".join([str(d) for d in path_dirs] + [str(tools)]),
         "HOME": str(home),
-        "QUOIN_PYTHON_SEARCH_DIRS": search_dirs,
     }
+    if search_dirs is not None:
+        env["QUOIN_PYTHON_SEARCH_DIRS"] = search_dirs
     env.update(extra_env or {})
     return subprocess.run(
         [BASH, str(install_sh)] + list(args or ["--print-python", "--scope", "user"]),
@@ -189,6 +190,65 @@ class TestDiscovery:
         assert r.returncode == 1
         assert str(stray) not in r.stdout
         assert "unbound" not in r.stderr
+
+    @staticmethod
+    def _sandboxed_installer(tmp_path):
+        """Copy of install.sh whose absolute well-known roots point into tmp_path,
+        so host interpreters under /opt, /usr/local etc. cannot win the search."""
+        fake = tmp_path / "fakeroot"
+        root = tmp_path / "proj"
+        (root / "quoin").mkdir(parents=True)
+        shutil.copy(REPO_ROOT / "pyproject.toml", root / "pyproject.toml")
+        text = INSTALL_SH.read_text(encoding="utf-8")
+        for prefix in ("/opt/", "/usr/local/", "/home/linuxbrew/", "/Library/"):
+            text = text.replace('"' + prefix, '"%s%s' % (fake, prefix))
+            text = text.replace(" " + prefix, " %s%s" % (fake, prefix))
+        dest = root / "quoin" / "install.sh"
+        dest.write_text(text, encoding="utf-8")
+        return fake, dest
+
+    @pytest.mark.parametrize("rel", [
+        "home/miniconda3/envs/work/bin/python3",
+        "home/opt/anaconda3/bin/python3",
+        "home/opt/miniconda3/bin/python3",
+        "home/.linuxbrew/bin/python3.12",
+        "fakeroot/opt/miniconda3/bin/python3",
+        "fakeroot/opt/anaconda3/envs/ml/bin/python3",
+        "fakeroot/opt/homebrew/Caskroom/miniconda/base/bin/python3",
+        "fakeroot/opt/homebrew/Caskroom/miniconda/base/envs/x/bin/python3",
+        "fakeroot/home/linuxbrew/.linuxbrew/bin/python3.12",
+    ])
+    def test_default_off_path_locations(self, tmp_path, rel):
+        _, script = self._sandboxed_installer(tmp_path)
+        onpath = tmp_path / "onpath"
+        _fake_python(onpath / "python3", 3008)
+        want = _fake_python(tmp_path / rel, 3012)
+        r = _run(tmp_path, [onpath], search_dirs=None, install_sh=script)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == str(want)
+
+    def test_hung_interpreter_times_out_and_search_continues(self, tmp_path):
+        d1, d2 = tmp_path / "d1", tmp_path / "d2"
+        d1.mkdir()
+        hang = d1 / "python3"
+        hang.write_text("#!/bin/sh\nexec sleep 30\n")
+        hang.chmod(0o755)
+        want = _fake_python(d2 / "python3", 3012)
+        import time
+        t0 = time.monotonic()
+        r = _run(tmp_path, [d1, d2], extra_env={"QUOIN_PROBE_TIMEOUT": "1"})
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip() == str(want)
+        assert time.monotonic() - t0 < 20
+
+    def test_absent_candidates_not_listed_in_failure(self, tmp_path):
+        d = tmp_path / "bin"
+        a = _fake_python(d / "python3", 3009)
+        r = _run(tmp_path, [d])
+        assert r.returncode == 1
+        assert str(a) in r.stderr
+        assert str(d / "python:") not in r.stderr
+        assert "not an executable file" not in r.stderr
 
     def test_script_syntax_clean_under_system_bash(self):
         r = subprocess.run([BASH, "-n", str(INSTALL_SH)], capture_output=True, text=True)

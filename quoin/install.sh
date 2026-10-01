@@ -203,6 +203,40 @@ _quoin_min_python() {
   return 0
 }
 
+# Runs the version probe with a time limit so a hung shim cannot stall the
+# installer. Output goes to a temp file (not a pipe) so orphaned children of a
+# killed interpreter cannot keep the capture open. Sets _QUOIN_PROBE_OUT.
+_quoin_run_probe() {
+  local cand="$1" limit="${QUOIN_PROBE_TIMEOUT:-10}" tmp pid wd tool=""
+  local code="import sys; v=sys.version_info; print(v.major * 1000 + v.minor)"
+  _QUOIN_PROBE_OUT=""
+  [[ $limit =~ $_QUOIN_NUM_RE ]] || limit=10
+  tmp="$(mktemp "${TMPDIR:-/tmp}/quoin-probe.XXXXXX" 2>/dev/null)" || tmp=""
+  if [[ -z "$tmp" ]]; then
+    _QUOIN_PROBE_OUT="$("$cand" -c "$code" 2>/dev/null)" || _QUOIN_PROBE_OUT=""
+    return 0
+  fi
+  if command -v timeout >/dev/null 2>&1; then
+    tool=timeout
+  elif command -v gtimeout >/dev/null 2>&1; then
+    tool=gtimeout
+  fi
+  if [[ -n "$tool" ]]; then
+    "$tool" "$limit" "$cand" -c "$code" >"$tmp" 2>/dev/null </dev/null || true
+  else
+    "$cand" -c "$code" >"$tmp" 2>/dev/null </dev/null &
+    pid=$!
+    ( sleep "$limit"; kill "$pid" 2>/dev/null ) >/dev/null 2>&1 &
+    wd=$!
+    wait "$pid" 2>/dev/null || true
+    kill "$wd" 2>/dev/null || true
+    wait "$wd" 2>/dev/null || true
+  fi
+  IFS= read -r _QUOIN_PROBE_OUT < "$tmp" || true
+  rm -f "$tmp" 2>/dev/null || true
+  return 0
+}
+
 # Sets _QUOIN_PROBED to major*1000+minor; records why on failure.
 _quoin_probe() {
   local cand="$1" out
@@ -211,15 +245,17 @@ _quoin_probe() {
     TRIED+=("$cand: dangling link")
     return 1
   fi
+  # Absent candidates (most python/python3 names per directory) are not worth
+  # listing in the failure diagnostic.
+  [[ -e "$cand" ]] || return 1
   if [[ ! -f "$cand" || ! -x "$cand" ]]; then
     TRIED+=("$cand: not an executable file")
     return 1
   fi
-  out="$("$cand" -c \
-    "import sys; v=sys.version_info; print(v.major * 1000 + v.minor)" \
-    2>/dev/null)" || out=""
+  _quoin_run_probe "$cand"
+  out="$_QUOIN_PROBE_OUT"
   if [[ ! $out =~ $_QUOIN_NUM_RE ]]; then
-    TRIED+=("$cand: not runnable")
+    TRIED+=("$cand: not runnable or timed out")
     return 1
   fi
   _QUOIN_PROBED="$out"
@@ -293,7 +329,7 @@ _quoin_try_dirs_reversed() {
 }
 
 _quoin_find_python() {
-  local cand dir ng p
+  local cand dir ng p root
   local pdirs=() extra=()
 
   # 1. Explicit override
@@ -352,11 +388,30 @@ _quoin_find_python() {
         ex2+=("$dir")
       done
       if (( ${#ex2[@]} > 0 )) && _quoin_try_dirs_reversed "${ex2[@]}"; then eval "$ng"; return 0; fi
-      for dir in "$home/miniconda3/bin" "$home/anaconda3/bin" "$home/miniforge3/bin"; do
-        if _quoin_try_dir "$dir"; then eval "$ng"; return 0; fi
+      for root in "$home/miniconda3" "$home/anaconda3" "$home/miniforge3" \
+                  "$home/opt/anaconda3" "$home/opt/miniconda3"; do
+        if _quoin_try_dir "$root/bin"; then eval "$ng"; return 0; fi
       done
     fi
-    for dir in /opt/conda/bin /opt/local/bin ${home:+"$home/.local/bin"}; do
+    for root in /opt/conda /opt/miniconda3 /opt/anaconda3 /opt/miniforge3 \
+                /opt/homebrew/Caskroom/miniconda/base \
+                /opt/homebrew/Caskroom/miniforge/base; do
+      if _quoin_try_dir "$root/bin"; then eval "$ng"; return 0; fi
+    done
+    # Named conda environments under each conda root
+    local envdirs=()
+    for root in ${home:+"$home/miniconda3" "$home/anaconda3" "$home/miniforge3" \
+                  "$home/opt/anaconda3" "$home/opt/miniconda3"} \
+                /opt/conda /opt/miniconda3 /opt/anaconda3 /opt/miniforge3 \
+                /opt/homebrew/Caskroom/miniconda/base \
+                /opt/homebrew/Caskroom/miniforge/base; do
+      for dir in "$root"/envs/*/bin; do
+        envdirs+=("$dir")
+      done
+    done
+    if (( ${#envdirs[@]} > 0 )) && _quoin_try_dirs_reversed "${envdirs[@]}"; then eval "$ng"; return 0; fi
+    for dir in /opt/local/bin /home/linuxbrew/.linuxbrew/bin \
+               ${home:+"$home/.linuxbrew/bin" "$home/.local/bin"}; do
       if _quoin_try_dir "$dir"; then eval "$ng"; return 0; fi
     done
     eval "$ng"

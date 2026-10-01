@@ -62,7 +62,8 @@ Claude install path.
 `bash quoin/install.sh` needs a Python that meets `requires-python` in
 `pyproject.toml` (3.10 or newer). It looks at `QUOIN_PYTHON` first, then every
 directory on `PATH` in order (any `python3.N`), then the usual Homebrew,
-python.org, pyenv, uv, asdf, mise, conda and MacPorts locations, and finally
+python.org, pyenv, uv, asdf, mise, conda (root and named environments, including
+`/opt` and `~/opt` installs and the Homebrew cask), Linuxbrew and MacPorts locations, and finally
 `uv python find`. `bash quoin/install.sh --print-python` prints the interpreter
 it would use without installing; set `QUOIN_PYTHON=/path/to/python3` to choose
 one yourself. A `.venv` synced from another computer usually has a dangling
