@@ -549,13 +549,19 @@ def _claim_lock_for_removal(lock_path: Path):
     return data
 
 
+# Mirrors quoin.supervisor.RUNTIMES; this script cannot import the package.
+_KNOWN_RUNTIMES = ("claude", "opencode")
+
+
 def _foreign_runtime(lock) -> Optional[str]:
-    """The runtime named by a parsed lock when it is not claude, else None.
-    A lock without the key, or naming claude, belongs to the Claude path."""
+    """The runtime named by a parsed lock when it is a known runtime other
+    than claude, else None. A lock without the key, naming claude, or holding
+    anything unrecognised belongs to the Claude path, so a corrupt value can
+    never suppress auto-resume."""
     if not isinstance(lock, dict):
         return None
     runtime = lock.get("runtime")
-    if isinstance(runtime, str) and runtime and runtime != "claude":
+    if isinstance(runtime, str) and runtime in _KNOWN_RUNTIMES and runtime != "claude":
         return runtime
     return None
 

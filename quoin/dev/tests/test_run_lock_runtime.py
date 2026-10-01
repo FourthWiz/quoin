@@ -98,6 +98,9 @@ def test_retry_after_failed_create_keeps_runtime(monkeypatch, project):
         ({"runtime": ""}, "claude"),
         ({"runtime": 5}, "claude"),
         ({"runtime": "opencode"}, "opencode"),
+        ({"runtime": "claude"}, "claude"),
+        ({"runtime": "OPENCODE"}, "unknown"),
+        ({"runtime": "x|y"}, "unknown"),
         (None, "claude"),
     ],
 )
@@ -383,3 +386,53 @@ def test_takeover_guard_is_keyed_on_the_runtime_field(project, _no_real_kill):
     ops = _Ops(alive=False)
     takeover.run_takeover("demo", project, ops.build())
     assert ("write_halt",) in ops.calls
+
+
+# --- allow-list of the runtime value in every reader -----------------------
+
+
+def test_known_runtimes_mirror_the_supervisor(ar):
+    assert tuple(ar._KNOWN_RUNTIMES) == tuple(sup.RUNTIMES)
+
+
+@pytest.mark.parametrize("value", ["x|y", 42, "OPENCODE", "", None, ["opencode"], "claude"])
+def test_auto_resume_ignores_unrecognised_runtime_values(ar, value):
+    assert ar._foreign_runtime({"runtime": value}) is None
+
+
+def test_auto_resume_only_exact_opencode_is_foreign(ar):
+    assert ar._foreign_runtime({"runtime": "opencode"}) == "opencode"
+
+
+def test_garbage_runtime_never_echoes_and_follows_the_claude_path(ar, project):
+    memory = _memory(project)
+    counter = ar._default_counter("demo", _now_iso())
+    _foreign_lock(memory, os.getppid(), runtime="x|y")
+    assert ar._do_handoff(memory, project, "demo", "budget", counter, _record()) == (
+        "LOCKED|%d" % os.getppid()
+    )
+    _foreign_lock(memory, _dead_pid(), runtime="x|y")
+    assert ar._lock_foreign_runtime(memory, "demo") is None
+
+
+def test_takeover_garbage_runtime_takes_the_claude_path(project, _no_real_kill):
+    _takeover_lock(project, runtime="x|y")
+    ops = _Ops(alive=False)
+    takeover.run_takeover("demo", project, ops.build())
+    assert ("write_halt",) in ops.calls
+
+
+def test_takeover_hint_for_pid_one_has_no_kill_text(project, _no_real_kill):
+    _takeover_lock(project, runtime="opencode", pid=1)
+    ops = _Ops(alive=True)
+    rc = takeover.run_takeover("demo", project, ops.build())
+    assert rc == takeover.EXIT_NO_CHILD and ops.calls == []
+    assert "kill" not in " ".join(ops.errs)
+
+
+def test_takeover_live_hint_asks_to_confirm_first(project, _no_real_kill):
+    _takeover_lock(project, runtime="opencode")
+    ops = _Ops(alive=True)
+    takeover.run_takeover("demo", project, ops.build())
+    text = " ".join(ops.errs)
+    assert "ps -p 4321 -o command" in text and "kill -TERM 4321" in text

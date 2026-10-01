@@ -1509,9 +1509,14 @@ def _acquire_supervisor_lock(
 
 
 def _lock_runtime(data) -> str:
-    """Runtime that owns a parsed lock; a missing key means claude."""
+    """Runtime that owns a parsed lock; a missing key means claude and a
+    value outside the known runtimes reads as ``unknown``."""
+    from quoin import supervisor as _supervisor  # noqa: PLC0415
+
     value = data.get("runtime") if isinstance(data, dict) else None
-    return value if isinstance(value, str) and value else "claude"
+    if not isinstance(value, str) or not value:
+        return "claude"
+    return value if value in _supervisor.RUNTIMES else "unknown"
 
 
 
