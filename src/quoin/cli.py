@@ -1531,6 +1531,54 @@ def _lock_runtime(data) -> str:
 
 
 
+def _opencode_lock_reader(project_root: pathlib.Path):
+    """Reader for the task lock that never follows a symlink: a lock that is
+    present but unreadable reports no pid and no runtime."""
+    from quoin.opencode_adapter import jsonio, runstore  # noqa: PLC0415
+
+    def read(task: str):
+        if not runstore.TASK_RE.match(task or ""):
+            return None
+        path = _supervisor_paths(project_root, task)["lock"]
+        if not os.path.lexists(str(path)):
+            return None
+        got = jsonio.read_regular_bytes(path, max_bytes=4096)
+        if got is None:
+            return {"pid": None, "runtime": None}
+        try:
+            data = json.loads(got[0].decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return {"pid": None, "runtime": "unknown"}
+        if not isinstance(data, dict):
+            return {"pid": None, "runtime": "unknown"}
+        pid = data.get("pid")
+        if not isinstance(pid, int) or isinstance(pid, bool):
+            pid = None
+        return {"pid": pid, "runtime": _lock_runtime(data)}
+
+    return read
+
+
+def _cmd_opencode_status(args: argparse.Namespace) -> int:
+    """`quoin opencode status`: read-only report on the latest phase run."""
+    from quoin.opencode_adapter import status  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    try:
+        report = status.collect(
+            project_root, task=args.task, run_id=args.run_id,
+            lock_reader=_opencode_lock_reader(project_root),
+        )
+    except status.StatusError as exc:
+        print("quoin: opencode status: %s" % exc, file=sys.stderr)
+        return 2
+    if args.json:
+        print(json.dumps(report, sort_keys=True))
+    else:
+        sys.stdout.write(status.render_text(report))
+    return 0
+
+
 def _make_opencode_driver(project_root):
     from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
 
@@ -2247,6 +2295,23 @@ def main(argv: list[str] | None = None) -> int:
         help="Also apply this project's classification and policy; it must be classified work or personal.",
     )
 
+    opencode_status_p = opencode_sub.add_parser(
+        "status",
+        description=(
+            "Report the latest OpenCode phase run of a task, or one run id: state, "
+            "child process, last event and the task lock. Read-only: nothing is "
+            "repaired, reconciled or signalled."
+        ),
+        help="Report the latest OpenCode phase run of a task (read-only)",
+    )
+    opencode_status_p.add_argument(
+        "--project-root", default=".", help="Project root the run belongs to; defaults to the current directory."
+    )
+    status_target = opencode_status_p.add_mutually_exclusive_group(required=True)
+    status_target.add_argument("--task", help="Task name; reports its latest run.")
+    status_target.add_argument("--run-id", help="Report this run id instead of a task's latest run.")
+    opencode_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
     dashboard_p = sub.add_parser(
         "dashboard",
         description=(
@@ -2495,6 +2560,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_script(args)
         if args.opencode_command == "probe":
             return _cmd_opencode_probe(args)
+        if args.opencode_command == "status":
+            return _cmd_opencode_status(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)

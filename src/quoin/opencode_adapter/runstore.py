@@ -312,6 +312,44 @@ def read_sidecar(path, *, repair: bool = False) -> SidecarRead:
     return SidecarRead(tuple(events), good, torn)
 
 
+def last_event(path, tail_bytes: int = 65536) -> Tuple[Optional[RuntimeEvent], bool]:
+    """The last complete event of a sidecar and whether the file ends in a
+    torn tail, reading only the final `tail_bytes`. Never repairs the file and
+    never follows a symlink. `(None, False)` when the file is absent, not a
+    regular file, or holds no complete event in the window."""
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        fd = os.open(str(path), flags)
+    except OSError:
+        return None, False
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                return None, False
+            start = max(0, info.st_size - tail_bytes)
+            handle.seek(start)
+            data = handle.read(tail_bytes)
+    except OSError:
+        return None, False
+    if not data:
+        return None, False
+    torn = not data.endswith(b"\n")
+    lines = data.split(b"\n")
+    if torn:
+        lines.pop()  # the unterminated final fragment
+    elif lines and lines[-1] == b"":
+        lines.pop()
+    if start > 0 and lines:
+        lines.pop(0)  # may begin mid-line
+    for line in reversed(lines):
+        try:
+            return RuntimeEvent.from_json(line.decode("utf-8")), torn
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return None, torn
+
+
 # ---------------------------------------------------------------------------
 # atomic JSON records
 # ---------------------------------------------------------------------------
