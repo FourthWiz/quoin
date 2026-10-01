@@ -596,7 +596,7 @@ while attempt <= QUOIN_VERIFY_RETRIES:
     run: python3 __QUOIN_HOME__/scripts/affected_tests.py --files "${touched[@]}" --repo-root "$REPO_ROOT" --format text
     code=$?
 
-    if code == 0:       # affected suite green / docs-only / clean tree
+    if code == 0:       # affected suite green / docs-only / clean tree / missing-tests-only
         break            # mark task ✓, commit, proceed
     if code == 1:        # affected suite RED — the ONLY retry trigger
         if attempt == QUOIN_VERIFY_RETRIES:
@@ -617,7 +617,7 @@ while attempt <= QUOIN_VERIFY_RETRIES:
     break
 ```
 
-**Exit-code map (D-02):** exit `0` → suite green (or docs-only/clean tree) → proceed to mark the task ✓. Exit `1` → affected suite RED → the only code that enters the retry loop above. Exit `2`/`3`/`4` (argparse error, undeterminable git state such as a stacked branch with no upstream, unmatched sources, or a missing/timed-out pytest) → emit the one-line fail-OPEN warning above and degrade — do NOT consume a retry; the post-implement `/gate` remains the hard backstop. `affected_tests.py` missing entirely (`FileNotFoundError`) → same fail-OPEN degrade path.
+**Exit-code map (D-02):** exit `0` → suite green (or docs-only/clean tree, or changed tests missing on disk with `exit_reason: missing-tests-only`) → proceed to mark the task ✓. Exit `1` → affected suite RED → the only code that enters the retry loop above. Exit `2`/`3`/`4` (argparse error, undeterminable git state such as a stacked branch with no upstream, unmatched sources, or a missing/timed-out pytest) → emit the one-line fail-OPEN warning above and degrade — do NOT consume a retry; the post-implement `/gate` remains the hard backstop. `affected_tests.py` missing entirely (`FileNotFoundError`) → same fail-OPEN degrade path.
 
 **Cost-ledger rows:** each retry appends an informational row reusing the ACTIVE `/implement` session's own UUID (obtained via `get_session_uuid.py --project-path "$PROJECT_ROOT" --phase implement` — the path is pinned explicitly, never left to default to `$(pwd)`), in the standard 7-column shape: `<uuid> | <date> | implement | sonnet | task | "verify-retry <n>/<QUOIN_VERIFY_RETRIES> on <task-id>" | 0`. These are audit rows, not separate cost-bearing sessions.
 
