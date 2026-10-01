@@ -135,6 +135,7 @@ If exit 1 (`OVER|...`): STOP. Tell the user verbatim:
     --task <task-name> --reason session-age --on-fail-halt "session age cap"
   ```
   Print the command's stdout as the pipeline's stop notice and end the turn.
+  On `HANDOFF|...`, arm the child watcher before ending the turn (see Watching a handed-off child under Error handling): 10-minute default cadence, re-armed until a terminal state; it checks the done sentinel, the halt sentinel, the needs-decision sentinel, new `.done` sentinels, new task-branch commits, and supervisor/child liveness.
   `DENIED|opt-out` or a missing/failing helper (empty stdout) falls through to
   the unchanged verbatim STOP text above.
 
@@ -351,7 +352,7 @@ _cbg_out="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-roo
      `HANDOFF|...` → print the notice and end the turn (the Stop hook stands
      down behind the supervisor lock this hand-off just took). If the result has
      a fourth `|` field, it is the child session id: also print `child session
-     <uuid>; take over with quoin run --takeover <task>`. Any other result
+     <uuid>; take over with quoin run --takeover <task>`. On `HANDOFF|...`, arm the child watcher before ending the turn (see Watching a handed-off child under Error handling): 10-minute default cadence, re-armed until a terminal state; it checks the done sentinel, the halt sentinel, the needs-decision sentinel, new `.done` sentinels, new task-branch commits, and supervisor/child liveness. Any other result
      → continue in-session; never stop on a printed instruction.
 - Exit 1 but `$_cbg_out` does NOT start with `OVER|` (helper crashed before
   reaching its own fail-OPEN try/except — e.g. empty output or a traceback, never
@@ -1596,6 +1597,7 @@ that tradeoff.
   python3 __QUOIN_HOME__/scripts/auto_resume.py handoff --project-root "$(pwd)" \
     --task <task-name> --reason context --on-fail-halt "context exhaustion"
   ```
+  `HANDOFF|...` → print the notice and the takeover pointer as the budget site does. On `HANDOFF|...`, arm the child watcher before ending the turn (see Watching a handed-off child under Error handling): 10-minute default cadence, re-armed until a terminal state; it checks the done sentinel, the halt sentinel, the needs-decision sentinel, new `.done` sentinels, new task-branch commits, and supervisor/child liveness.
 - **The user asks to stop an autonomous run:**
   ```bash
   python3 __QUOIN_HOME__/scripts/auto_resume.py pause --project-root "$(pwd)" \
@@ -1641,6 +1643,16 @@ that tradeoff.
   Only fires under `AUTONOMOUS`; a non-autonomous phase subagent that runs
   long is handled by the existing context-exhaustion path above ("save
   state, instruct user to resume").
+
+### Watching a handed-off child
+
+1. Scope: an interactive parent that received `HANDOFF|<pid>|...`. A headless child (`QUOIN_HEADLESS_CHILD=1`) never arms a watcher.
+2. Arm: after printing the notice, run `python3 __QUOIN_HOME__/scripts/child_watch.py --project-root "$(pwd)" --task <task-name> --supervisor-pid <pid> [--child-session <uuid>]` in the background (the `Monitor` tool when the session has it, else Bash with `run_in_background: true`; both re-invoke the session when the watcher exits), then end the turn. The session id is only a fallback; the lock's current id wins. Default cadence is 10 minutes (`QUOIN_CHILD_WATCH_INTERVAL_SECS`).
+3. Each window checks six signals: the done, halt and needs-decision sentinels, new `.done` sentinels under the progress directory, new commits on the task branch, and supervisor and child liveness.
+4. On re-invocation read the single `WATCH|...` line and act on `next=`. PROGRESS: at most one short chat line, re-arm. ALIVE: re-arm silently. STALL: report, then re-arm. DONE: report success, stop. HALTED, NEEDS_DECISION, DEAD, EXPIRED: report at once with the reason and the `takeover=` hint, stop. ERROR: report, re-arm once with the last good command, stop on a second consecutive ERROR. Also send reports through `PushNotification` when that tool exists.
+5. Observe-only: never resume phase work on a watcher re-invocation, never kill, relaunch or take over; the supervisor lock owns the run.
+6. A message the user types in the parent ends re-arming: answer the user, and re-arm only if asked.
+7. No background-capable tool: print the notice plus `check with: python3 __QUOIN_HOME__/scripts/child_watch.py --project-root "$(pwd)" --task <task-name> --supervisor-pid <pid> --once`.
 
 ## Hook cooperation (autonomous)
 
