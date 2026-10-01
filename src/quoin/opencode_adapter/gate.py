@@ -682,3 +682,198 @@ def _check_ledger(entry) -> Check:
     if entry.get("ledger_lines_appended_during_run"):
         return _check("ledger", [("WARN", "ledger-appended-during-run", "the ledger grew while the run was active")])
     return _check("ledger", [("PASS", "", "")])
+
+
+# ---------------------------------------------------------------------------
+# audit file
+# ---------------------------------------------------------------------------
+
+import secrets as _secrets  # noqa: E402
+
+MAX_CELL_CHARS = 300
+_ID_SHAPE_RE = re.compile(r"\b[DTRFQS]-\d+\b")
+_EVALUATOR_LINE = "evaluator: deterministic"
+
+
+class GateArtifactError(Exception):
+    """The audit file could not be written safely; `code` is a stable identifier."""
+
+    def __init__(self, code: str, message: str = "") -> None:
+        super().__init__(message or code)
+        self.code = code
+        self.message = message or code
+
+
+class GateArtifactConflict(GateArtifactError):
+    """A file of the same name exists and was not written by this gate."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__("gate-artifact-conflict", message or "an audit file written by another tool exists")
+
+
+class GateArtifactInvalid(GateArtifactError):
+    """The file just written does not pass strict validation."""
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__("gate-artifact-invalid", message or "the written audit file failed validation")
+
+
+def _yaml_string(value: str) -> str:
+    """A double-quoted YAML scalar. A value holding a short-ID-shaped token has
+    each hyphen escaped so the artifact validator's reference check does not
+    read it as a reference."""
+    quoted = json.dumps(value)
+    if _ID_SHAPE_RE.search(value):
+        quoted = quoted.replace("-", "\\x2D")
+    return quoted
+
+
+def _cell(text: str) -> str:
+    cleaned = _redact(" ".join(str(text).split())).replace("`", "'").replace("|", "/")
+    cleaned = cleaned[:MAX_CELL_CHARS].strip()
+    return "`%s`" % (cleaned or "-")
+
+
+def render_artifact(result: GateResult, *, date: str) -> str:
+    stage = "null" if result.stage is None else str(int(result.stage))
+    origin = "null" if result.origin is None else _yaml_string(result.origin)
+    lines = [
+        "---",
+        "phase: %s" % _yaml_string(result.phase),
+        "date: %s" % _yaml_string(date),
+        "task: %s" % _yaml_string(result.task),
+        "stage: %s" % stage,
+        "verdict: %s" % _yaml_string(result.verdict),
+        _EVALUATOR_LINE,
+        "origin: %s" % origin,
+        "---",
+        "",
+        "## Automated checks",
+        "",
+        "| Check | Status | Codes | Details |",
+        "|---|---|---|---|",
+    ]
+    for item in result.checks:
+        codes = ", ".join(list(item.codes) + list(item.warn_codes))
+        lines.append("| %s | %s | %s | %s |" % (
+            _cell(item.name), _cell(item.status), _cell(codes), _cell("; ".join(item.details))))
+    passed = sum(1 for c in result.checks if c.status in ("PASS", "WARN"))
+    lines += ["", "## Verdict", ""]
+    if result.verdict == "PASS":
+        lines.append("PASS (%d checks passed, %d warnings)" % (passed, len(result.warnings)))
+    else:
+        failing = sum(1 for c in result.checks if c.status == "FAIL")
+        lines.append("FAIL (%d failing checks: %s)" % (failing, ", ".join(result.reasons)))
+    if result.verdict == "FAIL":
+        lines += ["", "## Failures requiring attention", ""]
+        for number, code in enumerate(result.reasons, 1):
+            details = "; ".join(d for c in result.checks if code in c.codes for d in c.details)
+            lines.append("%d. %s: %s" % (number, _cell(code), _cell(details)))
+    if result.warnings:
+        lines += ["", "## Warnings (non-blocking)", ""]
+        for code in result.warnings:
+            details = "; ".join(d for c in result.checks if code in c.warn_codes for d in c.details)
+            lines.append("- %s: %s" % (_cell(code), _cell(details)))
+    if result.explanation is not None:
+        lines += ["", "## Summary of what was produced", "",
+                  "Explanation supplied with this gate (not evaluated by any check):", "", "```"]
+        lines += ["  " + ln for ln in _redact(result.explanation).splitlines()]
+        lines.append("```")
+    return "\n".join(lines) + "\n"
+
+
+def _checked_dir(project_root, sdir: Path) -> Path:
+    """`sdir` made safe to write into: it must lie under the artifact root and
+    no component may be a symlink."""
+    root = Path(project_root)
+    artifacts = root / ".workflow_artifacts"
+    rel = os.path.relpath(str(sdir), str(artifacts))
+    if rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+        raise GateArtifactError("unsafe-path", "the stage folder is outside the artifact root")
+    current = artifacts
+    for part in ["."] + [p for p in rel.split(os.sep) if p != "."]:
+        if part != ".":
+            current = current / part
+        info = _lstat(current)
+        if info is not None and stat.S_ISLNK(info.st_mode):
+            raise GateArtifactError("unsafe-path", "a symlink lies on the audit file path")
+    return current
+
+
+def _written_by_gate(path: Path) -> bool:
+    text = _read_text(path, 8 * 1024) if _lstat(path) else None
+    if text is None:
+        return False
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            return False
+        if line == _EVALUATOR_LINE:
+            return True
+    return False
+
+
+def write_artifact(project_root, result: GateResult, sdir: Path, *, source_dir, clock: Callable[[], float] = time.time) -> Path:
+    """Write `gate-PHASE-DATE.md` into the stage folder (the task root for a
+    stage-less phase), replacing a file this writer made on the same day.
+    Another tool's file of that name is never touched."""
+    folder = _checked_dir(project_root, Path(sdir))
+    date = time.strftime("%Y-%m-%d", time.gmtime(clock()))
+    target = folder / ("gate-%s-%s.md" % (result.phase, date))
+    info = _lstat(target)
+    if info is not None:
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
+            raise GateArtifactError("unsafe-path", "the audit file path is not a regular file")
+        if not _written_by_gate(target):
+            raise GateArtifactConflict()
+    os.makedirs(str(folder), exist_ok=True)
+    tmp = folder / (".%s.%s.tmp" % (target.name, _secrets.token_hex(4)))
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(str(tmp), flags, 0o666)
+    try:
+        try:
+            data = render_artifact(result, date=date).encode("utf-8")
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(str(tmp), str(target))
+    except BaseException:
+        try:
+            os.unlink(str(tmp))
+        except OSError:
+            pass
+        raise
+    detail = run_validator(project_root, source_dir, target)
+    if detail is not None:
+        raise GateArtifactInvalid(detail)
+    return target
+
+
+def record_gate(
+    project_root, task: str, stage: Optional[int], phase: str, result: GateResult, artifact_path,
+    clock: Callable[[], float] = time.time,
+) -> bool:
+    """Store the verdict on the phase's current entry. False when the phase has
+    no entry (a gate with no evidence still writes its audit file)."""
+    directory = runstore.inspect_store(project_root)
+    if directory is None:
+        return False
+    state = runstore.load_workflow_state(directory, task)
+    if state is None:
+        return False
+    sha = hashlib.sha256(Path(artifact_path).read_bytes()).hexdigest()
+    updated = runstore.update_current_entry(state, stage, phase, gate={
+        "verdict": result.verdict, "reasons": list(result.reasons), "warnings": list(result.warnings),
+        "artifact": _rel(Path(project_root), Path(artifact_path)), "artifact_sha256": sha,
+        "evaluated_at": result.evaluated_at,
+    })
+    if updated is None:
+        return False
+    state["updated_at"] = _now_iso(clock)
+    runstore.write_workflow_state(directory, state)
+    return True
