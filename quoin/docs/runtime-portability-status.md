@@ -125,6 +125,13 @@ Status: generated project assets, offline-verified; no live runtime evidence.
   offline fake provider). `quoin opencode config explain|compile|import-preview`
   and `quoin opencode probe` are offline-verified configuration tooling; the
   work profile is not yet supported, and there is still no live runtime evidence.
+- `quoin run --runtime opencode --phase PHASE` runs one workflow phase
+  headlessly with event capture, process-tree cancellation and resume rules;
+  `quoin opencode status` reports the latest run read-only and
+  `quoin opencode start` opens the terminal interface with the compiled
+  profile. Doctor findings carry a problem category, and `--profile` adds
+  configuration checks. These are verified against a fake executable only;
+  there is still no live runtime evidence.
 - Pinned release and claim status in `quoin/adapters/opencode/compatibility.md`.
 - Open maintainer decisions in `quoin/adapters/opencode/decisions.md`.
 - There is no global OpenCode installer or global OpenCode path assumed; all

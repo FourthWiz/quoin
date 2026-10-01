@@ -392,7 +392,11 @@ def test_log_records_carry_no_secret(world, capsys, caplog, secret):
 # ---------------------------------------------------------- secret boundary
 
 
+REVEALING_MODULES = {"probe_cli.py", "launch_env.py"}
 RESOLVER_NAMES = {"default_resolver", "CredentialResolver", "EnvBackend", "MacKeychainBackend"}
+# The driver names the default resolver factory as its injectable default; it
+# hands the resolver to the launch environment builder and never reveals.
+FACTORY_ONLY_MODULES = {"driver.py": {"default_resolver"}}
 
 
 def _tree(path):
@@ -420,12 +424,15 @@ def test_only_the_probe_wiring_resolves_and_reveals_secrets():
             assert RESOLVER_NAMES <= defined
             continue
         assert not (defined & RESOLVER_NAMES), path.name
-        if path.name != "probe_cli.py":
-            assert not used, (path.name, used)
+        if path.name not in REVEALING_MODULES:
+            assert used <= FACTORY_ONLY_MODULES.get(path.name, set()), (path.name, used)
             assert reveals == 0, path.name
         reveal_calls[path.name] = reveals
+    # The probe wiring and the launch environment builder are the only places
+    # a secret is read, once each; the launcher receives an injected resolver.
     assert reveal_calls["probe_cli.py"] == 1
-    assert {name for name, count in reveal_calls.items() if count} == {"probe_cli.py"}
+    assert reveal_calls["launch_env.py"] == 1
+    assert {name for name, count in reveal_calls.items() if count} == REVEALING_MODULES
     probe_uses = {
         node.attr for node in ast.walk(_tree(SRC_DIR / "probe_cli.py")) if isinstance(node, ast.Attribute)
     } & RESOLVER_NAMES

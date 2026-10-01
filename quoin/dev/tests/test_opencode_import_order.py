@@ -32,6 +32,7 @@ _CONFIG_MODULES = tuple(
     for name in (
         "errors", "paths", "jsonio", "schema_check", "secrets", "config",
         "merge", "qualification", "roles", "compiler", "explain", "probe_cli", "import_preview", "retry", "events",
+        "proctree", "runstore", "launch_env", "driver", "phase_loop", "categories", "status",
     )
 )
 
