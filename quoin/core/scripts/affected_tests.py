@@ -24,8 +24,11 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
   1  — affected-area suite RED: pytest ran and returned non-zero. BLOCKING.
   2  — argparse / malformed input.
   3  — UNDETERMINABLE (fail-CLOSED): git-root resolution failed, git error,
-       `unmatched_sources` non-empty without --allow-unmatched, or pytest
-       binary missing.  Treat as "cannot confirm green → do NOT auto-approve."
+       `unmatched_sources` non-empty without --allow-unmatched, pytest
+       binary missing, or the nearest project venv's interpreter is broken
+       (dangling link, missing, or not runnable) and no healthy venv was found
+       (`exit_reason="venv-interpreter-broken"`, details in
+       `interpreter_problems`).  Treat as "cannot confirm green → do NOT auto-approve."
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
        disabling detection must not silently green-light an APPROVE — this
        is the OPPOSITE of branch_hygiene's env opt-out which exits 0.
@@ -54,6 +57,10 @@ Env:
       instead (D-05) — a TimeoutExpired there maps to exit 3 with
       exit_reason="pytest-timeout" (BLOCKING-SURFACE, never a silent GREEN,
       never a hard-RED false block; see proc P-03).
+  QUOIN_PYTHON — interpreter to run pytest under; used only if it exists, is
+      executable and can import pytest, otherwise the venv walk continues.
+  QUOIN_DISABLE_VENV_PROBE=1 — skip interpreter discovery and broken-venv
+      detection entirely; pytest runs under the invoking interpreter.
   QUOIN_DISABLE_CHILD_REPO_SCAN=1 — skip the depth-1 child-.git discovery scan
       in discover_repos(); single-repo view only. Distinct from
       QUOIN_DISABLE_DISPATCH_CWD (a different concern, see D-08).
@@ -98,7 +105,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -1836,6 +1843,9 @@ class Selection:
     # are omitted from output until a caller actually resolves an interpreter.
     interpreter: str = ""
     interpreter_reason: str = ""
+    # Interpreters found but unusable, one "<kind>: <path> (<detail>)" entry
+    # each; omitted from output when empty.
+    interpreter_problems: list[str] = dataclasses.field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -1855,6 +1865,8 @@ class Selection:
             d["interpreter"] = self.interpreter
         if self.interpreter_reason:
             d["interpreter_reason"] = self.interpreter_reason
+        if self.interpreter_problems:
+            d["interpreter_problems"] = self.interpreter_problems
         return d
 
 
@@ -1899,6 +1911,12 @@ def _run(args: list[str]) -> tuple[str, str, int]:
 _VENV_WALK_MAX_DEPTH = 6
 
 
+# Set by _probe_interpreter when the probe subprocess timed out. The classifier
+# resets it before each probe call and reads it right after, so a patched
+# probe (which never touches it) always reads "no timeout".
+_PROBE_TIMED_OUT = False
+
+
 def _probe_interpreter(candidate: str, probe: str) -> bool:
     """Run `candidate -c probe` and report whether it exits 0.
 
@@ -1906,6 +1924,7 @@ def _probe_interpreter(candidate: str, probe: str) -> bool:
     helper's FileNotFoundError branch hardcodes a git-specific message that
     would be misleading here.
     """
+    global _PROBE_TIMED_OUT
     try:
         proc = subprocess.run(
             [candidate, "-c", probe],
@@ -1914,12 +1933,124 @@ def _probe_interpreter(candidate: str, probe: str) -> bool:
             timeout=_subprocess_timeout(),
         )
         return proc.returncode == 0
-    except Exception:  # noqa: BLE001 - TimeoutExpired, FileNotFoundError, OSError, ...
+    except subprocess.TimeoutExpired:
+        _PROBE_TIMED_OUT = True
+        return False
+    except Exception:  # noqa: BLE001 - FileNotFoundError, OSError, ...
         return False
 
 
-def resolve_python(project_root: Path, probe: str | None = None) -> tuple[str, str]:
-    """Resolve the Python interpreter to run pytest with.
+@dataclasses.dataclass
+class InterpreterProblem:
+    """A venv or override interpreter that was found but is not usable as-is."""
+
+    path: str
+    kind: str  # dangling-link | missing-interpreter | not-runnable | no-pytest
+    detail: str
+    # True when the candidate is a project interpreter that exists but cannot
+    # run. False for no-pytest (a healthy venv without pytest) and for a
+    # QUOIN_PYTHON path that does not exist at all.
+    broken: bool
+    source: str = "venv"  # "venv" or "QUOIN_PYTHON"
+
+    def __str__(self) -> str:
+        return "%s: %s (%s)" % (self.kind, self.path, self.detail)
+
+
+def _venv_base_hint(venv_dir: Path) -> str:
+    """Describe the Python a venv was built from, using its pyvenv.cfg."""
+    try:
+        text = (venv_dir / "pyvenv.cfg").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    cfg = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            cfg[key.strip().lower()] = value.strip()
+    home = cfg.get("home", "")
+    version = cfg.get("version", "") or cfg.get("version_info", "")
+    if not home and not version:
+        return ""
+    parts = ["venv built from Python"]
+    if version:
+        parts.append(version)
+    if home:
+        parts.append("at " + home)
+    return " ".join(parts)
+
+
+def _classify_candidate(
+    candidate: Path, probe: Optional[str], source: str = "venv"
+) -> Tuple[bool, Optional[InterpreterProblem]]:
+    """Decide whether `candidate` is a usable interpreter.
+
+    Returns (ok, problem). `problem` is None when the candidate is usable or
+    when there is nothing at that path worth reporting. Every probe goes
+    through _probe_interpreter so a patched probe controls the outcome.
+    """
+    global _PROBE_TIMED_OUT
+    path = str(candidate)
+    venv_dir = candidate.parent.parent
+    hint = _venv_base_hint(venv_dir)
+
+    if os.path.lexists(path) and not candidate.exists():
+        target = os.path.realpath(path)
+        detail = "link target %s does not exist" % target
+        if hint:
+            detail += "; " + hint
+        return False, InterpreterProblem(path, "dangling-link", detail, True, source)
+
+    if not os.path.lexists(path):
+        if source == "QUOIN_PYTHON":
+            return False, InterpreterProblem(
+                path,
+                "missing-interpreter",
+                "QUOIN_PYTHON names a path that does not exist",
+                False,
+                source,
+            )
+        if not (venv_dir / "pyvenv.cfg").is_file():
+            return False, None
+        detail = "bin/python missing"
+        if (candidate.parent / "python3").exists():
+            detail += "; bin/python3 present"
+        if hint:
+            detail += "; " + hint
+        return False, InterpreterProblem(path, "missing-interpreter", detail, True, source)
+
+    if not (candidate.is_file() and os.access(candidate, os.X_OK)):
+        return False, InterpreterProblem(
+            path, "not-runnable", "not an executable file", True, source
+        )
+
+    if probe is None:
+        return True, None
+
+    timeout_detail = "probe timed out after %ss" % _subprocess_timeout()
+    _PROBE_TIMED_OUT = False
+    if _probe_interpreter(path, probe):
+        return True, None
+    if _PROBE_TIMED_OUT:
+        return False, InterpreterProblem(path, "not-runnable", timeout_detail, True, source)
+
+    _PROBE_TIMED_OUT = False
+    if _probe_interpreter(path, "pass"):
+        return False, InterpreterProblem(
+            path, "no-pytest", "interpreter runs but the probe failed", False, source
+        )
+    if _PROBE_TIMED_OUT:
+        return False, InterpreterProblem(path, "not-runnable", timeout_detail, True, source)
+    detail = "interpreter cannot be executed"
+    if hint:
+        detail += "; " + hint
+    return False, InterpreterProblem(path, "not-runnable", detail, True, source)
+
+
+def resolve_python_detail(
+    project_root: Path, probe: Optional[str] = None
+) -> Tuple[str, str, List[InterpreterProblem]]:
+    """Resolve the Python interpreter to run pytest with, and report problems.
 
     Resolution order: QUOIN_DISABLE_VENV_PROBE=1 short-circuits to the
     invoking interpreter; QUOIN_PYTHON is honored if it points at an
@@ -1928,22 +2059,29 @@ def resolve_python(project_root: Path, probe: str | None = None) -> tuple[str, s
     _VENV_WALK_MAX_DEPTH levels and stopped before the home directory; if
     nothing qualifies, falls back to the invoking interpreter.
 
+    A candidate that exists but cannot be used is kept walking past and
+    recorded as an InterpreterProblem, in encounter order: a dangling link, a
+    venv whose bin/python is gone, or an interpreter that cannot run at all
+    (broken); a runnable interpreter that only lacks pytest is listed but not
+    broken. A healthy venv found higher up still wins.
+
     The candidate path is returned verbatim, never `.resolve()`d — resolving
     a venv interpreter symlink strips the venv prefix and silently changes
     which site-packages it imports from.
     """
     if os.environ.get("QUOIN_DISABLE_VENV_PROBE", "").strip() == "1":
-        return sys.executable, "disabled"
+        return sys.executable, "disabled", []
+
+    problems: List[InterpreterProblem] = []
 
     env_py = os.environ.get("QUOIN_PYTHON", "").strip()
     if env_py:
         candidate = Path(env_py)
-        if (
-            candidate.is_file()
-            and os.access(candidate, os.X_OK)
-            and (probe is None or _probe_interpreter(str(candidate), probe))
-        ):
-            return str(candidate), "env-override"
+        ok, problem = _classify_candidate(candidate, probe, source="QUOIN_PYTHON")
+        if problem is not None:
+            problems.append(problem)
+        if ok:
+            return str(candidate), "env-override", problems
         # else fall through to the venv walk — never return an unprobed override
 
     try:
@@ -1960,14 +2098,22 @@ def resolve_python(project_root: Path, probe: str | None = None) -> tuple[str, s
         if home is not None and d == home:
             break  # stop BEFORE the home directory; never probe ~/.venv
         candidate = d / ".venv" / "bin" / "python"
-        if (
-            candidate.is_file()
-            and os.access(candidate, os.X_OK)
-            and (probe is None or _probe_interpreter(str(candidate), probe))
-        ):
-            return str(candidate), "venv"
+        ok, problem = _classify_candidate(candidate, probe)
+        if problem is not None:
+            problems.append(problem)
+        if ok:
+            return str(candidate), "venv", problems
 
-    return sys.executable, "fallback"
+    return sys.executable, "fallback", problems
+
+
+def resolve_python(project_root: Path, probe: Optional[str] = None) -> Tuple[str, str]:
+    """Resolve the Python interpreter to run pytest with.
+
+    Thin wrapper over resolve_python_detail that drops the problem list.
+    """
+    interp, reason, _problems = resolve_python_detail(project_root, probe)
+    return interp, reason
 
 
 def discover_repos(project_root: Path) -> list[Path]:
@@ -2390,6 +2536,11 @@ def _format_text(sel: Selection) -> str:
         lines.append(f"interpreter: {sel.interpreter}")
     if sel.interpreter_reason:
         lines.append(f"interpreter_reason: {sel.interpreter_reason}")
+    if sel.interpreter_problems:
+        lines.append(
+            f"interpreter_problems ({len(sel.interpreter_problems)}): "
+            + "; ".join(sel.interpreter_problems)
+        )
     return "\n".join(lines)
 
 
@@ -2528,9 +2679,13 @@ def main(argv: list[str] | None = None) -> int:
     # so args.project_root can legally be None here, hence the Path.cwd() guard.
     if args.print_interpreter:
         anchor = args.project_root if args.project_root is not None else Path.cwd()
-        interp, interp_reason = resolve_python(anchor, probe="import pytest")
+        interp, interp_reason, interp_found = resolve_python_detail(
+            anchor, probe="import pytest"
+        )
         print(f"interpreter: {interp}")
         print(f"interpreter_reason: {interp_reason}")
+        for found in interp_found:
+            print(f"interpreter_problem: {found}")
         return 0
 
     # ------------------------------------------------------------------
@@ -2658,7 +2813,10 @@ def main(argv: list[str] | None = None) -> int:
     # repo_root — the only point where it is defined in all three modes — and
     # probed for pytest importability so a candidate venv that can't run
     # pytest falls through rather than being selected and failing later.
-    interp, interp_reason = resolve_python(repo_root, probe="import pytest")
+    interp, interp_reason, interp_found = resolve_python_detail(
+        repo_root, probe="import pytest"
+    )
+    interp_problems = [str(found) for found in interp_found]
 
     # FR-6/AC-6: partition intentionally-non-collectable files OUT of `changed`
     # BEFORE mapping.  An allowlisted .py (test or non-test) must never become a
@@ -2688,6 +2846,7 @@ def main(argv: list[str] | None = None) -> int:
             missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2713,6 +2872,7 @@ def main(argv: list[str] | None = None) -> int:
             missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2746,6 +2906,7 @@ def main(argv: list[str] | None = None) -> int:
                 missing_tests=missing_tests,
                 interpreter=interp,
                 interpreter_reason=interp_reason,
+                interpreter_problems=interp_problems,
             )
             if fmt == "text":
                 print(_format_text(sel))
@@ -2777,6 +2938,7 @@ def main(argv: list[str] | None = None) -> int:
             missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2799,6 +2961,48 @@ def main(argv: list[str] | None = None) -> int:
     # candidate was already probed for pytest importability by resolve_python
     # above, so this in-process check is skipped (checking sys.executable's
     # pytest would say nothing about the venv interpreter's).
+    # A project interpreter that exists but cannot run (dangling link, missing
+    # bin/python, unrunnable binary) with no healthy venv higher up: running
+    # pytest under the invoking interpreter instead would test the project
+    # under an interpreter nobody chose, so stop and name the problem.
+    if interp_reason == "fallback" and any(found.broken for found in interp_found):
+        sel = Selection(
+            changed=changed,
+            selectors=selectors,
+            unmatched_sources=unmatched_sources,
+            ignored=ignored,
+            ran_pytest=False,
+            pytest_returncode=None,
+            exit_reason="venv-interpreter-broken",
+            unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
+            noncollectable=noncollectable,
+            missing_tests=missing_tests,
+            interpreter=interp,
+            interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
+        )
+        if fmt == "text":
+            print(_format_text(sel))
+        else:
+            print(json.dumps(sel.to_dict(), indent=2))
+        broken_sources = {found.source for found in interp_found if found.broken}
+        if broken_sources == {"QUOIN_PYTHON"}:
+            remedy = "fix or unset QUOIN_PYTHON, or set QUOIN_DISABLE_VENV_PROBE=1 to skip the check"
+        else:
+            remedy = (
+                "recreate the project venv on this machine, remove a stray .venv in a "
+                "parent folder, or point QUOIN_PYTHON at a working interpreter "
+                "(QUOIN_DISABLE_VENV_PROBE=1 skips the check)"
+            )
+        print(
+            "affected_tests: the project interpreter is broken, so tests were not run: "
+            + "; ".join(interp_problems)
+            + ". To fix: "
+            + remedy,
+            file=sys.stderr,
+        )
+        return 3
+
     import importlib.util
 
     if interp == sys.executable and importlib.util.find_spec("pytest") is None:
@@ -2815,6 +3019,7 @@ def main(argv: list[str] | None = None) -> int:
             missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2844,6 +3049,7 @@ def main(argv: list[str] | None = None) -> int:
             missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2867,6 +3073,7 @@ def main(argv: list[str] | None = None) -> int:
             missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2903,6 +3110,7 @@ def main(argv: list[str] | None = None) -> int:
         missing_tests=missing_tests,
         interpreter=interp,
         interpreter_reason=interp_reason,
+        interpreter_problems=interp_problems,
     )
     if fmt == "text":
         print(_format_text(sel))
