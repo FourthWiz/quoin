@@ -58,3 +58,93 @@ _PARAMS = {
     "repo_revisions": {"max_source_bytes", "max_untracked_files", "budget_s"},
     "hash_inputs": {"max_files", "max_file_bytes", "max_total_bytes"},
 }
+
+
+# ---------------------------------------------------------------------------
+# task artifacts that pass strict validation
+# ---------------------------------------------------------------------------
+
+FOR_HUMAN = "## For human\n\nA short summary for the reader.\n\n"
+
+ARCHITECTURE = (
+    "---\ntask: fixture\n---\n" + FOR_HUMAN
+    + "## Context\n\ntext\n\n## Current state\n\ntext\n\n## Proposed architecture\n\ntext\n\n"
+    "## Risk register\n\ntext\n\n## Stage decomposition\n\n"
+    "1. S-1: First stage\n2. S-2: Second stage\n"
+)
+
+PLAN = (
+    "---\ntask: fixture\n---\n" + FOR_HUMAN
+    + "## State\n\ntext\n\n## Tasks\n\nwork\n\n## Risks\n\nnone\n"
+)
+
+CRITIC_PASS = (
+    "## Verdict\n\n`<verdict>PASS</verdict>`\n\n## Summary\n\ntext\n\n## Issues\n\nnone\n\n"
+    "## What's good\n\ntext\n\n## Scorecard\n\ntext\n"
+)
+CRITIC_REVISE = CRITIC_PASS.replace("PASS", "REVISE")
+
+REVIEW = (
+    "---\ntask: fixture\n---\n" + FOR_HUMAN
+    + "## Summary\n\ntext\n\n## Verdict\n\nAPPROVED\n\n## Plan Compliance\n\ntext\n\n"
+    "## Issues Found\n\nnone\n\n## Integration Safety\n\ntext\n\n## Test Coverage\n\ntext\n\n"
+    "## Risk Assessment\n\ntext\n\n## Dimension Verdicts\n\n| Dimension | Verdict |\n|---|---|\n| all | ok |\n"
+)
+
+DISCOVER_TEXT = {
+    "repos-inventory.md": "# Repositories\n\ntext\n",
+    "architecture-overview.md": "# Overview\n\n## System purpose\n\ntext\n",
+    "dependencies-map.md": "# Dependencies\n\n## Dependency graph\n\ntext\n",
+}
+
+
+def write(path, text) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def task_dir(root, task) -> Path:
+    return Path(root) / ".workflow_artifacts" / task
+
+
+def build_task(root, task="t1", *, critic=CRITIC_PASS, review=REVIEW, discover=False) -> Path:
+    """A multi-stage task with every gated phase's artifact in place."""
+    base = task_dir(root, task)
+    write(base / "architecture.md", ARCHITECTURE)
+    write(base / "stage-1" / "current-plan.md", PLAN)
+    if critic is not None:
+        write(base / "stage-1" / "critic-response-1.md", critic)
+    if review is not None:
+        write(base / "stage-1" / "review-1.md", review)
+    if discover:
+        for name, text in DISCOVER_TEXT.items():
+            write(Path(root) / ".workflow_artifacts" / "memory" / name, text)
+    return base
+
+
+def run_request(root, task, stage, phase):
+    """The request mapping exactly as the driver stores it."""
+    request = driver.RunRequest(project_root=Path(root), task=task, stage=stage, phase=phase, profile="p")
+    return {
+        "task": request.task, "stage": request.stage, "phase": request.phase, "profile": request.profile,
+        "effort": request.effort, "timeout_s": request.timeout_s, "budget": request.budget,
+        "context_refs": list(request.context_refs),
+    }
+
+
+def make_run(root, task="t1", *, stage="1", phase="plan", state="completed", evidence="full", task_override=None) -> str:
+    """Write a finished run record and return its id."""
+    directory = runstore.store_dir(root, create=True)
+    run_id = runstore.new_run_id()
+    record = runstore.new_run_record(
+        run_id, task_override or task, run_request(root, task, stage, phase), {},
+    )
+    record["state"] = state
+    record["outcome"] = {
+        "state": state, "evidence": evidence, "reason": None, "exit_code": 0, "signal": None,
+        "new_native_events": 1,
+    }
+    runstore.write_record(directory, record)
+    return run_id

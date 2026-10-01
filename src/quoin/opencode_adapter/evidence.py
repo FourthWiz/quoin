@@ -80,7 +80,7 @@ def take_snapshot(
     }
 
 
-def _well_formed(snapshot: Any) -> bool:
+def well_formed(snapshot: Any) -> bool:
     return (
         isinstance(snapshot, Mapping)
         and isinstance(snapshot.get("task_hashes"), Mapping)
@@ -148,7 +148,7 @@ def _compare_repos(recorded: Mapping[str, Any], current: Mapping[str, Any]) -> L
 def compare(recorded: Any, current: Any) -> Tuple[List[Finding], List[Finding]]:
     """`(task_findings, repo_findings)` between a stored and a fresh snapshot.
     Details are project-relative or repository paths, never file contents."""
-    if not _well_formed(recorded) or not _well_formed(current):
+    if not well_formed(recorded) or not well_formed(current):
         bad = [Finding("evidence-incomplete", "the evidence snapshot is malformed")]
         return list(bad), list(bad)
     return _compare_tasks(recorded, current), _compare_repos(recorded, current)
