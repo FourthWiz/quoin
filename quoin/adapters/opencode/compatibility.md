@@ -189,6 +189,8 @@ qualified against.
 
 ## Headless run events and process lifecycle
 
+The adapter README's "Runtime driver" section describes how the driver uses these rows: run states, resume rules, status and the terminal interface.
+
 | Claim | Status | Evidence | Note |
 |---|---|---|---|
 | With `--format json`, each emitted line is one JSON object `{type, timestamp (epoch ms), sessionID, ...data}` written to stdout followed by a newline. | verified | `github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/cli/cmd/run.ts` (L678-691) | `key: json-envelope`. The timestamp is the emission time, not the part time. |

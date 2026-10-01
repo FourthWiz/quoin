@@ -208,6 +208,16 @@ no live OpenCode run or corporate gateway has been qualified.
 - `quoin opencode probe --profile NAME --synthetic-only [--model NAME] [--project-root PATH]`
   qualifies one profile model against its gateway and writes its qualification
   record. Exit 0 qualified, 1 not qualified, 2 could not run or refused.
+- `quoin opencode status (--task NAME | --run-id ID) [--project-root PATH] [--json]`
+  reports the latest phase run of a task, or one run id, without changing
+  anything (see "Runtime driver"). Exit 0, or 2 for an unreadable store or an
+  invalid name.
+- `quoin opencode start --profile NAME [--project-root PATH] [--dry-run]`
+  opens the OpenCode terminal interface with the compiled profile.
+  `--dry-run` validates and prints the command, directory and environment
+  variable names without starting it. Exit 3 when a check refuses.
+- `quoin doctor --runtime opencode --profile NAME` adds the profile checks
+  described under "Runtime driver".
 
 ### File locations
 
@@ -299,6 +309,140 @@ delays use exponential backoff with full jitter. The attempt cap comes from
 is never repeated while a state-changing tool is running. Unknown token or
 cost usage stays unknown (`None`) when totalled, and a retry never moves work
 to another profile.
+
+## Runtime driver
+
+`quoin run --runtime opencode --profile NAME --phase PHASE TASK` runs one
+workflow phase headlessly on OpenCode and prints a JSON summary. A phase is a
+single supported command such as `plan`; a whole-task run is not available
+and is refused. The driver is verified offline against a fake executable
+only: no live OpenCode run has been verified, and nothing here makes the work
+profile supported.
+
+### Phase runs
+
+Flags: `--profile` (required), `--phase` (required), `--stage N` (a stage of a
+multi-stage task), `--new-run` (start the phase over instead of resuming the
+recorded run), `--max-relaunch N`, `--halt-on-abort` and `--budget`. A run
+holds the task lock while it works; the lock records `runtime: opencode`, so
+Claude auto-resume never continues such a task and treats the lock as owned by
+another runtime. A phase run never writes the whole-task halt sentinel.
+
+Run states: `prepared`, `running`, `completed`, `failed`, `awaiting_approval`,
+`cancelled` and `interrupted`. Each attempt is classified by one precedence
+order, first match wins: a cancel, then an approval stop, then a native error
+or a failed delegation or agent fallback (failed), then a timeout, driver
+error, lost driver, early end of stream, lost session, signal, missing or
+non-zero exit code or no proof the last step finished (interrupted), and only
+then completion. The summary reports a completed run whose evidence is not
+`full` as `COMPLETED_UNVERIFIED`.
+
+Evidence is `full` when every tool of the final step settled and nothing was
+delegated away, and `partial` otherwise. Delegated work (background tasks and
+subagent tool calls whose outcome the event stream cannot show) keeps the run
+`partial`, which is why it ends as `COMPLETED_UNVERIFIED` rather than
+`COMPLETED`. Approval requests cannot be answered in a headless run: asks are
+rejected automatically and the run ends awaiting approval. A policy `deny`
+rule is different: the model sees the denial and may continue, so it is
+recoverable.
+
+Summary keys: `runtime`, `task`, `stage`, `phase`, `profile`, `outcome`,
+`exit_code`, `run_state`, `evidence`, `reason`, `resume_blocked`, `run_id`,
+`sidecar`, `attempts`, `artifact_coverage` (`full` unless an input snapshot was
+cut short, then `partial`), `refusal`, `resume_hint`, `superseded_run` (the
+older run a `--new-run` replaced, when it still read running) and
+`workflow_validated` (always false: the driver does not check workflow
+artifacts). Exit codes: 0 completed, 2 failed, aborted or internal error, 3
+refused, 4 awaiting approval, 5 interrupted, 6 completed but unverified, and
+130 or 143 when stopped by SIGINT or SIGTERM.
+
+Run store: under the project's workflow memory directory, in `runtime/opencode/`:
+`RUN_ID.jsonl` (the event sidecar), `RUN_ID.run.json` (the run record),
+`RUN_ID.checkpoint.json` (the resume checkpoint) and `task-TASK.json` (a
+pointer from a task to its latest run). A run id looks like
+`oc-YYYYMMDDTHHMMSSZ-xxxxxxxx`. The directory is private to the user.
+
+Cancellation stops the whole process tree: the child and its descendants are
+terminated, then killed after a grace period. A second Ctrl-C during that
+grace does not force an exit; `kill -KILL` on the `quoin run` process is the
+escape, and the dead run's lock is reclaimed by the next run. Phase runs
+write `relaunches: 0` to the supervisor result file so the Claude auto-resume
+counter is never charged.
+
+### Resume, blocks and limits
+
+A new invocation for the same task, phase, stage and profile resumes an
+interrupted run. Resume is blocked, and the run must be started over with
+`--new-run`, when the driver cannot prove it is safe:
+
+- `effect-uncertain`: a step may have changed files that the driver cannot account for (the run stopped inside a step, the driver was lost, or no session was recorded).
+- `session-lost`: OpenCode reported that the recorded session no longer exists.
+- `session-invalid`: the recorded session id is not a usable OpenCode session id.
+- `sidecar-behind-checkpoint`: the event sidecar is shorter than the checkpoint says.
+- `checkpoint-invalid`: the checkpoint cannot be read or fails its checks.
+
+The `resume_hint` field is a command line; it ends with `--new-run` exactly
+when the next invocation would not resume. When another `quoin run` still holds
+the task lock, a new invocation is refused with `lock-held`. A record that
+still reads running while its driver is gone is refused with `run-in-progress`
+and names the child pid and process group: check them, stop the child if it is
+alive, then re-run with `--new-run` (holding the lock proves the old driver has
+exited, so `--new-run` always proceeds and reports the replaced run as
+`superseded_run`).
+
+Limits: `max_run_seconds` is counted per `quoin run` invocation, not across
+resumes. The no-progress guard can stop a run whose transient failures emit no
+native events before `max_transient_retries` is reached.
+
+### Status and the terminal interface
+
+`quoin opencode status` is strictly read-only: it never repairs a torn
+sidecar, reconciles a record, creates the store or sends a signal. It reports
+the state (`running (driver lost)` when the recording process has exited), the
+child, the last event, a torn sidecar tail, older runs still reading running,
+and the task lock. Liveness comes from one process-table snapshot; when the
+table cannot be read, liveness is reported as unknown (`null`) rather than
+guessed. Text output names the remedy for a dead lock, a lost driver or a
+blocked resume.
+
+`quoin opencode start` runs the same checks as a phase run (binary, pinned
+version, configuration, gateway qualification, installed files unchanged,
+configuration layers) and then replaces the `quoin` process with the OpenCode
+interface, started in the project directory with the compiled configuration
+and an isolated data directory. Nothing is captured: there is no event
+sidecar, no run record and no task lock, and the TUI keeps the terminal and
+receives Ctrl-C directly. The data directory is per profile and shared by
+every run and TUI session of that profile, so sessions created interactively
+are stored beside headless ones and are visible to the same profile.
+
+### Doctor categories and profile checks
+
+Every doctor finding carries a `category` in the JSON report, using the same
+slugs as run refusals so a finding and a refusal about one problem agree:
+
+| Category | Label | Example finding ids |
+|---|---|---|
+| `missing-binary` | missing binary | `opencode-binary-absent` |
+| `unsupported-version` | unsupported version | `opencode-version`, `opencode-version-unknown` |
+| `invalid-configuration` | invalid configuration | `config-unreadable`, `runtime-config-invalid`, `runtime-compile-blocked` |
+| `unqualified-gateway` | unqualified gateway | `runtime-gateway-unqualified` |
+| `policy-denial` | policy denial | `runtime-config-policy-denied`, `runtime-plugin-directory-present` |
+| `missing-optional-integration` | missing optional integration | `quoin-not-on-path`, `census-unverified` |
+| `workflow-validation` | workflow validation failure | `owned-modified`, `runtime-orphan-run`, `runtime-stale-lock` |
+
+Host checks now also report process-group support, an unusable run store,
+orphaned runs, a stale OpenCode task lock, a phase command whose agent is not
+primary, and plugin directories. With `--profile NAME` (not with `--smoke`)
+the doctor also evaluates that profile's configuration without resolving any
+credential and reports whether it can launch. A role blocked by a provider
+exclusion is reported as compile-blocked, exactly as the run refusal reports
+it.
+
+A plugin script in any OpenCode plugin directory (including the global one)
+refuses launches, because plugin code can hook permission handling. Move the
+plugin files out of those directories for the duration of a run, or run with a
+separate `XDG_CONFIG_HOME`. The doctor does not scan Quoin-named skills placed
+outside the installed project folders.
 
 ## Running the probe
 

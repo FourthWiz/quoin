@@ -670,6 +670,7 @@ def test_readme_documents_every_cli_flag():
     for flag in (
         "--profile", "--project-root", "--redact", "--json", "--output", "--check", "--allow-unqualified",
         "--profile-name", "--apply", "--confirm-model-id", "--force", "--synthetic-only", "--model",
+        "--task", "--run-id", "--dry-run",
     ):
         assert flag in commands, flag
     parser_source = (REPO_ROOT / "src" / "quoin" / "cli.py").read_text(encoding="utf-8")
