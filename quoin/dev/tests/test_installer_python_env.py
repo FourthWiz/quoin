@@ -63,6 +63,36 @@ def test_no_python3_on_path_is_a_warning_not_a_missing_tool(monkeypatch, capsys)
     assert "no python3 on PATH" in err and sys.executable in err
 
 
+def test_old_bare_python3_on_path_warns(monkeypatch, capsys):
+    real_which = inst.shutil.which
+
+    def which(name, *a, **kw):
+        return "/fake/python3" if name == "python3" else (real_which(name, *a, **kw) or "/bin/true")
+
+    monkeypatch.setattr(inst.shutil, "which", which)
+    monkeypatch.setattr(inst, "_bare_python3_version", lambda path: (3, 8))
+    inst.check_prerequisites()
+    err = capsys.readouterr().err
+    assert "python3 on PATH is 3.8" in err and sys.executable in err
+
+
+def test_sufficient_bare_python3_on_path_is_silent(monkeypatch, capsys):
+    real_which = inst.shutil.which
+    monkeypatch.setattr(
+        inst.shutil, "which",
+        lambda name, *a, **kw: real_which(name, *a, **kw) or "/bin/true",
+    )
+    monkeypatch.setattr(inst, "_bare_python3_version", lambda path: inst.MIN_PYTHON)
+    inst.check_prerequisites()
+    assert "python3 on PATH is" not in capsys.readouterr().err
+
+
+def test_installer_min_python_matches_pyproject():
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    major, minor = re.search(r'requires-python\s*=\s*">=(\d+)\.(\d+)', text).groups()
+    assert inst.MIN_PYTHON == (int(major), int(minor))
+
+
 def test_main_min_python_matches_pyproject():
     text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
     major, minor = re.search(r'requires-python\s*=\s*">=(\d+)\.(\d+)', text).groups()

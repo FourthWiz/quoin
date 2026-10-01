@@ -1034,6 +1034,22 @@ def merge_workflow_rules(
 
 # ── T-07 ──────────────────────────────────────────────────────────────────────
 
+MIN_PYTHON = (3, 10)  # keep in step with requires-python in pyproject.toml
+
+
+def _bare_python3_version(path: str) -> Optional[tuple]:
+    """Return (major, minor) reported by `path`, or None when it cannot say."""
+    try:
+        proc = subprocess.run(
+            [path, "-c", "import sys; print(sys.version_info[0], sys.version_info[1])"],
+            capture_output=True, text=True, timeout=10,
+        )
+        major, minor = proc.stdout.split()[:2]
+        return int(major), int(minor)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 def check_prerequisites() -> list[str]:
     """Return list of missing required tools; warn about optional ones."""
     missing: list[str] = []
@@ -1047,6 +1063,15 @@ def check_prerequisites() -> list[str]:
             f"python3; link or alias {sys.executable} as python3.",
             file=sys.stderr,
         )
+    else:
+        found = _bare_python3_version(shutil.which("python3"))
+        if found is not None and found < MIN_PYTHON:
+            print(
+                f"Warning: python3 on PATH is {found[0]}.{found[1]}, below the "
+                f"required {MIN_PYTHON[0]}.{MIN_PYTHON[1]} — quoin's skills and hooks "
+                f"call bare python3; put {sys.executable} first on PATH or link it as python3.",
+                file=sys.stderr,
+            )
     if shutil.which("gh") is None:
         print(
             "Warning: gh (GitHub CLI) not found — /end_of_task push will still work, but PR creation won't.",

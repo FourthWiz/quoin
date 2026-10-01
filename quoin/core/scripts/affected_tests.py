@@ -25,8 +25,9 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
   2  — argparse / malformed input.
   3  — UNDETERMINABLE (fail-CLOSED): git-root resolution failed, git error,
        `unmatched_sources` non-empty without --allow-unmatched, pytest
-       binary missing, or the nearest project venv's interpreter is broken
-       (dangling link, missing, or not runnable) and no healthy venv was found
+       binary missing, or a project venv interpreter found up the directory tree is
+       broken (dangling link, missing, or not runnable) and no healthy venv
+       with pytest was found
        (`exit_reason="venv-interpreter-broken"`, details in
        `interpreter_problems`).  Treat as "cannot confirm green → do NOT auto-approve."
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
@@ -2995,7 +2996,7 @@ def main(argv: list[str] | None = None) -> int:
                 "(QUOIN_DISABLE_VENV_PROBE=1 skips the check)"
             )
         print(
-            "affected_tests: the project interpreter is broken, so tests were not run: "
+            "affected_tests: a project venv interpreter up the directory tree is broken, so tests were not run: "
             + "; ".join(interp_problems)
             + ". To fix: "
             + remedy,
