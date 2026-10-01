@@ -161,6 +161,111 @@ class TestMapChangedToTests:
         assert s1 == s2, "selectors should be order-independent"
         assert s1 == sorted(s1), "selectors should be sorted"
 
+    def test_deleted_test_file_is_ignored_not_selected(self, fake_repo):
+        """A changed test file that no longer exists on disk must not become a
+        selector: pytest exits 4 on a missing path, which reads as a red
+        affected area.
+        """
+        selectors, unmatched, ignored = _at.map_changed_to_tests(["test_removed.py"], fake_repo)
+        assert not selectors
+        assert not unmatched
+        assert ignored == ["test_removed.py"]
+
+    @pytest.mark.parametrize("excluded", [
+        ".venv/lib/site-packages/pkg",
+        "node_modules/pkg",
+        ".tox/py312",
+        "build/lib",
+        "dist",
+        "pkg.egg-info",
+    ])
+    def test_excluded_dirs_are_not_scanned_for_tests(self, fake_repo, excluded):
+        """Test files inside a virtualenv, node_modules or build output are
+        never selection candidates, even when they match the changed module
+        by name.
+        """
+        pkg_dir = fake_repo / excluded
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "test_foo.py").write_text("import foo\ndef test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["foo.py"], fake_repo)
+        assert selectors == [str(fake_repo / "test_foo.py")]
+        assert not unmatched
+
+    def test_shared_exclude_names_unchanged(self):
+        """_EXCLUDE_NAMES mirrors branch_hygiene's repo-discovery set; the
+        wider test-walk set must live in its own constant."""
+        assert _at._EXCLUDE_NAMES == frozenset({
+            ".workflow_artifacts", ".git", "node_modules", ".venv", "venv",
+            "__pycache__", ".idea", ".vscode",
+        })
+        assert _at._EXCLUDE_NAMES < _at._WALK_EXCLUDE_NAMES
+
+    def test_selection_to_dict_has_missing_tests_default(self):
+        sel = _at.Selection(
+            changed=[], selectors=[], unmatched_sources=[], ignored=[],
+            ran_pytest=False, pytest_returncode=None, exit_reason="x",
+        )
+        assert sel.to_dict()["missing_tests"] == []
+
+    def test_conftest_selects_tests_under_its_directory(self, tmp_path):
+        (tmp_path / "pkg" / "tests" / "sub").mkdir(parents=True)
+        (tmp_path / "other").mkdir()
+        (tmp_path / "pkg" / "tests" / "conftest.py").write_text("")
+        a = tmp_path / "pkg" / "tests" / "test_a.py"
+        b = tmp_path / "pkg" / "tests" / "sub" / "test_b.py"
+        c = tmp_path / "other" / "test_c.py"
+        for t in (a, b, c):
+            t.write_text("def test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(
+            ["pkg/tests/conftest.py"], tmp_path)
+        assert selectors == sorted([str(a), str(b)])
+        assert not unmatched
+
+    def test_root_conftest_selects_all_non_excluded_tests(self, tmp_path):
+        (tmp_path / "conftest.py").write_text("")
+        (tmp_path / "d").mkdir()
+        (tmp_path / ".venv" / "lib").mkdir(parents=True)
+        a = tmp_path / "test_a.py"
+        b = tmp_path / "d" / "test_b.py"
+        v = tmp_path / ".venv" / "lib" / "test_v.py"
+        for t in (a, b, v):
+            t.write_text("def test_x(): pass\n")
+        selectors, _, _ = _at.map_changed_to_tests(["conftest.py"], tmp_path)
+        assert selectors == sorted([str(a), str(b)])
+
+    def test_deleted_conftest_still_selects_its_directory(self, tmp_path):
+        (tmp_path / "t").mkdir()
+        a = tmp_path / "t" / "test_a.py"
+        a.write_text("def test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["t/conftest.py"], tmp_path)
+        assert selectors == [str(a)]
+        assert not unmatched
+
+    def test_conftest_without_tests_is_unmatched(self, tmp_path):
+        (tmp_path / "empty").mkdir()
+        (tmp_path / "empty" / "conftest.py").write_text("")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["empty/conftest.py"], tmp_path)
+        assert not selectors
+        assert unmatched == ["empty/conftest.py"]
+
+    def test_deleted_source_without_references_is_unmatched(self, fake_repo):
+        """A removed non-test source cannot be told apart from a mistyped path
+        in --files mode, so it stays fail-closed (unmatched) rather than
+        being treated as green.
+        """
+        selectors, unmatched, ignored = _at.map_changed_to_tests(["gone.py"], fake_repo)
+        assert not selectors
+        assert unmatched == ["gone.py"]
+        assert not ignored
+
+    def test_deleted_source_still_referenced_selects_its_tests(self, fake_repo):
+        """A removed module that tests still mention keeps selecting them: they
+        fail if they still import it."""
+        (fake_repo / "test_uses_gone.py").write_text("import gone\ndef test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["gone.py"], fake_repo)
+        assert selectors == [str(fake_repo / "test_uses_gone.py")]
+        assert not unmatched
+
 
 # ---------------------------------------------------------------------------
 # IVG-92: special-case docs→test mapping (uses real quoin repo tree)
@@ -1695,3 +1800,128 @@ class TestPrintInterpreter:
             rc = _cli(["--print-interpreter", "--project-root", str(tmp_path)])
         assert rc == 0
         assert "interpreter_reason: fallback" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Missing (deleted) test files and excluded directories, end to end
+# ---------------------------------------------------------------------------
+
+def _cli_capture(args):
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _cli(args)
+    return rc, buf.getvalue()
+
+
+def _pytest_calls(mock_run):
+    return [c for c in mock_run.call_args_list if "pytest" in str(c)]
+
+
+class TestMissingAndExcludedCli:
+    def test_files_mode_missing_test_is_not_a_failure(self, tmp_path):
+        with mock.patch("subprocess.run") as mock_run:
+            rc, out = _cli_capture(["--files", "test_gone.py", "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "missing-tests-only"
+        assert d["missing_tests"] == ["test_gone.py"]
+        assert d["ran_pytest"] is False
+        assert not _pytest_calls(mock_run)
+
+    def test_git_deleted_test_is_not_a_failure(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_git_repo(repo)
+        (repo / "test_old.py").write_text("def test_x(): pass\n")
+        _git("add", "test_old.py", cwd=repo)
+        _git("commit", "-m", "add test", cwd=repo)
+        _git("checkout", "-b", "feature", cwd=repo)
+        _git("rm", "test_old.py", cwd=repo)
+        _git("commit", "-m", "remove test", cwd=repo)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture(["--project-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "missing-tests-only"
+        assert d["missing_tests"] == ["test_old.py"]
+        assert d["ran_pytest"] is False
+
+    def test_mixed_missing_and_live_runs_only_live(self, fake_repo):
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **kw):
+            if "pytest" in cmd:
+                return subprocess.CompletedProcess(cmd, 0)
+            return real_run(cmd, *a, **kw)
+
+        with mock.patch.object(_at.subprocess, "run", side_effect=fake_run) as mock_run:
+            rc, out = _cli_capture(["--files", "test_gone.py", "foo.py",
+                                    "--repo-root", str(fake_repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "affected-green"
+        assert d["missing_tests"] == ["test_gone.py"]
+        argv = [c.args[0] for c in _pytest_calls(mock_run)][0]
+        joined = " ".join(argv)
+        assert "test_foo.py" in joined
+        assert "test_gone.py" not in joined
+
+    def test_virtualenv_tests_never_selected(self, fake_repo):
+        venv_pkg = fake_repo / ".venv" / "lib" / "site-packages" / "pkg"
+        venv_pkg.mkdir(parents=True)
+        (venv_pkg / "test_foo.py").write_text("import foo\n")
+        rc, out = _cli_capture(["--select-only", "--files", "foo.py",
+                                "--repo-root", str(fake_repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["selectors"] == [str(fake_repo / "test_foo.py")]
+        assert not any(".venv" in sel for sel in d["selectors"])
+
+    def test_docs_only_stays_distinguishable(self, tmp_path):
+        rc, out = _cli_capture(["--files", "README.md", "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "docs-only-no-selectors"
+        assert d["missing_tests"] == []
+
+    def test_text_format_lists_missing_tests(self, tmp_path):
+        rc, out = _cli_capture(["--files", "test_gone.py", "--repo-root", str(tmp_path),
+                                "--format", "text"])
+        assert rc == 0
+        assert "missing_tests (1): test_gone.py" in out
+
+    def test_missing_test_alongside_unmatched_source_still_exit_3(self, fake_repo):
+        rc, out = _cli_capture(["--files", "test_gone.py", "orphan.py",
+                                "--repo-root", str(fake_repo)])
+        assert rc == 3
+        assert json.loads(out)["exit_reason"] == "unmatched-sources"
+
+    def test_deleted_source_exits_3(self, fake_repo):
+        rc, out = _cli_capture(["--files", "gone.py", "--repo-root", str(fake_repo)])
+        assert rc == 3
+        assert json.loads(out)["exit_reason"] == "unmatched-sources"
+
+    def test_conftest_scope_end_to_end(self, tmp_path):
+        (tmp_path / "dev" / "tests").mkdir(parents=True)
+        (tmp_path / ".venv" / "x").mkdir(parents=True)
+        (tmp_path / "dev" / "tests" / "conftest.py").write_text("")
+        (tmp_path / "dev" / "tests" / "test_a.py").write_text("")
+        (tmp_path / ".venv" / "x" / "test_v.py").write_text("")
+        rc, out = _cli_capture(["--select-only", "--files", "dev/tests/conftest.py",
+                                "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["selectors"] == [str(tmp_path / "dev" / "tests" / "test_a.py")]
+
+
+class TestPrintInterpreterStandalone:
+    def test_alone_exits_0_with_both_lines(self):
+        rc, out = _cli_capture(["--print-interpreter"])
+        assert rc == 0
+        assert "interpreter:" in out and "interpreter_reason:" in out
+
+    def test_no_mode_still_exit_2(self):
+        assert _cli([]) == 2
+
+    def test_two_modes_together_still_exit_2(self):
+        assert _cli(["--files", "a.py", "--files-from", "x"]) == 2

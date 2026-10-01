@@ -12,10 +12,15 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
            `unmatched_sources` is empty (or --allow-unmatched was passed).
        0b: docs-only / no selectors (`ran_pytest=false`,
            `exit_reason="docs-only-no-selectors"`)
-           ALL changed files are non-.py (docs/SKILL.md/JSON) so there is
-           legitimately nothing to test.  pytest is NOT invoked (HARD GUARD).
+           no changed .py source or test file needs testing (docs/SKILL.md/JSON
+           only) so there is legitimately nothing to test.  pytest is NOT invoked (HARD GUARD).
        0c: clean tree (`ran_pytest=false`, `exit_reason="no-changes"`)
            git ran cleanly and the working tree is genuinely unchanged.
+       0d: changed test files missing on disk (`ran_pytest=false`,
+           `exit_reason="missing-tests-only"`)
+           every changed test file was deleted by the change (or a wrong path
+           was passed via --files), so there is nothing to run.  The paths are
+           listed in `missing_tests`.  pytest is NOT invoked.
   1  — affected-area suite RED: pytest ran and returned non-zero. BLOCKING.
   2  — argparse / malformed input.
   3  — UNDETERMINABLE (fail-CLOSED): git-root resolution failed, git error,
@@ -110,6 +115,23 @@ _EXCLUDE_NAMES: frozenset[str] = frozenset({
     "__pycache__",
     ".idea",
     ".vscode",
+})
+
+# Directories pruned while walking a repo for test files.  Broader than
+# _EXCLUDE_NAMES, which mirrors branch_hygiene's depth-1 repo discovery: a test
+# walk also has to skip tool caches, build output and installed packages, none
+# of which hold this project's tests.  Directories ending in ".egg-info" are
+# pruned separately.
+_WALK_EXCLUDE_NAMES: frozenset[str] = _EXCLUDE_NAMES | frozenset({
+    ".tox",
+    ".nox",
+    ".eggs",
+    "site-packages",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
 })
 
 # Special-case mapping: certain docs/source files that are not .py themselves
@@ -1804,6 +1826,10 @@ class Selection:
     # kills the spurious exit-3/hard-RED false block (FR-6/AC-6).  Placed AFTER
     # unmatched_warning to satisfy dataclass default-ordering.
     noncollectable: list[str] = dataclasses.field(default_factory=list)
+    # Changed test files that do not exist on disk: deleted by the change, or a
+    # wrong path passed via --files.  They have nothing to run, so they never
+    # become selectors, but they are always reported by name.
+    missing_tests: list[str] = dataclasses.field(default_factory=list)
     # Interpreter the pytest subprocess ran (or would run) under, and why it
     # was selected — see resolve_python().  Both default to "" so every
     # pre-resolution Selection() call site stays untouched and both fields
@@ -1818,6 +1844,7 @@ class Selection:
             "unmatched_sources": self.unmatched_sources,
             "ignored": self.ignored,
             "noncollectable": self.noncollectable,
+            "missing_tests": self.missing_tests,
             "ran_pytest": self.ran_pytest,
             "pytest_returncode": self.pytest_returncode,
             "exit_reason": self.exit_reason,
@@ -2188,14 +2215,32 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
 # Detection algorithm
 # ---------------------------------------------------------------------------
 
+def _is_py_test_name(name: str) -> bool:
+    """True for a Python test module name: test_*.py or *_test.py.
+
+    The .py guard keeps non-Python files such as test_x.sh from becoming pytest
+    selectors, which pytest could not collect (exit 4).
+    """
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
 def _collect_test_files(repo_root: Path) -> list[Path]:
-    """Return all test_*.py / *_test.py files under repo_root."""
+    """Return all test_*.py / *_test.py files under repo_root.
+
+    Directories named in _WALK_EXCLUDE_NAMES (and *.egg-info) are pruned, so
+    third-party tests shipped inside a virtualenv, node_modules or a build tree
+    are never selection candidates.
+    """
     results: list[Path] = []
-    for p in repo_root.rglob("*.py"):
-        name = p.name
-        if name.startswith("test_") or name.endswith("_test.py"):
-            results.append(p)
-    return results
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _WALK_EXCLUDE_NAMES and not d.endswith(".egg-info")
+        ]
+        for name in filenames:
+            if _is_py_test_name(name):
+                results.append(Path(dirpath) / name)
+    return sorted(results)
 
 
 def map_changed_to_tests(
@@ -2212,9 +2257,14 @@ def map_changed_to_tests(
                           a docs-only changeset (exit 0b, not exit 4).
                           Exception: files listed in _DOCS_TO_TESTS are mapped to
                           a specific test file and do NOT land in ignored.
+                          Also holds changed test files that no longer exist
+                          on disk; main() reports those as missing_tests.
 
     Detection algorithm:
-      1. Changed test files → included directly as selectors.
+      0. A changed conftest.py → every test file under its directory (pytest's
+         conftest scope), unioned with the steps below.
+      1. Changed test files that exist → included directly as selectors;
+         missing ones → ignored.
       2. Changed non-test .py files with stem S → name-match: any test file whose
          basename matches test_{S}*.py or {S}_test.py (PRIMARY signal).
       3. Import-graph grep (BEST-EFFORT supplement): whole-word \\b{S}\\b match
@@ -2236,14 +2286,16 @@ def map_changed_to_tests(
         # Is this file itself a Python test file?
         # Guard on .py suffix to avoid selecting non-Python test files (e.g., .sh)
         # as pytest selectors — pytest would fail to collect them (exit 4).
-        if fpath.suffix == ".py" and (name.startswith("test_") or name.endswith("_test.py")):
+        if _is_py_test_name(name):
             # Include directly as a selector; resolve against repo_root if relative
             full = (repo_root / changed_file).resolve() if not fpath.is_absolute() else fpath.resolve()
             if full.exists():
                 selectors.add(str(full))
             else:
-                # File may be staged/deleted; add as-is
-                selectors.add(str(repo_root / changed_file))
+                # A test file removed by the change has nothing to run, and
+                # handing pytest the missing path makes it exit 4, which
+                # would read as a red affected area.
+                ignored.append(changed_file)
             continue
 
         # Special-case: certain non-.py docs/source files map to specific tests.
@@ -2274,6 +2326,15 @@ def map_changed_to_tests(
         # .py non-test source → attempt name-match + import-graph grep
         stem = fpath.stem
         matched: set[str] = set()
+
+        # A conftest.py supplies fixtures and hooks to every test below its
+        # directory, so a change (or deletion) there can break any of them.
+        if name == "conftest.py":
+            full = fpath if fpath.is_absolute() else repo_root / changed_file
+            scope = full.resolve().parent
+            for tf in test_files:
+                if scope in tf.resolve().parents:
+                    matched.add(str(tf))
 
         # Step 2: name-match
         for tf in test_files:
@@ -2321,6 +2382,8 @@ def _format_text(sel: Selection) -> str:
         lines.append(f"ignored ({len(sel.ignored)}): {', '.join(sel.ignored)}")
     if sel.noncollectable:
         lines.append(f"noncollectable ({len(sel.noncollectable)}): {', '.join(sel.noncollectable)}")
+    if sel.missing_tests:
+        lines.append(f"missing_tests ({len(sel.missing_tests)}): {', '.join(sel.missing_tests)}")
     if sel.unmatched_warning:
         lines.append("unmatched_warning: true (--allow-unmatched in use)")
     if sel.interpreter:
@@ -2360,7 +2423,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         add_help=True,
     )
-    mode = parser.add_mutually_exclusive_group(required=True)
+    mode = parser.add_mutually_exclusive_group(required=False)
     mode.add_argument(
         "--project-root",
         type=Path,
@@ -2448,15 +2511,21 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         args = parser.parse_args(argv)
+        if (
+            not args.print_interpreter
+            and args.project_root is None
+            and args.files_from is None
+            and args.files is None
+        ):
+            parser.error("one of the arguments --project-root --files-from --files is required")
     except SystemExit as exc:
         return int(exc.code) if exc.code is not None else 2
 
     fmt = args.format
 
     # --print-interpreter: early return, before repo resolution and every
-    # other early-exit path, so nothing can swallow it. args.project_root can
-    # legally be None here (--print-interpreter is not part of the required
-    # mode group), hence the Path.cwd() guard.
+    # other early-exit path, so nothing can swallow it. It may be given alone,
+    # so args.project_root can legally be None here, hence the Path.cwd() guard.
     if args.print_interpreter:
         anchor = args.project_root if args.project_root is not None else Path.cwd()
         interp, interp_reason = resolve_python(anchor, probe="import pytest")
@@ -2599,6 +2668,8 @@ def main(argv: list[str] | None = None) -> int:
     changed_remaining, noncollectable = partition_noncollectable(changed, nc_entries)
 
     selectors, unmatched_sources, ignored = map_changed_to_tests(changed_remaining, repo_root)
+    # Only the missing-on-disk branch can leave a test-named .py in `ignored`.
+    missing_tests = [f for f in ignored if _is_py_test_name(Path(f).name)]
 
     # ------------------------------------------------------------------
     # Step 3: --select-only path — print and exit without running pytest
@@ -2614,6 +2685,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="select-only",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
         )
@@ -2638,6 +2710,7 @@ def main(argv: list[str] | None = None) -> int:
             pytest_returncode=None,
             exit_reason="unmatched-sources",
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
         )
@@ -2670,6 +2743,7 @@ def main(argv: list[str] | None = None) -> int:
                 exit_reason="docs-only-no-selectors",
                 unmatched_warning=True,
                 noncollectable=noncollectable,
+                missing_tests=missing_tests,
                 interpreter=interp,
                 interpreter_reason=interp_reason,
             )
@@ -2685,7 +2759,12 @@ def main(argv: list[str] | None = None) -> int:
         # to exit 0 with a distinct exit_reason for gate/audit observability.
         # unmatched_sources is empty here (4a already returned exit 3 for the
         # unmatched-without-allow case; the allow-unmatched case returned above).
-        empty_reason = "noncollectable-skip" if noncollectable else "docs-only-no-selectors"
+        if noncollectable:
+            empty_reason = "noncollectable-skip"
+        elif missing_tests:
+            empty_reason = "missing-tests-only"
+        else:
+            empty_reason = "docs-only-no-selectors"
         sel = Selection(
             changed=changed,
             selectors=[],
@@ -2695,6 +2774,7 @@ def main(argv: list[str] | None = None) -> int:
             pytest_returncode=None,
             exit_reason=empty_reason,
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
         )
@@ -2732,6 +2812,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="pytest-missing",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
         )
@@ -2760,6 +2841,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="pytest-missing",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
         )
@@ -2782,6 +2864,7 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="pytest-timeout",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
         )
@@ -2817,6 +2900,7 @@ def main(argv: list[str] | None = None) -> int:
         exit_reason=exit_reason,
         unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
         noncollectable=noncollectable,
+        missing_tests=missing_tests,
         interpreter=interp,
         interpreter_reason=interp_reason,
     )
