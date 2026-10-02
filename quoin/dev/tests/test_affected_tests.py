@@ -161,6 +161,111 @@ class TestMapChangedToTests:
         assert s1 == s2, "selectors should be order-independent"
         assert s1 == sorted(s1), "selectors should be sorted"
 
+    def test_deleted_test_file_is_ignored_not_selected(self, fake_repo):
+        """A changed test file that no longer exists on disk must not become a
+        selector: pytest exits 4 on a missing path, which reads as a red
+        affected area.
+        """
+        selectors, unmatched, ignored = _at.map_changed_to_tests(["test_removed.py"], fake_repo)
+        assert not selectors
+        assert not unmatched
+        assert ignored == ["test_removed.py"]
+
+    @pytest.mark.parametrize("excluded", [
+        ".venv/lib/site-packages/pkg",
+        "node_modules/pkg",
+        ".tox/py312",
+        "build/lib",
+        "dist",
+        "pkg.egg-info",
+    ])
+    def test_excluded_dirs_are_not_scanned_for_tests(self, fake_repo, excluded):
+        """Test files inside a virtualenv, node_modules or build output are
+        never selection candidates, even when they match the changed module
+        by name.
+        """
+        pkg_dir = fake_repo / excluded
+        pkg_dir.mkdir(parents=True)
+        (pkg_dir / "test_foo.py").write_text("import foo\ndef test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["foo.py"], fake_repo)
+        assert selectors == [str(fake_repo / "test_foo.py")]
+        assert not unmatched
+
+    def test_shared_exclude_names_unchanged(self):
+        """_EXCLUDE_NAMES mirrors branch_hygiene's repo-discovery set; the
+        wider test-walk set must live in its own constant."""
+        assert _at._EXCLUDE_NAMES == frozenset({
+            ".workflow_artifacts", ".git", "node_modules", ".venv", "venv",
+            "__pycache__", ".idea", ".vscode",
+        })
+        assert _at._EXCLUDE_NAMES < _at._WALK_EXCLUDE_NAMES
+
+    def test_selection_to_dict_has_missing_tests_default(self):
+        sel = _at.Selection(
+            changed=[], selectors=[], unmatched_sources=[], ignored=[],
+            ran_pytest=False, pytest_returncode=None, exit_reason="x",
+        )
+        assert sel.to_dict()["missing_tests"] == []
+
+    def test_conftest_selects_tests_under_its_directory(self, tmp_path):
+        (tmp_path / "pkg" / "tests" / "sub").mkdir(parents=True)
+        (tmp_path / "other").mkdir()
+        (tmp_path / "pkg" / "tests" / "conftest.py").write_text("")
+        a = tmp_path / "pkg" / "tests" / "test_a.py"
+        b = tmp_path / "pkg" / "tests" / "sub" / "test_b.py"
+        c = tmp_path / "other" / "test_c.py"
+        for t in (a, b, c):
+            t.write_text("def test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(
+            ["pkg/tests/conftest.py"], tmp_path)
+        assert selectors == sorted([str(a), str(b)])
+        assert not unmatched
+
+    def test_root_conftest_selects_all_non_excluded_tests(self, tmp_path):
+        (tmp_path / "conftest.py").write_text("")
+        (tmp_path / "d").mkdir()
+        (tmp_path / ".venv" / "lib").mkdir(parents=True)
+        a = tmp_path / "test_a.py"
+        b = tmp_path / "d" / "test_b.py"
+        v = tmp_path / ".venv" / "lib" / "test_v.py"
+        for t in (a, b, v):
+            t.write_text("def test_x(): pass\n")
+        selectors, _, _ = _at.map_changed_to_tests(["conftest.py"], tmp_path)
+        assert selectors == sorted([str(a), str(b)])
+
+    def test_deleted_conftest_still_selects_its_directory(self, tmp_path):
+        (tmp_path / "t").mkdir()
+        a = tmp_path / "t" / "test_a.py"
+        a.write_text("def test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["t/conftest.py"], tmp_path)
+        assert selectors == [str(a)]
+        assert not unmatched
+
+    def test_conftest_without_tests_is_unmatched(self, tmp_path):
+        (tmp_path / "empty").mkdir()
+        (tmp_path / "empty" / "conftest.py").write_text("")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["empty/conftest.py"], tmp_path)
+        assert not selectors
+        assert unmatched == ["empty/conftest.py"]
+
+    def test_deleted_source_without_references_is_unmatched(self, fake_repo):
+        """A removed non-test source cannot be told apart from a mistyped path
+        in --files mode, so it stays fail-closed (unmatched) rather than
+        being treated as green.
+        """
+        selectors, unmatched, ignored = _at.map_changed_to_tests(["gone.py"], fake_repo)
+        assert not selectors
+        assert unmatched == ["gone.py"]
+        assert not ignored
+
+    def test_deleted_source_still_referenced_selects_its_tests(self, fake_repo):
+        """A removed module that tests still mention keeps selecting them: they
+        fail if they still import it."""
+        (fake_repo / "test_uses_gone.py").write_text("import gone\ndef test_x(): pass\n")
+        selectors, unmatched, _ = _at.map_changed_to_tests(["gone.py"], fake_repo)
+        assert selectors == [str(fake_repo / "test_uses_gone.py")]
+        assert not unmatched
+
 
 # ---------------------------------------------------------------------------
 # IVG-92: special-case docs→test mapping (uses real quoin repo tree)
@@ -1695,3 +1800,471 @@ class TestPrintInterpreter:
             rc = _cli(["--print-interpreter", "--project-root", str(tmp_path)])
         assert rc == 0
         assert "interpreter_reason: fallback" in buf.getvalue()
+
+
+# ---------------------------------------------------------------------------
+# Missing (deleted) test files and excluded directories, end to end
+# ---------------------------------------------------------------------------
+
+def _cli_capture(args):
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _cli(args)
+    return rc, buf.getvalue()
+
+
+def _pytest_calls(mock_run):
+    return [c for c in mock_run.call_args_list if "pytest" in str(c)]
+
+
+class TestMissingAndExcludedCli:
+    def test_files_mode_missing_test_is_not_a_failure(self, tmp_path):
+        with mock.patch("subprocess.run") as mock_run:
+            rc, out = _cli_capture(["--files", "test_gone.py", "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "missing-tests-only"
+        assert d["missing_tests"] == ["test_gone.py"]
+        assert d["ran_pytest"] is False
+        assert not _pytest_calls(mock_run)
+
+    def test_git_deleted_test_is_not_a_failure(self, tmp_path):
+        repo = tmp_path / "repo"
+        _init_git_repo(repo)
+        (repo / "test_old.py").write_text("def test_x(): pass\n")
+        _git("add", "test_old.py", cwd=repo)
+        _git("commit", "-m", "add test", cwd=repo)
+        _git("checkout", "-b", "feature", cwd=repo)
+        _git("rm", "test_old.py", cwd=repo)
+        _git("commit", "-m", "remove test", cwd=repo)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture(["--project-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "missing-tests-only"
+        assert d["missing_tests"] == ["test_old.py"]
+        assert d["ran_pytest"] is False
+
+    def test_mixed_missing_and_live_runs_only_live(self, fake_repo):
+        real_run = subprocess.run
+
+        def fake_run(cmd, *a, **kw):
+            if "pytest" in cmd:
+                return subprocess.CompletedProcess(cmd, 0)
+            return real_run(cmd, *a, **kw)
+
+        with mock.patch.object(_at.subprocess, "run", side_effect=fake_run) as mock_run:
+            rc, out = _cli_capture(["--files", "test_gone.py", "foo.py",
+                                    "--repo-root", str(fake_repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "affected-green"
+        assert d["missing_tests"] == ["test_gone.py"]
+        argv = [c.args[0] for c in _pytest_calls(mock_run)][0]
+        joined = " ".join(argv)
+        assert "test_foo.py" in joined
+        assert "test_gone.py" not in joined
+
+    def test_virtualenv_tests_never_selected(self, fake_repo):
+        venv_pkg = fake_repo / ".venv" / "lib" / "site-packages" / "pkg"
+        venv_pkg.mkdir(parents=True)
+        (venv_pkg / "test_foo.py").write_text("import foo\n")
+        rc, out = _cli_capture(["--select-only", "--files", "foo.py",
+                                "--repo-root", str(fake_repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["selectors"] == [str(fake_repo / "test_foo.py")]
+        assert not any(".venv" in sel for sel in d["selectors"])
+
+    def test_docs_only_stays_distinguishable(self, tmp_path):
+        rc, out = _cli_capture(["--files", "README.md", "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "docs-only-no-selectors"
+        assert d["missing_tests"] == []
+
+    def test_text_format_lists_missing_tests(self, tmp_path):
+        rc, out = _cli_capture(["--files", "test_gone.py", "--repo-root", str(tmp_path),
+                                "--format", "text"])
+        assert rc == 0
+        assert "missing_tests (1): test_gone.py" in out
+
+    def test_missing_test_alongside_unmatched_source_still_exit_3(self, fake_repo):
+        rc, out = _cli_capture(["--files", "test_gone.py", "orphan.py",
+                                "--repo-root", str(fake_repo)])
+        assert rc == 3
+        assert json.loads(out)["exit_reason"] == "unmatched-sources"
+
+    def test_deleted_source_exits_3(self, fake_repo):
+        rc, out = _cli_capture(["--files", "gone.py", "--repo-root", str(fake_repo)])
+        assert rc == 3
+        assert json.loads(out)["exit_reason"] == "unmatched-sources"
+
+    def test_conftest_scope_end_to_end(self, tmp_path):
+        (tmp_path / "dev" / "tests").mkdir(parents=True)
+        (tmp_path / ".venv" / "x").mkdir(parents=True)
+        (tmp_path / "dev" / "tests" / "conftest.py").write_text("")
+        (tmp_path / "dev" / "tests" / "test_a.py").write_text("")
+        (tmp_path / ".venv" / "x" / "test_v.py").write_text("")
+        rc, out = _cli_capture(["--select-only", "--files", "dev/tests/conftest.py",
+                                "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["selectors"] == [str(tmp_path / "dev" / "tests" / "test_a.py")]
+
+
+class TestPrintInterpreterStandalone:
+    def test_alone_exits_0_with_both_lines(self):
+        rc, out = _cli_capture(["--print-interpreter"])
+        assert rc == 0
+        assert "interpreter:" in out and "interpreter_reason:" in out
+
+    def test_no_mode_still_exit_2(self):
+        assert _cli([]) == 2
+
+    def test_two_modes_together_still_exit_2(self):
+        assert _cli(["--files", "a.py", "--files-from", "x"]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Interpreter health: broken venv interpreters are reported, not guessed past
+# ---------------------------------------------------------------------------
+
+def _write_sh_interpreter(path: Path, body: str = "exit 0") -> Path:
+    """Write an executable shell script standing in for a Python interpreter."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body + "\n")
+    path.chmod(0o755)
+    return path
+
+
+def _dangling_venv(base: Path, chained: bool = False) -> Path:
+    """base/.venv/bin/python -> (python3.14 ->) a target that does not exist."""
+    bindir = base / ".venv" / "bin"
+    bindir.mkdir(parents=True)
+    (base / ".venv" / "pyvenv.cfg").write_text(
+        "home = /nonexistent/bin\nversion = 3.14.6\n"
+    )
+    link = bindir / "python"
+    if chained:
+        (bindir / "python3.14").symlink_to(base / "gone" / "python3.14")
+        link.symlink_to("python3.14")
+    else:
+        link.symlink_to(base / "gone" / "python3.14")
+    return link
+
+
+@pytest.fixture()
+def clean_interp_env(monkeypatch):
+    monkeypatch.delenv("QUOIN_PYTHON", raising=False)
+    monkeypatch.delenv("QUOIN_DISABLE_VENV_PROBE", raising=False)
+
+
+class TestInterpreterHealth:
+    @pytest.fixture(autouse=True)
+    def _env(self, clean_interp_env):
+        yield
+
+    def test_dangling_link(self, tmp_path):
+        _dangling_venv(tmp_path)
+        interp, reason, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert (interp, reason) == (sys.executable, "fallback")
+        assert [p.kind for p in problems] == ["dangling-link"]
+        assert problems[0].broken
+        assert "gone/python3.14" in problems[0].detail
+        assert "3.14.6" in problems[0].detail
+
+    def test_chained_dangling_link(self, tmp_path):
+        _dangling_venv(tmp_path, chained=True)
+        _, reason, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert reason == "fallback"
+        assert [p.kind for p in problems] == ["dangling-link"]
+
+    def test_pyvenv_cfg_without_bin_python(self, tmp_path):
+        (tmp_path / ".venv" / "bin").mkdir(parents=True)
+        (tmp_path / ".venv" / "pyvenv.cfg").write_text("home = /x\n")
+        _, reason, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert reason == "fallback"
+        assert [p.kind for p in problems] == ["missing-interpreter"]
+        assert problems[0].broken
+
+    def test_python3_present_python_missing(self, tmp_path):
+        (tmp_path / ".venv" / "pyvenv.cfg").parent.mkdir(parents=True)
+        (tmp_path / ".venv" / "pyvenv.cfg").write_text("home = /x\n")
+        _write_sh_interpreter(tmp_path / ".venv" / "bin" / "python3")
+        _, _, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert problems[0].kind == "missing-interpreter"
+        assert "bin/python missing; bin/python3 present" in problems[0].detail
+
+    def test_no_pyvenv_cfg_no_interpreter_is_silent(self, tmp_path):
+        (tmp_path / ".venv" / "bin").mkdir(parents=True)
+        _, reason, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert reason == "fallback"
+        assert problems == []
+
+    def test_unrunnable_stub_is_not_runnable(self, tmp_path):
+        _write_sh_interpreter(tmp_path / ".venv" / "bin" / "python", "exit 1")
+        _, reason, problems = _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert reason == "fallback"
+        assert [p.kind for p in problems] == ["not-runnable"]
+        assert problems[0].broken
+
+    def test_runnable_without_pytest_is_listed_not_broken(self, tmp_path):
+        # exits 0 only for the bare `pass` probe: `$1` is -c, `$2` the code
+        _write_sh_interpreter(
+            tmp_path / ".venv" / "bin" / "python",
+            '[ "$2" = pass ] && exit 0\nexit 1',
+        )
+        _, reason, problems = _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert reason == "fallback"
+        assert [p.kind for p in problems] == ["no-pytest"]
+        assert not problems[0].broken
+
+    def test_broken_nearest_healthy_parent(self, tmp_path):
+        parent_py = _write_sh_interpreter(tmp_path / ".venv" / "bin" / "python")
+        child = tmp_path / "child"
+        child.mkdir()
+        _dangling_venv(child)
+        interp, reason, problems = _at.resolve_python_detail(child, probe=None)
+        assert reason == "venv"
+        assert interp == str(parent_py.resolve().parent.parent / "bin" / "python") or \
+            Path(interp).samefile(parent_py)
+        assert [p.kind for p in problems] == ["dangling-link"]
+
+    def test_timeout_reported_distinctly(self, tmp_path):
+        _write_sh_interpreter(tmp_path / ".venv" / "bin" / "python", "sleep 5")
+        with mock.patch.object(_at, "_subprocess_timeout", return_value=1):
+            _, _, problems = _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert [p.kind for p in problems] == ["not-runnable"]
+        assert "timed out" in problems[0].detail
+        assert problems[0].broken
+
+    def test_dangling_quoin_python_recorded_and_walk_continues(self, tmp_path):
+        # a dangling QUOIN_PYTHON is broken (source QUOIN_PYTHON); the walk goes on
+        link = tmp_path / "my-python"
+        link.symlink_to(tmp_path / "nowhere")
+        healthy = _write_sh_interpreter(tmp_path / ".venv" / "bin" / "python")
+        with mock.patch.dict(os.environ, {"QUOIN_PYTHON": str(link)}):
+            interp, reason, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert reason == "venv"
+        assert Path(interp).samefile(healthy)
+        assert problems[0].source == "QUOIN_PYTHON"
+        assert problems[0].kind == "dangling-link"
+        assert problems[0].broken
+
+    def test_disable_probe_skips_detection(self, tmp_path):
+        _dangling_venv(tmp_path)
+        with mock.patch.dict(os.environ, {"QUOIN_DISABLE_VENV_PROBE": "1"}):
+            assert _at.resolve_python_detail(tmp_path, probe=None) == (
+                sys.executable, "disabled", [])
+
+    def test_healthy_venv_has_no_problems_and_is_not_resolved(self, tmp_path):
+        link = _make_fake_venv(tmp_path)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            interp, reason, problems = _at.resolve_python_detail(
+                tmp_path, probe="import pytest")
+        assert (interp, reason, problems) == (str(link), "venv", [])
+        assert interp != str(link.resolve())
+
+    def test_seam_patched_success_selects_candidate_without_subprocess(self, tmp_path):
+        link = _make_fake_venv(tmp_path)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True), \
+                mock.patch("subprocess.run") as mock_run:
+            interp, reason, problems = _at.resolve_python_detail(
+                tmp_path, probe="import pytest")
+        assert (interp, reason, problems) == (str(link), "venv", [])
+        mock_run.assert_not_called()
+
+    def test_seam_routes_both_probes(self, tmp_path):
+        _make_fake_venv(tmp_path)
+        with mock.patch.object(_at, "_probe_interpreter", side_effect=[False, True]):
+            _, _, problems = _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert [(p.kind, p.broken) for p in problems] == [("no-pytest", False)]
+        with mock.patch.object(_at, "_probe_interpreter", side_effect=[False, False]):
+            _, _, problems = _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert [(p.kind, p.broken) for p in problems] == [("not-runnable", True)]
+
+    def test_timeout_flag_skips_second_probe(self, tmp_path):
+        _make_fake_venv(tmp_path)
+        calls = []
+
+        def probe(candidate, code):
+            calls.append(code)
+            _at._PROBE_TIMED_OUT = True
+            return False
+
+        with mock.patch.object(_at, "_probe_interpreter", side_effect=probe):
+            _, _, problems = _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert calls == ["import pytest"]
+        assert problems[0].kind == "not-runnable"
+        assert "timed out" in problems[0].detail
+
+    def test_plain_failure_runs_second_probe(self, tmp_path):
+        _make_fake_venv(tmp_path)
+        calls = []
+
+        def probe(candidate, code):
+            calls.append(code)
+            return False
+
+        with mock.patch.object(_at, "_probe_interpreter", side_effect=probe):
+            _at.resolve_python_detail(tmp_path, probe="import pytest")
+        assert calls == ["import pytest", "pass"]
+
+    def test_stale_timeout_flag_does_not_leak(self, tmp_path):
+        _make_fake_venv(tmp_path)
+        _at._PROBE_TIMED_OUT = True
+        try:
+            with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+                _, reason, problems = _at.resolve_python_detail(
+                    tmp_path, probe="import pytest")
+        finally:
+            _at._PROBE_TIMED_OUT = False
+        assert reason == "venv"
+        assert problems == []
+
+    def test_nonexistent_quoin_python_is_recorded_not_broken(self, tmp_path):
+        with mock.patch.dict(os.environ, {"QUOIN_PYTHON": str(tmp_path / "nope")}):
+            _, reason, problems = _at.resolve_python_detail(tmp_path, probe=None)
+        assert reason == "fallback"
+        assert len(problems) == 1
+        assert problems[0].kind == "missing-interpreter"
+        assert problems[0].source == "QUOIN_PYTHON"
+        assert problems[0].broken is False
+
+    def test_str_format(self):
+        p = _at.InterpreterProblem("/a/python", "dangling-link", "gone", True)
+        assert str(p) == "dangling-link: /a/python (gone)"
+
+
+class TestBrokenVenvCli:
+    @pytest.fixture(autouse=True)
+    def _env(self, clean_interp_env):
+        yield
+
+    @staticmethod
+    def _repo(tmp_path):
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / "foo.py").write_text("def foo(): pass\n")
+        (repo / "test_foo.py").write_text("import foo\ndef test_foo(): pass\n")
+        return repo
+
+    def test_broken_venv_blocks_run(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _dangling_venv(repo)
+        with mock.patch("subprocess.run") as mock_run:
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 3
+        assert d["exit_reason"] == "venv-interpreter-broken"
+        assert d["interpreter_reason"] == "fallback"
+        assert d["interpreter_problems"][0].startswith("dangling-link:")
+        assert d["ran_pytest"] is False
+        assert not _pytest_calls(mock_run)
+
+    def test_healthy_parent_venv_is_used(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _dangling_venv(repo)
+        parent_py = _write_sh_interpreter(tmp_path / ".venv" / "bin" / "python")
+        root = str((tmp_path / ".venv").resolve())
+
+        def probe(candidate, code):
+            return str(Path(candidate).parent.parent).startswith(root) or \
+                str(Path(candidate).parent.parent.resolve()) == root
+
+        with mock.patch.object(_at, "_probe_interpreter", side_effect=probe), \
+                mock.patch("subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 0)) as mock_run:
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["interpreter_reason"] == "venv"
+        assert Path(d["interpreter"]).samefile(parent_py)
+        assert d["interpreter_problems"][0].startswith("dangling-link:")
+        assert _pytest_calls(mock_run)
+
+    def test_docs_only_unaffected_but_problem_listed(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _dangling_venv(repo)
+        rc, out = _cli_capture(["--files", "README.md", "--repo-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["exit_reason"] == "docs-only-no-selectors"
+        assert d["interpreter_problems"][0].startswith("dangling-link:")
+
+    def test_disable_probe_restores_old_path(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _dangling_venv(repo)
+        with mock.patch.dict(os.environ, {"QUOIN_DISABLE_VENV_PROBE": "1"}), \
+                mock.patch("subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 0)):
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        d = json.loads(out)
+        assert "interpreter_problems" not in d
+        assert d["exit_reason"] != "venv-interpreter-broken"
+
+    def test_healthy_venv_has_no_problems_key(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _make_fake_venv(repo)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True), \
+                mock.patch("subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 0)):
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        assert rc == 0
+        assert "interpreter_problems" not in json.loads(out)
+
+    def test_nonexistent_quoin_python_with_healthy_venv(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _make_fake_venv(repo)
+        with mock.patch.dict(os.environ, {"QUOIN_PYTHON": str(tmp_path / "nope")}), \
+                mock.patch.object(_at, "_probe_interpreter", return_value=True), \
+                mock.patch("subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 0)):
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 0
+        assert d["interpreter_reason"] == "venv"
+        assert d["interpreter_problems"][0].startswith("missing-interpreter:")
+
+    def test_nonexistent_quoin_python_alone_is_not_blocking(self, tmp_path):
+        repo = self._repo(tmp_path)
+        with mock.patch.dict(os.environ, {"QUOIN_PYTHON": str(tmp_path / "nope")}), \
+                mock.patch("subprocess.run",
+                           return_value=subprocess.CompletedProcess([], 0)):
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        assert json.loads(out)["exit_reason"] != "venv-interpreter-broken"
+
+    def test_broken_quoin_python_without_venv_blocks_with_its_own_remedy(
+            self, tmp_path, capsys):
+        repo = self._repo(tmp_path)
+        bad = _write_sh_interpreter(tmp_path / "bad-python")
+        bad.chmod(0o644)  # exists but not executable
+        with mock.patch.dict(os.environ, {"QUOIN_PYTHON": str(bad)}), \
+                mock.patch("subprocess.run") as mock_run:
+            rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo)])
+        d = json.loads(out)
+        assert rc == 3
+        assert d["exit_reason"] == "venv-interpreter-broken"
+        assert "QUOIN_PYTHON" in d["interpreter_problems"][0] or \
+            str(bad) in d["interpreter_problems"][0]
+        err = capsys.readouterr().err
+        assert "fix or unset QUOIN_PYTHON" in err
+        assert "recreate the project venv" not in err
+        assert not _pytest_calls(mock_run)
+
+    def test_print_interpreter_lists_problems(self, tmp_path):
+        _dangling_venv(tmp_path)
+        rc, out = _cli_capture(["--print-interpreter", "--project-root", str(tmp_path)])
+        assert rc == 0
+        assert "interpreter_reason: fallback" in out
+        assert "interpreter_problem: dangling-link:" in out
+
+    def test_text_format_lists_problems(self, tmp_path):
+        repo = self._repo(tmp_path)
+        _dangling_venv(repo)
+        rc, out = _cli_capture(["--files", "foo.py", "--repo-root", str(repo),
+                                "--format", "text"])
+        assert rc == 3
+        assert "interpreter_problems (1): dangling-link:" in out

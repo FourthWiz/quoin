@@ -12,15 +12,24 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
            `unmatched_sources` is empty (or --allow-unmatched was passed).
        0b: docs-only / no selectors (`ran_pytest=false`,
            `exit_reason="docs-only-no-selectors"`)
-           ALL changed files are non-.py (docs/SKILL.md/JSON) so there is
-           legitimately nothing to test.  pytest is NOT invoked (HARD GUARD).
+           no changed .py source or test file needs testing (docs/SKILL.md/JSON
+           only) so there is legitimately nothing to test.  pytest is NOT invoked (HARD GUARD).
        0c: clean tree (`ran_pytest=false`, `exit_reason="no-changes"`)
            git ran cleanly and the working tree is genuinely unchanged.
+       0d: changed test files missing on disk (`ran_pytest=false`,
+           `exit_reason="missing-tests-only"`)
+           every changed test file was deleted by the change (or a wrong path
+           was passed via --files), so there is nothing to run.  The paths are
+           listed in `missing_tests`.  pytest is NOT invoked.
   1  — affected-area suite RED: pytest ran and returned non-zero. BLOCKING.
   2  — argparse / malformed input.
   3  — UNDETERMINABLE (fail-CLOSED): git-root resolution failed, git error,
-       `unmatched_sources` non-empty without --allow-unmatched, or pytest
-       binary missing.  Treat as "cannot confirm green → do NOT auto-approve."
+       `unmatched_sources` non-empty without --allow-unmatched, pytest
+       binary missing, or a project venv interpreter found up the directory tree is
+       broken (dangling link, missing, or not runnable) and no healthy venv
+       with pytest was found
+       (`exit_reason="venv-interpreter-broken"`, details in
+       `interpreter_problems`).  Treat as "cannot confirm green → do NOT auto-approve."
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
        disabling detection must not silently green-light an APPROVE — this
        is the OPPOSITE of branch_hygiene's env opt-out which exits 0.
@@ -49,6 +58,10 @@ Env:
       instead (D-05) — a TimeoutExpired there maps to exit 3 with
       exit_reason="pytest-timeout" (BLOCKING-SURFACE, never a silent GREEN,
       never a hard-RED false block; see proc P-03).
+  QUOIN_PYTHON — interpreter to run pytest under; used only if it exists, is
+      executable and can import pytest, otherwise the venv walk continues.
+  QUOIN_DISABLE_VENV_PROBE=1 — skip interpreter discovery and broken-venv
+      detection entirely; pytest runs under the invoking interpreter.
   QUOIN_DISABLE_CHILD_REPO_SCAN=1 — skip the depth-1 child-.git discovery scan
       in discover_repos(); single-repo view only. Distinct from
       QUOIN_DISABLE_DISPATCH_CWD (a different concern, see D-08).
@@ -93,7 +106,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, List, Optional, Tuple
 
 
 # ---------------------------------------------------------------------------
@@ -110,6 +123,23 @@ _EXCLUDE_NAMES: frozenset[str] = frozenset({
     "__pycache__",
     ".idea",
     ".vscode",
+})
+
+# Directories pruned while walking a repo for test files.  Broader than
+# _EXCLUDE_NAMES, which mirrors branch_hygiene's depth-1 repo discovery: a test
+# walk also has to skip tool caches, build output and installed packages, none
+# of which hold this project's tests.  Directories ending in ".egg-info" are
+# pruned separately.
+_WALK_EXCLUDE_NAMES: frozenset[str] = _EXCLUDE_NAMES | frozenset({
+    ".tox",
+    ".nox",
+    ".eggs",
+    "site-packages",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "build",
+    "dist",
 })
 
 # Special-case mapping: certain docs/source files that are not .py themselves
@@ -1804,12 +1834,19 @@ class Selection:
     # kills the spurious exit-3/hard-RED false block (FR-6/AC-6).  Placed AFTER
     # unmatched_warning to satisfy dataclass default-ordering.
     noncollectable: list[str] = dataclasses.field(default_factory=list)
+    # Changed test files that do not exist on disk: deleted by the change, or a
+    # wrong path passed via --files.  They have nothing to run, so they never
+    # become selectors, but they are always reported by name.
+    missing_tests: list[str] = dataclasses.field(default_factory=list)
     # Interpreter the pytest subprocess ran (or would run) under, and why it
     # was selected — see resolve_python().  Both default to "" so every
     # pre-resolution Selection() call site stays untouched and both fields
     # are omitted from output until a caller actually resolves an interpreter.
     interpreter: str = ""
     interpreter_reason: str = ""
+    # Interpreters found but unusable, one "<kind>: <path> (<detail>)" entry
+    # each; omitted from output when empty.
+    interpreter_problems: list[str] = dataclasses.field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -1818,6 +1855,7 @@ class Selection:
             "unmatched_sources": self.unmatched_sources,
             "ignored": self.ignored,
             "noncollectable": self.noncollectable,
+            "missing_tests": self.missing_tests,
             "ran_pytest": self.ran_pytest,
             "pytest_returncode": self.pytest_returncode,
             "exit_reason": self.exit_reason,
@@ -1828,6 +1866,8 @@ class Selection:
             d["interpreter"] = self.interpreter
         if self.interpreter_reason:
             d["interpreter_reason"] = self.interpreter_reason
+        if self.interpreter_problems:
+            d["interpreter_problems"] = self.interpreter_problems
         return d
 
 
@@ -1872,6 +1912,12 @@ def _run(args: list[str]) -> tuple[str, str, int]:
 _VENV_WALK_MAX_DEPTH = 6
 
 
+# Set by _probe_interpreter when the probe subprocess timed out. The classifier
+# resets it before each probe call and reads it right after, so a patched
+# probe (which never touches it) always reads "no timeout".
+_PROBE_TIMED_OUT = False
+
+
 def _probe_interpreter(candidate: str, probe: str) -> bool:
     """Run `candidate -c probe` and report whether it exits 0.
 
@@ -1879,6 +1925,7 @@ def _probe_interpreter(candidate: str, probe: str) -> bool:
     helper's FileNotFoundError branch hardcodes a git-specific message that
     would be misleading here.
     """
+    global _PROBE_TIMED_OUT
     try:
         proc = subprocess.run(
             [candidate, "-c", probe],
@@ -1887,12 +1934,124 @@ def _probe_interpreter(candidate: str, probe: str) -> bool:
             timeout=_subprocess_timeout(),
         )
         return proc.returncode == 0
-    except Exception:  # noqa: BLE001 - TimeoutExpired, FileNotFoundError, OSError, ...
+    except subprocess.TimeoutExpired:
+        _PROBE_TIMED_OUT = True
+        return False
+    except Exception:  # noqa: BLE001 - FileNotFoundError, OSError, ...
         return False
 
 
-def resolve_python(project_root: Path, probe: str | None = None) -> tuple[str, str]:
-    """Resolve the Python interpreter to run pytest with.
+@dataclasses.dataclass
+class InterpreterProblem:
+    """A venv or override interpreter that was found but is not usable as-is."""
+
+    path: str
+    kind: str  # dangling-link | missing-interpreter | not-runnable | no-pytest
+    detail: str
+    # True when the candidate is a project interpreter that exists but cannot
+    # run. False for no-pytest (a healthy venv without pytest) and for a
+    # QUOIN_PYTHON path that does not exist at all.
+    broken: bool
+    source: str = "venv"  # "venv" or "QUOIN_PYTHON"
+
+    def __str__(self) -> str:
+        return "%s: %s (%s)" % (self.kind, self.path, self.detail)
+
+
+def _venv_base_hint(venv_dir: Path) -> str:
+    """Describe the Python a venv was built from, using its pyvenv.cfg."""
+    try:
+        text = (venv_dir / "pyvenv.cfg").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    cfg = {}
+    for line in text.splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            cfg[key.strip().lower()] = value.strip()
+    home = cfg.get("home", "")
+    version = cfg.get("version", "") or cfg.get("version_info", "")
+    if not home and not version:
+        return ""
+    parts = ["venv built from Python"]
+    if version:
+        parts.append(version)
+    if home:
+        parts.append("at " + home)
+    return " ".join(parts)
+
+
+def _classify_candidate(
+    candidate: Path, probe: Optional[str], source: str = "venv"
+) -> Tuple[bool, Optional[InterpreterProblem]]:
+    """Decide whether `candidate` is a usable interpreter.
+
+    Returns (ok, problem). `problem` is None when the candidate is usable or
+    when there is nothing at that path worth reporting. Every probe goes
+    through _probe_interpreter so a patched probe controls the outcome.
+    """
+    global _PROBE_TIMED_OUT
+    path = str(candidate)
+    venv_dir = candidate.parent.parent
+    hint = _venv_base_hint(venv_dir)
+
+    if os.path.lexists(path) and not candidate.exists():
+        target = os.path.realpath(path)
+        detail = "link target %s does not exist" % target
+        if hint:
+            detail += "; " + hint
+        return False, InterpreterProblem(path, "dangling-link", detail, True, source)
+
+    if not os.path.lexists(path):
+        if source == "QUOIN_PYTHON":
+            return False, InterpreterProblem(
+                path,
+                "missing-interpreter",
+                "QUOIN_PYTHON names a path that does not exist",
+                False,
+                source,
+            )
+        if not (venv_dir / "pyvenv.cfg").is_file():
+            return False, None
+        detail = "bin/python missing"
+        if (candidate.parent / "python3").exists():
+            detail += "; bin/python3 present"
+        if hint:
+            detail += "; " + hint
+        return False, InterpreterProblem(path, "missing-interpreter", detail, True, source)
+
+    if not (candidate.is_file() and os.access(candidate, os.X_OK)):
+        return False, InterpreterProblem(
+            path, "not-runnable", "not an executable file", True, source
+        )
+
+    if probe is None:
+        return True, None
+
+    timeout_detail = "probe timed out after %ss" % _subprocess_timeout()
+    _PROBE_TIMED_OUT = False
+    if _probe_interpreter(path, probe):
+        return True, None
+    if _PROBE_TIMED_OUT:
+        return False, InterpreterProblem(path, "not-runnable", timeout_detail, True, source)
+
+    _PROBE_TIMED_OUT = False
+    if _probe_interpreter(path, "pass"):
+        return False, InterpreterProblem(
+            path, "no-pytest", "interpreter runs but the probe failed", False, source
+        )
+    if _PROBE_TIMED_OUT:
+        return False, InterpreterProblem(path, "not-runnable", timeout_detail, True, source)
+    detail = "interpreter cannot be executed"
+    if hint:
+        detail += "; " + hint
+    return False, InterpreterProblem(path, "not-runnable", detail, True, source)
+
+
+def resolve_python_detail(
+    project_root: Path, probe: Optional[str] = None
+) -> Tuple[str, str, List[InterpreterProblem]]:
+    """Resolve the Python interpreter to run pytest with, and report problems.
 
     Resolution order: QUOIN_DISABLE_VENV_PROBE=1 short-circuits to the
     invoking interpreter; QUOIN_PYTHON is honored if it points at an
@@ -1901,22 +2060,29 @@ def resolve_python(project_root: Path, probe: str | None = None) -> tuple[str, s
     _VENV_WALK_MAX_DEPTH levels and stopped before the home directory; if
     nothing qualifies, falls back to the invoking interpreter.
 
+    A candidate that exists but cannot be used is kept walking past and
+    recorded as an InterpreterProblem, in encounter order: a dangling link, a
+    venv whose bin/python is gone, or an interpreter that cannot run at all
+    (broken); a runnable interpreter that only lacks pytest is listed but not
+    broken. A healthy venv found higher up still wins.
+
     The candidate path is returned verbatim, never `.resolve()`d — resolving
     a venv interpreter symlink strips the venv prefix and silently changes
     which site-packages it imports from.
     """
     if os.environ.get("QUOIN_DISABLE_VENV_PROBE", "").strip() == "1":
-        return sys.executable, "disabled"
+        return sys.executable, "disabled", []
+
+    problems: List[InterpreterProblem] = []
 
     env_py = os.environ.get("QUOIN_PYTHON", "").strip()
     if env_py:
         candidate = Path(env_py)
-        if (
-            candidate.is_file()
-            and os.access(candidate, os.X_OK)
-            and (probe is None or _probe_interpreter(str(candidate), probe))
-        ):
-            return str(candidate), "env-override"
+        ok, problem = _classify_candidate(candidate, probe, source="QUOIN_PYTHON")
+        if problem is not None:
+            problems.append(problem)
+        if ok:
+            return str(candidate), "env-override", problems
         # else fall through to the venv walk — never return an unprobed override
 
     try:
@@ -1933,14 +2099,22 @@ def resolve_python(project_root: Path, probe: str | None = None) -> tuple[str, s
         if home is not None and d == home:
             break  # stop BEFORE the home directory; never probe ~/.venv
         candidate = d / ".venv" / "bin" / "python"
-        if (
-            candidate.is_file()
-            and os.access(candidate, os.X_OK)
-            and (probe is None or _probe_interpreter(str(candidate), probe))
-        ):
-            return str(candidate), "venv"
+        ok, problem = _classify_candidate(candidate, probe)
+        if problem is not None:
+            problems.append(problem)
+        if ok:
+            return str(candidate), "venv", problems
 
-    return sys.executable, "fallback"
+    return sys.executable, "fallback", problems
+
+
+def resolve_python(project_root: Path, probe: Optional[str] = None) -> Tuple[str, str]:
+    """Resolve the Python interpreter to run pytest with.
+
+    Thin wrapper over resolve_python_detail that drops the problem list.
+    """
+    interp, reason, _problems = resolve_python_detail(project_root, probe)
+    return interp, reason
 
 
 def discover_repos(project_root: Path) -> list[Path]:
@@ -2188,14 +2362,32 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
 # Detection algorithm
 # ---------------------------------------------------------------------------
 
+def _is_py_test_name(name: str) -> bool:
+    """True for a Python test module name: test_*.py or *_test.py.
+
+    The .py guard keeps non-Python files such as test_x.sh from becoming pytest
+    selectors, which pytest could not collect (exit 4).
+    """
+    return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
+
+
 def _collect_test_files(repo_root: Path) -> list[Path]:
-    """Return all test_*.py / *_test.py files under repo_root."""
+    """Return all test_*.py / *_test.py files under repo_root.
+
+    Directories named in _WALK_EXCLUDE_NAMES (and *.egg-info) are pruned, so
+    third-party tests shipped inside a virtualenv, node_modules or a build tree
+    are never selection candidates.
+    """
     results: list[Path] = []
-    for p in repo_root.rglob("*.py"):
-        name = p.name
-        if name.startswith("test_") or name.endswith("_test.py"):
-            results.append(p)
-    return results
+    for dirpath, dirnames, filenames in os.walk(repo_root):
+        dirnames[:] = [
+            d for d in dirnames
+            if d not in _WALK_EXCLUDE_NAMES and not d.endswith(".egg-info")
+        ]
+        for name in filenames:
+            if _is_py_test_name(name):
+                results.append(Path(dirpath) / name)
+    return sorted(results)
 
 
 def map_changed_to_tests(
@@ -2212,9 +2404,14 @@ def map_changed_to_tests(
                           a docs-only changeset (exit 0b, not exit 4).
                           Exception: files listed in _DOCS_TO_TESTS are mapped to
                           a specific test file and do NOT land in ignored.
+                          Also holds changed test files that no longer exist
+                          on disk; main() reports those as missing_tests.
 
     Detection algorithm:
-      1. Changed test files → included directly as selectors.
+      0. A changed conftest.py → every test file under its directory (pytest's
+         conftest scope), unioned with the steps below.
+      1. Changed test files that exist → included directly as selectors;
+         missing ones → ignored.
       2. Changed non-test .py files with stem S → name-match: any test file whose
          basename matches test_{S}*.py or {S}_test.py (PRIMARY signal).
       3. Import-graph grep (BEST-EFFORT supplement): whole-word \\b{S}\\b match
@@ -2236,14 +2433,16 @@ def map_changed_to_tests(
         # Is this file itself a Python test file?
         # Guard on .py suffix to avoid selecting non-Python test files (e.g., .sh)
         # as pytest selectors — pytest would fail to collect them (exit 4).
-        if fpath.suffix == ".py" and (name.startswith("test_") or name.endswith("_test.py")):
+        if _is_py_test_name(name):
             # Include directly as a selector; resolve against repo_root if relative
             full = (repo_root / changed_file).resolve() if not fpath.is_absolute() else fpath.resolve()
             if full.exists():
                 selectors.add(str(full))
             else:
-                # File may be staged/deleted; add as-is
-                selectors.add(str(repo_root / changed_file))
+                # A test file removed by the change has nothing to run, and
+                # handing pytest the missing path makes it exit 4, which
+                # would read as a red affected area.
+                ignored.append(changed_file)
             continue
 
         # Special-case: certain non-.py docs/source files map to specific tests.
@@ -2274,6 +2473,15 @@ def map_changed_to_tests(
         # .py non-test source → attempt name-match + import-graph grep
         stem = fpath.stem
         matched: set[str] = set()
+
+        # A conftest.py supplies fixtures and hooks to every test below its
+        # directory, so a change (or deletion) there can break any of them.
+        if name == "conftest.py":
+            full = fpath if fpath.is_absolute() else repo_root / changed_file
+            scope = full.resolve().parent
+            for tf in test_files:
+                if scope in tf.resolve().parents:
+                    matched.add(str(tf))
 
         # Step 2: name-match
         for tf in test_files:
@@ -2321,12 +2529,19 @@ def _format_text(sel: Selection) -> str:
         lines.append(f"ignored ({len(sel.ignored)}): {', '.join(sel.ignored)}")
     if sel.noncollectable:
         lines.append(f"noncollectable ({len(sel.noncollectable)}): {', '.join(sel.noncollectable)}")
+    if sel.missing_tests:
+        lines.append(f"missing_tests ({len(sel.missing_tests)}): {', '.join(sel.missing_tests)}")
     if sel.unmatched_warning:
         lines.append("unmatched_warning: true (--allow-unmatched in use)")
     if sel.interpreter:
         lines.append(f"interpreter: {sel.interpreter}")
     if sel.interpreter_reason:
         lines.append(f"interpreter_reason: {sel.interpreter_reason}")
+    if sel.interpreter_problems:
+        lines.append(
+            f"interpreter_problems ({len(sel.interpreter_problems)}): "
+            + "; ".join(sel.interpreter_problems)
+        )
     return "\n".join(lines)
 
 
@@ -2360,7 +2575,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         add_help=True,
     )
-    mode = parser.add_mutually_exclusive_group(required=True)
+    mode = parser.add_mutually_exclusive_group(required=False)
     mode.add_argument(
         "--project-root",
         type=Path,
@@ -2448,20 +2663,30 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         args = parser.parse_args(argv)
+        if (
+            not args.print_interpreter
+            and args.project_root is None
+            and args.files_from is None
+            and args.files is None
+        ):
+            parser.error("one of the arguments --project-root --files-from --files is required")
     except SystemExit as exc:
         return int(exc.code) if exc.code is not None else 2
 
     fmt = args.format
 
     # --print-interpreter: early return, before repo resolution and every
-    # other early-exit path, so nothing can swallow it. args.project_root can
-    # legally be None here (--print-interpreter is not part of the required
-    # mode group), hence the Path.cwd() guard.
+    # other early-exit path, so nothing can swallow it. It may be given alone,
+    # so args.project_root can legally be None here, hence the Path.cwd() guard.
     if args.print_interpreter:
         anchor = args.project_root if args.project_root is not None else Path.cwd()
-        interp, interp_reason = resolve_python(anchor, probe="import pytest")
+        interp, interp_reason, interp_found = resolve_python_detail(
+            anchor, probe="import pytest"
+        )
         print(f"interpreter: {interp}")
         print(f"interpreter_reason: {interp_reason}")
+        for found in interp_found:
+            print(f"interpreter_problem: {found}")
         return 0
 
     # ------------------------------------------------------------------
@@ -2589,7 +2814,10 @@ def main(argv: list[str] | None = None) -> int:
     # repo_root — the only point where it is defined in all three modes — and
     # probed for pytest importability so a candidate venv that can't run
     # pytest falls through rather than being selected and failing later.
-    interp, interp_reason = resolve_python(repo_root, probe="import pytest")
+    interp, interp_reason, interp_found = resolve_python_detail(
+        repo_root, probe="import pytest"
+    )
+    interp_problems = [str(found) for found in interp_found]
 
     # FR-6/AC-6: partition intentionally-non-collectable files OUT of `changed`
     # BEFORE mapping.  An allowlisted .py (test or non-test) must never become a
@@ -2599,6 +2827,8 @@ def main(argv: list[str] | None = None) -> int:
     changed_remaining, noncollectable = partition_noncollectable(changed, nc_entries)
 
     selectors, unmatched_sources, ignored = map_changed_to_tests(changed_remaining, repo_root)
+    # Only the missing-on-disk branch can leave a test-named .py in `ignored`.
+    missing_tests = [f for f in ignored if _is_py_test_name(Path(f).name)]
 
     # ------------------------------------------------------------------
     # Step 3: --select-only path — print and exit without running pytest
@@ -2614,8 +2844,10 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="select-only",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2638,8 +2870,10 @@ def main(argv: list[str] | None = None) -> int:
             pytest_returncode=None,
             exit_reason="unmatched-sources",
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2670,8 +2904,10 @@ def main(argv: list[str] | None = None) -> int:
                 exit_reason="docs-only-no-selectors",
                 unmatched_warning=True,
                 noncollectable=noncollectable,
+                missing_tests=missing_tests,
                 interpreter=interp,
                 interpreter_reason=interp_reason,
+                interpreter_problems=interp_problems,
             )
             if fmt == "text":
                 print(_format_text(sel))
@@ -2685,7 +2921,12 @@ def main(argv: list[str] | None = None) -> int:
         # to exit 0 with a distinct exit_reason for gate/audit observability.
         # unmatched_sources is empty here (4a already returned exit 3 for the
         # unmatched-without-allow case; the allow-unmatched case returned above).
-        empty_reason = "noncollectable-skip" if noncollectable else "docs-only-no-selectors"
+        if noncollectable:
+            empty_reason = "noncollectable-skip"
+        elif missing_tests:
+            empty_reason = "missing-tests-only"
+        else:
+            empty_reason = "docs-only-no-selectors"
         sel = Selection(
             changed=changed,
             selectors=[],
@@ -2695,8 +2936,10 @@ def main(argv: list[str] | None = None) -> int:
             pytest_returncode=None,
             exit_reason=empty_reason,
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2719,6 +2962,48 @@ def main(argv: list[str] | None = None) -> int:
     # candidate was already probed for pytest importability by resolve_python
     # above, so this in-process check is skipped (checking sys.executable's
     # pytest would say nothing about the venv interpreter's).
+    # A project interpreter that exists but cannot run (dangling link, missing
+    # bin/python, unrunnable binary) with no healthy venv higher up: running
+    # pytest under the invoking interpreter instead would test the project
+    # under an interpreter nobody chose, so stop and name the problem.
+    if interp_reason == "fallback" and any(found.broken for found in interp_found):
+        sel = Selection(
+            changed=changed,
+            selectors=selectors,
+            unmatched_sources=unmatched_sources,
+            ignored=ignored,
+            ran_pytest=False,
+            pytest_returncode=None,
+            exit_reason="venv-interpreter-broken",
+            unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
+            noncollectable=noncollectable,
+            missing_tests=missing_tests,
+            interpreter=interp,
+            interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
+        )
+        if fmt == "text":
+            print(_format_text(sel))
+        else:
+            print(json.dumps(sel.to_dict(), indent=2))
+        broken_sources = {found.source for found in interp_found if found.broken}
+        if broken_sources == {"QUOIN_PYTHON"}:
+            remedy = "fix or unset QUOIN_PYTHON, or set QUOIN_DISABLE_VENV_PROBE=1 to skip the check"
+        else:
+            remedy = (
+                "recreate the project venv on this machine, remove a stray .venv in a "
+                "parent folder, or point QUOIN_PYTHON at a working interpreter "
+                "(QUOIN_DISABLE_VENV_PROBE=1 skips the check)"
+            )
+        print(
+            "affected_tests: a project venv interpreter up the directory tree is broken, so tests were not run: "
+            + "; ".join(interp_problems)
+            + ". To fix: "
+            + remedy,
+            file=sys.stderr,
+        )
+        return 3
+
     import importlib.util
 
     if interp == sys.executable and importlib.util.find_spec("pytest") is None:
@@ -2732,8 +3017,10 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="pytest-missing",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2760,8 +3047,10 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="pytest-missing",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2782,8 +3071,10 @@ def main(argv: list[str] | None = None) -> int:
             exit_reason="pytest-timeout",
             unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
             noncollectable=noncollectable,
+            missing_tests=missing_tests,
             interpreter=interp,
             interpreter_reason=interp_reason,
+            interpreter_problems=interp_problems,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -2817,8 +3108,10 @@ def main(argv: list[str] | None = None) -> int:
         exit_reason=exit_reason,
         unmatched_warning=bool(unmatched_sources and args.allow_unmatched),
         noncollectable=noncollectable,
+        missing_tests=missing_tests,
         interpreter=interp,
         interpreter_reason=interp_reason,
+        interpreter_problems=interp_problems,
     )
     if fmt == "text":
         print(_format_text(sel))
