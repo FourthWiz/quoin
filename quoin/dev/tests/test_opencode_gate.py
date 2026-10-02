@@ -161,6 +161,8 @@ def build_refusals():
         doc("CHANGES_REQUESTED\n\n    " + FENCE + "\n" + TAG + "\n    " + FENCE))
     add("comment opener in a code span", r,
         "## Summary\n\n`<!--`\n\n## Verdict\n\nCHANGES_REQUESTED\n\n`-->`\n" + TAG + "\n")
+    add("comment opener in a code span before an approving section", r,
+        "## Summary\n\nsee `<!--` here\n\n" + CAN + "\n## Plan Compliance\n\nend `-->` x\n")
     # later headings that name the verdict, next to a canonical section
     for name, heading in (
         ("after re-run", "## Verdict (after re-run)"),
