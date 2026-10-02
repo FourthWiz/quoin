@@ -305,28 +305,312 @@ def _rel(root: Path, path: Path) -> str:
 # ---------------------------------------------------------------------------
 # verdicts
 # ---------------------------------------------------------------------------
+#
+# A review or critic response states its verdict once, in its Verdict section.
+# The parser is an allowlist: it approves only a document in which the section
+# holds the value and nothing else, the heading is the one visible Verdict
+# heading, and every other structured statement of the verdict agrees.
+# Anything else refuses. The rule catches an honest writer's formatting
+# mistakes; it does not try to defeat a writer who sets out to mislead.
 
-_TAG_RE = re.compile(r"<verdict>([^<>`]*)</verdict>")
-_HEADING_VERDICT_RE = re.compile(r"^## Verdict:\s*(\S+)\s*$")
-_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
-_ATX_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
-_ATX_CLOSE_RE = re.compile(r"(?:^|[ \t]+)#+$")
-_SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
+_LINE_BREAK_RE = re.compile("[\r\x0b\x0c\x1c-\x1e\x85  ]")
+_BIDI_RE = re.compile("[؜‎‏‪-‮⁦-⁩]")
+_CONTAINER_RE = re.compile(r"^(?:>[ \t]?|[-*+][ \t]+|\d{1,9}[.)][ \t]+)+")
+_ATX_PREFIX_RE = re.compile(r"^#{1,6}(?:[ \t]|$)")
+_TERMINATOR_RE = re.compile(r"^#{1,2}(?:[ \t]|$)")
+_UNDER_RE = re.compile(r"^ {0,3}(?:=+|-+)[ \t]*$")
+_BOLD_LINE_RE = re.compile(r"^(\*\*|__)\S.*\1:?$")
+_HTML_BLOCK_RE = re.compile(r"^ {0,3}<(?:[A-Za-z/?]|![A-Za-z\[])")
+_RAW_TEXT_RE = re.compile(
+    r"<(?:script|style|textarea|title|xmp|plaintext|iframe|noscript|noembed|noframes|pre)(?![A-Za-z0-9-])",
+    re.IGNORECASE,
+)
+_TAG_STRIP_RE = re.compile(r"<[^<>]{0,200}>")
+_LABEL_RE = re.compile(
+    r"^(?:[A-Za-z]+[ \t]+){0,2}[Vv][Ee][Rr][Dd][Ii][Cc][Tt][Ss]?[ \t]*(?:\([^()]{0,60}\)[ \t]*)?"
+    r"(?::|=|[–—]|-[ \t]|[Ii][Ss][ \t])[ \t]*(.*)$"
+)
+_INLINE_LABEL_RE = re.compile(
+    r"(?<![A-Za-z0-9])[Vv][Ee][Rr][Dd][Ii][Cc][Tt][Ss]?[ \t]*(?::|=|[–—-])?[ \t]*"
+    r"([A-Z][A-Z_]{2,}(?![A-Za-z0-9_]).*)$"
+)
+_HEAD_CANON_RE = re.compile(r"^## Verdict(?:: ?([A-Z_]+))?$")
+_VALUE_LINE_RE = re.compile(
+    r"^(?:(\*\*|__|\*|_|`)([A-Z_]+)(?:\.\1|\1\.?)|`?<verdict>([A-Z_]+)</verdict>`?\.?|([A-Z_]+)\.?)$"
+)
+_THEMATIC_RE = re.compile(r"^([-*_])(?:[ \t]*\1){2,}[ \t]*$")
+_UNDERLINE_RE = re.compile(r"^(?:=+|-+)[ \t]*$")
+_FENCE_OPEN_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})(.*)$")
+_AO_LABEL_RE = re.compile(r"^(?:[A-Za-z]+[ \t]+){0,2}[A-Za-z]+[ \t]*:[ \t]*")
+_FRONTMATTER_VERDICT_RE = re.compile(r"^verdict:[ \t]*(\"|'|)([A-Z_]+)\1[ \t]*$")
+_WORD_CHAR_RE = re.compile(r"[A-Za-z0-9_]")
+_LABEL_VALUE_RE = re.compile(r"^([A-Z_]+)(?![A-Za-z0-9])")
+_NON_APPROVING_WORDS = {
+    "CHANGES_REQUESTED": re.compile(r"(?<![a-z0-9])changes[ _-]requested(?![a-z0-9])"),
+    "BLOCKED": re.compile(r"(?<![a-z0-9])blocked(?![a-z0-9])"),
+    "REVISE": re.compile(r"(?<![a-z0-9])revise(?![a-z0-9])"),
+}
+_APPROVING_VALUES = frozenset({"PASS", "APPROVED"})
+_DIMENSION_HEADING = "## Dimension Verdicts"
+# The format kit's section tables for reviews, security reviews and critic
+# responses (quoin/memory/format-kit.sections.json) are the source of these
+# titles; a Verdict section may end only at one of them.
+_SECTION_TITLES = frozenset(
+    "## " + title
+    for title in (
+        "For human", "Summary", "Plan Compliance", "Spec Compliance", "Issues Found", "Integration Safety",
+        "Test Coverage", "Risk Assessment", "Recommendations", "Dimension Verdicts", "Target", "Issues",
+        "What's good", "Scorecard", "Findings", "Scope",
+    )
+)
+_FOLD = {"0": "o", "1": "i", "3": "e", "7": "t", "l": "i", "|": "i", "!": "i"}
+# Fast path for ASCII text: look-alike characters fold, letters stay, the rest drops.
+_FOLD_TABLE = {
+    code: (_FOLD.get(chr(code)) or (chr(code) if "a" <= chr(code) <= "z" else None)) for code in range(128)
+}
+_MARKUP_TABLE = {ord("*"): None, ord("`"): None}
+_CONTAINER_STARTS = tuple(">-*+0123456789")
+
+RECOVERY_SENTENCE = (
+    "Edit the artifact so the Verdict section holds only the value and every other statement agrees, "
+    "then run `quoin opencode adopt` (editing changes the evidence hash), or re-run the phase."
+)
+
+_REFUSALS = {
+    "line-break": "the text holds a line-boundary character other than a line feed.",
+    "bidi": "the text holds a bidirectional control character.",
+    "undecodable": "the text holds bytes that did not decode.",
+    "frontmatter-unclosed": "the frontmatter block is not closed.",
+    "frontmatter-key": "a frontmatter key naming the verdict is not exactly `verdict: VALUE`.",
+    "frontmatter-duplicate": "the frontmatter names the verdict twice.",
+    "lookalike": "a line spells the verdict with look-alike characters.",
+    "heading-count": "the document does not have exactly one Verdict heading.",
+    "heading-spelling": "the Verdict heading is not spelled exactly `## Verdict` or `## Verdict: VALUE`.",
+    "heading-value": "the Verdict heading names a value that is not allowed here.",
+    "raw-text-before": "an HTML element that can swallow the page appears before the Verdict heading.",
+    "html-block-before": "an HTML block appears before the Verdict heading.",
+    "heading-hidden": "the Verdict heading sits inside a fence or an HTML comment.",
+    "heading-not-after-blank": "the line before the Verdict heading is neither blank nor a rule.",
+    "indented": "a line in the Verdict section is indented four or more columns.",
+    "setext": "a line in the Verdict section is a heading underline.",
+    "section-line": "a line in the Verdict section is not just the value.",
+    "section-value": "the Verdict section holds a value that is not allowed here.",
+    "value-count": "the Verdict section does not hold exactly one value.",
+    "frontmatter-disagree": "the frontmatter verdict differs from the Verdict section.",
+    "label-disagree": "a label line names the verdict but does not start with the value.",
+    "value-line-elsewhere": "a line outside the Verdict section states a different value.",
+    "approving-line-start": "an approving document has a line that starts with a non-approving value.",
+    "approving-cell": "an approving document has a table cell that is a non-approving value.",
+    "approving-heading": "an approving document has a heading that names a non-approving value.",
+    "terminator": "the Verdict section ends at a heading that is not a standard section title.",
+}
 
 
-def _visible_lines(text: str) -> List[str]:
-    """The lines a reader sees as prose: fenced code and HTML comments are
-    dropped. A fence closes the CommonMark way: on a run of the same character
-    at least as long as the opening run, with nothing after it."""
-    lines: List[str] = []
+def _skeleton(text: str) -> str:
+    """The letters a reader could take `text` to spell, used only to find
+    mentions: look-alike digits and bars fold to letters, any other
+    non-ASCII letter, digit or symbol becomes the wildcard `?`, the rest is
+    dropped."""
+    folded = text.casefold()
+    if folded.isascii():
+        return folded.translate(_FOLD_TABLE).replace("cl", "d")
+    out: List[str] = []
+    for ch in folded:
+        if ch in _FOLD:
+            out.append(_FOLD[ch])
+        elif "a" <= ch <= "z":
+            out.append(ch)
+        elif not ch.isascii() and unicodedata.category(ch)[0] in "LNS":
+            out.append("?")
+    return "".join(out).replace("cl", "d")
+
+
+def _upper_skeleton(text: str) -> str:
+    """Like `_skeleton` for value words in headings: capitals stay, ASCII
+    lower-case letters and digits become `.`, other letters, digits and
+    symbols become `?`."""
+    out: List[str] = []
+    for ch in text:
+        if "A" <= ch <= "Z":
+            out.append(ch)
+        elif ch.isascii():
+            if "a" <= ch <= "z" or "0" <= ch <= "9":
+                out.append(".")
+        elif unicodedata.category(ch)[0] in "LNS":
+            out.append("?")
+    return "".join(out)
+
+
+def _skeleton_pattern(word: str) -> "re.Pattern[str]":
+    parts = []
+    for ch in word.casefold().replace("_", "").replace("l", "i"):
+        parts.append("(?:d|\\?)" if ch == "d" else "[%s?]" % ("i" if ch in "il" else ch))
+    return re.compile("".join(parts))
+
+
+def _upper_pattern(value: str) -> "re.Pattern[str]":
+    return re.compile("".join("[%s?]" % ch for ch in value.replace("_", "")))
+
+
+_VERDICT_SKELETON_RE = _skeleton_pattern("verdict")
+
+
+def _plain(line: str) -> str:
+    text = line.strip()
+    if text[:1] in _CONTAINER_STARTS:
+        text = _CONTAINER_RE.sub("", text)
+    if "<" in text:
+        text = _TAG_STRIP_RE.sub("", text)
+    return text.translate(_MARKUP_TABLE).strip()
+
+
+def _is_bold_line(line: str) -> bool:
+    return _BOLD_LINE_RE.match(line.strip()) is not None
+
+
+def _heading_shaped(lines: Sequence[str], index: int) -> bool:
+    raw = lines[index].strip()
+    text = _CONTAINER_RE.sub("", raw) if raw[:1] in _CONTAINER_STARTS else raw
+    if _ATX_PREFIX_RE.match(text) or (text[:2].lower() == "<h" and text[2:3] in tuple("123456")):
+        return True
+    if _BOLD_LINE_RE.match(raw):
+        return True
+    return (
+        bool(text)
+        and index + 1 < len(lines)
+        and _UNDER_RE.match(lines[index + 1]) is not None
+        and _THEMATIC_RE.match(text) is None
+    )
+
+
+def _approving_scan(
+    lines: Sequence[str], frontmatter_end: int, head: int, end: int, others: Sequence[str],
+) -> Optional[Tuple[str, int]]:
+    """For an approving result: the first line outside the section, the
+    frontmatter and the dimension table that starts with, or whose table cell
+    is, a non-approving value, or whose heading names one."""
+    skip = set(range(head, end))
+    for index in range(frontmatter_end, len(lines)):
+        if lines[index].rstrip() == _DIMENSION_HEADING:
+            stop = index + 1
+            while stop < len(lines) and not _TERMINATOR_RE.match(lines[stop]):
+                stop += 1
+            skip.update(range(index, stop))
+    for index in range(frontmatter_end, len(lines)):
+        if index in skip:
+            continue
+        line = lines[index]
+        text = _plain(line).lstrip("| \t_")
+        label = _AO_LABEL_RE.match(text)
+        candidates = (text, text[label.end():]) if label else (text,)
+        for value in others:
+            for candidate in candidates:
+                if candidate.startswith(value) and not _WORD_CHAR_RE.match(candidate[len(value):len(value) + 1]):
+                    return "approving-line-start", index + 1
+        if "|" in line:
+            stripped = line.strip()
+            cells = stripped.split("|")
+            if stripped.startswith("|"):
+                cells = cells[1:]
+            if stripped.endswith("|"):
+                cells = cells[:-1]
+            for cell in cells:
+                if "<" in cell:
+                    cell = _TAG_STRIP_RE.sub("", cell)
+                if cell.strip(" \t*_`") in others:
+                    return "approving-cell", index + 1
+        if _heading_shaped(lines, index):
+            folded = line.casefold()
+            for value in others:
+                if _NON_APPROVING_WORDS[value].search(folded):
+                    return "approving-heading", index + 1
+    return None
+
+
+def _parse_verdict(text: str, allowed: Sequence[str]) -> Tuple[Optional[str], str, Optional[int]]:
+    """`(value, reason, line)`: the allowed value the artifact states, or
+    None with a fixed reason sentence and the 1-based number of the refusing
+    line when one line refuses. The reason never quotes the artifact."""
+
+    def refuse(code: str, line: Optional[int] = None) -> Tuple[None, str, Optional[int]]:
+        return None, _REFUSALS[code], line
+
+    text = text.replace("\r\n", "\n")
+    for pattern, code in ((_LINE_BREAK_RE, "line-break"), (_BIDI_RE, "bidi")):
+        found = pattern.search(text)
+        if found:
+            return refuse(code, text.count("\n", 0, found.start()) + 1)
+    if "�" in text:
+        return refuse("undecodable", text.count("\n", 0, text.index("�")) + 1)
+    lines = text.split("\n")
+    upper_values = [_upper_pattern(v) for v in allowed]
+
+    frontmatter_end = 0
+    frontmatter: List[str] = []
+    if lines and lines[0].rstrip() == "---":
+        for index in range(1, len(lines)):
+            if lines[index].rstrip() in ("---", "..."):
+                frontmatter_end = index + 1
+                break
+        if not frontmatter_end:
+            return refuse("frontmatter-unclosed", 1)
+        for index in range(1, frontmatter_end - 1):
+            line = lines[index]
+            if ":" in line and _VERDICT_SKELETON_RE.search(_skeleton(line.split(":", 1)[0])):
+                match = _FRONTMATTER_VERDICT_RE.match(line)
+                if not match:
+                    return refuse("frontmatter-key", index + 1)
+                frontmatter.append(match.group(2))
+                if len(frontmatter) > 1:
+                    return refuse("frontmatter-duplicate", index + 1)
+
+    heads: List[int] = []
+    labels: List[Tuple[int, "re.Match[str]"]] = []
+    for index in range(frontmatter_end, len(lines)):
+        line = lines[index]
+        mention = _VERDICT_SKELETON_RE.search(_skeleton(line)) is not None
+        shaped = _heading_shaped(lines, index)
+        value_heading = (
+            shaped and not _is_bold_line(line) and any(p.search(_upper_skeleton(line)) for p in upper_values)
+        )
+        if not mention and not value_heading:
+            continue
+        if line.rstrip() == _DIMENSION_HEADING:
+            continue
+        if mention and "verdict" not in line.casefold():
+            return refuse("lookalike", index + 1)
+        label = _LABEL_RE.match(_plain(line)) if mention else None
+        if shaped and not (label and _is_bold_line(line)):
+            heads.append(index)
+            continue
+        if label:
+            labels.append((index, label))
+            continue
+        inline = _INLINE_LABEL_RE.search(_plain(line))
+        if inline:
+            labels.append((index, inline))
+    if len(heads) != 1:
+        return refuse("heading-count", heads[1] + 1 if len(heads) > 1 else None)
+    head = heads[0]
+    canon = _HEAD_CANON_RE.match(lines[head].rstrip())
+    if not canon:
+        return refuse("heading-spelling", head + 1)
+    head_value = canon.group(1)
+    if head_value is not None and head_value not in allowed:
+        return refuse("heading-value", head + 1)
+
+    for index in range(frontmatter_end, head):
+        if _RAW_TEXT_RE.search(lines[index]):
+            return refuse("raw-text-before", index + 1)
     fence: Optional[Tuple[str, int]] = None
     in_comment = False
-    for raw in text.split("\n"):
-        line = raw.rstrip("\r")
-        if fence is not None:
+    for index in range(frontmatter_end, head):
+        line = lines[index]
+        if fence:
             stripped = line.strip()
             if (
-                len(stripped) >= fence[1]
+                len(line) - len(line.lstrip(" ")) <= 3
+                and len(stripped) >= fence[1]
                 and stripped == fence[0] * len(stripped)
             ):
                 fence = None
@@ -336,105 +620,108 @@ def _visible_lines(text: str) -> List[str]:
             if opener and not (opener.group(1)[0] == "`" and "`" in opener.group(2)):
                 fence = (opener.group(1)[0], len(opener.group(1)))
                 continue
-        kept = ""
-        rest = line
-        while rest:
+            if _HTML_BLOCK_RE.match(line) and not line.lstrip().startswith("<!--"):
+                return refuse("html-block-before", index + 1)
+        pos = 0
+        while True:
             if in_comment:
-                end = rest.find("-->")
-                if end < 0:
-                    rest = ""
-                else:
-                    in_comment = False
-                    rest = rest[end + 3:]
+                close = line.find("-->", pos)
+                if close < 0:
+                    break
+                in_comment = False
+                pos = close + 3
             else:
-                start = rest.find("<!--")
-                if start < 0:
-                    kept += rest
-                    rest = ""
-                else:
-                    kept += rest[:start]
-                    in_comment = True
-                    rest = rest[start + 4:]
-        lines.append(kept)
-    return lines
+                open_at = line.find("<!--", pos)
+                if open_at < 0:
+                    break
+                in_comment = True
+                pos = open_at + 4
+    if fence or in_comment:
+        return refuse("heading-hidden", head + 1)
+    if head > frontmatter_end and lines[head - 1].strip() and lines[head - 1].strip() != "---":
+        return refuse("heading-not-after-blank", head + 1)
 
-
-def _headings(lines: Sequence[str]) -> List[Tuple[int, int, str, int]]:
-    """`(index, level, text, span)` for every ATX heading and setext heading,
-    with Unicode format characters removed from the text. `span` is the number
-    of lines the heading takes (2 for setext)."""
-    found: List[Tuple[int, int, str, int]] = []
-    skip = -1
-    for index, line in enumerate(lines):
-        if index <= skip:
+    end = len(lines)
+    for index in range(head + 1, len(lines)):
+        if _TERMINATOR_RE.match(lines[index]):
+            end = index
+            break
+    values = set([head_value] if head_value else [])
+    prev_blank = True
+    for index in range(head + 1, end):
+        raw = lines[index]
+        if not raw.strip():
+            prev_blank = True
             continue
-        clean = "".join(ch for ch in line if unicodedata.category(ch) != "Cf")
-        atx = _ATX_RE.match(clean)
-        if atx:
-            title = _ATX_CLOSE_RE.sub("", (atx.group(2) or "").strip()).strip()
-            found.append((index, len(atx.group(1)), title, 1))
+        lead = raw[: len(raw) - len(raw.lstrip(" \t"))]
+        if "\t" in lead or len(lead) >= 4:
+            return refuse("indented", index + 1)
+        stripped = raw.strip()
+        if _UNDERLINE_RE.match(stripped) and not prev_blank:
+            return refuse("setext", index + 1)
+        if stripped.startswith("="):
+            return refuse("setext", index + 1)
+        if _THEMATIC_RE.match(stripped):
+            prev_blank = False
             continue
-        if index + 1 < len(lines) and clean.strip() and not _SETEXT_RE.match(clean):
-            under = _SETEXT_RE.match("".join(ch for ch in lines[index + 1] if unicodedata.category(ch) != "Cf"))
-            if under and len(clean) - len(clean.lstrip(" ")) <= 3:
-                found.append((index, 1 if under.group(1)[0] == "=" else 2, clean.strip(), 2))
-                skip = index + 1
-    return found
+        match = _VALUE_LINE_RE.match(stripped)
+        if not match:
+            return refuse("section-line", index + 1)
+        value = match.group(2) or match.group(3) or match.group(4)
+        if value not in allowed:
+            return refuse("section-value", index + 1)
+        values.add(value)
+        prev_blank = False
+    if len(values) != 1:
+        return refuse("value-count", head + 1)
+    (only,) = values
 
-
-def _token_re(value: str) -> "re.Pattern[str]":
-    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(value) + r"(?![A-Za-z0-9])", re.IGNORECASE)
+    if frontmatter and frontmatter[0] != only:
+        return refuse("frontmatter-disagree", 1)
+    for index, label in labels:
+        match = _LABEL_VALUE_RE.match(label.group(1).strip())
+        if not match or match.group(1) != only:
+            return refuse("label-disagree", index + 1)
+    others = [v for v in allowed if v != only]
+    for index in range(frontmatter_end, len(lines)):
+        if head <= index < end:
+            continue
+        match = _VALUE_LINE_RE.match(lines[index].strip())
+        if match and (match.group(2) or match.group(3) or match.group(4)) in others:
+            return refuse("value-line-elsewhere", index + 1)
+    if only in _APPROVING_VALUES:
+        found = _approving_scan(lines, frontmatter_end, head, end, others)
+        if found:
+            return refuse(found[0], found[1])
+    if end < len(lines) and lines[end].rstrip() not in _SECTION_TITLES:
+        return refuse("terminator", end + 1)
+    return only, "", None
 
 
 def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
-    """The verdict an artifact states, or None when it does not state exactly
-    one allowed value. Fenced code and comments are ignored. Three forms are
-    read together: a `<verdict>` tag (bare or inside a code span) in the
-    `## Verdict` section, a `## Verdict: X` heading line, and a `## Verdict`
-    section whose only non-blank line is the value. Every value found must be
-    the same single allowed value; two different values refuse. Once the tags
-    are removed, any other allowed value appearing anywhere in the visible
-    section (case-insensitive, on word boundaries) refuses, whatever its
-    position or markup. The section ends at the next heading of level 1 or 2.
-    A second heading that reads "Verdict", or one not spelled exactly
-    `## Verdict`, refuses."""
-    lines = _visible_lines(text)
-    headings = _headings(lines)
-    verdict_heads = [h for h in headings if h[2].casefold() == "verdict"]
-    if len(verdict_heads) > 1:
-        return None
-    body: List[str] = []
-    found = False
-    if verdict_heads:
-        start, _level, _title, span = verdict_heads[0]
-        if span != 1 or lines[start].rstrip() != "## Verdict":
-            return None
-        found = True
-        end = len(lines)
-        for index, level, _t, _s in headings:
-            if index > start and level <= 2:
-                end = index
-                break
-        body = lines[start + 1: end]
-    values = set()
-    tokens = set()
-    if found:
-        section = "\n".join(body)
-        values.update(m.group(1).strip() for m in _TAG_RE.finditer(section))
-        meaningful = [ln.strip() for ln in body if ln.strip()]
-        if len(meaningful) == 1 and meaningful[0] in allowed:
-            values.add(meaningful[0])
-        remainder = _TAG_RE.sub(" ", section)
-        tokens = {v for v in allowed if _token_re(v).search(remainder)}
-    for line in lines:
-        match = _HEADING_VERDICT_RE.match(line)
-        if match:
-            values.add(match.group(1))
-    if len(values) == 1 and not tokens - values:
-        (only,) = values
-        if only in allowed:
-            return only
-    return None
+    """The verdict an artifact states, or None.
+
+    The artifact must have one Verdict heading, `## Verdict` or
+    `## Verdict: VALUE`, and no other heading that names the verdict or
+    spells a value in capitals. The section holds only the value (bare, bold,
+    in a code span or in a `<verdict>` tag, with at most one trailing period)
+    and ends at a standard section heading or the end of the file. Every other
+    structured statement of the verdict agrees with it: the frontmatter key,
+    any line labelled "Verdict", and any other line that is just a value. In
+    an approving document no line outside the section, the frontmatter and the
+    dimension table starts with a non-approving value, no table cell is one,
+    and no heading names one. Line breaks other than a line feed, bidirectional
+    controls and an HTML block before the heading refuse. Prose belongs in
+    another section. The rule catches formatting mistakes by an honest writer;
+    it does not try to defeat one who sets out to mislead."""
+    return _parse_verdict(text, allowed)[0]
+
+
+def unparseable_detail(name: str, reason: str, line: Optional[int]) -> str:
+    """The `verdict-unparseable` detail: the file name, the refusing line when
+    there is one, the reason and the recovery."""
+    where = "line %d: " % line if line else ""
+    return "%s: %s%s %s" % (name, where, reason, RECOVERY_SENTENCE)
 
 
 def critic_status(
@@ -472,9 +759,9 @@ def critic_status(
     if text is None:
         out.append(("FAIL", "artifact-missing", _rel(Path(project_root or sdir), used[-1])))
     else:
-        verdict = parse_verdict(text, CRITIC_VERDICTS)
+        verdict, reason, line = _parse_verdict(text, CRITIC_VERDICTS)
         if verdict is None:
-            out.append(("FAIL", "verdict-unparseable", used[-1].name))
+            out.append(("FAIL", "verdict-unparseable", unparseable_detail(used[-1].name, reason, line)))
         elif verdict == "REVISE":
             out.append(("FAIL", "critic-not-converged", "the last critic response asks for a revision"))
     if len(used) > cap:
@@ -800,9 +1087,13 @@ def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths) ->
         if not paths:
             return _skip("phase-verdict", "no review file")
         text = _read_text(paths[0], MAX_TEXT_BYTES)
-        verdict = parse_verdict(text, REVIEW_VERDICTS) if text is not None else None
+        if text is None:
+            verdict, reason, line = None, "the file could not be read.", None
+        else:
+            verdict, reason, line = _parse_verdict(text, REVIEW_VERDICTS)
         if verdict is None:
-            return _check("phase-verdict", [_fail("verdict-unparseable", paths[0].name)])
+            detail = unparseable_detail(paths[0].name, reason, line)
+            return _check("phase-verdict", [_fail("verdict-unparseable", detail)])
         if verdict != "APPROVED":
             return _check("phase-verdict", [_fail("review-not-approved", "the review verdict is %s" % verdict)])
         return _check("phase-verdict", [("PASS", "", "")])

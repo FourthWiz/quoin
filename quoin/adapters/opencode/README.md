@@ -233,13 +233,23 @@ no live OpenCode run or corporate gateway has been qualified.
   was updated). Artifacts must pass `validate_artifact.py` strictly, so a plan or
   review written through a skill's plain-English fallback (no `## For human`
   section) or with extra headings is refused as `artifact-invalid` naming the
-  invariant. A verdict must be a `<verdict>` tag, a `## Verdict: X` line, or a
-  lone value line under `## Verdict`; anything else is `verdict-unparseable`.
-  When several forms are present they must agree, and once the tags are
-  removed any other allowed value appearing anywhere in the visible section
-  (case-insensitive, whatever its markup) refuses. The section ends at the next
-  heading of level 1 or 2; a second heading reading "Verdict", or one not
-  spelled exactly `## Verdict`, refuses.
+  invariant. A verdict is read by a strict rule. The document has one Verdict heading
+  (`## Verdict` or `## Verdict: X`) and no other heading that names the
+  verdict or spells a value in capitals. The section holds only the value
+  (bare, bold, in a code span or in a `<verdict>` tag) and ends at a standard
+  section heading or the end of the file. Any "Verdict:" line elsewhere starts
+  with the same value. In an approving document, outside the Verdict section,
+  the frontmatter and `## Dimension Verdicts`, no line starts with a
+  non-approving value (after markup, container markers and an optional short
+  label, including inside code spans), no table cell is one, and no heading
+  contains "blocked", "revise" or "changes requested" in any case, even as
+  plain English. Earlier review rounds are described in a sentence, not as a
+  label line or a table of rounds. An HTML element that a raw-text rule names
+  (title, pre, script and the like) is named without angle brackets before the
+  Verdict heading. Anything else is `verdict-unparseable`, and prose belongs in
+  another section. The rule catches an honest writer's formatting mistakes; it
+  does not try to defeat a writer who sets out to mislead. Recovery: edit the
+  artifact, then run `quoin opencode adopt`, or re-run the phase.
   A single `--phase plan` run is refused as `critic-missing` until a critic
   has run: use `--phase thorough-plan` (the run command also accepts
   `thorough_plan`), or `adopt` after the critic. Any untracked, non-ignored
