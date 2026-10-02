@@ -190,7 +190,7 @@ def _s_critic_missing(fx):
 
 
 def _s_unparseable(fx):
-    h.write(fx.base / "stage-1" / "review-1.md", h.REVIEW.replace("\nAPPROVED\n", "\n**APPROVED**\n"))
+    h.write(fx.base / "stage-1" / "review-1.md", h.REVIEW.replace("\nAPPROVED\n", "\nAPPROVED - no active task context\n"))
     fx.record("review")
     return "review", 1, "verdict-unparseable"
 
@@ -484,3 +484,14 @@ def test_cli_parsed_stage_and_phase_match_an_int_stage_entry(fx, monkeypatch):
     runstore.write_record(directory, record)
     fx.record("plan", origin="phase-run", runs=[run_id])
     assert fx.evaluate("plan").verdict == "PASS"
+
+
+def test_unparseable_verdict_detail_names_file_line_reason_and_recovery(fx):
+    text = h.REVIEW.replace("\nAPPROVED\n", "\nAPPROVED\nNot approved yet.\n")
+    h.write(fx.base / "stage-1" / "review-1.md", text)
+    fx.record("review")
+    result = fx.evaluate("review", stage=1)
+    detail = " ".join(check(result, "phase-verdict").details)
+    line = text.split("\n").index("Not approved yet.") + 1
+    assert detail == "review-1.md: line %d: %s %s" % (line, gate._REFUSALS["section-line"], gate.RECOVERY_SENTENCE)
+    assert "verdict-unparseable" in reasons(result)
