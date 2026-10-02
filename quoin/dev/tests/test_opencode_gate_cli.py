@@ -271,7 +271,7 @@ def test_store_error_after_the_audit_file_keeps_the_result(fx, capsys, monkeypat
 
     monkeypatch.setattr(gate, "record_gate", boom)
     code, data = run(capsys, "gate", fx, "--write")
-    assert code == 8 and data["verdict"] == "PASS" and data["record_error"] == {"code": "corrupt-record", "message": "RunStoreError"}
+    assert code == 8 and data["verdict"] == "PASS" and data["record_error"] == {"code": "corrupt-record", "message": "the workflow state file is malformed"}
     assert data["artifact"] and (fx.root / data["artifact"]).is_file()
 
 

@@ -23,6 +23,7 @@ import stat
 import subprocess
 import sys
 import time
+import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
@@ -167,7 +168,7 @@ def _confine(project_root, value: Any, within: Path) -> Path:
     if not isinstance(value, str) or not value or "\0" in value:
         raise PathUnresolved("a recorded path is not a usable string")
     if ".." in value.replace("\\", "/").split("/"):
-        raise PathUnresolved("a recorded path climbs out of the task folder")
+        raise PathUnresolved("a recorded path climbs out of its folder")
     root = str(project_root)
     candidate = value if os.path.isabs(value) else os.path.join(root, value)
     rel = os.path.relpath(os.path.normpath(candidate), root)
@@ -305,26 +306,35 @@ def _rel(root: Path, path: Path) -> str:
 # verdicts
 # ---------------------------------------------------------------------------
 
-_TAG_RE = re.compile(r"<verdict>\s*([^<>`]*?)\s*</verdict>")
+_TAG_RE = re.compile(r"<verdict>([^<>`]*)</verdict>")
 _HEADING_VERDICT_RE = re.compile(r"^## Verdict:\s*(\S+)\s*$")
+_FENCE_OPEN_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_ATX_RE = re.compile(r"^ {0,3}(#{1,6})(?:[ \t]+(.*?))?[ \t]*$")
+_ATX_CLOSE_RE = re.compile(r"(?:^|[ \t]+)#+$")
+_SETEXT_RE = re.compile(r"^ {0,3}(=+|-+)[ \t]*$")
 
 
 def _visible_lines(text: str) -> List[str]:
-    """The lines a reader sees as prose: fenced code (backtick or tilde) and
-    HTML comments are dropped."""
+    """The lines a reader sees as prose: fenced code and HTML comments are
+    dropped. A fence closes the CommonMark way: on a run of the same character
+    at least as long as the opening run, with nothing after it."""
     lines: List[str] = []
-    fence: Optional[str] = None
+    fence: Optional[Tuple[str, int]] = None
     in_comment = False
     for raw in text.split("\n"):
         line = raw.rstrip("\r")
         if fence is not None:
-            if line.lstrip().startswith(fence):
+            stripped = line.strip()
+            if (
+                len(stripped) >= fence[1]
+                and stripped == fence[0] * len(stripped)
+            ):
                 fence = None
             continue
         if not in_comment:
-            marker = line.lstrip()[:3]
-            if marker in ("```", "~~~"):
-                fence = marker
+            opener = _FENCE_OPEN_RE.match(line)
+            if opener and not (opener.group(1)[0] == "`" and "`" in opener.group(2)):
+                fence = (opener.group(1)[0], len(opener.group(1)))
                 continue
         kept = ""
         rest = line
@@ -349,15 +359,31 @@ def _visible_lines(text: str) -> List[str]:
     return lines
 
 
-_LEADING_WORD_RE = re.compile(r"^[\s>*_`]*([A-Za-z_]+)")
+def _headings(lines: Sequence[str]) -> List[Tuple[int, int, str, int]]:
+    """`(index, level, text, span)` for every ATX heading and setext heading,
+    with Unicode format characters removed from the text. `span` is the number
+    of lines the heading takes (2 for setext)."""
+    found: List[Tuple[int, int, str, int]] = []
+    skip = -1
+    for index, line in enumerate(lines):
+        if index <= skip:
+            continue
+        clean = "".join(ch for ch in line if unicodedata.category(ch) != "Cf")
+        atx = _ATX_RE.match(clean)
+        if atx:
+            title = _ATX_CLOSE_RE.sub("", (atx.group(2) or "").strip()).strip()
+            found.append((index, len(atx.group(1)), title, 1))
+            continue
+        if index + 1 < len(lines) and clean.strip() and not _SETEXT_RE.match(clean):
+            under = _SETEXT_RE.match("".join(ch for ch in lines[index + 1] if unicodedata.category(ch) != "Cf"))
+            if under and len(clean) - len(clean.lstrip(" ")) <= 3:
+                found.append((index, 1 if under.group(1)[0] == "=" else 2, clean.strip(), 2))
+                skip = index + 1
+    return found
 
 
-def _leading_word(line: str) -> Optional[str]:
-    """The first word of a line once tags are removed and blockquote, emphasis
-    and code-span markers are stripped, e.g. `CHANGES_REQUESTED` for
-    `> **CHANGES_REQUESTED** until fixed`."""
-    match = _LEADING_WORD_RE.match(_TAG_RE.sub(" ", line))
-    return match.group(1).strip("_") if match else None
+def _token_re(value: str) -> "re.Pattern[str]":
+    return re.compile(r"(?<![A-Za-z0-9])" + re.escape(value) + r"(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
@@ -366,35 +392,45 @@ def parse_verdict(text: str, allowed: Sequence[str]) -> Optional[str]:
     read together: a `<verdict>` tag (bare or inside a code span) in the
     `## Verdict` section, a `## Verdict: X` heading line, and a `## Verdict`
     section whose only non-blank line is the value. Every value found must be
-    the same single allowed value; two different values refuse. An allowed
-    value that leads any line of the `## Verdict` section must agree too, so a
-    standalone value line cannot be outvoted by a tag elsewhere in the section.
-    More than one exact `## Verdict` heading refuses."""
+    the same single allowed value; two different values refuse. Once the tags
+    are removed, any other allowed value appearing anywhere in the visible
+    section (case-insensitive, on word boundaries) refuses, whatever its
+    position or markup. The section ends at the next heading of level 1 or 2.
+    A second heading that reads "Verdict", or one not spelled exactly
+    `## Verdict`, refuses."""
     lines = _visible_lines(text)
-    if sum(1 for line in lines if line.rstrip() == "## Verdict") > 1:
+    headings = _headings(lines)
+    verdict_heads = [h for h in headings if h[2].casefold() == "verdict"]
+    if len(verdict_heads) > 1:
         return None
     body: List[str] = []
     found = False
-    for line in lines:
-        if not found:
-            found = line.rstrip() == "## Verdict"
-            continue
-        if line.startswith("## "):
-            break
-        body.append(line)
+    if verdict_heads:
+        start, _level, _title, span = verdict_heads[0]
+        if span != 1 or lines[start].rstrip() != "## Verdict":
+            return None
+        found = True
+        end = len(lines)
+        for index, level, _t, _s in headings:
+            if index > start and level <= 2:
+                end = index
+                break
+        body = lines[start + 1: end]
     values = set()
-    leading = set()
+    tokens = set()
     if found:
-        values.update(m.group(1) for m in _TAG_RE.finditer("\n".join(body)))
+        section = "\n".join(body)
+        values.update(m.group(1).strip() for m in _TAG_RE.finditer(section))
         meaningful = [ln.strip() for ln in body if ln.strip()]
         if len(meaningful) == 1 and meaningful[0] in allowed:
             values.add(meaningful[0])
-        leading = {w for w in (_leading_word(ln) for ln in body) if w in allowed}
+        remainder = _TAG_RE.sub(" ", section)
+        tokens = {v for v in allowed if _token_re(v).search(remainder)}
     for line in lines:
         match = _HEADING_VERDICT_RE.match(line)
         if match:
             values.add(match.group(1))
-    if len(values) == 1 and not leading - values:
+    if len(values) == 1 and not tokens - values:
         (only,) = values
         if only in allowed:
             return only

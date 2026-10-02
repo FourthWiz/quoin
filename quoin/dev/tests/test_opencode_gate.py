@@ -64,6 +64,35 @@ REVIEW = ("APPROVED", "CHANGES_REQUESTED", "BLOCKED")
     ("## Verdict\n\nREVISE\n\nlater\n<verdict>PASS</verdict>\n", CRITIC, None),
     ("## Verdict\n\n> REVISE\n<verdict>PASS</verdict>\n", CRITIC, None),
     ("## Verdict\n\n<verdict>APPROVED</verdict>\n\nAPPROVED\n", REVIEW, "APPROVED"),
+    # a conflicting allowed value anywhere in the section refuses, whatever its markup
+    ("## Verdict\n\n- CHANGES_REQUESTED\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n1. CHANGES_REQUESTED\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n### CHANGES_REQUESTED\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n# CHANGES_REQUESTED\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n| CHANGES_REQUESTED |\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n**Verdict:** CHANGES_REQUESTED, once fixed <verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n<b>CHANGES_REQUESTED</b>\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\n<verdict>APPROVED</verdict> actually CHANGES_REQUESTED\n", REVIEW, None),
+    ("## Verdict\n\nthis is changes_requested\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\n\nResult: REVISE\n\n<verdict>PASS</verdict>\n", CRITIC, None),
+    ("## Verdict\n\n- REVISE\n<verdict>PASS</verdict>\n", CRITIC, None),
+    ("## Verdict\n\n| REVISE |\n<verdict>PASS</verdict>\n", CRITIC, None),
+    ("## Verdict\n\n<verdict>PASS</verdict>\n\n# Notes\n\nREVISE later\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<verdict>PASS</verdict>\n\n## Notes\n\n- REVISE later\n", CRITIC, "PASS"),
+    ("## Verdict\n\n<verdict>PASS</verdict>\n\n### Detail\n\n- REVISE\n", CRITIC, None),
+    # fences close only on a run of the same character at least as long
+    ("## Verdict\n\n````text\n```\n<verdict>APPROVED</verdict>\n````\nCHANGES_REQUESTED: two blockers\n", REVIEW, None),
+    ("## Verdict\n\n````\n```\nCHANGES_REQUESTED\n````\n<verdict>APPROVED</verdict>\n", REVIEW, "APPROVED"),
+    ("## Verdict\n\n~~~~\n~~~\nCHANGES_REQUESTED\n~~~~\n<verdict>APPROVED</verdict>\n", REVIEW, "APPROVED"),
+    ("## Verdict\n\n```\n~~~\nCHANGES_REQUESTED\n```\n<verdict>APPROVED</verdict>\n", REVIEW, "APPROVED"),
+    # non-canonical Verdict headings refuse
+    (" ## Verdict\n\nCHANGES_REQUESTED\n\n## Verdict\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict ##\n\nCHANGES_REQUESTED\n\n## Verdict\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("Verdict\n=======\n\nCHANGES_REQUESTED\n\n## Verdict\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict\u200b\n\nCHANGES_REQUESTED\n\n## Verdict\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("## Verdict ##\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("# Verdict\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
+    ("Verdict\n---\n\n<verdict>APPROVED</verdict>\n", REVIEW, None),
 ])
 def test_parse_verdict(text, allowed, expected):
     assert gate.parse_verdict(text, allowed) == expected
@@ -110,6 +139,15 @@ def test_parse_verdict_real_skill_shapes():
     assert gate.parse_verdict(REAL_REVIEW, REVIEW) == "APPROVED"
     assert gate.parse_verdict(REAL_CRITIC, CRITIC) == "PASS"
     assert gate.parse_verdict(REAL_REVIEW.replace("APPROVED</verdict>", "BLOCKED</verdict>"), REVIEW) == "BLOCKED"
+
+
+def test_parse_verdict_unclosed_tag_is_linear():
+    import time
+
+    text = "## Verdict\n\n<verdict>" + " " * 20000 + "\n"
+    started = time.monotonic()
+    assert gate.parse_verdict(text, CRITIC) is None
+    assert time.monotonic() - started < 2.0
 
 
 # -- critic status ---------------------------------------------------------

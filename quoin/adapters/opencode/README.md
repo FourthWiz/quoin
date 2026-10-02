@@ -235,8 +235,11 @@ no live OpenCode run or corporate gateway has been qualified.
   section) or with extra headings is refused as `artifact-invalid` naming the
   invariant. A verdict must be a `<verdict>` tag, a `## Verdict: X` line, or a
   lone value line under `## Verdict`; anything else is `verdict-unparseable`.
-  When several forms are present, or the section's lines lead with different
-  allowed values, all must agree: conflicting forms refuse.
+  When several forms are present they must agree, and once the tags are
+  removed any other allowed value appearing anywhere in the visible section
+  (case-insensitive, whatever its markup) refuses. The section ends at the next
+  heading of level 1 or 2; a second heading reading "Verdict", or one not
+  spelled exactly `## Verdict`, refuses.
   A single `--phase plan` run is refused as `critic-missing` until a critic
   has run: use `--phase thorough-plan` (the run command also accepts
   `thorough_plan`), or `adopt` after the critic. Any untracked, non-ignored

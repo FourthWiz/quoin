@@ -1638,6 +1638,17 @@ def _lock_refusal(project_root: pathlib.Path, task: str, held_pid) -> int:
     return _gate_refusal("lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3)
 
 
+_RECORD_ERROR_MESSAGES = {
+    "corrupt-record": "the workflow state file is malformed",
+    "corrupt-sidecar": "a run record is malformed",
+    "state-task-mismatch": "the workflow state belongs to a different task",
+    "unsafe-path": "the workflow state path is not a plain file under the task folder",
+    "unsupported-schema": "the workflow state uses an unsupported schema",
+    "OSError": "the workflow state could not be written",
+    "PermissionError": "the workflow state could not be written",
+}
+
+
 def _cmd_opencode_gate(args: argparse.Namespace) -> int:
     """`quoin opencode gate`: evaluate one gated phase and print one JSON line.
 
@@ -1686,9 +1697,10 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
             try:
                 gate.record_gate(project_root, args.task, stage, phase, result, path)
             except (runstore.RunStoreError, OSError) as exc:
+                record_code = getattr(exc, "code", type(exc).__name__)
                 payload["record_error"] = {
-                    "code": getattr(exc, "code", type(exc).__name__),
-                    "message": type(exc).__name__,
+                    "code": record_code,
+                    "message": _RECORD_ERROR_MESSAGES.get(record_code, "the gate result could not be recorded in the workflow state"),
                 }
                 return payload, 8
         return payload, code

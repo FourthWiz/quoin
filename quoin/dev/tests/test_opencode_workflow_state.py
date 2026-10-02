@@ -243,7 +243,11 @@ def test_run_phase_constants_match_the_shipped_manifest():
     [{"origin": "adopted", "phase": "plan", "critic_responses": 5}],
     [{"origin": "adopted", "phase": "plan", "harvested": 5}],
     [{"origin": "adopted", "phase": "plan", "evidence": "x"}],
-    [{"origin": "adopted", "phase": "plan", "stage": "1"}]])
+    [{"origin": "adopted", "phase": "plan", "stage": "1"}],
+    [{"origin": "adopted", "phase": "plan", "stage": 0}],
+    [{"origin": "adopted", "phase": "plan", "stage": -1}],
+    [{"origin": "adopted", "phase": "plan", "runs": [5, "good-run"]}],
+    [{"origin": "adopted", "phase": "plan", "critic_responses": [None, "critic-response-1.md"]}]])
 def test_malformed_entries_are_a_corrupt_record(tmp_path, entries):
     directory = runstore.store_dir(tmp_path, create=True)
     state = runstore.new_workflow_state("t1")
