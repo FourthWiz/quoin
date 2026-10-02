@@ -381,10 +381,10 @@ The helper resolves the git repo from `--project-root` itself (CRIT-1 fix: the o
 
 **Verdict rule (state exactly):**
 - exit 0 + `ran_pytest=true` → affected-area suite GREEN → APPROVED permissible.
-- exit 0 + `ran_pytest=false` → docs-only changeset or clean tree — no affected tests to run (N/A) → APPROVED permissible. When `ran_pytest=false` the review prose MUST state "no affected tests (docs-only / N/A)" rather than asserting tests passed, so the verdict is not over-claimed. (The dominant quoin task shape — SKILL.md/docs-only edits — lands here and is correctly approvable without running the whole suite.)
+- exit 0 + `ran_pytest=false` → docs-only changeset or clean tree — no affected tests to run (N/A) → APPROVED permissible. When `ran_pytest=false` the review MUST state "no affected tests (docs-only / N/A)" in `## Test Coverage` (never in the Verdict section) rather than asserting tests passed, so the verdict is not over-claimed. (The dominant quoin task shape — SKILL.md/docs-only edits — lands here and is correctly approvable without running the whole suite.)
 - exit 1 → at least one affected test RED. BEFORE forcing `CHANGES_REQUESTED`, run the IVG-144 known-red consult against the SAME captured run (Step 6b's affected-area pytest MUST capture its own `-rA` stdout to a file as part of the run that produced this exit code — `known_red.py` NEVER re-runs anything, MAJ-3): source in-scope selectors via `python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --select-only`, then `python3 __QUOIN_HOME__/scripts/known_red.py --pytest-output <captured-file> --selectors <selectors> --observed-rc <that run's RC> --project-root "$PROJECT_ROOT" --format text` (NO `--full-suite`). Branch on the payload's `downgrade` field (never bare exit): exit 0 with `downgrade=true` (ALL affected red are known-baseline, reconciled) → do NOT force `CHANGES_REQUESTED` on that basis; record the known-baseline failures (name/reason/date, verbatim text block) in `## Test Coverage`; NO `git worktree add … main` re-baseline. exit 1 (net-new affected red) → verdict MUST be `CHANGES_REQUESTED`; raise a CRITICAL issue listing the failing selectors. exit 2 (malformed manifest) → surface the stderr error + do-not-approve (fail-closed). exit 3 (reconcile-mismatch, CRIT-1) → surface the `## Reconciliation` line + `CHANGES_REQUESTED` (an unreconciled report is never grounds for approval). script missing → `CHANGES_REQUESTED` as today (fail-closed — no consult means no downgrade).
 - exit 3 or 4 → affected-area green UNCONFIRMED (a changed `.py` source had no resolvable test, or the changed set was undeterminable) → MUST NOT emit `APPROVED`. Either `CHANGES_REQUESTED` (if the cause is an unmatched source that needs a test) or surface to the user for explicit acknowledgement. Default: do-NOT-approve (fail-CLOSED rule).
-- exit 5 (exit_reason: no-quoin-task-context) → no active quoin task context → CLEAN SKIP / N/A (nothing to test in a non-quoin session); APPROVED remains permissible and MUST state "N/A — no active quoin task context" rather than asserting tests passed (no over-claim). NOT CHANGES_REQUESTED, NOT a blocking surface.
+- exit 5 (exit_reason: no-quoin-task-context) → no active quoin task context → CLEAN SKIP / N/A (nothing to test in a non-quoin session); APPROVED remains permissible and MUST state "N/A — no active quoin task context" in `## Test Coverage` (never in the Verdict section) rather than asserting tests passed (no over-claim). NOT CHANGES_REQUESTED, NOT a blocking surface.
 - script missing → non-blocking note; fall back to the generic "run the tests" behavior (fail-OPEN only on absent binary).
 
 **Cross-reference to IVG-71 background:** This precondition exists because a smoke-only review-1 APPROVED a deliverable whose affected-area tests (test_dashboard_assets.py) were red; review-2 caught it a full cycle late (IVG-71).
@@ -398,8 +398,9 @@ checklist bullet above):
 
 Result mapping:
 - exit 0 -> nothing to report.
-- exit 1 -> list every reported `file:line` and its matched token under an advisory
-  heading in the review output; still does not affect the verdict.
+- exit 1 -> list every reported `file:line` and its matched token under the heading
+  `### Authored-content lint (advisory)` in the review output; still does not affect
+  the verdict.
 - exit 2, exit 3, or the script is missing -> print a one-line non-blocking WARN and
   continue; do not treat this as a review finding.
 
@@ -434,7 +435,7 @@ Reference files (apply HERE at the body-generation WRITE-SITE — per format-kit
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
 Compose the format-aware body per the `review` artifact-type sections in format-kit.md §2:
 - `## Summary` — caveman prose: 2-3 sentence review outcome summary.
-- `## Verdict` — one line: `APPROVED`, `CHANGES_REQUESTED`, or `BLOCKED`. An `APPROVED` verdict asserts that the affected-area test suite is green (or N/A — no affected tests for a docs-only changeset), per the Step 6b hard precondition. Do NOT write `APPROVED` unless Step 6b was run and returned exit 0 (or exit 5 — the no-active-quoin-task-context CLEAN-SKIP / N/A carve-out, which is also approvable and MUST be annotated "N/A — no active quoin task context").
+- `## Verdict` — the Verdict section holds one line, the value alone: `APPROVED`, `CHANGES_REQUESTED`, or `BLOCKED`, bare or as a `<verdict>` tag. The "N/A — no active quoin task context" annotation and the "no affected tests (docs-only / N/A)" statement go in `## Test Coverage`, never in the Verdict section. An `APPROVED` verdict asserts that the affected-area test suite is green (or N/A — no affected tests for a docs-only changeset), per the Step 6b hard precondition. Do NOT write `APPROVED` unless Step 6b was run and returned exit 0 (or exit 5 — the no-active-quoin-task-context CLEAN-SKIP / N/A carve-out, which is also approvable; record its "N/A — no active quoin task context" annotation in `## Test Coverage`). The section after `## Verdict` is the next standard review section.
 - `## Plan Compliance` — caveman prose: how well implementation matches the plan; gaps.
 - `## Spec Compliance` — caveman prose: how well the implementation satisfies the task spec's acceptance criteria; GRANDFATHERED wording when no spec exists — write exactly `No spec — verified against plan only.`
 - `## Issues Found` — terse numbered list per severity (CRITICAL / MAJOR / MINOR), each item: description + Location (file:line) + Impact + Fix. On Medium/Large fan-out, each item is also dimension-labeled (security / performance / architecture-integration).
@@ -443,6 +444,13 @@ Compose the format-aware body per the `review` artifact-type sections in format-
 - `## Risk Assessment` — markdown table (columns: id / risk / status / notes).
 - `## Recommendations` — terse list: what to do next.
 - `## Dimension Verdicts` (Medium/Large fan-out and the Large carve-out, OPTIONAL) — markdown table (columns: dimension / verdict / top issue), one row per dimension.
+
+**Verdict-section writer contract.** The gate reads the verdict with a strict rule that catches honest formatting mistakes, so state the verdict once, in the Verdict section, and nowhere else in a structured form:
+- No heading other than `## Verdict` and `## Dimension Verdicts` contains the word "verdict", a verdict value, or the words "blocked", "revise" or "changes requested" in any case, even as plain English (for example "Items on hold" rather than "Blocked items"). The Step 6c lint heading is `### Authored-content lint (advisory)`.
+- A line elsewhere that names the verdict starts with the value, `Verdict: VALUE.`; the fan-out merge is written `Verdict: VALUE (worst-of across the dimensions).`
+- Outside the Verdict section, the frontmatter and `## Dimension Verdicts`, no line starts with a verdict value after markup, container markers and an optional short label, including code spans (so not a bullet that opens with `` `CHANGES_REQUESTED` `` and goes on, and not `Previous round: CHANGES_REQUESTED`), and no table cell is one. Describe earlier rounds in a sentence ("Round 3 asked for changes, now fixed"), not as a label line or a table of rounds.
+- When a review discusses verdict formats or values, describe them in words rather than quoting them.
+- Write `## Summary` before `## Verdict`, and in the summary name an HTML element without angle brackets ("the title element", not its tag), because an element opener before the Verdict heading makes the gate refuse the review even inside a code span.
 
 Apply `format-kit.md` §1 pick rules per section. DO NOT include the `## For human` block yet — that's Step 2 + Step 3. **Step 1 pre-write sweep:** `python3 __QUOIN_HOME__/scripts/fsops.py rm "<path>.body.tmp" "<path>.tmp"` — clear stale leftovers before writing. Write the body to `<path>.body.tmp`.
 
