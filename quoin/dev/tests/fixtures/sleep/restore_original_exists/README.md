@@ -6,3 +6,7 @@ should read the Source: anchor, confirm the original file exists, and append the
 
 Note: the forgotten file uses a placeholder "FIXTURE_ABS_PATH" that tests must replace
 with the actual absolute path to this fixture directory before use.
+
+Format note: the insights files here use the legacy "### Insight N:" entry-heading format, kept to
+exercise that parsing path. The format writers produce today is "## <HH:MM> — <context>"; see
+capture_insight_format/.

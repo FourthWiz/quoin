@@ -270,13 +270,16 @@ def collect_entries(scan_dir: str, scan_days: int = 30,
     Two-pass algorithm per D-07:
 
     Pass 1 (heading-based — canonical):
-      If file has ≥2 lines matching ^### , split on ### boundaries.
-      Discard the block before the first ### heading (preamble).
-      Each ### heading + following text until next heading (or EOF) = one entry.
+      Entries sit at the shallowest heading level the file uses:
+      "## " if the file has any (the /capture_insight entry format), otherwise
+      "### " if it has ≥2. Headings inside fenced code blocks are ignored.
+      Discard the block before the first entry heading (preamble).
+      Each entry heading + following text until the next entry heading
+      (or EOF) = one entry; deeper headings stay inside their entry.
 
     Pass 2 (separator-based — fallback):
-      If file has <2 ### headings, split on lines matching ^---\\s*$.
-      Strip surrounding blank lines from each block.
+      If the file has no "## " and <2 "### " headings, split on lines
+      matching ^---\\s*$. Strip surrounding blank lines from each block.
 
     Args:
         scan_dir: directory to scan for insights-*.md files.
@@ -343,27 +346,46 @@ def _parse_file(content: str, abs_path: str) -> List[RawEntry]:
     """Parse a single insights file into RawEntry objects."""
     lines = content.splitlines()
 
-    # Count H3 headings
-    h3_line_indices = [i for i, line in enumerate(lines) if line.startswith("### ")]
+    h2_line_indices: List[int] = []
+    h3_line_indices: List[int] = []
+    in_fence = False
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+        elif in_fence:
+            # A heading quoted inside a code block is entry content, not a boundary.
+            continue
+        elif line.startswith("## "):
+            h2_line_indices.append(i)
+        elif line.startswith("### "):
+            h3_line_indices.append(i)
 
+    # Entries sit at the shallowest heading level the file uses. /capture_insight
+    # and ad-hoc writers produce "## " entries; older files use "### ". A deeper
+    # heading inside an entry belongs to that entry.
+    if h2_line_indices:
+        return _parse_heading_based(lines, abs_path, h2_line_indices)
     if len(h3_line_indices) >= 2:
         return _parse_heading_based(lines, abs_path, h3_line_indices)
-    else:
-        return _parse_separator_based(lines, abs_path)
+    return _parse_separator_based(lines, abs_path)
 
 
-def _parse_heading_based(lines: List[str], abs_path: str, h3_indices: List[int]) -> List[RawEntry]:
-    """Pass 1: split on ### headings. Discard preamble before first heading."""
+def _parse_heading_based(lines: List[str], abs_path: str, heading_indices: List[int]) -> List[RawEntry]:
+    """Pass 1: split on entry headings. Discard preamble before first heading."""
     entries: List[RawEntry] = []
 
-    # Build blocks: each block starts at a ### heading and ends before the next
-    # (or EOF). Preamble (before first ### ) is discarded.
-    block_starts = h3_indices  # 0-based line indices of ### lines
+    # Build blocks: each block starts at an entry heading and ends before the
+    # next (or EOF). Preamble (before the first entry heading) is discarded.
+    block_starts = heading_indices  # 0-based line indices of entry heading lines
 
     for i, start_idx in enumerate(block_starts):
         end_idx = block_starts[i + 1] - 1 if i + 1 < len(block_starts) else len(lines) - 1
 
         block_lines = lines[start_idx:end_idx + 1]
+        # A "---" rule between entries is layout, not entry text. The source
+        # line range still covers it so the whole block moves together.
+        while block_lines and re.match(r"^(---)?\s*$", block_lines[-1]):
+            block_lines = block_lines[:-1]
         text = "\n".join(block_lines).strip()
 
         if len(text) < 10:
@@ -381,7 +403,7 @@ def _parse_heading_based(lines: List[str], abs_path: str, h3_indices: List[int])
 
 
 def _parse_separator_based(lines: List[str], abs_path: str) -> List[RawEntry]:
-    """Pass 2: split on ^---\\s*$ lines (fallback for files with <2 ### headings)."""
+    """Pass 2: split on ^---\\s*$ lines (fallback for files with no entry headings)."""
     entries: List[RawEntry] = []
 
     # Find separator line indices

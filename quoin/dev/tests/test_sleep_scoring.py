@@ -244,6 +244,33 @@ def test_default_weights_present():
     )
 
 
+def test_h2_entries_split_per_entry():
+    """capture_insight_format/ fixture: each "## " entry is parsed on its own."""
+    with materialized_fixture("capture_insight_format") as fdir:
+        entries = collect_entries(str(fdir), scan_days=365)
+        _assert(
+            len(entries) == 3,
+            f"Expected 3 entries (one per '## ' heading), got {len(entries)}: "
+            f"{[e.text.splitlines()[0] for e in entries]}",
+        )
+        first, second, third = entries
+
+        _assert(first.text.startswith("## 09:15"), f"Unexpected first entry: {first.text[:40]!r}")
+        _assert("Scratchpad for patterns" not in first.text, "File preamble leaked into the first entry")
+        _assert(not first.text.endswith("---"), "Separator rule leaked into the entry text")
+
+        # Per-entry Promote? tags, not one tag set for the whole file.
+        _assert(first.promote_tag and not first.no_tag, "First entry should carry Promote?: yes only")
+        _assert(not second.promote_tag and not second.no_tag, "Second entry is Promote?: maybe")
+        _assert(third.no_tag and not third.promote_tag, "Third entry should carry Promote?: no only")
+
+        # A nested "### " heading and a "## " line quoted in a code block stay
+        # inside the entry that contains them.
+        _assert("### Detail" in second.text, "Nested heading was split out of its entry")
+        _assert("## Cost" in second.text, "Fenced heading was treated as an entry boundary")
+        _assert(second.text.startswith("## 13:40"), f"Unexpected second entry: {second.text[:40]!r}")
+
+
 # ---------------------------------------------------------------------------
 # Runner
 # ---------------------------------------------------------------------------
@@ -256,6 +283,7 @@ def run_tests():
         ("test_dedup_suppress", test_dedup_suppress),
         ("test_weight_override", test_weight_override),
         ("test_default_weights_present", test_default_weights_present),
+        ("test_h2_entries_split_per_entry", test_h2_entries_split_per_entry),
     ]
 
     print(f"Running {len(tests)} test(s) from {__file__}")
