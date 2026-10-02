@@ -7,3 +7,7 @@ The file mtime triggers stale_30days when the file is old enough. user_marked_no
 sufficient to reach forget_min_score=2.
 
 Tests call collect_entries(fixture_dir, scan_days=365).
+
+Format note: the insights files here use the legacy "### Insight N:" entry-heading format, kept to
+exercise that parsing path. The format writers produce today is "## <HH:MM> — <context>"; see
+capture_insight_format/.

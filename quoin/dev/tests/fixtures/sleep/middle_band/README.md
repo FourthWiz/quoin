@@ -9,3 +9,7 @@ The middle bucket is the fallback: everything that is neither clearly promote (p
 forget_score <= 0) nor clearly forget (forget_score >= 2 AND promote_score <= 0) ends up here.
 
 Tests call collect_entries(fixture_dir, scan_days=365).
+
+Format note: the insights files here use the legacy "### Insight N:" entry-heading format, kept to
+exercise that parsing path. The format writers produce today is "## <HH:MM> — <context>"; see
+capture_insight_format/.
