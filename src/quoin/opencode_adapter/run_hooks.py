@@ -265,6 +265,8 @@ def _record_entry(
     }
     if outputs_error is not None:
         fields["outputs_error"] = outputs_error
+    if record.get("resume_blocked"):
+        fields["resume_blocked"] = record["resume_blocked"]
     evidence.record_evidence(
         project_root, task, stage, entry_phase, "phase-run", snapshot, runs=runs,
         boundary="violation" if violation else None, clock=clock, **fields,

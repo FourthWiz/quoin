@@ -441,6 +441,18 @@ artifacts). Exit codes: 0 completed, 2 failed, aborted or internal error, 3
 refused, 4 awaiting approval, 5 interrupted, 6 completed but unverified, and
 130 or 143 when stopped by SIGINT or SIGTERM.
 
+A phase run that can no longer continue (it completed, failed, awaits
+approval, was cancelled, is blocked from resuming, or was replaced by a later
+run) writes one cost row to the task's cost ledger and stores its telemetry in
+its run record. A run of a gated phase (discover, architect, plan, thorough
+plan, critic, implement or review) also records a workflow entry for the gate,
+listing the critic responses or the review the run itself produced; a phase
+finished before runs recorded entries has none and is reported as work to adopt
+and gate. A run that rewrote earlier lines of the cost ledger ends `FAILED`
+with reason `boundary-violation` (exit code 2, and the hint offers `--new-run`).
+The summary keys and the single line on standard output do not change; cost
+rows and telemetry never appear there.
+
 Run store: under the project's workflow memory directory, in `runtime/opencode/`:
 `RUN_ID.jsonl` (the event sidecar), `RUN_ID.run.json` (the run record),
 `RUN_ID.checkpoint.json` (the resume checkpoint) and `task-TASK.json` (a
@@ -479,6 +491,100 @@ Limits: `max_run_seconds` is counted per `quoin run` invocation, not across
 resumes. The no-progress guard can stop a run whose transient failures emit no
 native events before `max_transient_retries` is reached.
 
+### Cost rows and run telemetry
+
+**Row shape.** The row is the shared eight-column ledger row, built with the
+portable cost-event formatter and parsed back before it is written. Column
+one is the run id, so one run id is one row. Column two is the UTC date the
+last attempt ended. Column three is the ledger phase: discover, architect,
+plan, `thorough-plan`, critic, implement, review, gate, `end-of-task`,
+checkpoint, `ad-hoc` (for `continue_work`, which has no ledger phase of its
+own) and `run-orchestrator` (the coordinator phase, not runnable yet). Column
+four is the effective model, column five is `task`, and column six is the
+note: `runtime=opencode command=quoin-PHASE outcome=ENDED attempts=N
+scope=parent-session-only`, where PHASE spells the command name with hyphens,
+ENDED is the run's end in lower case with underscores, and N counts every
+non-staged attempt of the run across invocations. Column seven is the
+fallback count (always 0). Column eight is the attribution: `usd=X;tok=N;src=opencode_stream`
+when the dollar cost is known, `tok=N;src=unresolved` when only tokens are
+known, and `src=unresolved` when nothing is. The `opencode_stream` tag is
+used only when a dollar amount is known and is defined here, not in the
+shared core. Every field written to the ledger has pipes, control characters
+and line breaks replaced and its length capped, so a row is always one line
+with eight columns.
+
+**When a row is written.** Once, when the run can no longer continue: a
+completed, failed, aborted, cancelled or approval-stopped run, a run blocked
+from resuming (including a checkpoint that cannot be read), or a run that a
+later run took the place of. A resumable interruption writes nothing yet; a
+run resumed across invocations ends with one row holding the usage of every
+attempt. A run that moves the task's pointer (a different phase, stage or
+profile, or `--new-run`) closes an earlier run that was still open: that run
+is costed with `outcome=superseded`, its record names the run that replaced
+it and reads as closed, `quoin opencode status` shows it as superseded with
+nothing to resume, and a run that never spawned a child gets telemetry but no
+row. An `end_of_task` run writes its row just before the child starts, with
+`outcome=launched` and unknown usage, because the run itself may move the task
+folder away; no row can be added after that. When the task folder does not
+exist no ledger is created and no workflow entry is recorded, but the
+telemetry is still stored.
+
+**Unknown is never zero.** A dollar amount is written only when the compiled
+configuration prices the effective model and the stream reported a cost that
+is not 0 while tokens were used (a model without prices reports 0 for every
+step, so a reported 0 cannot tell a free model from an unpriced one). The
+generated configuration does not price models yet, so rows carry
+`tok=N;src=unresolved` and the telemetry says `cost-unpriced-model`. A value
+that cannot be known is omitted from the row (and null with a reason in the
+telemetry); it is never written as 0 and never estimated.
+
+**Scope.** Usage is the latest revision of each step-finish part of the run's
+own session, counted once per part id. Usage of subagent sessions is not in
+the parent's event stream and the parent's cost does not include it, so the
+row covers the parent session only (`scope=parent-session-only`) and child
+usage is reported as unavailable. The effective reasoning effort is not
+visible in the stream and is reported as unknown beside the configured one.
+
+**Telemetry.** The run record gains a `telemetry` block: the schema number,
+`final`, how the run ended, the provider (shared and native ids), the
+effective model, the effort (requested, configured, variant, and the
+effective value as unknown), elapsed seconds per attempt with a total and a
+wall-clock figure, retry counts, the native session and step-finish part ids,
+usage and cost with a reason for every unknown field, the provenance of the
+numbers, the list of things that are unavailable, the ledger result (mark,
+whether the row was written, found or skipped and why, the prefix check, the
+lines other writers appended), and the workflow-entry result. Nothing copies
+event text, standard error or the command line. A hook failure is stored as
+`hook_error` and never changes the outcome.
+
+**Earlier bytes and appended lines.** Before a phase runs the command records
+the size and digest of the ledger. Lines that other writers appended during
+the run are kept and listed in the run's telemetry and workflow entry (the gate
+warns about them). If the earlier bytes changed, or the ledger shrank or
+disappeared, the run ends `FAILED` with `boundary-violation`; the row is still
+appended once. The violation is sticky: a workflow entry that lists a run which
+rewrote earlier lines stays marked, so a later clean critic run cannot clear it
+and the gate refuses until the plan is run again as a fresh plan run.
+
+**Workflow entries from runs.** A plan or thorough-plan run starts a fresh
+entry whose critic responses are the files that run produced; a critic run
+extends the live entry written by a run, adding itself and its response. The
+gate trusts only the responses and the review recorded this way, never older
+files left on disk, for an entry a run wrote; adopted entries keep the earlier
+behaviour. A critic run after an adopted plan starts its own entry, which has
+no plan run listed, so the gate refuses it: adopt the plan again after the
+critique, or run the plan as a phase run. The critic round cap counts only the
+responses recorded since the last plan run, so it does not bound a plan and
+critic sequence driven by single-phase runs. A run's produced files come from
+its own before and after hashes of the task folder; when those hashes are
+incomplete no file is recorded and the entry says why.
+
+**Residual.** A run left open with no later run for the task is costed only
+when it ends or when a later run for the task replaces it; until then it has no
+row, and `quoin opencode status` shows it as open. A crash between appending the
+row and writing the run record loses only the closed marking and the telemetry
+of that run: the row is correct and is never written twice.
+
 ### Status and the terminal interface
 
 `quoin opencode status` is strictly read-only: it never repairs a torn
@@ -488,7 +594,8 @@ child, the last event, a torn sidecar tail, older runs still reading running,
 and the task lock. Liveness comes from one process-table snapshot; when the
 table cannot be read, liveness is reported as unknown (`null`) rather than
 guessed. Text output names the remedy for a dead lock, a lost driver or a
-blocked resume.
+blocked resume. A run that a later run replaced is shown as superseded, with
+nothing to resume.
 
 `quoin opencode start` runs the same checks as a phase run (binary, pinned
 version, configuration, gateway qualification, installed files unchanged,

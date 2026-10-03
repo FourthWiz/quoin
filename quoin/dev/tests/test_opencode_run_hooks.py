@@ -112,6 +112,7 @@ def test_a_checkpoint_invalid_block_in_the_result_is_costed_and_recorded(w):
     stored = w.synth.record(run)
     assert stored["resume_blocked"] == "checkpoint-invalid" and stored["telemetry"]["final"] is True
     assert w.live("plan")["runs"] == [run]
+    assert w.live("plan")["resume_blocked"] == "checkpoint-invalid"
     again = w.exec_run("plan", state="running")
     w.hook(again, candidate=run, outcome="INTERRUPTED")
     assert len(w.synth.rows_for(run)) == 1
