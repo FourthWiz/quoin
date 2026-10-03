@@ -338,7 +338,7 @@ The task-keyed run-state record, PreCompact's always-allow table, the compact re
 
 All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, etc.) use integer basis-points arithmetic. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
 
-Opt-in `/ctx` mod: `install.sh --with-context-tracker` (undo: `--remove-context-tracker`); see hooks-guide.md.
+Opt-in mods: `install.sh --with-context-tracker`, `--with-workflow-tasks` (undo `--remove-*`); hooks-guide.md.
 
 ### Lifecycle skills (checkpoint / end_of_day / sleep / cleanup)
 

@@ -613,3 +613,24 @@ class TestAffectedTests:
     def test_status_graph_change_selects_the_parity_test(self):
         joined, _ = self._select("quoin/core/scripts/status_graph.py")
         assert "test_workflow_tasks_stage_parity.py" in joined
+
+
+# ── docs ────────────────────────────────────────────────────────────────────
+
+class TestDocs:
+    def test_hooks_guide_section(self):
+        text = (QUOIN_SRC / "docs" / "hooks-guide.md").read_text(encoding="utf-8")
+        assert "## Opt-in workflow-tasks mod" in text
+        section = text.split("## Opt-in workflow-tasks mod", 1)[1]
+        for needle in ("/quoin-tasks", "--with-workflow-tasks", "--remove-workflow-tasks",
+                       "workflow-tasks@skills-dir", "user scope", "never sends", "Read-only",
+                       "claude plugin disable workflow-tasks@skills-dir", "2.1.288"):
+            assert needle in section, needle
+
+    def test_section_follows_the_context_tracker_section(self):
+        text = (QUOIN_SRC / "docs" / "hooks-guide.md").read_text(encoding="utf-8")
+        assert text.index("## Opt-in context-tracker mod") < text.index("## Opt-in workflow-tasks mod")
+
+    def test_claude_md_mentions_both_mods(self):
+        text = (QUOIN_SRC / "CLAUDE.md").read_text(encoding="utf-8")
+        assert "--with-context-tracker" in text and "--with-workflow-tasks" in text

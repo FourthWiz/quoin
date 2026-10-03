@@ -135,3 +135,18 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 - **Disable without reinstalling:** `claude plugin disable context-tracker@skills-dir`. That entry survives removal and must be re-enabled by hand if you install again.
 - **Requirements:** verified on Claude Code 2.1.288; older builds ignore the folder. Remove any older hand-copied dev-mods version first to avoid loading it twice.
 - **Drift check:** the deploy drift check compares the mod's files only when the mod is installed, and only for the scope it checks (user by default).
+
+## Opt-in workflow-tasks mod
+
+`/quoin-tasks` opens a pane listing the active quoin tasks of the current project as a parent/child tree. Each row shows the task's stage (spec, architecture, plan, implement, review, and whether the last gate passed or failed) and how long ago it changed, and the detail block names the next workflow command. Arrow keys and Enter select a row, `f` fills the suggested command into the prompt box, and `r` refreshes. It ships as a small Claude Code mod and is never installed unless you ask for it.
+
+- **Fills, never sends:** the command is only placed in the prompt box (replacing the draft); you press Enter yourself. The pane closes after a successful fill so the keys return to the prompt, and stays open with a message when the prompt box cannot take it (a dialog is open, or there is no box).
+- **Read-only:** the mod only lists and reads files under the project's `.workflow_artifacts/`. It writes no files, runs no commands and touches no settings. It scans only when you run `/quoin-tasks` or press `r`; nothing runs at session start.
+- **Install:** `bash quoin/install.sh --with-workflow-tasks` (or `quoin install --with-workflow-tasks`) copies five files into `skills/workflow-tasks/` under the install scope. Claude Code auto-loads that folder as `workflow-tasks@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
+- **Sticky refresh:** once installed, a plain reinstall refreshes the copy and never creates one where none exists.
+- **Remove:** `--remove-workflow-tasks` deletes the folder.
+- **Ownership is by name only:** a hand-copied `workflow-tasks` folder is overwritten or removed, but any other folder in that spot, or a symlink, is left alone and the opt-in refuses.
+- **Scope:** the default is user scope. Project scope works once the workspace is trusted, and refuses while a user-scope copy is installed (both would load).
+- **Disable without reinstalling:** `claude plugin disable workflow-tasks@skills-dir`. That entry survives removal and must be re-enabled by hand if you install again.
+- **Requirements:** verified on Claude Code 2.1.288; older builds ignore the folder.
+- **Drift check:** the deploy drift check compares the mod's files only when the mod is installed, and only for the scope it checks (user by default).
