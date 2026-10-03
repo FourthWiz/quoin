@@ -1832,6 +1832,27 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/docs/hooks-guide.md",
         "quoin/dev/tests/test_workflow_tasks_install.py",
     ),
+    # Install questions and the agentdesk setup flag.
+    (
+        "quoin/install.sh",
+        "quoin/dev/tests/test_install_questions_cli.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_install_questions_cli.py",
+    ),
+    (
+        "README.md",
+        "quoin/dev/tests/test_install_questions_cli.py",
+    ),
+    (
+        "quoin/install.sh",
+        "quoin/dev/tests/test_agentdesk_setup_flag.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_install_prompts.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

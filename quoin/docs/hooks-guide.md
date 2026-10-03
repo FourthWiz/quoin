@@ -127,7 +127,7 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 
 `/ctx` opens a live context pane with three views (switch with `1`, `2`, `3`; `r` refreshes). It ships as a small Claude Code mod and is never installed unless you ask for it.
 
-- **Install:** `bash quoin/install.sh --with-context-tracker` (or `quoin install --with-context-tracker`) copies four files into `skills/context-tracker/` under the install scope. Claude Code auto-loads that folder as `context-tracker@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
+- **Install:** `bash quoin/install.sh --with-context-tracker` (or `quoin install --with-context-tracker`, or answer yes when the installer asks) copies four files into `skills/context-tracker/` under the install scope. Claude Code auto-loads that folder as `context-tracker@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
 - **Sticky refresh:** once installed, a plain reinstall refreshes the copy and never creates one where none exists.
 - **Remove:** `--remove-context-tracker` deletes the folder.
 - **Ownership is by name only:** a hand-copied `context-tracker` folder is overwritten or removed, but any other folder in that spot, or a symlink, is left alone and the opt-in refuses.
@@ -142,7 +142,7 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 
 - **Fills, never sends:** the command is only placed in the prompt box (replacing the draft); you press Enter yourself. The pane closes after a successful fill so the keys return to the prompt, and stays open with a message when the prompt box cannot take it (a dialog is open, or there is no box).
 - **Read-only:** the mod only lists and reads files under the project's `.workflow_artifacts/`. It writes no files, runs no commands and touches no settings. It scans only when you run `/quoin-tasks` or press `r`; nothing runs at session start.
-- **Install:** `bash quoin/install.sh --with-workflow-tasks` (or `quoin install --with-workflow-tasks`) copies five files into `skills/workflow-tasks/` under the install scope. Claude Code auto-loads that folder as `workflow-tasks@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
+- **Install:** `bash quoin/install.sh --with-workflow-tasks` (or `quoin install --with-workflow-tasks`, or answer yes when the installer asks) copies five files into `skills/workflow-tasks/` under the install scope. Claude Code auto-loads that folder as `workflow-tasks@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
 - **Sticky refresh:** once installed, a plain reinstall refreshes the copy and never creates one where none exists.
 - **Remove:** `--remove-workflow-tasks` deletes the folder.
 - **Ownership is by name only:** a hand-copied `workflow-tasks` folder is overwritten or removed, but any other folder in that spot, or a symlink, is left alone and the opt-in refuses.
@@ -150,3 +150,13 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 - **Disable without reinstalling:** `claude plugin disable workflow-tasks@skills-dir`. That entry survives removal and must be re-enabled by hand if you install again.
 - **Requirements:** verified on Claude Code 2.1.288; older builds ignore the folder.
 - **Drift check:** the deploy drift check compares the mod's files only when the mod is installed, and only for the scope it checks (user by default).
+
+## Install questions
+
+In a terminal, `quoin install` (and `install.sh`, which delegates to it) asks about optional components before it writes anything.
+
+- **When it asks:** only when both stdin and stdout are terminals. Piped, redirected or CI installs never ask. `QUOIN_INSTALL_NO_PROMPT=1` also suppresses the component questions (the two mods and agentdesk). The install-scope prompt is separate, so pass `--scope` as well for a fully silent install.
+- **Mods:** the context-tracker and workflow-tasks mods default to Yes. A mod is asked about only when it is not installed and its flag was not given; an installed mod is refreshed silently. A mod that cannot be installed (foreign folder, missing sources, user-scope copy during a project install) is reported in one line and not offered.
+- **Agentdesk:** default No, user scope only, and not asked when `~/.zshrc` already sources the helper. Asked on macOS only; elsewhere pass `--setup-agentdesk`. When confirmed it runs last, after everything else is installed, and a failing setup is a warning (the install still exits 0).
+- **Flags win:** `--with-*`, `--remove-*` and `--setup-agentdesk` answer their question up front.
+- **Abort:** Ctrl-C or end of input at any question exits with status 1 before anything is written.

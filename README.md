@@ -403,14 +403,22 @@ quoin install --runtime claude        # or: quoin install --runtime claude --sco
 ```
 
 This copies `agentdesk.zsh` and `setup-agentdesk.sh` to `~/.config/agentdesk/`.
-Then run the setup script once to install dependencies (Zellij, lazygit, fzf)
-and patch your `.zshrc`:
+Running the setup (Zellij, lazygit and fzf via Homebrew, plus a line in your
+`.zshrc`) changes your system, so it only happens with your consent:
 
-```bash
-bash ~/.config/agentdesk/setup-agentdesk.sh
-```
+- In a terminal, the installer asks "Run the agentdesk setup now?" (default
+  No). The question lists what the script does: it installs Homebrew if
+  missing (and may ask for your password), installs zellij, lazygit, fzf and
+  the Ghostty app, writes the agentdesk helper and the zellij layout and
+  config (backups kept), and adds lines to `~/.zshrc` (backup kept). It is not
+  asked when `~/.zshrc` already sources the helper.
+- For a non-interactive install, pass the flag instead:
+  `quoin install --setup-agentdesk` or `bash quoin/install.sh --setup-agentdesk`.
 
-After that, `agentdesk` is available in every new shell session.
+The setup runs as the last install step. If it fails, you get a warning and
+quoin stays installed; the deployed script is idempotent, so re-run the install
+with `--setup-agentdesk` to retry. After that, `agentdesk` is available in
+every new shell session.
 
 > Agentdesk is user-scope only — it is not deployed in project-scope installs.
 
