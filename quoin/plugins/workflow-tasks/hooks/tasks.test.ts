@@ -453,10 +453,17 @@ describe('run state', () => {
     expect(nextCommand(stage, 'foo').command).toBe('/run --resume foo')
   })
 
-  test('the resume command comes from the record when it matches the safe pattern', async () => {
-    const { fs } = memFs(tree(record({ resume_command: '/run --resume foo-2' })))
-    expect(nextCommand(await deriveStage(fs, ROOT, 'foo'), 'foo').command).toBe('/run --resume foo-2')
+  test('the resume command from the record is used when it names exactly this task', async () => {
+    const { fs } = memFs(tree(record({ resume_command: '/run --resume foo' })))
+    expect(nextCommand(await deriveStage(fs, ROOT, 'foo'), 'foo').command).toBe('/run --resume foo')
   })
+
+  for (const cmd of ['/run --resume --autonomous', '/run --resume ../x', '/run --resume foo-2', '/run --resume foo --autonomous']) {
+    test(`a resume command that is not exactly this task is replaced: ${cmd}`, async () => {
+      const { fs } = memFs(tree(record({ resume_command: cmd })))
+      expect(nextCommand(await deriveStage(fs, ROOT, 'foo'), 'foo').command).toBe('/run --resume foo')
+    })
+  }
 
   test('an invalid resume command is replaced by /run --resume TASK', async () => {
     const { fs } = memFs(tree(record({ resume_command: '/run --resume foo; rm -rf /' })))

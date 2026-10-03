@@ -1036,6 +1036,20 @@ export const STAGE_FIXTURES: StageFixture[] =
     }
   },
   {
+    "id": "multi-stage-stray-file-stage-dir",
+    "tree": {
+      "foo/architecture.md": "# Architecture\n\n## Stage decomposition\n\n1. \u2705 S-1: first stage\n2. \u23f3 S-2: second stage\n3. \u23f3 S-3: third stage\n\n## Appendix\n",
+      "foo/stage-1/.DS_Store": "x"
+    },
+    "task": "foo",
+    "phaseDir": "foo/stage-1",
+    "expect": {
+      "detectPhase": "discover",
+      "stage": "architecture-approved",
+      "command": "/thorough_plan stage 1 of foo"
+    }
+  },
+  {
     "id": "multi-stage-1-review-approved-count-2",
     "tree": {
       "foo/architecture.md": "# Architecture\n\n## Stage decomposition\n\n1. \u23f3 S-1: first stage\n2. \u23f3 S-2: second stage\n\n## Appendix\n",

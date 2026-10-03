@@ -62,7 +62,6 @@ export const ARCHITECT_GATE_PREFIXES = ['gate-architect-']
 export const SPECIFY_GATE_PREFIXES = ['gate-specify-']
 
 const TASK_ARG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*(\/[A-Za-z0-9][A-Za-z0-9._-]*)*$/
-const RESUME_RE = /^\/run --resume [A-Za-z0-9._/-]+$/
 
 // ---------------------------------------------------------------- basics
 
@@ -563,7 +562,7 @@ async function evaluateDir(fs: Fs, dirPath: string, entries: Entry[], ctx: Stage
       )
     }
     default: {
-      if (ctx.multi && ctx.stage !== null && entries.length === 0) {
+      if (ctx.multi && ctx.stage !== null) {
         return makeStage('architecture-approved', base, ctx)
       }
       if (has('program.md')) return makeStage('program', base, ctx)
@@ -704,8 +703,8 @@ export function nextCommand(stage: StageInfo, task: string): NextCommand {
 
   switch (stage.key) {
     case 'run-active': {
-      const resume = stage.run?.resumeCommand ?? ''
-      return make(RESUME_RE.test(resume) ? resume : `/run --resume ${task}`)
+      // Only the exact resume command for this task is ever shown; a record's own text is not trusted.
+      return make(`/run --resume ${task}`)
     }
     case 'started':
     case 'pre-spec':
