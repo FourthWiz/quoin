@@ -244,7 +244,18 @@ no live OpenCode run or corporate gateway has been qualified.
   label, including inside code spans), no table cell is one, and no heading
   contains "blocked", "revise" or "changes requested" in any case, even as
   plain English. Earlier review rounds are described in a sentence, not as a
-  label line or a table of rounds. An HTML element that a raw-text rule names
+  label line or a table of rounds. Other refusals: a line break or bidi
+  control character, a frontmatter verdict that differs from the section, a
+  value line outside the Verdict section that states another value, an HTML
+  block before the Verdict heading, a run of non-ASCII letters or symbols that
+  spells a "verdict"-length word (refused as a look-alike), and, in critic
+  responses only, a heading that contains "revise". The approving-only scan
+  does not read these shapes: a value after an emoji prefix, a checkbox or
+  brackets, a non-approving value in a table cell followed by notes, a value
+  after an intervening word in prose, a label of four or more words, and a
+  non-verdict frontmatter key. A non-approving dimension row under an
+  approving overall result passes by design. An unreadable or oversized file
+  is reported as such, with its own recovery. An HTML element that a raw-text rule names
   (title, pre, script and the like) is named without angle brackets before the
   Verdict heading. Anything else is `verdict-unparseable`, and prose belongs in
   another section. The rule catches an honest writer's formatting mistakes; it

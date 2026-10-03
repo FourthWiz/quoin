@@ -447,7 +447,7 @@ Compose the format-aware body per the `review` artifact-type sections in format-
 
 **Verdict-section writer contract.** The gate reads the verdict with a strict rule that catches honest formatting mistakes, so state the verdict once, in the Verdict section, and nowhere else in a structured form:
 - No heading other than `## Verdict` and `## Dimension Verdicts` contains the word "verdict", a verdict value, or the words "blocked", "revise" or "changes requested" in any case, even as plain English (for example "Items on hold" rather than "Blocked items"). The Step 6c lint heading is `### Authored-content lint (advisory)`.
-- A line elsewhere that names the verdict starts with the value, `Verdict: VALUE.`; the fan-out merge is written `Verdict: VALUE (worst-of across the dimensions).`
+- A line elsewhere that names the verdict starts with the value, `Verdict: VALUE.`; the fan-out merge is written `Verdict: VALUE (worst-of across the dimensions).` and goes in `## Summary`; the Verdict section holds only the bare value.
 - Outside the Verdict section, the frontmatter and `## Dimension Verdicts`, no line starts with a verdict value after markup, container markers and an optional short label, including code spans (so not a bullet that opens with `` `CHANGES_REQUESTED` `` and goes on, and not `Previous round: CHANGES_REQUESTED`), and no table cell is one. Describe earlier rounds in a sentence ("Round 3 asked for changes, now fixed"), not as a label line or a table of rounds.
 - When a review discusses verdict formats or values, describe them in words rather than quoting them.
 - Write `## Summary` before `## Verdict`, and in the summary name an HTML element without angle brackets ("the title element", not its tag), because an element opener before the Verdict heading makes the gate refuse the review even inside a code span.
@@ -467,7 +467,7 @@ Spawn an Agent subagent with:
   - additional system instruction prepended to the prompt: "Use temperature 0.0
     (deterministic). Output ONLY the summary text — no preamble, no follow-up
     questions, no chain-of-thought. Do not invent facts not present in the body.
-    Do not exceed 8 lines."
+    Do not exceed 8 lines. Do not write a verdict label; write any verdict value only in capitals, and use no HTML tags."
 
 Wait for the subagent. Capture its response text as `summary_raw`.
 

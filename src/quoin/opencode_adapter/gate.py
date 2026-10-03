@@ -331,7 +331,7 @@ _LABEL_RE = re.compile(
     r"(?::|=|[–—]|-[ \t]|[Ii][Ss][ \t])[ \t]*(.*)$"
 )
 _INLINE_LABEL_RE = re.compile(
-    r"(?<![A-Za-z0-9])[Vv][Ee][Rr][Dd][Ii][Cc][Tt][Ss]?[ \t]*(?::|=|[–—-])?[ \t]*"
+    r"(?<![A-Za-z0-9])[Vv][Ee][Rr][Dd][Ii][Cc][Tt][Ss]?[ \t]*(?:[:=–—-][ \t]*)?"
     r"([A-Z][A-Z_]{2,}(?![A-Za-z0-9_]).*)$"
 )
 _HEAD_CANON_RE = re.compile(r"^## Verdict(?:: ?([A-Z_]+))?$")
@@ -371,6 +371,10 @@ _FOLD_TABLE = {
 _MARKUP_TABLE = {ord("*"): None, ord("`"): None}
 _CONTAINER_STARTS = tuple(">-*+0123456789")
 
+UNREADABLE_REASON = "the file could not be read."
+UNREADABLE_RECOVERY_SENTENCE = (
+    "Check that the file exists, is readable and is under the size limit, then re-run the phase."
+)
 RECOVERY_SENTENCE = (
     "Edit the artifact so the Verdict section holds only the value and every other statement agrees, "
     "then run `quoin opencode adopt` (editing changes the evidence hash), or re-run the phase."
@@ -492,14 +496,18 @@ def _approving_scan(
     skip = set(range(head, end))
     for index in range(frontmatter_end, len(lines)):
         if lines[index].rstrip() == _DIMENSION_HEADING:
+            # Only the heading, its table rows and blank lines are exempt;
+            # any other line after the table is still scanned.
             stop = index + 1
-            while stop < len(lines) and not _TERMINATOR_RE.match(lines[stop]):
+            while stop < len(lines) and (not lines[stop].strip() or lines[stop].lstrip().startswith("|")):
                 stop += 1
             skip.update(range(index, stop))
     for index in range(frontmatter_end, len(lines)):
         if index in skip:
             continue
         line = lines[index]
+        if not line.strip():
+            continue
         text = _plain(line).lstrip("| \t_")
         label = _AO_LABEL_RE.match(text)
         candidates = (text, text[label.end():]) if label else (text,)
@@ -568,11 +576,14 @@ def _parse_verdict(text: str, allowed: Sequence[str]) -> Tuple[Optional[str], st
     labels: List[Tuple[int, "re.Match[str]"]] = []
     for index in range(frontmatter_end, len(lines)):
         line = lines[index]
+        if not line.strip():
+            continue
         mention = _VERDICT_SKELETON_RE.search(_skeleton(line)) is not None
         shaped = _heading_shaped(lines, index)
-        value_heading = (
-            shaped and not _is_bold_line(line) and any(p.search(_upper_skeleton(line)) for p in upper_values)
-        )
+        value_heading = False
+        if shaped and not _is_bold_line(line):
+            upper = _upper_skeleton(line)
+            value_heading = any(p.search(upper) for p in upper_values)
         if not mention and not value_heading:
             continue
         if line.rstrip() == _DIMENSION_HEADING:
@@ -721,7 +732,8 @@ def unparseable_detail(name: str, reason: str, line: Optional[int]) -> str:
     """The `verdict-unparseable` detail: the file name, the refusing line when
     there is one, the reason and the recovery."""
     where = "line %d: " % line if line else ""
-    return "%s: %s%s %s" % (name, where, reason, RECOVERY_SENTENCE)
+    recovery = UNREADABLE_RECOVERY_SENTENCE if reason == UNREADABLE_REASON else RECOVERY_SENTENCE
+    return "%s: %s%s %s" % (name, where, reason, recovery)
 
 
 def critic_status(
@@ -1088,7 +1100,7 @@ def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths) ->
             return _skip("phase-verdict", "no review file")
         text = _read_text(paths[0], MAX_TEXT_BYTES)
         if text is None:
-            verdict, reason, line = None, "the file could not be read.", None
+            verdict, reason, line = None, UNREADABLE_REASON, None
         else:
             verdict, reason, line = _parse_verdict(text, REVIEW_VERDICTS)
         if verdict is None:

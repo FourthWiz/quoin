@@ -376,8 +376,16 @@ def test_unparseable_detail_order():
     assert detail.startswith("review-3.md: line 42: a label line names the verdict but does not start with the value. ")
     assert detail.endswith(gate.RECOVERY_SENTENCE)
     assert "quoin opencode adopt" in detail
+    unreadable = gate.unparseable_detail("review-3.md", gate.UNREADABLE_REASON, None)
+    assert unreadable.endswith(gate.UNREADABLE_RECOVERY_SENTENCE)
+    assert "Verdict section" not in unreadable
     no_line = gate.unparseable_detail("review-3.md", gate._REFUSALS["heading-count"], None)
     assert no_line.startswith("review-3.md: the document does not have exactly one Verdict heading. ")
+
+
+def test_text_after_dimension_table_is_scanned():
+    text = CAN + "\n## Dimension Verdicts\n\n| d | v |\n|---|---|\n| a | APPROVED |\n\nBLOCKED\n"
+    assert gate.parse_verdict(text, REVIEW) is None
 
 
 # -- linear time -----------------------------------------------------------
@@ -399,6 +407,13 @@ def timed_rows():
         ("long tag candidates", doc("<" + "a" * 199 + ("<" + "a" * 199) * (MB // 200))),
         ("label lines", doc("Verdict: x\n" * 100000)),
         ("verdict word run", doc("verdict " * (MB // 8))),
+        ("word then spaces mid-line", doc("x verdict" + " " * MB + "y")),
+        ("word then tabs mid-line", doc("x verdict" + "\t" * MB + "y")),
+        ("word then spaces at start", doc("verdict" + " " * MB + "y")),
+        ("word then tabs at start", doc("verdict" + "\t" * MB + "y")),
+        ("equals lines", doc("=\n" * (MB // 2))),
+        ("dash lines", doc("-\n" * (MB // 2))),
+        ("blank lines", doc("\n" * MB)),
         ("label qualifier", doc("Verdict (" + "a" * MB)),
         ("wildcards", doc("→" * (MB // 3))),
         ("pipes after the section", CAN + "\n## Summary\n\n" + "|" * MB + "\n"),
