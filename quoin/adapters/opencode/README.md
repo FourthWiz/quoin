@@ -450,6 +450,12 @@ listing the critic responses or the review the run itself produced; a phase
 finished before runs recorded entries has none and is reported as work to adopt
 and gate. A run that rewrote earlier lines of the cost ledger ends `FAILED`
 with reason `boundary-violation` (exit code 2, and the hint offers `--new-run`).
+The ledger check fails closed: when the ledger existed before the run and
+cannot be read afterwards (unreadable, replaced by a link or special file, or
+over the size limit), its earlier lines cannot be shown to be unchanged, so the
+run is treated as having rewritten them and ends `FAILED` with the same
+`boundary-violation` reason. A ledger that cannot be read before the run is
+recorded as unavailable and never counts as a rewrite.
 The summary keys and the single line on standard output do not change; cost
 rows and telemetry never appear there.
 
@@ -477,6 +483,12 @@ interrupted run. Resume is blocked, and the run must be started over with
 - `session-invalid`: the recorded session id is not a usable OpenCode session id.
 - `sidecar-behind-checkpoint`: the event sidecar is shorter than the checkpoint says.
 - `checkpoint-invalid`: the checkpoint cannot be read or fails its checks.
+
+A run that was already closed (its cost row and telemetry are written) is never
+resumed. Re-running the same request against such an interrupted run ends
+`INTERRUPTED` with reason `run-closed` when the record names no block of its
+own; the hint then ends with `--new-run`, so restarting is always an explicit
+choice.
 
 The `resume_hint` field is a command line; it ends with `--new-run` exactly
 when the next invocation would not resume. When another `quoin run` still holds
@@ -635,6 +647,174 @@ refuses launches, because plugin code can hook permission handling. Move the
 plugin files out of those directories for the duration of a run, or run with a
 separate `XDG_CONFIG_HOME`. The doctor does not scan Quoin-named skills placed
 outside the installed project folders.
+
+## Role boundaries
+
+Every phase run is checked against what its role may change. The coordinator
+lists the paths a role can legitimately touch before and after the run and
+compares the two against the rules below. The roles, in plain words:
+
+| Role (phases) | May change | Source repositories |
+|---|---|---|
+| Investigator (`discover`) | any file in the task folder except gate audit files; the discovery map and the three discovery files | unchanged |
+| Architect, planner (`architect`, `plan`, `thorough_plan`) | any file in the task folder except gate audit files | unchanged |
+| Implementer (`implement`) | any file in the task folder except gate audit files | may change |
+| Critic and reviewer in the real tree (`critic`, `review` outside a snapshot) | only a new numbered critic response or review file in the task or stage folder | unchanged |
+| Critic and reviewer in a snapshot | nothing in the project; the finding is harvested (see Snapshot runs) | unchanged |
+| Gate | gate audit files in the task or stage folder and the task's own workflow-state record | unchanged |
+| Checkpoint | the task's continuation record and its previous copy | unchanged |
+| Continue work | nothing | unchanged |
+| End of task | moves the task folder into `finalized/`, plus the lessons-learned file | may change |
+
+Session scratch files (`memory/sessions/`, `memory/daily/insights-*.md`,
+`cache/`) are writable by any role and are never judged. The cost ledger, gate
+audit files, continuation records and the run store belong to the coordinator;
+no role may write the ledger, and the run's own store files are excluded from
+the comparison by path.
+
+A check ends in one of three results:
+
+- `ok`: nothing outside the role's allowance changed and the source state could
+  be compared.
+- `violation`: a path outside the allowance changed, a symlink appeared in the
+  listed scope, or a repository changed under a role that must leave source
+  alone. The run ends `FAILED` with reason `boundary-violation`, and the gate
+  fails the entry.
+- `unverified`: the check could not be completed. Reasons include a truncated
+  listing, an unreadable install record, source state that cannot be compared,
+  a run resumed after an earlier invocation already ran (the window began
+  before this listing), and a change that may belong to another writer. The
+  entry stores no boundary result. The gate warns for entries recorded by a
+  single-phase run (`boundary-unverified`) and refuses entries recorded by the
+  coordinator, so an unverifiable check never approves a coordinator phase.
+
+**What is listed.** The listing is deliberately narrow so that files other
+tools legitimately write are never judged: the artifact root except `memory/`,
+`cache/` and the contents of `finalized/` (only its immediate children are
+listed); inside `memory/`, only `continuation/`, `runtime/opencode/` and
+`lessons-learned.md`; inside `.opencode/` and `.quoin/`, only the paths the
+install record owns plus the two install records. Source state (head, dirty
+flag and a digest of the changes) is compared for every repository, with
+the artifact root, `.opencode`, `.quoin` and `.workspaces` left out and
+nested repositories attributed to their own entry. Symlinks are never followed.
+Files are hashed up to fixed caps; past a cap the result is `unverified`, not a
+failure.
+
+OpenCode itself writes into every configuration directory it scans at launch:
+a `.gitignore`, a `package.json`, a lockfile and `node_modules/`, from the
+background install of its plugin package (compatibility row for
+`ensureGitignore`, in "Configuration sources and precedence"). Those names are
+never listed, so the runtime's own launch-time writes are not mistaken for a
+role writing outside its allowance.
+
+**Concurrent tasks.** Another task's run holds its own task lock. A change
+inside another task's folder, run store or pointer is downgraded from
+`violation` to `unverified` with reason `concurrent-task-run` when that task's
+lock named a live process at either listing. Without a live lock, a change
+confined to another task's folder is `unverified` with reason
+`concurrent-writer-unlocked` for single-phase runs, because other sessions in
+the same project routinely edit other task folders without taking the OpenCode
+lock; the coordinator's snapshot runs keep it a violation. Changes to the
+install-owned paths, to source state, to the memory scope and to the run's own
+task are never downgraded. In the gate these show up as the `boundary-unverified`
+warning on the entry, with the reason stored beside the result.
+
+**Permission inheritance.** At generation time the adapter also checks that a
+role which delegates to a child role never lets the child do more than the
+parent. Rules are compared as effective actions under last-match-wins: the
+child's action for each of its patterns must not exceed the parent's action for
+that pattern, lowered by any later parent pattern that may overlap it, and
+built-in defaults count as `allow`. The one exemption is a read-only or
+artifact-confined helper script. At run time OpenCode also re-applies the
+parent's deny rules to a subagent (compatibility rows under "Commands, agents,
+delegation and permissions"), so the generation check is a second line.
+
+## Snapshot runs
+
+A headless critic or review run starts in a read-only copy of the project, not
+in the project. The copy lives outside the project, under the adapter state
+directory (`snapshots/PROJECT_KEY/TAG`, mode 0700), and is its own git
+repository, so OpenCode discovery and project identity stop at its root
+(compatibility keys `discovery-stops-at-git-root` and `project-identity`);
+parent directories are never read, and a relative path inside it cannot name a
+project file. It holds the tracked and untracked-not-ignored source of every
+repository, the installed OpenCode files, the task folder and the discovery
+files. It never holds a `.git` entry, a symlink or a `.env*` file. Reviewers
+also get a `review-context/` directory with the diff of the stage against its
+base tree (HEAD when no base tree was recorded; the context file says which).
+The copy and its `.opencode/` directory are writable only where OpenCode needs
+to write at launch; owned files inside stay read-only. The copy is removed
+after the run.
+
+Only one file leaves the copy: the finding the run wrote to its outbox.
+Harvest requires exactly one match, validates it, renumbers it to the next free
+critic-response or review number in the real task folder, and creates it
+exclusively. The model's own number is ignored. A run with a boundary
+violation harvests nothing.
+
+Limits:
+
+- Snapshot runs apply to headless critic and review only. In the TUI the same
+  roles keep their permission-map guard rails and are not isolated.
+- A snapshot run always starts fresh. An interrupted snapshot run is superseded
+  and costed when the next run starts, never resumed, so it cannot continue in
+  a different snapshot or on the real root.
+- A copy over the size or file-count cap is refused (`snapshot-too-large`).
+- A dirty tree whose source digest goes over its budget (64 MiB of changed
+  content, 5000 untracked files) cannot be digested, so every snapshot boundary
+  is `unverified` and nothing is harvested until the tree is committed or
+  cleaned.
+
+## Test runs
+
+`quoin opencode test-run --task TASK [--stage N]` runs the task's configured
+test command against a throwaway copy of the working tree and prints one JSON
+line (exit 0 `PASSED`, 1 `FAILED`, 2 refused). The command and the
+include directories (git-ignored subdirectories of the project) are fixed in the task's workflow state by a human-side
+configuration call; the subcommand has no option that changes them, so a model
+cannot choose what runs.
+
+For each repository the command runs in a detached git worktree at the current
+HEAD with the working-tree changes overlaid (tracked edits and untracked files,
+never `.env*` files). Include directories are linked in, the command runs
+there, the worktrees are removed, and the real repositories are then checked:
+if HEAD, the source state or the refs changed, the run fails and its result is
+not used. 
+The result is written outside the project, under the adapter state directory,
+stamped with the id and attempt number of the phase run that started it, so a
+file written by an agent inside the project cannot stand in for it. When the
+implement run finishes, the evidence hook copies the result into the entry only
+if it passed and belongs to that run's last attempt; a relaunched implement run
+must therefore run its tests again. Test-run does not take the task lock, since
+it runs inside a phase run that holds it; a busy file stops two test runs of the
+same task from overlapping.
+
+The command runs with a scrubbed environment. Under the launcher it keeps only
+the basic variables the launcher lets through (path, home, locale and similar),
+which drops the launcher's own variables, provider credentials and proxy
+settings. Outside the launcher it removes only the launcher's own names. A
+command that needs anything else, such as `PYTHONPATH`, sets it in its own
+argv, for example `env PYTHONPATH=src python -m pytest`, and a command that
+needs a proxy must set it the same way. Review entries carry no test result
+yet.
+
+## Non-interactive runs
+
+A headless run cannot answer questions (asks are rejected automatically,
+compatibility key `auto-reject-asks`). The coordinator therefore appends the
+literal marker ` (non-interactive run)` to the command argument. A phase that
+sees the marker takes the task name from the word before it, asks nothing, and
+stops with a statement of what is missing if it cannot continue. A single-phase
+`quoin run --runtime opencode ... --non-interactive` sets the same marker for
+that run; without the flag the argument is passed as typed. Headless implement
+runs additionally run no shell command other than the allowed Quoin helpers,
+never commit and skip the branch checks; the launch checks the branch.
+
+`quoin opencode gate --write` and `quoin opencode handoff write` take the task
+lock, and `quoin run` holds that lock for the whole run. A gate or checkpoint
+phase run headless therefore gets a `lock-held` outcome (exit 3) and writes
+nothing; the verdict or handoff has to be written from the TUI, where no lock is
+held, or after the run. The overlay text for those phases says so.
 
 ## Running the probe
 

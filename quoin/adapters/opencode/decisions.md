@@ -190,3 +190,36 @@ Paste values from a probe run's `--output` record here; no probe has been run ye
 ## Plugin need
 
 Intentionally empty — filled only when a concrete event or diagnostic that the CLI path cannot provide has been measured.
+
+## Workflow parity residuals
+
+Design limits of role boundaries, snapshot runs and test runs that are accepted
+rather than open questions:
+
+- A write through an absolute path is detected after the run, not prevented.
+- `.workspaces/` is outside the listing.
+- Include directories given to the test command are shared with the real
+  tree and are writable.
+- There is no network isolation for snapshot or test runs.
+- Run-store files written during a run (current and prior run records, the
+  pointer, the lock and result files) are excluded by exact path and trusted to
+  their schema-checked loaders; the boundary check does not re-verify their
+  content against the last write. A forged record can alter only that run's own
+  telemetry, because the driver's final write replaces it and the ledger is
+  checked by its own mark.
+- An interrupted snapshot run is restarted fresh, never resumed.
+- The generated `.opencode/` surface is verified by owned-file checks and the
+  scoped listing, not by the source digest, and unowned files there are not
+  listed.
+- Memory files outside continuation, runtime and lessons-learned are not
+  listed.
+- A human editing another task's folder during a run is still a violation when
+  the other task's lock is not live and the run is a snapshot run.
+- A source state over the digest budget blocks headless review.
+- In the TUI a user can approve an `external_directory` write into the
+  test-result directory.
+- Review entries carry no test result until the coordinator exists.
+- A test command that needs a proxy variable must set it itself under the
+  launcher.
+- A test result from an attempt other than the run's last is not copied, so a
+  relaunched implement run must run its tests again.

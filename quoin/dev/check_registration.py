@@ -732,6 +732,8 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     # discovers them (the syntactic usage filter cannot fully distinguish
     # them from a true roster), so they are classified here explicitly
     # rather than silently passing.
+    "PHASE_SKILLS@test_opencode_overlay_rewrites.py": "editorial list of the phase skills whose OpenCode overlays are rewritten, single-file, no skills.json field",
+    "NON_INTERACTIVE_ENTRIES@test_opencode_overlay_rewrites.py": "editorial list of overlay entries carrying the non-interactive note, single-file, no skills.json field",
     "ORCHESTRATOR_SKILLS@test_quoin_pollution_preamble.py": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
     "ORCHESTRATOR_SKILLS@test_inject_pollution_dispatch.py": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
 
