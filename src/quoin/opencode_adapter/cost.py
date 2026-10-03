@@ -30,6 +30,7 @@ with the evidence layer for single-phase runs, and a coordinator can call
 from __future__ import annotations
 
 import calendar
+import errno
 import hashlib
 import importlib.util
 import math
@@ -403,6 +404,14 @@ def _now_text(clock: Callable[[], float]) -> str:
     return time.strftime(_TIME_FORMAT, time.gmtime(clock()))
 
 
+_LINK_ERRNOS = frozenset(
+    code for code in (getattr(errno, "ELOOP", None), getattr(errno, "EMLINK", None)) if code is not None
+)
+_UNSAFE_OPEN_ERRNOS = _LINK_ERRNOS | frozenset(
+    code for code in (getattr(errno, "ENXIO", None),) if code is not None
+)
+
+
 def _read_ledger(path: Path) -> Tuple[Optional[bytes], Optional[str]]:
     """`(bytes, None)`, `(None, "absent")`, or `(None, reason)`; never raises."""
     try:
@@ -417,7 +426,9 @@ def _read_ledger(path: Path) -> Tuple[Optional[bytes], Optional[str]]:
         return None, "ledger-too-large"
     try:
         fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-    except OSError:
+    except OSError as exc:
+        if exc.errno in _LINK_ERRNOS:
+            return None, "ledger-unsafe"
         return None, "ledger-unreadable"
     try:
         opened = os.fstat(fd)
@@ -478,7 +489,11 @@ def scan(path: Any, mark: Optional[Mapping[str, Any]], run_id: str, own_uuids: I
     usable = isinstance(mark, Mapping) and mark.get("exists") in (True, False)
     if reason not in (None, "absent"):
         result.has_row = None if reason == "ledger-too-large" else False
-        if usable and reason in ("ledger-unsafe", "ledger-too-large"):
+        if usable and mark.get("exists") is True and reason == "ledger-unreadable":
+            # The ledger existed at the mark and can no longer be read: its
+            # content cannot be shown to be unchanged.
+            result.prefix, result.prefix_reason = "changed", "ledger-unreadable-after-run"
+        elif usable and reason in ("ledger-unsafe", "ledger-too-large"):
             # A usable mark and a ledger that is now a link, a special file or
             # past the cap: the file was replaced, which is a rewrite.
             result.prefix, result.prefix_reason = "changed", reason + "-after-run"
@@ -554,8 +569,10 @@ def append_row(project_root: Any, task: str, line: str) -> str:
         try:
             fd = os.open(
                 str(path), os.O_RDWR | os.O_APPEND | flags_nofollow | getattr(os, "O_NONBLOCK", 0))
-        except OSError:
-            return "ledger-unsafe"
+        except OSError as exc:
+            if exc.errno in _UNSAFE_OPEN_ERRNOS:
+                return "ledger-unsafe"
+            raise
         try:
             opened = os.fstat(fd)
             if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
@@ -719,7 +736,11 @@ def _record_run(
     try:
         sidecar_path = runstore.run_paths(directory, run_id).sidecar
         try:
-            too_big = os.stat(str(sidecar_path)).st_size > runstore.DEFAULT_MAX_FILE_BYTES
+            side_info = os.lstat(str(sidecar_path))
+            too_big = (
+                not stat.S_ISREG(side_info.st_mode)
+                or side_info.st_size > runstore.DEFAULT_MAX_FILE_BYTES
+            )
         except OSError:
             too_big = False
         events: Optional[Sequence[Any]] = None if too_big else runstore.read_sidecar(sidecar_path).events

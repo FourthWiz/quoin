@@ -374,6 +374,25 @@ def test_other_states_start_a_new_run(tmp_path, state):
     assert r.run_id != old and drv.calls[1] == ("prepare", None)
 
 
+@pytest.mark.parametrize("blocked", ["effect-uncertain", None])
+def test_closed_interrupted_run_is_not_restarted_without_new_run(tmp_path, blocked):
+    drv = ScriptedDriver(tmp_path, [outcome()])
+    run_id = drv.seed("interrupted")
+    record = drv.record(run_id)
+    record["telemetry"] = {"final": True}
+    if blocked:
+        record["resume_blocked"] = blocked
+    runstore.write_record(drv.directory, record)
+    r, drv, *_ = go(tmp_path, [], drv=drv)
+    assert r.outcome == "INTERRUPTED" and r.run_id == run_id
+    assert r.resume_blocked == (blocked or "run-closed")
+    assert phase_loop.exit_code(r) == 5
+    assert "start" not in drv.names() and "resume" not in drv.names()
+    assert not any(c[0] == "prepare" for c in drv.calls)
+    forced, drv2, *_ = go(tmp_path, [outcome()], drv=drv, new_run=True)
+    assert forced.run_id != run_id and forced.outcome == "COMPLETED"
+
+
 def test_new_run_flag_forces_a_new_run(tmp_path):
     drv = ScriptedDriver(tmp_path, [outcome()])
     old = drv.seed("interrupted")

@@ -163,6 +163,19 @@ def test_a_cancelled_run_and_a_blocked_run_are_each_costed(world, capsys):
     assert len(project.rows()) == 3
 
 
+def test_a_blocked_run_is_not_restarted_without_new_run(world, capsys):
+    project = world("crash_in_open_step")
+    code, blocked = project.run_cli(capsys)
+    assert code == 5 and blocked["resume_blocked"] == "effect-uncertain"
+    run_id = blocked["run_id"]
+    rows = len(project.rows())
+    code, again = project.run_cli(capsys)
+    assert code == 5 and again["run_id"] == run_id
+    assert again["resume_blocked"] == "effect-uncertain"
+    assert len(project.rows()) == rows
+    assert len(project.rows_for(run_id)) == 1
+
+
 def test_a_new_run_supersedes_an_interrupted_resumable_run(world, capsys):
     project = world("session_continuation")
     code, first = project.run_cli(capsys, "--max-relaunch", "0")

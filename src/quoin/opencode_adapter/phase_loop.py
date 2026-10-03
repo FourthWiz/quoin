@@ -291,6 +291,18 @@ def run_phase(
         and not (isinstance(existing.get("telemetry"), dict) and existing["telemetry"].get("final") is True)
     ):
         run_id = existing.get("run_id")
+    elif (
+        not new_run and existing and existing.get("state") == "interrupted"
+        and _same_request(existing, request)
+    ):
+        # A closed (costed) run cannot be resumed; stopping here keeps the
+        # explicit restart acknowledgement instead of silently starting over.
+        blocked = existing.get("resume_blocked")
+        return finish(
+            "INTERRUPTED", blocked if isinstance(blocked, str) and blocked else "run-closed",
+            resume_blocked=blocked if isinstance(blocked, str) and blocked else "run-closed",
+            run_id_override=existing.get("run_id"),
+        )
 
     budget: Optional[float] = None
     policy: Optional[retry.RetryPolicy] = None

@@ -361,3 +361,44 @@ def test_ledger_mark_forms(synth, tmp_path):
 def test_a_record_that_is_missing_reports_it(synth):
     out = cost.record_run(synth.root, "oc-20260101T000000Z-aaaaaaaa", source_dir=SOURCE, ended_as="completed")
     assert out.row == "skipped" and out.row_reason == "record-missing"
+
+
+@pytest.mark.skipif(hasattr(os, "geteuid") and os.geteuid() == 0, reason="root ignores file modes")
+def test_a_ledger_made_unreadable_after_a_usable_mark_is_a_violation(synth):
+    mark = mark_of(synth)
+    synth.ledger.chmod(0)
+    try:
+        assert cost.scan(synth.ledger, mark, "run-x").prefix == "changed"
+        assert cost.scan(synth.ledger, None, "run-x").prefix == "unavailable"
+    finally:
+        synth.ledger.chmod(0o644)
+
+
+def test_a_symlink_swapped_in_at_open_time_is_unsafe(synth, monkeypatch):
+    import errno
+
+    real_open = os.open
+
+    def fake_open(path, flags, *args, **kw):
+        if str(path) == str(synth.ledger):
+            raise OSError(errno.ELOOP, "too many links")
+        return real_open(path, flags, *args, **kw)
+
+    monkeypatch.setattr(cost.os, "open", fake_open)
+    assert cost._read_ledger(synth.ledger) == (None, "ledger-unsafe")
+    assert cost.append_row(synth.root, synth.task, "r | d | plan | m | task | n | 0") == "ledger-unsafe"
+
+
+def test_other_open_failures_are_not_reported_as_unsafe(synth, monkeypatch):
+    import errno
+
+    real_open = os.open
+
+    def fake_open(path, flags, *args, **kw):
+        if str(path) == str(synth.ledger):
+            raise OSError(errno.EACCES, "denied")
+        return real_open(path, flags, *args, **kw)
+
+    monkeypatch.setattr(cost.os, "open", fake_open)
+    with pytest.raises(PermissionError):
+        cost.append_row(synth.root, synth.task, "r | d | plan | m | task | n | 0")
