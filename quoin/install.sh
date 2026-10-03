@@ -6,6 +6,7 @@
 #                        [--allow-hook-merge] [--autocompact-pct N]
 #                        [--autocompact-window TOKENS] [--clear-autocompact-env]
 #                        [--with-context-tracker] [--remove-context-tracker]
+#                        [--with-workflow-tasks] [--remove-workflow-tasks]
 #                        [--print-python] [-h]
 #
 # Python: any interpreter meeting the project minimum (pyproject.toml
@@ -38,6 +39,8 @@ AUTOCOMPACT_WINDOW_FLAG=""
 CLEAR_AUTOCOMPACT_ENV_FLAG=""
 WITH_CONTEXT_TRACKER_FLAG=""
 REMOVE_CONTEXT_TRACKER_FLAG=""
+WITH_WORKFLOW_TASKS_FLAG=""
+REMOVE_WORKFLOW_TASKS_FLAG=""
 USE_PIP=0
 PIP_UPGRADE_FLAG=""
 PRINT_PYTHON=0
@@ -60,6 +63,8 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
     --clear-autocompact-env) CLEAR_AUTOCOMPACT_ENV_FLAG="--clear-autocompact-env" ;;
     --with-context-tracker) WITH_CONTEXT_TRACKER_FLAG="--with-context-tracker" ;;
     --remove-context-tracker) REMOVE_CONTEXT_TRACKER_FLAG="--remove-context-tracker" ;;
+    --with-workflow-tasks) WITH_WORKFLOW_TASKS_FLAG="--with-workflow-tasks" ;;
+    --remove-workflow-tasks) REMOVE_WORKFLOW_TASKS_FLAG="--remove-workflow-tasks" ;;
     --autocompact-pct=*)
       if [[ -n "${arg#--autocompact-pct=}" ]]; then
         AUTOCOMPACT_PCT_FLAG="--autocompact-pct ${arg#--autocompact-pct=}"
@@ -134,6 +139,7 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "                       [--allow-hook-merge] [--autocompact-pct N]"
       echo "                       [--autocompact-window TOKENS] [--clear-autocompact-env]"
       echo "                       [--with-context-tracker] [--remove-context-tracker]"
+      echo "                       [--with-workflow-tasks] [--remove-workflow-tasks]"
       echo "                       [--print-python]"
       echo "  --dev                Install dev dependencies (pyyaml, pytest)"
       echo "  --upgrade            Re-install via pip before deploying (alias: --use-pip)"
@@ -170,6 +176,12 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "  --remove-context-tracker"
       echo "                       Remove the context-tracker mod folder. Mutually exclusive with"
       echo "                       --with-context-tracker."
+      echo "  --with-workflow-tasks"
+      echo "                       Opt-in: deploy the workflow-tasks mod (/quoin-tasks pane) to"
+      echo "                       skills/workflow-tasks/. Off by default."
+      echo "  --remove-workflow-tasks"
+      echo "                       Remove the workflow-tasks mod folder. Mutually exclusive with"
+      echo "                       --with-workflow-tasks."
       exit 0
       ;;
     *)  REST+=("$arg") ;;
@@ -515,6 +527,8 @@ fi
 [[ -n "$CLEAR_AUTOCOMPACT_ENV_FLAG" ]] && INSTALL_ARGS+=("$CLEAR_AUTOCOMPACT_ENV_FLAG")
 [[ -n "$WITH_CONTEXT_TRACKER_FLAG" ]] && INSTALL_ARGS+=("$WITH_CONTEXT_TRACKER_FLAG")
 [[ -n "$REMOVE_CONTEXT_TRACKER_FLAG" ]] && INSTALL_ARGS+=("$REMOVE_CONTEXT_TRACKER_FLAG")
+[[ -n "$WITH_WORKFLOW_TASKS_FLAG" ]] && INSTALL_ARGS+=("$WITH_WORKFLOW_TASKS_FLAG")
+[[ -n "$REMOVE_WORKFLOW_TASKS_FLAG" ]] && INSTALL_ARGS+=("$REMOVE_WORKFLOW_TASKS_FLAG")
 
 # ── Get versions ──────────────────────────────────────────────────────────────
 # Every "is quoin importable on its own" probe runs from a neutral directory.

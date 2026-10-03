@@ -76,6 +76,23 @@ def _validate_context_tracker_args(args: argparse.Namespace) -> Optional[str]:
     return None
 
 
+def _validate_workflow_tasks_args(args: argparse.Namespace) -> Optional[str]:
+    """Return "with", "remove" or None for the workflow-tasks mod flags.
+
+    Same shape as the context-tracker validator: getattr defaults for
+    Namespaces that predate the flags, ValueError when both are given.
+    """
+    with_wt = getattr(args, "with_workflow_tasks", False)
+    remove_wt = getattr(args, "remove_workflow_tasks", False)
+    if with_wt and remove_wt:
+        raise ValueError("--with-workflow-tasks cannot be combined with --remove-workflow-tasks")
+    if with_wt:
+        return "with"
+    if remove_wt:
+        return "remove"
+    return None
+
+
 def _autocompact_window_type(raw: str) -> int:
     """argparse type= for --autocompact-window: a plain integer, no suffix.
 
@@ -336,18 +353,29 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         ct_mode = _validate_context_tracker_args(args)
     except ValueError as exc:
         _abort(f"quoin: {exc}")
-    ct_errors, ct_warnings = installer.context_tracker_preflight(
-        source_dir,
-        dest_root,
-        mode=ct_mode,
-        is_project_mode=is_project_mode,
-        home_dest_root=pathlib.Path.home() / ".claude",
-        cwd_dest_root=pathlib.Path.cwd() / ".claude",
-    )
-    for warning in ct_warnings:
-        print(warning, file=sys.stderr)
-    if ct_errors:
-        for error in ct_errors:
+    try:
+        wt_mode = _validate_workflow_tasks_args(args)
+    except ValueError as exc:
+        _abort(f"quoin: {exc}")
+    mod_errors: list[str] = []
+    for preflight, mode in (
+        (installer.context_tracker_preflight, ct_mode),
+        (installer.workflow_tasks_preflight, wt_mode),
+    ):
+        errors, warnings = preflight(
+            source_dir,
+            dest_root,
+            mode=mode,
+            is_project_mode=is_project_mode,
+            home_dest_root=pathlib.Path.home() / ".claude",
+            cwd_dest_root=pathlib.Path.cwd() / ".claude",
+        )
+        for warning in warnings:
+            print(warning, file=sys.stderr)
+        mod_errors.extend(errors)
+    if mod_errors:
+        # Every refusal is reported at once, before anything is written.
+        for error in mod_errors:
             print(error, file=sys.stderr)
         return 1
 
@@ -395,6 +423,7 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     # T-05
     installer.deploy_skills(source_dir, dest_root)
     installer.apply_context_tracker(source_dir, dest_root, mode=ct_mode)
+    installer.apply_workflow_tasks(source_dir, dest_root, mode=wt_mode)
     installer.deploy_scripts(source_dir, dest_root)
     installer.deploy_core_scripts(source_dir, dest_root)
     installer.deploy_core_workflow(source_dir, dest_root)  # IVG-248: portable workflow docs (D-10)
@@ -516,6 +545,15 @@ def _cmd_install(args: argparse.Namespace) -> int:
     ):
         _abort(
             "quoin: --with-context-tracker/--remove-context-tracker are only "
+            "valid with --runtime claude"
+        )
+
+    if runtime != "claude" and (
+        getattr(args, "with_workflow_tasks", False)
+        or getattr(args, "remove_workflow_tasks", False)
+    ):
+        _abort(
+            "quoin: --with-workflow-tasks/--remove-workflow-tasks are only "
             "valid with --runtime claude"
         )
 
@@ -2087,6 +2125,8 @@ def main(argv: list[str] | None = None) -> int:
               quoin install --clear-autocompact-env
               quoin install --with-context-tracker
               quoin install --remove-context-tracker
+              quoin install --with-workflow-tasks
+              quoin install --remove-workflow-tasks
         """),
     )
     install_p.add_argument(
@@ -2213,6 +2253,24 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Remove the opt-in context-tracker mod folder. Mutually exclusive "
             "with --with-context-tracker."
+        ),
+    )
+    install_p.add_argument(
+        "--with-workflow-tasks",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in, off by default: deploy the workflow-tasks mod (/quoin-tasks pane) to "
+            "skills/workflow-tasks/. Once installed, later installs refresh it."
+        ),
+    )
+    install_p.add_argument(
+        "--remove-workflow-tasks",
+        action="store_true",
+        default=False,
+        help=(
+            "Remove the opt-in workflow-tasks mod folder. Mutually exclusive "
+            "with --with-workflow-tasks."
         ),
     )
 
@@ -2714,6 +2772,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             _validate_autocompact_args(args)
             _validate_context_tracker_args(args)
+            _validate_workflow_tasks_args(args)
         except ValueError as exc:
             install_p.error(str(exc))
         return _cmd_install(args)
