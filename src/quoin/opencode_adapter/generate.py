@@ -927,6 +927,15 @@ def render(inputs: GeneratorInputs) -> Dict[str, RenderedFile]:
     if graph_errors:
         raise GenerationError("; ".join(graph_errors))
 
+    from quoin.opencode_adapter import boundaries
+
+    inheritance_errors = boundaries.check_inheritance(
+        {role: role_permissions(role) for role in manifest_roles},
+        {role: task_targets(role) for role in manifest_roles},
+    )
+    if inheritance_errors:
+        raise GenerationError("; ".join(inheritance_errors))
+
     catalog_id_set = {c["name"] for c in inputs.catalog if isinstance(c, dict) and isinstance(c.get("name"), str)}
     supported_id_set = {row["id"] for row in supported_rows}
 
