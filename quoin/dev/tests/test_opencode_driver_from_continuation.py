@@ -114,3 +114,15 @@ def test_corrupt_run_record_starts_fresh(seeded):
     fx, run_id, record = seeded
     runstore.run_paths(fx.directory(), run_id).record.write_text("{broken")
     assert token(fx, record) is None
+
+
+def test_token_is_withheld_once_the_run_is_no_longer_the_pointer_run(seeded):
+    fx, run_id, record = seeded
+    fx.seed_run("review", "1", "completed")
+    assert token(fx, record) is None
+
+
+def test_token_is_withheld_without_a_pointer(seeded):
+    fx, run_id, record = seeded
+    runstore.pointer_path(fx.directory(), fx.task).unlink()
+    assert token(fx, record) is None

@@ -277,6 +277,9 @@ class Handoff:
             run = runstore.load_record(directory, run_id)
             if run is None or run.get("task") != record.get("task") or run.get("state") != "interrupted":
                 return None
+            pointer = runstore.load_pointer(directory, run["task"])
+            if not isinstance(pointer, Mapping) or pointer.get("run_id") != run_id:
+                return None
             if run.get("resume_blocked") is not None:
                 return None
             if any(a.get("driver_lost") for a in run.get("attempts") or []):

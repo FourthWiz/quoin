@@ -39,8 +39,8 @@ MAX_LIST = 100
 MAX_REASONS = 64
 LISTING_CAP = 2000
 _TOKEN_BAD_RE = re.compile(r"[^A-Za-z0-9._:/@+_-]")
-_CHECKPOINT_RE = r"^\d{4}-\d{2}-\d{2}T\d{4}-%s\.md$"
-_SESSION_RE = r"^\d{4}-\d{2}-\d{2}-%s-(?:codex|orchestrator)\.md$"
+_CHECKPOINT_RE = r"^\d{4}-\d{2}-\d{2}T\d{4}-%s\.md\Z"
+_SESSION_RE = r"^\d{4}-\d{2}-\d{2}-%s-(?:codex|orchestrator)\.md\Z"
 _ARTIFACT_RE = re.compile(r"^(critic-response|review)-\d+\.md$")
 _ARTIFACT_TYPES = {
     "architecture.md": "architecture",
@@ -773,6 +773,9 @@ def state_agreement(record: Mapping[str, Any], state: Optional[Mapping[str, Any]
 
 def _summary(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
     request = record.get("request") or {}
+    attempts = record.get("attempts") or []
+    if not isinstance(request, Mapping) or not isinstance(attempts, list):
+        return None
     try:
         item = (runstore.entry_phase_for_run(request.get("phase")), runstore.normalize_stage(request.get("stage")))
     except ValueError:
@@ -787,7 +790,7 @@ def _summary(record: Mapping[str, Any]) -> Optional[Dict[str, Any]]:
         "item": item,
         "resume_blocked": record.get("resume_blocked"),
         "driver_lost": any(
-            isinstance(a, Mapping) and a.get("driver_lost") for a in record.get("attempts") or []
+            isinstance(a, Mapping) and a.get("driver_lost") for a in attempts
         ),
     }
 
@@ -807,7 +810,12 @@ def run_facts(directory, task: str) -> Optional[Dict[str, Any]]:
     records, skipped = runstore.list_records(directory, task)
     for record in records:
         summary = _summary(record)
-        if summary is None or summary["item"][0] is None:
+        if summary is None:
+            skipped += 1
+            continue
+        if summary["item"][0] is None or summary["state"] == "prepared":
+            # A run refused at prepare never launched and never moves the
+            # pointer, so it says nothing about the item's earlier runs.
             continue
         key = (str(summary["created_at"]), str(summary["run_id"]))
         current = by_item.get(summary["item"])
@@ -1000,13 +1008,20 @@ def next_step(project_root, record: Mapping[str, Any], state, run, source_dir) -
         steps.append(handoff_write_command(task, root))
         result["hint"] = "the phase passed its gate after the record was written; refresh the record"
     elif kind == "run-completed":
-        steps.extend([adopt, write_gate])
+        hidden = facts["run_records_skipped"]
+        (candidates if hidden > 0 else steps).extend([adopt, write_gate])
         hint = (
             "run %s completed but is not recorded as a workflow entry (no run writes one yet), so adopt its "
             "result and gate it; running the phase again would repeat finished work" % facts["run_id"]
         )
         if latest is not None and runstore.normalize_phase(latest["request"].get("phase")) in ("critic", "thorough_plan"):
             hint += "; the adopted evidence is the stage plan as it stands after that run"
+        if hidden > 0:
+            hint += (
+                "; %d run record(s) in the store could not be read, so a newer run for this item may be "
+                "hidden and the artifact may hold its partial changes; check quoin opencode status --task %s "
+                "--project-root %s before adopting" % (hidden, _q(task), _q(root))
+            )
         result["hint"] = hint
     elif kind == "unrecorded":
         steps.extend([adopt, write_gate])
@@ -1014,7 +1029,7 @@ def next_step(project_root, record: Mapping[str, Any], state, run, source_dir) -
             "the artifact exists with no workflow entry (work from the TUI, another runtime, or a run that "
             "is no longer the item's latest)"
         )
-        if facts["run_state"] in ("failed", "interrupted", "running"):
+        if facts["run_state"] in ("failed", "interrupted", "running", "cancelled", "awaiting_approval"):
             hint += "; the item's latest run did not complete, so check the artifact is complete before adopting it"
         result["hint"] = hint
     else:  # pending
@@ -1023,16 +1038,16 @@ def next_step(project_root, record: Mapping[str, Any], state, run, source_dir) -
         if facts["run_state"] == "running":
             candidates.append(fresh)
             result["hint"] = "run %s is still marked running; check %s first" % (facts["run_id"], status_cmd)
-        elif facts["run_records_skipped"] > 0 and latest is None:
+        elif facts["run_records_skipped"] > 0:
             candidates.append(fresh)
             result["hint"] = (
-                "%d run record(s) could not be read (unreadable), so a completed run for this item may be "
+                "%d run record(s) in the store could not be read (unreadable), so a run for this item may be "
                 "hidden; check %s and the run store before running the phase" % (facts["run_records_skipped"], status_cmd)
             )
         else:
             steps.append(fresh)
             hints: List[str] = []
-            if facts["run_state"] in ("failed", "interrupted"):
+            if facts["run_state"] in ("failed", "interrupted", "cancelled", "awaiting_approval"):
                 hints.append(
                     "run %s did not complete and may have left partial changes in the tree; check them "
                     "(for example with git status) before running again" % facts["run_id"]

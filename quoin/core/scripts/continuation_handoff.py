@@ -171,6 +171,9 @@ class RecordError(Exception):
 # -- Validation ---------------------------------------------------------------
 
 
+MAX_REASONS = 256
+
+
 def _is_int(value: Any) -> bool:
     return type(value) is int
 
@@ -178,11 +181,17 @@ def _is_int(value: Any) -> bool:
 class _Checker:
     def __init__(self) -> None:
         self.reasons: List[str] = []
+        self._seen: set = set()
 
     def add(self, code: str, name: str = "") -> None:
         reason = code + (":" + name if name else "")
-        if reason not in self.reasons:
+        if reason in self._seen:
+            return
+        self._seen.add(reason)
+        if len(self.reasons) < MAX_REASONS:
             self.reasons.append(reason)
+        elif len(self.reasons) == MAX_REASONS:
+            self.reasons.append("reasons-truncated")
 
     # primitives -------------------------------------------------------------
 
@@ -712,6 +721,9 @@ def write_record(path: str, record: Dict[str, Any]) -> None:
     reasons = validate(record)
     if reasons:
         raise RecordError("record-invalid", reasons)
+    if str(record.get("task", "")).endswith(".prev"):
+        # NAME.prev.json is the backup slot of task NAME.
+        raise RecordError("record-invalid", ["field-invalid:task"])
     path = os.path.abspath(os.fspath(path))
     directory = os.path.dirname(path)
     try:
@@ -742,12 +754,14 @@ def write_record(path: str, record: Dict[str, Any]) -> None:
 
 
 def load_bytes(path: str) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         fd = os.open(path, flags)
     except OSError:
         raise RecordError("record-unreadable")
     try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RecordError("record-unreadable")
         chunks = []
         while True:
             chunk = os.read(fd, 65536)

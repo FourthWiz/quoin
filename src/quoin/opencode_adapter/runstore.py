@@ -42,7 +42,7 @@ from .paths import git_worktree_root
 from .proctree import Identity, ProcInfo, alive, group_members
 
 SCHEMA_VERSION = 1
-TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 STORE_PARTS = (".workflow_artifacts", "memory", "runtime", "opencode")
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_FILES = 5000
@@ -177,8 +177,8 @@ _RECORD_FILE_RE = re.compile(r"^(" + RUN_ID_RE.pattern.strip("^$") + r")\.run\.j
 
 
 def list_records(directory, task: Optional[str] = None, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
-    """Run records in the store, read-only: up to `limit` record files in name
-    order (filtered by task when given) and the number of files skipped.
+    """Run records in the store, read-only: up to `limit` record files, newest
+    name first (filtered by task when given) and the number of files skipped.
 
     A symlink, an unreadable or unparsable file, and every file beyond the
     limit are skipped and counted; a record is never repaired or rewritten."""
@@ -186,7 +186,8 @@ def list_records(directory, task: Optional[str] = None, limit: int = 1000) -> Tu
     skipped = 0
     try:
         names_ = sorted(
-            entry.name for entry in os.scandir(str(directory)) if _RECORD_FILE_RE.match(entry.name)
+            (entry.name for entry in os.scandir(str(directory)) if _RECORD_FILE_RE.match(entry.name)),
+            reverse=True,
         )
     except OSError:
         return [], 0

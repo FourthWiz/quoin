@@ -1762,7 +1762,7 @@ _HANDOFF_TEXT_COUNT = 20
 def _handoff_refusal(code: str, message: str, reasons=(), exit_code: int = 2) -> int:
     return _gate_json({
         "outcome": "HANDOFF_REFUSED",
-        "refusal": {"code": code, "message": message, "reasons": [str(r) for r in reasons]},
+        "refusal": {"code": code, "message": message, "reasons": [str(r) for r in list(reasons)[:256]]},
     }, exit_code)
 
 

@@ -498,3 +498,30 @@ def test_doc_table_matches_script():
                 assert m.group(2) == expected, m.group(1)
     script = set(ch.REQUIRED_FIELDS) | set(ch.OPTIONAL_FIELDS) | set(ch.ITEM_FIELDS)
     assert names == script
+
+
+def test_many_distinct_bad_fields_validate_quickly_with_capped_reasons():
+    import time
+
+    record = valid_record()
+    for i in range(20000):
+        record["x%d" % i] = 1
+    start = time.monotonic()
+    reasons = ch.validate(record)
+    assert time.monotonic() - start < 5
+    assert len(reasons) <= ch.MAX_REASONS + 1
+    assert reasons[-1] == "reasons-truncated"
+
+
+def test_duplicate_reasons_are_reported_once():
+    chk = ch._Checker()
+    for _ in range(5):
+        chk.add("field-invalid", "a")
+    assert chk.reasons == ["field-invalid:a"]
+
+
+def test_previous_record_slot_task_is_refused(tmp_path):
+    record = valid_record()
+    record["task"] = "foo.prev"
+    with pytest.raises(ch.RecordError):
+        ch.write_record(str(tmp_path / "foo.prev.json"), record)

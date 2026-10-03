@@ -635,3 +635,79 @@ def test_session_ids_the_resume_rule_refuses_are_dropped(at_implement):
     for bad in ("ses_ok bad", "bad id!"):
         at_implement.seed_run("implement", "1", "interrupted", checkpoint=True, session=bad)
         assert at_implement.build()["native"]["session_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# run facts: never-launched and hidden runs
+# ---------------------------------------------------------------------------
+
+
+def corrupt_record(fx, name="oc-20990101T000000Z-deadbeef.run.json"):
+    (fx.directory() / name).write_text("not json")
+
+
+def test_run_refused_at_prepare_does_not_hide_a_completed_run(at_implement):
+    done = at_implement.seed_run("implement", "1", "completed")
+    at_implement.seed_run("implement", "1", "prepared", pointer=False)
+    at_implement.seed_run("review", "1", "completed")
+    advice = advise(at_implement)
+    kinds = {(i["phase"], i["stage"]): i for i in advice["items"]}
+    assert kinds[("implement", 1)]["kind"] == "run-completed"
+    assert kinds[("implement", 1)]["facts"]["run_id"] == done
+    assert run_cmd(at_implement, "implement") not in all_text(advice)
+
+
+def test_prepared_only_run_is_not_a_run_fact(at_implement):
+    at_implement.seed_run("implement", "1", "prepared", pointer=False)
+    facts = handoff.run_facts(at_implement.directory(), "t1")
+    assert ("implement", 1) not in facts["by_item"]
+
+
+def test_hidden_newer_run_demotes_the_fresh_run_even_with_a_visible_failed_run(at_implement):
+    at_implement.seed_run("implement", "1", "failed")
+    corrupt_record(at_implement)
+    advice = advise(at_implement)
+    assert advice["status"] == "pending"
+    assert advice["steps"] == []
+    assert advice["candidates"] == [run_cmd(at_implement, "implement")]
+    assert "could not be read" in advice["hint"]
+
+
+def test_hidden_newer_run_demotes_the_adopt_of_an_older_completed_run(at_implement):
+    at_implement.seed_run("implement", "1", "completed")
+    corrupt_record(at_implement)
+    advice = advise(at_implement)
+    assert advice["status"] == "run-completed"
+    assert advice["steps"] == []
+    assert advice["candidates"] == [adopt_cmd(at_implement, "implement"), gate_cmd(at_implement, "implement")]
+    assert "may be hidden" in advice["hint"]
+
+
+def test_completed_run_with_nothing_hidden_still_gets_steps(at_implement):
+    at_implement.seed_run("implement", "1", "completed")
+    advice = advise(at_implement)
+    assert advice["steps"] == [adopt_cmd(at_implement, "implement"), gate_cmd(at_implement, "implement")]
+    assert advice["candidates"] == []
+
+
+def test_list_records_hides_the_oldest_runs_past_the_cap(at_implement):
+    ids = [at_implement.seed_run("implement", "1", "completed", pointer=False) for _ in range(3)]
+    records, skipped = runstore.list_records(at_implement.directory(), "t1", limit=2)
+    assert sorted(r["run_id"] for r in records) == sorted(ids[1:])
+    assert skipped == 1
+
+
+@pytest.mark.parametrize("bad", [{"request": "nope"}, {"attempts": {"a": 1}}])
+def test_malformed_run_record_shapes_are_skipped_not_crashed(at_implement, bad):
+    run_id = at_implement.seed_run("implement", "1", "failed", pointer=False)
+    record = runstore.load_record(at_implement.directory(), run_id)
+    record.update(bad)
+    runstore.write_record(at_implement.directory(), record)
+    facts = handoff.run_facts(at_implement.directory(), "t1")
+    assert ("implement", 1) not in facts["by_item"]
+    assert facts["records_skipped"] == 1
+
+
+def test_cancelled_latest_run_carries_the_partial_changes_hint(at_implement):
+    at_implement.seed_run("implement", "1", "cancelled")
+    assert "partial changes" in advise(at_implement)["hint"]
