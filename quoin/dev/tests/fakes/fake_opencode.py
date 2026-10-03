@@ -23,6 +23,7 @@ kind should exercise it.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -300,8 +301,75 @@ def _ledger_rewrite(task: str = "demo") -> Dict[str, Any]:
         {"do": "exit", "code": 0},
     )
 
+# Copies of valid review and critic bodies, so the fake still imports nothing
+# from Quoin.
+_FOR_HUMAN = "## For human\n\nA short summary for the reader.\n\n"
+CRITIC_PASS_TEXT = (
+    "## Verdict\n\n`<verdict>PASS</verdict>`\n\n## Summary\n\ntext\n\n## Issues\n\nnone\n\n"
+    "## What's good\n\ntext\n\n## Scorecard\n\ntext\n"
+)
+REVIEW_APPROVED_TEXT = (
+    "---\ntask: fixture\n---\n" + _FOR_HUMAN
+    + "## Summary\n\ntext\n\n## Verdict\n\nAPPROVED\n\n## Plan Compliance\n\ntext\n\n"
+    "## Issues Found\n\nnone\n\n## Integration Safety\n\ntext\n\n## Test Coverage\n\ntext\n\n"
+    "## Risk Assessment\n\ntext\n\n## Dimension Verdicts\n\n| Dimension | Verdict |\n|---|---|\n| all | ok |\n"
+)
+
+
+def _try_write(path: str, content: str = "") -> Dict[str, Any]:
+    return {"do": "try_write", "path": path, "content": content}
+
+
+def _clean_finish() -> List[Dict[str, Any]]:
+    return [_step_finish("prt_f1", "stop"), {"do": "exit", "code": 0}]
+
+
+def _boundary_escape(real_root: str = "/nonexistent",
+                     outbox: str = ".workflow_artifacts/demo/stage-1",
+                     name: str = "review-1.md", body: str = REVIEW_APPROVED_TEXT,
+                     absolute: bool = False) -> Dict[str, Any]:
+    steps: List[Dict[str, Any]] = [
+        _step_start("prt_s1"),
+        _try_write("src/app.py", "escaped\n"),
+        {"do": "shell_write", "path": "src/shell.txt", "content": "shell\n"},
+        {"do": "spawn_write", "path": "src/spawned.txt", "content": "spawned\n"},
+        _try_write("%s/%s" % (outbox, name), body),
+        _try_write("%s/%s.tmp" % (outbox, name), body),
+    ]
+    if absolute:
+        steps.append({"do": "write_file", "path": "%s/src/escaped.txt" % real_root,
+                      "content": "escaped\n"})
+    return _scenario(*steps, *_clean_finish())
+
+
+def _edits_path(path: str = ".opencode/commands/quoin-plan.md", content: str = "x") -> Dict[str, Any]:
+    return _scenario({"do": "write_file", "path": path, "content": content}, *_clean_finish())
+
+
+def _writes_paths(paths: Any = ()) -> Dict[str, Any]:
+    return _scenario(
+        *[{"do": "write_file", "path": p, "content": c} for p, c in paths], *_clean_finish())
+
+
+def _opencode_managed_writes(extra: Any = ()) -> Dict[str, Any]:
+    """What the pinned OpenCode does to every scanned config directory at launch."""
+    managed = [
+        (".opencode/.gitignore", "node_modules\npackage.json\nbun.lock\n"),
+        (".opencode/package.json", "{}\n"),
+        (".opencode/bun.lock", "\n"),
+        (".opencode/node_modules/@opencode-ai/plugin/package.json", "{}\n"),
+    ]
+    return _scenario(
+        *[_try_write(p, c) for p, c in managed],
+        *[_try_write(p, c) for p, c in extra],
+        *_clean_finish())
+
 
 SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "boundary_escape": _boundary_escape,
+    "edits_path": _edits_path,
+    "writes_paths": _writes_paths,
+    "opencode_managed_writes": _opencode_managed_writes,
     "usage_revised": _usage_revised,
     "usage_unknown_tokens": _usage_unknown_tokens,
     "usage_zero_cost": _usage_zero_cost,
@@ -590,6 +658,64 @@ def _emit_fixture(name: str) -> None:
             _out(piece.decode("utf-8", "replace") + "\n")
 
 
+_SPAWN_WRITE_CODE = (
+    "import sys\n"
+    "with open(sys.argv[2], 'w', encoding='utf-8') as fh:\n"
+    "    fh.write(sys.argv[1])\n"
+)
+
+
+def _log_effect(state: Path, line: str) -> None:
+    with open(state / "effects.log", "a", encoding="utf-8") as fh:
+        fh.write(line.replace("\n", " ") + "\n")
+
+
+def _boundary_write(verb: str, step: Dict[str, Any], state: Path) -> None:
+    """Write a file the way a tool, a shell or a spawned process would.
+
+    A refusal by the operating system is logged as ``denied PATH ERRNO`` and
+    the step list continues; nothing here claims how the real runtime reports
+    a refused write.
+    """
+    path = step["path"]
+    content = step.get("content", "")
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        if verb == "try_write":
+            Path(path).write_text(content, encoding="utf-8")
+        elif verb == "shell_write":
+            res = subprocess.run(
+                ["/bin/sh", "-c", 'printf %s "$1" > "$2"', "sh", content, path],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode != 0:
+                _log_effect(state, "denied %s exit%d" % (path, res.returncode))
+                return
+        else:
+            res = subprocess.run(
+                [sys.executable, "-c", _SPAWN_WRITE_CODE, content, path],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode != 0:
+                _log_effect(state, "denied %s exit%d" % (path, res.returncode))
+                return
+    except OSError as exc:
+        _log_effect(state, "denied %s %s" % (path, errno.errorcode.get(exc.errno or 0, "EIO")))
+        return
+    _log_effect(state, path)
+
+
+def _run_cmd(step: Dict[str, Any], state: Path) -> None:
+    """Run a child with this process's own environment and working directory."""
+    try:
+        res = subprocess.run(
+            [str(a) for a in step["argv"]], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        _log_effect(state, "ran 127 %s" % exc)
+        return
+    tail = res.stdout[:200].decode("utf-8", "replace").strip()
+    _log_effect(state, "ran %d %s" % (res.returncode, tail))
+
+
 def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
                scenario: Optional[Dict[str, Any]] = None) -> int:
     scenario = scenario or {}
@@ -640,6 +766,10 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
                 fh.write(step.get("content", ""))
             with open(state / "effects.log", "a", encoding="utf-8") as fh:
                 fh.write("%s\n" % step["path"])
+        elif verb in ("try_write", "shell_write", "spawn_write"):
+            _boundary_write(verb, step, state)
+        elif verb == "run_cmd":
+            _run_cmd(step, state)
         elif verb == "move_path":
             target = Path(step["to"])
             target.parent.mkdir(parents=True, exist_ok=True)
