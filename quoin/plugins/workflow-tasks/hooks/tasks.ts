@@ -288,8 +288,8 @@ const firstWord = (raw: string) => {
 
 /**
  * Reads a gate file's outcome: the text after `## Verdict:`, else the first
- * non-blank line under a `## Verdict` heading, else an inline `Verdict:` line,
- * else a frontmatter `verdict:` key. A first word starting FAIL is a fail;
+ * non-blank line under a `## Verdict` (or `###`) heading, else an inline `Verdict:` line,
+ * else a frontmatter `verdict:` key. A first word starting FAIL, or NO-GO, is a fail;
  * NEEDS, BLOCKED and PARTIAL are undecided (the gate has to be run again);
  * anything else, a missing verdict included, reads as passed, as detect_phase
  * does by never looking inside gate files.
@@ -298,12 +298,12 @@ export function gateVerdict(text: string): GateVerdict {
   const lines = text.split(/\r?\n/)
   let raw: string | null = null
   for (let i = 0; i < lines.length && raw === null; i += 1) {
-    const inline = lines[i].match(/^##\s+Verdict\s*:\s*(\S.*)$/)
+    const inline = lines[i].match(/^#{2,3}\s+Verdict\s*:\s*(\S.*)$/)
     if (inline) {
       raw = inline[1]
       break
     }
-    if (/^##\s+Verdict\s*:?\s*$/.test(lines[i])) {
+    if (/^#{2,3}\s+Verdict\s*:?\s*$/.test(lines[i])) {
       for (let j = i + 1; j < lines.length; j += 1) {
         if (lines[j].trim() !== '') {
           raw = lines[j]
@@ -315,7 +315,7 @@ export function gateVerdict(text: string): GateVerdict {
   }
   if (raw === null) {
     for (const line of lines) {
-      const m = line.match(/^\s*\**Verdict\**\s*:\s*\**\s*(\S.*)$/i)
+      const m = line.match(/^\s*(?:[-*]\s+)?\**Verdict\**(?:\s*\([^)]*\))?\s*:\s*\**\s*(\S.*)$/i)
       if (m) {
         raw = m[1]
         break
@@ -334,22 +334,25 @@ export function gateVerdict(text: string): GateVerdict {
   if (raw === null) return 'pass'
   const word = firstWord(raw)
   if (word.startsWith('FAIL')) return 'fail'
+  if (/^[\s\W]*NO-GO/i.test(raw.replace(/<[^>]*>/g, ' ').replace(/[*`]/g, ''))) return 'fail'
   if (word === 'NEEDS' || word === 'BLOCKED' || word === 'PARTIAL') return 'undecided'
   return 'pass'
 }
 
 const DATE_RE = /\d{4}-\d{2}-\d{2}/
 // First retry marker anywhere in a gate name: `-r2`, `round3`, `fix-1`, `fix2`,
-// or a bare number just before the date. Each number is one or two digits
+// or a bare number just before the date, or a number right after the date
+// (`gate-x-2026-09-30-2.md`; the lookbehind keeps the day itself from reading
+// as a retry). Each number is one or two digits
 // that no digit follows, so the date in `fix-2026-08-15` is not read as a retry.
 const RETRY_RE =
-  /(?:^|[^A-Za-z])r(\d{1,2})(?!\d)|round(\d{1,2})(?!\d)|fix-?(\d{1,2})(?!\d)|-(\d{1,2})-(?=\d{4}-\d{2}-\d{2})/
+  /(?:^|[^A-Za-z])r(\d{1,2})(?!\d)|round(\d{1,2})(?!\d)|fix-?(\d{1,2})(?!\d)|-(\d{1,2})-(?=\d{4}-\d{2}-\d{2})|(?<=\d{4}-\d{2}-\d{2})-(\d{1,2})(?=\.md$)/
 
 const gateDate = (name: string) => (name.match(DATE_RE) ?? [''])[0]
 const gateRetry = (name: string) => {
   const m = name.match(RETRY_RE)
   if (!m) return 1
-  return Number(m[1] ?? m[2] ?? m[3] ?? m[4])
+  return Number(m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5])
 }
 
 /**

@@ -316,6 +316,24 @@ describe('gate selection and verdicts', () => {
     expect(pick(['gate-implement-2026-09-01.md', 'gate-implement-fix2-2026-09-01.md'])).toBe('gate-implement-fix2-2026-09-01.md')
   })
 
+  test('a number right after the date is a retry; the day itself never is', () => {
+    const rank = (day: string) => {
+      const older = file(`gate-implement-${day}-2.md`, 10)
+      const newer = file(`gate-implement-${day}.md`, 999)
+      return newestGate([newer, older], ['gate-implement-'])?.name
+    }
+    expect(rank('2026-09-30')).toBe('gate-implement-2026-09-30-2.md')
+    expect(rank('2026-10-03')).toBe('gate-implement-2026-10-03-2.md')
+    for (const suffix of ['fix2', 'r2', '2']) {
+      const names = [`gate-implement-2026-09-30-${suffix}.md`, 'gate-implement-2026-09-30.md']
+      const picked = newestGate([file(names[1], 999), file(names[0], 10)], ['gate-implement-'])?.name
+      expect(picked).toBe(names[0])
+    }
+    const day30 = file('gate-implement-2026-09-30.md', 5)
+    const day03 = file('gate-implement-2026-10-03.md', 5)
+    expect(newestGate([day30, day03], ['gate-implement-'])?.name).toBe('gate-implement-2026-10-03.md')
+  })
+
   test('a date inside a fix name is not read as a retry number', () => {
     const entries = [file('gate-implement-2026-08-15.md', 300), file('gate-implement-fix-2026-08-15.md', 200)]
     expect(newestGate(entries, ['gate-implement-'])?.name).toBe('gate-implement-2026-08-15.md')
@@ -355,6 +373,19 @@ describe('gate selection and verdicts', () => {
     expect(gateVerdict('**Level:** Full\n**Verdict:** PASS\n')).toBe('pass')
     expect(gateVerdict('Verdict: PASSED\n')).toBe('pass')
     expect(gateVerdict('---\nverdict: FAIL\n---\n# Gate\n')).toBe('fail')
+  })
+
+  test('legacy forms: ### heading, bulleted bold, parenthetical label and NO-GO', () => {
+    expect(gateVerdict('### Verdict\n\nFAIL\n')).toBe('fail')
+    expect(gateVerdict('### Verdict\n\nPASS\n')).toBe('pass')
+    expect(gateVerdict('- **Verdict:** FAIL\n')).toBe('fail')
+    expect(gateVerdict('- **Verdict:** PASS\n')).toBe('pass')
+    expect(gateVerdict('Verdict (automated): FAIL\n')).toBe('fail')
+    expect(gateVerdict('Verdict (automated): PASS\n')).toBe('pass')
+    expect(gateVerdict('## Verdict: NO-GO\n')).toBe('fail')
+    expect(gateVerdict('## Verdict: NO-GO — tests red\n')).toBe('fail')
+    expect(gateVerdict('## Verdict: NOTED\n')).toBe('pass')
+    expect(gateVerdict('## Verdict: GO\n')).toBe('pass')
   })
 
   test('NEEDS-DECISION, BLOCKED and PARTIAL are undecided; CONDITIONAL PASS, GO and APPROVED pass', () => {
