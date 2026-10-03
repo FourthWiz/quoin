@@ -9,7 +9,6 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
 from typing import NamedTuple, Optional
 
 # T-04: single source of truth for wheel-bundled memory files (8 Tier-1 files)
@@ -542,10 +541,14 @@ def deploy_scripts(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
 # plain file, symlink) is foreign and never written to or removed.
 
 
-@dataclass(frozen=True)
-class OptInMod:
+class OptInMod(NamedTuple):
     """An opt-in mod: its folder name (also its plugin name and flag stem) and
-    the allowlist of source files that are deployed."""
+    the allowlist of source files that are deployed.
+
+    A NamedTuple rather than a dataclass: several tests load this module with
+    spec_from_file_location without registering it in sys.modules, which a
+    dataclass cannot survive when annotations are strings.
+    """
 
     name: str
     files: tuple[str, ...]
