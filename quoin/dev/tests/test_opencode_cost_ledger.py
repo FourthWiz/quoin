@@ -126,6 +126,53 @@ def test_a_changed_prefix_is_a_violation_but_the_row_is_still_written_once(synth
     assert synth.record(run)["telemetry"]["ledger"]["prefix"] == "changed"
 
 
+@pytest.mark.parametrize("swap", ["symlink", "directory", "fifo", "oversize"])
+def test_a_ledger_replaced_after_the_mark_is_a_violation(synth, tmp_path, monkeypatch, swap):
+    mark = mark_of(synth)
+    if swap == "oversize":
+        monkeypatch.setattr(cost, "MAX_LEDGER_BYTES", 10)
+    else:
+        forged = tmp_path / "forged.md"
+        forged.write_text(synth.ledger.read_text(encoding="utf-8"), encoding="utf-8")
+        synth.ledger.unlink()
+        if swap == "symlink":
+            synth.ledger.symlink_to(forged)
+        elif swap == "directory":
+            synth.ledger.mkdir()
+        else:
+            os.mkfifo(str(synth.ledger))
+    result = cost.scan(synth.ledger, mark, "run-x")
+    assert result.prefix == "changed" and result.prefix_reason.endswith("-after-run")
+    run = synth.seed()
+    out = record(synth, run, mark=mark)
+    assert out.prefix == "changed" and out.violation
+    assert synth.record(run)["telemetry"]["ledger"]["prefix"] == "changed"
+
+
+def test_a_ledger_that_appears_unsafe_when_the_mark_said_absent_is_a_violation(tmp_path):
+    s = ch.Synth(tmp_path, ledger=False)
+    mark = mark_of(s)
+    assert mark["exists"] is False
+    forged = tmp_path / "forged.md"
+    forged.write_text("x\n", encoding="utf-8")
+    s.ledger.symlink_to(forged)
+    assert cost.scan(s.ledger, mark, "run-x").prefix == "changed"
+
+
+def test_an_unsafe_ledger_without_a_usable_mark_stays_unavailable(synth, tmp_path):
+    forged = tmp_path / "forged.md"
+    forged.write_text("x\n", encoding="utf-8")
+    synth.ledger.unlink()
+    synth.ledger.symlink_to(forged)
+    assert cost.scan(synth.ledger, None, "run-x").prefix == "unavailable"
+
+
+def test_a_fifo_ledger_is_refused_without_blocking(synth):
+    synth.ledger.unlink()
+    os.mkfifo(str(synth.ledger))
+    assert cost.append_row(synth.root, synth.task, "r | d | plan | m | task | n | 0") == "ledger-unsafe"
+
+
 def test_no_mark_means_no_prefix_verdict_and_no_violation(synth):
     run = synth.seed()
     out = record(synth, run, mark=None)

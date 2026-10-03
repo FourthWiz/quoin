@@ -168,7 +168,7 @@ def usage_from_events(events: Optional[Iterable[Any]]) -> Dict[str, Any]:
     if events is None:
         out["reasons"] = {name: "sidecar-unreadable" for name in (*_TOKEN_FIELDS, "cost", "tokens")}
         return out
-    items = list(events)
+    items = events if isinstance(events, (list, tuple)) else list(events)
     usage_events = [e for e in items if e.type is ev.EventType.USAGE]
     totals = ev.usage_totals(usage_events)
     reasons: Dict[str, str] = {}
@@ -308,7 +308,7 @@ def build_telemetry(
     prepared = record.get("prepared") if isinstance(record.get("prepared"), Mapping) else {}
     request = record.get("request") if isinstance(record.get("request"), Mapping) else {}
     attempts = _real_attempts(record)
-    items = list(events) if events is not None else None
+    items = (events if isinstance(events, (list, tuple)) else list(events)) if events is not None else None
 
     def recorded(key: str) -> Any:
         return prepared.get(key)
@@ -416,8 +416,16 @@ def _read_ledger(path: Path) -> Tuple[Optional[bytes], Optional[str]]:
     if info.st_size > MAX_LEDGER_BYTES:
         return None, "ledger-too-large"
     try:
-        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     except OSError:
+        return None, "ledger-unreadable"
+    try:
+        opened = os.fstat(fd)
+        if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            os.close(fd)
+            return None, "ledger-unsafe"
+    except OSError:
+        os.close(fd)
         return None, "ledger-unreadable"
     try:
         with os.fdopen(fd, "rb") as handle:
@@ -470,7 +478,12 @@ def scan(path: Any, mark: Optional[Mapping[str, Any]], run_id: str, own_uuids: I
     usable = isinstance(mark, Mapping) and mark.get("exists") in (True, False)
     if reason not in (None, "absent"):
         result.has_row = None if reason == "ledger-too-large" else False
-        result.prefix, result.prefix_reason = "unavailable", reason
+        if usable and reason in ("ledger-unsafe", "ledger-too-large"):
+            # A usable mark and a ledger that is now a link, a special file or
+            # past the cap: the file was replaced, which is a rewrite.
+            result.prefix, result.prefix_reason = "changed", reason + "-after-run"
+        else:
+            result.prefix, result.prefix_reason = "unavailable", reason
         return result
     if data is None:
         result.has_row = False
@@ -538,14 +551,18 @@ def append_row(project_root: Any, task: str, line: str) -> str:
             return "written"
         if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
             return "ledger-unsafe"
-        prefix = ""
-        if info.st_size > 0:
-            with open(str(path), "rb") as handle:
-                handle.seek(-1, os.SEEK_END)
-                if handle.read(1) != b"\n":
-                    prefix = "\n"
-        fd = os.open(str(path), os.O_WRONLY | os.O_APPEND | flags_nofollow)
         try:
+            fd = os.open(
+                str(path), os.O_RDWR | os.O_APPEND | flags_nofollow | getattr(os, "O_NONBLOCK", 0))
+        except OSError:
+            return "ledger-unsafe"
+        try:
+            opened = os.fstat(fd)
+            if not stat.S_ISREG(opened.st_mode) or (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                return "ledger-unsafe"
+            prefix = ""
+            if opened.st_size > 0 and os.pread(fd, 1, opened.st_size - 1) != b"\n":
+                prefix = "\n"
             os.write(fd, (prefix + line + "\n").encode("utf-8"))
             os.fsync(fd)
         finally:
@@ -700,7 +717,12 @@ def _record_run(
 
     task = record.get("task")
     try:
-        events: Optional[Sequence[Any]] = runstore.read_sidecar(runstore.run_paths(directory, run_id).sidecar).events
+        sidecar_path = runstore.run_paths(directory, run_id).sidecar
+        try:
+            too_big = os.stat(str(sidecar_path)).st_size > runstore.DEFAULT_MAX_FILE_BYTES
+        except OSError:
+            too_big = False
+        events: Optional[Sequence[Any]] = None if too_big else runstore.read_sidecar(sidecar_path).events
     except Exception:  # noqa: BLE001
         events = None
     telemetry = build_telemetry(record, events, ended_as=ended_as, clock=clock)

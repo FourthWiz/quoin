@@ -288,6 +288,7 @@ def run_phase(
     elif (
         not new_run and existing and existing.get("state") == "interrupted"
         and _same_request(existing, request)
+        and not (isinstance(existing.get("telemetry"), dict) and existing["telemetry"].get("final") is True)
     ):
         run_id = existing.get("run_id")
 
