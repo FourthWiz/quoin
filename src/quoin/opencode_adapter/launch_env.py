@@ -124,8 +124,17 @@ class LaunchEnv:
         raise TypeError("a launch environment cannot be pickled or copied")
 
 
+# Variables the launcher itself sets in the child environment.
+LAUNCHER_ENV_NAMES: Tuple[str, ...] = ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR)
+
+
 def _allowed_ambient(name: str) -> bool:
     return name in _ALLOWED_ENV or name.startswith("LC_")
+
+
+def allowed_ambient(name: str) -> bool:
+    """Whether an ambient variable of this name reaches the child."""
+    return _allowed_ambient(name)
 
 
 def _providers_by_id(providers: Union[Mapping[str, Any], Iterable[Any]]) -> Dict[str, Any]:
@@ -170,6 +179,7 @@ def build_env(
     data_dir: Union[str, Path],
     config_path: Union[str, Path],
     redactor: Optional[Redactor] = None,
+    state_dir: Optional[Union[str, Path]] = None,
 ) -> LaunchEnv:
     """Allowlist the ambient environment, then add the launcher's own
     variables and the resolved credentials the compiled file names."""
@@ -191,6 +201,8 @@ def build_env(
 
     values["OPENCODE_CONFIG"] = str(config_path)
     values["XDG_DATA_HOME"] = str(data_dir)
+    if state_dir is not None:
+        values[paths.ENV_STATE_DIR] = str(state_dir)
 
     for env_name in sorted(credential_env):
         provider_id = credential_env[env_name]

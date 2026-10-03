@@ -2009,6 +2009,25 @@ def _opencode_backoff(n: int) -> float:
     return _supervisor.default_backoff(n)
 
 
+def _print_adopt_advice(args: argparse.Namespace, result: Any, project_root: pathlib.Path) -> None:
+    """After a run that stopped for approval, tell the human how to finish the
+    phase in the TUI and record it. Stderr only: stdout stays one JSON line."""
+    if getattr(result, "outcome", None) != "AWAITING_APPROVAL":
+        return
+    try:
+        from quoin.opencode_adapter import gate as _gate  # noqa: PLC0415
+        from quoin.opencode_adapter import runstore  # noqa: PLC0415
+
+        entry = runstore.entry_phase_for_run(args.phase)
+        if not entry:
+            return
+        stage = int(args.stage) if args.stage is not None else None
+        command = _gate.adopt_command(args.task, stage, entry, project_root)
+    except Exception:  # noqa: BLE001 - advice is best effort
+        return
+    print("quoin: or finish the phase in the TUI, then run: " + command, file=sys.stderr)
+
+
 def _cmd_run_opencode(args: argparse.Namespace) -> int:
     """Run one workflow phase on the OpenCode runtime and print a JSON summary.
 
@@ -2079,6 +2098,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                     request = _driver.RunRequest(
                         project_root=project_root, task=args.task, stage=args.stage,
                         phase=args.phase, profile=args.profile, budget=args.budget,
+                        non_interactive=bool(getattr(args, "non_interactive", False)),
                     )
                     on_prepared = None
                     try:
@@ -2120,6 +2140,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                         )
                     except Exception:  # noqa: BLE001 - the hint still reaches the summary
                         pass
+                _print_adopt_advice(args, result, project_root)
                 if args.halt_on_abort and not paths["result"].exists():
                     _write_supervisor_result(paths["memory_dir"], paths["result"], result.outcome, 0)
             finally:
@@ -3068,6 +3089,14 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     run_p.add_argument(
+        "--non-interactive",
+        action="store_true",
+        help=(
+            "Only with --runtime opencode: mark the command argument as a "
+            "non-interactive run."
+        ),
+    )
+    run_p.add_argument(
         "--budget",
         default=None,
         help=(
@@ -3158,6 +3187,7 @@ def main(argv: list[str] | None = None) -> int:
             for flag, value in (
                 ("--profile", args.profile), ("--phase", args.phase),
                 ("--stage", args.stage), ("--new-run", args.new_run),
+                ("--non-interactive", args.non_interactive),
             ):
                 if value:
                     _abort(f"quoin: {flag} is only valid with --runtime opencode")

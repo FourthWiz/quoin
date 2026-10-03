@@ -18,6 +18,7 @@ from .install import PROFILE_RE
 ENV_XDG_CONFIG = "XDG_CONFIG_HOME"
 ENV_XDG_STATE = "XDG_STATE_HOME"
 ENV_MANAGED_POLICY = "QUOIN_OPENCODE_MANAGED_POLICY"
+ENV_STATE_DIR = "QUOIN_OPENCODE_STATE_DIR"
 
 SCHEMA_FILE = "runtime-config.schema.json"
 NATIVE_SCHEMA_FILE = "opencode-1.18.32-config.subset.schema.json"
@@ -69,6 +70,15 @@ def qualification_path(name: str, env: Mapping[str, str], home: Path) -> Path:
 
 def state_dir(env: Mapping[str, str], home: Path) -> Path:
     return state_home(env, home) / "quoin" / "opencode"
+
+
+def launcher_state_dir(env: Mapping[str, str]) -> Optional[Path]:
+    """The adapter state directory a launcher-built process was given, or
+    None when the variable is absent or not an absolute path."""
+    value = env.get(ENV_STATE_DIR)
+    if value and os.path.isabs(value):
+        return Path(value)
+    return None
 
 
 def managed_policy_path(env: Mapping[str, str]) -> Optional[Path]:

@@ -201,6 +201,10 @@ def _same_request(record: Mapping[str, Any], request: "driver.RunRequest") -> bo
         and stored.get("stage") == request.stage
         and str(stored.get("phase", "")).replace("-", "_") == str(request.phase).replace("-", "_")
         and stored.get("profile") == request.profile
+        and stored.get("workspace") == (
+            str(request.workspace) if getattr(request, "workspace", None) is not None else None
+        )
+        and bool(stored.get("non_interactive")) == bool(getattr(request, "non_interactive", False))
     )
 
 
