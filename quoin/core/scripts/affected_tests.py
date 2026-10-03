@@ -1737,6 +1737,101 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/docs/hooks-guide.md",
         "quoin/dev/tests/test_context_tracker_install.py",
     ),
+    # Opt-in workflow-tasks mod: same reasoning as the context-tracker rows. The
+    # shared fixture table, the pure logic and its tests also feed the Python
+    # parity check against status_graph.detect_phase.
+    (
+        "quoin/plugins/workflow-tasks/.claude-plugin/plugin.json",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/.claude-plugin/plugin.json",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/hooks.json",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/hooks.json",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/register.test.ts",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/register.test.ts",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/register.tsx",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/register.tsx",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/stage-fixtures.ts",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/stage-fixtures.ts",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/stage-fixtures.ts",
+        "quoin/dev/tests/test_workflow_tasks_stage_parity.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/tasks.test.ts",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/tasks.test.ts",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/tasks.test.ts",
+        "quoin/dev/tests/test_workflow_tasks_stage_parity.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/tasks.ts",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/tasks.ts",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/hooks/tasks.ts",
+        "quoin/dev/tests/test_workflow_tasks_stage_parity.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/tsconfig.json",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/tsconfig.json",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/types/index.d.ts",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/plugins/workflow-tasks/types/index.d.ts",
+        "quoin/dev/tests/test_workflow_tasks_plugin_ts.py",
+    ),
+    (
+        "quoin/install.sh",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_workflow_tasks_install.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

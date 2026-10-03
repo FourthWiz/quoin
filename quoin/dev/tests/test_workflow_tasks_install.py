@@ -573,3 +573,43 @@ class TestDrift:
     def test_foreign_folder_is_not_compared(self, tmp_path):
         _foreign(tmp_path)
         assert inst.compute_drift(QUOIN_SRC, tmp_path, categories=("plugins",)) == []
+
+
+# ── affected-tests mapping ──────────────────────────────────────────────────
+
+class TestAffectedTests:
+    @staticmethod
+    def _select(changed: str) -> tuple[str, list]:
+        import importlib.util
+        import sys
+
+        path = QUOIN_SRC / "core" / "scripts" / "affected_tests.py"
+        spec = importlib.util.spec_from_file_location("_wt_affected_tests", path)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = mod
+        spec.loader.exec_module(mod)
+        selectors, _unmatched, ignored = mod.map_changed_to_tests([changed], REPO)
+        return " ".join(str(s) for s in selectors), ignored
+
+    def test_pure_logic_selects_install_ts_and_parity_tests(self):
+        joined, ignored = self._select("quoin/plugins/workflow-tasks/hooks/tasks.ts")
+        assert "test_workflow_tasks_install.py" in joined
+        assert "test_workflow_tasks_plugin_ts.py" in joined
+        assert "test_workflow_tasks_stage_parity.py" in joined
+        assert not ignored
+
+    @pytest.mark.parametrize("rel", sorted(SOURCE_FILES))
+    def test_every_plugin_file_selects_its_install_and_ts_tests(self, rel):
+        joined, ignored = self._select(f"quoin/plugins/workflow-tasks/{rel}")
+        assert "test_workflow_tasks_install.py" in joined
+        assert "test_workflow_tasks_plugin_ts.py" in joined
+        assert not ignored
+
+    def test_install_script_and_hooks_guide_select_the_install_tests(self):
+        for changed in ("quoin/install.sh", "quoin/docs/hooks-guide.md"):
+            joined, _ = self._select(changed)
+            assert "test_workflow_tasks_install.py" in joined, changed
+
+    def test_status_graph_change_selects_the_parity_test(self):
+        joined, _ = self._select("quoin/core/scripts/status_graph.py")
+        assert "test_workflow_tasks_stage_parity.py" in joined
