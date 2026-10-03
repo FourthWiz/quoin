@@ -763,6 +763,79 @@ def apply_context_tracker(
     return apply_mod(CONTEXT_TRACKER, source_dir, dest_root, mode=mode)
 
 
+WORKFLOW_TASKS = OptInMod(
+    "workflow-tasks",
+    (
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "hooks/register.tsx",
+        "hooks/tasks.ts",
+        "types/index.d.ts",
+    ),
+)
+
+# Every opt-in mod, in the order the install applies them.
+OPT_IN_MODS: tuple[OptInMod, ...] = (CONTEXT_TRACKER, WORKFLOW_TASKS)
+
+WORKFLOW_TASKS_NAME = WORKFLOW_TASKS.name
+WORKFLOW_TASKS_FILES: tuple[str, ...] = WORKFLOW_TASKS.files
+
+
+def workflow_tasks_source(source_dir: pathlib.Path) -> pathlib.Path:
+    return mod_source(WORKFLOW_TASKS, source_dir)
+
+
+def workflow_tasks_dest(dest_root: pathlib.Path) -> pathlib.Path:
+    return mod_dest(WORKFLOW_TASKS, dest_root)
+
+
+def workflow_tasks_state(dest_root: pathlib.Path) -> str:
+    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
+    return mod_state(WORKFLOW_TASKS, dest_root)
+
+
+def missing_workflow_tasks_sources(source_dir: pathlib.Path) -> list[str]:
+    return missing_mod_sources(WORKFLOW_TASKS, source_dir)
+
+
+def workflow_tasks_preflight(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    mode: Optional[str],
+    is_project_mode: bool,
+    home_dest_root: pathlib.Path,
+    cwd_dest_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
+    """Pure check run before anything is written; returns (errors, warnings)."""
+    return mod_preflight(
+        WORKFLOW_TASKS,
+        source_dir,
+        dest_root,
+        mode=mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=home_dest_root,
+        cwd_dest_root=cwd_dest_root,
+    )
+
+
+def deploy_workflow_tasks(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
+    """Copy the allowlisted mod files; returns the number of files handled."""
+    return deploy_mod(WORKFLOW_TASKS, source_dir, dest_root, strict=strict)
+
+
+def remove_workflow_tasks(dest_root: pathlib.Path) -> bool:
+    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
+    return remove_mod(WORKFLOW_TASKS, dest_root)
+
+
+def apply_workflow_tasks(
+    source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
+) -> str:
+    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
+    return apply_mod(WORKFLOW_TASKS, source_dir, dest_root, mode=mode)
+
+
 # ── IVG-136: read-only deploy-drift detection ────────────────────────────────
 
 # Category names compute_drift knows how to compare. Kept in sync with the
@@ -868,13 +941,16 @@ def compute_drift(
         for fname in CORE_WORKFLOW_FILES:
             _check("core-workflow", src_workflow / fname, dst_workflow / fname)
 
-    # The mod is optional: compare it only when an installed copy exists, so a
+    # Mods are optional: compare each only when an installed copy exists, so a
     # never-installed or foreign folder is never reported as drift.
-    if "plugins" in selected and context_tracker_state(dest_root) == "installed":
-        src_ct = context_tracker_source(source_dir)
-        dst_ct = context_tracker_dest(dest_root)
-        for rel in CONTEXT_TRACKER_FILES:
-            _check("plugins", src_ct / rel, dst_ct / rel)
+    if "plugins" in selected:
+        for mod in OPT_IN_MODS:
+            if mod_state(mod, dest_root) != "installed":
+                continue
+            src_mod = mod_source(mod, source_dir)
+            dst_mod = mod_dest(mod, dest_root)
+            for rel in mod.files:
+                _check("plugins", src_mod / rel, dst_mod / rel)
 
     return drift
 

@@ -132,3 +132,67 @@ class TestContextTrackerMessages:
     def test_no_mode_and_absent_is_silent(self, tmp_path, capsys):
         assert inst.apply_context_tracker(QUOIN_SRC, tmp_path / "dest", mode=None) == "noop"
         assert capsys.readouterr().out == ""
+
+
+class TestRegistry:
+    def test_names_are_unique_and_match_folders(self):
+        names = [mod.name for mod in inst.OPT_IN_MODS]
+        assert names == ["context-tracker", "workflow-tasks"]
+        assert len(set(names)) == len(names)
+
+    def test_every_allowlisted_file_exists_in_source(self):
+        for mod in inst.OPT_IN_MODS:
+            assert inst.missing_mod_sources(mod, QUOIN_SRC) == [], mod.name
+
+    def test_allowlists_exclude_test_and_tooling_files(self):
+        for mod in inst.OPT_IN_MODS:
+            for rel in mod.files:
+                assert "tsconfig" not in rel, (mod.name, rel)
+                assert not rel.endswith(".test.ts"), (mod.name, rel)
+                assert "stage-fixtures" not in rel, (mod.name, rel)
+                assert ".claude-plugin/types/" not in rel, (mod.name, rel)
+
+    def test_workflow_tasks_allowlist_is_the_five_runtime_files(self):
+        assert inst.WORKFLOW_TASKS.files == (
+            ".claude-plugin/plugin.json",
+            "hooks/hooks.json",
+            "hooks/register.tsx",
+            "hooks/tasks.ts",
+            "types/index.d.ts",
+        )
+
+    def test_wrappers_are_bound_to_their_mods(self):
+        assert inst.CONTEXT_TRACKER_FILES is inst.CONTEXT_TRACKER.files
+        assert inst.WORKFLOW_TASKS_FILES is inst.WORKFLOW_TASKS.files
+        assert inst.CONTEXT_TRACKER_NAME == "context-tracker"
+        assert inst.WORKFLOW_TASKS_NAME == "workflow-tasks"
+
+    def test_generic_messages_carry_the_mod_name(self, tmp_path, capsys):
+        dest = tmp_path / "dest"
+        folder = dest / "skills" / "workflow-tasks"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="with") == "deployed"
+        assert capsys.readouterr().out == f"Deployed workflow-tasks mod to {folder}\n"
+        assert inst.apply_workflow_tasks(QUOIN_SRC, dest, mode="remove") == "removed"
+        assert capsys.readouterr().out == f"Removed workflow-tasks mod from {folder}\n"
+        errors, _ = inst.workflow_tasks_preflight(
+            QUOIN_SRC,
+            tmp_path / "project",
+            mode="with",
+            is_project_mode=True,
+            home_dest_root=dest,
+            cwd_dest_root=tmp_path / "project",
+        )
+        assert errors == []
+        inst.deploy_workflow_tasks(QUOIN_SRC, dest, strict=True)
+        errors, _ = inst.workflow_tasks_preflight(
+            QUOIN_SRC,
+            tmp_path / "project",
+            mode="with",
+            is_project_mode=True,
+            home_dest_root=dest,
+            cwd_dest_root=tmp_path / "project",
+        )
+        assert errors == [
+            f"quoin: user-scope copy installed at {folder}; "
+            "remove it first (--remove-workflow-tasks --scope user) to avoid a double load"
+        ]
