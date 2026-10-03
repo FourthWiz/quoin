@@ -1013,7 +1013,7 @@ PLAN_PRODUCER_PHASES = frozenset({"plan", "thorough_plan"})
 # continue_work only save or restore session state, and end_of_task ships work
 # that was already gated. A phase added to the manifest as runnable must be
 # mapped by `entry_phase_for_run` or listed here.
-UNMAPPED_RUN_PHASES = ("gate", "checkpoint", "continue_work", "end_of_task")
+UNMAPPED_RUN_PHASES = ("gate", "checkpoint", "continue_work", "end_of_task", "run")
 
 _ENTRY_PHASE_FOR_RUN = {
     "discover": "discover",

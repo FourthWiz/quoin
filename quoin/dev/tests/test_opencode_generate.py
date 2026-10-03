@@ -883,7 +883,7 @@ def test_load_inputs_wraps_recursion_error_from_check_manifest(monkeypatch):
 # render() on the real tree: file set, path families, bindings
 
 
-def test_render_source_dir_renders_exactly_32_files_with_no_run_command():
+def test_render_source_dir_renders_exactly_34_files_with_run_command():
     files = generate.render_source_dir(SOURCE_DIR)
     manifest_data = _load_real_manifest()
     supported = _supported_rows(manifest_data)
@@ -896,8 +896,9 @@ def test_render_source_dir_renders_exactly_32_files_with_no_run_command():
     assert command_paths == [".opencode/commands/%s.md" % n for n in expected_names]
     assert skill_paths == [".opencode/skills/%s/SKILL.md" % n for n in expected_names]
     assert len(agent_paths) == len(manifest_data["roles"])
-    assert len(files) == 32
-    assert not any("quoin-run" in k for k in files)
+    assert len(files) == 34
+    assert ".opencode/commands/quoin-run.md" in files
+    assert ".opencode/skills/quoin-run/SKILL.md" in files
 
 
 def test_render_command_agent_binding_matches_manifest_rows():

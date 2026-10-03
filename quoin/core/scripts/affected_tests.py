@@ -1649,6 +1649,10 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/core/skills/thorough_plan.md",
         "quoin/dev/tests/test_opencode_generate.py",
     ),
+    (
+        "quoin/core/skills/run.md",
+        "quoin/dev/tests/test_opencode_generate.py",
+    ),
     # Completion-marker, retry-budget and headless no-yield prose guards.
     (
         "quoin/adapters/claude/skills/run/SKILL.md",

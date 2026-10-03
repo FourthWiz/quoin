@@ -93,10 +93,6 @@
       "reason": "The adapter owns asset generation and name translation only, never provider or process configuration"
     },
     {
-      "name": "any asset for run",
-      "reason": "Phase orchestration needs the runtime driver; a stub command would be misleading"
-    },
-    {
       "name": "model pinning in agent files",
       "reason": "Generated agent frontmatter carries no model key, so nothing pins or leaks to a provider"
     }
@@ -552,15 +548,22 @@
     },
     {
       "id": "run",
-      "status": "documentation-only",
-      "reason": "Phase orchestration needs the OpenCode runtime driver; no OpenCode asset is generated for this entry.",
+      "status": "supported",
+      "reason": "Generated next-step command; offline-verified; live runtime evidence pending",
       "target_milestone": "workflow-execution",
       "catalog": {
         "user_facing": true,
         "spawn_target": false
       },
-      "opencode": {},
-      "assets": [],
+      "opencode": {
+        "command": "quoin-run",
+        "skill": "quoin-run",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
       "live_runtime_evidence": false,
       "evidence": []
     },
