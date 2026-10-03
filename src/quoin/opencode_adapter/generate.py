@@ -67,6 +67,23 @@ ROLE_SCRIPTS: Dict[str, tuple] = {
 # (`packages/opencode/src/tool/shell.ts` L99, L119-121).
 REDIRECT_RULE = {"*>*": "ask", "*<*": "ask"}
 
+# The Quoin helper commands each role may run directly. A helper allow covers
+# every argument, so `shell_rule` follows each one with asks for the
+# arguments that could redirect it at another tree, another project or a
+# secrets file.
+HELPER_ALLOWS: Dict[str, tuple] = {
+    "gate": ("quoin opencode gate *",),
+    "coordinator": (
+        "quoin opencode gate *",
+        "quoin opencode handoff *",
+        "quoin opencode workflow next *",
+    ),
+    "implementer": ("quoin opencode test-run *",),
+}
+
+# Argument fragments asked about after every helper allow.
+HELPER_ASK_FRAGMENTS = ("--source-dir", "--project-root", ".env")
+
 _READ_ONLY_ROLES = ("critic", "reviewer")
 
 # The eight Quoin roles this generator knows about. Used only for the
@@ -98,11 +115,19 @@ def artifact_edit_rule(base: str) -> Dict[str, str]:
 def shell_rule(role: str) -> Dict[str, str]:
     """The bash permission map for `role`: ask by default, one allow per
     allowlisted helper script (argument tail included, never argument-wide),
-    then the redirection ask rules, always last so they win under
+    one per helper command followed by asks for its tree, project and
+    secrets-file arguments, then the redirection ask rules, always last so they win under
     last-match evaluation."""
     rule: Dict[str, str] = {"*": "ask"}
     for name in sorted(ROLE_SCRIPTS.get(role, ())):
         rule["quoin opencode script %s *" % name] = "allow"
+    helpers = HELPER_ALLOWS.get(role, ())
+    for pattern in helpers:
+        rule[pattern] = "allow"
+    for pattern in helpers:
+        prefix = pattern[:-2] if pattern.endswith(" *") else pattern
+        for fragment in HELPER_ASK_FRAGMENTS:
+            rule["%s *%s*" % (prefix, fragment)] = "ask"
     rule.update(REDIRECT_RULE)
     return rule
 

@@ -183,7 +183,8 @@ def command_env(environ: Mapping[str, str]) -> Dict[str, str]:
     through ambiently are kept; that drops the launcher's own variables, any
     provider credential and the proxy settings. Otherwise only the launcher's
     own names are removed. The state-directory variable never reaches the
-    command either way."""
+    command either way. Outside the launcher this also strips a person's own
+    variables that happen to share a launcher name."""
     launched = paths.ENV_STATE_DIR in environ
     out: Dict[str, str] = {}
     for name, value in environ.items():
@@ -244,8 +245,9 @@ def _ensure_state_root(state_root: Path) -> None:
 
 def _running_identity(project_root, task: str) -> Tuple[Optional[str], Optional[int]]:
     """The run id of the task's pointer when that run is `running`, and the
-    highest attempt number of it that is itself `running`; `(None, None)`
-    when there is no such run."""
+    highest attempt number of it that has been started (any attempt that is
+    not merely staged, since the record can be read just before the attempt
+    itself is marked running); `(None, None)` when there is no such run."""
     try:
         directory = runstore.inspect_store(project_root)
         if directory is None:
@@ -260,7 +262,7 @@ def _running_identity(project_root, task: str) -> Tuple[Optional[str], Optional[
         return None, None
     numbers = [
         item.get("attempt") for item in record.get("attempts") or []
-        if isinstance(item, dict) and item.get("state") == "running"
+        if isinstance(item, dict) and item.get("state") != "staged"
         and isinstance(item.get("attempt"), int) and not isinstance(item.get("attempt"), bool)
     ]
     return str(record["run_id"]), (max(numbers) if numbers else None)

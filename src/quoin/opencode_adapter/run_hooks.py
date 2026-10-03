@@ -12,14 +12,16 @@ the one exception, handled by the caller from ``HookOutcome.violation``).
 """
 from __future__ import annotations
 
+import json
 import os
 import re
+import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
-from . import cost, evidence, gate, runstore
+from . import boundaries, cost, evidence, gate, runstore, testrun
 
 _CRITIC_RE = re.compile(r"^critic-response-(\d+)\.md$")
 _REVIEW_RE = re.compile(r"^review-(\d+)\.md$")
@@ -67,6 +69,19 @@ def open_run(project_root: Any, task: str) -> Optional[str]:
     run_id = pointer_run(project_root, task)
     record = _load(project_root, run_id) if run_id else None
     return run_id if record is not None and cost.is_open(record) else None
+
+
+def before_boundary(
+    project_root: Any, task: str, clock: Optional[Callable[[], float]] = None,
+) -> Optional[boundaries.Listing]:
+    """The boundary listing taken before the phase runs, or None when the task
+    folder is absent or the listing cannot be taken. Never raises."""
+    try:
+        if not cost.task_folder_present(project_root, task):
+            return None
+        return boundaries.take_listing(project_root, clock=clock)
+    except Exception:  # noqa: BLE001 - a missing listing only leaves the boundary unrecorded
+        return None
 
 
 def prelaunch(
@@ -180,6 +195,59 @@ def _write_evidence_note(project_root: Any, run_id: str, note: Mapping[str, Any]
     runstore.write_record(directory, record)
 
 
+def _write_boundary_note(project_root: Any, run_id: str, result: "boundaries.BoundaryResult") -> None:
+    directory = runstore.inspect_store(project_root)
+    record = runstore.load_record(directory, run_id) if directory is not None else None
+    if record is None:
+        return
+    telemetry = record.get("telemetry")
+    if not isinstance(telemetry, dict):
+        telemetry = {}
+        record["telemetry"] = telemetry
+    telemetry["boundary"] = {
+        "status": result.status, "reason": result.reason,
+        "violations": [dict(v) for v in result.violations],
+    }
+    runstore.write_record(directory, record)
+
+
+def _last_attempt_number(record: Mapping[str, Any]) -> Optional[int]:
+    numbers = [
+        a.get("attempt") for a in record.get("attempts") or []
+        if isinstance(a, Mapping) and a.get("state") != "staged"
+        and isinstance(a.get("attempt"), int) and not isinstance(a.get("attempt"), bool)
+    ]
+    return max(numbers) if numbers else None
+
+
+_MAX_RESULT_BYTES = 256 * 1024
+
+
+def _read_test_result(
+    state_root: Any, project_root: Any, task: str, stage: Optional[int], record: Mapping[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """The stage's stored test result when it passed and belongs to this run's
+    last attempt; otherwise None. The match is on the run id and attempt
+    number, never on timestamps from different clocks."""
+    if state_root is None:
+        return None
+    try:
+        path = testrun.result_path(state_root, project_root, task, stage)
+        info = os.lstat(str(path))
+        if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_RESULT_BYTES:
+            return None
+        with open(str(path), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError, runstore.RunStoreError):
+        return None
+    if not isinstance(data, dict) or data.get("outcome") != testrun.PASSED:
+        return None
+    attempt = _last_attempt_number(record)
+    if data.get("run_id") != record.get("run_id") or attempt is None or data.get("attempt") != attempt:
+        return None
+    return data
+
+
 def _prefix_changed(project_root: Any, run_id: str) -> bool:
     record = _load(project_root, run_id)
     telemetry = (record or {}).get("telemetry")
@@ -201,6 +269,7 @@ def _dedup(items: List[Any]) -> List[Any]:
 def _record_entry(
     project_root: Any, task: str, record: Mapping[str, Any], outcome: cost.CostOutcome,
     source_dir: Any, clock: Callable[[], float],
+    boundary: Optional["boundaries.BoundaryResult"] = None, state_root: Any = None,
 ) -> Dict[str, Any]:
     """Compose and record the run's workflow entry; returns the telemetry note."""
     request = record.get("request") if isinstance(record.get("request"), Mapping) else {}
@@ -256,6 +325,19 @@ def _record_entry(
         harvested = [{"path": rel, "sha256": digest}]
 
     snapshot = evidence.take_snapshot(project_root, task, entry_phase)
+    boundary_value: Optional[str] = "violation" if violation else None
+    extra: Dict[str, Any] = {}
+    if boundary is not None:
+        if boundary.status == "violation":
+            boundary_value = "violation"
+        elif boundary.status == "ok" and not violation:
+            boundary_value = "ok"
+        if boundary_value is None:
+            extra["boundary_reason"] = boundary.reason
+    if entry_phase == "implement":
+        tests = _read_test_result(state_root, project_root, task, stage, record)
+        if tests is not None:
+            extra["tests"] = tests
     fields: Dict[str, Any] = {
         "ledger_uuids": _dedup(ledger_uuids),
         "ledger_lines_appended_during_run": _dedup(appended),
@@ -269,7 +351,7 @@ def _record_entry(
         fields["resume_blocked"] = record["resume_blocked"]
     evidence.record_evidence(
         project_root, task, stage, entry_phase, "phase-run", snapshot, runs=runs,
-        boundary="violation" if violation else None, clock=clock, **fields,
+        boundary=boundary_value, clock=clock, **extra, **fields,
     )
     note["recorded"] = True
     if outputs_error is not None:
@@ -277,15 +359,51 @@ def _record_entry(
     return note
 
 
+def _boundary_verdict(
+    project_root: Any, task: str, record: Mapping[str, Any], run_id: str,
+    before: Optional[boundaries.Listing], after: Optional[boundaries.Listing],
+    superseded_candidate: Optional[str],
+) -> Optional["boundaries.BoundaryResult"]:
+    """The boundary result for a closed run, or None when no check applies."""
+    if before is None or after is None:
+        return None
+    key = boundaries.role_key(record)
+    if key is None:
+        return None
+    request = record.get("request") if isinstance(record.get("request"), Mapping) else {}
+    try:
+        stage = runstore.normalize_stage(request.get("stage"))
+    except ValueError:
+        stage = None
+    return boundaries.verify(
+        key, before, after, task=task, run_id=run_id, prior_run_id=superseded_candidate,
+        stage_rel=None if stage is None else "stage-%d" % stage,
+        window_partial=superseded_candidate == run_id, other_task_policy="unverified",
+    )
+
+
 def after_phase_run(
     project_root: Any, task: str, result: Any, *, mark: Optional[Mapping[str, Any]], source_dir: Any,
     superseded_candidate: Optional[str], clock: Callable[[], float] = time.time,
+    boundary_before: Optional[boundaries.Listing] = None, state_root: Any = None,
 ) -> HookOutcome:
     """Cost the run, close a superseded one, and record the run's entry.
-    The caller holds the task lock. Never raises."""
+
+    With `boundary_before` the role boundary is also checked: the second
+    listing is the first thing taken, before any hook write, and the entry
+    records `violation`, `ok` or no result with the reason. The window is
+    partial (never `ok`) when the run was already open at the first listing.
+    `state_root` is where the stage's test result is read from. The caller
+    holds the task lock. Never raises."""
     out = HookOutcome()
     run_id = getattr(result, "run_id", None)
     own: List[str] = []
+    boundary_after: Optional[boundaries.Listing] = None
+    if boundary_before is not None:
+        try:
+            boundary_after = boundaries.take_listing(project_root, clock=clock)
+        except Exception:  # noqa: BLE001
+            boundary_after = None
 
     # supersession: the pointer moved away from a run that was still open
     try:
@@ -343,10 +461,20 @@ def after_phase_run(
         if (telemetry.get("evidence") or {}).get("recorded") is True:
             out.entry_recorded = True
             return out
+        verdict = _boundary_verdict(
+            project_root, task, record, run_id, boundary_before, boundary_after, superseded_candidate)
+        if verdict is not None:
+            if verdict.status == "violation":
+                out.violation = True
+            try:
+                _write_boundary_note(project_root, run_id, verdict)
+            except Exception as exc:  # noqa: BLE001
+                _note_error(project_root, run_id, "boundary", exc)
         if getattr(result, "outcome", None) == "REFUSED":
             note: Dict[str, Any] = {"recorded": False, "entry_phase": None, "stage": None, "reason": "refused"}
         else:
-            note = _record_entry(project_root, task, record, outcome, source_dir, clock)
+            note = _record_entry(
+                project_root, task, record, outcome, source_dir, clock, boundary=verdict, state_root=state_root)
         out.entry_recorded = bool(note.get("recorded"))
         out.reason = note.get("reason")
         _write_evidence_note(project_root, run_id, note)

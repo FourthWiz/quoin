@@ -1652,6 +1652,12 @@ _RECORD_ERROR_MESSAGES = {
 }
 
 
+def _launcher_state_env() -> str:
+    from quoin.opencode_adapter import paths  # noqa: PLC0415
+
+    return paths.ENV_STATE_DIR
+
+
 def _cmd_opencode_gate(args: argparse.Namespace) -> int:
     """`quoin opencode gate`: evaluate one gated phase and print one JSON line.
 
@@ -1666,6 +1672,17 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
             explanation = _read_explanation(args.explanation_file)
         except OSError:
             return _gate_refusal("explanation-unreadable", "the explanation file cannot be read")
+        if explanation is not None and _launcher_state_env() in os.environ:
+            # Under the launcher the note must come from inside the artifact
+            # root, so the helper cannot be used to copy another file into an
+            # audit artifact.
+            root = os.path.realpath(str(project_root / ".workflow_artifacts"))
+            real = os.path.realpath(args.explanation_file)
+            if os.path.commonpath([root, real]) != root:
+                return _gate_refusal(
+                    "explanation-outside-artifacts",
+                    "the explanation file must be inside the workflow artifact folder",
+                )
     try:
         source_dir = _resolve_source_dir(args.source_dir)
     except SystemExit:
@@ -2123,9 +2140,10 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
             )
         else:
             try:
-                source_dir = mark = candidate = None
+                source_dir = mark = candidate = listing = state_root = None
                 try:
                     drv = _make_opencode_driver(project_root)
+                    state_root = getattr(drv, "state_root", None)
                     request = _driver.RunRequest(
                         project_root=project_root, task=args.task, stage=args.stage,
                         phase=args.phase, profile=args.profile, budget=args.budget,
@@ -2139,6 +2157,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                             source_dir = None
                         mark = run_hooks.before_run(project_root, args.task)
                         candidate = run_hooks.open_run(project_root, args.task)
+                        listing = run_hooks.before_boundary(project_root, args.task)
                         if runstore.normalize_phase(args.phase) == "end_of_task":
                             on_prepared = run_hooks.prelaunch(project_root, mark, source_dir)
                     except Exception:  # noqa: BLE001 - costing never blocks the run
@@ -2155,7 +2174,8 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                 try:
                     hook = run_hooks.after_phase_run(
                         project_root, args.task, result, mark=mark, source_dir=source_dir,
-                        superseded_candidate=candidate,
+                        superseded_candidate=candidate, boundary_before=listing,
+                        state_root=state_root,
                     )
                     if hook.violation and result.outcome not in ("CANCELLED", "REFUSED"):
                         result = dataclasses.replace(
@@ -2833,6 +2853,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opencode_gate_p = opencode_sub.add_parser(
         "gate",
+        allow_abbrev=False,
         description=(
             "Evaluate one gated phase of a task with the deterministic checks and print one "
             "JSON line. Without --write nothing is written and no lock is taken. Exit 0 PASS, "
@@ -2888,6 +2909,7 @@ def main(argv: list[str] | None = None) -> int:
 
     opencode_handoff_p = opencode_sub.add_parser(
         "handoff",
+        allow_abbrev=False,
         description=(
             "Write, show or validate the portable continuation record of a task. Prints one JSON "
             "line. Exit 0, 2 refused, 3 task lock held (write), 8 record not written."
@@ -2904,7 +2926,7 @@ def main(argv: list[str] | None = None) -> int:
             sub_p.add_argument("--profile", default=None, help="Runtime profile; must match the one recorded for the task.")
 
     handoff_write_p = handoff_sub.add_parser(
-        "write", help="Build the record from the workflow state, run records and the tree",
+        "write", allow_abbrev=False, help="Build the record from the workflow state, run records and the tree",
         description="Build and write the continuation record (takes the task lock).",
     )
     _handoff_common(handoff_write_p, profile=True)
@@ -2917,12 +2939,12 @@ def main(argv: list[str] | None = None) -> int:
         help="A note to record (repeatable, at most 20 per call, 2000 characters each).",
     )
     handoff_show_p = handoff_sub.add_parser(
-        "show", help="Validate the record and print the next steps",
+        "show", allow_abbrev=False, help="Validate the record and print the next steps",
         description="Validate the record against the tree and print what to do next. Writes nothing.",
     )
     _handoff_common(handoff_show_p, profile=True)
     handoff_validate_p = handoff_sub.add_parser(
-        "validate", help="Check the record alone",
+        "validate", allow_abbrev=False, help="Check the record alone",
         description="Check the record file against the schema. Reads nothing else.",
     )
     _handoff_common(handoff_validate_p, profile=False)
