@@ -492,6 +492,7 @@ def deploy_core_scripts(source_dir: pathlib.Path, dest_root: pathlib.Path) -> No
 # IVG-248: runtime-neutral workflow semantics (rules.md, task-layout.md, session-state.md,
 # cost-ledger.md, skills.md, skills.json) plus the inter-agent handoff spec (T-06, D-10).
 CORE_WORKFLOW_FILES = (
+    "continuation-handoff.md",
     "cost-ledger.md",
     "handoff-format-reference.md",
     "handoff-format.md",
