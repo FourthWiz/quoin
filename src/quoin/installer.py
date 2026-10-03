@@ -692,7 +692,9 @@ def apply_context_tracker(
 # Category names compute_drift knows how to compare. Kept in sync with the
 # deploy manifests above. The CLI (deploy_drift_check.py) surfaces this list as
 # `checked_categories` and names everything NOT here as `uncovered_categories`.
-DRIFT_CATEGORIES: tuple[str, ...] = ("skills", "scripts", "core-scripts", "core-workflow", "memory")
+DRIFT_CATEGORIES: tuple[str, ...] = (
+    "skills", "scripts", "core-scripts", "core-workflow", "memory", "plugins",
+)
 
 
 class DriftEntry(NamedTuple):
@@ -716,7 +718,8 @@ def compute_drift(
 
     Iterates the SAME manifest tuples the deploy functions use — TIER1_MEMORY_FILES,
     CANONICAL_SKILLS (via resolve_skill_source_md, + preamble.md when the source stub
-    carries one), DEPLOYED_SCRIPTS, CORE_SCRIPTS — and compares each deployed file
+    carries one), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
+    context-tracker mod is installed) CONTEXT_TRACKER_FILES — and compares each deployed file
     under dest_root against expected_deployed_content(src, dest_root). Per file:
       * deployed copy absent            -> DriftEntry(..., reason="missing")
       * deployed bytes != expected      -> DriftEntry(..., reason="stale")
@@ -788,6 +791,14 @@ def compute_drift(
         dst_workflow = dest_root / "core" / "workflow"
         for fname in CORE_WORKFLOW_FILES:
             _check("core-workflow", src_workflow / fname, dst_workflow / fname)
+
+    # The mod is optional: compare it only when an installed copy exists, so a
+    # never-installed or foreign folder is never reported as drift.
+    if "plugins" in selected and context_tracker_state(dest_root) == "installed":
+        src_ct = context_tracker_source(source_dir)
+        dst_ct = context_tracker_dest(dest_root)
+        for rel in CONTEXT_TRACKER_FILES:
+            _check("plugins", src_ct / rel, dst_ct / rel)
 
     return drift
 

@@ -555,14 +555,17 @@ class TestDriftScript:
         assert tuple(ddc._CHECKED_CATEGORIES) == tuple(inst.DRIFT_CATEGORIES)
         assert "plugins" in ddc._COVERAGE_QUALIFIER
 
-    def test_plain_install_clean(self, ddc, shared, tmp_path):
-        assert self._run(ddc, _fresh_copy(shared[1], tmp_path)) == 0
+    def test_plain_install_clean(self, ddc, shared):
+        assert self._run(ddc, shared[1]) == 0
 
-    def test_opted_in_install_clean(self, ddc, shared, tmp_path):
-        assert self._run(ddc, _fresh_copy(shared[3], tmp_path)) == 0
+    def test_opted_in_install_clean(self, ddc, shared):
+        assert self._run(ddc, shared[3]) == 0
 
     def test_edited_mod_file_is_drift(self, ddc, shared, tmp_path):
-        dest = _fresh_copy(shared[3], tmp_path)
+        # Deployed files embed their install path, so a fresh install (not a
+        # copied tree) is needed for the drift run to start clean.
+        rc, dest = _install(tmp_path, "drifted", with_ct=True)
+        assert rc == 0 and self._run(ddc, dest) == 0
         (dest / "skills" / "context-tracker" / "hooks" / "register.tsx").write_text("// edited")
         assert self._run(ddc, dest) == 1
 

@@ -533,7 +533,7 @@ def test_sys_path_not_duplicated_across_two_runs(ddc, tmp_path, capsys):
 
 def test_coverage_qualifier_byte_identity(ddc):
     assert ddc._COVERAGE_QUALIFIER == (
-        "Deploy drift: PASS (checked: skills, scripts, core-scripts, core-workflow, memory; "
+        "Deploy drift: PASS (checked: skills, scripts, core-scripts, core-workflow, memory, plugins; "
         "not covered: hooks, CLAUDE.md, settings.json, dashboard assets, "
         "QUICKSTART.md — see D-07/D-09)"
     )
