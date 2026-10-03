@@ -1658,6 +1658,26 @@ def _launcher_state_env() -> str:
     return paths.ENV_STATE_DIR
 
 
+def _launcher_redirect(args: argparse.Namespace) -> "tuple[str, str] | None":
+    """Under the launcher, a helper may not be pointed at another source tree or
+    project. The shell permission asks cannot be the only guard: quoting splits
+    an option name in the statement text yet reaches the parser whole."""
+    from quoin.opencode_adapter import scripts  # noqa: PLC0415
+
+    if _launcher_state_env() not in os.environ:
+        return None
+    if getattr(args, "source_dir", None) is not None:
+        return "source-dir-refused", "the quoin source directory cannot be chosen from an agent shell"
+    cwd = os.path.realpath(os.getcwd())
+    allowed = {cwd}
+    found = scripts.find_project_root(pathlib.Path(cwd))
+    if found is not None:
+        allowed.add(os.path.realpath(str(found)))
+    if os.path.realpath(str(args.project_root)) not in allowed:
+        return "project-root-refused", "the project root cannot be chosen from an agent shell"
+    return None
+
+
 def _cmd_opencode_gate(args: argparse.Namespace) -> int:
     """`quoin opencode gate`: evaluate one gated phase and print one JSON line.
 
@@ -1665,6 +1685,9 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
     is written and no lock is taken."""
     from quoin.opencode_adapter import gate, runstore  # noqa: PLC0415
 
+    redirect = _launcher_redirect(args)
+    if redirect is not None:
+        return _gate_refusal(*redirect)
     project_root = pathlib.Path(args.project_root).resolve()
     explanation = None
     if args.explanation_file:
@@ -1826,6 +1849,9 @@ def _handoff_source(args: argparse.Namespace):
         runstore.check_task_name(args.task)
     except runstore.RunStoreError:
         return None, _handoff_refusal("invalid-task-name", "the task name is not valid")
+    redirect = _launcher_redirect(args)
+    if redirect is not None:
+        return None, _handoff_refusal(*redirect)
     try:
         return _resolve_source_dir(args.source_dir), None
     except SystemExit:
@@ -2199,6 +2225,10 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
     finally:
         for sig, handler in previous.items():
             signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+    if hint and getattr(args, "non_interactive", False) and "--non-interactive" not in hint:
+        # The stored hint stays as written; the printed one keeps the run's mode
+        # so following it does not start a fresh interactive run.
+        hint = hint + " --non-interactive"
     return emit(result, hint)
 
 

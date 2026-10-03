@@ -455,6 +455,9 @@ def after_phase_run(
             note_now = (stored.get("telemetry") or {}).get("evidence") or {}
             out.entry_recorded = note_now.get("recorded") is True
             out.reason = note_now.get("reason")
+            stored_boundary = (stored.get("telemetry") or {}).get("boundary") or {}
+            if isinstance(stored_boundary, Mapping) and stored_boundary.get("status") == "violation":
+                out.violation = True
             return out
         record = _load(project_root, run_id) or record
         telemetry = record.get("telemetry") if isinstance(record.get("telemetry"), Mapping) else {}

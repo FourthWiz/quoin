@@ -20,11 +20,11 @@ import hashlib
 import json
 import os
 import re
+import select
 import shutil
 import signal
 import stat
 import subprocess
-import threading
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -97,8 +97,12 @@ def _git(args: Sequence[str], cwd: str, *, timeout_s: float = GIT_TIMEOUT_S,
     env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME")}
     env["LC_ALL"] = "C"
     env["GIT_OPTIONAL_LOCKS"] = "0"
+    # No repository or system configuration may run a program (a file-system
+    # monitor or a hook) while the workspace is built.
+    env["GIT_CONFIG_NOSYSTEM"] = "1"
+    hardening = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=" + os.devnull]
     proc = subprocess.run(
-        ["git", "-C", cwd, *args], env=env, input=stdin,
+        ["git", *hardening, "-C", cwd, *args], env=env, input=stdin,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout_s, check=False,
     )
     return proc.returncode, proc.stdout
@@ -141,13 +145,26 @@ def _check_include(root: str, item: Any) -> str:
     return rel.replace(os.sep, "/")
 
 
+PIN_NAME = "settings.pin"
+
+
+def _settings_digest(command: Sequence[str], include: Sequence[str], timeout_s: Any) -> str:
+    canonical = json.dumps(
+        {"command": list(command), "include": list(include), "timeout_s": timeout_s},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def configure(
     project_root, task: str, *, command: Sequence[str], include: Sequence[str] = (),
-    timeout_s: float = DEFAULT_TIMEOUT_S, clock: Callable[[], float] = time.time,
+    timeout_s: float = DEFAULT_TIMEOUT_S, state_root, clock: Callable[[], float] = time.time,
 ) -> Dict[str, Any]:
     """Record the test command, include paths and timeout in the task's
-    workflow state and return the stored settings. The caller holds the task
-    lock. Raises `TestRunError` for a bad value."""
+    workflow state and return the stored settings. A digest of the settings is
+    kept under `state_root`, outside the project, and a run refuses settings
+    that no longer match it. The caller holds the task lock. Raises
+    `TestRunError` for a bad value."""
     if (
         isinstance(command, (str, bytes)) or not isinstance(command, (list, tuple)) or not command
         or any(not isinstance(item, str) or not item or "\0" in item for item in command)
@@ -166,6 +183,13 @@ def configure(
     settings["test_include"] = cleaned
     settings["test_timeout_s"] = timeout_s
     state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
+    try:
+        _ensure_state_root(Path(state_root))
+        task_dir = _private_dirs(Path(state_root), "tests", paths.project_key(Path(root)), task)
+        data = (_settings_digest(command, cleaned, timeout_s) + "\n").encode("ascii")
+        jsonio.write_private_atomic(task_dir / PIN_NAME, data)
+    except OSError:
+        raise TestRunError("state-dir-unsafe", "the settings digest could not be stored") from None
     runstore.write_workflow_state(directory, state)
     return dict(settings)
 
@@ -425,7 +449,6 @@ def _execute(command: Sequence[str], cwd: str, env: Mapping[str, str], timeout_s
         list(command), cwd=cwd, env=dict(env), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, start_new_session=True,
     )
-    fired = threading.Event()
 
     def kill_group() -> None:
         try:
@@ -436,20 +459,26 @@ def _execute(command: Sequence[str], cwd: str, env: Mapping[str, str], timeout_s
             except OSError:
                 pass
 
-    def expire() -> None:
-        fired.set()
-        kill_group()
-
-    timer = threading.Timer(max(timeout_s, 0.0), expire)
-    timer.daemon = True
-    timer.start()
+    deadline = time.monotonic() + max(timeout_s, 0.0)
     digest = hashlib.sha256()
     hashed = 0
     tail = b""
+    expired = False
+    clean = False
+    assert proc.stdout is not None
+    fd = proc.stdout.fileno()
     try:
-        assert proc.stdout is not None
+        # The read is bounded by the deadline rather than by end of output: a
+        # child that left the process group can hold the pipe open forever.
         while True:
-            chunk = proc.stdout.read(65536)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                expired = True
+                break
+            ready, _, _ = select.select([fd], [], [], min(remaining, 0.5))
+            if not ready:
+                continue
+            chunk = os.read(fd, 65536)
             if not chunk:
                 break
             if hashed < cap:
@@ -457,18 +486,54 @@ def _execute(command: Sequence[str], cwd: str, env: Mapping[str, str], timeout_s
                 digest.update(part)
                 hashed += len(part)
             tail = (tail + chunk)[-TAIL_BYTES:]
-        proc.wait()
+        if not expired:
+            try:
+                proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
+            except subprocess.TimeoutExpired:
+                expired = True
+        clean = not expired
     finally:
-        timer.cancel()
-        kill_group()
-        if proc.stdout is not None:
-            proc.stdout.close()
+        if expired or not clean:
+            kill_group()
+        proc.stdout.close()
         proc.wait()
-    return proc.returncode, fired.is_set(), digest.hexdigest(), _clean_tail(tail)
+    return proc.returncode, expired, digest.hexdigest(), _clean_tail(tail)
 
 
 def _stamp(clock: Callable[[], float]) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
+
+
+def _sweep_dead_workspaces(work_dir: Path, repos: Sequence[_Repo]) -> None:
+    """Remove the workspaces of test runs whose process is gone (a killed run
+    never reaches its own cleanup) and prune the worktree records they left."""
+    removed = False
+    try:
+        names = os.listdir(str(work_dir))
+    except OSError:
+        return
+    for name in names:
+        head = name.split("-", 1)[0]
+        if not head.isdigit():
+            continue
+        pid = int(head)
+        if pid == os.getpid():
+            continue
+        try:
+            os.kill(pid, 0)
+            continue
+        except PermissionError:
+            continue
+        except OSError:
+            pass
+        shutil.rmtree(str(work_dir / name), ignore_errors=True)
+        removed = True
+    if removed:
+        for repo in repos:
+            try:
+                _git(("worktree", "prune"), repo.path)
+            except (OSError, subprocess.SubprocessError):
+                pass
 
 
 def _take_busy(directory: Path) -> Path:
@@ -525,10 +590,24 @@ def run_tests(
     command = settings.get("test_command")
     if not isinstance(command, list) or not command or any(not isinstance(i, str) for i in command):
         return TestRun(outcome=REFUSED, reason="tests-not-configured")
-    include = [i for i in settings.get("test_include") or [] if isinstance(i, str)]
+    raw_include = settings.get("test_include") or []
+    if not isinstance(raw_include, list):
+        return TestRun(outcome=REFUSED, reason="tests-settings-changed")
     timeout_s = settings.get("test_timeout_s")
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or not timeout_s > 0:
         timeout_s = DEFAULT_TIMEOUT_S
+    # The workflow state sits inside the project, where an agent can edit it;
+    # only the digest kept outside the project says what was configured.
+    try:
+        pinned = (result_dir(state_root, root, task) / PIN_NAME).read_text("ascii").strip()
+    except (OSError, ValueError):
+        pinned = ""
+    if not pinned or pinned != _settings_digest(command, raw_include, settings.get("test_timeout_s")):
+        return TestRun(outcome=REFUSED, reason="tests-settings-changed")
+    try:
+        include = [_check_include(root, item) for item in raw_include]
+    except TestRunError as exc:
+        return TestRun(outcome=REFUSED, reason=exc.code)
 
     try:
         _ensure_state_root(Path(state_root))
@@ -553,6 +632,7 @@ def run_tests(
             repos = _list_repos(root)
         except TestRunError as exc:
             return TestRun(outcome=REFUSED, reason=exc.code)
+        _sweep_dead_workspaces(work_dir, repos)
         before = _state_of(root, repos)
         exit_code: Optional[int] = None
         timed_out = False

@@ -101,14 +101,27 @@ ROLES = (
 )
 
 
-def artifact_edit_rule(base: str) -> Dict[str, str]:
+def artifact_edit_rule(base: str, *, guard_store: bool = False) -> Dict[str, str]:
     """The edit permission map shared by every role that may touch the
     artifact root: `base` for everything else, allow inside the artifact
     root whether it sits at the project root or nested under a sub-repo."""
-    return {
+    rule = {
         "*": base,
         "%s/*" % ARTIFACT_ROOT: "allow",
         "*/%s/*" % ARTIFACT_ROOT: "allow",
+    }
+    if guard_store:
+        rule.update(store_deny_rule())
+    return rule
+
+
+def store_deny_rule() -> Dict[str, str]:
+    """Edit denies for the run store, which holds the workflow state and run
+    records the Quoin helpers read as trusted input. They follow the artifact
+    root allows so they win under last-match evaluation."""
+    return {
+        "%s/memory/runtime/opencode/*" % ARTIFACT_ROOT: "deny",
+        "*/%s/memory/runtime/opencode/*" % ARTIFACT_ROOT: "deny",
     }
 
 
@@ -169,7 +182,7 @@ def role_permissions(role: str) -> Dict[str, object]:
         }
     if role == "gate":
         return {
-            "edit": artifact_edit_rule("deny"),
+            "edit": artifact_edit_rule("deny", guard_store=True),
             "bash": shell_rule(role),
             "task": "deny",
             "skill": dict(SKILL_RULE),

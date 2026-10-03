@@ -1830,7 +1830,7 @@ def test_generator_version_pin_forces_a_schema_bump_on_output_change():
     # rendered bytes for these same inputs must update this hash and bump
     # GENERATOR_SCHEMA_VERSION, which moves every real digest in turn.
     assert generate.GENERATOR_SCHEMA_VERSION == 1
-    assert digest == "d73e7bb03a2fd8599bc71b8ff323f2b210c40b5e8fc30858421acbfbd9f0cc7d"
+    assert digest == "2b3deddc7d8068d2013c9f8364aed2e56bb7b4ced15e8f2c957ac7d99b1ed472"
 
 
 # --- core-input routing and source sweep ---

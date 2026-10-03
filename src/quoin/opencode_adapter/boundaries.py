@@ -111,7 +111,8 @@ class _Walker:
 
     def _hash(self, path: str, size: int) -> Optional[str]:
         if size > self.max_hash_bytes or self.hashed + size > self.max_total_bytes:
-            self.truncated = True
+            # An unhashed file is still compared by size and mtime, so a file
+            # too large to hash must not make the whole listing unverifiable.
             return None
         flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -197,7 +198,17 @@ class _Walker:
                     else:
                         stack.append(child_rel)
                 else:
-                    self.add_path(child_rel)
+                    self.add_path(child_rel, hashed=not _is_store_history(child_rel))
+
+
+_STORE_STATE_RE = re.compile(r"(?:task|workflow)-[^/]+\.json\Z")
+
+
+def _is_store_history(rel: str) -> bool:
+    """A run-store file other than the small per-task pointer and workflow
+    records: the accumulated run history, which grows without bound and is
+    compared by size and mtime only."""
+    return rel.startswith(_STORE_REL) and not _STORE_STATE_RE.match(rel[len(_STORE_REL):])
 
 
 def _iso(clock: Optional[Callable[[], float]]) -> str:
@@ -433,6 +444,8 @@ def _allowed(ctx: _Context, rel: str, change: str, scope: str) -> bool:
     base = rel.rsplit("/", 1)[-1]
     if scope == "task":
         sub = rel[len(ctx.task_prefix):]
+        if sub.split("/", 1)[0] == "finalized" and role != "end_of_task":
+            return False
         if role in _TASK_WRITERS:
             return bool(sub) and not _is_gate_file(base)
         if role == "critic-real":

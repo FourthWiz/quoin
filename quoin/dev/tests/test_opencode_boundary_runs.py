@@ -146,6 +146,8 @@ def test_another_tasks_folder_without_a_live_lock_is_unverified_for_a_single_pha
     assert code == 0 and summary["outcome"] != "FAILED"
     entry = last_entry(proj)
     assert entry["boundary"] is None and entry["boundary_reason"] == "concurrent-writer-unlocked"
+    code, data = proj.gate(capsys, "implement")
+    assert "boundary-unverified" in data.get("warnings", [])
 
 
 def test_a_live_lock_on_another_task_downgrades_its_writes(make, capsys):
@@ -244,7 +246,7 @@ def test_a_fresh_run_under_a_fixed_driver_clock_is_not_partial(make, capsys):
 
 
 def configure(proj, command=("sh", "-c", "true")):
-    testrun.configure(proj.root, TASK, command=list(command))
+    testrun.configure(proj.root, TASK, command=list(command), state_root=proj.state_root)
 
 
 BOOT = (
@@ -276,7 +278,9 @@ def test_without_the_launcher_variable_the_result_lands_elsewhere(make, capsys):
         *dh.fake._clean_finish()))
     code, summary = proj.run_cli(capsys, "implement")
     assert code == 0
-    assert any(line.startswith("ran 0 ") for line in proj.effects()), proj.effects()
+    # Outside the launcher the child resolves another state directory, where the
+    # settings were never pinned, so the run is refused and nothing is picked up.
+    assert any(line.startswith("ran 2 ") for line in proj.effects()), proj.effects()
     assert "tests" not in last_entry(proj) or last_entry(proj)["tests"] is None
 
 

@@ -127,6 +127,7 @@ def test_handoff_and_test_run_reject_abbreviated_options(fx, capsys):
 @pytestmark_cli
 def test_launcher_refuses_an_explanation_outside_the_artifact_root(fx, capsys, tmp_path, monkeypatch):
     fx.record("plan")
+    monkeypatch.chdir(fx.root)
     monkeypatch.setenv("QUOIN_OPENCODE_STATE_DIR", str(tmp_path / "state"))
     note = tmp_path / "home" / "secret.txt"
     note.parent.mkdir()
@@ -141,6 +142,7 @@ def test_launcher_refuses_an_explanation_outside_the_artifact_root(fx, capsys, t
 @pytestmark_cli
 def test_launcher_carries_an_explanation_inside_the_artifact_root(fx, capsys, tmp_path, monkeypatch):
     fx.record("plan")
+    monkeypatch.chdir(fx.root)
     monkeypatch.setenv("QUOIN_OPENCODE_STATE_DIR", str(tmp_path / "state"))
     note = fx.root / ".workflow_artifacts" / "note.txt"
     note.write_text("INSIDE-NOTE")
@@ -152,6 +154,7 @@ def test_launcher_carries_an_explanation_inside_the_artifact_root(fx, capsys, tm
 @pytestmark_cli
 def test_launcher_still_reports_an_outside_symlink_as_unreadable(fx, capsys, tmp_path, monkeypatch):
     fx.record("plan")
+    monkeypatch.chdir(fx.root)
     monkeypatch.setenv("QUOIN_OPENCODE_STATE_DIR", str(tmp_path / "state"))
     target = tmp_path / "elsewhere.txt"
     target.write_text("x")
@@ -170,3 +173,42 @@ def test_human_path_carries_an_outside_explanation(fx, capsys, tmp_path):
     code, data = gate(capsys, fx, "--explanation-file", str(note))
     assert code == 0
     assert "HUMAN-NOTE" in (fx.root / data["artifact"]).read_text()
+
+
+@pytestmark_cli
+@pytest.mark.parametrize("extra", [
+    ["--source-dir", "/planted"],
+    ["--project-root", "/planted"],
+])
+def test_launcher_refuses_a_redirected_gate_whatever_the_statement_text(fx, capsys, tmp_path, monkeypatch, extra):
+    # A quoted or backslash-split spelling reaches the parser as the full
+    # option, so the refusal has to live in the command itself.
+    fx.record("plan")
+    monkeypatch.setenv("QUOIN_OPENCODE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.chdir(fx.root)
+    argv = ["opencode", "gate", "--task", fx.task, "--phase", "plan", "--stage", "1"]
+    if "--project-root" not in extra:
+        argv += ["--project-root", str(fx.root)]
+    code = cli.main(argv + extra)
+    data = json.loads(capsys.readouterr().out.strip())
+    assert code == 2 and data["refusal"]["code"] in ("source-dir-refused", "project-root-refused")
+
+
+@pytestmark_cli
+def test_launcher_refuses_a_redirected_handoff(fx, capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOIN_OPENCODE_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.chdir(fx.root)
+    for extra in (["--source-dir", "/planted"], ["--project-root", "/planted"]):
+        code = cli.main(["opencode", "handoff", "validate", "--task", fx.task, *extra])
+        data = json.loads(capsys.readouterr().out.strip())
+        assert code == 2 and data["refusal"]["code"] in ("source-dir-refused", "project-root-refused")
+
+
+def test_gate_role_cannot_edit_the_run_store_directly():
+    from quoin.opencode_adapter import generate
+
+    edit = generate.role_permissions("gate")["edit"]
+    keys = list(edit)
+    store = ".workflow_artifacts/memory/runtime/opencode/*"
+    assert edit[store] == "deny" and edit["*/" + store] == "deny"
+    assert keys.index(store) > keys.index(".workflow_artifacts/*")

@@ -35,8 +35,10 @@ def world(tmp_path, monkeypatch):
     return type("World", (), {"root": root, "state": state_root, "tmp": tmp_path})()
 
 
-def configure(world, command=PASSING, include=("env",), **kwargs):
-    return testrun.configure(world.root, "t1", command=command, include=include, **kwargs)
+def configure(world, command=PASSING, include=("env",), state=None, **kwargs):
+    return testrun.configure(
+        world.root, "t1", command=command, include=include, state_root=state or world.state, **kwargs,
+    )
 
 
 def run(world, stage=None):
@@ -199,7 +201,7 @@ def test_sibling_repos_in_a_plain_directory(world):
     (a / "f.txt").write_text("changed-a\n")
     (b / "f.txt").write_text("changed-b\n")
     before = (tree_state(a), tree_state(b))
-    testrun.configure(plain, "t1", command=["sh", "-c", "pwd; cat a/f.txt b/f.txt"])
+    testrun.configure(plain, "t1", command=["sh", "-c", "pwd; cat a/f.txt b/f.txt"], state_root=world.state)
     result = testrun.run_tests(plain, "t1", state_root=world.state)
     assert result.outcome == "PASSED" and result.workspace_removed is True
     lines = result.output_tail.split()
@@ -287,11 +289,15 @@ def project(world, monkeypatch):
     return world
 
 
+def default_state():
+    return paths.state_dir(os.environ, Path.home())
+
+
 def test_cli_exit_codes_and_one_json_line(project, capsys):
-    configure(project)
+    configure(project, state=default_state())
     code, data = cli_run(capsys, "--task", "t1")
     assert code == 0 and data["outcome"] == "PASSED" and data["exit_code"] == 0
-    configure(project, command=["false"], include=())
+    configure(project, command=["false"], include=(), state=default_state())
     code, data = cli_run(capsys, "--task", "t1")
     assert code == 1 and data["outcome"] == "FAILED" and data["exit_code"] == 1
     code, data = cli_run(capsys, "--task", "other")
@@ -299,8 +305,8 @@ def test_cli_exit_codes_and_one_json_line(project, capsys):
 
 
 def test_cli_state_dir_variable_wins_over_xdg(project, monkeypatch, capsys, tmp_path):
-    configure(project, command=["true"], include=())
     chosen = tmp_path / "chosen"
+    configure(project, command=["true"], include=(), state=chosen)
     monkeypatch.setenv("QUOIN_OPENCODE_STATE_DIR", str(chosen))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
     code, _ = cli_run(capsys, "--task", "t1")
@@ -310,8 +316,8 @@ def test_cli_state_dir_variable_wins_over_xdg(project, monkeypatch, capsys, tmp_
 
 
 def test_cli_without_variable_uses_the_adapter_state_dir(project, monkeypatch, capsys, tmp_path):
-    configure(project, command=["true"], include=())
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
+    configure(project, command=["true"], include=(), state=default_state())
     code, _ = cli_run(capsys, "--task", "t1")
     assert code == 0
     expected = paths.state_dir(os.environ, Path.home())
@@ -340,6 +346,65 @@ def test_cli_rejects_other_options_and_abbreviations(project, capsys, argv):
 
 
 def test_cli_accepts_the_full_stage_option(project, capsys):
-    configure(project, command=["true"], include=())
+    configure(project, command=["true"], include=(), state=default_state())
     code, data = cli_run(capsys, "--task", "t1", "--stage", "1")
     assert code == 0 and data["outcome"] == "PASSED"
+
+
+def test_settings_edited_inside_the_project_are_refused(world):
+    configure(world, command=["true"], include=())
+    directory = runstore.store_dir(world.root)
+    state = runstore.load_workflow_state(directory, "t1")
+    state["settings"]["test_command"] = ["sh", "-c", "echo forged > pwned.txt"]
+    runstore.write_workflow_state(directory, state)
+    result = run(world)
+    assert result.outcome == "REFUSED" and result.reason == "tests-settings-changed"
+    assert not (world.root / "pwned.txt").exists()
+    assert not testrun.result_path(world.state, world.root, "t1", None).exists()
+
+
+def test_settings_without_a_stored_digest_are_refused(world):
+    configure(world, command=["true"], include=())
+    (testrun.result_dir(world.state, world.root, "t1") / testrun.PIN_NAME).unlink()
+    assert run(world).reason == "tests-settings-changed"
+
+
+def test_include_is_checked_again_at_run_time(world):
+    configure(world, command=["true"], include=("env",))
+    (world.root / ".gitignore").write_text("")
+    result = run(world)
+    assert result.outcome == "REFUSED" and result.reason == "include-not-ignored"
+
+
+def test_a_child_that_escapes_the_group_cannot_outlive_the_timeout(world):
+    pidfile = world.tmp / "escaped.pid"
+    script = (
+        "import os, subprocess, sys; "
+        "p = subprocess.Popen(['sleep', '60'], start_new_session=True); "
+        "open(sys.argv[1], 'w').write(str(p.pid)); "
+        "os.execvp('sleep', ['sleep', '60'])"
+    )
+    import sys
+
+    configure(world, command=[sys.executable, "-c", script, str(pidfile)], include=(), timeout_s=1)
+    began = time.monotonic()
+    result = run(world)
+    try:
+        assert time.monotonic() - began < 20
+        assert result.timed_out is True and result.reason == "tests-timeout"
+    finally:
+        if pidfile.exists():
+            try:
+                os.kill(int(pidfile.read_text()), 9)
+            except OSError:
+                pass
+
+
+def test_work_directories_of_dead_runs_are_swept(world):
+    configure(world, command=["true"], include=())
+    work = world.state / "tests" / paths.project_key(world.root) / "work"
+    work.mkdir(parents=True, mode=0o700)
+    stale = work / "999999999-deadbeef"
+    stale.mkdir()
+    assert run(world).outcome == "PASSED"
+    assert not stale.exists()

@@ -798,6 +798,19 @@ argv, for example `env PYTHONPATH=src python -m pytest`, and a command that
 needs a proxy must set it the same way. Review entries carry no test result
 yet.
 
+What a `PASSED` result means: the configured command exited 0 against a copy of
+the working tree. That tree includes code the implementer wrote, such as test
+files, a `conftest.py` or source modules, and `test-run` runs it with the user's
+privileges without a prompt, even though headless shell commands are otherwise
+asked about and auto-rejected. Code run this way can write outside the project,
+force a zero exit or start a process that outlives the run, so a result attests
+only to what agent-controlled code reported. A deadline bounds the run: output
+is read against it, so a child that left the process group and holds the
+output open cannot extend it. The digest of the configured command, include
+list and timeout is stored under the adapter state directory when the settings
+are written, and a run refuses settings that no longer match it, so editing the
+workflow state inside the project does not change what runs.
+
 ## Non-interactive runs
 
 A headless run cannot answer questions (asks are rejected automatically,

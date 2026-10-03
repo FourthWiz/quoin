@@ -130,8 +130,26 @@ def test_listing_cap_is_unverified(root):
     after = listing(root)
     result = boundaries.verify("planner", before, after, task=TASK, run_id=RUN)
     assert result.status == "unverified" and result.reason == "listing-truncated"
+
+
+def test_a_file_over_the_hash_cap_is_compared_by_size_not_unverified(root):
     capped = listing(root, max_hash_bytes=1)
-    assert capped.truncated
+    assert not capped.truncated
+    assert any(entry[0] == "f" and entry[3] is None for entry in capped.entries.values())
+
+
+def test_a_large_store_sidecar_does_not_make_the_listing_unverified(root):
+    store = root / ".workflow_artifacts" / "memory" / "runtime" / "opencode"
+    h.write(store / "r1.jsonl", "x" * 4096)
+    h.write(store / "workflow-demo.json", "{}")
+    before = listing(root, max_hash_bytes=1024)
+    assert not before.truncated
+    entries = before.entries
+    assert entries[".workflow_artifacts/memory/runtime/opencode/r1.jsonl"][3] is None
+    assert entries[".workflow_artifacts/memory/runtime/opencode/workflow-demo.json"][3] is not None
+    after = listing(root, max_hash_bytes=1024)
+    result = boundaries.verify("planner", before, after, task=TASK, run_id=RUN)
+    assert result.reason != "listing-truncated"
 
 
 def test_live_task_locks_name_live_processes_only(root):
@@ -246,6 +264,7 @@ def test_implementer_may_edit_source_and_the_task_folder(root):
     write_rel(".quoin/opencode-install.json", "{}"),
     write_rel(".workflow_artifacts/other/plan.md", "tampered\n"),
     write_rel(".workflow_artifacts/finalized/demo/x", "y"),
+    write_rel(".workflow_artifacts/demo/finalized/x", "y"),
 ])
 def test_implementer_forbidden_paths(root, change):
     assert run("implementer", root, change).status == "violation"

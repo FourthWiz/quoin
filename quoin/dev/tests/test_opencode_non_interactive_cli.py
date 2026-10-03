@@ -76,3 +76,10 @@ def test_no_advice_for_other_outcomes(world, capsys):
     _, summary, captured = run(project, capsys, "--stage", "1", phase="implement")
     assert summary["outcome"] != "AWAITING_APPROVAL"
     assert "quoin opencode adopt" not in captured.err
+
+
+def test_resume_hint_keeps_the_non_interactive_flag(world, capsys):
+    project = world("approval_tool_error")
+    _, summary, _ = run(project, capsys, "--stage", "1", "--non-interactive", phase="implement")
+    assert summary["resume_hint"].endswith(" --non-interactive")
+    assert summary["resume_hint"].count("--non-interactive") == 1

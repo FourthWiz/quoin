@@ -223,3 +223,19 @@ rather than open questions:
   launcher.
 - A test result from an attempt other than the run's last is not copied, so a
   relaunched implement run must run its tests again.
+- A passing test result attests only to what the code in the copied tree
+  reported: test-run runs implementer-written code unprompted with the user's
+  privileges. An OS sandbox that confines writes to the workspace, or an opt-in
+  allow granted by the configuration call, is the follow-up.
+- The test workspace build is not capped: the binary diff is held in memory and
+  untracked files are copied without a size limit, outside the test timeout.
+- The snapshot copier checks the final path component for links only, and the
+  snapshot git deadline is checked after a read returns, not while a silent
+  command runs. Neither is reachable from a production caller yet.
+- The overlay residue test checks "MUST run finalization" rather than "run
+  finalization", because the replacement text "Never run finalization." contains
+  the shorter phrase. The overlay-rewrite phase list stays hand-maintained
+  beside the feature manifest.
+- The gate role's own edits to the workflow record are denied in its permission
+  map; the gate helper still writes the record from its own process, and the
+  boundary check still treats that file as the gate's to change.
