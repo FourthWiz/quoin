@@ -210,3 +210,72 @@ def cost_mark(world: "HookWorld") -> Dict[str, Any]:
     from quoin.opencode_adapter import cost
 
     return cost.ledger_mark(world.root, world.task, clock)
+
+
+def make_cost_project(tmp_path: Path, monkeypatch: Any, scenario: Any, *, task_folder: bool = True, **kw: Any):
+    """An installed end-to-end world with a task folder and a seeded ledger."""
+    from quoin import cli
+
+    from _opencode_run_helpers import InstalledProject
+
+    class CostProject(InstalledProject):
+        def set_scenario(self, new: Any) -> None:
+            self.dh.fake.write_scenario(self.tmp / "s.json", self.dh.scenario_dict(new))
+
+        @property
+        def task_dir(self) -> Path:
+            return self.root / ".workflow_artifacts" / TASK
+
+        @property
+        def ledger(self) -> Path:
+            return self.task_dir / "cost-ledger.md"
+
+        def run_cli(self, capsys: Any, *extra: str, phase: str = "plan", stage: Optional[str] = None):
+            argv = ["run", TASK, "--runtime", "opencode", "--profile", "work", "--phase", phase,
+                    "--project-root", str(self.root)]
+            if stage is not None:
+                argv += ["--stage", stage]
+            code = cli.main(argv + list(extra))
+            lines = capsys.readouterr().out.strip().splitlines()
+            return code, json.loads(lines[-1])
+
+        def rows(self) -> List[Any]:
+            core = load_core_cost_event()
+            path = self.ledger
+            if not path.exists():
+                return []
+            out = []
+            for line in path.read_text(encoding="utf-8").splitlines():
+                if line.strip() and not line.startswith("#"):
+                    out.append(core.parse_row(line))
+            return out
+
+        def rows_for(self, run_id: str) -> List[Any]:
+            return [r for r in self.rows() if r.uuid == run_id]
+
+        def entries(self) -> List[Dict[str, Any]]:
+            directory = runstore.store_dir(self.root)
+            state = runstore.load_workflow_state(directory, TASK)
+            return list((state or {}).get("entries") or [])
+
+        def gate(self, capsys: Any, phase: str = "plan", *extra: str):
+            argv = ["opencode", "gate", "--task", TASK, "--phase", phase, "--project-root", str(self.root)]
+            code = cli.main(argv + list(extra))
+            return code, json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+
+        def telemetry(self, run_id: str) -> Dict[str, Any]:
+            return self.record(run_id)["telemetry"]
+
+    project = CostProject(tmp_path, monkeypatch, scenario, **kw)
+    if task_folder:
+        project.task_dir.mkdir(parents=True, exist_ok=True)
+        project.ledger.write_text(HEADER + SEED_ROW, encoding="utf-8")
+    monkeypatch.setattr(cli, "_make_opencode_driver", project.driver_factory())
+    monkeypatch.setattr(cli, "_opencode_backoff", lambda n: 0)
+    return project
+
+
+def load_core_cost_event():
+    from quoin.opencode_adapter import cost
+
+    return cost.load_cost_event(SOURCE_DIR)
