@@ -523,6 +523,12 @@ def _iso(clock: Callable[[], float]) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
 
 
+def _model_priced(document: Any, model_ref: str) -> bool:
+    from . import cost  # noqa: PLC0415 - cost imports gate, which must not load with the driver
+
+    return cost.model_priced(document, model_ref)
+
+
 class _PrepareState:
     """What `prepare` has established so far, so a refusal can be recorded."""
 
@@ -971,6 +977,16 @@ class OpenCodeDriver:
             "env_names": list(child_env.names()),
             "profile": evaluation.profile,
             "effort": request.effort,
+            "provider": resolution.provider_id,
+            "native_provider": effective_model.split("/", 1)[0],
+            "configured_effort": resolution.effort if resolution.effort_options is not None else None,
+            "effort_origin": resolution.effort_origin,
+            "variant": (
+                compiler.VARIANT_PREFIX + resolution.effort
+                if resolution.effort_options is not None and resolution.effort else None
+            ),
+            "effort_diagnostic": resolution.effort_diagnostic,
+            "model_priced": _model_priced(fresh.document, effective_model),
         }
         record["prepared"] = summary
         record["refusal"] = None

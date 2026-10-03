@@ -214,6 +214,7 @@ def run_phase(
     backoff_fn: Optional[Callable[[int], float]] = None,
     monotonic: Callable[[], float] = time.monotonic,
     default_timeout_s: float = driver.DEFAULT_TIMEOUT_S,
+    on_prepared: Optional[Callable[[Any], None]] = None,
 ) -> PhaseResult:
     t0 = monotonic()
     attempts = interrupted_relaunches = failed_count = no_progress = 0
@@ -322,6 +323,11 @@ def run_phase(
             if cancel.is_set():
                 return finish("CANCELLED", "cancelled")
             if fresh:
+                if on_prepared is not None:
+                    try:
+                        on_prepared(prepared)
+                    except Exception:  # noqa: BLE001 - the callback records its own errors
+                        pass
                 handle = drv.start(prepared, deadline_s=deadline)
             else:
                 handle = drv.resume(handoff, prepared, deadline_s=deadline)
