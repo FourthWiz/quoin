@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import importlib.resources
 import json
 import os
@@ -2019,7 +2020,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
 
     from quoin import supervisor as _supervisor  # noqa: PLC0415
     from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
-    from quoin.opencode_adapter import phase_loop, runstore  # noqa: PLC0415
+    from quoin.opencode_adapter import phase_loop, run_hooks, runstore  # noqa: PLC0415
 
     project_root = pathlib.Path(args.project_root).resolve()
     ident = {
@@ -2072,20 +2073,45 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
             )
         else:
             try:
+                source_dir = mark = candidate = None
                 try:
                     drv = _make_opencode_driver(project_root)
                     request = _driver.RunRequest(
                         project_root=project_root, task=args.task, stage=args.stage,
                         phase=args.phase, profile=args.profile, budget=args.budget,
                     )
+                    on_prepared = None
+                    try:
+                        try:
+                            source_dir = _resolve_source_dir(None)
+                        except SystemExit:
+                            source_dir = None
+                        mark = run_hooks.before_run(project_root, args.task)
+                        candidate = run_hooks.open_run(project_root, args.task)
+                        if runstore.normalize_phase(args.phase) == "end_of_task":
+                            on_prepared = run_hooks.prelaunch(project_root, mark, source_dir)
+                    except Exception:  # noqa: BLE001 - costing never blocks the run
+                        pass
                     result = phase_loop.run_phase(
                         drv, request, max_relaunch=args.max_relaunch, cancel=cancel,
                         new_run=args.new_run, backoff_fn=_opencode_backoff,
+                        on_prepared=on_prepared,
                     )
                 except Exception as exc:  # noqa: BLE001
                     result = phase_loop.PhaseResult(
                         outcome="ERROR", reason="driver-error: " + type(exc).__name__
                     )
+                try:
+                    hook = run_hooks.after_phase_run(
+                        project_root, args.task, result, mark=mark, source_dir=source_dir,
+                        superseded_candidate=candidate,
+                    )
+                    if hook.violation and result.outcome not in ("CANCELLED", "REFUSED"):
+                        result = dataclasses.replace(
+                            result, outcome="FAILED", reason="boundary-violation"
+                        )
+                except Exception:  # noqa: BLE001 - the outcome stays as the run left it
+                    pass
                 hint = phase_loop.resume_hint(result, ident, project_root)
                 if result.run_id and hint:
                     try:
