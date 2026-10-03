@@ -68,19 +68,20 @@ def attempt(number: int = 1, *, pid: Optional[int] = 4242, state: str = "complet
 class Synth:
     """A project root with a task folder, a ledger and a run store."""
 
-    def __init__(self, tmp_path: Path, *, task_folder: bool = True, ledger: bool = True) -> None:
-        self.root = Path(tmp_path) / "proj"
+    def __init__(self, tmp_path: Path, *, task_folder: bool = True, ledger: bool = True,
+                 root: Optional[Path] = None, task: str = TASK) -> None:
+        self.root = Path(root) if root is not None else Path(tmp_path) / "proj"
         self.root.mkdir(parents=True, exist_ok=True)
-        self.task = TASK
+        self.task = task
         if task_folder:
-            (self.root / ".workflow_artifacts" / TASK).mkdir(parents=True, exist_ok=True)
+            (self.root / ".workflow_artifacts" / task).mkdir(parents=True, exist_ok=True)
             if ledger:
-                self.ledger.write_text(HEADER + SEED_ROW, encoding="utf-8")
+                self.ledger.write_text("# Cost Ledger \u2014 %s\n" % task + SEED_ROW, encoding="utf-8")
         self.directory = runstore.store_dir(self.root, create=True)
 
     @property
     def ledger(self) -> Path:
-        return self.root / ".workflow_artifacts" / TASK / "cost-ledger.md"
+        return self.root / ".workflow_artifacts" / self.task / "cost-ledger.md"
 
     def rows(self) -> List[str]:
         if not self.ledger.exists():
@@ -94,10 +95,11 @@ class Synth:
     def seed(
         self, state: str = "completed", *, phase: str = "plan", stage: Any = None,
         attempts: Optional[Sequence[Dict[str, Any]]] = None, events: Optional[Sequence[Any]] = None,
-        prepared: Optional[Dict[str, Any]] = None, task: str = TASK, pointer: bool = True,
+        prepared: Optional[Dict[str, Any]] = None, task: Optional[str] = None, pointer: bool = True,
         resume_blocked: Optional[str] = None, request: Optional[dict] = None,
         usage: bool = True, extra: Optional[dict] = None,
     ) -> str:
+        task = task or self.task
         run_id, _paths = runstore.reserve_run_id(self.directory)
         req = {"task": task, "stage": stage, "phase": phase, "profile": "work", "effort": None}
         req.update(request or {})
@@ -105,6 +107,11 @@ class Synth:
         record["state"] = state
         record["resume_blocked"] = resume_blocked
         record["attempts"] = list(attempts if attempts is not None else [attempt()])
+        if state not in ("prepared", "running"):
+            record["outcome"] = {
+                "state": state, "evidence": "full" if state == "completed" else "none", "reason": None,
+                "exit_code": 0, "signal": None, "new_native_events": 1,
+            }
         record.update(extra or {})
         runstore.write_record(self.directory, record)
         if events is None and usage:
@@ -129,9 +136,77 @@ class Synth:
         assert record is not None
         return record
 
-    def set_pointer(self, run_id: str, task: str = TASK) -> None:
-        runstore.write_pointer(self.directory, runstore.new_pointer(task, run_id))
+    def set_pointer(self, run_id: str, task: Optional[str] = None) -> None:
+        runstore.write_pointer(self.directory, runstore.new_pointer(task or self.task, run_id))
 
 
 def read_json(path: Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8"))
+
+
+class HookWorld:
+    """A git project holding a complete multi-stage task (`t1`) with a seeded
+    cost ledger, for the hook and gate tests."""
+
+    def __init__(self, tmp_path: Path, monkeypatch: Any) -> None:
+        import _opencode_gate_helpers as gh
+
+        self.gh = gh
+        self.fx = gh.Fixture(tmp_path, monkeypatch)
+        self.root = self.fx.root
+        self.task = self.fx.task
+        self.synth = Synth(tmp_path, root=self.root, task=self.task)
+        self.stage_rel = ".workflow_artifacts/%s/stage-1" % self.task
+        self.mark = cost_mark(self)
+
+    def path(self, rel: str) -> Path:
+        return self.root / ".workflow_artifacts" / self.task / rel
+
+    def exec_run(
+        self, phase: str, *, stage: Any = 1, writes: Optional[Dict[str, str]] = None,
+        edit: Any = None, state: str = "completed", attempts: Optional[list] = None, **seed_kw: Any,
+    ) -> str:
+        """Write a run record whose before and after hashes bracket `writes`
+        (task-relative paths) and `edit` (a callable run between them)."""
+        before = runstore.hash_inputs(self.root, self.task)
+        for rel, text in (writes or {}).items():
+            self.gh.write(self.path(rel), text)
+        if edit is not None:
+            edit()
+        after = runstore.hash_inputs(self.root, self.task)
+        items = attempts if attempts is not None else [attempt(before=before, after=after, state=state)]
+        return self.synth.seed(
+            state, phase=phase, stage=stage if stage is None else str(stage), attempts=items, **seed_kw)
+
+    def result(self, run_id: str, outcome: str = "COMPLETED", blocked: Optional[str] = None) -> Any:
+        from quoin.opencode_adapter import phase_loop
+
+        return phase_loop.PhaseResult(outcome=outcome, run_id=run_id, resume_blocked=blocked)
+
+    def hook(self, run_id: str, *, outcome: str = "COMPLETED", blocked: Optional[str] = None,
+             candidate: Optional[str] = None, source_dir: Any = SOURCE_DIR, mark: Any = "default") -> Any:
+        from quoin.opencode_adapter import run_hooks
+
+        return run_hooks.after_phase_run(
+            self.root, self.task, self.result(run_id, outcome, blocked),
+            mark=self.mark if mark == "default" else mark, source_dir=source_dir,
+            superseded_candidate=candidate, clock=clock)
+
+    def entries(self) -> List[Dict[str, Any]]:
+        directory = runstore.store_dir(self.root)
+        state = runstore.load_workflow_state(directory, self.task)
+        return list((state or {}).get("entries") or [])
+
+    def live(self, phase: str, stage: Optional[int] = 1) -> Optional[Dict[str, Any]]:
+        directory = runstore.store_dir(self.root)
+        state = runstore.load_workflow_state(directory, self.task)
+        return runstore.current_entry(state, stage, phase) if state else None
+
+    def evaluate(self, phase: str, stage: Optional[int] = 1) -> Any:
+        return self.fx.evaluate(phase, stage=stage)
+
+
+def cost_mark(world: "HookWorld") -> Dict[str, Any]:
+    from quoin.opencode_adapter import cost
+
+    return cost.ledger_mark(world.root, world.task, clock)
