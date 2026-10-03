@@ -678,6 +678,36 @@ def load_for_continuation(
     return record
 
 
+def validate_record(project_root, task: str, *, source_dir) -> Dict[str, Any]:
+    """The record validated on its own: no scope, finalized or older-format
+    checks. Refused as `continuation-missing` or `continuation-invalid`."""
+    _task(task)
+    mod = core(source_dir)
+    try:
+        record = mod.load_record(str(record_path(project_root, task)))
+    except HandoffRefused as exc:
+        raise HandoffRefused("continuation-invalid", "the continuation location is unsafe", (exc.code,)) from None
+    except mod.RecordError as exc:
+        if exc.code == "record-missing":
+            raise HandoffRefused("continuation-missing", "no continuation record exists for this task") from None
+        raise HandoffRefused("continuation-invalid", "the continuation record cannot be used", (exc.code,)) from None
+    reasons = mod.validate(record)
+    if reasons:
+        raise HandoffRefused("continuation-invalid", "the continuation record is invalid", reasons)
+    return record
+
+
+def advice_inputs(project_root, task: str) -> Tuple[Optional[Path], Optional[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Run store directory, workflow state and run facts for advice. A store
+    that cannot be read or a state that cannot be parsed is refused rather
+    than treated as absent. No store gives three `None`s."""
+    _task(task)
+    directory = _store_or_none(project_root)
+    if directory is None:
+        return None, None, None
+    return directory, _load_state(directory, task), run_facts(directory, task)
+
+
 def _under_root(project_root, rel: str) -> Optional[Path]:
     """The path when no component below the project root is a symlink."""
     current = Path(project_root)

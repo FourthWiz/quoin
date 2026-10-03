@@ -1596,9 +1596,9 @@ def _gate_json(payload: dict, code: int) -> int:
     return code
 
 
-def _gate_refusal(code: str, message: str, exit_code: int = 2) -> int:
+def _gate_refusal(code: str, message: str, exit_code: int = 2, outcome: str = "GATE_REFUSED") -> int:
     return _gate_json(
-        {"outcome": "GATE_REFUSED", "refusal": {"code": code, "message": message}}, exit_code
+        {"outcome": outcome, "refusal": {"code": code, "message": message}}, exit_code
     )
 
 
@@ -1632,10 +1632,12 @@ def _with_task_lock(project_root: pathlib.Path, task: str, body):
         _release_supervisor_lock(paths["lock"], os.getpid())
 
 
-def _lock_refusal(project_root: pathlib.Path, task: str, held_pid) -> int:
+def _lock_refusal(project_root: pathlib.Path, task: str, held_pid, outcome: str = "GATE_REFUSED") -> int:
     holder = _read_json(_supervisor_paths(project_root, task)["lock"])
     runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
-    return _gate_refusal("lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3)
+    return _gate_refusal(
+        "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3, outcome=outcome
+    )
 
 
 _RECORD_ERROR_MESSAGES = {
@@ -1751,6 +1753,163 @@ def _cmd_opencode_adopt(args: argparse.Namespace) -> int:
         },
         "next": f"quoin opencode gate --task {shlex.quote(args.task)}{stage_part} --phase {phase} --write --project-root {quoted_root}",
     }, 0)
+
+
+_HANDOFF_TEXT_CAP = 2000
+_HANDOFF_TEXT_COUNT = 20
+
+
+def _handoff_refusal(code: str, message: str, reasons=(), exit_code: int = 2) -> int:
+    return _gate_json({
+        "outcome": "HANDOFF_REFUSED",
+        "refusal": {"code": code, "message": message, "reasons": [str(r) for r in reasons]},
+    }, exit_code)
+
+
+def _handoff_refused(exc) -> int:
+    return _handoff_refusal(exc.code, exc.message, exc.reasons)
+
+
+def _handoff_source(args: argparse.Namespace):
+    from quoin.opencode_adapter import runstore  # noqa: PLC0415
+
+    try:
+        runstore.check_task_name(args.task)
+    except runstore.RunStoreError:
+        return None, _handoff_refusal("invalid-task-name", "the task name is not valid")
+    try:
+        return _resolve_source_dir(args.source_dir), None
+    except SystemExit:
+        return None, _handoff_refusal("source-unavailable", "the quoin source directory cannot be resolved")
+
+
+def _handoff_texts(args: argparse.Namespace):
+    for label, values in (("--decision", args.decision), ("--note", args.note)):
+        if len(values) > _HANDOFF_TEXT_COUNT or any(len(v) > _HANDOFF_TEXT_CAP for v in values):
+            return None, _handoff_refusal(
+                "argument-invalid",
+                "%s takes at most %d values of at most %d characters" % (label, _HANDOFF_TEXT_COUNT, _HANDOFF_TEXT_CAP),
+            )
+    return (args.decision, args.note), None
+
+
+def _handoff_evaluator(project_root: pathlib.Path):
+    from quoin.opencode_adapter import handoff  # noqa: PLC0415
+
+    env = _opencode_config_env()
+    home = pathlib.Path.home()
+    return lambda profile: handoff.scope_for_profile(project_root, profile, env=env, home=home)
+
+
+def _handoff_rel(project_root: pathlib.Path, path) -> str:
+    return os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
+
+
+def _cmd_opencode_handoff_write(args: argparse.Namespace) -> int:
+    """`quoin opencode handoff write`: build the continuation record from the
+    workflow state, run records and tree. Agent text enters only through
+    `--decision` and `--note`."""
+    from quoin.opencode_adapter import handoff  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    source_dir, refused = _handoff_source(args)
+    if refused is not None:
+        return refused
+    texts, refused = _handoff_texts(args)
+    if refused is not None:
+        return refused
+    decisions, notes = texts
+
+    def work():
+        scope, source = handoff.resolve_profile(
+            project_root, args.task, args.profile, evaluate=_handoff_evaluator(project_root),
+        )
+        previous = None
+        try:
+            previous = handoff.core(source_dir).load_record(str(handoff.record_path(project_root, args.task)))
+        except Exception:  # noqa: BLE001 - an unusable previous record only loses its decisions
+            previous = None
+        record = handoff.build_record(
+            project_root, args.task, scope=scope, scope_source=source, source_dir=source_dir,
+            decisions=decisions, notes=notes, previous=previous,
+        )
+        directory, state, run = handoff.advice_inputs(project_root, args.task)
+        items = handoff.classify_pending(project_root, record, state, run, source_dir)
+        try:
+            path = handoff.write(project_root, args.task, record, source_dir=source_dir)
+        except handoff.HandoffRefused as exc:
+            return _handoff_refusal("record-write-failed", exc.message, (exc.code,) + tuple(exc.reasons), 8)
+        except OSError as exc:
+            return _handoff_refusal("record-write-failed", "the record could not be written", (type(exc).__name__,), 8)
+        return _gate_json({
+            "outcome": "HANDOFF_WRITTEN", "record": _handoff_rel(project_root, path),
+            "phase": record["phase"]["current"], "pending": len(record["pending"]),
+            "completed": len(record["completed"]),
+            "unrecorded": sum(1 for item in items if item["kind"] == "unrecorded"),
+            "scope_source": source,
+        }, 0)
+
+    try:
+        code, held_pid = _with_task_lock(project_root, args.task, work)
+    except handoff.HandoffRefused as exc:
+        return _handoff_refused(exc)
+    if code is None:
+        return _lock_refusal(project_root, args.task, held_pid, outcome="HANDOFF_REFUSED")
+    return code
+
+
+def _cmd_opencode_handoff_show(args: argparse.Namespace) -> int:
+    """`quoin opencode handoff show`: validate the record, then print the next
+    steps (or candidate commands). Takes no lock and writes nothing."""
+    from quoin.opencode_adapter import driver, handoff  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    source_dir, refused = _handoff_source(args)
+    if refused is not None:
+        return refused
+    try:
+        requested = _handoff_evaluator(project_root)(args.profile) if args.profile else None
+        record = handoff.load_for_continuation(
+            project_root, args.task, source_dir=source_dir, requested_scope=requested,
+        )
+        directory, state, run = handoff.advice_inputs(project_root, args.task)
+        advice = handoff.next_step(project_root, record, state, run, source_dir)
+    except handoff.HandoffRefused as exc:
+        return _handoff_refused(exc)
+    native = directory is not None and driver.Handoff.from_continuation(record, directory) is not None
+    return _gate_json({
+        "outcome": "CONTINUATION_READY",
+        "record": _handoff_rel(project_root, handoff.record_path(project_root, args.task)),
+        "origin_runtime": record["origin_runtime"], "phase": record["phase"],
+        "next": advice, "native_resume": native,
+    }, 0)
+
+
+def _cmd_opencode_handoff_validate(args: argparse.Namespace) -> int:
+    """`quoin opencode handoff validate`: check the record alone."""
+    from quoin.opencode_adapter import handoff  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    source_dir, refused = _handoff_source(args)
+    if refused is not None:
+        return refused
+    try:
+        record = handoff.validate_record(project_root, args.task, source_dir=source_dir)
+    except handoff.HandoffRefused as exc:
+        return _handoff_refused(exc)
+    return _gate_json({
+        "outcome": "RECORD_VALID",
+        "record": _handoff_rel(project_root, handoff.record_path(project_root, args.task)),
+        "task": record["task"], "created_at": record["created_at"], "origin_runtime": record["origin_runtime"],
+    }, 0)
+
+
+def _cmd_opencode_handoff(args: argparse.Namespace) -> int:
+    if args.handoff_command == "write":
+        return _cmd_opencode_handoff_write(args)
+    if args.handoff_command == "show":
+        return _cmd_opencode_handoff_show(args)
+    return _cmd_opencode_handoff_validate(args)
 
 
 def _is_posix() -> bool:
@@ -2636,6 +2795,47 @@ def main(argv: list[str] | None = None) -> int:
     opencode_adopt_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
     opencode_adopt_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
 
+    opencode_handoff_p = opencode_sub.add_parser(
+        "handoff",
+        description=(
+            "Write, show or validate the portable continuation record of a task. Prints one JSON "
+            "line. Exit 0, 2 refused, 3 task lock held (write), 8 record not written."
+        ),
+        help="Write, show or validate a task's continuation record",
+    )
+    handoff_sub = opencode_handoff_p.add_subparsers(dest="handoff_command", required=True)
+
+    def _handoff_common(sub_p, *, profile: bool):
+        sub_p.add_argument("--task", required=True, help="Task name.")
+        sub_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
+        sub_p.add_argument("--source-dir", default=None, help="Quoin source tree; defaults to the installed one.")
+        if profile:
+            sub_p.add_argument("--profile", default=None, help="Runtime profile; must match the one recorded for the task.")
+
+    handoff_write_p = handoff_sub.add_parser(
+        "write", help="Build the record from the workflow state, run records and the tree",
+        description="Build and write the continuation record (takes the task lock).",
+    )
+    _handoff_common(handoff_write_p, profile=True)
+    handoff_write_p.add_argument(
+        "--decision", action="append", default=[],
+        help="A decision to record (repeatable, at most 20 per call, 2000 characters each).",
+    )
+    handoff_write_p.add_argument(
+        "--note", action="append", default=[],
+        help="A note to record (repeatable, at most 20 per call, 2000 characters each).",
+    )
+    handoff_show_p = handoff_sub.add_parser(
+        "show", help="Validate the record and print the next steps",
+        description="Validate the record against the tree and print what to do next. Writes nothing.",
+    )
+    _handoff_common(handoff_show_p, profile=True)
+    handoff_validate_p = handoff_sub.add_parser(
+        "validate", help="Check the record alone",
+        description="Check the record file against the schema. Reads nothing else.",
+    )
+    _handoff_common(handoff_validate_p, profile=False)
+
     dashboard_p = sub.add_parser(
         "dashboard",
         description=(
@@ -2892,6 +3092,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_gate(args)
         if args.opencode_command == "adopt":
             return _cmd_opencode_adopt(args)
+        if args.opencode_command == "handoff":
+            return _cmd_opencode_handoff(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)

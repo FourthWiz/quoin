@@ -279,6 +279,28 @@ no live OpenCode run or corporate gateway has been qualified.
   adopted evidence as run-verified: it reports `run-evidence-absent` and
   `boundary-unverified` as warnings, and still refuses any later change.
   Takes the task lock. Exit 0, 2 refused request, 3 task lock held.
+- `quoin opencode handoff write --task NAME [--project-root PATH] [--source-dir PATH] [--profile NAME] [--decision TEXT] [--note TEXT]`
+  builds the portable continuation record from the workflow state, the run
+  records and the tree, and writes it to `continuation/NAME.json` in the
+  project's workflow memory directory; agent text enters the record only
+  through `--decision` and `--note` (repeatable, at most 20 per call, 2000
+  characters each). Takes the task lock. Exit 0, 2 refused, 3 task lock held,
+  8 record not written.
+- `quoin opencode handoff show --task NAME [--project-root PATH] [--source-dir PATH] [--profile NAME]`
+  validates the record and refuses a missing, invalid, older-format or
+  finalized continuation (and, with `--profile`, a scope that is not covered by
+  the recorded one), then prints the next steps, or candidate commands with
+  what to check when the choice needs the operator. Reads only; takes no lock.
+  Whether a native session can be resumed relies on the compatibility keys
+  `continuation-flags` and `continuation-no-replay`.
+- `quoin opencode handoff validate --task NAME [--project-root PATH] [--source-dir PATH]`
+  checks the record file alone against its schema.
+
+  Until a later release records workflow entries after runs, a phase finished
+  by a headless `quoin run` is reported as run completed, even after later
+  runs of other phases, and the advice is to adopt and gate it rather than run
+  it again. When some run records cannot be read, a fresh run is offered only
+  as a candidate to check first.
 - `quoin doctor --runtime opencode --profile NAME` adds the profile checks
   described under "Runtime driver".
 
