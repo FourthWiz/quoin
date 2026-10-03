@@ -114,7 +114,7 @@ def test_an_agent_line_after_the_mark_is_kept_and_reported(synth):
 def test_a_changed_prefix_is_a_violation_but_the_row_is_still_written_once(synth, damage):
     mark = mark_of(synth)
     if damage == "flip":
-        synth.ledger.write_text(ch.HEADER + ch.SEED_ROW.replace("seed-model", "other-mod"), encoding="utf-8")
+        synth.ledger.write_text(ch.HEADER + ch.SEED_ROW.replace("seed-model", "seed-modal"), encoding="utf-8")
     elif damage == "truncate":
         synth.ledger.write_text("# Cost", encoding="utf-8")
     else:

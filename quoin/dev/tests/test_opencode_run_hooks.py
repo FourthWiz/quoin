@@ -140,9 +140,17 @@ def test_repeated_hooks_add_no_row_and_no_second_entry(w):
 # -- unresolved stage folders --------------------------------------------------
 
 
-def test_a_staged_run_without_a_source_dir_fails_closed_without_a_hook_error(w):
+def test_a_staged_run_without_a_source_dir_fails_closed_without_a_hook_error(w, monkeypatch):
+    calls = []
+
+    def spy(*args, **kwargs):
+        calls.append(args)
+        raise RuntimeError("must not be reached")
+
+    monkeypatch.setattr(gate, "stage_dir", spy)
     run = w.exec_run("plan", writes={CRITIC2: gh.CRITIC_PASS})
     out = w.hook(run, source_dir=None)
+    assert calls == []
     assert out.entry_recorded
     entry = w.live("plan")
     assert entry["outputs_error"] == "stage-unresolved" and entry["critic_responses"] == []
