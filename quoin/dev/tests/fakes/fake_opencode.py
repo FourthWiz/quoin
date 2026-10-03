@@ -67,15 +67,19 @@ def _step_start(pid: str, ts: Optional[int] = None) -> Dict[str, Any]:
         _emit("step_start", part={"id": pid, "messageID": "msg_fake", "type": "step-start"}), ts)
 
 
-def _step_finish(pid: str, reason: str, ts: Optional[int] = None) -> Dict[str, Any]:
-    return _stamped(_emit(
-        "step_finish",
-        part={
-            "id": pid, "reason": reason, "messageID": "msg_fake", "type": "step-finish",
-            "tokens": {"input": 10, "output": 2, "reasoning": 0, "cache": {"read": 0, "write": 0}},
-            "cost": 0.001,
-        },
-    ), ts)
+def _step_finish(pid: str, reason: str, ts: Optional[int] = None, *,
+                 tokens: Optional[Dict[str, Any]] = None, cost: float = 0.001,
+                 omit_cost: bool = False) -> Dict[str, Any]:
+    """A step-finish event. ``tokens`` replaces the default usage verbatim (so a
+    test can drop a field); ``omit_cost`` leaves the cost key out."""
+    part: Dict[str, Any] = {
+        "id": pid, "reason": reason, "messageID": "msg_fake", "type": "step-finish",
+        "tokens": tokens if tokens is not None else {
+            "input": 10, "output": 2, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+    }
+    if not omit_cost:
+        part["cost"] = cost
+    return _stamped(_emit("step_finish", part=part), ts)
 
 
 def _text(pid: str, body: str, ts: Optional[int] = None) -> Dict[str, Any]:
@@ -240,7 +244,69 @@ def _task_then_boundary_crash(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _usage(input_tokens: int, output_tokens: int) -> Dict[str, Any]:
+    return {"input": input_tokens, "output": output_tokens, "reasoning": 0,
+            "cache": {"read": 0, "write": 0}}
+
+
+def _usage_revised() -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        _step_finish("prt_f1", "tool-calls"),
+        _step_finish("prt_f1", "tool-calls", tokens=_usage(40, 5)),
+        _step_finish("prt_f2", "stop"),
+        {"do": "exit", "code": 0},
+    )
+
+
+def _usage_unknown_tokens() -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        _step_finish("prt_f1", "stop", tokens={
+            "input": 10, "reasoning": 0, "cache": {"read": 0, "write": 0}}),
+        {"do": "exit", "code": 0},
+    )
+
+
+def _usage_zero_cost() -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        _step_finish("prt_f1", "stop", tokens=_usage(100, 20), cost=0),
+        {"do": "exit", "code": 0},
+    )
+
+
+_LEDGER_HEADER = "# Cost Ledger \u2014 %s\n"
+_AGENT_ROW = "agent-row-1 | 2026-01-01 | plan | some-model | task | agent wrote this | 0\n"
+
+
+def _ledger_append(task: str = "demo") -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        {"do": "append_file", "path": ".workflow_artifacts/%s/cost-ledger.md" % task,
+         "content": _AGENT_ROW},
+        _step_finish("prt_f1", "stop"),
+        {"do": "exit", "code": 0},
+    )
+
+
+def _ledger_rewrite(task: str = "demo") -> Dict[str, Any]:
+    changed = "seed-row-1 | 2026-01-01 | plan | changed-model | task | rewritten by agent | 0\n"
+    return _scenario(
+        _step_start("prt_s1"),
+        {"do": "write_file", "path": ".workflow_artifacts/%s/cost-ledger.md" % task,
+         "content": (_LEDGER_HEADER % "demo") + changed},
+        _step_finish("prt_f1", "stop"),
+        {"do": "exit", "code": 0},
+    )
+
+
 SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "usage_revised": _usage_revised,
+    "usage_unknown_tokens": _usage_unknown_tokens,
+    "usage_zero_cost": _usage_zero_cost,
+    "ledger_append": _ledger_append,
+    "ledger_rewrite": _ledger_rewrite,
     "replay": replay,
     "crash_after_start": lambda: _scenario(_step_start("prt_s1"), {"do": "crash", "signal": "SIGKILL"}),
     "crash_mid_stream": lambda: _scenario(
@@ -567,6 +633,19 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
             target.write_text(step.get("content", ""), encoding="utf-8")
             with open(state / "effects.log", "a", encoding="utf-8") as fh:
                 fh.write("%s\n" % step["path"])
+        elif verb == "append_file":
+            target = Path(step["path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(step.get("content", ""))
+            with open(state / "effects.log", "a", encoding="utf-8") as fh:
+                fh.write("%s\n" % step["path"])
+        elif verb == "move_path":
+            target = Path(step["to"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(step["from"], step["to"])
+            with open(state / "effects.log", "a", encoding="utf-8") as fh:
+                fh.write("%s -> %s\n" % (step["from"], step["to"]))
         elif verb == "spawn_grandchild":
             _grandchild(state, bool(step.get("ignore_term")), _lifetime(scenario, step),
                         bool(step.get("detach")))
