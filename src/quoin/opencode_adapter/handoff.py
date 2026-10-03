@@ -1001,8 +1001,9 @@ def next_step(project_root, record: Mapping[str, Any], state, run, source_dir) -
             candidates.append(fresh_run_command(task, stage, phase, profile, root))
             result["hint"] = (
                 "the entry was recorded by a run, and adopting over it would replace run-verified evidence; "
-                "recording a replacement entry after a run belongs to the coordinator stage, so check the "
-                "reasons and decide whether to run the phase again"
+                "a new run of the phase records a replacement entry, so check the reasons and decide whether "
+                "to run the phase again; a critic run after an adopted plan starts its own entry, so the "
+                "recovery there is to adopt the plan again after the critique or to run the plan as a phase run"
             )
     elif kind == "recorded-since":
         steps.append(handoff_write_command(task, root))
@@ -1011,7 +1012,8 @@ def next_step(project_root, record: Mapping[str, Any], state, run, source_dir) -
         hidden = facts["run_records_skipped"]
         (candidates if hidden > 0 else steps).extend([adopt, write_gate])
         hint = (
-            "run %s completed but is not recorded as a workflow entry (no run writes one yet), so adopt its "
+            "run %s completed but has no workflow entry (it ran before runs recorded entries, or its entry "
+            "could not be recorded; see the run record's telemetry), so adopt its "
             "result and gate it; running the phase again would repeat finished work" % facts["run_id"]
         )
         if latest is not None and runstore.normalize_phase(latest["request"].get("phase")) in ("critic", "thorough_plan"):

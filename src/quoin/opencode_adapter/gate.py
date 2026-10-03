@@ -280,7 +280,7 @@ def expected_artifacts(
             if isinstance(candidate, str) and _REVIEW_RE.match(os.path.basename(candidate)):
                 chosen = _confine(project_root, candidate, sdir)
                 break
-        if chosen is None:
+        if chosen is None and entry.get("outputs_recorded") is not True:
             reviews = _numbered(sdir, _REVIEW_RE)
             chosen = reviews[-1][1] if reviews else None
         if chosen is None:
@@ -742,8 +742,9 @@ def critic_status(
     """`(status, code, detail)` items for the plan's critic loop.
 
     Recorded responses must be `critic-response-N.md` files in the stage
-    folder. A coordinator entry trusts only the responses it recorded; any
-    other origin falls back to the responses on disk when none were recorded.
+    folder. A coordinator entry, or any entry whose run recorded its own
+    outputs, trusts only the responses it recorded; any other entry falls back
+    to the responses on disk when none were recorded.
     No response is a refusal unless the settings say a critic is not required
     or the plan was adopted, which warns."""
     recorded = [r for r in (entry.get("critic_responses") or []) if isinstance(r, str)]
@@ -756,7 +757,7 @@ def critic_status(
                 used.append(_confine(project_root or sdir, name, sdir))
         except PathUnresolved as exc:
             return [("FAIL", "path-unresolved", exc.detail)]
-    elif origin == "coordinator":
+    elif origin == "coordinator" or entry.get("outputs_recorded") is True:
         used = []
     else:
         used = [path for _n, path in _numbered(sdir, _CRITIC_RE)]

@@ -114,7 +114,7 @@ A continuation may narrow the recorded scope but never widen it. Profile and cla
 
 ## Continuation rules
 
-A new runtime session is always created from the record. Transcripts are never read, and `provenance.transcripts_imported` is always false. Native run and session ids are an optional aid only: they are used when the named run is still interrupted and resumable, and the continuation starts a fresh native session otherwise. Older-format checkpoints and finalized tasks are refused, never migrated. Recording workflow entries after runs is left to a later coordinator, so until then a phase finished by a headless run has no workflow entry and is reported as a completed run to adopt and gate.
+A new runtime session is always created from the record. Transcripts are never read, and `provenance.transcripts_imported` is always false. Native run and session ids are an optional aid only: they are used when the named run is still interrupted and resumable, and the continuation starts a fresh native session otherwise. Older-format checkpoints and finalized tasks are refused, never migrated. A phase run records a workflow entry for its phase when it ends; a phase finished outside a recorded run, or by a run whose entry could not be recorded, has none and is reported as work to adopt and gate.
 
 ## Versioning
 
