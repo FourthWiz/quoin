@@ -59,6 +59,23 @@ def _validate_autocompact_args(args: argparse.Namespace) -> tuple[int | None, in
     return pct, window, clear
 
 
+def _validate_context_tracker_args(args: argparse.Namespace) -> Optional[str]:
+    """Return "with", "remove" or None for the context-tracker mod flags.
+
+    Uses getattr defaults because callers (and tests) build Namespaces that
+    predate these flags. Raises ValueError when both are given.
+    """
+    with_ct = getattr(args, "with_context_tracker", False)
+    remove_ct = getattr(args, "remove_context_tracker", False)
+    if with_ct and remove_ct:
+        raise ValueError("--with-context-tracker cannot be combined with --remove-context-tracker")
+    if with_ct:
+        return "with"
+    if remove_ct:
+        return "remove"
+    return None
+
+
 def _autocompact_window_type(raw: str) -> int:
     """argparse type= for --autocompact-window: a plain integer, no suffix.
 
@@ -315,6 +332,25 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
                 "  (b) Run with --allow-hook-merge to proceed anyway (documents the double-fire)."
             )
 
+    try:
+        ct_mode = _validate_context_tracker_args(args)
+    except ValueError as exc:
+        _abort(f"quoin: {exc}")
+    ct_errors, ct_warnings = installer.context_tracker_preflight(
+        source_dir,
+        dest_root,
+        mode=ct_mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=pathlib.Path.home() / ".claude",
+        cwd_dest_root=pathlib.Path.cwd() / ".claude",
+    )
+    for warning in ct_warnings:
+        print(warning, file=sys.stderr)
+    if ct_errors:
+        for error in ct_errors:
+            print(error, file=sys.stderr)
+        return 1
+
     # allow_writes: only in --dev mode with a writable source tree.
     # This is the single dev/user division: user installs (pip or bash, with or without
     # --source-dir) never regenerate; dev installs (--dev + writable working tree) do.
@@ -358,6 +394,7 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
 
     # T-05
     installer.deploy_skills(source_dir, dest_root)
+    installer.apply_context_tracker(source_dir, dest_root, mode=ct_mode)
     installer.deploy_scripts(source_dir, dest_root)
     installer.deploy_core_scripts(source_dir, dest_root)
     installer.deploy_core_workflow(source_dir, dest_root)  # IVG-248: portable workflow docs (D-10)
@@ -472,6 +509,15 @@ def _cmd_install(args: argparse.Namespace) -> int:
     scope: str = getattr(args, "scope", None) or "user"
     if scope.startswith("project") and runtime in ("codex", "opencode"):
         _abort("quoin: --scope project is only valid with --runtime claude")
+
+    if runtime != "claude" and (
+        getattr(args, "with_context_tracker", False)
+        or getattr(args, "remove_context_tracker", False)
+    ):
+        _abort(
+            "quoin: --with-context-tracker/--remove-context-tracker are only "
+            "valid with --runtime claude"
+        )
 
     if runtime == "opencode":
         return _cmd_opencode_install(args)
@@ -2039,6 +2085,8 @@ def main(argv: list[str] | None = None) -> int:
               quoin install --runtime opencode --project-root .
               quoin install --autocompact-pct 75
               quoin install --clear-autocompact-env
+              quoin install --with-context-tracker
+              quoin install --remove-context-tracker
         """),
     )
     install_p.add_argument(
@@ -2147,6 +2195,24 @@ def main(argv: list[str] | None = None) -> int:
             "Remove quoin's two autocompact env keys from settings.json's env block, "
             "leaving every other env key untouched. Mutually exclusive with "
             "--autocompact-pct and --autocompact-window."
+        ),
+    )
+    install_p.add_argument(
+        "--with-context-tracker",
+        action="store_true",
+        default=False,
+        help=(
+            "Opt-in, off by default: deploy the context-tracker mod (/ctx pane) to "
+            "skills/context-tracker/. Once installed, later installs refresh it."
+        ),
+    )
+    install_p.add_argument(
+        "--remove-context-tracker",
+        action="store_true",
+        default=False,
+        help=(
+            "Remove the opt-in context-tracker mod folder. Mutually exclusive "
+            "with --with-context-tracker."
         ),
     )
 
@@ -2647,6 +2713,7 @@ def main(argv: list[str] | None = None) -> int:
         # _cmd_claude_install, ran after every deploy_* except deploy_hooks).
         try:
             _validate_autocompact_args(args)
+            _validate_context_tracker_args(args)
         except ValueError as exc:
             install_p.error(str(exc))
         return _cmd_install(args)

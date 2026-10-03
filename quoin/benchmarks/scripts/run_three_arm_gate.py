@@ -74,6 +74,10 @@ DEFAULT_GATE_TASK_ID = "scenario_medium_refactor_plan"
 # outside what the precheck actually adds up.
 MODEL_PROBE_MAX_BUDGET_USD = 1.0
 
+# The cross-arm byte-diff manifest fingerprints the arms' source subtrees listed
+# in CATEGORY_SUBDIRS and deliberately ignores quoin/plugins/, so a mod-only
+# difference between arms is not a candidate change. Do not sync this tuple
+# with the installer's DRIFT_CATEGORIES.
 DRIFT_CATEGORIES = ("skills", "scripts", "core-scripts", "core-workflow", "memory")
 HOOK_SCRIPTS = (
     "_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh",

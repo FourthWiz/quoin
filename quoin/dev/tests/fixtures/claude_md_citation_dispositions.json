@@ -107,21 +107,21 @@
     },
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
-      "line_hash": "826eb88568104b6c45d1093ae7fae992644d35b0b34581aa172c353b114d39d6",
+      "line_hash": "f374f5f4545820d1e77149695b484806b5d1305f4b2892417eb8a5b217e695a7",
       "heading_disposition": "non-citation",
       "path_form": "none",
       "note": "verbatim quote of deploy_drift_check.py's own 'not covered' tool-output string, which lists CLAUDE.md as a literal category name \u2014 not a content pointer."
     },
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
-      "line_hash": "9c1fe7e91c7e9ab03617db282f4ccb48ec382990def5021ae051fd24b7cd7c2a",
+      "line_hash": "0be1881f269b547e5250690699c905bd5d49fa28f8504ff6207fe9550a79b9dd",
       "heading_disposition": "non-citation",
       "path_form": "none",
       "note": "verbatim quote of deploy_drift_check.py's own tool-output string (same as gate:319)."
     },
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
-      "line_hash": "1b9fb10fe672cbb534e53c0c76f83949e7ad9cb45e319489eaf0fa87705d43ee",
+      "line_hash": "a015c4bff683dc7a8b7ce4c4289af0a6804b33fd6b3cbfeee6533bcf17e85da9",
       "heading_disposition": "non-citation",
       "path_form": "none",
       "note": "verbatim quote of deploy_drift_check.py's own tool-output string (same as gate:319), repeated twice within this row."

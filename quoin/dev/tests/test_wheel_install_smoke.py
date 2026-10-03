@@ -462,6 +462,35 @@ def test_wheel_contents_include_claude_md_slim_variant(built_wheel):
     )
 
 
+def test_pyproject_force_include_line_for_plugins():
+    """pyproject.toml must wire quoin/plugins into the wheel data dir.
+
+    Cheap non-build guard: without this line the opt-in context-tracker mod
+    is absent from wheel installs and the install flag has nothing to copy.
+    """
+    expected = '"quoin/plugins" = "src/quoin/data/plugins"'
+    assert expected in _force_include_block(), (
+        f"pyproject.toml force-include must contain:\n  {expected}"
+    )
+
+
+@_requires_build
+def test_wheel_contents_include_context_tracker_plugin(built_wheel):
+    """The wheel ships the context-tracker mod, minus generated type stubs."""
+    with zipfile.ZipFile(built_wheel) as whl:
+        names = whl.namelist()
+    for suffix in (
+        "quoin/data/plugins/context-tracker/hooks/register.tsx",
+        "quoin/data/plugins/context-tracker/.claude-plugin/plugin.json",
+    ):
+        assert any(name.endswith(suffix) for name in names), (
+            f"Missing wheel asset: {suffix}"
+        )
+    assert not any(
+        "plugins/context-tracker/.claude-plugin/types/" in name for name in names
+    ), "generated .claude-plugin/types/ must not ship in the wheel"
+
+
 @_requires_build
 def test_wheel_contents_include_claude_adapter_skill_assets(built_wheel):
     """Wheel installs must include active Claude adapter skills, not only stubs."""
