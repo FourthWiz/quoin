@@ -1723,6 +1723,37 @@ def _cmd_opencode_gate(args: argparse.Namespace) -> int:
     return _gate_json(payload, code)
 
 
+def _cmd_opencode_test_run(args: argparse.Namespace) -> int:
+    """`quoin opencode test-run`: run the task's configured test command in a
+    throwaway workspace and print one JSON line. The command, include paths
+    and project root cannot be chosen here."""
+    from quoin.opencode_adapter import paths as _paths, runstore, scripts, testrun  # noqa: PLC0415
+
+    def refuse(code: str, message: str) -> int:
+        return _gate_json({"outcome": "REFUSED", "refusal": {"code": code, "message": message}}, 2)
+
+    project_root = scripts.find_project_root(pathlib.Path.cwd())
+    if project_root is None:
+        return refuse("project-root-unresolved", "no quoin project was found from the current directory")
+    try:
+        runstore.check_task_name(args.task)
+        stage = runstore.normalize_stage(args.stage)
+    except (runstore.RunStoreError, ValueError):
+        return refuse("request-invalid", "the task name or stage is not valid")
+    if _paths.ENV_STATE_DIR in os.environ:
+        state_root = _paths.launcher_state_dir(os.environ)
+        if state_root is None:
+            return refuse("state-dir-invalid", "the state directory variable must be an absolute path")
+    else:
+        state_root = _paths.state_dir(os.environ, pathlib.Path.home())
+    run = testrun.run_tests(project_root, args.task, stage, state_root=state_root)
+    payload = run.to_dict()
+    if run.outcome == testrun.REFUSED:
+        return refuse(run.reason or "refused", "the test run could not start")
+    code = 0 if run.outcome == testrun.PASSED else 1
+    return _gate_json(payload, code)
+
+
 def _cmd_opencode_adopt(args: argparse.Namespace) -> int:
     """`quoin opencode adopt`: a human step recording evidence for a phase that
     finished outside a recorded run. The gate never treats it as run-verified."""
@@ -2842,6 +2873,19 @@ def main(argv: list[str] | None = None) -> int:
     opencode_adopt_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
     opencode_adopt_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
 
+    opencode_test_run_p = opencode_sub.add_parser(
+        "test-run",
+        allow_abbrev=False,
+        description=(
+            "Run the task's configured test command against a throwaway copy of the working tree "
+            "and print one JSON line. The command is fixed in the task's workflow state. "
+            "Exit 0 PASSED, 1 FAILED, 2 refused."
+        ),
+        help="Run the task's configured tests in a throwaway workspace",
+    )
+    opencode_test_run_p.add_argument("--task", required=True, help="Task name.")
+    opencode_test_run_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
+
     opencode_handoff_p = opencode_sub.add_parser(
         "handoff",
         description=(
@@ -3147,6 +3191,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_gate(args)
         if args.opencode_command == "adopt":
             return _cmd_opencode_adopt(args)
+        if args.opencode_command == "test-run":
+            return _cmd_opencode_test_run(args)
         if args.opencode_command == "handoff":
             return _cmd_opencode_handoff(args)
         if args.opencode_command == "config":
