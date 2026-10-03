@@ -122,3 +122,16 @@ This is the only place quoin ever writes a non-`QUOIN_*` variable. It is off by 
 - `--autocompact-pct N`
 - `--autocompact-window TOKENS`
 - `--clear-autocompact-env` — removes exactly the two keys above, leaving every other `env` key untouched.
+
+## Opt-in context-tracker mod
+
+`/ctx` opens a live context pane with three views (switch with `1`, `2`, `3`; `r` refreshes). It ships as a small Claude Code mod and is never installed unless you ask for it.
+
+- **Install:** `bash quoin/install.sh --with-context-tracker` (or `quoin install --with-context-tracker`) copies four files into `skills/context-tracker/` under the install scope. Claude Code auto-loads that folder as `context-tracker@skills-dir`. No `settings.json` key, hook stanza or environment variable is written.
+- **Sticky refresh:** once installed, a plain reinstall refreshes the copy and never creates one where none exists.
+- **Remove:** `--remove-context-tracker` deletes the folder.
+- **Ownership is by name only:** a hand-copied `context-tracker` folder is overwritten or removed, but any other folder in that spot, or a symlink, is left alone and the opt-in refuses.
+- **Scope:** the default is user scope. Project scope works once the workspace is trusted, and refuses while a user-scope copy is installed (both would load).
+- **Disable without reinstalling:** `claude plugin disable context-tracker@skills-dir`. That entry survives removal and must be re-enabled by hand if you install again.
+- **Requirements:** verified on Claude Code 2.1.288; older builds ignore the folder. Remove any older hand-copied dev-mods version first to avoid loading it twice.
+- **Drift check:** the deploy drift check compares the mod's files only when the mod is installed, and only for the scope it checks (user by default).
