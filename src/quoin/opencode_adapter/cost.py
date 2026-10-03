@@ -392,12 +392,20 @@ def ledger_path(project_root: Any, task: str) -> Path:
     return Path(project_root) / ".workflow_artifacts" / runstore.check_task_name(task) / LEDGER_NAME
 
 
-def task_folder_present(project_root: Any, task: str) -> bool:
+def folder_state(project_root: Any, task: str) -> str:
+    """`"present"` for a real task directory, `"absent"` when nothing is there,
+    `"unsafe"` for anything else (a symlink, a file, an unreadable entry)."""
     try:
         info = os.lstat(str(Path(project_root) / ".workflow_artifacts" / runstore.check_task_name(task)))
+    except FileNotFoundError:
+        return "absent"
     except (OSError, runstore.RunStoreError):
-        return False
-    return stat.S_ISDIR(info.st_mode)
+        return "unsafe"
+    return "present" if stat.S_ISDIR(info.st_mode) else "unsafe"
+
+
+def task_folder_present(project_root: Any, task: str) -> bool:
+    return folder_state(project_root, task) == "present"
 
 
 def _now_text(clock: Callable[[], float]) -> str:
@@ -683,6 +691,7 @@ class CostOutcome:
     violation: bool = False
     telemetry: Optional[Dict[str, Any]] = None
     closed: bool = False
+    from_stored: bool = False
 
 
 def _outcome_from_stored(run_id: str, telemetry: Mapping[str, Any]) -> CostOutcome:
@@ -692,6 +701,7 @@ def _outcome_from_stored(run_id: str, telemetry: Mapping[str, Any]) -> CostOutco
         run_id=run_id, row=str(ledger.get("row") or "skipped"), row_reason=ledger.get("row_reason"),
         prefix=prefix, appended=list(ledger.get("ledger_lines_appended_during_run") or []),
         violation=prefix == "changed", telemetry=dict(telemetry), closed=True,
+        from_stored=True,
     )
 
 
@@ -754,12 +764,23 @@ def _record_run(
         "uuid": run_id,
     }
     violation = False
+    folder = folder_state(project_root, task)
     if not spawned(record):
         ledger["row_reason"] = "never-spawned"
         ledger["prefix_reason"] = "never-spawned"
-    elif not task_folder_present(project_root, task):
+    elif folder == "absent":
         ledger["row_reason"] = "task-folder-missing"
         ledger["prefix_reason"] = "task-folder-missing"
+    elif folder == "unsafe":
+        # a folder that was a directory before the run and is something else now
+        # (for example a link to another tree) is a change to the ledger's prefix
+        ledger["row_reason"] = "task-folder-unsafe"
+        if isinstance(effective_mark, Mapping) and effective_mark.get("exists") is True:
+            ledger["prefix"] = "changed"
+            ledger["prefix_reason"] = "task-folder-unsafe-after-run"
+            violation = True
+        else:
+            ledger["prefix_reason"] = "task-folder-unsafe"
     else:
         result = scan(ledger_path(project_root, task), effective_mark, run_id, own_uuids)
         ledger.update(

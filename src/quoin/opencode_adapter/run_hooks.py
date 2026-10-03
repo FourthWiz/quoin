@@ -324,11 +324,20 @@ def after_phase_run(
         if not outcome.closed:
             out.reason = outcome.row_reason
             return out
+        from_stored = outcome.from_stored
     except Exception as exc:  # noqa: BLE001
         _note_error(project_root, run_id, "cost", exc)
         return out
 
     try:
+        if from_stored:
+            # an earlier invocation already closed and costed this run: report the
+            # stored outcome and record nothing new
+            stored = _load(project_root, run_id) or record
+            note_now = (stored.get("telemetry") or {}).get("evidence") or {}
+            out.entry_recorded = note_now.get("recorded") is True
+            out.reason = note_now.get("reason")
+            return out
         record = _load(project_root, run_id) or record
         telemetry = record.get("telemetry") if isinstance(record.get("telemetry"), Mapping) else {}
         if (telemetry.get("evidence") or {}).get("recorded") is True:
