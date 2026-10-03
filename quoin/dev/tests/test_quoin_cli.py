@@ -507,7 +507,7 @@ def test_installer_byte_identical_to_install_sh():
                 if rel.name == "quoin-runtime.json":
                     # The install record legitimately varies per invocation: each
                     # transport picks its own interpreter (install.sh probes PATH for
-                    # the newest available python3.x; the in-process python transport
+                    # the first sufficient interpreter in PATH order; the in-process python transport
                     # here always runs under sys.executable), and installed_at is a
                     # wall-clock timestamp. Normalize those fields; everything else
                     # (schema, version, quoin_file, source_dir, source_version) must

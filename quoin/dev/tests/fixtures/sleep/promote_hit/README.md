@@ -6,3 +6,7 @@ the pattern "jq must be installed before hooks can parse stdin". The first file 
 frequency_3plus (weight 3) when scored together. Combined promote_score >= 3 (promote_min_score threshold).
 
 Tests call collect_entries(fixture_dir, scan_days=365) to include all files regardless of mtime.
+
+Format note: the insights files here use the legacy "### Insight N:" entry-heading format, kept to
+exercise that parsing path. The format writers produce today is "## <HH:MM> — <context>"; see
+capture_insight_format/.

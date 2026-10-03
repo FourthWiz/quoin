@@ -9,3 +9,7 @@ with the text of lessons-learned-fixture.md should filter it out — it is alrea
 
 Test reads lessons-learned-fixture.md text and passes it to dedup_against_lessons(scored, lessons_text).
 Asserts the candidate is NOT in the returned list.
+
+Format note: the insights files here use the legacy "### Insight N:" entry-heading format, kept to
+exercise that parsing path. The format writers produce today is "## <HH:MM> — <context>"; see
+capture_insight_format/.
