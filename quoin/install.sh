@@ -5,6 +5,7 @@
 #                        [--scope user|project[:DIR]] [--claude-md-variant full|slim]
 #                        [--allow-hook-merge] [--autocompact-pct N]
 #                        [--autocompact-window TOKENS] [--clear-autocompact-env]
+#                        [--with-context-tracker] [--remove-context-tracker]
 #                        [--print-python] [-h]
 #
 # Python: any interpreter meeting the project minimum (pyproject.toml
@@ -35,6 +36,8 @@ ALLOW_HOOK_MERGE_FLAG=""
 AUTOCOMPACT_PCT_FLAG=""
 AUTOCOMPACT_WINDOW_FLAG=""
 CLEAR_AUTOCOMPACT_ENV_FLAG=""
+WITH_CONTEXT_TRACKER_FLAG=""
+REMOVE_CONTEXT_TRACKER_FLAG=""
 USE_PIP=0
 PIP_UPGRADE_FLAG=""
 PRINT_PYTHON=0
@@ -55,6 +58,8 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
     --force-merge)  FORCE_MERGE_FLAG="--force-merge" ;;
     --allow-hook-merge) ALLOW_HOOK_MERGE_FLAG="--allow-hook-merge" ;;
     --clear-autocompact-env) CLEAR_AUTOCOMPACT_ENV_FLAG="--clear-autocompact-env" ;;
+    --with-context-tracker) WITH_CONTEXT_TRACKER_FLAG="--with-context-tracker" ;;
+    --remove-context-tracker) REMOVE_CONTEXT_TRACKER_FLAG="--remove-context-tracker" ;;
     --autocompact-pct=*)
       if [[ -n "${arg#--autocompact-pct=}" ]]; then
         AUTOCOMPACT_PCT_FLAG="--autocompact-pct ${arg#--autocompact-pct=}"
@@ -128,6 +133,7 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "                       [--scope user|project[:DIR]] [--claude-md-variant full|slim]"
       echo "                       [--allow-hook-merge] [--autocompact-pct N]"
       echo "                       [--autocompact-window TOKENS] [--clear-autocompact-env]"
+      echo "                       [--with-context-tracker] [--remove-context-tracker]"
       echo "                       [--print-python]"
       echo "  --dev                Install dev dependencies (pyyaml, pytest)"
       echo "  --upgrade            Re-install via pip before deploying (alias: --use-pip)"
@@ -158,6 +164,12 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "  --clear-autocompact-env"
       echo "                       Remove quoin's two autocompact env keys from settings.json's"
       echo "                       env block. Mutually exclusive with the two flags above."
+      echo "  --with-context-tracker"
+      echo "                       Opt-in: deploy the context-tracker mod (/ctx pane) to"
+      echo "                       skills/context-tracker/. Off by default."
+      echo "  --remove-context-tracker"
+      echo "                       Remove the context-tracker mod folder. Mutually exclusive with"
+      echo "                       --with-context-tracker."
       exit 0
       ;;
     *)  REST+=("$arg") ;;
@@ -501,6 +513,8 @@ if [[ -n "$AUTOCOMPACT_WINDOW_FLAG" ]]; then
   INSTALL_ARGS+=("$_window_key" "$_window_val")
 fi
 [[ -n "$CLEAR_AUTOCOMPACT_ENV_FLAG" ]] && INSTALL_ARGS+=("$CLEAR_AUTOCOMPACT_ENV_FLAG")
+[[ -n "$WITH_CONTEXT_TRACKER_FLAG" ]] && INSTALL_ARGS+=("$WITH_CONTEXT_TRACKER_FLAG")
+[[ -n "$REMOVE_CONTEXT_TRACKER_FLAG" ]] && INSTALL_ARGS+=("$REMOVE_CONTEXT_TRACKER_FLAG")
 
 # ── Get versions ──────────────────────────────────────────────────────────────
 # Every "is quoin importable on its own" probe runs from a neutral directory.

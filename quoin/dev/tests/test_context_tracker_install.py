@@ -342,7 +342,7 @@ def _install(base: Path, name: str, *, with_ct=False, remove_ct=False, seed: Pat
     if seed is not None:
         shutil.copytree(seed.parent, project)
     else:
-        project.mkdir(parents=True)
+        project.mkdir(parents=True, exist_ok=True)
     home = fake_home or (base / (name + "-home"))
     home.mkdir(parents=True, exist_ok=True)
     args = argparse.Namespace(
@@ -387,6 +387,11 @@ def _normalised(dest: Path) -> dict[str, bytes]:
     return out
 
 
+def _settings(dest: Path) -> dict:
+    text = (dest / "settings.json").read_text(encoding="utf-8").replace(str(dest), "DEST")
+    return json.loads(text)
+
+
 def _all_keys(node) -> list[str]:
     if isinstance(node, dict):
         return [str(k) for k in node] + [k for v in node.values() for k in _all_keys(v)]
@@ -412,7 +417,7 @@ class TestEndToEnd:
     def test_opt_in_deploys_four_files(self, shared):
         _, plain_a, _, opted = shared
         assert _files(opted / "skills" / "context-tracker") == set(ALLOWLIST)
-        assert json.loads((opted / "settings.json").read_text()) == json.loads((plain_a / "settings.json").read_text())
+        assert _settings(opted) == _settings(plain_a)
 
     def test_foreign_folder_refused_and_nothing_written(self, shared, tmp_path):
         _, plain_a, _, _ = shared
@@ -436,10 +441,10 @@ class TestEndToEnd:
         assert _snapshot(dest) == before
 
     def test_settings_idempotent_across_opt_in_runs(self, shared, tmp_path):
-        _, _, _, opted = shared
-        seed = _fresh_copy(opted, tmp_path)
-        first = (seed / "settings.json").read_bytes()
-        rc, dest = _install(tmp_path, "again", with_ct=True, seed=seed)
+        rc, dest = _install(tmp_path, "idem", with_ct=True)
+        assert rc == 0
+        first = (dest / "settings.json").read_bytes()
+        rc, dest = _install(tmp_path, "idem", with_ct=True)
         assert rc == 0
         assert (dest / "settings.json").read_bytes() == first
 
