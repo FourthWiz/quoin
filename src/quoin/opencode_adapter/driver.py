@@ -257,6 +257,46 @@ class Handoff:
             ran_anything=bool(checkpoint.get("ran_anything", False)),
         )
 
+    @classmethod
+    def from_continuation(cls, record: Mapping[str, Any], directory: Path) -> Optional["Handoff"]:
+        """The checkpoint token a continuation record points at, or None.
+
+        The token is returned only for an interrupted OpenCode run that the
+        record names, that is still resumable and whose checkpoint agrees with
+        the record; anything else means the phase starts a fresh native
+        session. Damaged run data never blocks a fresh start."""
+        try:
+            if record.get("origin_runtime") != "opencode":
+                return None
+            native = record.get("native")
+            if not isinstance(native, Mapping):
+                return None
+            run_id = native.get("run_id")
+            if not isinstance(run_id, str) or not ev.RUN_ID_RE.match(run_id):
+                return None
+            run = runstore.load_record(directory, run_id)
+            if run is None or run.get("task") != record.get("task") or run.get("state") != "interrupted":
+                return None
+            if run.get("resume_blocked") is not None:
+                return None
+            if any(a.get("driver_lost") for a in run.get("attempts") or []):
+                return None
+            request = run.get("request") or {}
+            phase = record.get("phase") or {}
+            if runstore.entry_phase_for_run(request.get("phase")) != phase.get("current"):
+                return None
+            if runstore.normalize_stage(request.get("stage")) != phase.get("stage"):
+                return None
+            checkpoint = runstore.load_checkpoint(directory, run_id)
+            if checkpoint is None or checkpoint.get("run_id") != run_id:
+                return None
+            recorded, saved = native.get("session_id"), checkpoint.get("native_session_id")
+            if recorded is not None and saved is not None and recorded != saved:
+                return None
+            return cls.from_checkpoint(checkpoint)
+        except (runstore.RunStoreError, ValueError, KeyError, TypeError, AttributeError):
+            return None
+
 
 # The id goes into argv, so it must be unable to read as a flag.
 NATIVE_SESSION_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
