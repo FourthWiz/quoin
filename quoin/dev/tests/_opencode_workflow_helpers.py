@@ -37,7 +37,7 @@ class CoordDriver(rh.ScriptedDriver):
             record = runstore.load_record(self.directory, prepared.run_id)
             record["request"] = {
                 "task": request.task, "stage": request.stage, "phase": request.phase,
-                "profile": request.profile, "effort": None, "workspace": None,
+                "profile": request.profile, "effort": None, "workspace": str(request.workspace) if request.workspace else None,
                 "non_interactive": bool(request.non_interactive),
                 "context_refs": list(request.context_refs),
             }
@@ -66,6 +66,12 @@ class CoordDriver(rh.ScriptedDriver):
         record["attempts"] = [
             ch.attempt(before=handle.before, after=after, state=handle.outcome.state)
         ]
+        state = handle.outcome.state
+        if state not in ("prepared", "running"):
+            record["outcome"] = {
+                "state": state, "evidence": "full" if state == "completed" else "none", "reason": None,
+                "exit_code": 0, "signal": None, "new_native_events": 1,
+            }
         runstore.write_record(self.directory, record)
 
 
@@ -112,6 +118,19 @@ class CoordWorld(ch.HookWorld):
         stage = request.get("stage")
         rel = "stage-%s/current-plan.md" % stage if stage else "current-plan.md"
         gh.write(self.path(rel), gh.PLAN + "\nrevised by the run\n")
+
+    def finding_effect(self, name: str, bodies: List[str]) -> Callable[[Any, Dict[str, Any]], None]:
+        """An effect for a snapshot phase: write the next body into the
+        snapshot's outbox under `name`."""
+        queue = list(bodies)
+
+        def effect(driver: Any, request: Dict[str, Any]) -> None:
+            body = queue.pop(0)
+            stage = request.get("stage")
+            rel = ".workflow_artifacts/%s/%s" % (self.task, "stage-%s" % stage if stage else "")
+            gh.write(Path(request["workspace"]) / rel / name, body)
+
+        return effect
 
     def record_json(self) -> Optional[Dict[str, Any]]:
         import json

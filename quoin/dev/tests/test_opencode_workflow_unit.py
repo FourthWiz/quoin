@@ -212,3 +212,133 @@ def test_a_coordinator_request_matches_the_single_phase_record_except_for_the_mo
     assert not phase_loop._same_request(record, driver.RunRequest(
         project_root=w.root, task=w.task, stage="1", phase="implement", profile="personal",
         non_interactive=True))
+
+
+# -- part two: critic loop, review, gates, pause and outcomes --------------------
+
+UNPARSEABLE = gh.CRITIC_PASS + "\n## Verdict\n\nREVISE\n"
+
+
+def critic_world(w, bodies, **opt):
+    w.seed_workflow()
+    w.drv.effects["plan"] = w.write_plan
+    w.drv.effects["critic"] = w.finding_effect("critic-response-7.md", bodies)
+    return w.coordinator(**opt)
+
+
+def test_revise_then_pass_converges_in_two_rounds_and_passes_the_context_on(w):
+    coord = critic_world(w, [gh.CRITIC_REVISE, gh.CRITIC_PASS])
+    steps = coord.plan_item(1)
+    assert [s.result.outcome for s in steps] == ["COMPLETED"] * 4
+    entry = w.live("plan")
+    assert entry["origin"] == "coordinator" and len(entry["critic_responses"]) == 2
+    assert len(entry["runs"]) == 4
+    plan_requests = [r for r in w.drv.requests if r.phase == "plan"]
+    assert plan_requests[0].context_refs == ()
+    assert plan_requests[1].context_refs == (entry["critic_responses"][0],)
+    assert steps[-1].gate.passed, steps[-1].gate.reasons
+
+
+def test_revise_at_the_cap_refuses_at_the_gate(w):
+    coord = critic_world(w, [gh.CRITIC_REVISE, gh.CRITIC_REVISE])
+    steps = coord.plan_item(1)
+    assert len(w.live("plan")["critic_responses"]) == 2
+    assert steps[-1].gate.verdict == "FAIL" and "critic-not-converged" in steps[-1].gate.reasons
+
+
+def test_an_unparseable_critic_response_goes_straight_to_the_gate(w):
+    coord = critic_world(w, [UNPARSEABLE])
+    steps = coord.plan_item(1)
+    assert [s.phase for s in steps] == ["plan", "plan"]
+    assert len([r for r in w.drv.requests if r.phase == "plan"]) == 1
+    assert "verdict-unparseable" in steps[-1].gate.reasons
+
+
+def test_critic_classes_are_recorded_and_a_failing_classifier_does_not_stop_the_loop(w, monkeypatch):
+    coord = critic_world(w, [gh.CRITIC_PASS])
+    steps = coord.plan_item(1)
+    classes = w.live("plan")["critic_classes"]
+    assert len(classes) == 1 and set(classes[0]["counts"]) == {"issues", "structural", "mechanical"}
+    assert steps[-1].gate is not None
+
+
+def test_a_failing_classifier_records_an_error_and_the_loop_goes_on(w, monkeypatch):
+    def boom(*a, **k):
+        raise ValueError("bad")
+
+    monkeypatch.setattr(workflow, "classify_counts", boom)
+    steps = critic_world(w, [gh.CRITIC_PASS]).plan_item(1)
+    classes = w.live("plan")["critic_classes"]
+    assert classes[-1].get("error") == "ValueError" and "counts" not in classes[-1]
+    assert steps[-1].gate is not None
+
+
+def review_world(w, **opt):
+    coord = critic_world(w, [gh.CRITIC_PASS], **opt)
+    w.drv.effects["review"] = w.finding_effect("review-7.md", [gh.REVIEW, gh.REVIEW])
+    w.drv.effects["implement"] = lambda d, r: gh.write(w.root / "src" / "feature.py", "z = 1\n")
+    testrun.configure(w.root, w.task, command=["true"], state_root=w.drv.state_root)
+    return coord
+
+
+def test_a_review_copies_the_implement_tests_when_the_source_is_unchanged(w):
+    coord = review_world(w)
+    impl = coord.run_plain_phase("implement", 1)
+    assert impl.completed and w.live("implement")["tests"]["exit_code"] == 0
+    step = coord.review_item(1)
+    assert step.completed and step.gate is not None
+    review = w.live("review")
+    assert review["tests_source"] == "implement-entry" and review["tests"] == w.live("implement")["tests"]
+    assert review["harvested"] and review["harvested"][0]["path"].endswith(".md")
+
+
+def test_a_review_reruns_the_tests_after_a_source_change(w):
+    coord = review_world(w)
+    coord.run_plain_phase("implement", 1)
+    gh.write(w.root / "src" / "feature.py", "z = 2\n")
+    coord.review_item(1)
+    assert w.live("review")["tests_source"] == "coordinator"
+
+
+def test_a_gate_artifact_conflict_ends_with_exit_8(w, monkeypatch):
+    critic_world(w, [gh.CRITIC_PASS])
+    coord = w.coordinator(no_pause=True)
+
+    def conflict(*a, **k):
+        raise workflow.gate.GateArtifactConflict()
+
+    monkeypatch.setattr(workflow.gate, "write_artifact", conflict)
+    summary = coord.run_items([("plan", 1)])
+    assert summary["outcome"] == "GATE_ARTIFACT_FAILED" and summary["exit_code"] == 8
+    assert summary["workflow_validated"] is False
+
+
+def test_pause_after_a_plan_gate_and_through_stop_where_specified(w):
+    coord = critic_world(w, [gh.CRITIC_PASS])
+    summary = coord.run_items([("plan", 1), ("implement", 1)])
+    assert summary["outcome"] == "PAUSED_AT_GATE" and summary["exit_code"] == 0
+    assert [p["phase"] for p in summary["phases"]] == ["plan"]
+    assert summary["workflow_validated"] is True and "--continue" in summary["resume_hint"]
+    assert summary["record"].endswith("t1.json")
+
+
+
+def test_through_stops_after_the_first_passing_gate_of_that_phase(w):
+    critic_world(w, [gh.CRITIC_PASS])
+    done = w.coordinator(no_pause=True, through="plan").run_items([("plan", 1), ("implement", 1)])
+    assert done["outcome"] == "COMPLETED" and [p["phase"] for p in done["phases"]] == ["plan"]
+
+
+def test_a_refused_gate_reports_exit_7_and_is_not_validated(w):
+    coord = critic_world(w, [gh.CRITIC_REVISE, gh.CRITIC_REVISE], no_pause=True)
+    summary = coord.run_items([("plan", 1)])
+    assert summary["outcome"] == "GATE_REFUSED" and summary["exit_code"] == 7
+    assert "critic-not-converged" in summary["reasons"] and summary["workflow_validated"] is False
+
+
+def test_a_workflow_refusal_maps_to_exit_3(w):
+    w.seed_workflow()
+    testrun.configure(w.root, w.task, command=["true"], state_root=w.drv.state_root.parent / "other")
+    summary = w.coordinator().run_items([("implement", 1)])
+    assert summary["outcome"] == "REFUSED" and summary["exit_code"] == 3
+    assert summary["reasons"] == ["tests-settings-changed"]

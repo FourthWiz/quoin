@@ -15,6 +15,7 @@ import dataclasses
 import hashlib
 import importlib.util
 import os
+import shlex
 import stat
 import sys
 import time
@@ -219,6 +220,7 @@ class StepResult:
     hook: Optional[run_hooks.HookOutcome] = None
     gate: Optional[GateOutcome] = None
     tests_ran: bool = False
+    harvested: Optional[str] = None
 
     @property
     def completed(self) -> bool:
@@ -466,15 +468,16 @@ class Coordinator:
         except Exception:  # noqa: BLE001
             return False
 
-    def run_implement_tests(self, stage: Optional[int]) -> None:
-        """Run the configured tests and store the outcome on the live implement
-        entry: the result as `tests`, or the reason it could not be had."""
+    def run_implement_tests(self, stage: Optional[int], phase: str = "implement") -> None:
+        """Run the configured tests and store the outcome on the live entry of
+        `phase` (implement or review): the result as `tests`, or the reason it
+        could not be had."""
         run = testrun.run_tests(self.project_root, self.task, stage, state_root=self.state_root)
         directory = runstore.store_dir(self.project_root, create=True)
         state = runstore.load_workflow_state(directory, self.task)
         if state is None:
             return
-        entry = runstore.current_entry(state, stage, "implement")
+        entry = runstore.current_entry(state, stage, phase)
         if entry is None:
             return
         data = None
@@ -493,3 +496,253 @@ class Coordinator:
             entry["tests_source"] = "coordinator"
             entry["tests_reason"] = run.reason or "tests-not-run"
         self.save_state(state)
+
+
+    # -- snapshot phases -----------------------------------------------------
+    def run_snapshot_phase(self, kind: str, stage: Optional[int]) -> StepResult:
+        """A critic or review run in a fresh snapshot, recorded through
+        `after_snapshot_run`. A harvest error on a completed run turns it into
+        FAILED with the harvest reason; a snapshot refusal raises."""
+        root, task, opts = self.project_root, self.task, self.options
+        self.refresh_record()
+        request = driver.RunRequest(
+            project_root=root, task=task, stage=stage_text(stage), phase=kind, profile=opts.profile,
+            budget=opts.budget, non_interactive=True,
+        )
+        mark = run_hooks.before_run(root, task)
+        candidate = run_hooks.open_run(root, task)
+        isolated = snapshot.run_in_snapshot(
+            self.drv, request, kind=kind, source_dir=self.source_dir, cancel=self.cancel,
+            max_relaunch=opts.max_relaunch, backoff_fn=self.backoff_fn, clock=self.clock,
+        )
+        if isolated.result is None:
+            raise WorkflowRefused(isolated.refusal or "snapshot-refused", "the %s snapshot could not be made: %s" % (
+                kind, isolated.refusal))
+        hook = run_hooks.after_snapshot_run(
+            root, task, isolated, kind=kind, stage=stage, mark=mark, source_dir=self.source_dir,
+            superseded_candidate=candidate, origin="coordinator", clock=self.clock,
+        )
+        result = isolated.result
+        if result.outcome == "COMPLETED":
+            if hook.violation or (isolated.boundary is not None and getattr(isolated.boundary, "status", "") == "violation"):
+                result = dataclasses.replace(result, outcome="FAILED", reason="boundary-violation")
+            elif isolated.harvest is None or isolated.harvest.error or isolated.harvest.path_rel is None:
+                reason = (isolated.harvest.error if isolated.harvest is not None else None) or isolated.harvest_skipped or "harvest-none"
+                result = dataclasses.replace(result, outcome="FAILED", reason=reason)
+        self.refresh_record()
+        step = StepResult(phase="plan" if kind == "critic" else "review", stage=stage, result=result, hook=hook)
+        step.harvested = isolated.harvest.path_rel if isolated.harvest is not None else None
+        return step
+
+    def classify_response(self, stage: Optional[int], path_rel: str) -> None:
+        """Record the advisory issue counts of a harvested critic response on the
+        plan entry. A failure is stored as an error and never stops the loop."""
+        try:
+            counts: Any = classify_counts(self.source_dir, self.project_root / path_rel)
+            item: Dict[str, Any] = {"path": path_rel, "counts": counts}
+        except Exception as exc:  # noqa: BLE001 - advisory only
+            item = {"path": path_rel, "error": type(exc).__name__}
+        state = self.load_state()
+        if state is None:
+            return
+        entry = runstore.current_entry(state, stage, "plan")
+        if entry is None:
+            return
+        classes = [c for c in entry.get("critic_classes") or [] if isinstance(c, dict) and c.get("path") != path_rel]
+        classes.append(item)
+        entry["critic_classes"] = classes
+        self.save_state(state)
+
+    def _read_text(self, path_rel: str) -> Optional[str]:
+        path = self.project_root / path_rel
+        try:
+            info = os.lstat(str(path))
+            if not stat.S_ISREG(info.st_mode) or info.st_size > 4 * 1024 * 1024:
+                return None
+            return path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return None
+
+    def _last_run_phase(self, entry: Mapping[str, Any]) -> Optional[str]:
+        runs = [r for r in entry.get("runs") or [] if isinstance(r, str)]
+        if not runs:
+            return None
+        directory = runstore.store_dir(self.project_root, create=True)
+        record = runstore.load_record(directory, runs[-1])
+        request = (record or {}).get("request") or {}
+        phase = request.get("phase")
+        return phase if isinstance(phase, str) else None
+
+    def plan_item(self, stage: Optional[int]) -> List[StepResult]:
+        """Plan round, critic, and further rounds while the critic says REVISE
+        and the cap allows; the plan gate follows. Stops at the first run that
+        does not complete. The returned list ends with the gated step."""
+        steps: List[StepResult] = []
+        cap = stored_cap(self.load_state(), self.options)
+        state = self.load_state()
+        entry = runstore.current_entry(state, stage, "plan") if state is not None else None
+        if entry is None or entry.get("origin") != "coordinator":
+            step = self.run_plain_phase("plan", stage, gate_after=False)
+            steps.append(step)
+            if not step.completed:
+                return steps
+        while True:
+            state = self.load_state()
+            entry = runstore.current_entry(state, stage, "plan") if state is not None else None
+            if entry is None:
+                break
+            last = self._last_run_phase(entry)
+            responses = [r for r in entry.get("critic_responses") or [] if isinstance(r, str)]
+            if last in ("plan", "thorough_plan"):
+                step = self.run_snapshot_phase("critic", stage)
+                steps.append(step)
+                if not step.completed:
+                    return steps
+                continue
+            if last != "critic" or not responses:
+                break
+            latest = responses[-1]
+            if not any(isinstance(c, dict) and c.get("path") == latest for c in entry.get("critic_classes") or []):
+                self.classify_response(stage, latest)
+            text = self._read_text(latest)
+            verdict = gate.parse_verdict(text, gate.CRITIC_VERDICTS) if text is not None else None
+            if verdict == "REVISE" and len(responses) < cap:
+                step = self.run_plain_phase(
+                    "plan", stage, compose=True, context_refs=(latest,), gate_after=False,
+                )
+                steps.append(step)
+                if not step.completed:
+                    return steps
+                continue
+            break
+        gated = steps[-1] if steps else StepResult("plan", stage, phase_loop.PhaseResult(outcome="COMPLETED"))
+        gated.gate = self.gate(stage, "plan")
+        self.refresh_record()
+        if gated not in steps:
+            steps.append(gated)
+        return steps
+
+    def review_item(self, stage: Optional[int]) -> StepResult:
+        """Review in a snapshot, its test result, then the review gate."""
+        step = self.run_snapshot_phase("review", stage)
+        if not step.completed:
+            return step
+        if self._tests_configured():
+            self._review_tests(stage)
+            step.tests_ran = True
+        step.gate = self.gate(stage, "review")
+        self.refresh_record()
+        return step
+
+    def _review_tests(self, stage: Optional[int]) -> None:
+        """Copy the stage's implement test result onto the review entry when the
+        repositories are unchanged since implement, otherwise run the tests."""
+        state = self.load_state()
+        impl = runstore.current_entry(state, stage, "implement") if state is not None else None
+        review = runstore.current_entry(state, stage, "review") if state is not None else None
+        if impl is None or review is None:
+            self.run_implement_tests(stage, "review")
+            return
+        copied = False
+        tests = impl.get("tests")
+        if isinstance(tests, dict) and isinstance(impl.get("evidence"), dict):
+            try:
+                fresh = evidence.take_snapshot(self.project_root, self.task, "implement", clock=self.clock)
+                _, repo_findings = evidence.compare(impl["evidence"], fresh)
+            except Exception:  # noqa: BLE001 - fall back to a rerun
+                repo_findings = [object()]
+            if not repo_findings:
+                review["tests"] = dict(tests)
+                review["tests_source"] = "implement-entry"
+                review.pop("tests_reason", None)
+                self.save_state(state)
+                copied = True
+        if not copied:
+            self.run_implement_tests(stage, "review")
+
+    # -- the loop ------------------------------------------------------------
+    def resume_hint(self) -> str:
+        return "quoin run --runtime opencode --profile %s --workflow --continue %s --project-root %s" % (
+            shlex.quote(self.options.profile), shlex.quote(self.task), shlex.quote(str(self.project_root)))
+
+    def _item_passed(self, state: Optional[Mapping[str, Any]], phase: str, stage: Optional[int]) -> bool:
+        entry = runstore.current_entry(state, stage, phase) if state is not None else None
+        gate_info = (entry or {}).get("gate")
+        return isinstance(gate_info, Mapping) and gate_info.get("verdict") == "PASS"
+
+    def run_item(self, phase: str, stage: Optional[int]) -> List[StepResult]:
+        if phase == "plan":
+            return self.plan_item(stage)
+        if phase == "review":
+            return [self.review_item(stage)]
+        return [self.run_plain_phase(phase, stage)]
+
+    def run_items(self, items: Sequence[Tuple[str, Optional[int]]]) -> Dict[str, Any]:
+        """Walk `items` in order, stopping at the first refusal, failure, failed
+        gate, pause or `--through` boundary, and return the summary."""
+        opts = self.options
+        phases: List[Dict[str, Any]] = []
+        gates: List[GateOutcome] = []
+        outcome, exit_code, reasons = "COMPLETED", 0, []  # type: str, int, List[str]
+        stopped = False
+        try:
+            for phase, stage in items:
+                if self._item_passed(self.load_state(), phase, stage):
+                    continue
+                steps = self.run_item(phase, stage)
+                phases.append({
+                    "phase": phase, "stage": stage,
+                    "run_ids": [st.result.run_id for st in steps if st.result.run_id],
+                    "outcome": steps[-1].result.outcome if steps else None,
+                    "gate": None, "gate_artifact": None,
+                })
+                last = steps[-1]
+                if not last.completed:
+                    stopped = True
+                    outcome = last.result.outcome
+                    exit_code = last.exit_code
+                    if last.result.reason:
+                        reasons.append(last.result.reason)
+                    break
+                outcome_gate = last.gate
+                if outcome_gate is None:
+                    continue
+                phases[-1]["gate"] = outcome_gate.verdict
+                phases[-1]["gate_artifact"] = outcome_gate.artifact
+                if outcome_gate.verdict is None:
+                    stopped, outcome, exit_code = True, "GATE_ARTIFACT_FAILED", 8
+                    reasons.append(outcome_gate.error or "gate-artifact-failed")
+                    break
+                gates.append(outcome_gate)
+                if not outcome_gate.passed:
+                    stopped, outcome, exit_code = True, "GATE_REFUSED", 7
+                    reasons.extend(outcome_gate.reasons)
+                    break
+                if opts.through == phase:
+                    stopped = True
+                    break
+                if not opts.no_pause and phase in ("plan", "review") and (phase, stage) != items[-1]:
+                    stopped, outcome = True, "PAUSED_AT_GATE"
+                    break
+        except WorkflowRefused as exc:
+            outcome, exit_code = "REFUSED", exc.exit_code
+            reasons.append(exc.code)
+            self.errors.append(exc.message)
+        record = self.refresh_record()
+        return {
+            "runtime": "opencode", "mode": "workflow", "task": self.task, "profile": opts.profile,
+            "outcome": outcome, "exit_code": exit_code, "phases": phases, "reasons": reasons,
+            "resume_hint": None if outcome == "COMPLETED" else self.resume_hint(),
+            "record": os.path.relpath(record, str(self.project_root)).replace(os.sep, "/") if record else None,
+            "workflow_validated": bool(gates) and all(g.passed for g in gates) and outcome in (
+                "COMPLETED", "PAUSED_AT_GATE"),
+        }
+
+
+def classify_counts(source_dir, path) -> Dict[str, int]:
+    """Issue counts of a critic response from the core classifier."""
+    mod = load_core_script(source_dir, "classify_critic_issues")
+    issues = mod.parse_critic_response(str(path))
+    serious = [i for i in issues if i.severity in ("CRITICAL", "MAJOR")]
+    mechanical = [i for i in serious if mod._is_mechanical(i)]  # noqa: SLF001 - the classifier's own rule
+    return {"issues": len(issues), "structural": len(serious) - len(mechanical), "mechanical": len(mechanical)}
