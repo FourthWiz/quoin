@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from quoin.opencode_adapter import names
 
@@ -100,7 +100,40 @@ def read_pinned_version(source_dir) -> str:
     return version_match.group(1)
 
 
-def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> List[str]:
+def repo_root_for(source_dir) -> Optional[Path]:
+    """The repository root holding the evidence tests next to `source_dir`, or
+    None for a deployed copy that ships no tests."""
+    root = Path(source_dir).parent
+    return root if (root / "quoin" / "dev" / "tests").is_dir() else None
+
+
+def _evidence_errors(rid: str, evidence: list, repo_root: Path) -> List[str]:
+    """Every evidence entry is a repo-relative POSIX path to a regular file
+    whose text names the row's command (`--workflow` for the whole-task form)."""
+    errs: List[str] = []
+    needle = "--workflow" if rid == "run" else "quoin-" + rid.replace("_", "-")
+    root = Path(repo_root)
+    for item in evidence:
+        if not item or item.startswith("/") or "\\" in item or ".." in item.split("/") or re.match(r"^[A-Za-z]:", item):
+            errs.append("row '%s' evidence %r is not a repo-relative path" % (rid, item))
+            continue
+        path = root / item
+        if path.is_symlink() or not path.is_file():
+            errs.append("row '%s' evidence %r is not a regular file in the repository" % (rid, item))
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            errs.append("row '%s' evidence %r cannot be read" % (rid, item))
+            continue
+        if needle not in text:
+            errs.append("row '%s' evidence %r does not mention %r" % (rid, item, needle))
+    return errs
+
+
+def check_manifest(
+    manifest: dict, catalog: List[dict], pinned_version: str, repo_root: Optional[Path] = None,
+) -> List[str]:
     errs: List[str] = []
 
     for key in REQUIRED_TOP_KEYS:
@@ -290,6 +323,8 @@ def check_manifest(manifest: dict, catalog: List[dict], pinned_version: str) -> 
             errs.append("row '%s' evidence must be a list of strings" % rid)
         if live_evidence is True and not evidence:
             errs.append("row '%s' live_runtime_evidence is true but evidence is empty" % rid)
+        if repo_root is not None and isinstance(evidence, list) and all(isinstance(e, str) for e in evidence):
+            errs.extend(_evidence_errors(rid, evidence, repo_root))
 
     for cid in sorted(catalog_id_set):
         name_err = names.name_error(names.normalize(cid))
@@ -308,4 +343,4 @@ def check_source_dir(source_dir) -> List[str]:
     manifest = load_manifest(source_dir)
     catalog = load_catalog(source_dir)
     pinned_version = read_pinned_version(source_dir)
-    return check_manifest(manifest, catalog, pinned_version)
+    return check_manifest(manifest, catalog, pinned_version, repo_root_for(source_dir))
