@@ -660,6 +660,14 @@ def _record_snapshot_entry(
     }
     if outputs_error is not None and kind == "review":
         fields["outputs_error"] = outputs_error
+    if kind == "critic":
+        prior_errors = [
+            e for e in ((live or {}).get("critic_errors") or [])
+            if isinstance(e, dict) and isinstance(e.get("run"), str)
+        ] if live is not None and live.get("origin") in _COMPOSED_ORIGINS else []
+        if outputs_error is not None:
+            prior_errors.append({"run": run_id, "error": outputs_error})
+        fields["critic_errors"] = prior_errors
     snapshot = evidence.take_snapshot(project_root, task, entry_phase)
     evidence.record_evidence(
         project_root, task, stage, entry_phase, origin, snapshot, runs=runs,

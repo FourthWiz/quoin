@@ -300,6 +300,22 @@ class Coordinator:
     def save_state(self, state: Dict[str, Any]) -> None:
         state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.clock()))
         runstore.write_workflow_state(runstore.store_dir(self.project_root, create=True), state)
+        self._note_state_write()
+
+    def _note_state_write(self) -> None:
+        """Note the workflow state file in the window of the open run, so a
+        resumed attempt accepts only the coordinator's own writes to it and any
+        other change made while a run was open still reads as a violation."""
+        try:
+            open_id = run_hooks.open_run(self.project_root, self.task)
+            if open_id is None:
+                return
+            path = runstore.workflow_state_path(runstore.store_dir(self.project_root), self.task)
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            rel = os.path.relpath(str(path), str(self.project_root)).replace(os.sep, "/")
+            self.window.note_write(open_id, rel, digest)
+        except Exception:  # noqa: BLE001 - an unnoted write only makes the window stricter
+            pass
 
     def sequence(self, state: Optional[Mapping[str, Any]]) -> List[Tuple[str, Optional[int]]]:
         return sequence(self.project_root, self.task, state, self.source_dir, self.options)
@@ -327,6 +343,7 @@ class Coordinator:
             path = handoff.write(self.project_root, self.task, record, source_dir=self.source_dir)
             if open_id is not None:
                 self._note_record_writes(open_id, path)
+                self._note_state_write()
             return str(path)
         except Exception as exc:  # noqa: BLE001
             self.errors.append("record-refresh: " + type(exc).__name__)
@@ -452,8 +469,11 @@ class Coordinator:
         if hook.violation and result.outcome not in ("CANCELLED", "REFUSED"):
             result = dataclasses.replace(result, outcome="FAILED", reason="boundary-violation")
 
-        # 6. the record follows the entry; a phase that did not complete stops here
-        self.refresh_record()
+        # 6. a phase that did not complete stops here with the record following its entry;
+        #    a completed one is refreshed by the next phase start or the run's exit, so the
+        #    source digest is not recomputed between the run, its tests and its gate
+        if result.outcome != "COMPLETED":
+            self.refresh_record()
         step = StepResult(phase=entry_phase, stage=stage, result=result, hook=hook)
         if result.run_id and result.outcome == "COMPLETED":
             self.window.drop(result.run_id)
@@ -464,12 +484,12 @@ class Coordinator:
         if entry_phase == "implement" and self._tests_configured():
             self.run_implement_tests(stage)
             step.tests_ran = True
-            self.refresh_record()
+            if not gate_after:
+                self.refresh_record()
 
         # 8. gate
         if gate_after:
             step.gate = self.gate(stage, entry_phase)
-            self.refresh_record()
         return step
 
     def _pre_run_listing(self, stage, phase, resumed):
@@ -486,7 +506,7 @@ class Coordinator:
                 except Exception:  # noqa: BLE001
                     now = None
                 if now is not None:
-                    return window.reconcile(saved, now, self._with_state_write(writes, now), root), True
+                    return window.reconcile(saved, now, writes, root), True
         listing = run_hooks.before_boundary(root, self.task)
         if listing is not None and resumed is None:
             try:
@@ -494,26 +514,6 @@ class Coordinator:
             except Exception as exc:  # noqa: BLE001
                 self.errors.append("window-save: " + type(exc).__name__)
         return listing, False
-
-    def _with_state_write(self, writes: Mapping[str, str], now: Any) -> Dict[str, str]:
-        """`writes` plus the workflow state file as it stands now. The coordinator
-        rewrites that file between a run's attempts (the interrupted entry, a fresh
-        timestamp), so it must not count against the resumed run; a change made
-        while the resumed attempt runs still differs from this baseline."""
-        out = dict(writes)
-        try:
-            rel = os.path.relpath(
-                str(runstore.workflow_state_path(runstore.store_dir(self.project_root), self.task)),
-                str(self.project_root),
-            ).replace(os.sep, "/")
-            entry = now.entries.get(rel)
-            if entry is not None and entry[0] == "f":
-                digest = entry[3] if entry[3] is not None else window._disk_sha(self.project_root, rel)  # noqa: SLF001
-                if digest:
-                    out[rel] = digest
-        except Exception:  # noqa: BLE001 - without it the window stays as saved
-            pass
-        return out
 
     # -- tests ---------------------------------------------------------------
     def _tests_configured(self) -> bool:
@@ -585,7 +585,8 @@ class Coordinator:
             elif isolated.harvest is None or isolated.harvest.error or isolated.harvest.path_rel is None:
                 reason = (isolated.harvest.error if isolated.harvest is not None else None) or isolated.harvest_skipped or "harvest-none"
                 result = dataclasses.replace(result, outcome="FAILED", reason=reason)
-        self.refresh_record()
+        if result.outcome != "COMPLETED":
+            self.refresh_record()
         step = StepResult(phase="plan" if kind == "critic" else "review", stage=stage, result=result, hook=hook)
         step.harvested = isolated.harvest.path_rel if isolated.harvest is not None else None
         return step
@@ -675,7 +676,6 @@ class Coordinator:
             break
         gated = steps[-1] if steps else StepResult("plan", stage, phase_loop.PhaseResult(outcome="COMPLETED"))
         gated.gate = self.gate(stage, "plan")
-        self.refresh_record()
         if gated not in steps:
             steps.append(gated)
         return steps
@@ -689,7 +689,6 @@ class Coordinator:
             self._review_tests(stage)
             step.tests_ran = True
         step.gate = self.gate(stage, "review")
-        self.refresh_record()
         return step
 
     def _review_tests(self, stage: Optional[int]) -> None:
@@ -920,6 +919,10 @@ class Coordinator:
             outcome = "COMPLETED_UNVERIFIED"
         if outcome is None and entry.get("boundary") == "violation":
             return "FAILED", 2, "boundary-violation"
+        if outcome is None and state == "completed":
+            errors = [e for e in entry.get("critic_errors") or [] if isinstance(e, Mapping)]
+            if errors and errors[-1].get("run") == run_id and isinstance(errors[-1].get("error"), str):
+                return "FAILED", 2, errors[-1]["error"]
         if outcome is None:
             return None
         code = phase_loop.exit_code(phase_loop.PhaseResult(outcome=outcome, signum=signum))
@@ -989,7 +992,6 @@ class Coordinator:
         result = phase_loop.PhaseResult(outcome="COMPLETED", run_id=res.run_id)
         step = StepResult(phase, stage, result, regated=res.origin != "coordinator")
         step.gate = self.gate(stage, phase)
-        self.refresh_record()
         return [step]
 
     # -- the loop ------------------------------------------------------------
