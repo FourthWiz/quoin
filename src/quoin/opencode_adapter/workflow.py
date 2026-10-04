@@ -1073,3 +1073,69 @@ def classify_counts(source_dir, path) -> Dict[str, int]:
     serious = [i for i in issues if i.severity in ("CRITICAL", "MAJOR")]
     mechanical = [i for i in serious if mod._is_mechanical(i)]  # noqa: SLF001 - the classifier's own rule
     return {"issues": len(issues), "structural": len(serious) - len(mechanical), "mechanical": len(mechanical)}
+
+
+def _workflow_command(profile: str, task: str, root, *, continue_: bool) -> str:
+    return "quoin run --runtime opencode --profile %s --workflow %s%s --project-root %s" % (
+        shlex.quote(profile), "--continue " if continue_ else "", shlex.quote(task), shlex.quote(str(root)))
+
+
+def next_action(project_root, task: str, source_dir, profile: Optional[str] = None) -> Dict[str, Any]:
+    """What to do next for `task`, from the workflow state and the tree only
+    (no lock, nothing written). `next` is a runnable `--workflow` command or
+    None; `hint` is text for a human and never a command to run unattended.
+    Raises `handoff.HandoffRefused` when the store cannot be read."""
+    directory, state, _run = handoff.advice_inputs(project_root, task)
+    block = workflow_block(state)
+    use_profile = (block or {}).get("profile") if isinstance((block or {}).get("profile"), str) else profile
+    use_profile = use_profile or "PROFILE"
+    record_present = os.path.lexists(str(handoff.record_path(project_root, task)))
+    if not has_workflow_state(state) and not record_present:
+        return {
+            "status": "not-started", "facts": {"items": []},
+            "next": _workflow_command(use_profile, task, project_root, continue_=False), "hint": None,
+        }
+    options = WorkflowOptions(profile=use_profile)
+    items = sequence(project_root, task, state, source_dir, options)
+    facts: List[Dict[str, Any]] = []
+    first: Optional[Tuple[str, Optional[int], str]] = None
+    for phase, stage in items:
+        entry = runstore.current_entry(state, stage, phase) if state is not None else None
+        gate_info = (entry or {}).get("gate")
+        verdict = gate_info.get("verdict") if isinstance(gate_info, Mapping) else None
+        if verdict == "PASS":
+            status = "passed"
+        elif verdict:
+            status = "gate-failed"
+        elif entry is not None:
+            status = "awaiting-gate"
+        elif handoff._primary_artifact_present(project_root, task, stage, phase, source_dir):  # noqa: SLF001
+            status = "unrecorded"
+        else:
+            status = "pending"
+        facts.append({"phase": phase, "stage": stage, "status": status})
+        if first is None and status != "passed":
+            first = (phase, stage, status)
+    if first is None:
+        return {"status": "complete", "facts": {"items": facts}, "next": None, "hint": None}
+    phase, stage, status = first
+    label = phase if stage is None else "%s (stage %s)" % (phase, stage)
+    cont = _workflow_command(use_profile, task, project_root, continue_=True)
+    if status == "gate-failed":
+        return {
+            "status": status, "facts": {"items": facts}, "next": None,
+            "hint": "%s failed its gate; fix the work named in the gate audit file, then a human restarts it "
+            "with --continue --rerun-from %s" % (label, phase if phase in RERUN_PHASES else "plan"),
+        }
+    if status == "unrecorded":
+        return {
+            "status": status, "facts": {"items": facts}, "next": None,
+            "hint": "%s has output with no recorded entry; a human records it with --continue --adopt %s, "
+            "or restarts it with --continue --rerun-from %s" % (label, phase, phase if phase in RERUN_PHASES else "plan"),
+        }
+    done_before = [f for f in facts if f["status"] == "passed"]
+    paused = status == "pending" and bool(done_before) and facts[len(done_before) - 1]["phase"] in ("plan", "review")
+    return {
+        "status": "paused-at-gate" if paused else status, "facts": {"items": facts}, "next": cont,
+        "hint": None,
+    }

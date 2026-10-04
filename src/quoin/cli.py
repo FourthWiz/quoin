@@ -2148,6 +2148,17 @@ def _print_adopt_advice(args: argparse.Namespace, result: Any, project_root: pat
     print("quoin: or finish the phase in the TUI, then run: " + command, file=sys.stderr)
 
 
+_WORKFLOW_THROUGH = ("discover", "architect", "plan", "implement", "review")
+_WORKFLOW_RERUN = ("plan", "implement", "review")
+# (flag, argparse attribute, value that means "not given")
+_WORKFLOW_ONLY_FLAGS = (
+    ("--continue", "continue_", False), ("--no-pause", "no_pause", False), ("--through", "through", None),
+    ("--from-discover", "from_discover", False), ("--max-critic-rounds", "max_critic_rounds", None),
+    ("--test-command", "test_command", None), ("--test-include", "test_include", None),
+    ("--test-timeout", "test_timeout", None), ("--rerun-from", "rerun_from", None), ("--adopt", "adopt", None),
+)
+
+
 def _cmd_run_opencode(args: argparse.Namespace) -> int:
     """Run one workflow phase on the OpenCode runtime and print a JSON summary.
 
@@ -2176,6 +2187,8 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
         print(json.dumps(phase_loop.summary(result, ident, hint), sort_keys=True))
         return phase_loop.exit_code(result)
 
+    if getattr(args, "workflow", False):
+        return _cmd_run_opencode_workflow(args)
     if not args.phase:
         return emit(refusal(
             "workflow-validation", "whole-task-unavailable", _supervisor.WHOLE_TASK_UNAVAILABLE
@@ -2276,6 +2289,152 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
         # so following it does not start a fresh interactive run.
         hint = hint + " --non-interactive"
     return emit(result, hint)
+
+
+def _workflow_summary_refusal(args: argparse.Namespace, code: str, message: str, exit_code: int) -> dict:
+    return {
+        "runtime": "opencode", "mode": "workflow", "task": args.task, "profile": args.profile,
+        "outcome": "REFUSED", "exit_code": exit_code, "phases": [], "reasons": [code],
+        "refusal": {"code": code, "message": message}, "resume_hint": None, "record": None,
+        "workflow_validated": False,
+    }
+
+
+def _workflow_options(args: argparse.Namespace):
+    from quoin.opencode_adapter import workflow  # noqa: PLC0415
+
+    return workflow.WorkflowOptions(
+        profile=args.profile, no_pause=bool(args.no_pause), through=args.through,
+        from_discover=bool(args.from_discover), max_critic_rounds=args.max_critic_rounds,
+        rerun_from=args.rerun_from, adopt=args.adopt, continue_=bool(args.continue_),
+        max_relaunch=args.max_relaunch, halt_on_abort=bool(args.halt_on_abort), budget=args.budget,
+        test_command=shlex.split(args.test_command) if args.test_command else None,
+        test_include=tuple(args.test_include or ()), test_timeout=args.test_timeout,
+    )
+
+
+def _print_workflow_adopt_advice(args: argparse.Namespace, summary: dict, project_root: pathlib.Path) -> None:
+    """Stderr only: how to finish a phase that stopped for approval."""
+    if summary.get("outcome") != "AWAITING_APPROVAL" or not summary.get("phases"):
+        return
+    try:
+        from quoin.opencode_adapter import gate as _gate  # noqa: PLC0415
+        from quoin.opencode_adapter import runstore  # noqa: PLC0415
+
+        last = summary["phases"][-1]
+        entry = runstore.entry_phase_for_run(last["phase"])
+        if not entry:
+            return
+        command = _gate.adopt_command(args.task, last.get("stage"), entry, project_root)
+    except Exception:  # noqa: BLE001 - advice is best effort
+        return
+    print("quoin: or finish the phase in the TUI, then run: " + command, file=sys.stderr)
+
+
+def _cmd_run_opencode_workflow(args: argparse.Namespace) -> int:
+    """`quoin run --runtime opencode --workflow`: walk the whole task and print
+    one JSON summary line. One task lock covers the whole invocation."""
+    import signal  # noqa: PLC0415
+
+    from quoin.opencode_adapter import handoff, phase_loop, runstore, workflow  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+
+    def emit(summary: dict) -> int:
+        print(json.dumps(summary, sort_keys=True))
+        return summary["exit_code"]
+
+    try:
+        runstore.check_task_name(args.task)
+    except runstore.RunStoreError:
+        return emit(_workflow_summary_refusal(args, "invalid-task-name", "the task name is not valid", 2))
+    if args.test_command:
+        try:
+            shlex.split(args.test_command)
+        except ValueError:
+            return emit(_workflow_summary_refusal(args, "tests-command-invalid", "the test command cannot be split", 2))
+    try:
+        source_dir = _resolve_source_dir(None)
+    except SystemExit:
+        return emit(_workflow_summary_refusal(
+            args, "source-unavailable", "the quoin source directory cannot be resolved", 2))
+
+    cancel = phase_loop.CancelToken()
+
+    def _on_signal(signum, _frame):
+        cancel.cancel(signum)
+
+    previous = {}
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            previous[sig] = signal.signal(sig, _on_signal)
+        except ValueError:  # not the main thread: no handlers, no cancel by signal
+            break
+
+    try:
+        paths = _supervisor_paths(project_root, args.task)
+        acquired, held_pid = _acquire_supervisor_lock(
+            paths["memory_dir"], paths["lock"], paths["result"], args.task,
+            args.max_relaunch, None, runtime="opencode",
+        )
+        if not acquired:
+            holder = _read_json(paths["lock"])
+            runtime = _lock_runtime(holder) if isinstance(holder, dict) else "unknown"
+            summary = _workflow_summary_refusal(
+                args, "lock-held", f"the task lock is held by pid {held_pid} (runtime {runtime})", 3)
+        else:
+            try:
+                summary = None
+                try:
+                    options = _workflow_options(args)
+                    scope, scope_source = handoff.resolve_profile(
+                        project_root, args.task, args.profile, evaluate=_handoff_evaluator(project_root),
+                    )
+                    drv = _make_opencode_driver(project_root)
+                    coord = workflow.Coordinator(
+                        drv, project_root, args.task, options, source_dir=source_dir, cancel=cancel,
+                        scope=scope, scope_source=scope_source, backoff_fn=_opencode_backoff,
+                    )
+                    coord.begin()
+                    summary = coord.run_items(coord.sequence(coord.load_state()))
+                    for message in coord.errors:
+                        print("quoin: " + message, file=sys.stderr)
+                except workflow.WorkflowRefused as exc:
+                    summary = _workflow_summary_refusal(args, exc.code, exc.message, exc.exit_code)
+                except handoff.HandoffRefused as exc:
+                    summary = _workflow_summary_refusal(args, exc.code, exc.message, 2)
+                except Exception as exc:  # noqa: BLE001
+                    summary = _workflow_summary_refusal(
+                        args, "driver-error", "workflow failed: " + type(exc).__name__, 1)
+                    summary["outcome"] = "ERROR"
+                if args.halt_on_abort and not paths["result"].exists():
+                    _write_supervisor_result(paths["memory_dir"], paths["result"], summary["outcome"], 0)
+            finally:
+                _release_supervisor_lock(paths["lock"], os.getpid())
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler if handler is not None else signal.SIG_DFL)
+    _print_workflow_adopt_advice(args, summary, project_root)
+    return emit(summary)
+
+
+def _cmd_opencode_workflow_next(args: argparse.Namespace) -> int:
+    """`quoin opencode workflow next`: print the next step of a task's
+    workflow. Takes no lock and writes nothing."""
+    from quoin.opencode_adapter import handoff, workflow  # noqa: PLC0415
+
+    project_root = pathlib.Path(args.project_root).resolve()
+    source_dir, refused = _handoff_source(args)
+    if refused is not None:
+        return refused
+    try:
+        advice = workflow.next_action(project_root, args.task, source_dir)
+    except handoff.HandoffRefused as exc:
+        return _handoff_refused(exc)
+    return _gate_json({
+        "outcome": "NEXT_STEP", "next": advice["next"], "status": advice["status"],
+        "facts": advice["facts"], "hint": advice["hint"],
+    }, 0)
 
 
 def _strip_handoff_pythonpath() -> None:
@@ -3045,6 +3204,21 @@ def main(argv: list[str] | None = None) -> int:
     )
     _handoff_common(handoff_validate_p, profile=False)
 
+    opencode_workflow_p = opencode_sub.add_parser(
+        "workflow",
+        allow_abbrev=False,
+        description="Read-only helpers for the whole-task workflow. Prints one JSON line.",
+        help="Show the next step of a task's workflow",
+    )
+    workflow_sub = opencode_workflow_p.add_subparsers(dest="workflow_command", required=True)
+    workflow_next_p = workflow_sub.add_parser(
+        "next", allow_abbrev=False, help="Print the next step",
+        description="Print the next step from the workflow state and the tree. Takes no lock, writes nothing.",
+    )
+    workflow_next_p.add_argument("--task", required=True, help="Task name.")
+    workflow_next_p.add_argument("--project-root", default=".", help="Project root; defaults to the current directory.")
+    workflow_next_p.add_argument("--source-dir", default=None, help="Quoin source tree; defaults to the installed one.")
+
     dashboard_p = sub.add_parser(
         "dashboard",
         description=(
@@ -3267,6 +3441,50 @@ def main(argv: list[str] | None = None) -> int:
             "only; see autonomous-mode.md."
         ),
     )
+    run_p.add_argument(
+        "--workflow", action="store_true",
+        help="Only with --runtime opencode: run the whole task (every phase) headlessly instead of one phase.",
+    )
+    run_p.add_argument(
+        "--continue", dest="continue_", action="store_true",
+        help="Only with --workflow: continue a started workflow from its state or continuation record.",
+    )
+    run_p.add_argument(
+        "--no-pause", action="store_true",
+        help="Only with --workflow: do not stop for review after the plan and review gates.",
+    )
+    run_p.add_argument(
+        "--through", choices=_WORKFLOW_THROUGH, default=None,
+        help="Only with --workflow: stop after this phase passes its gate.",
+    )
+    run_p.add_argument(
+        "--from-discover", action="store_true",
+        help="Only with --workflow: start with discover even when its files exist.",
+    )
+    run_p.add_argument(
+        "--max-critic-rounds", type=int, default=None,
+        help="Only with --workflow: critic rounds per plan (default 2, at most 5).",
+    )
+    run_p.add_argument(
+        "--test-command", default=None,
+        help="Only with --workflow: command run after implement in a throwaway copy of the tree.",
+    )
+    run_p.add_argument(
+        "--test-include", action="append", default=None,
+        help="Only with --workflow: extra path copied into the test workspace (repeatable).",
+    )
+    run_p.add_argument(
+        "--test-timeout", type=float, default=None,
+        help="Only with --workflow: test command timeout in seconds.",
+    )
+    run_p.add_argument(
+        "--rerun-from", choices=_WORKFLOW_RERUN, default=None,
+        help="Only with --workflow --continue: restart the current stage from this phase.",
+    )
+    run_p.add_argument(
+        "--adopt", choices=_WORKFLOW_THROUGH, default=None,
+        help="Only with --workflow --continue: record the current output of this phase as its evidence.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -3314,6 +3532,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_test_run(args)
         if args.opencode_command == "handoff":
             return _cmd_opencode_handoff(args)
+        if args.opencode_command == "workflow":
+            return _cmd_opencode_workflow_next(args)
         if args.opencode_command == "config":
             if args.config_command == "explain":
                 return _cmd_opencode_config_explain(args)
@@ -3353,8 +3573,10 @@ def main(argv: list[str] | None = None) -> int:
                 ("--profile", args.profile), ("--phase", args.phase),
                 ("--stage", args.stage), ("--new-run", args.new_run),
                 ("--non-interactive", args.non_interactive),
+                ("--workflow", args.workflow),
+                *((flag, getattr(args, attr)) for flag, attr, _ in _WORKFLOW_ONLY_FLAGS),
             ):
-                if value:
+                if value is not None and value is not False and value != []:
                     _abort(f"quoin: {flag} is only valid with --runtime opencode")
             return _cmd_run(args)
         if args.takeover:
@@ -3374,6 +3596,19 @@ def main(argv: list[str] | None = None) -> int:
             )
         if args.max_relaunch < 0:
             _abort("quoin: --max-relaunch must be 0 or more")
+        if args.workflow:
+            if args.phase:
+                _abort("quoin: --workflow and --phase cannot be combined")
+            for flag, value in (("--stage", args.stage), ("--new-run", args.new_run)):
+                if value:
+                    _abort(
+                        f"quoin: {flag} is not valid with --workflow; the coordinator picks the stage "
+                        "and decides between a fresh and a resumed run (recover with --rerun-from)"
+                    )
+        else:
+            for flag, attr, empty in _WORKFLOW_ONLY_FLAGS:
+                if getattr(args, attr) != empty:
+                    _abort(f"quoin: {flag} is only valid with --workflow")
         return _cmd_run_opencode(args)
 
     parser.print_help()
