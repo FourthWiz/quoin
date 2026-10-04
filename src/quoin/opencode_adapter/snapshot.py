@@ -19,6 +19,7 @@ import dataclasses
 import hashlib
 import os
 import re
+import selectors
 import secrets as _secrets
 import shutil
 import stat
@@ -141,11 +142,19 @@ def _git(
     size = 0
     truncated = False
     deadline = time.monotonic() + GIT_TIMEOUT_S
+    selector = selectors.DefaultSelector()
     try:
         assert proc.stdout is not None
+        fd = proc.stdout.fileno()
+        selector.register(fd, selectors.EVENT_READ)
         while True:
+            # wait no longer than the deadline allows, so a silent git is cut off too
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                truncated = True
+                break
             want = _CHUNK if cap is None else min(_CHUNK, cap + 1 - size)
-            chunk = proc.stdout.read(want)
+            chunk = os.read(fd, want)
             if not chunk:
                 break
             chunks.append(chunk)
@@ -153,10 +162,8 @@ def _git(
             if cap is not None and size > cap:
                 truncated = True
                 break
-            if time.monotonic() > deadline:
-                truncated = True
-                break
     finally:
+        selector.close()
         if truncated or proc.poll() is None:
             try:
                 os.killpg(proc.pid, 9)
@@ -261,6 +268,24 @@ class _Builder:
     def skip(self, rel: str, reason: str) -> None:
         self.skipped.append({"path": rel, "reason": reason})
 
+    def _has_link_parent(self, source: str) -> bool:
+        """True when a directory between the project root and `source` is a
+        symlink: a directory swapped for a link after it was listed would
+        otherwise lead the copy outside the project."""
+        root = os.path.normpath(self.root)
+        parent = os.path.dirname(os.path.normpath(source))
+        parts = []
+        while parent != root and parent.startswith(root + os.sep):
+            parts.append(parent)
+            parent = os.path.dirname(parent)
+        for directory in parts:
+            try:
+                if stat.S_ISLNK(os.lstat(directory).st_mode):
+                    return True
+            except OSError:
+                return True
+        return False
+
     def copy(self, rel: str, source: str) -> None:
         """Copy one regular file as bytes; anything else is skipped and listed."""
         if rel in self.manifest:
@@ -281,6 +306,9 @@ class _Builder:
             return
         if not stat.S_ISREG(info.st_mode):
             self.skip(rel, "not-regular")
+            return
+        if self._has_link_parent(source):
+            self.skip(rel, "symlink-parent")
             return
         if len(self.manifest) >= self.max_files:
             raise SnapshotRefused("snapshot-too-large")

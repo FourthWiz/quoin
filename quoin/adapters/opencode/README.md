@@ -399,10 +399,11 @@ to another profile.
 
 `quoin run --runtime opencode --profile NAME --phase PHASE TASK` runs one
 workflow phase headlessly on OpenCode and prints a JSON summary. A phase is a
-single supported command such as `plan`; a whole-task run is not available
-and is refused. The driver is verified offline against a fake executable
-only: no live OpenCode run has been verified, and nothing here makes the work
-profile supported.
+single supported command such as `plan`. The bare whole-task form (no `--phase`
+and no `--workflow`) is still refused; a whole task runs through the
+coordinator described under "Workflow coordinator". The driver is verified
+offline against a fake executable only: no live OpenCode run has been verified,
+and the work profile is not made supported by anything here.
 
 ### Phase runs
 
@@ -504,6 +505,11 @@ resumes. The no-progress guard can stop a run whose transient failures emit no
 native events before `max_transient_retries` is reached.
 
 ### Cost rows and run telemetry
+
+**Single writer.** The driver and the coordinator are the only writers of the
+cost ledger for a headless run; an agent that appends to or rewrites it ends the
+run `FAILED` with `boundary-violation`. A ledger that exists but cannot be read
+is treated as changed (fail closed), never as empty.
 
 **Row shape.** The row is the shared eight-column ledger row, built with the
 portable cost-event formatter and parsed back before it is written. Column
@@ -647,6 +653,109 @@ refuses launches, because plugin code can hook permission handling. Move the
 plugin files out of those directories for the duration of a run, or run with a
 separate `XDG_CONFIG_HOME`. The doctor does not scan Quoin-named skills placed
 outside the installed project folders.
+
+## Workflow coordinator
+
+`quoin run --runtime opencode --profile NAME --workflow TASK` walks a whole
+task headlessly: every phase is a fresh driver run with its own command
+(`quoin-discover`, `quoin-architect`, `quoin-plan`, `quoin-critic`,
+`quoin-implement`, `quoin-review`), followed by the deterministic gate for that
+phase. The `/quoin-run` command in the terminal interface only names the next
+step; the coordinator is the headless route. It never runs `end_of_task`:
+finalizing a task stays an explicit human action.
+
+Flags (`--workflow` itself is refused without `--runtime opencode`, and every
+other flag here is refused without `--workflow`): `--workflow` starts a task,
+`--continue` continues one from its continuation record, `--no-pause` skips the pauses described below,
+`--through PHASE` stops after that phase passes its gate, `--from-discover`
+runs `discover` even when discovery files exist, `--max-critic-rounds N`
+(default 2, at most 5), `--test-command CMD`, `--test-include PATH` and
+`--test-timeout SECONDS` (the tests the coordinator runs after each implement),
+`--rerun-from {plan,implement,review}` and `--adopt PHASE` (both need
+`--continue`). `--max-relaunch`, `--halt-on-abort` and `--budget` apply to
+every run.
+
+Sequence: `discover` (only with `--from-discover` or when the discovery files
+are missing), `architect`, then for each stage listed in the architecture
+`plan`, `implement` and `review`; a task without a stage list has one
+task-root stage. The stage list is read again after `architect` passes. Each
+phase runs only after the previous gate passed.
+
+Critic loop: a plan item is the plan run followed by an isolated critic run;
+while the critic answers `REVISE` the plan is run again, up to the round cap,
+which the gate reads from the same stored setting. The second and later plan
+rounds, and an `implement` rerun after a refused review, receive the finding
+they must address through a context suffix on the command argument, for
+example `stage 1 of demo (context: PATH-TO-THE-CRITIC-RESPONSE) (non-interactive run)`, where the path is project-relative.
+The suffix always comes before the non-interactive marker. Critic and review
+sessions are separate contexts from planning and implementing; they use the
+same model unless the profile says otherwise, so this is a clean-context
+check, not a second opinion from a different model.
+
+Pause rule: without `--no-pause` the coordinator stops with outcome
+`PAUSED_AT_GATE` (exit 0) after each plan gate and each review gate except
+the last item, and `--continue` goes on. A re-gated plan that a record seeded
+does not pause.
+
+Tests: the operator configures the test command with `--test-command`; the
+coordinator runs it itself after every implement and again for each review,
+under the driver's own state directory, so what an agent runs inside a run and
+what the coordinator runs read and write the same result. The coordinator
+runs implementer-written code with the user's privileges; `--test-command` is
+the operator's opt-in.
+
+Outcomes and exit codes: `COMPLETED` 0, `PAUSED_AT_GATE` 0, `FAILED` 2,
+`REFUSED` 3, `AWAITING_APPROVAL` 4, `INTERRUPTED` 5, `COMPLETED_UNVERIFIED` 6,
+`GATE_REFUSED` 7 (a gate check refused; the reasons are in the summary),
+`GATE_ARTIFACT_FAILED` 8 (the gate audit file could not be written or
+recorded) and `CANCELLED` 143 (130 for an interrupt). A refused or failed
+phase prints the command that continues it. A closed run that stored a
+boundary violation is reported again as `FAILED` with `boundary-violation`
+and is not run again until `--rerun-from` restarts it.
+
+Recovery: `--continue` re-reads the continuation record, refuses a record that
+disagrees with the workflow state, and resumes an interrupted run of a plain
+phase under the same run id; a critic or review run that was interrupted
+starts fresh and the abandoned run is closed as superseded. A cancelled run is
+final: `--continue --rerun-from PHASE` starts that phase of the current stage
+over (and every later phase of the stage); with every item passed it reruns
+the last stage. `--continue --adopt PHASE` records a phase finished outside a
+recorded run, as `quoin opencode adopt` does, and the gate still treats it as
+unverified. A headless run that stops for an approval ends `AWAITING_APPROVAL`
+and prints the `adopt` command to use after finishing the phase in the
+terminal interface.
+
+## Deterministic gate
+
+After every phase the coordinator runs the same checks as
+`quoin opencode gate --write`, so the verdict, the audit file and the recorded
+entry are identical to those of a gate run by hand. The checks include the
+artifact format, the critic loop (`critic-not-converged` while the last
+response asks for a revision), the review verdict, the boundary result of each
+run, the tests (`tests-failed`, `tests-not-run`, `tests-settings-changed` and
+the other `tests-` reasons) and the cost ledger. A critic response or review
+file that is newer than the one recorded on the entry is refused as
+`finding-superseded`; this also applies to entries recorded by a single-phase
+run, so run the phase again or record the newer file before gating. A changed
+test pin refuses implement before anything is spawned and shows up at the gate
+as `tests-settings-changed`.
+
+## Continuation record
+
+`quoin opencode handoff write` and the coordinator build the portable
+continuation record from the workflow state, the run records and the tree. The
+coordinator keeps it level with state: while a run of the current item is open
+the artifact hashes in the record are the ones state holds, so an agent's edit
+in mid-run never puts a hash in the record that state has not seen, and a
+record that lags state by a recorded step is accepted and rewritten. A record
+written by another runtime seeds continuation entries and is re-gated, never
+trusted: nothing but the record, the workflow state and directory listings is
+read, so other runtimes' transcripts and session files are not opened, and a
+new native session is started. Refusals: `continuation-missing`,
+`continuation-invalid`, `continuation-legacy-format` (only older-format files
+exist), `task-finalized`, `continuation-state-mismatch`,
+`continuation-artifact-changed`, `profile-mismatch`, `classification-mismatch`
+and `policy-widened`.
 
 ## Role boundaries
 
@@ -944,9 +1053,13 @@ statuses:
 - `unsupported` — the skill depends on Claude-only mechanics that have no
   OpenCode equivalent.
 
-`live_runtime_evidence` and `evidence` are `false`/empty for every row
-today. A later change flips `live_runtime_evidence` to `true` and fills
-`evidence` in once a row has been exercised against a real OpenCode run.
+`live_runtime_evidence` is `false` for every row today. The rows for
+`architect`, `checkpoint`, `continue_work`, `critic`, `discover`, `end_of_task`,
+`gate`, `implement`, `plan`, `review`, `thorough_plan` and `run` list `evidence`:
+repo-relative test files that the manifest check opens and that must name the
+row's command (`--workflow` for `run`). They say the row is fixture-verified;
+a later change flips `live_runtime_evidence` to `true` once a row has been
+exercised against a real OpenCode run.
 
 Each row also names a target milestone, in plain terms:
 

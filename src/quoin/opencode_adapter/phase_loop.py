@@ -302,11 +302,9 @@ def run_phase(
         # A closed (costed) run cannot be resumed; stopping here keeps the
         # explicit restart acknowledgement instead of silently starting over.
         blocked = existing.get("resume_blocked")
-        return finish(
-            "INTERRUPTED", blocked if isinstance(blocked, str) and blocked else "run-closed",
-            resume_blocked=blocked if isinstance(blocked, str) and blocked else "run-closed",
-            run_id_override=existing.get("run_id"),
-        )
+        if blocked not in driver.RESUME_BLOCK_REASONS and blocked not in LOOP_BLOCK_REASONS:
+            blocked = "run-closed"  # a stored value outside the known set is never echoed back
+        return finish("INTERRUPTED", blocked, resume_blocked=blocked, run_id_override=existing.get("run_id"))
 
     budget: Optional[float] = None
     policy: Optional[retry.RetryPolicy] = None

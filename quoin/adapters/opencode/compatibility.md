@@ -235,3 +235,24 @@ The adapter README's "Runtime driver" section describes how the driver uses thes
 | A model without pricing metadata has `cost` of 0 on every step: each price falls back to 0 when the model's cost block or a field of it is absent. | verified | `github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/session/session.ts` (L338-405) | `key: cost-unpriced-zero`. A reported 0 therefore does not distinguish a free model from an unpriced one; the price must come from the model definition, not from the event. |
 | No JSON-mode event carries the resolved model variant or reasoning effort: the stream emits only message parts and errors, and the step-finish part holds `reason`, `snapshot`, `tokens` and `cost`. | verified | `github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/cli/cmd/run.ts` (L678-691, L720-790), `github.com/anomalyco/opencode/blob/v1.18.32/packages/opencode/src/session/processor.ts` (L460-469) | `key: effective-variant-visibility`. The model and agent names are printed only in the formatted (non-JSON) header. The effective variant can only be known from configuration. |
 | What the `edit` and `write` tools report when the operating system refuses the write (for example a read-only file). | unverified — both tools ask for `edit` permission first and then write inside an effect that converts failures into defects; how a defect from that write reaches the tool part was not traced to its terminal state | none | `key: readonly-write-error`. `write` asks at L54-62 and writes at L64, `edit` asks and writes at L102-111 and L145-155, all in `packages/opencode/src/tool/`; `write` ends with `Effect.orDie` at L101. Until verified, no code depends on the shape of this error. |
+
+## Whole-task coordinator reliance
+
+The headless coordinator (`quoin run --runtime opencode --workflow`) relies on
+these OpenCode behaviours at the pinned release. Each is already a row above,
+and none of them rests on an `unverified` row:
+
+- A `--command` run without `--session` or `--continue` opens a session of its
+  own, so each coordinator phase starts in a clean context: `headless-deny-rules`
+  (a non-interactive run creates its session) and `continuation-flags`
+  (reuse happens only for `--continue` or an explicit `--session`).
+- A completed synchronous `task` part reaches the parent stream with the
+  child's text inside it, which is how a delegated critic is seen:
+  `task-sync-output-to-parent`.
+- Continuation of an interrupted run uses `--session` and no command:
+  `continuation-flags`, `continuation-agent` and `continuation-no-replay`.
+- A child session's own events are filtered from the parent stream, so only the
+  parent's `task` part reports it: `child-events-filtered`.
+- The command argument, including the context suffix and the non-interactive
+  marker, is passed to the command verbatim as its message: `continuation-flags`
+  (`--command` runs a named command with the message as arguments).

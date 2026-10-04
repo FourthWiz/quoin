@@ -140,9 +140,9 @@ Rationale: a headless phase has a bounded input and an observable event stream, 
 
 ### Whole-task runs on OpenCode
 
-Status: deferred
-Decision: `quoin run --runtime opencode` without `--phase` is refused.
-Rationale: a whole-task run needs a coordinator command that sequences the phases; that belongs with the workflow-parity work, not the driver.
+Status: decided
+Decision: a whole task runs through the headless coordinator, `quoin run --runtime opencode --workflow`, which sequences the phases and gates each one; the bare form without `--phase` or `--workflow` is still refused.
+Rationale: sequencing, gating and recovery belong in one coordinator that holds the task lock, not in the single-phase driver.
 
 ### Approval visibility for delegated work
 
@@ -218,20 +218,21 @@ rather than open questions:
 - A source state over the digest budget blocks headless review.
 - In the TUI a user can approve an `external_directory` write into the
   test-result directory.
-- Review entries carry no test result until the coordinator exists.
+- A review entry carries a test result only when the operator configured a
+  test command; without one the gate reports `tests-not-configured` as a
+  warning.
 - A test command that needs a proxy variable must set it itself under the
   launcher.
-- A test result from an attempt other than the run's last is not copied, so a
-  relaunched implement run must run its tests again.
+- A test result from an attempt other than the run's last is not copied; the
+  coordinator runs the tests again after every implement run, so a relaunched
+  run is covered, but a single-phase run still has to run them itself.
 - A passing test result attests only to what the code in the copied tree
   reported: test-run runs implementer-written code unprompted with the user's
-  privileges. An OS sandbox that confines writes to the workspace, or an opt-in
-  allow granted by the configuration call, is the follow-up.
+  privileges. The coordinator runs it after every implement, and
+  `--test-command` is the operator's opt-in. An OS sandbox that confines writes
+  to the workspace is the follow-up.
 - The test workspace build is not capped: the binary diff is held in memory and
   untracked files are copied without a size limit, outside the test timeout.
-- The snapshot copier checks the final path component for links only, and the
-  snapshot git deadline is checked after a read returns, not while a silent
-  command runs. Neither is reachable from a production caller yet.
 - The overlay residue test checks "MUST run finalization" rather than "run
   finalization", because the replacement text "Never run finalization." contains
   the shorter phrase. The overlay-rewrite phase list stays hand-maintained
@@ -243,13 +244,21 @@ rather than open questions:
   and mtime only, and code started by test-run can reset an mtime. The limit
   sits beside the other test-run residuals; comparing ctime as well is a
   possible tightening.
-- The settings digest lives under the driver's own state root. The coordinator
-  must pass that same root when it configures test-run; recomputing it from
-  other inputs makes every implement test run refuse with a settings-changed
-  reason, and settings hand-edited in the workflow record always refuse. In
-  both cases the gate reports missing tests rather than the underlying reason.
+- Test settings hand-edited in the workflow record always refuse, by design:
+  the digest is pinned under the driver's own state root, outside the project,
+  and a run whose settings no longer match it is refused as
+  `tests-settings-changed`.
 - The printed resume hint carries the non-interactive flag while the stored
   hint does not, so advice built from the stored hint still suggests an
   interactive restart. This is deliberate for now.
-- A closed-run rerun that re-reports its stored violation has no dedicated
-  test yet.
+- The window store that lets a resumed run keep its original boundary window
+  lives under the driver's state directory and is trusted: a forged window file
+  could hide a change made before the interruption, but cannot reach files in
+  the project, and the workflow state file is baselined at resume because the
+  coordinator rewrites it between attempts.
+- The continuation record may lag the workflow state by recorded steps (a
+  crash between an entry write and the record refresh); the coordinator accepts
+  such a record when every hash in it appears in state's history and rewrites
+  it. A record ahead of state still refuses.
+- Output a child writes after the exit drain window (one second once the
+  process has ended) is dropped from the output hash and tail.

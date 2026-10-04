@@ -293,10 +293,20 @@ def read_sidecar(path, *, repair: bool = False) -> SidecarRead:
     events: List[RuntimeEvent] = []
     good = 0
     torn = False
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        handle = open(str(path), "rb")
+        fd = os.open(str(path), flags)
     except FileNotFoundError:
         return SidecarRead((), 0, False)
+    except OSError:
+        raise RunStoreError("unreadable-sidecar") from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RunStoreError("unreadable-sidecar")
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
     with handle:
         while True:
             line = handle.readline()
