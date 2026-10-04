@@ -221,6 +221,7 @@ class StepResult:
     gate: Optional[GateOutcome] = None
     tests_ran: bool = False
     harvested: Optional[str] = None
+    regated: bool = False
 
     @property
     def completed(self) -> bool:
@@ -229,6 +230,34 @@ class StepResult:
     @property
     def exit_code(self) -> int:
         return phase_loop.exit_code(self.result)
+
+
+@dataclass
+class Resolution:
+    """What to do about one sequence item: `pass` (skip), `run`, `gate` (the
+    entry exists and only needs its gate), `report` (a stored non-completed
+    outcome), `gate-fail` (a stored FAIL verdict) or `refuse`."""
+
+    kind: str
+    outcome: Optional[str] = None
+    exit_code: int = 0
+    reasons: Tuple[str, ...] = ()
+    run_id: Optional[str] = None
+    gate_artifact: Optional[str] = None
+    code: str = ""
+    message: str = ""
+    origin: Optional[str] = None
+
+
+_STORED_OUTCOMES = {
+    "awaiting_approval": "AWAITING_APPROVAL",
+    "failed": "FAILED",
+    "interrupted": "INTERRUPTED",
+    "cancelled": "CANCELLED",
+    "running": "INTERRUPTED",
+    "prepared": "INTERRUPTED",
+}
+_SNAPSHOT_KINDS = ("critic", "review")
 
 
 # ---------------------------------------------------------------------------
@@ -258,6 +287,10 @@ class Coordinator:
         self.state_root = drv.state_root
         self.window = window.WindowStore(self.state_root, self.project_root, self.task)
         self.errors: List[str] = []
+        self.seeded: List[Tuple[str, Optional[int]]] = []
+        self.rerun_info: Optional[Dict[str, Any]] = None
+        self._new_run_for: Optional[Tuple[str, Optional[int]]] = None
+        self._rerun_refs: Tuple[str, ...] = ()
 
     # -- state ---------------------------------------------------------------
     def load_state(self) -> Optional[Dict[str, Any]]:
@@ -582,7 +615,9 @@ class Coordinator:
         state = self.load_state()
         entry = runstore.current_entry(state, stage, "plan") if state is not None else None
         if entry is None or entry.get("origin") != "coordinator":
-            step = self.run_plain_phase("plan", stage, gate_after=False)
+            step = self.run_plain_phase(
+                "plan", stage, gate_after=False, new_run=self._take_new_run("plan", stage),
+            )
             steps.append(step)
             if not step.completed:
                 return steps
@@ -660,6 +695,280 @@ class Coordinator:
         if not copied:
             self.run_implement_tests(stage, "review")
 
+    # -- start: new run, continuation, seeding, rerun and adopt ----------------
+    def _take_new_run(self, phase: str, stage: Optional[int]) -> bool:
+        if self._new_run_for == (phase, stage):
+            self._new_run_for = None
+            return True
+        return False
+
+    def _record_exists(self) -> bool:
+        try:
+            return os.path.lexists(str(handoff.record_path(self.project_root, self.task)))
+        except handoff.HandoffRefused as exc:
+            raise WorkflowRefused("continuation-invalid", exc.message) from None
+
+    def begin(self) -> None:
+        """Resolve how the invocation starts, in this order: a new run or the
+        continuation precedence (agreement with lag, or seeding), the stored
+        settings, the test configuration, the seeded entries' test result, then
+        `--rerun-from` and `--adopt`. Raises `WorkflowRefused`."""
+        opts = self.options
+        state = self.load_state()
+        if not opts.continue_:
+            if opts.rerun_from or opts.adopt:
+                raise WorkflowRefused("continue-required", "--rerun-from and --adopt need --continue")
+            if has_workflow_state(state) or self._record_exists():
+                raise WorkflowRefused(
+                    "workflow-started",
+                    "this task already has workflow state or a continuation record; continue it with: %s"
+                    % self.resume_hint(),
+                )
+            state = state or runstore.new_workflow_state(self.task, self.clock)
+            write_settings(state, opts, include_architect=True, from_discover=opts.from_discover, clock=self.clock)
+            self.save_state(state)
+        else:
+            self._begin_continue(state)
+        self._configure_tests()
+        self._seed_tests()
+        if opts.rerun_from:
+            self._apply_rerun()
+        if opts.adopt:
+            self._apply_adopt()
+
+    def _begin_continue(self, state: Optional[Dict[str, Any]]) -> None:
+        opts = self.options
+        try:
+            record = handoff.load_for_continuation(
+                self.project_root, self.task, source_dir=self.source_dir, requested_scope=self.scope,
+            )
+        except handoff.HandoffRefused as exc:
+            raise WorkflowRefused(exc.code, exc.message) from None
+        foreign = record.get("origin_runtime") != handoff.ORIGIN_RUNTIME
+        if not foreign and has_workflow_state(state):
+            problems = handoff.state_agreement(record, state, allow_lag=True)
+            if problems:
+                raise WorkflowRefused(
+                    "continuation-state-mismatch",
+                    "the continuation record and the workflow state disagree (%s); restart the item with "
+                    "--rerun-from or record it with --adopt" % ", ".join(problems[:5]),
+                )
+            if handoff.state_agreement(record, state):
+                self.refresh_record()  # the record was behind state; bring it level before running anything
+        else:
+            self._seed(record)
+        state = self.load_state() or runstore.new_workflow_state(self.task, self.clock)
+        block = workflow_block(state)
+        if block is None:
+            pairs = {(c["phase"], c.get("stage")) for c in record.get("completed") or []}
+            pairs |= handoff._completed_pairs(state)  # noqa: SLF001 - same package, same definition
+            include = (
+                ("architect", None) in pairs
+                or handoff._primary_artifact_present(self.project_root, self.task, None, "architect", self.source_dir)  # noqa: SLF001
+                or not any(phase == "plan" for phase, _ in pairs)
+            )
+            prior = state["settings"].get("max_critic_rounds")
+            write_settings(state, opts, include_architect=include, from_discover=opts.from_discover, clock=self.clock)
+            if opts.max_critic_rounds is None and isinstance(prior, int) and not isinstance(prior, bool) and prior >= 1:
+                state["settings"]["max_critic_rounds"] = min(prior, MAX_CRITIC_ROUNDS)
+        else:
+            state["settings"]["workflow"] = dict(block, through=opts.through, no_pause=bool(opts.no_pause))
+            if opts.max_critic_rounds is not None:
+                state["settings"]["max_critic_rounds"] = opts.critic_cap()
+        self.save_state(state)
+
+    def _seed(self, record: Mapping[str, Any]) -> None:
+        changed = handoff.artifact_changes(self.project_root, record)
+        if changed:
+            raise WorkflowRefused(
+                "continuation-artifact-changed",
+                "artifacts changed since the continuation record was written: %s" % ", ".join(changed[:5]),
+            )
+        validation = {(v["phase"], v.get("stage")): v for v in record.get("validation") or []}
+        for item in record.get("completed") or []:
+            phase, stage = item["phase"], item.get("stage")
+            found = validation.get((phase, stage))
+            snapshot_data = evidence.take_snapshot(self.project_root, self.task, phase, clock=self.clock)
+            evidence.record_evidence(
+                self.project_root, self.task, stage, phase, "continuation", snapshot_data, clock=self.clock,
+                continuation_validation=(found or {}).get("verdict"),
+            )
+            self.seeded.append((phase, stage))
+
+    def _configure_tests(self) -> None:
+        opts = self.options
+        if not opts.test_command:
+            return
+        try:
+            testrun.configure(
+                self.project_root, self.task, command=list(opts.test_command), include=list(opts.test_include),
+                timeout_s=opts.test_timeout if opts.test_timeout is not None else testrun.DEFAULT_TIMEOUT_S,
+                state_root=self.state_root, clock=self.clock,
+            )
+        except testrun.TestRunError as exc:
+            raise WorkflowRefused(exc.code, str(exc)) from None
+
+    def _seed_tests(self) -> None:
+        """One test run attached to every seeded implement and review entry."""
+        targets = [(p, s) for p, s in self.seeded if p in ("implement", "review")]
+        if not targets:
+            return
+        problem = testrun.settings_status(self.project_root, self.task, state_root=self.state_root)
+        if problem == "tests-settings-changed":
+            raise WorkflowRefused("tests-settings-changed", "the test settings changed since they were configured")
+        if problem is not None:
+            return
+        stage = targets[0][1]
+        run = testrun.run_tests(self.project_root, self.task, stage, state_root=self.state_root)
+        data = None
+        if run.outcome != testrun.REFUSED:
+            data = testrun.read_result(self.state_root, self.project_root, self.task, stage)
+        fields: Dict[str, Any] = {"tests_source": "continuation-seed"}
+        if data is not None:
+            fields["tests"] = data
+            if data.get("outcome") != testrun.PASSED:
+                reason = data.get("reason")
+                fields["tests_reason"] = reason if isinstance(reason, str) and reason else "tests-failed"
+        else:
+            fields["tests"] = None
+            fields["tests_reason"] = run.reason or "tests-not-run"
+        state = self.load_state()
+        if state is None:
+            return
+        for phase, st in targets:
+            entry = runstore.current_entry(state, st, phase)
+            if entry is not None:
+                entry.update(fields)
+        self.save_state(state)
+
+    def _stage_items(self, state) -> List[Tuple[str, Optional[int]]]:
+        return [item for item in self.sequence(state) if item[0] in RERUN_PHASES]
+
+    def _apply_rerun(self) -> None:
+        phase = self.options.rerun_from
+        state = self.load_state()
+        stage_items = self._stage_items(state)
+        if not stage_items:
+            raise WorkflowRefused("rerun-unavailable", "the task has no stage to rerun")
+        first = next((it for it in stage_items if not self._item_passed(state, *it)), None)
+        stage = first[1] if first is not None else stage_items[-1][1]
+        if (phase, stage) not in stage_items:
+            raise WorkflowRefused("rerun-unavailable", "there is no %s item for stage %s" % (phase, stage))
+        refs: Tuple[str, ...] = ()
+        if phase == "implement":
+            review = runstore.current_entry(state, stage, "review")
+            for item in reversed((review or {}).get("harvested") or []):
+                if isinstance(item, Mapping) and isinstance(item.get("path"), str):
+                    refs = (item["path"],)
+                    break
+        runstore.supersede_items(state, stage, RERUN_PHASES[RERUN_PHASES.index(phase):], self.clock)
+        self.save_state(state)
+        self._new_run_for = (phase, stage)
+        self._rerun_refs = refs
+        self.rerun_info = {"phase": phase, "stage": stage}
+        sys.stderr.write("rerunning %s for stage %s\n" % (phase, "-" if stage is None else stage))
+
+    def _apply_adopt(self) -> None:
+        phase = self.options.adopt
+        state = self.load_state()
+        found = next(
+            (it for it in self.sequence(state) if it[0] == phase and not self._item_passed(state, *it)), None,
+        )
+        if found is None:
+            raise WorkflowRefused("adopt-unavailable", "there is no pending %s item to adopt" % phase)
+        snapshot_data = evidence.take_snapshot(self.project_root, self.task, phase, clock=self.clock)
+        evidence.record_evidence(
+            self.project_root, self.task, found[1], phase, "adopted", snapshot_data, clock=self.clock,
+        )
+
+    # -- next-item resolution --------------------------------------------------
+    def _stored_outcome(self, run_id: str, entry: Mapping[str, Any]) -> Optional[Tuple[str, int, str]]:
+        """`(outcome, exit code, reason)` of a last run that did not complete,
+        or whose boundary is a stored violation."""
+        directory = runstore.store_dir(self.project_root, create=True)
+        record = runstore.load_record(directory, run_id) or {}
+        state = record.get("state")
+        outcome = _STORED_OUTCOMES.get(state)
+        signum = None
+        if state == "cancelled":
+            signal_name = (record.get("outcome") or {}).get("signal")
+            signum = 2 if signal_name in ("SIGINT", 2) else 15
+        if outcome is None and state == "completed" and (record.get("outcome") or {}).get("evidence") not in (None, "full"):
+            outcome = "COMPLETED_UNVERIFIED"
+        if outcome is None and entry.get("boundary") == "violation":
+            return "FAILED", 2, "boundary-violation"
+        if outcome is None:
+            return None
+        code = phase_loop.exit_code(phase_loop.PhaseResult(outcome=outcome, signum=signum))
+        reason = (record.get("outcome") or {}).get("reason")
+        return outcome, code, reason if isinstance(reason, str) and reason else outcome.lower()
+
+    def _unrecorded(self, phase: str, stage: Optional[int], what: str) -> Resolution:
+        label = phase if stage is None else "%s (stage %s)" % (phase, stage)
+        return Resolution(
+            "refuse", code="phase-unrecorded",
+            message="%s has %s with no recorded entry; record it with --adopt %s, or restart it with "
+            "--rerun-from %s (a run started by a single-phase command is finished or restarted with that "
+            "command)" % (label, what, phase, phase if phase in RERUN_PHASES else "plan"),
+        )
+
+    def resolve(self, state: Optional[Mapping[str, Any]], phase: str, stage: Optional[int]) -> Resolution:
+        entry = runstore.current_entry(state, stage, phase) if state is not None else None
+        if entry is not None:
+            gate_info = entry.get("gate")
+            if isinstance(gate_info, Mapping) and gate_info.get("verdict"):
+                if gate_info["verdict"] == "PASS":
+                    return Resolution("pass")
+                return Resolution(
+                    "gate-fail", "GATE_REFUSED", 7, tuple(str(r) for r in gate_info.get("reasons") or []),
+                    gate_artifact=gate_info.get("artifact"),
+                )
+            runs = [r for r in entry.get("runs") or [] if isinstance(r, str)]
+            if runs:
+                stored = self._stored_outcome(runs[-1], entry)
+                if stored is not None:
+                    return Resolution("report", stored[0], stored[1], (stored[2],), run_id=runs[-1])
+            if phase == "plan" and entry.get("origin") == "coordinator":
+                return Resolution("run")
+            return Resolution("gate", run_id=runs[-1] if runs else None, origin=entry.get("origin"))
+        known = [e for e in (state or {}).get("entries") or [] if e.get("phase") == phase and e.get("stage") == stage]
+        recorded_runs = {r for e in (state or {}).get("entries") or [] for r in e.get("runs") or []}
+        pointer = self.drv.reconcile_task(self.task)
+        if pointer and pointer.get("run_id") not in recorded_runs:
+            req = pointer.get("request") or {}
+            if (
+                runstore.entry_phase_for_run(req.get("phase")) == phase
+                and req.get("stage") == stage_text(stage)
+            ):
+                telemetry = pointer.get("telemetry")
+                closed = isinstance(telemetry, dict) and telemetry.get("final") is True
+                if pointer.get("state") == "interrupted" and not closed:
+                    if runstore.normalize_phase(req.get("phase")) in _SNAPSHOT_KINDS or req.get("non_interactive"):
+                        return Resolution("run")
+                    return self._unrecorded(phase, stage, "an interrupted run started by a single-phase command")
+                return self._unrecorded(phase, stage, "a finished run")
+        if not known and handoff._primary_artifact_present(  # noqa: SLF001 - the advice engine's own test
+            self.project_root, self.task, stage, phase, self.source_dir
+        ):
+            return self._unrecorded(phase, stage, "its output already present")
+        return Resolution("run")
+
+    def gate_existing(self, phase: str, stage: Optional[int], res: Resolution) -> List[StepResult]:
+        """Gate an entry whose run completed (or that was seeded or adopted)."""
+        if res.origin == "coordinator" and self._tests_configured():
+            state = self.load_state()
+            entry = runstore.current_entry(state, stage, phase) if state is not None else None
+            if entry is not None and not entry.get("tests") and not entry.get("tests_reason"):
+                if phase == "implement":
+                    self.run_implement_tests(stage)
+                elif phase == "review":
+                    self._review_tests(stage)
+        result = phase_loop.PhaseResult(outcome="COMPLETED", run_id=res.run_id)
+        step = StepResult(phase, stage, result, regated=res.origin != "coordinator")
+        step.gate = self.gate(stage, phase)
+        self.refresh_record()
+        return [step]
+
     # -- the loop ------------------------------------------------------------
     def resume_hint(self) -> str:
         return "quoin run --runtime opencode --profile %s --workflow --continue %s --project-root %s" % (
@@ -675,7 +984,9 @@ class Coordinator:
             return self.plan_item(stage)
         if phase == "review":
             return [self.review_item(stage)]
-        return [self.run_plain_phase(phase, stage)]
+        new_run = self._take_new_run(phase, stage)
+        refs = self._rerun_refs if new_run else ()
+        return [self.run_plain_phase(phase, stage, new_run=new_run, context_refs=refs)]
 
     def run_items(self, items: Sequence[Tuple[str, Optional[int]]]) -> Dict[str, Any]:
         """Walk `items` in order, stopping at the first refusal, failure, failed
@@ -687,9 +998,21 @@ class Coordinator:
         stopped = False
         try:
             for phase, stage in items:
-                if self._item_passed(self.load_state(), phase, stage):
+                res = self.resolve(self.load_state(), phase, stage)
+                if res.kind == "pass":
                     continue
-                steps = self.run_item(phase, stage)
+                if res.kind == "refuse":
+                    raise WorkflowRefused(res.code, res.message)
+                if res.kind in ("report", "gate-fail"):
+                    phases.append({
+                        "phase": phase, "stage": stage, "run_ids": [res.run_id] if res.run_id else [],
+                        "outcome": res.outcome, "gate": "FAIL" if res.kind == "gate-fail" else None,
+                        "gate_artifact": res.gate_artifact,
+                    })
+                    stopped, outcome, exit_code = True, res.outcome or "FAILED", res.exit_code
+                    reasons.extend(res.reasons)
+                    break
+                steps = self.gate_existing(phase, stage, res) if res.kind == "gate" else self.run_item(phase, stage)
                 phases.append({
                     "phase": phase, "stage": stage,
                     "run_ids": [st.result.run_id for st in steps if st.result.run_id],
@@ -721,7 +1044,10 @@ class Coordinator:
                 if opts.through == phase:
                     stopped = True
                     break
-                if not opts.no_pause and phase in ("plan", "review") and (phase, stage) != items[-1]:
+                if (
+                    not opts.no_pause and phase in ("plan", "review") and (phase, stage) != items[-1]
+                    and not last.regated
+                ):
                     stopped, outcome = True, "PAUSED_AT_GATE"
                     break
         except WorkflowRefused as exc:
@@ -734,6 +1060,7 @@ class Coordinator:
             "outcome": outcome, "exit_code": exit_code, "phases": phases, "reasons": reasons,
             "resume_hint": None if outcome == "COMPLETED" else self.resume_hint(),
             "record": os.path.relpath(record, str(self.project_root)).replace(os.sep, "/") if record else None,
+            **({"rerun": self.rerun_info} if self.rerun_info else {}),
             "workflow_validated": bool(gates) and all(g.passed for g in gates) and outcome in (
                 "COMPLETED", "PAUSED_AT_GATE"),
         }

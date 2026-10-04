@@ -765,17 +765,47 @@ def latest_shas(state: Optional[Mapping[str, Any]]) -> Dict[str, str]:
     return shas
 
 
-def state_agreement(record: Mapping[str, Any], state: Optional[Mapping[str, Any]]) -> List[str]:
+def sha_history(state: Optional[Mapping[str, Any]]) -> Dict[str, set]:
+    """Every sha state ever recorded for each artifact path, in live and
+    superseded entries alike."""
+    seen: Dict[str, set] = {}
+    for entry in (state or {}).get("entries") or []:
+        snapshot = entry.get("evidence")
+        hashes = snapshot.get("task_hashes") if isinstance(snapshot, Mapping) else None
+        if isinstance(hashes, Mapping):
+            for path, value in hashes.items():
+                if isinstance(value, str):
+                    seen.setdefault(path, set()).add(value)
+        for item in entry.get("harvested") or []:
+            if isinstance(item, Mapping) and isinstance(item.get("path"), str) and isinstance(item.get("sha256"), str):
+                seen.setdefault(item["path"], set()).add(item["sha256"])
+    return seen
+
+
+def state_agreement(
+    record: Mapping[str, Any], state: Optional[Mapping[str, Any]], allow_lag: bool = False,
+) -> List[str]:
+    """Where the record and the state disagree. With `allow_lag` a record that
+    is merely behind the state is accepted: a sha state recorded at some point
+    for that path, and a completed set that is a subset of state's."""
     out: List[str] = []
     if state is not None and state.get("task") != record.get("task"):
         out.append("task")
     recorded = {(c["phase"], c.get("stage")) for c in record.get("completed") or []}
-    if recorded != _completed_pairs(state):
+    state_pairs = _completed_pairs(state)
+    if allow_lag:
+        if not recorded <= state_pairs:
+            out.append("completed")
+    elif recorded != state_pairs:
         out.append("completed")
     shas = latest_shas(state)
+    history = sha_history(state) if allow_lag else {}
     for item in record.get("artifacts") or []:
-        if item["path"] in shas and shas[item["path"]] != item["sha256"]:
-            out.append("artifact:" + item["path"])
+        path = item["path"]
+        if path in shas and shas[path] != item["sha256"]:
+            if allow_lag and item["sha256"] in history.get(path, ()):
+                continue
+            out.append("artifact:" + path)
     return out
 
 
