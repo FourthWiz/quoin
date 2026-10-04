@@ -536,34 +536,49 @@ def deploy_scripts(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None:
         print(f"Copied {fname} to {dest_root}/scripts/")
 
 
-# ── Opt-in context-tracker mod ───────────────────────────────────────────────
-# A small Claude Code mod (the /ctx pane) that Claude Code auto-loads from
-# <dest>/skills/context-tracker/ as "context-tracker@skills-dir". It is only
-# ever created on explicit request; once installed, later installs refresh it.
-# Ownership is by name: a folder whose plugin.json names "context-tracker" is
-# ours, anything else (other name, unreadable, plain file, symlink) is foreign
-# and never written to or removed.
+# ── Opt-in mods ──────────────────────────────────────────────────────────────
+# Small Claude Code mods that Claude Code auto-loads from <dest>/skills/<name>/
+# as "<name>@skills-dir". A mod is only ever created on explicit request; once
+# installed, later installs refresh it. Ownership is by name: a folder whose
+# plugin.json names the mod is ours, anything else (other name, unreadable,
+# plain file, symlink) is foreign and never written to or removed.
 
-CONTEXT_TRACKER_NAME = "context-tracker"
-CONTEXT_TRACKER_FILES: tuple[str, ...] = (
-    ".claude-plugin/plugin.json",
-    "hooks/hooks.json",
-    "hooks/register.tsx",
-    "types/index.d.ts",
+
+class OptInMod(NamedTuple):
+    """An opt-in mod: its folder name (also its plugin name and flag stem) and
+    the allowlist of source files that are deployed.
+
+    A NamedTuple rather than a dataclass: several tests load this module with
+    spec_from_file_location without registering it in sys.modules, which a
+    dataclass cannot survive when annotations are strings.
+    """
+
+    name: str
+    files: tuple[str, ...]
+
+
+CONTEXT_TRACKER = OptInMod(
+    "context-tracker",
+    (
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "hooks/register.tsx",
+        "types/index.d.ts",
+    ),
 )
 
 
-def context_tracker_source(source_dir: pathlib.Path) -> pathlib.Path:
-    return source_dir / "plugins" / CONTEXT_TRACKER_NAME
+def mod_source(mod: OptInMod, source_dir: pathlib.Path) -> pathlib.Path:
+    return source_dir / "plugins" / mod.name
 
 
-def context_tracker_dest(dest_root: pathlib.Path) -> pathlib.Path:
-    return dest_root / "skills" / CONTEXT_TRACKER_NAME
+def mod_dest(mod: OptInMod, dest_root: pathlib.Path) -> pathlib.Path:
+    return dest_root / "skills" / mod.name
 
 
-def context_tracker_state(dest_root: pathlib.Path) -> str:
+def mod_state(mod: OptInMod, dest_root: pathlib.Path) -> str:
     """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
-    folder = context_tracker_dest(dest_root)
+    folder = mod_dest(mod, dest_root)
     try:
         if folder.is_symlink():
             return "foreign"
@@ -572,19 +587,20 @@ def context_tracker_state(dest_root: pathlib.Path) -> str:
         if not folder.is_dir():
             return "foreign"
         data = json.loads((folder / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
-        if isinstance(data, dict) and data.get("name") == CONTEXT_TRACKER_NAME:
+        if isinstance(data, dict) and data.get("name") == mod.name:
             return "installed"
     except (OSError, ValueError, UnicodeDecodeError):
         pass
     return "foreign"
 
 
-def missing_context_tracker_sources(source_dir: pathlib.Path) -> list[str]:
-    src = context_tracker_source(source_dir)
-    return [rel for rel in CONTEXT_TRACKER_FILES if not (src / rel).is_file()]
+def missing_mod_sources(mod: OptInMod, source_dir: pathlib.Path) -> list[str]:
+    src = mod_source(mod, source_dir)
+    return [rel for rel in mod.files if not (src / rel).is_file()]
 
 
-def context_tracker_preflight(
+def mod_preflight(
+    mod: OptInMod,
     source_dir: pathlib.Path,
     dest_root: pathlib.Path,
     *,
@@ -598,49 +614,51 @@ def context_tracker_preflight(
     warnings: list[str] = []
     if mode is None:
         return errors, warnings
-    state = context_tracker_state(dest_root)
-    folder = context_tracker_dest(dest_root)
+    state = mod_state(mod, dest_root)
+    folder = mod_dest(mod, dest_root)
     if mode == "with":
-        missing = missing_context_tracker_sources(source_dir)
+        missing = missing_mod_sources(mod, source_dir)
         if missing:
-            errors.append("quoin: context-tracker source files missing: " + ", ".join(missing))
+            errors.append(f"quoin: {mod.name} source files missing: " + ", ".join(missing))
         if state == "foreign":
             errors.append(
-                f"quoin: {folder} exists and is not the quoin context-tracker mod "
+                f"quoin: {folder} exists and is not the quoin {mod.name} mod "
                 "(or is a symlink); move it aside and re-run"
             )
-        if is_project_mode and context_tracker_state(home_dest_root) == "installed":
+        if is_project_mode and mod_state(mod, home_dest_root) == "installed":
             errors.append(
-                f"quoin: user-scope copy installed at {context_tracker_dest(home_dest_root)}; "
-                "remove it first (--remove-context-tracker --scope user) to avoid a double load"
+                f"quoin: user-scope copy installed at {mod_dest(mod, home_dest_root)}; "
+                f"remove it first (--remove-{mod.name} --scope user) to avoid a double load"
             )
         if (
             not is_project_mode
             and cwd_dest_root.resolve() != dest_root.resolve()
-            and context_tracker_state(cwd_dest_root) == "installed"
+            and mod_state(mod, cwd_dest_root) == "installed"
         ):
             warnings.append(
-                f"quoin: project copy at {context_tracker_dest(cwd_dest_root)} "
+                f"quoin: project copy at {mod_dest(mod, cwd_dest_root)} "
                 "will load alongside this user copy"
             )
     elif mode == "remove" and state == "foreign":
-        warnings.append(f"quoin: {folder} is not the quoin context-tracker mod; leaving it untouched")
+        warnings.append(f"quoin: {folder} is not the quoin {mod.name} mod; leaving it untouched")
     return errors, warnings
 
 
-def deploy_context_tracker(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
+def deploy_mod(
+    mod: OptInMod, source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool
+) -> int:
     """Copy the allowlisted mod files; returns the number of files handled.
 
     strict=True aborts on a missing source file (explicit opt-in); strict=False
     warns and skips so a routine refresh never fails an install.
     """
-    src_root = context_tracker_source(source_dir)
-    dst_root = context_tracker_dest(dest_root)
+    src_root = mod_source(mod, source_dir)
+    dst_root = mod_dest(mod, dest_root)
     copied = 0
-    for rel in CONTEXT_TRACKER_FILES:
+    for rel in mod.files:
         src = src_root / rel
         if not src.is_file():
-            msg = f"quoin: Expected context-tracker file {rel} at {src} but not found"
+            msg = f"quoin: Expected {mod.name} file {rel} at {src} but not found"
             if strict:
                 print(msg, file=sys.stderr)
                 sys.exit(1)
@@ -653,41 +671,175 @@ def deploy_context_tracker(source_dir: pathlib.Path, dest_root: pathlib.Path, *,
     return copied
 
 
+def remove_mod(mod: OptInMod, dest_root: pathlib.Path) -> bool:
+    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
+    if mod_state(mod, dest_root) != "installed":
+        return False
+    shutil.rmtree(mod_dest(mod, dest_root))
+    return True
+
+
+def apply_mod(
+    mod: OptInMod, source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
+) -> str:
+    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
+    state = mod_state(mod, dest_root)
+    folder = mod_dest(mod, dest_root)
+    if mode == "remove":
+        if state == "installed":
+            remove_mod(mod, dest_root)
+            print(f"Removed {mod.name} mod from {folder}")
+            return "removed"
+        if state == "absent":
+            print(f"{mod.name} mod not installed at {folder}; nothing to remove")
+            return "absent"
+        return "foreign"
+    if mode == "with":
+        deploy_mod(mod, source_dir, dest_root, strict=True)
+        if state == "installed":
+            print(f"Refreshed {mod.name} mod at {folder}")
+            return "refreshed"
+        print(f"Deployed {mod.name} mod to {folder}")
+        return "deployed"
+    if state == "installed":
+        deploy_mod(mod, source_dir, dest_root, strict=False)
+        print(f"Refreshed {mod.name} mod at {folder}")
+        return "refreshed"
+    return "noop"
+
+
+# Names the context-tracker tests and the CLI already use: thin wrappers bound
+# to CONTEXT_TRACKER so their signatures and behaviour stay unchanged.
+CONTEXT_TRACKER_NAME = CONTEXT_TRACKER.name
+CONTEXT_TRACKER_FILES: tuple[str, ...] = CONTEXT_TRACKER.files
+
+
+def context_tracker_source(source_dir: pathlib.Path) -> pathlib.Path:
+    return mod_source(CONTEXT_TRACKER, source_dir)
+
+
+def context_tracker_dest(dest_root: pathlib.Path) -> pathlib.Path:
+    return mod_dest(CONTEXT_TRACKER, dest_root)
+
+
+def context_tracker_state(dest_root: pathlib.Path) -> str:
+    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
+    return mod_state(CONTEXT_TRACKER, dest_root)
+
+
+def missing_context_tracker_sources(source_dir: pathlib.Path) -> list[str]:
+    return missing_mod_sources(CONTEXT_TRACKER, source_dir)
+
+
+def context_tracker_preflight(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    mode: Optional[str],
+    is_project_mode: bool,
+    home_dest_root: pathlib.Path,
+    cwd_dest_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
+    """Pure check run before anything is written; returns (errors, warnings)."""
+    return mod_preflight(
+        CONTEXT_TRACKER,
+        source_dir,
+        dest_root,
+        mode=mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=home_dest_root,
+        cwd_dest_root=cwd_dest_root,
+    )
+
+
+def deploy_context_tracker(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
+    """Copy the allowlisted mod files; returns the number of files handled."""
+    return deploy_mod(CONTEXT_TRACKER, source_dir, dest_root, strict=strict)
+
+
 def remove_context_tracker(dest_root: pathlib.Path) -> bool:
     """Delete the mod folder, only when it is an installed (non-symlink) copy."""
-    if context_tracker_state(dest_root) != "installed":
-        return False
-    shutil.rmtree(context_tracker_dest(dest_root))
-    return True
+    return remove_mod(CONTEXT_TRACKER, dest_root)
 
 
 def apply_context_tracker(
     source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
 ) -> str:
     """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
-    state = context_tracker_state(dest_root)
-    folder = context_tracker_dest(dest_root)
-    if mode == "remove":
-        if state == "installed":
-            remove_context_tracker(dest_root)
-            print(f"Removed context-tracker mod from {folder}")
-            return "removed"
-        if state == "absent":
-            print(f"context-tracker mod not installed at {folder}; nothing to remove")
-            return "absent"
-        return "foreign"
-    if mode == "with":
-        deploy_context_tracker(source_dir, dest_root, strict=True)
-        if state == "installed":
-            print(f"Refreshed context-tracker mod at {folder}")
-            return "refreshed"
-        print(f"Deployed context-tracker mod to {folder}")
-        return "deployed"
-    if state == "installed":
-        deploy_context_tracker(source_dir, dest_root, strict=False)
-        print(f"Refreshed context-tracker mod at {folder}")
-        return "refreshed"
-    return "noop"
+    return apply_mod(CONTEXT_TRACKER, source_dir, dest_root, mode=mode)
+
+
+WORKFLOW_TASKS = OptInMod(
+    "workflow-tasks",
+    (
+        ".claude-plugin/plugin.json",
+        "hooks/hooks.json",
+        "hooks/register.tsx",
+        "hooks/tasks.ts",
+        "types/index.d.ts",
+    ),
+)
+
+# Every opt-in mod, in the order the install applies them.
+OPT_IN_MODS: tuple[OptInMod, ...] = (CONTEXT_TRACKER, WORKFLOW_TASKS)
+
+WORKFLOW_TASKS_NAME = WORKFLOW_TASKS.name
+WORKFLOW_TASKS_FILES: tuple[str, ...] = WORKFLOW_TASKS.files
+
+
+def workflow_tasks_source(source_dir: pathlib.Path) -> pathlib.Path:
+    return mod_source(WORKFLOW_TASKS, source_dir)
+
+
+def workflow_tasks_dest(dest_root: pathlib.Path) -> pathlib.Path:
+    return mod_dest(WORKFLOW_TASKS, dest_root)
+
+
+def workflow_tasks_state(dest_root: pathlib.Path) -> str:
+    """Return "absent", "installed" or "foreign" for the mod folder. Never raises."""
+    return mod_state(WORKFLOW_TASKS, dest_root)
+
+
+def missing_workflow_tasks_sources(source_dir: pathlib.Path) -> list[str]:
+    return missing_mod_sources(WORKFLOW_TASKS, source_dir)
+
+
+def workflow_tasks_preflight(
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    mode: Optional[str],
+    is_project_mode: bool,
+    home_dest_root: pathlib.Path,
+    cwd_dest_root: pathlib.Path,
+) -> tuple[list[str], list[str]]:
+    """Pure check run before anything is written; returns (errors, warnings)."""
+    return mod_preflight(
+        WORKFLOW_TASKS,
+        source_dir,
+        dest_root,
+        mode=mode,
+        is_project_mode=is_project_mode,
+        home_dest_root=home_dest_root,
+        cwd_dest_root=cwd_dest_root,
+    )
+
+
+def deploy_workflow_tasks(source_dir: pathlib.Path, dest_root: pathlib.Path, *, strict: bool) -> int:
+    """Copy the allowlisted mod files; returns the number of files handled."""
+    return deploy_mod(WORKFLOW_TASKS, source_dir, dest_root, strict=strict)
+
+
+def remove_workflow_tasks(dest_root: pathlib.Path) -> bool:
+    """Delete the mod folder, only when it is an installed (non-symlink) copy."""
+    return remove_mod(WORKFLOW_TASKS, dest_root)
+
+
+def apply_workflow_tasks(
+    source_dir: pathlib.Path, dest_root: pathlib.Path, *, mode: Optional[str]
+) -> str:
+    """Apply the requested mod action; returns noop/deployed/refreshed/removed/absent/foreign."""
+    return apply_mod(WORKFLOW_TASKS, source_dir, dest_root, mode=mode)
 
 
 # ── IVG-136: read-only deploy-drift detection ────────────────────────────────
@@ -795,13 +947,16 @@ def compute_drift(
         for fname in CORE_WORKFLOW_FILES:
             _check("core-workflow", src_workflow / fname, dst_workflow / fname)
 
-    # The mod is optional: compare it only when an installed copy exists, so a
+    # Mods are optional: compare each only when an installed copy exists, so a
     # never-installed or foreign folder is never reported as drift.
-    if "plugins" in selected and context_tracker_state(dest_root) == "installed":
-        src_ct = context_tracker_source(source_dir)
-        dst_ct = context_tracker_dest(dest_root)
-        for rel in CONTEXT_TRACKER_FILES:
-            _check("plugins", src_ct / rel, dst_ct / rel)
+    if "plugins" in selected:
+        for mod in OPT_IN_MODS:
+            if mod_state(mod, dest_root) != "installed":
+                continue
+            src_mod = mod_source(mod, source_dir)
+            dst_mod = mod_dest(mod, dest_root)
+            for rel in mod.files:
+                _check("plugins", src_mod / rel, dst_mod / rel)
 
     return drift
 

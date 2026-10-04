@@ -18,7 +18,7 @@ import textwrap
 import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import NamedTuple, Optional, Tuple
 
 
 def _abort(msg: str, code: int = 2) -> None:
@@ -26,6 +26,7 @@ def _abort(msg: str, code: int = 2) -> None:
     print(msg, file=sys.stderr)
     sys.exit(code)
 
+from quoin import install_prompts
 from quoin.__about__ import __version__
 
 
@@ -74,6 +75,23 @@ def _validate_context_tracker_args(args: argparse.Namespace) -> Optional[str]:
     if with_ct:
         return "with"
     if remove_ct:
+        return "remove"
+    return None
+
+
+def _validate_workflow_tasks_args(args: argparse.Namespace) -> Optional[str]:
+    """Return "with", "remove" or None for the workflow-tasks mod flags.
+
+    Same shape as the context-tracker validator: getattr defaults for
+    Namespaces that predate the flags, ValueError when both are given.
+    """
+    with_wt = getattr(args, "with_workflow_tasks", False)
+    remove_wt = getattr(args, "remove_workflow_tasks", False)
+    if with_wt and remove_wt:
+        raise ValueError("--with-workflow-tasks cannot be combined with --remove-workflow-tasks")
+    if with_wt:
+        return "with"
+    if remove_wt:
         return "remove"
     return None
 
@@ -266,6 +284,78 @@ def _resolve_dest_root(args: argparse.Namespace) -> pathlib.Path:
     return dest
 
 
+class _InstallAnswers(NamedTuple):
+    ct_mode: Optional[str]
+    wt_mode: Optional[str]
+    agentdesk_run: bool
+    agentdesk_declined: bool
+    agentdesk_already: bool
+    warned_mods: Tuple[str, ...]
+
+
+def _ask_install_questions(
+    args: argparse.Namespace,
+    installer,
+    source_dir: pathlib.Path,
+    dest_root: pathlib.Path,
+    *,
+    is_project_mode: bool,
+    ct_mode: Optional[str],
+    wt_mode: Optional[str],
+) -> _InstallAnswers:
+    """Ask every install question up front, before anything is written.
+
+    Questions appear only when stdin and stdout are both terminals. Explicit
+    flags suppress their own question; an installed mod is refreshed silently.
+    """
+    interactive = install_prompts.is_interactive()
+    modes = {"context-tracker": ct_mode, "workflow-tasks": wt_mode}
+    warned: list = []
+    if interactive:
+        for mod in (installer.CONTEXT_TRACKER, installer.WORKFLOW_TASKS):
+            if modes[mod.name] is not None:
+                continue
+            if installer.mod_state(mod, dest_root) == "installed":
+                continue
+            errors, warnings = installer.mod_preflight(
+                mod,
+                source_dir,
+                dest_root,
+                mode="with",
+                is_project_mode=is_project_mode,
+                home_dest_root=pathlib.Path.home() / ".claude",
+                cwd_dest_root=pathlib.Path.cwd() / ".claude",
+            )
+            if errors:
+                first = errors[0]
+                if first.startswith("quoin: "):
+                    first = first[len("quoin: "):]
+                print(f"quoin: not offering the {mod.name} mod: {first}")
+                continue
+            for warning in warnings:
+                print(warning, file=sys.stderr)
+            if install_prompts.ask_yes_no(
+                install_prompts.mod_question(mod.name, installer.mod_dest(mod, dest_root)),
+                default=True,
+            ):
+                modes[mod.name] = "with"
+                warned.append(mod.name)
+
+    run = bool(getattr(args, "setup_agentdesk", False))
+    declined = False
+    already = False
+    if interactive and not is_project_mode and not run:
+        already = install_prompts.agentdesk_already_set_up(pathlib.Path.home() / ".zshrc")
+        # The setup script installs Homebrew and a macOS cask, so other hosts
+        # only get the flag.
+        if not already and sys.platform == "darwin":
+            run = install_prompts.ask_yes_no(install_prompts.AGENTDESK_QUESTION, default=False)
+            declined = not run
+    return _InstallAnswers(
+        modes["context-tracker"], modes["workflow-tasks"], run, declined, already, tuple(warned)
+    )
+
+
 def _cmd_claude_install(args: argparse.Namespace) -> int:
     from quoin import installer
 
@@ -338,18 +428,49 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         ct_mode = _validate_context_tracker_args(args)
     except ValueError as exc:
         _abort(f"quoin: {exc}")
-    ct_errors, ct_warnings = installer.context_tracker_preflight(
+    try:
+        wt_mode = _validate_workflow_tasks_args(args)
+    except ValueError as exc:
+        _abort(f"quoin: {exc}")
+    if getattr(args, "setup_agentdesk", False) and is_project_mode:
+        _abort(
+            "quoin: --setup-agentdesk is only valid with --scope user "
+            "(agentdesk is user scope only)"
+        )
+    answers = _ask_install_questions(
+        args,
+        installer,
         source_dir,
         dest_root,
-        mode=ct_mode,
         is_project_mode=is_project_mode,
-        home_dest_root=pathlib.Path.home() / ".claude",
-        cwd_dest_root=pathlib.Path.cwd() / ".claude",
+        ct_mode=ct_mode,
+        wt_mode=wt_mode,
     )
-    for warning in ct_warnings:
-        print(warning, file=sys.stderr)
-    if ct_errors:
-        for error in ct_errors:
+    ct_mode, wt_mode = answers.ct_mode, answers.wt_mode
+    mod_errors: list[str] = []
+    for preflight, mode in (
+        (installer.context_tracker_preflight, ct_mode),
+        (installer.workflow_tasks_preflight, wt_mode),
+    ):
+        errors, warnings = preflight(
+            source_dir,
+            dest_root,
+            mode=mode,
+            is_project_mode=is_project_mode,
+            home_dest_root=pathlib.Path.home() / ".claude",
+            cwd_dest_root=pathlib.Path.cwd() / ".claude",
+        )
+        if preflight is installer.context_tracker_preflight:
+            already_shown = "context-tracker" in answers.warned_mods
+        else:
+            already_shown = "workflow-tasks" in answers.warned_mods
+        for warning in warnings:
+            if not already_shown:
+                print(warning, file=sys.stderr)
+        mod_errors.extend(errors)
+    if mod_errors:
+        # Every refusal is reported at once, before anything is written.
+        for error in mod_errors:
             print(error, file=sys.stderr)
         return 1
 
@@ -397,6 +518,7 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     # T-05
     installer.deploy_skills(source_dir, dest_root)
     installer.apply_context_tracker(source_dir, dest_root, mode=ct_mode)
+    installer.apply_workflow_tasks(source_dir, dest_root, mode=wt_mode)
     installer.deploy_scripts(source_dir, dest_root)
     installer.deploy_core_scripts(source_dir, dest_root)
     installer.deploy_core_workflow(source_dir, dest_root)  # IVG-248: portable workflow docs (D-10)
@@ -421,10 +543,12 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     if not is_project_mode:
         agentdesk_dest = pathlib.Path.home() / ".config" / "agentdesk"
         installer.deploy_agentdesk(source_dir, agentdesk_dest)
-        if agentdesk_dest.exists():
+        if agentdesk_dest.exists() and not answers.agentdesk_run and not answers.agentdesk_already:
             print()
-            print("To complete agentdesk setup (install zellij, lazygit, fzf, patch .zshrc), run:")
-            print(f"  bash {agentdesk_dest}/setup-agentdesk.sh")
+            print(
+                "To finish agentdesk setup (zellij, lazygit and fzf via Homebrew, plus a "
+                "~/.zshrc line), re-run the install with --setup-agentdesk."
+            )
 
     # T-06: CLAUDE.md placement differs by mode (D-02)
     if is_project_mode:
@@ -497,6 +621,28 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     if record_path is not None:
         print(f"Wrote install record {record_path}")
 
+    # Last step: a failed agentdesk setup is only a warning, quoin is installed.
+    if answers.agentdesk_run and not is_project_mode:
+        script = pathlib.Path.home() / ".config" / "agentdesk" / "setup-agentdesk.sh"
+        print()
+        print(f"Running agentdesk setup ({script}) ...")
+        if not script.is_file():
+            print(
+                f"quoin: warning: agentdesk setup script not found at {script}; "
+                "re-run the install with --setup-agentdesk",
+                file=sys.stderr,
+            )
+        else:
+            rc = install_prompts.run_agentdesk_setup(script)
+            if rc == 0:
+                print("agentdesk setup finished")
+            else:
+                print(
+                    f"quoin: warning: agentdesk setup exited with status {rc}; quoin itself "
+                    "is installed. Re-run the install with --setup-agentdesk to retry.",
+                    file=sys.stderr,
+                )
+
     return 0
 
 
@@ -520,6 +666,18 @@ def _cmd_install(args: argparse.Namespace) -> int:
             "quoin: --with-context-tracker/--remove-context-tracker are only "
             "valid with --runtime claude"
         )
+
+    if runtime != "claude" and (
+        getattr(args, "with_workflow_tasks", False)
+        or getattr(args, "remove_workflow_tasks", False)
+    ):
+        _abort(
+            "quoin: --with-workflow-tasks/--remove-workflow-tasks are only "
+            "valid with --runtime claude"
+        )
+
+    if runtime != "claude" and getattr(args, "setup_agentdesk", False):
+        _abort("quoin: --setup-agentdesk is only valid with --runtime claude")
 
     if runtime == "opencode":
         return _cmd_opencode_install(args)
@@ -2707,6 +2865,9 @@ def main(argv: list[str] | None = None) -> int:
               quoin install --clear-autocompact-env
               quoin install --with-context-tracker
               quoin install --remove-context-tracker
+              quoin install --with-workflow-tasks
+              quoin install --setup-agentdesk
+              quoin install --remove-workflow-tasks
         """),
     )
     install_p.add_argument(
@@ -2822,7 +2983,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         default=False,
         help=(
-            "Opt-in, off by default: deploy the context-tracker mod (/ctx pane) to "
+            "Not installed unless you pass this flag or answer yes when asked: deploy the context-tracker mod (/ctx pane) to "
             "skills/context-tracker/. Once installed, later installs refresh it."
         ),
     )
@@ -2833,6 +2994,33 @@ def main(argv: list[str] | None = None) -> int:
         help=(
             "Remove the opt-in context-tracker mod folder. Mutually exclusive "
             "with --with-context-tracker."
+        ),
+    )
+    install_p.add_argument(
+        "--with-workflow-tasks",
+        action="store_true",
+        default=False,
+        help=(
+            "Not installed unless you pass this flag or answer yes when asked: deploy the workflow-tasks mod (/quoin-tasks pane) to "
+            "skills/workflow-tasks/. Once installed, later installs refresh it."
+        ),
+    )
+    install_p.add_argument(
+        "--setup-agentdesk",
+        action="store_true",
+        default=False,
+        help=(
+            "Run the bundled agentdesk setup as the last install step (user scope "
+            "only; may ask for a password when Homebrew is missing)."
+        ),
+    )
+    install_p.add_argument(
+        "--remove-workflow-tasks",
+        action="store_true",
+        default=False,
+        help=(
+            "Remove the opt-in workflow-tasks mod folder. Mutually exclusive "
+            "with --with-workflow-tasks."
         ),
     )
 
@@ -3499,6 +3687,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             _validate_autocompact_args(args)
             _validate_context_tracker_args(args)
+            _validate_workflow_tasks_args(args)
         except ValueError as exc:
             install_p.error(str(exc))
         return _cmd_install(args)

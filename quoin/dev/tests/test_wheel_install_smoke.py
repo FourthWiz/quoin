@@ -492,6 +492,24 @@ def test_wheel_contents_include_context_tracker_plugin(built_wheel):
 
 
 @_requires_build
+def test_wheel_contents_include_workflow_tasks_plugin(built_wheel):
+    """The wheel ships the workflow-tasks mod, minus generated type stubs."""
+    with zipfile.ZipFile(built_wheel) as whl:
+        names = whl.namelist()
+    for suffix in (
+        "quoin/data/plugins/workflow-tasks/hooks/tasks.ts",
+        "quoin/data/plugins/workflow-tasks/hooks/register.tsx",
+        "quoin/data/plugins/workflow-tasks/.claude-plugin/plugin.json",
+    ):
+        assert any(name.endswith(suffix) for name in names), (
+            f"Missing wheel asset: {suffix}"
+        )
+    assert not any(
+        "plugins/workflow-tasks/.claude-plugin/types/" in name for name in names
+    ), "generated .claude-plugin/types/ must not ship in the wheel"
+
+
+@_requires_build
 def test_wheel_contents_include_claude_adapter_skill_assets(built_wheel):
     """Wheel installs must include active Claude adapter skills, not only stubs."""
     with zipfile.ZipFile(built_wheel) as whl:
