@@ -1,0 +1,9 @@
+{
+  "name": "workflow-tasks",
+  "version": "0.1.0",
+  "description": "Pane listing quoin tasks with their stage and the next workflow command to fill",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "IvGor"
+  }
+}

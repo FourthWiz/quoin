@@ -107,7 +107,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
-      "line_hash": "f374f5f4545820d1e77149695b484806b5d1305f4b2892417eb8a5b217e695a7",
+      "line_hash": "e7524f42b8ca64cb74c09f5987fe414628b247eaf167ef441596c19436130e0e",
       "heading_disposition": "non-citation",
       "path_form": "none",
       "note": "verbatim quote of deploy_drift_check.py's own 'not covered' tool-output string, which lists CLAUDE.md as a literal category name \u2014 not a content pointer."

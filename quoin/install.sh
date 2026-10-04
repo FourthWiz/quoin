@@ -6,7 +6,8 @@
 #                        [--allow-hook-merge] [--autocompact-pct N]
 #                        [--autocompact-window TOKENS] [--clear-autocompact-env]
 #                        [--with-context-tracker] [--remove-context-tracker]
-#                        [--print-python] [-h]
+#                        [--with-workflow-tasks] [--remove-workflow-tasks]
+#                        [--setup-agentdesk] [--print-python] [-h]
 #
 # Python: any interpreter meeting the project minimum (pyproject.toml
 # requires-python, 3.10 by default) is accepted. Set QUOIN_PYTHON=/path/to/python
@@ -17,11 +18,11 @@
 # Tier 3 (network, opt-in):  version mismatch or --upgrade/--use-pip → pip install -e .
 #
 # Agentdesk: the Python installer (quoin install) deploys agentdesk tool files to
-# ~/.config/agentdesk/ automatically for user-mode installs. After quoin install
-# completes, it will print a hint to run setup-agentdesk.sh for the full setup
-# (installs zellij, lazygit, fzf via Homebrew and patches ~/.zshrc). That step
-# is intentionally NOT auto-run here — it modifies system state and requires
-# explicit user consent.
+# ~/.config/agentdesk/ automatically for user-mode installs. The full setup
+# (zellij, lazygit, fzf via Homebrew and a ~/.zshrc line) modifies system state,
+# so it only runs with consent: in a terminal the Python installer asks, and
+# --setup-agentdesk answers that question up front (also for non-interactive
+# installs). It always runs as the last install step.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,6 +39,9 @@ AUTOCOMPACT_WINDOW_FLAG=""
 CLEAR_AUTOCOMPACT_ENV_FLAG=""
 WITH_CONTEXT_TRACKER_FLAG=""
 REMOVE_CONTEXT_TRACKER_FLAG=""
+WITH_WORKFLOW_TASKS_FLAG=""
+SETUP_AGENTDESK_FLAG=""
+REMOVE_WORKFLOW_TASKS_FLAG=""
 USE_PIP=0
 PIP_UPGRADE_FLAG=""
 PRINT_PYTHON=0
@@ -60,6 +64,9 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
     --clear-autocompact-env) CLEAR_AUTOCOMPACT_ENV_FLAG="--clear-autocompact-env" ;;
     --with-context-tracker) WITH_CONTEXT_TRACKER_FLAG="--with-context-tracker" ;;
     --remove-context-tracker) REMOVE_CONTEXT_TRACKER_FLAG="--remove-context-tracker" ;;
+    --with-workflow-tasks) WITH_WORKFLOW_TASKS_FLAG="--with-workflow-tasks" ;;
+    --remove-workflow-tasks) REMOVE_WORKFLOW_TASKS_FLAG="--remove-workflow-tasks" ;;
+    --setup-agentdesk) SETUP_AGENTDESK_FLAG="--setup-agentdesk" ;;
     --autocompact-pct=*)
       if [[ -n "${arg#--autocompact-pct=}" ]]; then
         AUTOCOMPACT_PCT_FLAG="--autocompact-pct ${arg#--autocompact-pct=}"
@@ -134,7 +141,10 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "                       [--allow-hook-merge] [--autocompact-pct N]"
       echo "                       [--autocompact-window TOKENS] [--clear-autocompact-env]"
       echo "                       [--with-context-tracker] [--remove-context-tracker]"
-      echo "                       [--print-python]"
+      echo "                       [--with-workflow-tasks] [--remove-workflow-tasks]"
+      echo "                       [--setup-agentdesk] [--print-python]"
+      echo "  In a terminal the installer asks whether to add the two mods and whether to run"
+      echo "  the agentdesk setup; the flags below answer those questions up front."
       echo "  --dev                Install dev dependencies (pyyaml, pytest)"
       echo "  --upgrade            Re-install via pip before deploying (alias: --use-pip)"
       echo "  --use-pip            Same as --upgrade"
@@ -166,10 +176,20 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "                       env block. Mutually exclusive with the two flags above."
       echo "  --with-context-tracker"
       echo "                       Opt-in: deploy the context-tracker mod (/ctx pane) to"
-      echo "                       skills/context-tracker/. Off by default."
+      echo "                       skills/context-tracker/. Not installed unless you pass this"
+      echo "                       flag or answer yes when asked."
       echo "  --remove-context-tracker"
       echo "                       Remove the context-tracker mod folder. Mutually exclusive with"
       echo "                       --with-context-tracker."
+      echo "  --with-workflow-tasks"
+      echo "                       Opt-in: deploy the workflow-tasks mod (/quoin-tasks pane) to"
+      echo "                       skills/workflow-tasks/. Not installed unless you pass this"
+      echo "                       flag or answer yes when asked."
+      echo "  --remove-workflow-tasks"
+      echo "                       Remove the workflow-tasks mod folder. Mutually exclusive with"
+      echo "                       --with-workflow-tasks."
+      echo "  --setup-agentdesk    Run the bundled agentdesk setup at the end of a user-scope install"
+      echo "                       (Homebrew if missing, zellij, lazygit, fzf, a ~/.zshrc line)."
       exit 0
       ;;
     *)  REST+=("$arg") ;;
@@ -515,6 +535,9 @@ fi
 [[ -n "$CLEAR_AUTOCOMPACT_ENV_FLAG" ]] && INSTALL_ARGS+=("$CLEAR_AUTOCOMPACT_ENV_FLAG")
 [[ -n "$WITH_CONTEXT_TRACKER_FLAG" ]] && INSTALL_ARGS+=("$WITH_CONTEXT_TRACKER_FLAG")
 [[ -n "$REMOVE_CONTEXT_TRACKER_FLAG" ]] && INSTALL_ARGS+=("$REMOVE_CONTEXT_TRACKER_FLAG")
+[[ -n "$WITH_WORKFLOW_TASKS_FLAG" ]] && INSTALL_ARGS+=("$WITH_WORKFLOW_TASKS_FLAG")
+[[ -n "$REMOVE_WORKFLOW_TASKS_FLAG" ]] && INSTALL_ARGS+=("$REMOVE_WORKFLOW_TASKS_FLAG")
+[[ -n "$SETUP_AGENTDESK_FLAG" ]] && INSTALL_ARGS+=("$SETUP_AGENTDESK_FLAG")
 
 # ── Get versions ──────────────────────────────────────────────────────────────
 # Every "is quoin importable on its own" probe runs from a neutral directory.

@@ -128,7 +128,7 @@ def test_classification_table_matches_plan_table():
     keep_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_KEEP_HEADINGS)
     drop_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_DROP_HEADINGS)
     assert keep_bytes == 7311, keep_bytes  # finalization-rule bullet shortened
-    assert drop_bytes == 31953, drop_bytes  # opt-in context-tracker line added to the hooks block, six phrases tightened (net -16)
+    assert drop_bytes == 31970, drop_bytes  # opt-in mods line now notes that the installer asks in a terminal (+17)
 
 
 def test_classification_table_is_bijective_with_source_headings():

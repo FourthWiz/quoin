@@ -301,3 +301,36 @@ def store_value_snapshot(path):
         return (row[0], row[1])
     finally:
         con.close()
+
+
+# ── install questions stay off for the whole run (autouse, session-wide) ────
+# Session scope is required: module-scoped fixtures that run installs are built
+# before any function-scoped autouse fixture. The env var forces the real
+# is_interactive() to False (and reaches subprocess installs, for example under
+# `pytest -s` in a terminal) without hiding the function, so its own tests can
+# still call it. Only the agentdesk runner is stubbed; the real one is kept in
+# REAL_RUN_AGENTDESK_SETUP for tests that opt in.
+try:
+    from quoin import install_prompts as _install_prompts
+    REAL_RUN_AGENTDESK_SETUP = _install_prompts.run_agentdesk_setup
+except ImportError:  # pragma: no cover
+    _install_prompts = None
+    REAL_RUN_AGENTDESK_SETUP = None
+
+
+def _fail_if_called(*_a, **_k):
+    pytest.fail("agentdesk setup ran without a test opting in")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _install_prompts_non_interactive():
+    if _install_prompts is None:
+        yield
+        return
+    mp = pytest.MonkeyPatch()
+    mp.setenv("QUOIN_INSTALL_NO_PROMPT", "1")
+    mp.setattr(_install_prompts, "run_agentdesk_setup", _fail_if_called)
+    try:
+        yield
+    finally:
+        mp.undo()
