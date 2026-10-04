@@ -2506,6 +2506,9 @@ def _cmd_run_opencode_workflow(args: argparse.Namespace) -> int:
         runstore.check_task_name(args.task)
     except runstore.RunStoreError:
         return emit(_workflow_summary_refusal(args, "invalid-task-name", "the task name is not valid", 2))
+    if _launcher_state_env() in os.environ and (args.test_command or args.test_include or args.test_timeout is not None):
+        return emit(_workflow_summary_refusal(
+            args, "test-flags-refused", "the test settings cannot be chosen from an agent shell", 3))
     if args.test_command:
         try:
             shlex.split(args.test_command)

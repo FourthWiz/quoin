@@ -682,7 +682,8 @@ class Coordinator:
             steps.append(step)
             if not step.completed:
                 return steps
-        while True:
+        # backstop: a hook that failed to record an entry would otherwise repeat paid runs
+        for _ in range(2 * cap + 2):
             state = self.load_state()
             entry = runstore.current_entry(state, stage, "plan") if state is not None else None
             if entry is None:
@@ -711,6 +712,12 @@ class Coordinator:
                     return steps
                 continue
             break
+        else:
+            self.errors.append("plan-loop-exceeded")
+            steps.append(StepResult(
+                "plan", stage, phase_loop.PhaseResult(outcome="FAILED", reason="plan-loop-exceeded"),
+            ))
+            return steps
         gated = steps[-1] if steps else StepResult("plan", stage, phase_loop.PhaseResult(outcome="COMPLETED"))
         gated.gate = self.gate(stage, "plan")
         if gated not in steps:
@@ -1126,7 +1133,8 @@ class Coordinator:
             outcome, exit_code = "REFUSED", exc.exit_code
             reasons.append(exc.code)
             self.errors.append(exc.message)
-        record = self.refresh_record()
+        finally:
+            record = self.refresh_record()
         return {
             "runtime": "opencode", "mode": "workflow", "task": self.task, "profile": opts.profile,
             "outcome": outcome, "exit_code": exit_code, "phases": phases, "reasons": reasons,

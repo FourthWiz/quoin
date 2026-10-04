@@ -117,6 +117,11 @@ _DOWNGRADE_DELEGATIONS = ("background", "denied-tail", "failed")
 # ----------------------------------------------------------------- types
 
 
+_CONTEXT_REF = re.compile(
+    r"\A\.workflow_artifacts/[A-Za-z0-9][A-Za-z0-9._-]*/(?:stage-[0-9]+/)?(?:critic-response|review)-[0-9]+\.md\Z"
+)
+
+
 class PrepareRefused(Exception):
     """A run was refused before any process was spawned."""
 
@@ -963,6 +968,9 @@ class OpenCodeDriver:
             if value is not None and isinstance(value.value, int) and not isinstance(value.value, bool):
                 limits[name] = value.value
         policy = retry.RetryPolicy.from_limits(limits)
+        for ref in request.context_refs:
+            if not isinstance(ref, str) or not _CONTEXT_REF.match(ref):
+                raise refuse("workflow-validation", "context-ref-invalid", "a context reference is not a task review artifact")
         try:
             input_hashes = runstore.hash_inputs(root, task, request.context_refs)
         except runstore.RunStoreError:
