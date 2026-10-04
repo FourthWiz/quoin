@@ -6,6 +6,7 @@ Layout, under `memory/runtime/opencode/` in the project's artifact root:
     RUN_ID.run.json         run record (rewritten atomically)
     RUN_ID.checkpoint.json  resume checkpoint (rewritten atomically)
     task-TASK.json          pointer from a task to its latest run
+    workflow-TASK.json      workflow evidence record for a task's gated phases
 
 The directory is created mode 700 and every component from
 the artifact root down must be a real directory, never a symlink. Files
@@ -19,8 +20,10 @@ import json
 import os
 import re
 import secrets as _secrets
+import signal
 import stat
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -39,7 +42,7 @@ from .paths import git_worktree_root
 from .proctree import Identity, ProcInfo, alive, group_members
 
 SCHEMA_VERSION = 1
-TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+TASK_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 STORE_PARTS = (".workflow_artifacts", "memory", "runtime", "opencode")
 MAX_RECORD_BYTES = 8 * 1024 * 1024
 DEFAULT_MAX_FILES = 5000
@@ -50,7 +53,16 @@ SHORT_REVISIONS_BUDGET_S = 10.0
 # End-of-attempt hashing after a timeout or cancel must not hold the caller.
 SHORT_HASH_TOTAL_BYTES = 32 * 1024 * 1024
 MAX_SUBREPOS = 64
+# Project-relative directories that hold coordinator or tool output, never
+# source: a write into any of them must not change a repository's source state.
+SOURCE_EXCLUDED_DIRS = (".workflow_artifacts", ".opencode", ".quoin", ".workspaces")
+SOURCE_DIGEST_MAX_BYTES = 64 * 1024 * 1024
+SOURCE_MAX_UNTRACKED = 5000
 GIT_TIMEOUT_S = 30.0
+# A repository's own config must not be able to hide edits from the source
+# state (a file-system monitor hook can, and also runs a command) or serve a
+# stale untracked listing.
+_SOURCE_GIT_CONFIG = ("-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false")
 _HASH_CHUNK = 1024 * 1024
 
 
@@ -165,8 +177,8 @@ _RECORD_FILE_RE = re.compile(r"^(" + RUN_ID_RE.pattern.strip("^$") + r")\.run\.j
 
 
 def list_records(directory, task: Optional[str] = None, limit: int = 1000) -> Tuple[List[Dict[str, Any]], int]:
-    """Run records in the store, read-only: up to `limit` record files in name
-    order (filtered by task when given) and the number of files skipped.
+    """Run records in the store, read-only: up to `limit` record files, newest
+    name first (filtered by task when given) and the number of files skipped.
 
     A symlink, an unreadable or unparsable file, and every file beyond the
     limit are skipped and counted; a record is never repaired or rewritten."""
@@ -174,7 +186,8 @@ def list_records(directory, task: Optional[str] = None, limit: int = 1000) -> Tu
     skipped = 0
     try:
         names_ = sorted(
-            entry.name for entry in os.scandir(str(directory)) if _RECORD_FILE_RE.match(entry.name)
+            (entry.name for entry in os.scandir(str(directory)) if _RECORD_FILE_RE.match(entry.name)),
+            reverse=True,
         )
     except OSError:
         return [], 0
@@ -280,10 +293,20 @@ def read_sidecar(path, *, repair: bool = False) -> SidecarRead:
     events: List[RuntimeEvent] = []
     good = 0
     torn = False
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        handle = open(str(path), "rb")
+        fd = os.open(str(path), flags)
     except FileNotFoundError:
         return SidecarRead((), 0, False)
+    except OSError:
+        raise RunStoreError("unreadable-sidecar") from None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RunStoreError("unreadable-sidecar")
+        handle = os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
     with handle:
         while True:
             line = handle.readline()
@@ -593,9 +616,12 @@ def hash_inputs(
     project_root, task: str, context_refs: Sequence[str] = (), *,
     max_files: int = DEFAULT_MAX_FILES, max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     max_total_bytes: int = DEFAULT_MAX_TOTAL_BYTES,
+    exclude: Optional[Callable[[str], bool]] = None,
 ) -> Dict[str, Any]:
     """sha256 of every regular file under the task folder and each context
-    reference, keyed by project-relative path. Symlinks are skipped."""
+    reference, keyed by project-relative path. Symlinks are skipped. A path
+    for which `exclude(rel)` is true is dropped before it counts toward any
+    cap."""
     root = os.path.realpath(str(project_root))
     tops = [os.path.join(str(project_root), ".workflow_artifacts", check_task_name(task))]
     for ref in context_refs:
@@ -616,6 +642,8 @@ def hash_inputs(
             continue
         for path in files:
             rel = os.path.relpath(path, str(project_root)).replace(os.sep, "/")
+            if exclude is not None and exclude(rel):
+                continue
             if rel in result:
                 continue
             if len(result) >= max_files:
@@ -685,39 +713,261 @@ def _default_git_runner(argv: Sequence[str], timeout_s: float) -> Tuple[int, str
     return proc.returncode, proc.stdout.decode("utf-8", "replace")
 
 
-def _repo_entry(repo: str, project_root: str, run: GitRunner, deadline: float) -> Dict[str, Any]:
+GitBytesRunner = Callable[[Sequence[str], float, int], Tuple[int, bytes, bool]]
+
+
+def _default_git_bytes_runner(argv: Sequence[str], timeout_s: float, max_bytes: int) -> Tuple[int, bytes, bool]:
+    """Run git and return `(exit code, stdout bytes, truncated)`. Output past
+    `max_bytes` kills the process and sets `truncated`; running past
+    `timeout_s` raises `subprocess.TimeoutExpired`. The child leads its own
+    session so the timeout also stops anything it started that still holds
+    the output pipe."""
+    env = {k: v for k, v in os.environ.items() if k in ("PATH", "HOME")}
+    env["LC_ALL"] = "C"
+    env["GIT_OPTIONAL_LOCKS"] = "0"
+    proc = subprocess.Popen(
+        list(argv), env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True,
+    )
+    fired = threading.Event()
+
+    def _stop() -> None:
+        try:
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:  # pragma: no cover - non-POSIX
+                proc.kill()
+        except OSError:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def _expire() -> None:
+        fired.set()
+        _stop()
+
+    timer = threading.Timer(max(timeout_s, 0.0), _expire)
+    timer.daemon = True
+    timer.start()
+    chunks: List[bytes] = []
+    size = 0
+    truncated = False
+    try:
+        assert proc.stdout is not None
+        while True:
+            chunk = proc.stdout.read(min(_HASH_CHUNK, max_bytes + 1 - size))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            size += len(chunk)
+            if size > max_bytes:
+                truncated = True
+                _stop()
+                break
+        proc.wait()
+    finally:
+        timer.cancel()
+        if proc.stdout is not None:
+            proc.stdout.close()
+        if proc.poll() is None:
+            _stop()
+            proc.wait()
+    if fired.is_set() and not truncated and proc.returncode == -signal.SIGKILL:
+        raise subprocess.TimeoutExpired(list(argv), timeout_s)
+    data = b"".join(chunks)
+    del chunks
+    if truncated:
+        data = data[:max_bytes]
+    return proc.returncode, data, truncated
+
+
+def source_pathspecs(repo: str, project_root: str, repos: Sequence[str]) -> List[str]:
+    """Pathspecs that scope a repository's source state: the whole tree minus
+    the project's output directories and every other repository nested inside
+    this one. Names are matched literally."""
+    specs = {"."}
+
+    def add(target: str) -> None:
+        rel = os.path.relpath(target, repo)
+        if rel == "." or rel == ".." or rel.startswith(".." + os.sep) or os.path.isabs(rel):
+            return
+        specs.add(":(exclude,literal)" + rel.replace(os.sep, "/"))
+
+    for name in SOURCE_EXCLUDED_DIRS:
+        add(os.path.join(project_root, name))
+    for other in repos:
+        if other != repo:
+            add(other)
+    return sorted(specs)
+
+
+def _source_digest(
+    repo: str, specs: Sequence[str], bytes_run: GitBytesRunner, deadline: float,
+    max_source_bytes: int, max_untracked_files: int,
+) -> Tuple[Optional[str], Optional[str]]:
+    """`(digest, error)` for a dirty tree; exactly one of them is set."""
+
+    def timeout() -> float:
+        return min(GIT_TIMEOUT_S, deadline - time.monotonic())
+
+    if timeout() <= 0:
+        return None, "budget"
+    try:
+        code, diff, cut = bytes_run(
+            ("git", "-C", repo, *_SOURCE_GIT_CONFIG, "-c", "core.quotepath=off", "diff", "--binary", "--no-ext-diff",
+             "--no-textconv", "--no-color", "--no-renames", "HEAD", "--", *specs),
+            timeout(), max_source_bytes,
+        )
+        if cut:
+            return None, "too-large"
+        if code != 0:
+            return None, "git-failed"
+        if timeout() <= 0:
+            return None, "budget"
+        code, listing, cut = bytes_run(
+            ("git", "-C", repo, *_SOURCE_GIT_CONFIG, "ls-files", "-z", "--others", "--exclude-standard", "--", *specs),
+            timeout(), max_source_bytes,
+        )
+    except subprocess.TimeoutExpired:
+        return None, "budget"
+    except (OSError, subprocess.SubprocessError):
+        return None, "git-failed"
+    if cut:
+        return None, "too-large"
+    if code != 0:
+        return None, "git-failed"
+    if listing.count(b"\0") > max_untracked_files:
+        return None, "too-many-files"
+    entries = sorted(item for item in listing.split(b"\0") if item)
+    if len(entries) > max_untracked_files:
+        return None, "too-many-files"
+    digest = hashlib.sha256()
+    digest.update(b"quoin-source/1\0diff\0")
+    digest.update(diff)
+    digest.update(b"\0untracked\0")
+    remaining = max_source_bytes - len(diff)
+    for raw in entries:
+        if timeout() <= 0:
+            return None, "budget"
+        full = os.path.join(repo, os.fsdecode(raw))
+        try:
+            info = os.lstat(full)
+        except OSError:
+            return None, "changed-during-hash"
+        if stat.S_ISLNK(info.st_mode):
+            try:
+                kind, sha = "l", hashlib.sha256(os.fsencode(os.readlink(full))).hexdigest()
+            except OSError:
+                return None, "changed-during-hash"
+        elif stat.S_ISREG(info.st_mode):
+            value = _sha256_file(full, max(remaining, 0))
+            if isinstance(value, dict):
+                return None, "changed-during-hash" if value.get("skipped") == "changed" else "too-large"
+            if value is None:
+                return None, "changed-during-hash"
+            remaining -= info.st_size
+            if remaining < 0:
+                return None, "too-large"
+            kind, sha = "f", value
+        elif stat.S_ISDIR(info.st_mode):
+            kind, sha = "d", ""
+        else:
+            kind, sha = "o", ""
+        digest.update(raw + b"\0" + kind.encode("ascii") + b"\0" + sha.encode("ascii") + b"\0")
+    return digest.hexdigest(), None
+
+
+def _source_state(
+    repo: str, project_root: str, repos: Sequence[str], run: GitRunner, bytes_run: GitBytesRunner,
+    deadline: float, max_source_bytes: int, max_untracked_files: int,
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"source_dirty": None, "source_digest": None, "source_error": None}
+    specs = source_pathspecs(repo, project_root, repos)
+    left = min(GIT_TIMEOUT_S, deadline - time.monotonic())
+    if left <= 0:
+        out["source_error"] = "budget"
+        return out
+    try:
+        code, text = run(
+            ("git", "-C", repo, *_SOURCE_GIT_CONFIG, "status", "--porcelain=v1", "-z", "--untracked-files=normal",
+             "--ignore-submodules=none", "--", *specs),
+            left,
+        )
+    except subprocess.TimeoutExpired:
+        out["source_error"] = "budget"
+        return out
+    except (OSError, subprocess.SubprocessError):
+        out["source_error"] = "git-failed"
+        return out
+    if code != 0:
+        out["source_error"] = "git-failed"
+        return out
+    out["source_dirty"] = bool(text.strip("\0 \n"))
+    if out["source_dirty"]:
+        out["source_digest"], out["source_error"] = _source_digest(
+            repo, specs, bytes_run, deadline, max_source_bytes, max_untracked_files,
+        )
+    return out
+
+
+def _repo_entry(
+    repo: str, project_root: str, run: GitRunner, deadline: float, source: Optional[Mapping[str, Any]] = None,
+) -> Dict[str, Any]:
     rel = os.path.relpath(repo, project_root).replace(os.sep, "/")
     entry: Dict[str, Any] = {"path": rel, "head": None, "dirty": None, "error": None}
     def timeout() -> float:
         return min(GIT_TIMEOUT_S, deadline - time.monotonic())
 
+    def finish() -> Dict[str, Any]:
+        if source is not None:
+            if entry["error"] is not None:
+                entry.update(source_dirty=None, source_digest=None,
+                             source_error="budget" if entry["error"] == "budget" else "git-failed")
+            else:
+                entry.update(_source_state(
+                    repo, project_root, source["repos"], run, source["bytes_runner"], deadline,
+                    source["max_source_bytes"], source["max_untracked_files"],
+                ))
+        return entry
+
     if timeout() <= 0:
         entry["error"] = "budget"
-        return entry
+        return finish()
     try:
         code, out = run(("git", "-C", repo, "rev-parse", "HEAD"), timeout())
         if code != 0 or not out.strip():
             entry["error"] = "rev-parse-failed"
-            return entry
+            return finish()
         entry["head"] = out.strip()
         if timeout() <= 0:
             entry["error"] = "budget"
-            return entry
+            return finish()
         code, out = run(("git", "-C", repo, "status", "--porcelain"), timeout())
         if code != 0:
             entry["error"] = "status-failed"
-            return entry
+            return finish()
         entry["dirty"] = bool(out.strip())
     except (OSError, subprocess.SubprocessError):
         entry["error"] = "git-unavailable"
-    return entry
+    return finish()
 
 
 def repo_revisions(
     project_root, *, runner: Optional[GitRunner] = None, budget_s: float = REVISIONS_BUDGET_S,
+    source: bool = False, bytes_runner: Optional[GitBytesRunner] = None,
+    max_source_bytes: int = SOURCE_DIGEST_MAX_BYTES, max_untracked_files: int = SOURCE_MAX_UNTRACKED,
 ) -> List[Dict[str, Any]]:
     """Head and dirtiness of the worktree holding the project root plus each
-    immediate subdirectory that holds its own `.git`."""
+    immediate subdirectory that holds its own `.git`.
+
+    With `source=True` every entry also carries `source_dirty`, `source_digest`
+    and `source_error`: the tree's state with the project's output directories
+    and nested repositories left out, so a write into those never reads as a
+    source change. Repositories are found only as immediate subdirectories; an
+    untracked nested repository deeper than that is hashed as a bare directory
+    entry and a submodule appears only as a gitlink plus a dirty marker, so
+    edits inside either are not reflected in the digest."""
     run = runner or _default_git_runner
     root = os.path.realpath(str(project_root))
     repos: List[str] = []
@@ -736,7 +986,232 @@ def repo_revisions(
         if len(repos) >= MAX_SUBREPOS:
             break
     deadline = time.monotonic() + budget_s
-    return [_repo_entry(repo, root, run, deadline) for repo in repos]
+    options: Optional[Dict[str, Any]] = None
+    if source:
+        options = {
+            "repos": list(repos), "bytes_runner": bytes_runner or _default_git_bytes_runner,
+            "max_source_bytes": max_source_bytes, "max_untracked_files": max_untracked_files,
+        }
+    return [_repo_entry(repo, root, run, deadline, options) for repo in repos]
+
+
+# ---------------------------------------------------------------------------
+# workflow state
+# ---------------------------------------------------------------------------
+
+WORKFLOW_KIND = "quoin-opencode-workflow"
+WORKFLOW_PHASES = ("discover", "architect", "plan", "critic", "implement", "review")
+GATED_PHASES = ("discover", "architect", "plan", "implement", "review")
+EVIDENCE_ORIGINS = ("coordinator", "phase-run", "adopted", "continuation")
+STAGELESS_PHASES = ("discover", "architect")
+
+# Run phases each gated phase accepts, taken from the commands the shipped
+# feature manifest marks supported. A plan is produced by `plan` or by
+# `thorough_plan` and may also list the critic runs of its loop; `revise` has
+# no supported command, so a run of it never completes and is not listed.
+RUN_PHASES_FOR = {
+    "discover": frozenset({"discover"}),
+    "architect": frozenset({"architect"}),
+    "plan": frozenset({"plan", "thorough_plan", "critic"}),
+    "implement": frozenset({"implement"}),
+    "review": frozenset({"review"}),
+}
+PLAN_PRODUCER_PHASES = frozenset({"plan", "thorough_plan"})
+
+# These phases have a supported OpenCode command and run under `--phase`, but
+# never record a gated entry: a gate run evaluates entries, checkpoint and
+# continue_work only save or restore session state, and end_of_task ships work
+# that was already gated. A phase added to the manifest as runnable must be
+# mapped by `entry_phase_for_run` or listed here.
+UNMAPPED_RUN_PHASES = ("gate", "checkpoint", "continue_work", "end_of_task", "run")
+
+_ENTRY_PHASE_FOR_RUN = {
+    "discover": "discover",
+    "architect": "architect",
+    "plan": "plan",
+    "thorough_plan": "plan",
+    "critic": "plan",
+    "implement": "implement",
+    "review": "review",
+}
+
+
+def normalize_phase(phase: Any) -> str:
+    """The run phase spelling used everywhere: hyphens become underscores."""
+    return str(phase).replace("-", "_")
+
+
+def normalize_stage(value: Any) -> Optional[int]:
+    """A stage as an int or None. The CLI passes `--stage` through as text,
+    so digit strings are accepted; anything else raises `ValueError`."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ValueError("invalid stage")
+    if isinstance(value, int):
+        if value >= 1:
+            return value
+        raise ValueError("invalid stage")
+    if isinstance(value, str) and value.isascii() and value.isdigit() and int(value) >= 1:
+        return int(value)
+    raise ValueError("invalid stage")
+
+
+def entry_phase_for_run(run_phase: Any) -> Optional[str]:
+    """The gated entry a single-phase run records, or None when it records
+    none. A critic run changes the plan stage's evidence, so it maps to plan."""
+    return _ENTRY_PHASE_FOR_RUN.get(normalize_phase(run_phase))
+
+
+def workflow_state_path(directory: Path, task: str) -> Path:
+    return _checked(directory, "workflow-%s.json" % check_task_name(task))
+
+
+def new_workflow_state(task: str, clock: Callable[[], float] = time.time) -> Dict[str, Any]:
+    now = _now(clock)
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "kind": WORKFLOW_KIND,
+        "task": check_task_name(task),
+        "created_at": now,
+        "updated_at": now,
+        "settings": {},
+        "entries": [],
+    }
+
+
+def load_workflow_state(directory: Path, task: str) -> Optional[Dict[str, Any]]:
+    """The task's workflow state, `None` when absent. A damaged, foreign or
+    other-task file is an error, never silently replaced."""
+    data = read_json(workflow_state_path(directory, task))
+    if data is None:
+        return None
+    if (
+        data.get("kind") != WORKFLOW_KIND
+        or not isinstance(data.get("entries"), list)
+        or not isinstance(data.get("settings"), dict)
+    ):
+        raise RunStoreError("corrupt-record")
+    for item in data["entries"]:
+        if not isinstance(item, dict) or not isinstance(item.get("origin"), str) or not isinstance(item.get("phase"), str):
+            raise RunStoreError("corrupt-record")
+        for key in ("runs", "critic_responses", "harvested"):
+            if item.get(key) is not None and not isinstance(item[key], list):
+                raise RunStoreError("corrupt-record")
+        for key in ("runs", "critic_responses"):
+            if any(not isinstance(value, str) for value in item.get(key) or []):
+                raise RunStoreError("corrupt-record")
+        if item.get("evidence") is not None and not isinstance(item["evidence"], dict):
+            raise RunStoreError("corrupt-record")
+        stage = item.get("stage")
+        if stage is not None and (not isinstance(stage, int) or isinstance(stage, bool) or stage < 1):
+            raise RunStoreError("corrupt-record")
+    if data.get("task") != task:
+        raise RunStoreError("state-task-mismatch")
+    return data
+
+
+def write_workflow_state(directory: Path, state: Mapping[str, Any]) -> None:
+    atomic_write_json(workflow_state_path(directory, state["task"]), state)
+
+
+MAX_SUPERSEDED_PER_ITEM = 10
+
+
+def _trim_superseded(state: Dict[str, Any], stage: Optional[int], phase: str) -> None:
+    """Keep at most MAX_SUPERSEDED_PER_ITEM superseded entries for one item,
+    dropping the oldest superseded ones; live entries and the order of every
+    remaining entry are untouched."""
+    entries = state["entries"]
+    idx = [i for i, e in enumerate(entries)
+           if e.get("stage") == stage and e.get("phase") == phase and e.get("superseded")]
+    excess = len(idx) - MAX_SUPERSEDED_PER_ITEM
+    if excess > 0:
+        drop = set(idx[:excess])
+        state["entries"] = [e for i, e in enumerate(entries) if i not in drop]
+
+
+def supersede_items(
+    state: Dict[str, Any], stage: Optional[int], phases: Any, clock: Callable[[], float] = time.time,
+) -> int:
+    """Mark every live entry of `stage` whose phase is in `phases` superseded;
+    returns how many were marked."""
+    wanted = set(phases)
+    stage = normalize_stage(stage)
+    count = 0
+    for entry in state["entries"]:
+        if entry.get("stage") == stage and entry.get("phase") in wanted and not entry.get("superseded"):
+            entry["superseded"] = True
+            count += 1
+    if count:
+        state["updated_at"] = _now(clock)
+        for phase in wanted:
+            _trim_superseded(state, stage, phase)
+    return count
+
+
+def _new_entry(entry: Mapping[str, Any], clock: Callable[[], float]) -> Dict[str, Any]:
+    phase = entry.get("phase")
+    origin = entry.get("origin")
+    if phase not in WORKFLOW_PHASES:
+        raise ValueError("invalid phase")
+    if origin not in EVIDENCE_ORIGINS:
+        raise ValueError("invalid origin")
+    stage = normalize_stage(entry.get("stage"))
+    if phase in STAGELESS_PHASES and stage is not None:
+        raise ValueError("stage not allowed for this phase")
+    full: Dict[str, Any] = {
+        "stage": stage,
+        "phase": phase,
+        "origin": origin,
+        "recorded_at": _now(clock),
+        "superseded": False,
+        "runs": [],
+        "boundary": None,
+        "critic_responses": [],
+        "harvested": [],
+        "envelope_path": None,
+        "tests": None,
+        "continuation_validation": None,
+        "ledger_uuids": [],
+        "ledger_lines_appended_during_run": [],
+        "evidence": {},
+        "gate": None,
+    }
+    for key, value in entry.items():
+        if key not in ("stage", "phase", "origin", "superseded"):
+            full[key] = value
+    return full
+
+
+def record_phase_entry(
+    state: Dict[str, Any], entry: Mapping[str, Any], clock: Callable[[], float] = time.time,
+) -> Dict[str, Any]:
+    """Append an entry; every earlier live entry for the same stage and phase
+    is kept as history and marked superseded."""
+    new = _new_entry(entry, clock)
+    for old in state["entries"]:
+        if old.get("stage") == new["stage"] and old.get("phase") == new["phase"] and not old.get("superseded"):
+            old["superseded"] = True
+    state["entries"].append(new)
+    _trim_superseded(state, new["stage"], new["phase"])
+    state["updated_at"] = _now(clock)
+    return new
+
+
+def current_entry(state: Mapping[str, Any], stage: Optional[int], phase: str) -> Optional[Dict[str, Any]]:
+    """The latest non-superseded entry for a stage and phase."""
+    for entry in reversed(state.get("entries") or []):
+        if entry.get("stage") == stage and entry.get("phase") == phase and not entry.get("superseded"):
+            return entry
+    return None
+
+
+def update_current_entry(state: Dict[str, Any], stage: Optional[int], phase: str, **fields: Any) -> Optional[Dict[str, Any]]:
+    entry = current_entry(state, stage, phase)
+    if entry is not None:
+        entry.update(fields)
+    return entry
 
 
 # ---------------------------------------------------------------------------

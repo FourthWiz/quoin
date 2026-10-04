@@ -20,6 +20,11 @@ REPORT_KEYS = (
     "updated_at",
 )
 
+# A run that a later run took the place of is closed by recording the run that
+# replaced it and this block reason in the same write, so either marks it as
+# closed; the report carries the block reason, the per-run list the successor.
+CLOSED_BLOCK = "superseded"
+
 LockReader = Callable[[str], Optional[Mapping[str, Any]]]
 
 
@@ -136,6 +141,7 @@ def collect(
             "run_id": other.get("run_id"), "pid": other_last.get("pid"),
             "pgid": other_last.get("pgid"),
             "driver_lost": table is not None and runstore.orphan_state(other, table) == "driver-lost",
+            "closed": bool(other.get("superseded_by")),
         })
     request = record.get("request") if isinstance(record.get("request"), Mapping) else {}
     report: Dict[str, Any] = {
@@ -223,14 +229,18 @@ def render_text(report: Mapping[str, Any]) -> str:
         child = report.get("child") or {}
         lines.append("the quoin run that drove this phase has exited; its child may still be running")
         lines.extend(_kill_hints(child.get("pid"), child.get("pgid")))
-        lines.append("  then start over with --new-run")
+        if report.get("resume_blocked") != CLOSED_BLOCK:
+            lines.append("  then start over with --new-run")
     for other in report.get("superseded_running") or []:
         lines.append(
             "older run %s still reads running%s" % (other["run_id"], " (driver lost)" if other.get("driver_lost") else "")
         )
         lines.extend(_kill_hints(other.get("pid"), other.get("pgid")))
-        lines.append("  then start over with --new-run")
-    if report.get("resume_blocked"):
+        if not other.get("closed"):
+            lines.append("  then start over with --new-run")
+    if report.get("resume_blocked") == CLOSED_BLOCK:
+        lines.append("superseded: this run is closed and costed; nothing to resume")
+    elif report.get("resume_blocked"):
         lines.append(
             "resume is blocked (%s): start the phase over with --new-run" % report["resume_blocked"]
         )

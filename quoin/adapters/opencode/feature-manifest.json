@@ -93,10 +93,6 @@
       "reason": "The adapter owns asset generation and name translation only, never provider or process configuration"
     },
     {
-      "name": "any asset for run",
-      "reason": "Phase orchestration needs the runtime driver; a stub command would be misleading"
-    },
-    {
       "name": "model pinning in agent files",
       "reason": "Generated agent frontmatter carries no model key, so nothing pins or leaks to a provider"
     }
@@ -175,7 +171,7 @@
     {
       "id": "architect",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -191,7 +187,9 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ]
     },
     {
       "id": "capture_insight",
@@ -210,7 +208,7 @@
     {
       "id": "checkpoint",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script; does not run cleanup, which is unsupported; writes its own recent-sessions.md entry",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -226,7 +224,9 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_command_evidence.py"
+      ]
     },
     {
       "id": "cleanup",
@@ -245,7 +245,7 @@
     {
       "id": "continue_work",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; no hook-written session index or Claude transcripts; resumes from session state and the checkpoint handoff",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -261,12 +261,14 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_command_evidence.py"
+      ]
     },
     {
       "id": "cost_snapshot",
       "status": "unsupported",
-      "reason": "This reads Claude JSONL and ccusage data; OpenCode cost translation lands with the workflow-execution milestone.",
+      "reason": "OpenCode ledger rows carry inline attribution; the snapshot skill still needs an OpenCode cost resolver and live evidence",
       "target_milestone": "workflow-execution",
       "catalog": {
         "user_facing": true,
@@ -280,7 +282,7 @@
     {
       "id": "critic",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -296,12 +298,15 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ],
+      "notes": "The read-only snapshot applies on the headless path; the TUI keeps permission-map guard rails."
     },
     {
       "id": "discover",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -317,7 +322,9 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ]
     },
     {
       "id": "end_of_day",
@@ -336,7 +343,7 @@
     {
       "id": "end_of_task",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -352,7 +359,10 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_single_phase_evidence.py"
+      ],
+      "notes": "Real finalization runs in the TUI because commit and push are asks headless."
     },
     {
       "id": "enrich",
@@ -385,7 +395,7 @@
     {
       "id": "gate",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -401,12 +411,14 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_command_evidence.py"
+      ]
     },
     {
       "id": "implement",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending; deterministic helpers via quoin opencode script",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -422,7 +434,9 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ]
     },
     {
       "id": "init_workflow",
@@ -455,7 +469,7 @@
     {
       "id": "plan",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -471,7 +485,9 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ]
     },
     {
       "id": "pr",
@@ -490,7 +506,7 @@
     {
       "id": "review",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -506,7 +522,10 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ],
+      "notes": "The read-only snapshot applies on the headless path; the TUI keeps permission-map guard rails."
     },
     {
       "id": "revise",
@@ -552,17 +571,27 @@
     },
     {
       "id": "run",
-      "status": "documentation-only",
-      "reason": "Phase orchestration needs the OpenCode runtime driver; no OpenCode asset is generated for this entry.",
+      "status": "supported",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "workflow-execution",
       "catalog": {
         "user_facing": true,
         "spawn_target": false
       },
-      "opencode": {},
-      "assets": [],
+      "opencode": {
+        "command": "quoin-run",
+        "skill": "quoin-run",
+        "agent_role": "coordinator"
+      },
+      "assets": [
+        "command",
+        "skill"
+      ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_workflow_e2e.py"
+      ],
+      "notes": "The TUI command only names the next step; the headless coordinator is `quoin run --runtime opencode --workflow`."
     },
     {
       "id": "security_review",
@@ -637,7 +666,7 @@
     {
       "id": "thorough_plan",
       "status": "supported",
-      "reason": "Generated command and skill; offline-verified; live runtime evidence pending",
+      "reason": "Fixture-verified through the headless coordinator; live model evaluation pending",
       "target_milestone": "adapter-foundation",
       "catalog": {
         "user_facing": true,
@@ -653,7 +682,10 @@
         "skill"
       ],
       "live_runtime_evidence": false,
-      "evidence": []
+      "evidence": [
+        "quoin/dev/tests/test_opencode_single_phase_evidence.py"
+      ],
+      "notes": "The read-only snapshot applies on the headless path; the TUI keeps permission-map guard rails."
     },
     {
       "id": "triage",

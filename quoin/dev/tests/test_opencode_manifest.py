@@ -158,7 +158,7 @@ def test_check_source_dir_real_tree_is_clean():
 def test_bundle_membership_and_counts():
     supported = {
         "architect", "checkpoint", "continue_work", "critic", "discover",
-        "end_of_task", "gate", "implement", "plan", "review", "thorough_plan",
+        "end_of_task", "gate", "implement", "plan", "review", "run", "thorough_plan",
     }
     unsupported = {"cleanup", "cost_snapshot", "end_of_day", "revise-fast", "start_of_day"}
     data = manifest.load_manifest(SOURCE_DIR)
@@ -168,8 +168,8 @@ def test_bundle_membership_and_counts():
         by_status.setdefault(row["status"], set()).add(row["id"])
     assert by_status["supported"] == supported
     assert by_status["unsupported"] == unsupported
-    assert len(by_status["supported"]) == 11
-    assert len(by_status.get("documentation-only", set())) == 16
+    assert len(by_status["supported"]) == 12
+    assert len(by_status.get("documentation-only", set())) == 15
     assert len(by_status["unsupported"]) == 5
     assert all(row["live_runtime_evidence"] is False for row in rows)
 
@@ -314,11 +314,11 @@ def test_drift_supported_row_empty_assets(tmp_path):
 def test_drift_documentation_only_row_with_assets(tmp_path):
     dest = _copy_source_tree(tmp_path)
     data = _load_manifest_dict(dest)
-    row = next(r for r in data["catalog_entries"] if r["id"] == "run")
+    row = next(r for r in data["catalog_entries"] if r["id"] == "status")
     row["assets"] = ["command", "skill"]
     _write_manifest_dict(dest, data)
     errs = manifest.check_source_dir(dest)
-    assert any("run" in e and "assets" in e for e in errs), errs
+    assert any("status" in e and "assets" in e for e in errs), errs
 
 
 def test_drift_wrong_command_name(tmp_path):

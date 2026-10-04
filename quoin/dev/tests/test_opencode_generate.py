@@ -631,6 +631,10 @@ def test_posture_pin_full_allow_and_ask_set():
         ("gate", "bash", "*", "ask"),
         ("gate", "bash", "quoin opencode script path_resolve *", "allow"),
         ("gate", "bash", "quoin opencode script validate_artifact *", "allow"),
+        ("gate", "bash", "quoin opencode gate *", "allow"),
+        ("gate", "bash", "quoin opencode gate *--source-dir*", "ask"),
+        ("gate", "bash", "quoin opencode gate *--project-root*", "ask"),
+        ("gate", "bash", "quoin opencode gate *.env*", "ask"),
         ("gate", "bash", "*>*", "ask"),
         ("gate", "bash", "*<*", "ask"),
         ("gate", "skill", "quoin-*", "allow"),
@@ -646,6 +650,16 @@ def test_posture_pin_full_allow_and_ask_set():
         ("coordinator", "bash", "quoin opencode script handoff_validate *", "allow"),
         ("coordinator", "bash", "quoin opencode script path_resolve *", "allow"),
         ("coordinator", "bash", "quoin opencode script validate_artifact *", "allow"),
+        *[
+            ("coordinator", "bash", pat, act)
+            for helper in ("gate", "handoff", "workflow next")
+            for pat, act in (
+                ("quoin opencode %s *" % helper, "allow"),
+                ("quoin opencode %s *--source-dir*" % helper, "ask"),
+                ("quoin opencode %s *--project-root*" % helper, "ask"),
+                ("quoin opencode %s *.env*" % helper, "ask"),
+            )
+        ],
         ("coordinator", "bash", "*>*", "ask"),
         ("coordinator", "bash", "*<*", "ask"),
         ("coordinator", "task", "quoin-investigator", "allow"),
@@ -658,6 +672,10 @@ def test_posture_pin_full_allow_and_ask_set():
         ("implementer", "bash", "*", "ask"),
         ("implementer", "bash", "quoin opencode script path_resolve *", "allow"),
         ("implementer", "bash", "quoin opencode script validate_artifact *", "allow"),
+        ("implementer", "bash", "quoin opencode test-run *", "allow"),
+        ("implementer", "bash", "quoin opencode test-run *--source-dir*", "ask"),
+        ("implementer", "bash", "quoin opencode test-run *--project-root*", "ask"),
+        ("implementer", "bash", "quoin opencode test-run *.env*", "ask"),
         ("implementer", "bash", "*>*", "ask"),
         ("implementer", "bash", "*<*", "ask"),
         ("implementer", "skill", "quoin-*", "allow"),
@@ -865,7 +883,7 @@ def test_load_inputs_wraps_recursion_error_from_check_manifest(monkeypatch):
 # render() on the real tree: file set, path families, bindings
 
 
-def test_render_source_dir_renders_exactly_32_files_with_no_run_command():
+def test_render_source_dir_renders_exactly_34_files_with_run_command():
     files = generate.render_source_dir(SOURCE_DIR)
     manifest_data = _load_real_manifest()
     supported = _supported_rows(manifest_data)
@@ -878,8 +896,9 @@ def test_render_source_dir_renders_exactly_32_files_with_no_run_command():
     assert command_paths == [".opencode/commands/%s.md" % n for n in expected_names]
     assert skill_paths == [".opencode/skills/%s/SKILL.md" % n for n in expected_names]
     assert len(agent_paths) == len(manifest_data["roles"])
-    assert len(files) == 32
-    assert not any("quoin-run" in k for k in files)
+    assert len(files) == 34
+    assert ".opencode/commands/quoin-run.md" in files
+    assert ".opencode/skills/quoin-run/SKILL.md" in files
 
 
 def test_render_command_agent_binding_matches_manifest_rows():
@@ -1811,7 +1830,7 @@ def test_generator_version_pin_forces_a_schema_bump_on_output_change():
     # rendered bytes for these same inputs must update this hash and bump
     # GENERATOR_SCHEMA_VERSION, which moves every real digest in turn.
     assert generate.GENERATOR_SCHEMA_VERSION == 1
-    assert digest == "64d75414a3cbeeab0d9992fda9fbf6be6ca18bf779e5ff1b703243e02f4fa727"
+    assert digest == "2b3deddc7d8068d2013c9f8364aed2e56bb7b4ced15e8f2c957ac7d99b1ed472"
 
 
 # --- core-input routing and source sweep ---

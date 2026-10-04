@@ -201,6 +201,10 @@ def _same_request(record: Mapping[str, Any], request: "driver.RunRequest") -> bo
         and stored.get("stage") == request.stage
         and str(stored.get("phase", "")).replace("-", "_") == str(request.phase).replace("-", "_")
         and stored.get("profile") == request.profile
+        and stored.get("workspace") == (
+            str(request.workspace) if getattr(request, "workspace", None) is not None else None
+        )
+        and bool(stored.get("non_interactive")) == bool(getattr(request, "non_interactive", False))
     )
 
 
@@ -214,6 +218,7 @@ def run_phase(
     backoff_fn: Optional[Callable[[int], float]] = None,
     monotonic: Callable[[], float] = time.monotonic,
     default_timeout_s: float = driver.DEFAULT_TIMEOUT_S,
+    on_prepared: Optional[Callable[[Any], None]] = None,
 ) -> PhaseResult:
     t0 = monotonic()
     attempts = interrupted_relaunches = failed_count = no_progress = 0
@@ -287,8 +292,19 @@ def run_phase(
     elif (
         not new_run and existing and existing.get("state") == "interrupted"
         and _same_request(existing, request)
+        and not (isinstance(existing.get("telemetry"), dict) and existing["telemetry"].get("final") is True)
     ):
         run_id = existing.get("run_id")
+    elif (
+        not new_run and existing and existing.get("state") == "interrupted"
+        and _same_request(existing, request)
+    ):
+        # A closed (costed) run cannot be resumed; stopping here keeps the
+        # explicit restart acknowledgement instead of silently starting over.
+        blocked = existing.get("resume_blocked")
+        if blocked not in driver.RESUME_BLOCK_REASONS and blocked not in LOOP_BLOCK_REASONS:
+            blocked = "run-closed"  # a stored value outside the known set is never echoed back
+        return finish("INTERRUPTED", blocked, resume_blocked=blocked, run_id_override=existing.get("run_id"))
 
     budget: Optional[float] = None
     policy: Optional[retry.RetryPolicy] = None
@@ -322,6 +338,11 @@ def run_phase(
             if cancel.is_set():
                 return finish("CANCELLED", "cancelled")
             if fresh:
+                if on_prepared is not None:
+                    try:
+                        on_prepared(prepared)
+                    except Exception:  # noqa: BLE001 - the callback records its own errors
+                        pass
                 handle = drv.start(prepared, deadline_s=deadline)
             else:
                 handle = drv.resume(handoff, prepared, deadline_s=deadline)

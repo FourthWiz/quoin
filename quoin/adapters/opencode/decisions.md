@@ -140,9 +140,9 @@ Rationale: a headless phase has a bounded input and an observable event stream, 
 
 ### Whole-task runs on OpenCode
 
-Status: deferred
-Decision: `quoin run --runtime opencode` without `--phase` is refused.
-Rationale: a whole-task run needs a coordinator command that sequences the phases; that belongs with the workflow-parity work, not the driver.
+Status: decided
+Decision: a whole task runs through the headless coordinator, `quoin run --runtime opencode --workflow`, which sequences the phases and gates each one; the bare form without `--phase` or `--workflow` is still refused.
+Rationale: sequencing, gating and recovery belong in one coordinator that holds the task lock, not in the single-phase driver.
 
 ### Approval visibility for delegated work
 
@@ -190,3 +190,75 @@ Paste values from a probe run's `--output` record here; no probe has been run ye
 ## Plugin need
 
 Intentionally empty — filled only when a concrete event or diagnostic that the CLI path cannot provide has been measured.
+
+## Workflow parity residuals
+
+Design limits of role boundaries, snapshot runs and test runs that are accepted
+rather than open questions:
+
+- A write through an absolute path is detected after the run, not prevented.
+- `.workspaces/` is outside the listing.
+- Include directories given to the test command are shared with the real
+  tree and are writable.
+- There is no network isolation for snapshot or test runs.
+- Run-store files written during a run (current and prior run records, the
+  pointer, the lock and result files) are excluded by exact path and trusted to
+  their schema-checked loaders; the boundary check does not re-verify their
+  content against the last write. A forged record can alter only that run's own
+  telemetry, because the driver's final write replaces it and the ledger is
+  checked by its own mark.
+- An interrupted snapshot run is restarted fresh, never resumed.
+- The generated `.opencode/` surface is verified by owned-file checks and the
+  scoped listing, not by the source digest, and unowned files there are not
+  listed.
+- Memory files outside continuation, runtime and lessons-learned are not
+  listed.
+- A human editing another task's folder during a run is still a violation when
+  the other task's lock is not live and the run is a snapshot run.
+- A source state over the digest budget blocks headless review.
+- In the TUI a user can approve an `external_directory` write into the
+  test-result directory.
+- A review entry carries a test result only when the operator configured a
+  test command; without one the gate reports `tests-not-configured` as a
+  warning.
+- A test command that needs a proxy variable must set it itself under the
+  launcher.
+- A test result from an attempt other than the run's last is not copied; the
+  coordinator runs the tests again after every implement run, so a relaunched
+  run is covered, but a single-phase run still has to run them itself.
+- A passing test result attests only to what the code in the copied tree
+  reported: test-run runs implementer-written code unprompted with the user's
+  privileges. The coordinator runs it after every implement, and
+  `--test-command` is the operator's opt-in. An OS sandbox that confines writes
+  to the workspace is the follow-up.
+- The test workspace build is not capped: the binary diff is held in memory and
+  untracked files are copied without a size limit, outside the test timeout.
+- The overlay residue test checks "MUST run finalization" rather than "run
+  finalization", because the replacement text "Never run finalization." contains
+  the shorter phrase. The overlay-rewrite phase list stays hand-maintained
+  beside the feature manifest.
+- The gate role's own edits to the workflow record are denied in its permission
+  map; the gate helper still writes the record from its own process, and the
+  boundary check still treats that file as the gate's to change.
+- Files over the hash cap, or past the total hash budget, are compared by size
+  and mtime only, and code started by test-run can reset an mtime. The limit
+  sits beside the other test-run residuals; comparing ctime as well is a
+  possible tightening.
+- Test settings hand-edited in the workflow record always refuse, by design:
+  the digest is pinned under the driver's own state root, outside the project,
+  and a run whose settings no longer match it is refused as
+  `tests-settings-changed`.
+- The printed resume hint carries the non-interactive flag while the stored
+  hint does not, so advice built from the stored hint still suggests an
+  interactive restart. This is deliberate for now.
+- The window store that lets a resumed run keep its original boundary window
+  lives under the driver's state directory and is trusted: a forged window file
+  could hide a change made before the interruption, but cannot reach files in
+  the project, and the workflow state file is baselined at resume because the
+  coordinator rewrites it between attempts.
+- The continuation record may lag the workflow state by recorded steps (a
+  crash between an entry write and the record refresh); the coordinator accepts
+  such a record when every hash in it appears in state's history and rewrites
+  it. A record ahead of state still refuses.
+- Output a child writes after the exit drain window (one second once the
+  process has ended) is dropped from the output hash and tail.

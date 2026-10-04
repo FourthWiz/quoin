@@ -67,6 +67,23 @@ ROLE_SCRIPTS: Dict[str, tuple] = {
 # (`packages/opencode/src/tool/shell.ts` L99, L119-121).
 REDIRECT_RULE = {"*>*": "ask", "*<*": "ask"}
 
+# The Quoin helper commands each role may run directly. A helper allow covers
+# every argument, so `shell_rule` follows each one with asks for the
+# arguments that could redirect it at another tree, another project or a
+# secrets file.
+HELPER_ALLOWS: Dict[str, tuple] = {
+    "gate": ("quoin opencode gate *",),
+    "coordinator": (
+        "quoin opencode gate *",
+        "quoin opencode handoff *",
+        "quoin opencode workflow next *",
+    ),
+    "implementer": ("quoin opencode test-run *",),
+}
+
+# Argument fragments asked about after every helper allow.
+HELPER_ASK_FRAGMENTS = ("--source-dir", "--project-root", ".env")
+
 _READ_ONLY_ROLES = ("critic", "reviewer")
 
 # The eight Quoin roles this generator knows about. Used only for the
@@ -84,25 +101,46 @@ ROLES = (
 )
 
 
-def artifact_edit_rule(base: str) -> Dict[str, str]:
+def artifact_edit_rule(base: str, *, guard_store: bool = False) -> Dict[str, str]:
     """The edit permission map shared by every role that may touch the
     artifact root: `base` for everything else, allow inside the artifact
     root whether it sits at the project root or nested under a sub-repo."""
-    return {
+    rule = {
         "*": base,
         "%s/*" % ARTIFACT_ROOT: "allow",
         "*/%s/*" % ARTIFACT_ROOT: "allow",
+    }
+    if guard_store:
+        rule.update(store_deny_rule())
+    return rule
+
+
+def store_deny_rule() -> Dict[str, str]:
+    """Edit denies for the run store, which holds the workflow state and run
+    records the Quoin helpers read as trusted input. They follow the artifact
+    root allows so they win under last-match evaluation."""
+    return {
+        "%s/memory/runtime/opencode/*" % ARTIFACT_ROOT: "deny",
+        "*/%s/memory/runtime/opencode/*" % ARTIFACT_ROOT: "deny",
     }
 
 
 def shell_rule(role: str) -> Dict[str, str]:
     """The bash permission map for `role`: ask by default, one allow per
     allowlisted helper script (argument tail included, never argument-wide),
-    then the redirection ask rules, always last so they win under
+    one per helper command followed by asks for its tree, project and
+    secrets-file arguments, then the redirection ask rules, always last so they win under
     last-match evaluation."""
     rule: Dict[str, str] = {"*": "ask"}
     for name in sorted(ROLE_SCRIPTS.get(role, ())):
         rule["quoin opencode script %s *" % name] = "allow"
+    helpers = HELPER_ALLOWS.get(role, ())
+    for pattern in helpers:
+        rule[pattern] = "allow"
+    for pattern in helpers:
+        prefix = pattern[:-2] if pattern.endswith(" *") else pattern
+        for fragment in HELPER_ASK_FRAGMENTS:
+            rule["%s *%s*" % (prefix, fragment)] = "ask"
     rule.update(REDIRECT_RULE)
     return rule
 
@@ -144,7 +182,7 @@ def role_permissions(role: str) -> Dict[str, object]:
         }
     if role == "gate":
         return {
-            "edit": artifact_edit_rule("deny"),
+            "edit": artifact_edit_rule("deny", guard_store=True),
             "bash": shell_rule(role),
             "task": "deny",
             "skill": dict(SKILL_RULE),
@@ -926,6 +964,15 @@ def render(inputs: GeneratorInputs) -> Dict[str, RenderedFile]:
     graph_errors = check_task_graph(manifest_roles)
     if graph_errors:
         raise GenerationError("; ".join(graph_errors))
+
+    from quoin.opencode_adapter import boundaries
+
+    inheritance_errors = boundaries.check_inheritance(
+        {role: role_permissions(role) for role in manifest_roles},
+        {role: task_targets(role) for role in manifest_roles},
+    )
+    if inheritance_errors:
+        raise GenerationError("; ".join(inheritance_errors))
 
     catalog_id_set = {c["name"] for c in inputs.catalog if isinstance(c, dict) and isinstance(c.get("name"), str)}
     supported_id_set = {row["id"] for row in supported_rows}

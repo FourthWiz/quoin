@@ -216,6 +216,91 @@ no live OpenCode run or corporate gateway has been qualified.
   opens the OpenCode terminal interface with the compiled profile.
   `--dry-run` validates and prints the command, directory and environment
   variable names without starting it. Exit 3 when a check refuses.
+- `quoin opencode gate --task NAME --phase PHASE [--stage N] [--project-root PATH] [--write] [--explanation-file PATH] [--source-dir PATH]`
+  evaluates one gated phase (`discover`, `architect`, `plan`, `implement`,
+  `review`) with a fixed list of deterministic checks and prints one JSON
+  line. No option approves, adopts or chooses evidence, and `--explanation-file`
+  text (up to 64 KiB) is only carried in the audit file, never evaluated.
+  Without `--write` it is read-only and takes no lock; with `--write` it takes
+  the task lock, writes `gate-PHASE-DATE.md` into the stage folder (the task
+  root for `discover` and `architect`), and records the verdict. A same-day
+  file this command wrote is replaced; a file of that name written by another
+  tool is never touched. Exit 0 passed, 7 refused by a check, 2 refused
+  request or unreadable store, 3 task lock held, 8 audit file not written or
+  not valid, or written but the verdict could not be recorded (the payload
+  keeps `outcome` and the verdict and adds `artifact_error` or `record_error`,
+  each with `code` and `message`; `outcome` is not a promise that the state
+  was updated). Artifacts must pass `validate_artifact.py` strictly, so a plan or
+  review written through a skill's plain-English fallback (no `## For human`
+  section) or with extra headings is refused as `artifact-invalid` naming the
+  invariant. A verdict is read by a strict rule. The document has one Verdict heading
+  (`## Verdict` or `## Verdict: X`) and no other heading that names the
+  verdict or spells a value in capitals. The section holds only the value
+  (bare, bold, in a code span or in a `<verdict>` tag) and ends at a standard
+  section heading or the end of the file. Any "Verdict:" line elsewhere starts
+  with the same value. In an approving document, outside the Verdict section,
+  the frontmatter and `## Dimension Verdicts`, no line starts with a
+  non-approving value (after markup, container markers and an optional short
+  label, including inside code spans), no table cell is one, and no heading
+  contains "blocked", "revise" or "changes requested" in any case, even as
+  plain English. Earlier review rounds are described in a sentence, not as a
+  label line or a table of rounds. Other refusals: a line break or bidi
+  control character, a frontmatter verdict that differs from the section, a
+  value line outside the Verdict section that states another value, an HTML
+  block before the Verdict heading, a run of non-ASCII letters or symbols that
+  spells a "verdict"-length word (refused as a look-alike), and, in critic
+  responses only, a heading that contains "revise". The approving-only scan
+  does not read these shapes: a value after an emoji prefix, a checkbox or
+  brackets, a non-approving value in a table cell followed by notes, a value
+  after an intervening word in prose, a label of four or more words, and a
+  non-verdict frontmatter key. A non-approving dimension row under an
+  approving overall result passes by design. An unreadable or oversized file
+  is reported as such, with its own recovery. An HTML element that a raw-text rule names
+  (title, pre, script and the like) is named without angle brackets before the
+  Verdict heading. Anything else is `verdict-unparseable`, and prose belongs in
+  another section. The rule catches an honest writer's formatting mistakes; it
+  does not try to defeat a writer who sets out to mislead. Recovery: edit the
+  artifact, then run `quoin opencode adopt`, or re-run the phase.
+  A single `--phase plan` run is refused as `critic-missing` until a critic
+  has run: use `--phase thorough-plan` (the run command also accepts
+  `thorough_plan`), or `adopt` after the critic. Any untracked, non-ignored
+  file created after evidence was recorded (for example `__pycache__` or
+  `.pytest_cache` from a test run) changes the source digest and makes the
+  gate refuse. Repositories are found as immediate subdirectories only; edits
+  inside a deeper untracked repository or a submodule are not reflected in the
+  digest. Edits hidden from git itself (`--assume-unchanged`, `--skip-worktree`,
+  `.git/info/exclude`) are not seen either; a repository's `core.fsmonitor` and
+  untracked-cache settings are overridden for the digest. The audit file is
+  named with the UTC date.
+- `quoin opencode adopt --task NAME --phase PHASE [--stage N] [--project-root PATH]`
+  is a human step that records evidence for a phase finished outside a
+  recorded run (for example in the terminal interface), from the tree as it is
+  now, and prints the `gate` command to run next. The gate never treats
+  adopted evidence as run-verified: it reports `run-evidence-absent` and
+  `boundary-unverified` as warnings, and still refuses any later change.
+  Takes the task lock. Exit 0, 2 refused request, 3 task lock held.
+- `quoin opencode handoff write --task NAME [--project-root PATH] [--source-dir PATH] [--profile NAME] [--decision TEXT] [--note TEXT]`
+  builds the portable continuation record from the workflow state, the run
+  records and the tree, and writes it to `continuation/NAME.json` in the
+  project's workflow memory directory; agent text enters the record only
+  through `--decision` and `--note` (repeatable, at most 20 per call, 2000
+  characters each). Takes the task lock. Exit 0, 2 refused, 3 task lock held,
+  8 record not written.
+- `quoin opencode handoff show --task NAME [--project-root PATH] [--source-dir PATH] [--profile NAME]`
+  validates the record and refuses a missing, invalid, older-format or
+  finalized continuation (and, with `--profile`, a scope that is not covered by
+  the recorded one), then prints the next steps, or candidate commands with
+  what to check when the choice needs the operator. Reads only; takes no lock.
+  Whether a native session can be resumed relies on the compatibility keys
+  `continuation-flags` and `continuation-no-replay`.
+- `quoin opencode handoff validate --task NAME [--project-root PATH] [--source-dir PATH]`
+  checks the record file alone against its schema.
+
+  Until a later release records workflow entries after runs, a phase finished
+  by a headless `quoin run` is reported as run completed, even after later
+  runs of other phases, and the advice is to adopt and gate it rather than run
+  it again. When some run records cannot be read, a fresh run is offered only
+  as a candidate to check first.
 - `quoin doctor --runtime opencode --profile NAME` adds the profile checks
   described under "Runtime driver".
 
@@ -314,10 +399,11 @@ to another profile.
 
 `quoin run --runtime opencode --profile NAME --phase PHASE TASK` runs one
 workflow phase headlessly on OpenCode and prints a JSON summary. A phase is a
-single supported command such as `plan`; a whole-task run is not available
-and is refused. The driver is verified offline against a fake executable
-only: no live OpenCode run has been verified, and nothing here makes the work
-profile supported.
+single supported command such as `plan`. The bare whole-task form (no `--phase`
+and no `--workflow`) is still refused; a whole task runs through the
+coordinator described under "Workflow coordinator". The driver is verified
+offline against a fake executable only: no live OpenCode run has been verified,
+and the work profile is not made supported by anything here.
 
 ### Phase runs
 
@@ -356,6 +442,24 @@ artifacts). Exit codes: 0 completed, 2 failed, aborted or internal error, 3
 refused, 4 awaiting approval, 5 interrupted, 6 completed but unverified, and
 130 or 143 when stopped by SIGINT or SIGTERM.
 
+A phase run that can no longer continue (it completed, failed, awaits
+approval, was cancelled, is blocked from resuming, or was replaced by a later
+run) writes one cost row to the task's cost ledger and stores its telemetry in
+its run record. A run of a gated phase (discover, architect, plan, thorough
+plan, critic, implement or review) also records a workflow entry for the gate,
+listing the critic responses or the review the run itself produced; a phase
+finished before runs recorded entries has none and is reported as work to adopt
+and gate. A run that rewrote earlier lines of the cost ledger ends `FAILED`
+with reason `boundary-violation` (exit code 2, and the hint offers `--new-run`).
+The ledger check fails closed: when the ledger existed before the run and
+cannot be read afterwards (unreadable, replaced by a link or special file, or
+over the size limit), its earlier lines cannot be shown to be unchanged, so the
+run is treated as having rewritten them and ends `FAILED` with the same
+`boundary-violation` reason. A ledger that cannot be read before the run is
+recorded as unavailable and never counts as a rewrite.
+The summary keys and the single line on standard output do not change; cost
+rows and telemetry never appear there.
+
 Run store: under the project's workflow memory directory, in `runtime/opencode/`:
 `RUN_ID.jsonl` (the event sidecar), `RUN_ID.run.json` (the run record),
 `RUN_ID.checkpoint.json` (the resume checkpoint) and `task-TASK.json` (a
@@ -381,6 +485,12 @@ interrupted run. Resume is blocked, and the run must be started over with
 - `sidecar-behind-checkpoint`: the event sidecar is shorter than the checkpoint says.
 - `checkpoint-invalid`: the checkpoint cannot be read or fails its checks.
 
+A run that was already closed (its cost row and telemetry are written) is never
+resumed. Re-running the same request against such an interrupted run ends
+`INTERRUPTED` with reason `run-closed` when the record names no block of its
+own; the hint then ends with `--new-run`, so restarting is always an explicit
+choice.
+
 The `resume_hint` field is a command line; it ends with `--new-run` exactly
 when the next invocation would not resume. When another `quoin run` still holds
 the task lock, a new invocation is refused with `lock-held`. A record that
@@ -394,6 +504,105 @@ Limits: `max_run_seconds` is counted per `quoin run` invocation, not across
 resumes. The no-progress guard can stop a run whose transient failures emit no
 native events before `max_transient_retries` is reached.
 
+### Cost rows and run telemetry
+
+**Single writer.** The driver and the coordinator are the only writers of the
+cost ledger for a headless run; an agent that appends to or rewrites it ends the
+run `FAILED` with `boundary-violation`. A ledger that exists but cannot be read
+is treated as changed (fail closed), never as empty.
+
+**Row shape.** The row is the shared eight-column ledger row, built with the
+portable cost-event formatter and parsed back before it is written. Column
+one is the run id, so one run id is one row. Column two is the UTC date the
+last attempt ended. Column three is the ledger phase: discover, architect,
+plan, `thorough-plan`, critic, implement, review, gate, `end-of-task`,
+checkpoint, `ad-hoc` (for `continue_work`, which has no ledger phase of its
+own) and `run-orchestrator` (the coordinator phase, not runnable yet). Column
+four is the effective model, column five is `task`, and column six is the
+note: `runtime=opencode command=quoin-PHASE outcome=ENDED attempts=N
+scope=parent-session-only`, where PHASE spells the command name with hyphens,
+ENDED is the run's end in lower case with underscores, and N counts every
+non-staged attempt of the run across invocations. Column seven is the
+fallback count (always 0). Column eight is the attribution: `usd=X;tok=N;src=opencode_stream`
+when the dollar cost is known, `tok=N;src=unresolved` when only tokens are
+known, and `src=unresolved` when nothing is. The `opencode_stream` tag is
+used only when a dollar amount is known and is defined here, not in the
+shared core. Every field written to the ledger has pipes, control characters
+and line breaks replaced and its length capped, so a row is always one line
+with eight columns.
+
+**When a row is written.** Once, when the run can no longer continue: a
+completed, failed, aborted, cancelled or approval-stopped run, a run blocked
+from resuming (including a checkpoint that cannot be read), or a run that a
+later run took the place of. A resumable interruption writes nothing yet; a
+run resumed across invocations ends with one row holding the usage of every
+attempt. A run that moves the task's pointer (a different phase, stage or
+profile, or `--new-run`) closes an earlier run that was still open: that run
+is costed with `outcome=superseded`, its record names the run that replaced
+it and reads as closed, `quoin opencode status` shows it as superseded with
+nothing to resume, and a run that never spawned a child gets telemetry but no
+row. An `end_of_task` run writes its row just before the child starts, with
+`outcome=launched` and unknown usage, because the run itself may move the task
+folder away; no row can be added after that. When the task folder does not
+exist no ledger is created and no workflow entry is recorded, but the
+telemetry is still stored.
+
+**Unknown is never zero.** A dollar amount is written only when the compiled
+configuration prices the effective model and the stream reported a cost that
+is not 0 while tokens were used (a model without prices reports 0 for every
+step, so a reported 0 cannot tell a free model from an unpriced one). The
+generated configuration does not price models yet, so rows carry
+`tok=N;src=unresolved` and the telemetry says `cost-unpriced-model`. A value
+that cannot be known is omitted from the row (and null with a reason in the
+telemetry); it is never written as 0 and never estimated.
+
+**Scope.** Usage is the latest revision of each step-finish part of the run's
+own session, counted once per part id. Usage of subagent sessions is not in
+the parent's event stream and the parent's cost does not include it, so the
+row covers the parent session only (`scope=parent-session-only`) and child
+usage is reported as unavailable. The effective reasoning effort is not
+visible in the stream and is reported as unknown beside the configured one.
+
+**Telemetry.** The run record gains a `telemetry` block: the schema number,
+`final`, how the run ended, the provider (shared and native ids), the
+effective model, the effort (requested, configured, variant, and the
+effective value as unknown), elapsed seconds per attempt with a total and a
+wall-clock figure, retry counts, the native session and step-finish part ids,
+usage and cost with a reason for every unknown field, the provenance of the
+numbers, the list of things that are unavailable, the ledger result (mark,
+whether the row was written, found or skipped and why, the prefix check, the
+lines other writers appended), and the workflow-entry result. Nothing copies
+event text, standard error or the command line. A hook failure is stored as
+`hook_error` and never changes the outcome.
+
+**Earlier bytes and appended lines.** Before a phase runs the command records
+the size and digest of the ledger. Lines that other writers appended during
+the run are kept and listed in the run's telemetry and workflow entry (the gate
+warns about them). If the earlier bytes changed, or the ledger shrank or
+disappeared, the run ends `FAILED` with `boundary-violation`; the row is still
+appended once. The violation is sticky: a workflow entry that lists a run which
+rewrote earlier lines stays marked, so a later clean critic run cannot clear it
+and the gate refuses until the plan is run again as a fresh plan run.
+
+**Workflow entries from runs.** A plan or thorough-plan run starts a fresh
+entry whose critic responses are the files that run produced; a critic run
+extends the live entry written by a run, adding itself and its response. The
+gate trusts only the responses and the review recorded this way, never older
+files left on disk, for an entry a run wrote; adopted entries keep the earlier
+behaviour. A critic run after an adopted plan starts its own entry, which has
+no plan run listed, so the gate refuses it: adopt the plan again after the
+critique, or run the plan as a phase run. The critic round cap counts only the
+responses recorded since the last plan run, so it does not bound a plan and
+critic sequence driven by single-phase runs. A run's produced files come from
+its own before and after hashes of the task folder; when those hashes are
+incomplete no file is recorded and the entry says why.
+
+**Residual.** A run left open with no later run for the task is costed only
+when it ends or when a later run for the task replaces it; until then it has no
+row, and `quoin opencode status` shows it as open. A crash between appending the
+row and writing the run record loses only the closed marking and the telemetry
+of that run: the row is correct and is never written twice.
+
 ### Status and the terminal interface
 
 `quoin opencode status` is strictly read-only: it never repairs a torn
@@ -403,7 +612,8 @@ child, the last event, a torn sidecar tail, older runs still reading running,
 and the task lock. Liveness comes from one process-table snapshot; when the
 table cannot be read, liveness is reported as unknown (`null`) rather than
 guessed. Text output names the remedy for a dead lock, a lost driver or a
-blocked resume.
+blocked resume. A run that a later run replaced is shown as superseded, with
+nothing to resume.
 
 `quoin opencode start` runs the same checks as a phase run (binary, pinned
 version, configuration, gateway qualification, installed files unchanged,
@@ -443,6 +653,290 @@ refuses launches, because plugin code can hook permission handling. Move the
 plugin files out of those directories for the duration of a run, or run with a
 separate `XDG_CONFIG_HOME`. The doctor does not scan Quoin-named skills placed
 outside the installed project folders.
+
+## Workflow coordinator
+
+`quoin run --runtime opencode --profile NAME --workflow TASK` walks a whole
+task headlessly: every phase is a fresh driver run with its own command
+(`quoin-discover`, `quoin-architect`, `quoin-plan`, `quoin-critic`,
+`quoin-implement`, `quoin-review`), followed by the deterministic gate for that
+phase. The `/quoin-run` command in the terminal interface only names the next
+step; the coordinator is the headless route. It never runs `end_of_task`:
+finalizing a task stays an explicit human action.
+
+Flags (`--workflow` itself is refused without `--runtime opencode`, and every
+other flag here is refused without `--workflow`): `--workflow` starts a task,
+`--continue` continues one from its continuation record, `--no-pause` skips the pauses described below,
+`--through PHASE` stops after that phase passes its gate, `--from-discover`
+runs `discover` even when discovery files exist, `--max-critic-rounds N`
+(default 2, at most 5), `--test-command CMD`, `--test-include PATH` and
+`--test-timeout SECONDS` (the tests the coordinator runs after each implement),
+`--rerun-from {plan,implement,review}` and `--adopt PHASE` (both need
+`--continue`). `--max-relaunch`, `--halt-on-abort` and `--budget` apply to
+every run.
+
+Sequence: `discover` (only with `--from-discover` or when the discovery files
+are missing), `architect`, then for each stage listed in the architecture
+`plan`, `implement` and `review`; a task without a stage list has one
+task-root stage. The stage list is read again after `architect` passes. Each
+phase runs only after the previous gate passed.
+
+Critic loop: a plan item is the plan run followed by an isolated critic run;
+while the critic answers `REVISE` the plan is run again, up to the round cap,
+which the gate reads from the same stored setting. The second and later plan
+rounds, and an `implement` rerun after a refused review, receive the finding
+they must address through a context suffix on the command argument, for
+example `stage 1 of demo (context: PATH-TO-THE-CRITIC-RESPONSE) (non-interactive run)`, where the path is project-relative.
+The suffix always comes before the non-interactive marker. Critic and review
+sessions are separate contexts from planning and implementing; they use the
+same model unless the profile says otherwise, so this is a clean-context
+check, not a second opinion from a different model.
+
+Pause rule: without `--no-pause` the coordinator stops with outcome
+`PAUSED_AT_GATE` (exit 0) after each plan gate and each review gate except
+the last item, and `--continue` goes on. A re-gated plan that a record seeded
+does not pause.
+
+Tests: the operator configures the test command with `--test-command`; the
+coordinator runs it itself after every implement and again for each review,
+under the driver's own state directory, so what an agent runs inside a run and
+what the coordinator runs read and write the same result. The coordinator
+runs implementer-written code with the user's privileges; `--test-command` is
+the operator's opt-in.
+
+Outcomes and exit codes: `COMPLETED` 0, `PAUSED_AT_GATE` 0, `FAILED` 2,
+`REFUSED` 3, `AWAITING_APPROVAL` 4, `INTERRUPTED` 5, `COMPLETED_UNVERIFIED` 6,
+`GATE_REFUSED` 7 (a gate check refused; the reasons are in the summary),
+`GATE_ARTIFACT_FAILED` 8 (the gate audit file could not be written or
+recorded) and `CANCELLED` 143 (130 for an interrupt). A refused or failed
+phase prints the command that continues it. A closed run that stored a
+boundary violation is reported again as `FAILED` with `boundary-violation`
+and is not run again until `--rerun-from` restarts it.
+
+Recovery: `--continue` re-reads the continuation record, refuses a record that
+disagrees with the workflow state, and resumes an interrupted run of a plain
+phase under the same run id; a critic or review run that was interrupted
+starts fresh and the abandoned run is closed as superseded. A cancelled run is
+final: `--continue --rerun-from PHASE` starts that phase of the current stage
+over (and every later phase of the stage); with every item passed it reruns
+the last stage. `--continue --adopt PHASE` records a phase finished outside a
+recorded run, as `quoin opencode adopt` does, and the gate still treats it as
+unverified. A headless run that stops for an approval ends `AWAITING_APPROVAL`
+and prints the `adopt` command to use after finishing the phase in the
+terminal interface.
+
+## Deterministic gate
+
+After every phase the coordinator runs the same checks as
+`quoin opencode gate --write`, so the verdict, the audit file and the recorded
+entry are identical to those of a gate run by hand. The checks include the
+artifact format, the critic loop (`critic-not-converged` while the last
+response asks for a revision), the review verdict, the boundary result of each
+run, the tests (`tests-failed`, `tests-not-run`, `tests-settings-changed` and
+the other `tests-` reasons) and the cost ledger. A critic response or review
+file that is newer than the one recorded on the entry is refused as
+`finding-superseded`; this also applies to entries recorded by a single-phase
+run, so run the phase again or record the newer file before gating. A changed
+test pin refuses implement before anything is spawned and shows up at the gate
+as `tests-settings-changed`.
+
+## Continuation record
+
+`quoin opencode handoff write` and the coordinator build the portable
+continuation record from the workflow state, the run records and the tree. The
+coordinator keeps it level with state: while a run of the current item is open
+the artifact hashes in the record are the ones state holds, so an agent's edit
+in mid-run never puts a hash in the record that state has not seen, and a
+record that lags state by a recorded step is accepted and rewritten. A record
+written by another runtime seeds continuation entries and is re-gated, never
+trusted: nothing but the record, the workflow state and directory listings is
+read, so other runtimes' transcripts and session files are not opened, and a
+new native session is started. Refusals: `continuation-missing`,
+`continuation-invalid`, `continuation-legacy-format` (only older-format files
+exist), `task-finalized`, `continuation-state-mismatch`,
+`continuation-artifact-changed`, `profile-mismatch`, `classification-mismatch`
+and `policy-widened`.
+
+## Role boundaries
+
+Every phase run is checked against what its role may change. The coordinator
+lists the paths a role can legitimately touch before and after the run and
+compares the two against the rules below. The roles, in plain words:
+
+| Role (phases) | May change | Source repositories |
+|---|---|---|
+| Investigator (`discover`) | any file in the task folder except gate audit files; the discovery map and the three discovery files | unchanged |
+| Architect, planner (`architect`, `plan`, `thorough_plan`) | any file in the task folder except gate audit files | unchanged |
+| Implementer (`implement`) | any file in the task folder except gate audit files | may change |
+| Critic and reviewer in the real tree (`critic`, `review` outside a snapshot) | only a new numbered critic response or review file in the task or stage folder | unchanged |
+| Critic and reviewer in a snapshot | nothing in the project; the finding is harvested (see Snapshot runs) | unchanged |
+| Gate | gate audit files in the task or stage folder and the task's own workflow-state record | unchanged |
+| Checkpoint | the task's continuation record and its previous copy | unchanged |
+| Continue work | nothing | unchanged |
+| End of task | moves the task folder into `finalized/`, plus the lessons-learned file | may change |
+
+Session scratch files (`memory/sessions/`, `memory/daily/insights-*.md`,
+`cache/`) are writable by any role and are never judged. The cost ledger, gate
+audit files, continuation records and the run store belong to the coordinator;
+no role may write the ledger, and the run's own store files are excluded from
+the comparison by path.
+
+A check ends in one of three results:
+
+- `ok`: nothing outside the role's allowance changed and the source state could
+  be compared.
+- `violation`: a path outside the allowance changed, a symlink appeared in the
+  listed scope, or a repository changed under a role that must leave source
+  alone. The run ends `FAILED` with reason `boundary-violation`, and the gate
+  fails the entry.
+- `unverified`: the check could not be completed. Reasons include a truncated
+  listing, an unreadable install record, source state that cannot be compared,
+  a run resumed after an earlier invocation already ran (the window began
+  before this listing), and a change that may belong to another writer. The
+  entry stores no boundary result. The gate warns for entries recorded by a
+  single-phase run (`boundary-unverified`) and refuses entries recorded by the
+  coordinator, so an unverifiable check never approves a coordinator phase.
+
+**What is listed.** The listing is deliberately narrow so that files other
+tools legitimately write are never judged: the artifact root except `memory/`,
+`cache/` and the contents of `finalized/` (only its immediate children are
+listed); inside `memory/`, only `continuation/`, `runtime/opencode/` and
+`lessons-learned.md`; inside `.opencode/` and `.quoin/`, only the paths the
+install record owns plus the two install records. Source state (head, dirty
+flag and a digest of the changes) is compared for every repository, with
+the artifact root, `.opencode`, `.quoin` and `.workspaces` left out and
+nested repositories attributed to their own entry. Symlinks are never followed.
+Files are hashed up to fixed caps; past a cap the result is `unverified`, not a
+failure.
+
+OpenCode itself writes into every configuration directory it scans at launch:
+a `.gitignore`, a `package.json`, a lockfile and `node_modules/`, from the
+background install of its plugin package (compatibility row for
+`ensureGitignore`, in "Configuration sources and precedence"). Those names are
+never listed, so the runtime's own launch-time writes are not mistaken for a
+role writing outside its allowance.
+
+**Concurrent tasks.** Another task's run holds its own task lock. A change
+inside another task's folder, run store or pointer is downgraded from
+`violation` to `unverified` with reason `concurrent-task-run` when that task's
+lock named a live process at either listing. Without a live lock, a change
+confined to another task's folder is `unverified` with reason
+`concurrent-writer-unlocked` for single-phase runs, because other sessions in
+the same project routinely edit other task folders without taking the OpenCode
+lock; the coordinator's snapshot runs keep it a violation. Changes to the
+install-owned paths, to source state, to the memory scope and to the run's own
+task are never downgraded. In the gate these show up as the `boundary-unverified`
+warning on the entry, with the reason stored beside the result.
+
+**Permission inheritance.** At generation time the adapter also checks that a
+role which delegates to a child role never lets the child do more than the
+parent. Rules are compared as effective actions under last-match-wins: the
+child's action for each of its patterns must not exceed the parent's action for
+that pattern, lowered by any later parent pattern that may overlap it, and
+built-in defaults count as `allow`. The one exemption is a read-only or
+artifact-confined helper script. At run time OpenCode also re-applies the
+parent's deny rules to a subagent (compatibility rows under "Commands, agents,
+delegation and permissions"), so the generation check is a second line.
+
+## Snapshot runs
+
+A headless critic or review run starts in a read-only copy of the project, not
+in the project. The copy lives outside the project, under the adapter state
+directory (`snapshots/PROJECT_KEY/TAG`, mode 0700), and is its own git
+repository, so OpenCode discovery and project identity stop at its root
+(compatibility keys `discovery-stops-at-git-root` and `project-identity`);
+parent directories are never read, and a relative path inside it cannot name a
+project file. It holds the tracked and untracked-not-ignored source of every
+repository, the installed OpenCode files, the task folder and the discovery
+files. It never holds a `.git` entry, a symlink or a `.env*` file. Reviewers
+also get a `review-context/` directory with the diff of the stage against its
+base tree (HEAD when no base tree was recorded; the context file says which).
+The copy and its `.opencode/` directory are writable only where OpenCode needs
+to write at launch; owned files inside stay read-only. The copy is removed
+after the run.
+
+Only one file leaves the copy: the finding the run wrote to its outbox.
+Harvest requires exactly one match, validates it, renumbers it to the next free
+critic-response or review number in the real task folder, and creates it
+exclusively. The model's own number is ignored. A run with a boundary
+violation harvests nothing.
+
+Limits:
+
+- Snapshot runs apply to headless critic and review only. In the TUI the same
+  roles keep their permission-map guard rails and are not isolated.
+- A snapshot run always starts fresh. An interrupted snapshot run is superseded
+  and costed when the next run starts, never resumed, so it cannot continue in
+  a different snapshot or on the real root.
+- A copy over the size or file-count cap is refused (`snapshot-too-large`).
+- A dirty tree whose source digest goes over its budget (64 MiB of changed
+  content, 5000 untracked files) cannot be digested, so every snapshot boundary
+  is `unverified` and nothing is harvested until the tree is committed or
+  cleaned.
+
+## Test runs
+
+`quoin opencode test-run --task TASK [--stage N]` runs the task's configured
+test command against a throwaway copy of the working tree and prints one JSON
+line (exit 0 `PASSED`, 1 `FAILED`, 2 refused). The command and the
+include directories (git-ignored subdirectories of the project) are fixed in the task's workflow state by a human-side
+configuration call; the subcommand has no option that changes them, so a model
+cannot choose what runs.
+
+For each repository the command runs in a detached git worktree at the current
+HEAD with the working-tree changes overlaid (tracked edits and untracked files,
+never `.env*` files). Include directories are linked in, the command runs
+there, the worktrees are removed, and the real repositories are then checked:
+if HEAD, the source state or the refs changed, the run fails and its result is
+not used. 
+The result is written outside the project, under the adapter state directory,
+stamped with the id and attempt number of the phase run that started it, so a
+file written by an agent inside the project cannot stand in for it. When the
+implement run finishes, the evidence hook copies the result into the entry only
+if it passed and belongs to that run's last attempt; a relaunched implement run
+must therefore run its tests again. Test-run does not take the task lock, since
+it runs inside a phase run that holds it; a busy file stops two test runs of the
+same task from overlapping.
+
+The command runs with a scrubbed environment. Under the launcher it keeps only
+the basic variables the launcher lets through (path, home, locale and similar),
+which drops the launcher's own variables, provider credentials and proxy
+settings. Outside the launcher it removes only the launcher's own names. A
+command that needs anything else, such as `PYTHONPATH`, sets it in its own
+argv, for example `env PYTHONPATH=src python -m pytest`, and a command that
+needs a proxy must set it the same way. Review entries carry no test result
+yet.
+
+What a `PASSED` result means: the configured command exited 0 against a copy of
+the working tree. That tree includes code the implementer wrote, such as test
+files, a `conftest.py` or source modules, and `test-run` runs it with the user's
+privileges without a prompt, even though headless shell commands are otherwise
+asked about and auto-rejected. Code run this way can write outside the project,
+force a zero exit or start a process that outlives the run, so a result attests
+only to what agent-controlled code reported. A deadline bounds the run: output
+is read against it, so a child that left the process group and holds the
+output open cannot extend it. The digest of the configured command, include
+list and timeout is stored under the adapter state directory when the settings
+are written, and a run refuses settings that no longer match it, so editing the
+workflow state inside the project does not change what runs.
+
+## Non-interactive runs
+
+A headless run cannot answer questions (asks are rejected automatically,
+compatibility key `auto-reject-asks`). The coordinator therefore appends the
+literal marker ` (non-interactive run)` to the command argument. A phase that
+sees the marker takes the task name from the word before it, asks nothing, and
+stops with a statement of what is missing if it cannot continue. A single-phase
+`quoin run --runtime opencode ... --non-interactive` sets the same marker for
+that run; without the flag the argument is passed as typed. Headless implement
+runs additionally run no shell command other than the allowed Quoin helpers,
+never commit and skip the branch checks; the launch checks the branch.
+
+`quoin opencode gate --write` and `quoin opencode handoff write` take the task
+lock, and `quoin run` holds that lock for the whole run. A gate or checkpoint
+phase run headless therefore gets a `lock-held` outcome (exit 3) and writes
+nothing; the verdict or handoff has to be written from the TUI, where no lock is
+held, or after the run. The overlay text for those phases says so.
 
 ## Running the probe
 
@@ -559,9 +1053,13 @@ statuses:
 - `unsupported` — the skill depends on Claude-only mechanics that have no
   OpenCode equivalent.
 
-`live_runtime_evidence` and `evidence` are `false`/empty for every row
-today. A later change flips `live_runtime_evidence` to `true` and fills
-`evidence` in once a row has been exercised against a real OpenCode run.
+`live_runtime_evidence` is `false` for every row today. The rows for
+`architect`, `checkpoint`, `continue_work`, `critic`, `discover`, `end_of_task`,
+`gate`, `implement`, `plan`, `review`, `thorough_plan` and `run` list `evidence`:
+repo-relative test files that the manifest check opens and that must name the
+row's command (`--workflow` for `run`). They say the row is fixture-verified;
+a later change flips `live_runtime_evidence` to `true` once a row has been
+exercised against a real OpenCode run.
 
 Each row also names a target milestone, in plain terms:
 

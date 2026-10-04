@@ -16,6 +16,7 @@ import queue
 import re
 import shutil
 import signal as _signal
+import stat
 import subprocess
 import sys
 import threading
@@ -102,6 +103,9 @@ RESUME_BLOCK_REASONS: Tuple[str, ...] = (
     "session-invalid",
 )
 
+# Appended to the command argument of a run that must not ask questions.
+NON_INTERACTIVE_MARKER = " (non-interactive run)"
+
 RESUME_MESSAGE = "Continue the task from where you stopped. Do not repeat tool calls that already completed."
 
 WRITABLE_TOOLS: Tuple[str, ...] = ("write", "edit", "patch", "multiedit", "bash")
@@ -111,6 +115,11 @@ _DOWNGRADE_DELEGATIONS = ("background", "denied-tail", "failed")
 
 
 # ----------------------------------------------------------------- types
+
+
+_CONTEXT_REF = re.compile(
+    r"\A\.workflow_artifacts/[A-Za-z0-9][A-Za-z0-9._-]*/(?:stage-[0-9]+/)?(?:critic-response|review)-[0-9]+\.md\Z"
+)
 
 
 class PrepareRefused(Exception):
@@ -151,6 +160,8 @@ class RunRequest:
     timeout_s: Optional[float] = None
     budget: Optional[str] = None
     context_refs: Tuple[str, ...] = ()
+    workspace: Optional[Path] = None
+    non_interactive: bool = False
 
 
 @dataclass(frozen=True)
@@ -256,6 +267,49 @@ class Handoff:
             step_open=bool(checkpoint.get("step_open", False)),
             ran_anything=bool(checkpoint.get("ran_anything", False)),
         )
+
+    @classmethod
+    def from_continuation(cls, record: Mapping[str, Any], directory: Path) -> Optional["Handoff"]:
+        """The checkpoint token a continuation record points at, or None.
+
+        The token is returned only for an interrupted OpenCode run that the
+        record names, that is still resumable and whose checkpoint agrees with
+        the record; anything else means the phase starts a fresh native
+        session. Damaged run data never blocks a fresh start."""
+        try:
+            if record.get("origin_runtime") != "opencode":
+                return None
+            native = record.get("native")
+            if not isinstance(native, Mapping):
+                return None
+            run_id = native.get("run_id")
+            if not isinstance(run_id, str) or not ev.RUN_ID_RE.match(run_id):
+                return None
+            run = runstore.load_record(directory, run_id)
+            if run is None or run.get("task") != record.get("task") or run.get("state") != "interrupted":
+                return None
+            pointer = runstore.load_pointer(directory, run["task"])
+            if not isinstance(pointer, Mapping) or pointer.get("run_id") != run_id:
+                return None
+            if run.get("resume_blocked") is not None:
+                return None
+            if any(a.get("driver_lost") for a in run.get("attempts") or []):
+                return None
+            request = run.get("request") or {}
+            phase = record.get("phase") or {}
+            if runstore.entry_phase_for_run(request.get("phase")) != phase.get("current"):
+                return None
+            if runstore.normalize_stage(request.get("stage")) != phase.get("stage"):
+                return None
+            checkpoint = runstore.load_checkpoint(directory, run_id)
+            if checkpoint is None or checkpoint.get("run_id") != run_id:
+                return None
+            recorded, saved = native.get("session_id"), checkpoint.get("native_session_id")
+            if recorded is not None and saved is not None and recorded != saved:
+                return None
+            return cls.from_checkpoint(checkpoint)
+        except (runstore.RunStoreError, ValueError, KeyError, TypeError, AttributeError):
+            return None
 
 
 # The id goes into argv, so it must be unable to read as a flag.
@@ -480,6 +534,12 @@ def _iso(clock: Callable[[], float]) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
 
 
+def _model_priced(document: Any, model_ref: str) -> bool:
+    from . import cost  # noqa: PLC0415 - cost imports gate, which must not load with the driver
+
+    return cost.model_priced(document, model_ref)
+
+
 class _PrepareState:
     """What `prepare` has established so far, so a refusal can be recorded."""
 
@@ -644,6 +704,11 @@ class OpenCodeDriver:
     def _config_env(self) -> Dict[str, str]:
         return {key: self._env[key] for key in _CONFIG_ENV_KEYS if key in self._env}
 
+    @property
+    def state_root(self) -> Path:
+        """The adapter state directory this driver resolves."""
+        return adapter_paths.state_dir(self._config_env(), self._home)
+
     def _read_version(self, binary: str) -> Optional[str]:
         try:
             text = self._version_runner(binary)
@@ -737,6 +802,7 @@ class OpenCodeDriver:
             raise refuse("workflow-validation", "project-root-mismatch", "the request names a different project root")
         if not root.is_dir():
             raise refuse("workflow-validation", "invalid-project-root", "the project root is not a directory")
+        workspace = request.workspace
         try:
             directory = runstore.store_dir(root, create=True)
         except (runstore.RunStoreError, OSError):
@@ -755,6 +821,8 @@ class OpenCodeDriver:
             "timeout_s": request.timeout_s,
             "budget": request.budget,
             "context_refs": list(request.context_refs),
+            "workspace": str(request.workspace) if request.workspace is not None else None,
+            "non_interactive": bool(request.non_interactive),
         }
         state.resume = resume_run_id is not None
         try:
@@ -774,6 +842,8 @@ class OpenCodeDriver:
                     and stored.get("stage") == request.stage
                     and str(stored.get("phase", "")).replace("-", "_") == phase_id
                     and stored.get("profile") == request.profile
+                    and stored.get("workspace") == request_dict["workspace"]
+                    and bool(stored.get("non_interactive")) == request.non_interactive
                 )
                 if not same:
                     raise refuse(
@@ -781,6 +851,11 @@ class OpenCodeDriver:
                         "the request does not match the run being resumed",
                     )
                 state.record = existing
+                if workspace is not None and not os.path.isdir(str(workspace)):
+                    raise refuse(
+                        "workflow-validation", "workspace-missing",
+                        "the workspace of the run being resumed no longer exists",
+                    )
         except (runstore.RunStoreError, OSError) as exc:
             if isinstance(exc, runstore.RunStoreError) and getattr(exc, "code", "") == "corrupt-record":
                 raise refuse("workflow-validation", "run-record-invalid", "the run record cannot be read") from None
@@ -788,6 +863,10 @@ class OpenCodeDriver:
                 "workflow-validation", "sidecar-dir-unwritable",
                 "the run store directory under the project cannot be used",
             ) from None
+
+        if workspace is not None:
+            workspace = self._check_workspace(workspace, root)
+        run_cwd = workspace if workspace is not None else root
 
         # 2. platform
         if not getattr(self._proc, "SUPPORTED", False) or os.name != "posix":
@@ -844,10 +923,24 @@ class OpenCodeDriver:
         if command_rel not in metadata.owned:
             raise refuse("workflow-validation", "not-installed", "the command file for %s is not part of the installed set" % phase_id)
         self._verify_owned(root, metadata)
+        if workspace is not None:
+            if not os.path.isfile(os.path.join(str(workspace), command_rel)):
+                raise refuse(
+                    "workflow-validation", "workspace-not-installed",
+                    "the workspace does not hold the installed command file for %s" % phase_id,
+                )
+            self._verify_owned(workspace, metadata)
         agent = self._command_agent(root, command_rel, metadata)
 
         # 8a. non-git roots
-        if adapter_paths.git_worktree_root(root, home=None) is None and not NON_GIT_DISCOVERY_VERIFIED:
+        if workspace is not None:
+            isolated = adapter_paths.git_worktree_root(workspace, home=None)
+            if isolated is None or os.path.realpath(str(isolated)) != os.path.realpath(str(workspace)):
+                raise refuse(
+                    "workflow-validation", "workspace-not-isolated",
+                    "the workspace must be the root of its own git worktree so OpenCode discovery stops there",
+                )
+        elif adapter_paths.git_worktree_root(root, home=None) is None and not NON_GIT_DISCOVERY_VERIFIED:
             raise refuse(
                 "workflow-validation", "non-git-root-unverified",
                 "the project root is not inside a git worktree and OpenCode discovery there is not verified; "
@@ -865,7 +958,7 @@ class OpenCodeDriver:
         # 10. configuration layers and environment
         redactor = launch_env.Redactor()
         child_env = self._scan_and_build_env(
-            root, cfg_env, config_path, fresh, evaluation, metadata, redactor
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, cwd=run_cwd
         )
 
         # 11. limits, hashes, revisions, argv
@@ -875,12 +968,19 @@ class OpenCodeDriver:
             if value is not None and isinstance(value.value, int) and not isinstance(value.value, bool):
                 limits[name] = value.value
         policy = retry.RetryPolicy.from_limits(limits)
+        for ref in request.context_refs:
+            if not isinstance(ref, str) or not _CONTEXT_REF.match(ref):
+                raise refuse("workflow-validation", "context-ref-invalid", "a context reference is not a task review artifact")
         try:
             input_hashes = runstore.hash_inputs(root, task, request.context_refs)
         except runstore.RunStoreError:
             raise refuse("workflow-validation", "context-ref-invalid", "a context reference is not a path inside the project") from None
         revisions = tuple(runstore.repo_revisions(root))
         arg = task if request.stage is None else "stage %s of %s" % (request.stage, task)
+        if request.context_refs:
+            arg += " (context: %s)" % ", ".join(request.context_refs)
+        if request.non_interactive:
+            arg += NON_INTERACTIVE_MARKER
         argv = (str(binary), "run", "--format", "json", "--command", command_name, "--", arg)
 
         prepared = PreparedRun(
@@ -893,7 +993,7 @@ class OpenCodeDriver:
             config_digest=fresh.digest,
             native_sha256=native_sha,
             config_path=config_path,
-            cwd=root,
+            cwd=run_cwd,
             argv=argv,
             env_names=tuple(child_env.names()),
             policy={
@@ -923,11 +1023,23 @@ class OpenCodeDriver:
             "config_digest": fresh.digest,
             "native_sha256": native_sha,
             "config_path": str(config_path),
-            "cwd": str(root),
+            "cwd": str(run_cwd),
+            "workspace": request_dict["workspace"],
+            "non_interactive": bool(request.non_interactive),
             "argv": list(argv),
             "env_names": list(child_env.names()),
             "profile": evaluation.profile,
             "effort": request.effort,
+            "provider": resolution.provider_id,
+            "native_provider": effective_model.split("/", 1)[0],
+            "configured_effort": resolution.effort if resolution.effort_options is not None else None,
+            "effort_origin": resolution.effort_origin,
+            "variant": (
+                compiler.VARIANT_PREFIX + resolution.effort
+                if resolution.effort_options is not None and resolution.effort else None
+            ),
+            "effort_diagnostic": resolution.effort_diagnostic,
+            "model_priced": _model_priced(fresh.document, effective_model),
         }
         record["prepared"] = summary
         record["refusal"] = None
@@ -1035,9 +1147,28 @@ class OpenCodeDriver:
                     "the installed file %s changed or cannot be read; reinstall with quoin opencode install" % rel,
                 )
 
+    def _check_workspace(self, workspace: Path, root: Path) -> Path:
+        """A workspace is an absolute path to a real directory (not a symlink)
+        that lies outside the project root."""
+        refuse = self._refusal
+        text = str(workspace)
+        bad = refuse("workflow-validation", "workspace-invalid", "the workspace is not usable for a run")
+        if not os.path.isabs(text):
+            raise bad
+        try:
+            if not stat.S_ISDIR(os.lstat(text).st_mode):
+                raise bad
+        except OSError:
+            raise bad from None
+        real = os.path.realpath(text)
+        real_root = os.path.realpath(str(root))
+        if real == real_root or real.startswith(real_root.rstrip(os.sep) + os.sep):
+            raise bad
+        return Path(text)
+
     def _scan_and_build_env(
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
-        evaluation: Any, metadata: Any, redactor: Any,
+        evaluation: Any, metadata: Any, redactor: Any, cwd: Optional[Path] = None,
     ) -> Any:
         """Refuse on a configuration layer that would change the compiled
         pair, then build the child environment. May raise `LaunchRefused`."""
@@ -1047,7 +1178,8 @@ class OpenCodeDriver:
         if "XDG_CONFIG_HOME" in cfg_env:
             scan_env["XDG_CONFIG_HOME"] = cfg_env["XDG_CONFIG_HOME"]
         launch_env.check_config_layers(
-            cwd=root, env=scan_env, home=self._home, compiled_doc=fresh.document,
+            cwd=cwd if cwd is not None else root, env=scan_env, home=self._home,
+            compiled_doc=fresh.document,
             owned_agents=owned_agents, owned_commands=owned_commands,
         )
         data = launch_env.data_dir(cfg_env, self._home, evaluation.profile)
@@ -1056,6 +1188,7 @@ class OpenCodeDriver:
             providers=evaluation.effective.providers,
             resolver=self._resolver_factory(self._env, platform=self._platform),
             data_dir=data, config_path=config_path, redactor=redactor,
+            state_dir=self.state_root,
         )
 
     def prepare_interactive(self, profile: str) -> "InteractiveLaunch":

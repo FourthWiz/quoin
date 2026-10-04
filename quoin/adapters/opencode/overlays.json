@@ -4,8 +4,16 @@
       "command_note": "",
       "description": "Deep architectural analysis and stage decomposition for a task, run by the architect role.",
       "extra_sections": [],
-      "notes": [],
-      "rewrites": []
+      "notes": [
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+      ],
+      "rewrites": [
+        {
+          "from": "- Cost-ledger writes are mandatory when a task context is active.\n  The ledger lives at `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row in `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`; do not edit that file."
+        }
+      ]
     },
     "checkpoint": {
       "command_note": "",
@@ -15,7 +23,10 @@
       ],
       "notes": [
         "Cleanup does not run before a checkpoint save; there is no cleanup skill in OpenCode.",
-        "The skill writes its own `recent-sessions.md` entry directly, without any automated background process."
+        "The skill writes its own `recent-sessions.md` entry directly, without any automated background process.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "Write the handoff with `quoin opencode handoff write --task TASK`, passing `--decision` and `--note` for the decisions and notes to carry over.",
+        "If the helper reports that the task lock is held, this phase is running headless under `quoin run`; report that the verdict or handoff must be written from the TUI or after the run, and stop."
       ],
       "rewrites": [
         {
@@ -32,6 +43,11 @@
           "from": "- Auto-cleanup: unless `--no-cleanup` is passed, invoke the cleanup skill as the\n  first sub-step to trash stale sentinels before writing new ones.\n",
           "section": "Behavior contract",
           "to": "- Auto-cleanup is not available in OpenCode: there is no cleanup skill to invoke, so stale sentinels are left for the user to clear manually.\n"
+        },
+        {
+          "from": "- Cost-ledger write is conditional: only when a task context is unambiguously active.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row; do not edit the cost ledger."
         }
       ]
     },
@@ -41,7 +57,8 @@
       "extra_sections": [],
       "notes": [
         "There is no automated session index or Claude transcript in OpenCode.",
-        "Resume from the session-state file and the checkpoint handoff, never from a transcript."
+        "Resume from the session-state file and the checkpoint handoff, never from a transcript.",
+        "Read the handoff with `quoin opencode handoff show --task TASK`; never read transcripts."
       ],
       "rewrites": [
         {
@@ -73,7 +90,12 @@
       "notes": [
         "The read-only subagent returns its findings as its final message; the calling role writes the artifact.",
         "Tests run only in the calling role, never in the read-only subagent.",
-        "Running critic in this adapter is a separate context, not model diversity."
+        "Running critic in this adapter gives a separate context, not a different model.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "The verdict appears once, in the Verdict section: for a critic response the heading `## Verdict: PASS` or `## Verdict: REVISE` followed by a `## Summary` section, for a review a Verdict section holding only the bare value.",
+        "No other heading names the verdict, a verdict value or the words blocked, revise or changes requested in any case, and no other line starts with a verdict value after markup, container markers and a short label; no table cell is a verdict value either. A line elsewhere that names the verdict starts with the value.",
+        "Describe earlier rounds in a sentence, describe verdict formats in words, and name any HTML element that precedes the Verdict heading without angle brackets.",
+        "Write each critic finding with an `Assessment:` label."
       ],
       "rewrites": [
         {
@@ -85,6 +107,11 @@
           "from": "The runtime adapter is responsible for spawning a\n  fresh agent; the mechanism is adapter-specific.",
           "section": "Behavior contract",
           "to": "The coordinator delegates to the quoin-critic subagent through the task tool, which OpenCode always starts with a fresh context."
+        },
+        {
+          "from": "- Cost-ledger writes are mandatory when a task context is active.\n  The ledger lives at `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row in `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`; do not edit that file."
         }
       ]
     },
@@ -94,12 +121,29 @@
       "extra_sections": [
         "Discovery map (optional structured output)"
       ],
-      "notes": [],
+      "notes": [
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+      ],
       "rewrites": [
         {
           "from": "`quoin/scripts/generate_discovery_map.py`",
           "section": "Discovery map (optional structured output)",
           "to": "`quoin opencode script generate_discovery_map`"
+        },
+        {
+          "from": "cost-ledger row (see below).",
+          "section": "Inputs",
+          "to": "cost row the runtime records (see below)."
+        },
+        {
+          "from": "The cost-ledger row at `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md` is\nwritten ONLY when a task context is active for this invocation (see\n\"Behavior contract\" — conditional cost recording).",
+          "section": "Output",
+          "to": "The runtime records this run's cost row; the skill does not write it."
+        },
+        {
+          "from": "- Cost-ledger writes are CONDITIONAL. Discover MAY run standalone (no\n  task context — invoked by a user setting up the workflow) or as part\n  of an active task (invoked by the run orchestrator or by a user inside\n  an open task folder). The skill MUST append a row to\n  `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md` only when a task name\n  is determinable from the invocation context or active session state;\n  otherwise it MUST skip cost recording.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row in `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`; do not edit that file."
         }
       ]
     },
@@ -108,9 +152,21 @@
       "description": "Finalizes a reviewed task: commits remaining changes, pushes the branch and captures lessons learned.",
       "extra_sections": [],
       "notes": [
-        "This skill is never started without an explicit user command."
+        "This skill is never started without an explicit user command.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
       ],
-      "rewrites": []
+      "rewrites": [
+        {
+          "from": "- A new entry appended to the cost ledger at\n  `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md` (phase: `end-of-task`).",
+          "section": "Output",
+          "to": "- A cost row the runtime records before the run starts (do not append one)."
+        },
+        {
+          "from": "- The skill MUST append the session's cost-ledger row at phase `end-of-task`\n  at session open per shared cost-tracking rules.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row before launch; do not append one."
+        }
+      ]
     },
     "gate": {
       "command_note": "The coordinator repeats the failed-check rule when relaying gate results.",
@@ -122,13 +178,21 @@
       "notes": [
         "Run validators with quoin opencode script validate_artifact and quoin opencode script path_resolve.",
         "A missing, failing or unrunnable validator is a failed check, never a reason to approve on judgment.",
-        "A validator warning that PyYAML is not installed means the frontmatter check did not run; report the result as partial, not as a pass."
+        "A validator warning that PyYAML is not installed means the frontmatter check did not run; report the result as partial, not as a pass.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "The verdict comes only from `quoin opencode gate --task TASK [--stage N] --phase PHASE --write`; your text may only explain it. When it refuses for missing evidence, tell the user the adopt command it names; never run that command yourself.",
+        "If the helper reports that the task lock is held, this phase is running headless under `quoin run`; report that the verdict or handoff must be written from the TUI or after the run, and stop."
       ],
       "rewrites": [
         {
           "from": "Recovery: use the canonical safe reset-to-origin recipe at\n  `memory/branch-recovery.md` (deployed Tier-1 memory file) — move\n  mis-placed commits to a feature branch first, then run the recipe.\n",
           "section": "Gate levels",
           "to": "Recovery: move the mis-placed commits onto a feature branch first, then reset the protected branch to match its upstream.\n"
+        },
+        {
+          "from": "- Cost-ledger writes are conditional: record only when a task context is\n  determinable from the surrounding artifacts.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row; do not edit the cost ledger."
         }
       ]
     },
@@ -141,13 +205,32 @@
         "Automated verify-fix loop"
       ],
       "notes": [
-        "This skill is never started without an explicit user command."
+        "This skill is never started without an explicit user command.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "In a non-interactive run, run no shell command other than the allowed Quoin helpers, never commit, and skip the branch checks; the runtime checks the branch before launch.",
+        "To run the project's configured tests, run `quoin opencode test-run --task TASK --stage N`; it prints one JSON line with the outcome, and the runtime reads that result itself.",
+        "When the command argument holds a parenthesised context suffix naming files, read those files first. A review means fix its findings before anything else."
       ],
       "rewrites": [
         {
           "from": "If task commits have already landed on a protected branch and need to be recovered, the canonical safe reset-to-origin recipe is at `memory/branch-recovery.md` (deployed Tier-1 memory file).",
           "section": "Branch hygiene",
           "to": "If task commits have already landed on a protected branch and need to be recovered, move them onto a feature branch first, then reset the protected branch to match its upstream."
+        },
+        {
+          "from": "- A new entry appended to the cost ledger at\n  `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md` (phase: `implement`).",
+          "section": "Output",
+          "to": "- A cost row the runtime records for this run (do not append one)."
+        },
+        {
+          "from": "- Cost-ledger writes are mandatory at session open (phase: `implement`).",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row in `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`; do not edit that file."
+        },
+        {
+          "from": "- Each retry attempt MUST be logged to the cost ledger so retry cost stays\n  visible.",
+          "section": "Automated verify-fix loop",
+          "to": "- Retry attempts are counted in the run's cost row by the runtime; do not edit the cost ledger."
         }
       ]
     },
@@ -155,8 +238,17 @@
       "command_note": "",
       "description": "Creates a detailed, implementation-ready plan for a development task, run by the planner role.",
       "extra_sections": [],
-      "notes": [],
-      "rewrites": []
+      "notes": [
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "When the command argument holds a parenthesised context suffix naming files, read those files first. A critic response means revise the existing plan against its findings and keep its earlier history."
+      ],
+      "rewrites": [
+        {
+          "from": "- Cost-ledger writes are mandatory when a task context is active.\n  The ledger lives at `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row in `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`; do not edit that file."
+        }
+      ]
     },
     "review": {
       "command_note": "The coordinator delegates to the quoin-reviewer subagent through the task tool and persists the returned findings.",
@@ -165,13 +257,103 @@
       "notes": [
         "The read-only subagent returns its findings as its final message; the calling role writes the artifact.",
         "Tests run only in the calling role, never in the read-only subagent.",
-        "Running review in this adapter is a separate context, not model diversity."
+        "Running review in this adapter gives a separate context, not a different model.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "The verdict appears once, in the Verdict section: for a critic response the heading `## Verdict: PASS` or `## Verdict: REVISE` followed by a `## Summary` section, for a review a Verdict section holding only the bare value.",
+        "No other heading names the verdict, a verdict value or the words blocked, revise or changes requested in any case, and no other line starts with a verdict value after markup, container markers and a short label; no table cell is a verdict value either. A line elsewhere that names the verdict starts with the value.",
+        "Describe earlier rounds in a sentence, describe verdict formats in words, and name any HTML element that precedes the Verdict heading without angle brackets.",
+        "Put test-coverage annotations under the `## Test Coverage` section."
       ],
       "rewrites": [
         {
           "from": "include a pointer to the\n  canonical safe reset-to-origin recovery recipe at `memory/branch-recovery.md`\n  (deployed Tier-1 memory file).",
           "section": "Behavior contract",
           "to": "include a plain instruction: move the mis-placed commits onto a feature branch first, then reset the protected branch to match its upstream."
+        },
+        {
+          "from": "- Cost-ledger writes are mandatory when a task context is active.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row; do not edit the cost ledger."
+        }
+      ]
+    },
+    "run": {
+      "command_note": "In OpenCode this command only reports the next step; it never runs a phase itself.",
+      "description": "Names the next workflow step for a task and the command that runs it.",
+      "extra_sections": [],
+      "notes": [
+        "Run `quoin opencode workflow next --task TASK` and relay the command it names; do not start the phase yourself."
+      ],
+      "rewrites": [
+        {
+          "from": "End-to-end orchestration of the development workflow from discovery\nthrough finalization. The skill coordinates other skills in sequence —\ndiscover, architect, plan, implement, review, and finalize — and\npauses at every phase boundary for an explicit user confirmation. It\ndoes not perform the work of those phases itself; it sequences, hands\noff, and gates.",
+          "section": "Purpose",
+          "to": "Names the next workflow step for a task and the command that runs it. It never runs a phase itself."
+        },
+        {
+          "from": "- When the user wants the full pipeline in one invocation rather than\n  manually advancing through each phase.",
+          "section": "When to use",
+          "to": "- When the user wants to know the next workflow step for a task and the command that runs it."
+        },
+        {
+          "from": "- The orchestrator is the documented exception that may invoke the\n  implementation and finalization skills on the user's behalf, but\n  only after the user confirms at the relevant checkpoint. The user's\n  invocation constitutes the conscious decision; checkpoint\n  confirmations are the safety net.",
+          "section": "When to use",
+          "to": "- Never runs implementation, finalization or any other phase; it only names the command for the user."
+        },
+        {
+          "from": "- A task folder at `{{ARTIFACT_ROOT}}/<task-name>/` populated with all\n  phase artifacts produced by the orchestrated skills.\n- A cost ledger at `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md` with\n  one row per phase session, including the orchestrator's own session.",
+          "section": "Output",
+          "to": "- A report naming the next step and the command that runs it."
+        },
+        {
+          "from": "- A session-state file under `{{ARTIFACT_ROOT}}/memory/sessions/`\n  tracking current phase, outcomes, and checkpoint history.",
+          "section": "Output",
+          "to": "- No file is written."
+        },
+        {
+          "from": "- The skill MUST chain phases in this order, each conditional on the\n  routing outcome determined earlier in the pipeline rather than an\n  unconditional fixed sequence: discover (conditional — skip if\n  recent), spec (conditional — skip if Small or if a task spec already\n  exists), a routing step that decides between two paths, architect\n  (conditional — skip if Small profile, or if the routing step chose\n  the abbreviated path), planning (conditional — skip on the same\n  terms as architect), implementation, review, finalization. The\n  routing step MAY skip straight from spec to implementation, carrying\n  a mechanically-derived plan of its own, when its eligibility criteria\n  are met and the user (or, under autonomous mode, the formulation\n  quality bar) confirms it.",
+          "section": "Behavior contract",
+          "to": "- Run `quoin opencode workflow next --task TASK` and relay the command it names; never run a phase."
+        },
+        {
+          "from": "- After discovery, when no task feature spec exists at\n  `<task-root>/spec.md` and the task is not Small, the skill SHOULD\n  offer/run the spec phase, gated at its own checkpoint; the skill\n  MUST forward the task spec path to the downstream design and review\n  phases when present; absence of a spec is always a valid,\n  non-blocking outcome (grandfather).",
+          "section": "Behavior contract",
+          "to": "- When the next step is the spec phase, name its command; never run it."
+        },
+        {
+          "from": "- The skill MUST pause at every phase boundary and wait for explicit\n  user confirmation before advancing to the next phase.",
+          "section": "Behavior contract",
+          "to": "- Stop after reporting the next step."
+        },
+        {
+          "from": "- The skill MUST treat each heavy phase as a separate session; the\n  orchestrator's own context must remain lean across the full pipeline. A\n  lightweight in-orchestrator routing step is permitted where the runtime\n  needs an interactive prompt the orchestrator itself must raise.",
+          "section": "Behavior contract",
+          "to": "- Keep the report short; phases run in their own sessions started by the user."
+        },
+        {
+          "from": "- The skill MUST honor profile triage (Small / Medium / Large) when\n  routing sub-skills.",
+          "section": "Behavior contract",
+          "to": "- Report the task's profile (Small / Medium / Large) as the next-step helper names it."
+        },
+        {
+          "from": "- The skill MUST NOT auto-invoke implementation or finalization without\n  a prior user confirmation at the dedicated checkpoint for each phase.",
+          "section": "Behavior contract",
+          "to": "- Never invoke implementation or finalization."
+        },
+        {
+          "from": "- The skill MUST run finalization in a fresh context for unbiased\n  assessment downstream.",
+          "section": "Behavior contract",
+          "to": "- Never run finalization."
+        },
+        {
+          "from": "- The skill MUST update the session-state file after each phase\n  completes so that a resume invocation can identify the next phase\n  without rerunning completed work.",
+          "section": "Behavior contract",
+          "to": "- Never edit the session-state file."
+        },
+        {
+          "from": "- Cost-ledger writes are mandatory when a task context is active.",
+          "section": "Behavior contract",
+          "to": "- Never edit the cost ledger or any task artifact."
         }
       ]
     },
@@ -180,7 +362,8 @@
       "description": "Triages a task by size and orchestrates the matching plan-critic-revise convergence loop.",
       "extra_sections": [],
       "notes": [
-        "The planner saves each critique the quoin-critic subagent returns as the critic-response file; the subagent never writes it itself."
+        "The planner saves each critique the quoin-critic subagent returns as the critic-response file; the subagent never writes it itself.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
       ],
       "rewrites": [
         {
@@ -192,6 +375,11 @@
           "from": "- The skill MUST NOT produce plan content itself. It invokes the planning\n  skill, the critic skill, and the revision skill as coordinated agents.\n",
           "section": "Behavior contract",
           "to": "- The skill MUST NOT produce plan content itself. The planner plans and revises in this session; each critique runs in a fresh quoin-critic subagent.\n"
+        },
+        {
+          "from": "- Cost-ledger writes are mandatory when a task context is active.\n  The ledger lives at `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`.",
+          "section": "Behavior contract",
+          "to": "- The runtime records this run's cost row in `{{ARTIFACT_ROOT}}/<task-name>/cost-ledger.md`; do not edit that file."
         }
       ]
     }

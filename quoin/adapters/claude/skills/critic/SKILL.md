@@ -252,6 +252,14 @@ Compose the format-aware body for `critic-response-{round}.md` per `format-kit.m
 
 `{path}` is `{task_dir}/critic-response-{round}.md`, where `{task_dir}` is resolved via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task {task-name} [--stage <N-or-name>]`. When invoked by `/architect` as a subagent, `{path}` is `{project-folder}/.workflow_artifacts/{task-name}/architecture-critic-{round}.md` instead (architecture-critic-N.md ALWAYS at task root per D-03 — corollary: pre-resolves stage-4's Q-01; same body composition; T-08 ensures the validator detects it as critic-response type). **Target contract (D-01 spawn-prompt convention):** when invoked by `/architect` Phase 4, the caller MUST pass the target in the spawn prompt as plain English: `Target: <ABS_PATH>/architecture.md — critique this architecture.` The critic reads this target=architecture.md context from the spawn prompt to determine which file to critique and which output path to use.
 
+**Verdict-section writer contract.** The gate reads the verdict with a strict rule that catches honest formatting mistakes, so state the verdict once, in the Verdict section, and nowhere else in a structured form:
+- Write `## Verdict: PASS` or `## Verdict: REVISE` on its own line, followed directly by `## Summary`; put nothing under it.
+- No other heading names the verdict or a value, in any case ("Required before PASS" becomes "Required before approval"), and no heading contains "revise" in any case (for example "What to change next round" rather than "What to revise next round").
+- Inside findings, do not use the word "verdict" as a label; write a per-finding judgement as `Assessment:`.
+- When a response discusses verdict formats, describe label and heading shapes in words rather than quoting them, because a quoted label line, even in a code span, is read as a label.
+- No line starts with a verdict value after markup, container markers and an optional short label, and no table cell is one. Describe earlier rounds in a sentence, not as a label line or a table of rounds.
+- Nothing before `## Verdict` names an HTML element with angle brackets; name it in words ("the title element").
+
 Body content example (Step 1 output):
 
 ```markdown

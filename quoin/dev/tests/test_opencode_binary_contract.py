@@ -144,7 +144,7 @@ def test_binary_sees_the_generated_skills_and_agents(installed_project):
         if entry["status"] == "supported"
     }
     assert expected == skill_names, (skill_names, expected)
-    assert len(skill_names) == 11
+    assert len(skill_names) == 12
 
 
 def test_binary_sees_the_generated_agents(installed_project):

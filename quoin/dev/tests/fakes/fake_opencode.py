@@ -11,6 +11,14 @@ Scenario file: ``{"version_output"?, "require_session_after_first"?,
 "max_lifetime_s"?, "attempts": [{"steps": [...]}, ...]}``. Attempt ``i`` runs
 ``attempts[min(i - 1, len - 1)]``. Only ``run`` calls count as attempts.
 
+An optional ``commands: {KEY: {"attempts": [...]}}`` table selects steps per
+command: a ``run`` call looks up ``COMMAND@STAGE`` (for example
+``quoin-plan@2``), then ``COMMAND``, then the top-level ``attempts``. The
+attempt index inside a ``commands`` entry is counted per lookup key (recorded
+as ``scenario_key``); the global ``attempt`` field is unchanged. String values
+in a step may use ``$task``, ``$stage``, ``$stagedir`` and ``$context``, parsed
+from the ``--command`` argument.
+
 Helper processes (the grandchildren) exit on their own when ``STATE/stop``
 exists or after ``max_lifetime_s`` seconds (default 120), so a failed test
 cannot leave one running forever; each writes its own pid to
@@ -23,6 +31,7 @@ kind should exercise it.
 """
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
 import os
@@ -67,15 +76,19 @@ def _step_start(pid: str, ts: Optional[int] = None) -> Dict[str, Any]:
         _emit("step_start", part={"id": pid, "messageID": "msg_fake", "type": "step-start"}), ts)
 
 
-def _step_finish(pid: str, reason: str, ts: Optional[int] = None) -> Dict[str, Any]:
-    return _stamped(_emit(
-        "step_finish",
-        part={
-            "id": pid, "reason": reason, "messageID": "msg_fake", "type": "step-finish",
-            "tokens": {"input": 10, "output": 2, "reasoning": 0, "cache": {"read": 0, "write": 0}},
-            "cost": 0.001,
-        },
-    ), ts)
+def _step_finish(pid: str, reason: str, ts: Optional[int] = None, *,
+                 tokens: Optional[Dict[str, Any]] = None, cost: float = 0.001,
+                 omit_cost: bool = False) -> Dict[str, Any]:
+    """A step-finish event. ``tokens`` replaces the default usage verbatim (so a
+    test can drop a field); ``omit_cost`` leaves the cost key out."""
+    part: Dict[str, Any] = {
+        "id": pid, "reason": reason, "messageID": "msg_fake", "type": "step-finish",
+        "tokens": tokens if tokens is not None else {
+            "input": 10, "output": 2, "reasoning": 0, "cache": {"read": 0, "write": 0}},
+    }
+    if not omit_cost:
+        part["cost"] = cost
+    return _stamped(_emit("step_finish", part=part), ts)
 
 
 def _text(pid: str, body: str, ts: Optional[int] = None) -> Dict[str, Any]:
@@ -240,7 +253,136 @@ def _task_then_boundary_crash(state: Dict[str, Any]) -> Dict[str, Any]:
     )
 
 
+def _usage(input_tokens: int, output_tokens: int) -> Dict[str, Any]:
+    return {"input": input_tokens, "output": output_tokens, "reasoning": 0,
+            "cache": {"read": 0, "write": 0}}
+
+
+def _usage_revised() -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        _step_finish("prt_f1", "tool-calls"),
+        _step_finish("prt_f1", "tool-calls", tokens=_usage(40, 5)),
+        _step_finish("prt_f2", "stop"),
+        {"do": "exit", "code": 0},
+    )
+
+
+def _usage_unknown_tokens() -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        _step_finish("prt_f1", "stop", tokens={
+            "input": 10, "reasoning": 0, "cache": {"read": 0, "write": 0}}),
+        {"do": "exit", "code": 0},
+    )
+
+
+def _usage_zero_cost() -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        _step_finish("prt_f1", "stop", tokens=_usage(100, 20), cost=0),
+        {"do": "exit", "code": 0},
+    )
+
+
+_LEDGER_HEADER = "# Cost Ledger \u2014 %s\n"
+_AGENT_ROW = "agent-row-1 | 2026-01-01 | plan | some-model | task | agent wrote this | 0\n"
+
+
+def _ledger_append(task: str = "demo") -> Dict[str, Any]:
+    return _scenario(
+        _step_start("prt_s1"),
+        {"do": "append_file", "path": ".workflow_artifacts/%s/cost-ledger.md" % task,
+         "content": _AGENT_ROW},
+        _step_finish("prt_f1", "stop"),
+        {"do": "exit", "code": 0},
+    )
+
+
+def _ledger_rewrite(task: str = "demo") -> Dict[str, Any]:
+    changed = "seed-row-1 | 2026-01-01 | plan | changed-model | task | rewritten by agent | 0\n"
+    return _scenario(
+        _step_start("prt_s1"),
+        {"do": "write_file", "path": ".workflow_artifacts/%s/cost-ledger.md" % task,
+         "content": (_LEDGER_HEADER % "demo") + changed},
+        _step_finish("prt_f1", "stop"),
+        {"do": "exit", "code": 0},
+    )
+
+# Copies of valid review and critic bodies, so the fake still imports nothing
+# from Quoin.
+_FOR_HUMAN = "## For human\n\nA short summary for the reader.\n\n"
+CRITIC_PASS_TEXT = (
+    "## Verdict\n\n`<verdict>PASS</verdict>`\n\n## Summary\n\ntext\n\n## Issues\n\nnone\n\n"
+    "## What's good\n\ntext\n\n## Scorecard\n\ntext\n"
+)
+REVIEW_APPROVED_TEXT = (
+    "---\ntask: fixture\n---\n" + _FOR_HUMAN
+    + "## Summary\n\ntext\n\n## Verdict\n\nAPPROVED\n\n## Plan Compliance\n\ntext\n\n"
+    "## Issues Found\n\nnone\n\n## Integration Safety\n\ntext\n\n## Test Coverage\n\ntext\n\n"
+    "## Risk Assessment\n\ntext\n\n## Dimension Verdicts\n\n| Dimension | Verdict |\n|---|---|\n| all | ok |\n"
+)
+
+
+def _try_write(path: str, content: str = "") -> Dict[str, Any]:
+    return {"do": "try_write", "path": path, "content": content}
+
+
+def _clean_finish() -> List[Dict[str, Any]]:
+    return [_step_finish("prt_f1", "stop"), {"do": "exit", "code": 0}]
+
+
+def _boundary_escape(real_root: str = "/nonexistent",
+                     outbox: str = ".workflow_artifacts/demo/stage-1",
+                     name: str = "review-1.md", body: str = REVIEW_APPROVED_TEXT,
+                     absolute: bool = False) -> Dict[str, Any]:
+    steps: List[Dict[str, Any]] = [
+        _step_start("prt_s1"),
+        _try_write("src/app.py", "escaped\n"),
+        {"do": "shell_write", "path": "src/shell.txt", "content": "shell\n"},
+        {"do": "spawn_write", "path": "src/spawned.txt", "content": "spawned\n"},
+        _try_write("%s/%s" % (outbox, name), body),
+        _try_write("%s/%s.tmp" % (outbox, name), body),
+    ]
+    if absolute:
+        steps.append({"do": "write_file", "path": "%s/src/escaped.txt" % real_root,
+                      "content": "escaped\n"})
+    return _scenario(*steps, *_clean_finish())
+
+
+def _edits_path(path: str = ".opencode/commands/quoin-plan.md", content: str = "x") -> Dict[str, Any]:
+    return _scenario({"do": "write_file", "path": path, "content": content}, *_clean_finish())
+
+
+def _writes_paths(paths: Any = ()) -> Dict[str, Any]:
+    return _scenario(
+        *[{"do": "write_file", "path": p, "content": c} for p, c in paths], *_clean_finish())
+
+
+def _opencode_managed_writes(extra: Any = ()) -> Dict[str, Any]:
+    """What the pinned OpenCode does to every scanned config directory at launch."""
+    managed = [
+        (".opencode/.gitignore", "node_modules\npackage.json\nbun.lock\n"),
+        (".opencode/package.json", "{}\n"),
+        (".opencode/bun.lock", "\n"),
+        (".opencode/node_modules/@opencode-ai/plugin/package.json", "{}\n"),
+    ]
+    return _scenario(
+        *[_try_write(p, c) for p, c in managed],
+        *[_try_write(p, c) for p, c in extra],
+        *_clean_finish())
+
+
 SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "boundary_escape": _boundary_escape,
+    "edits_path": _edits_path,
+    "writes_paths": _writes_paths,
+    "opencode_managed_writes": _opencode_managed_writes,
+    "usage_revised": _usage_revised,
+    "usage_unknown_tokens": _usage_unknown_tokens,
+    "usage_zero_cost": _usage_zero_cost,
+    "ledger_append": _ledger_append,
+    "ledger_rewrite": _ledger_rewrite,
     "replay": replay,
     "crash_after_start": lambda: _scenario(_step_start("prt_s1"), {"do": "crash", "signal": "SIGKILL"}),
     "crash_mid_stream": lambda: _scenario(
@@ -356,6 +498,36 @@ def _fill(value: Any, session: str) -> Any:
     return value
 
 
+_MARKER = " (non-interactive run)"
+_ARG_RE = re.compile(
+    r"^(?:stage (?P<stage>[0-9]+) of )?(?P<task>[^\s()]+)"
+    r"(?: \(context: (?P<context>[^()]*)\))?"
+    r"(?P<marker>" + re.escape(_MARKER) + r")?$")
+_PLACEHOLDER_RE = re.compile(r"\$(stagedir|stage|task|context)\b")
+
+
+def _parse_command_arg(text: str) -> Optional[Dict[str, str]]:
+    """Parse the driver-built argument; None when the order is not the driver's."""
+    match = _ARG_RE.match(text)
+    if match is None:
+        return None
+    task = match.group("task")
+    stage = match.group("stage") or ""
+    context = (match.group("context") or "").replace(", ", " ")
+    stagedir = ".workflow_artifacts/%s/stage-%s" % (task, stage) if stage else ".workflow_artifacts/%s" % task
+    return {"task": task, "stage": stage, "stagedir": stagedir, "context": context}
+
+
+def _substitute(value: Any, subs: Dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _PLACEHOLDER_RE.sub(lambda m: subs[m.group(1)], value)
+    if isinstance(value, list):
+        return [_substitute(v, subs) for v in value]
+    if isinstance(value, dict):
+        return {k: _substitute(v, subs) for k, v in value.items()}
+    return value
+
+
 def _out(text: str) -> None:
     sys.stdout.write(text)
     sys.stdout.flush()
@@ -396,6 +568,17 @@ def _parse_run(args: List[str]) -> Dict[str, Any]:
 def _record(state: Path, entry: Dict[str, Any]) -> None:
     with open(state / "invocations.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry) + "\n")
+
+
+def _prior_key_runs(state: Path, key: str) -> int:
+    path = state / "invocations.jsonl"
+    if not path.exists():
+        return 0
+    count = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.strip() and json.loads(raw).get("scenario_key") == key:
+            count += 1
+    return count
 
 
 def _prior_runs(state: Path) -> int:
@@ -524,6 +707,64 @@ def _emit_fixture(name: str) -> None:
             _out(piece.decode("utf-8", "replace") + "\n")
 
 
+_SPAWN_WRITE_CODE = (
+    "import sys\n"
+    "with open(sys.argv[2], 'w', encoding='utf-8') as fh:\n"
+    "    fh.write(sys.argv[1])\n"
+)
+
+
+def _log_effect(state: Path, line: str) -> None:
+    with open(state / "effects.log", "a", encoding="utf-8") as fh:
+        fh.write(line.replace("\n", " ") + "\n")
+
+
+def _boundary_write(verb: str, step: Dict[str, Any], state: Path) -> None:
+    """Write a file the way a tool, a shell or a spawned process would.
+
+    A refusal by the operating system is logged as ``denied PATH ERRNO`` and
+    the step list continues; nothing here claims how the real runtime reports
+    a refused write.
+    """
+    path = step["path"]
+    content = step.get("content", "")
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        if verb == "try_write":
+            Path(path).write_text(content, encoding="utf-8")
+        elif verb == "shell_write":
+            res = subprocess.run(
+                ["/bin/sh", "-c", 'printf %s "$1" > "$2"', "sh", content, path],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode != 0:
+                _log_effect(state, "denied %s exit%d" % (path, res.returncode))
+                return
+        else:
+            res = subprocess.run(
+                [sys.executable, "-c", _SPAWN_WRITE_CODE, content, path],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            if res.returncode != 0:
+                _log_effect(state, "denied %s exit%d" % (path, res.returncode))
+                return
+    except OSError as exc:
+        _log_effect(state, "denied %s %s" % (path, errno.errorcode.get(exc.errno or 0, "EIO")))
+        return
+    _log_effect(state, path)
+
+
+def _run_cmd(step: Dict[str, Any], state: Path) -> None:
+    """Run a child with this process's own environment and working directory."""
+    try:
+        res = subprocess.run(
+            [str(a) for a in step["argv"]], stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        _log_effect(state, "ran 127 %s" % exc)
+        return
+    tail = res.stdout[:200].decode("utf-8", "replace").strip()
+    _log_effect(state, "ran %d %s" % (res.returncode, tail))
+
+
 def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
                scenario: Optional[Dict[str, Any]] = None) -> int:
     scenario = scenario or {}
@@ -567,6 +808,23 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
             target.write_text(step.get("content", ""), encoding="utf-8")
             with open(state / "effects.log", "a", encoding="utf-8") as fh:
                 fh.write("%s\n" % step["path"])
+        elif verb == "append_file":
+            target = Path(step["path"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with open(target, "a", encoding="utf-8") as fh:
+                fh.write(step.get("content", ""))
+            with open(state / "effects.log", "a", encoding="utf-8") as fh:
+                fh.write("%s\n" % step["path"])
+        elif verb in ("try_write", "shell_write", "spawn_write"):
+            _boundary_write(verb, step, state)
+        elif verb == "run_cmd":
+            _run_cmd(step, state)
+        elif verb == "move_path":
+            target = Path(step["to"])
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(step["from"], step["to"])
+            with open(state / "effects.log", "a", encoding="utf-8") as fh:
+                fh.write("%s -> %s\n" % (step["from"], step["to"]))
         elif verb == "spawn_grandchild":
             _grandchild(state, bool(step.get("ignore_term")), _lifetime(scenario, step),
                         bool(step.get("detach")))
@@ -637,16 +895,55 @@ def main(argv: List[str]) -> int:
         session = existing[-1].stem if existing else "ses_fake%d" % attempt
     else:
         session = "ses_fake%d" % attempt
-    (state / "sessions" / (session + ".json")).write_text(
-        json.dumps({"id": session, "last_attempt": attempt}) + "\n", encoding="utf-8")
-    _record(state, dict(base_entry, attempt=attempt, session_id=session, parsed=parsed))
+    session_path = state / "sessions" / (session + ".json")
+    try:
+        previous = json.loads(session_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    session_path.write_text(
+        json.dumps(dict(previous, id=session, last_attempt=attempt)) + "\n", encoding="utf-8")
+    command_arg = parsed.get("command")
+    commands = scenario.get("commands")
+    chosen_key: Optional[str] = None
+    chosen: Optional[Dict[str, Any]] = None
+    arg_info: Optional[Dict[str, str]] = None
+    if commands and isinstance(command_arg, str):
+        arg_info = _parse_command_arg(" ".join(parsed["message"]))
+        stage = arg_info["stage"] if arg_info else ""
+        for candidate in ((command_arg + "@" + stage) if stage else None, command_arg):
+            if candidate and candidate in commands:
+                chosen_key, chosen = candidate, commands[candidate]
+                break
+    session_file = state / "sessions" / (session + ".json")
+    if commands and chosen_key is None and requested:
+        # a continuation names no command: it runs the steps of the command that opened the session
+        stored = previous
+        if stored.get("scenario_key") in commands and isinstance(stored.get("arg_info"), dict):
+            chosen_key, chosen, arg_info = stored["scenario_key"], commands[stored["scenario_key"]], stored["arg_info"]
+    if chosen_key is not None and arg_info is not None:
+        session_file.write_text(json.dumps(
+            {"id": session, "last_attempt": attempt, "scenario_key": chosen_key, "arg_info": arg_info}) + "\n",
+            encoding="utf-8")
+    entry = dict(base_entry, attempt=attempt, session_id=session, parsed=parsed)
+    if chosen_key is not None:
+        entry["scenario_key"] = chosen_key
+    key_attempt = (_prior_key_runs(state, chosen_key) + 1) if chosen_key is not None else attempt
+    _record(state, entry)
 
     if scenario.get("require_session_after_first") and attempt > 1 and not requested:
         _err("fake opencode: continuation attempt arrived without --session\n")
         return 97
 
-    attempts = scenario["attempts"]
-    steps = attempts[min(attempt - 1, len(attempts) - 1)]["steps"]
+    if chosen is not None:
+        attempts = chosen["attempts"]
+        steps = attempts[min(key_attempt - 1, len(attempts) - 1)]["steps"]
+        if arg_info is None:
+            _log_effect(state, "argument-order-invalid")
+            return 96
+        steps = _substitute(steps, arg_info)
+    else:
+        attempts = scenario["attempts"]
+        steps = attempts[min(attempt - 1, len(attempts) - 1)]["steps"]
     return _run_steps(steps, session, state, scenario)
 
 
