@@ -290,5 +290,5 @@ def test_closed_violation_run_in_the_coordinator_is_reported_then_rerun(make, ca
     assert code == 2 and summary["reasons"] == ["boundary-violation"], json.dumps(summary)
     assert len(proj.runs()) == launches
     code, summary = proj.run_workflow(capsys, "--continue", "--rerun-from", "plan", *FLOW, "--through", "plan")
-    assert code == 99, json.dumps(summary)
+    assert code == 0, json.dumps(summary)
     assert len(proj.runs()) > launches
