@@ -1,0 +1,9 @@
+{
+  "name": "context-tracker",
+  "version": "0.1.0",
+  "description": "Live pane tracking the context window: colored category breakdown, a timeline of growth spikes, and per-skill growth attribution.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "IvGor"
+  }
+}

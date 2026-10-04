@@ -1682,6 +1682,65 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/core/skills/run.md",
         "quoin/dev/tests/test_run_tasks_complete_entry.py",
     ),
+    # Opt-in context-tracker mod: its non-.py files would otherwise be ignored
+    # by map_changed_to_tests. No package.json is added, so the CI mirror keeps
+    # treating the plugin as having no deliverable of its own.
+    (
+        "quoin/plugins/context-tracker/.claude-plugin/plugin.json",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/.claude-plugin/plugin.json",
+        "quoin/dev/tests/test_context_tracker_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/hooks/hooks.json",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/hooks/hooks.json",
+        "quoin/dev/tests/test_context_tracker_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/hooks/register.test.ts",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/hooks/register.test.ts",
+        "quoin/dev/tests/test_context_tracker_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/hooks/register.tsx",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/hooks/register.tsx",
+        "quoin/dev/tests/test_context_tracker_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/tsconfig.json",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/tsconfig.json",
+        "quoin/dev/tests/test_context_tracker_plugin_ts.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/types/index.d.ts",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/plugins/context-tracker/types/index.d.ts",
+        "quoin/dev/tests/test_context_tracker_plugin_ts.py",
+    ),
+    (
+        "quoin/install.sh",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_context_tracker_install.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

@@ -137,6 +137,17 @@ class TestMapChangedToTests:
         assert not unmatched
         assert "pyproject.toml" in ignored
 
+    def test_context_tracker_plugin_source_selects_its_tests(self):
+        """Editing the mod's non-.py source selects both of its test files."""
+        repo = Path(__file__).resolve().parents[3]
+        selectors, unmatched, ignored = _at.map_changed_to_tests(
+            ["quoin/plugins/context-tracker/hooks/register.tsx"], repo
+        )
+        joined = " ".join(str(s) for s in selectors)
+        assert "test_context_tracker_install.py" in joined
+        assert "test_context_tracker_plugin_ts.py" in joined
+        assert not ignored
+
     def test_sh_test_file_not_selected_as_pytest_selector(self, fake_repo):
         """test_*.sh files must NOT be added as pytest selectors.
 
