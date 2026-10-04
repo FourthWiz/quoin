@@ -580,6 +580,57 @@ def _take_busy(directory: Path) -> Path:
     raise TestRunError("test-run-busy", "another test run of this task is in progress")
 
 
+MAX_RESULT_BYTES = 256 * 1024
+
+
+def _settings_problem(settings: Mapping[str, Any], state_root, root: str, task: str) -> Optional[str]:
+    """None when tests are configured and the pinned digest under `state_root`
+    matches; otherwise the refusal reason."""
+    command = settings.get("test_command")
+    if not isinstance(command, list) or not command or any(not isinstance(i, str) for i in command):
+        return "tests-not-configured"
+    raw_include = settings.get("test_include") or []
+    if not isinstance(raw_include, list):
+        return "tests-settings-changed"
+    # The workflow state sits inside the project, where an agent can edit it;
+    # only the digest kept outside the project says what was configured.
+    try:
+        pinned = (result_dir(state_root, root, task) / PIN_NAME).read_text("ascii").strip()
+    except (OSError, ValueError):
+        pinned = ""
+    if not pinned or pinned != _settings_digest(command, raw_include, settings.get("test_timeout_s")):
+        return "tests-settings-changed"
+    return None
+
+
+def settings_status(project_root, task: str, *, state_root) -> Optional[str]:
+    """None when tests are configured and the pinned digest matches;
+    `tests-not-configured` or `tests-settings-changed` otherwise. Pure read."""
+    root = os.path.realpath(str(project_root))
+    try:
+        runstore.check_task_name(task)
+        directory = runstore.inspect_store(root)
+        state = runstore.load_workflow_state(directory, task) if directory is not None else None
+    except (runstore.RunStoreError, ConfigErrors, OSError, ValueError):
+        return "tests-not-configured"
+    return _settings_problem((state or {}).get("settings") or {}, state_root, root, task)
+
+
+def read_result(state_root, project_root, task: str, stage: Optional[int]) -> Optional[Dict[str, Any]]:
+    """The stored latest result for a stage, whatever its outcome, or None when
+    it is absent, not a regular file, oversized or malformed."""
+    try:
+        path = result_path(state_root, project_root, task, stage)
+        info = os.lstat(str(path))
+        if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_RESULT_BYTES:
+            return None
+        with open(str(path), "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError, runstore.RunStoreError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
 def run_tests(
     project_root, task: str, stage: Optional[int] = None, *, state_root,
     clock: Callable[[], float] = time.time, output_cap: int = DEFAULT_OUTPUT_CAP,
@@ -599,23 +650,14 @@ def run_tests(
     except (runstore.RunStoreError, ConfigErrors, OSError):
         return TestRun(outcome=REFUSED, reason="state-unreadable")
     settings = (state or {}).get("settings") or {}
-    command = settings.get("test_command")
-    if not isinstance(command, list) or not command or any(not isinstance(i, str) for i in command):
-        return TestRun(outcome=REFUSED, reason="tests-not-configured")
+    problem = _settings_problem(settings, state_root, root, task)
+    if problem is not None:
+        return TestRun(outcome=REFUSED, reason=problem)
+    command = settings["test_command"]
     raw_include = settings.get("test_include") or []
-    if not isinstance(raw_include, list):
-        return TestRun(outcome=REFUSED, reason="tests-settings-changed")
     timeout_s = settings.get("test_timeout_s")
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)) or not timeout_s > 0:
         timeout_s = DEFAULT_TIMEOUT_S
-    # The workflow state sits inside the project, where an agent can edit it;
-    # only the digest kept outside the project says what was configured.
-    try:
-        pinned = (result_dir(state_root, root, task) / PIN_NAME).read_text("ascii").strip()
-    except (OSError, ValueError):
-        pinned = ""
-    if not pinned or pinned != _settings_digest(command, raw_include, settings.get("test_timeout_s")):
-        return TestRun(outcome=REFUSED, reason="tests-settings-changed")
     try:
         include = [_check_include(root, item) for item in raw_include]
     except TestRunError as exc:

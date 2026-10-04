@@ -15,7 +15,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import stat
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -220,7 +219,6 @@ def _last_attempt_number(record: Mapping[str, Any]) -> Optional[int]:
     return max(numbers) if numbers else None
 
 
-_MAX_RESULT_BYTES = 256 * 1024
 
 
 def _read_test_result(
@@ -231,16 +229,8 @@ def _read_test_result(
     number, never on timestamps from different clocks."""
     if state_root is None:
         return None
-    try:
-        path = testrun.result_path(state_root, project_root, task, stage)
-        info = os.lstat(str(path))
-        if not stat.S_ISREG(info.st_mode) or info.st_size > _MAX_RESULT_BYTES:
-            return None
-        with open(str(path), "r", encoding="utf-8") as handle:
-            data = json.load(handle)
-    except (OSError, ValueError, runstore.RunStoreError):
-        return None
-    if not isinstance(data, dict) or data.get("outcome") != testrun.PASSED:
+    data = testrun.read_result(state_root, project_root, task, stage)
+    if data is None or data.get("outcome") != testrun.PASSED:
         return None
     attempt = _last_attempt_number(record)
     if data.get("run_id") != record.get("run_id") or attempt is None or data.get("attempt") != attempt:

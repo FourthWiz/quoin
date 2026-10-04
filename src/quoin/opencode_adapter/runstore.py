@@ -1105,6 +1105,41 @@ def write_workflow_state(directory: Path, state: Mapping[str, Any]) -> None:
     atomic_write_json(workflow_state_path(directory, state["task"]), state)
 
 
+MAX_SUPERSEDED_PER_ITEM = 10
+
+
+def _trim_superseded(state: Dict[str, Any], stage: Optional[int], phase: str) -> None:
+    """Keep at most MAX_SUPERSEDED_PER_ITEM superseded entries for one item,
+    dropping the oldest superseded ones; live entries and the order of every
+    remaining entry are untouched."""
+    entries = state["entries"]
+    idx = [i for i, e in enumerate(entries)
+           if e.get("stage") == stage and e.get("phase") == phase and e.get("superseded")]
+    excess = len(idx) - MAX_SUPERSEDED_PER_ITEM
+    if excess > 0:
+        drop = set(idx[:excess])
+        state["entries"] = [e for i, e in enumerate(entries) if i not in drop]
+
+
+def supersede_items(
+    state: Dict[str, Any], stage: Optional[int], phases: Any, clock: Callable[[], float] = time.time,
+) -> int:
+    """Mark every live entry of `stage` whose phase is in `phases` superseded;
+    returns how many were marked."""
+    wanted = set(phases)
+    stage = normalize_stage(stage)
+    count = 0
+    for entry in state["entries"]:
+        if entry.get("stage") == stage and entry.get("phase") in wanted and not entry.get("superseded"):
+            entry["superseded"] = True
+            count += 1
+    if count:
+        state["updated_at"] = _now(clock)
+        for phase in wanted:
+            _trim_superseded(state, stage, phase)
+    return count
+
+
 def _new_entry(entry: Mapping[str, Any], clock: Callable[[], float]) -> Dict[str, Any]:
     phase = entry.get("phase")
     origin = entry.get("origin")
@@ -1149,6 +1184,7 @@ def record_phase_entry(
         if old.get("stage") == new["stage"] and old.get("phase") == new["phase"] and not old.get("superseded"):
             old["superseded"] = True
     state["entries"].append(new)
+    _trim_superseded(state, new["stage"], new["phase"])
     state["updated_at"] = _now(clock)
     return new
 
