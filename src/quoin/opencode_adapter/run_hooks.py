@@ -238,6 +238,31 @@ def _read_test_result(
     return data
 
 
+def _tests_reason(
+    state_root: Any, project_root: Any, task: str, stage: Optional[int], record: Mapping[str, Any],
+) -> Optional[str]:
+    """Why an implement entry carries no passing test result, or None when
+    tests are not configured (or no state root was given)."""
+    if state_root is None:
+        return None
+    try:
+        status = testrun.settings_status(project_root, task, state_root=state_root)
+    except Exception:  # noqa: BLE001
+        return None
+    if status == "tests-not-configured":
+        return None
+    if status is not None:
+        return status
+    data = testrun.read_result(state_root, project_root, task, stage)
+    if data is None:
+        return "tests-not-run"
+    attempt = _last_attempt_number(record)
+    if data.get("run_id") != record.get("run_id") or attempt is None or data.get("attempt") != attempt:
+        return "tests-result-stale"
+    reason = data.get("reason")
+    return reason if isinstance(reason, str) and reason else "tests-failed"
+
+
 def _prefix_changed(project_root: Any, run_id: str) -> bool:
     record = _load(project_root, run_id)
     telemetry = (record or {}).get("telemetry")
@@ -260,6 +285,7 @@ def _record_entry(
     project_root: Any, task: str, record: Mapping[str, Any], outcome: cost.CostOutcome,
     source_dir: Any, clock: Callable[[], float],
     boundary: Optional["boundaries.BoundaryResult"] = None, state_root: Any = None,
+    origin: str = "phase-run", compose: bool = False,
 ) -> Dict[str, Any]:
     """Compose and record the run's workflow entry; returns the telemetry note."""
     request = record.get("request") if isinstance(record.get("request"), Mapping) else {}
@@ -299,12 +325,14 @@ def _record_entry(
     ledger_uuids: List[Any] = []
     appended: List[Any] = list(outcome.appended)
     copied_violation = False
-    if run_phase == "critic" and live is not None and live.get("origin") in _COMPOSED_ORIGINS:
+    carried_boundary_ok = True
+    if (run_phase == "critic" or compose) and live is not None and live.get("origin") in _COMPOSED_ORIGINS:
         runs = [r for r in live.get("runs") or [] if isinstance(r, str)] + [run_id]
         critic_responses = [r for r in live.get("critic_responses") or [] if isinstance(r, str)] + critic_responses
         ledger_uuids = list(live.get("ledger_uuids") or [])
         appended = list(live.get("ledger_lines_appended_during_run") or []) + appended
         copied_violation = live.get("boundary") == "violation"
+        carried_boundary_ok = live.get("boundary") == "ok"
     if outcome.row in ("written", "present"):
         ledger_uuids.append(run_id)
     violation = outcome.violation or copied_violation or any(
@@ -320,7 +348,7 @@ def _record_entry(
     if boundary is not None:
         if boundary.status == "violation":
             boundary_value = "violation"
-        elif boundary.status == "ok" and not violation:
+        elif boundary.status == "ok" and not violation and (carried_boundary_ok or not compose):
             boundary_value = "ok"
         if boundary_value is None:
             extra["boundary_reason"] = boundary.reason
@@ -328,6 +356,10 @@ def _record_entry(
         tests = _read_test_result(state_root, project_root, task, stage, record)
         if tests is not None:
             extra["tests"] = tests
+        else:
+            reason = _tests_reason(state_root, project_root, task, stage, record)
+            if reason is not None:
+                extra["tests_reason"] = reason
     fields: Dict[str, Any] = {
         "ledger_uuids": _dedup(ledger_uuids),
         "ledger_lines_appended_during_run": _dedup(appended),
@@ -340,7 +372,7 @@ def _record_entry(
     if record.get("resume_blocked"):
         fields["resume_blocked"] = record["resume_blocked"]
     evidence.record_evidence(
-        project_root, task, stage, entry_phase, "phase-run", snapshot, runs=runs,
+        project_root, task, stage, entry_phase, origin, snapshot, runs=runs,
         boundary=boundary_value, clock=clock, **extra, **fields,
     )
     note["recorded"] = True
@@ -352,7 +384,8 @@ def _record_entry(
 def _boundary_verdict(
     project_root: Any, task: str, record: Mapping[str, Any], run_id: str,
     before: Optional[boundaries.Listing], after: Optional[boundaries.Listing],
-    superseded_candidate: Optional[str],
+    superseded_candidate: Optional[str], *, other_task_policy: str = "unverified",
+    window_complete: bool = False,
 ) -> Optional["boundaries.BoundaryResult"]:
     """The boundary result for a closed run, or None when no check applies."""
     if before is None or after is None:
@@ -368,14 +401,36 @@ def _boundary_verdict(
     return boundaries.verify(
         key, before, after, task=task, run_id=run_id, prior_run_id=superseded_candidate,
         stage_rel=None if stage is None else "stage-%d" % stage,
-        window_partial=superseded_candidate == run_id, other_task_policy="unverified",
+        window_partial=superseded_candidate == run_id and not window_complete,
+        other_task_policy=other_task_policy,
     )
+
+
+def _close_superseded(
+    project_root: Any, candidate: Optional[str], run_id: Optional[str], task: str, source_dir: Any,
+    clock: Callable[[], float], own: List[str],
+) -> None:
+    """Cost an open older run the pointer moved away from. Never raises."""
+    try:
+        if candidate and candidate != run_id:
+            successor = pointer_run(project_root, task)
+            old = _load(project_root, candidate)
+            if successor and successor != candidate and old is not None and cost.is_open(old):
+                cost.record_run(
+                    project_root, candidate, source_dir=source_dir, mark=None, ended_as="superseded",
+                    superseded_by=successor, clock=clock,
+                )
+                own.append(candidate)
+    except Exception as exc:  # noqa: BLE001
+        _note_error(project_root, run_id or candidate, "supersession", exc)
 
 
 def after_phase_run(
     project_root: Any, task: str, result: Any, *, mark: Optional[Mapping[str, Any]], source_dir: Any,
     superseded_candidate: Optional[str], clock: Callable[[], float] = time.time,
     boundary_before: Optional[boundaries.Listing] = None, state_root: Any = None,
+    origin: str = "phase-run", compose: bool = False, other_task_policy: str = "unverified",
+    window_complete: bool = False,
 ) -> HookOutcome:
     """Cost the run, close a superseded one, and record the run's entry.
 
@@ -384,7 +439,9 @@ def after_phase_run(
     records `violation`, `ok` or no result with the reason. The window is
     partial (never `ok`) when the run was already open at the first listing.
     `state_root` is where the stage's test result is read from. The caller
-    holds the task lock. Never raises."""
+    holds the task lock. Never raises. The keywords `origin`, `compose`,
+    `other_task_policy` and `window_complete` serve the whole-task coordinator;
+    the defaults are the single-phase behaviour."""
     out = HookOutcome()
     run_id = getattr(result, "run_id", None)
     own: List[str] = []
@@ -396,19 +453,7 @@ def after_phase_run(
             boundary_after = None
 
     # supersession: the pointer moved away from a run that was still open
-    try:
-        candidate = superseded_candidate
-        if candidate and candidate != run_id:
-            successor = pointer_run(project_root, task)
-            old = _load(project_root, candidate)
-            if successor and successor != candidate and old is not None and cost.is_open(old):
-                cost.record_run(
-                    project_root, candidate, source_dir=source_dir, mark=None, ended_as="superseded",
-                    superseded_by=successor, clock=clock,
-                )
-                own.append(candidate)
-    except Exception as exc:  # noqa: BLE001
-        _note_error(project_root, run_id or superseded_candidate, "supersession", exc)
+    _close_superseded(project_root, superseded_candidate, run_id, task, source_dir, clock, own)
     if not run_id:
         out.reason = "no-run"
         return out
@@ -455,7 +500,8 @@ def after_phase_run(
             out.entry_recorded = True
             return out
         verdict = _boundary_verdict(
-            project_root, task, record, run_id, boundary_before, boundary_after, superseded_candidate)
+            project_root, task, record, run_id, boundary_before, boundary_after, superseded_candidate,
+            other_task_policy=other_task_policy, window_complete=window_complete)
         if verdict is not None:
             if verdict.status == "violation":
                 out.violation = True
@@ -467,10 +513,159 @@ def after_phase_run(
             note: Dict[str, Any] = {"recorded": False, "entry_phase": None, "stage": None, "reason": "refused"}
         else:
             note = _record_entry(
-                project_root, task, record, outcome, source_dir, clock, boundary=verdict, state_root=state_root)
+                project_root, task, record, outcome, source_dir, clock, boundary=verdict, state_root=state_root,
+                origin=origin, compose=compose)
         out.entry_recorded = bool(note.get("recorded"))
         out.reason = note.get("reason")
         _write_evidence_note(project_root, run_id, note)
     except Exception as exc:  # noqa: BLE001
         _note_error(project_root, run_id, "evidence", exc)
     return out
+
+
+def after_snapshot_run(
+    project_root: Any, task: str, isolated: Any, *, kind: str, stage: Optional[int],
+    mark: Optional[Mapping[str, Any]], source_dir: Any, superseded_candidate: Optional[str],
+    origin: str = "coordinator", clock: Callable[[], float] = time.time,
+) -> HookOutcome:
+    """Cost a snapshot critic or review run and record its entry.
+
+    A critic run composes onto the live plan entry (adding the harvested
+    response); a review run records a new review entry with the harvested
+    finding. A run still open only stores the mark. The caller holds the task
+    lock. Never raises."""
+    out = HookOutcome()
+    result = getattr(isolated, "result", None)
+    run_id = getattr(result, "run_id", None)
+    own: List[str] = []
+    _close_superseded(project_root, superseded_candidate, run_id, task, source_dir, clock, own)
+    if not run_id:
+        out.reason = "no-run"
+        return out
+    try:
+        record = _load(project_root, run_id)
+        if record is None:
+            out.reason = "record-missing"
+            return out
+        blocked = getattr(result, "resume_blocked", None)
+        if cost.is_open(record, blocked):
+            cost.store_mark(project_root, run_id, mark)
+            out.reason = "run-open"
+            return out
+        outcome = cost.record_run(
+            project_root, run_id, source_dir=source_dir, mark=mark,
+            ended_as=str(getattr(result, "outcome", "ended")).lower(), resume_blocked=blocked,
+            own_uuids=own, clock=clock,
+        )
+        out.violation = bool(outcome.violation)
+        if not outcome.closed:
+            out.reason = outcome.row_reason
+            return out
+        if outcome.from_stored:
+            stored = _load(project_root, run_id) or record
+            note_now = (stored.get("telemetry") or {}).get("evidence") or {}
+            out.entry_recorded = note_now.get("recorded") is True
+            out.reason = note_now.get("reason")
+            stored_boundary = (stored.get("telemetry") or {}).get("boundary") or {}
+            if isinstance(stored_boundary, Mapping) and stored_boundary.get("status") == "violation":
+                out.violation = True
+            return out
+    except Exception as exc:  # noqa: BLE001
+        _note_error(project_root, run_id, "cost", exc)
+        return out
+
+    try:
+        record = _load(project_root, run_id) or record
+        telemetry = record.get("telemetry") if isinstance(record.get("telemetry"), Mapping) else {}
+        if (telemetry.get("evidence") or {}).get("recorded") is True:
+            out.entry_recorded = True
+            return out
+        verdict = getattr(isolated, "boundary", None)
+        if verdict is not None:
+            if verdict.status == "violation":
+                out.violation = True
+            try:
+                _write_boundary_note(project_root, run_id, verdict)
+            except Exception as exc:  # noqa: BLE001
+                _note_error(project_root, run_id, "boundary", exc)
+        note = _record_snapshot_entry(
+            project_root, task, isolated, outcome, kind=kind, stage=stage, run_id=run_id, verdict=verdict,
+            origin=origin, clock=clock)
+        out.entry_recorded = bool(note.get("recorded"))
+        out.reason = note.get("reason")
+        _write_evidence_note(project_root, run_id, note)
+    except Exception as exc:  # noqa: BLE001
+        _note_error(project_root, run_id, "evidence", exc)
+    return out
+
+
+def _record_snapshot_entry(
+    project_root: Any, task: str, isolated: Any, outcome: cost.CostOutcome, *, kind: str,
+    stage: Optional[int], run_id: str, verdict: Optional["boundaries.BoundaryResult"], origin: str,
+    clock: Callable[[], float],
+) -> Dict[str, Any]:
+    entry_phase = "plan" if kind == "critic" else "review"
+    note: Dict[str, Any] = {"recorded": False, "entry_phase": entry_phase, "stage": stage, "reason": None}
+    if not cost.task_folder_present(project_root, task):
+        note["reason"] = "task-folder-missing"
+        return note
+    directory = runstore.store_dir(project_root, create=True)
+    state = runstore.load_workflow_state(directory, task)
+    live = runstore.current_entry(state, stage, entry_phase) if state is not None else None
+
+    found = getattr(isolated, "harvest", None)
+    path_rel = getattr(found, "path_rel", None)
+    digest = getattr(found, "sha256", None)
+    outputs_error: Optional[str] = None
+    if path_rel is None:
+        outputs_error = getattr(found, "error", None) or getattr(isolated, "harvest_skipped", None) or "harvest-skipped"
+
+    runs: List[str] = [run_id]
+    ledger_uuids: List[Any] = []
+    appended: List[Any] = list(outcome.appended)
+    critic_responses: List[str] = []
+    carried_ok = False
+    copied_violation = False
+    if kind == "critic":
+        if live is not None and live.get("origin") in _COMPOSED_ORIGINS:
+            runs = [r for r in live.get("runs") or [] if isinstance(r, str)] + [run_id]
+            critic_responses = [r for r in live.get("critic_responses") or [] if isinstance(r, str)]
+            ledger_uuids = list(live.get("ledger_uuids") or [])
+            appended = list(live.get("ledger_lines_appended_during_run") or []) + appended
+            copied_violation = live.get("boundary") == "violation"
+            carried_ok = live.get("boundary") == "ok"
+        if path_rel is not None:
+            critic_responses.append(path_rel)
+    if outcome.row in ("written", "present"):
+        ledger_uuids.append(run_id)
+    violation = outcome.violation or copied_violation
+    boundary_value: Optional[str] = "violation" if violation else None
+    extra: Dict[str, Any] = {}
+    if verdict is not None:
+        if verdict.status == "violation":
+            boundary_value = "violation"
+        elif verdict.status == "ok" and not violation and (kind != "critic" or carried_ok):
+            boundary_value = "ok"
+        if boundary_value is None:
+            extra["boundary_reason"] = verdict.reason
+    harvested: List[Dict[str, str]] = []
+    if kind == "review" and path_rel is not None:
+        harvested = [{"path": path_rel, "sha256": digest or ""}]
+    fields: Dict[str, Any] = {
+        "ledger_uuids": _dedup(ledger_uuids),
+        "ledger_lines_appended_during_run": _dedup(appended),
+        "outputs_recorded": True,
+        "critic_responses": critic_responses,
+        "harvested": harvested,
+    }
+    if outputs_error is not None and kind == "review":
+        fields["outputs_error"] = outputs_error
+    snapshot = evidence.take_snapshot(project_root, task, entry_phase)
+    evidence.record_evidence(
+        project_root, task, stage, entry_phase, origin, snapshot, runs=runs,
+        boundary=boundary_value, clock=clock, **extra, **fields,
+    )
+    note["recorded"] = True
+    if outputs_error is not None:
+        note["reason"] = outputs_error
+    return note
