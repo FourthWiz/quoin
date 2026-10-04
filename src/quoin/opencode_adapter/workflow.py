@@ -345,9 +345,12 @@ class Coordinator:
     # -- gate ----------------------------------------------------------------
     def gate(self, stage: Optional[int], phase: str) -> GateOutcome:
         """Evaluate, write the audit artifact and record the verdict."""
-        result = gate.evaluate(
-            self.project_root, self.task, stage, phase, source_dir=self.source_dir, clock=self.clock
-        )
+        try:
+            result = gate.evaluate(
+                self.project_root, self.task, stage, phase, source_dir=self.source_dir, clock=self.clock
+            )
+        except gate.GateRefused as exc:
+            return GateOutcome(verdict=None, reasons=(), error=exc.code)
         out = GateOutcome(verdict=result.verdict, reasons=tuple(result.reasons))
         try:
             sdir = gate.stage_dir(self.project_root, self.task, stage, self.source_dir)
@@ -996,8 +999,12 @@ class Coordinator:
         gates: List[GateOutcome] = []
         outcome, exit_code, reasons = "COMPLETED", 0, []  # type: str, int, List[str]
         stopped = False
+        items = list(items)
+        pos = 0
         try:
-            for phase, stage in items:
+            while pos < len(items):
+                phase, stage = items[pos]
+                pos += 1
                 res = self.resolve(self.load_state(), phase, stage)
                 if res.kind == "pass":
                     continue
@@ -1041,6 +1048,12 @@ class Coordinator:
                     stopped, outcome, exit_code = True, "GATE_REFUSED", 7
                     reasons.extend(outcome_gate.reasons)
                     break
+                if phase == "architect":
+                    # the architecture just written names the stages to run
+                    fresh = self.sequence(self.load_state())
+                    if ("architect", None) in fresh:
+                        items = fresh
+                        pos = fresh.index(("architect", None)) + 1
                 if opts.through == phase:
                     stopped = True
                     break
