@@ -11,6 +11,14 @@ Scenario file: ``{"version_output"?, "require_session_after_first"?,
 "max_lifetime_s"?, "attempts": [{"steps": [...]}, ...]}``. Attempt ``i`` runs
 ``attempts[min(i - 1, len - 1)]``. Only ``run`` calls count as attempts.
 
+An optional ``commands: {KEY: {"attempts": [...]}}`` table selects steps per
+command: a ``run`` call looks up ``COMMAND@STAGE`` (for example
+``quoin-plan@2``), then ``COMMAND``, then the top-level ``attempts``. The
+attempt index inside a ``commands`` entry is counted per lookup key (recorded
+as ``scenario_key``); the global ``attempt`` field is unchanged. String values
+in a step may use ``$task``, ``$stage``, ``$stagedir`` and ``$context``, parsed
+from the ``--command`` argument.
+
 Helper processes (the grandchildren) exit on their own when ``STATE/stop``
 exists or after ``max_lifetime_s`` seconds (default 120), so a failed test
 cannot leave one running forever; each writes its own pid to
@@ -490,6 +498,36 @@ def _fill(value: Any, session: str) -> Any:
     return value
 
 
+_MARKER = " (non-interactive run)"
+_ARG_RE = re.compile(
+    r"^(?:stage (?P<stage>[0-9]+) of )?(?P<task>[^\s()]+)"
+    r"(?: \(context: (?P<context>[^()]*)\))?"
+    r"(?P<marker>" + re.escape(_MARKER) + r")?$")
+_PLACEHOLDER_RE = re.compile(r"\$(stagedir|stage|task|context)\b")
+
+
+def _parse_command_arg(text: str) -> Optional[Dict[str, str]]:
+    """Parse the driver-built argument; None when the order is not the driver's."""
+    match = _ARG_RE.match(text)
+    if match is None:
+        return None
+    task = match.group("task")
+    stage = match.group("stage") or ""
+    context = (match.group("context") or "").replace(", ", " ")
+    stagedir = ".workflow_artifacts/%s/stage-%s" % (task, stage) if stage else ".workflow_artifacts/%s" % task
+    return {"task": task, "stage": stage, "stagedir": stagedir, "context": context}
+
+
+def _substitute(value: Any, subs: Dict[str, str]) -> Any:
+    if isinstance(value, str):
+        return _PLACEHOLDER_RE.sub(lambda m: subs[m.group(1)], value)
+    if isinstance(value, list):
+        return [_substitute(v, subs) for v in value]
+    if isinstance(value, dict):
+        return {k: _substitute(v, subs) for k, v in value.items()}
+    return value
+
+
 def _out(text: str) -> None:
     sys.stdout.write(text)
     sys.stdout.flush()
@@ -530,6 +568,17 @@ def _parse_run(args: List[str]) -> Dict[str, Any]:
 def _record(state: Path, entry: Dict[str, Any]) -> None:
     with open(state / "invocations.jsonl", "a", encoding="utf-8") as fh:
         fh.write(json.dumps(entry) + "\n")
+
+
+def _prior_key_runs(state: Path, key: str) -> int:
+    path = state / "invocations.jsonl"
+    if not path.exists():
+        return 0
+    count = 0
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        if raw.strip() and json.loads(raw).get("scenario_key") == key:
+            count += 1
+    return count
 
 
 def _prior_runs(state: Path) -> int:
@@ -848,14 +897,38 @@ def main(argv: List[str]) -> int:
         session = "ses_fake%d" % attempt
     (state / "sessions" / (session + ".json")).write_text(
         json.dumps({"id": session, "last_attempt": attempt}) + "\n", encoding="utf-8")
-    _record(state, dict(base_entry, attempt=attempt, session_id=session, parsed=parsed))
+    command_arg = parsed.get("command")
+    commands = scenario.get("commands")
+    chosen_key: Optional[str] = None
+    chosen: Optional[Dict[str, Any]] = None
+    arg_info: Optional[Dict[str, str]] = None
+    if commands and isinstance(command_arg, str):
+        arg_info = _parse_command_arg(" ".join(parsed["message"]))
+        stage = arg_info["stage"] if arg_info else ""
+        for candidate in ((command_arg + "@" + stage) if stage else None, command_arg):
+            if candidate and candidate in commands:
+                chosen_key, chosen = candidate, commands[candidate]
+                break
+    entry = dict(base_entry, attempt=attempt, session_id=session, parsed=parsed)
+    if chosen_key is not None:
+        entry["scenario_key"] = chosen_key
+    key_attempt = (_prior_key_runs(state, chosen_key) + 1) if chosen_key is not None else attempt
+    _record(state, entry)
 
     if scenario.get("require_session_after_first") and attempt > 1 and not requested:
         _err("fake opencode: continuation attempt arrived without --session\n")
         return 97
 
-    attempts = scenario["attempts"]
-    steps = attempts[min(attempt - 1, len(attempts) - 1)]["steps"]
+    if chosen is not None:
+        attempts = chosen["attempts"]
+        steps = attempts[min(key_attempt - 1, len(attempts) - 1)]["steps"]
+        if arg_info is None:
+            _log_effect(state, "argument-order-invalid")
+            return 96
+        steps = _substitute(steps, arg_info)
+    else:
+        attempts = scenario["attempts"]
+        steps = attempts[min(attempt - 1, len(attempts) - 1)]["steps"]
     return _run_steps(steps, session, state, scenario)
 
 
