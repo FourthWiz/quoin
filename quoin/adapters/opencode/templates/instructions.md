@@ -8,6 +8,10 @@ These rules govern any `/quoin-*` work in this project and take precedence over 
 
 `/quoin-implement` and `/quoin-end-of-task` are never started without an explicit user command. No other command may start implementation or finalize a task on the user's behalf.
 
+## Headless coordinator
+
+`quoin run --runtime opencode --workflow` runs the whole sequence headless, one fresh session per phase, with a separate reviewing session for critic and review and a deterministic gate after each phase. `/quoin-run` only names the next step to take. A reviewing session here is a separate context running the same model, not a different model.
+
 ## Gate
 
 A gate runs deterministic validators and stops for explicit human approval before the next phase begins. A missing, failing or unrunnable validator is a failed check, never a reason to approve on judgment.

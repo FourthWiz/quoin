@@ -5,7 +5,7 @@
       "description": "Deep architectural analysis and stage decomposition for a task, run by the architect role.",
       "extra_sections": [],
       "notes": [
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
       ],
       "rewrites": [
         {
@@ -24,7 +24,7 @@
       "notes": [
         "Cleanup does not run before a checkpoint save; there is no cleanup skill in OpenCode.",
         "The skill writes its own `recent-sessions.md` entry directly, without any automated background process.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
         "Write the handoff with `quoin opencode handoff write --task TASK`, passing `--decision` and `--note` for the decisions and notes to carry over.",
         "If the helper reports that the task lock is held, this phase is running headless under `quoin run`; report that the verdict or handoff must be written from the TUI or after the run, and stop."
       ],
@@ -90,8 +90,12 @@
       "notes": [
         "The read-only subagent returns its findings as its final message; the calling role writes the artifact.",
         "Tests run only in the calling role, never in the read-only subagent.",
-        "Running critic in this adapter is a separate context, not model diversity.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "Running critic in this adapter gives a separate context, not a different model.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "The verdict appears once, in the Verdict section: for a critic response the heading `## Verdict: PASS` or `## Verdict: REVISE` followed by a `## Summary` section, for a review a Verdict section holding only the bare value.",
+        "No other heading names the verdict, a verdict value or the words blocked, revise or changes requested in any case, and no other line starts with a verdict value after markup, container markers and a short label; no table cell is a verdict value either. A line elsewhere that names the verdict starts with the value.",
+        "Describe earlier rounds in a sentence, describe verdict formats in words, and name any HTML element that precedes the Verdict heading without angle brackets.",
+        "Write each critic finding with an `Assessment:` label."
       ],
       "rewrites": [
         {
@@ -118,7 +122,7 @@
         "Discovery map (optional structured output)"
       ],
       "notes": [
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
       ],
       "rewrites": [
         {
@@ -149,7 +153,7 @@
       "extra_sections": [],
       "notes": [
         "This skill is never started without an explicit user command.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
       ],
       "rewrites": [
         {
@@ -175,7 +179,7 @@
         "Run validators with quoin opencode script validate_artifact and quoin opencode script path_resolve.",
         "A missing, failing or unrunnable validator is a failed check, never a reason to approve on judgment.",
         "A validator warning that PyYAML is not installed means the frontmatter check did not run; report the result as partial, not as a pass.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
         "The verdict comes only from `quoin opencode gate --task TASK [--stage N] --phase PHASE --write`; your text may only explain it. When it refuses for missing evidence, tell the user the adopt command it names; never run that command yourself.",
         "If the helper reports that the task lock is held, this phase is running headless under `quoin run`; report that the verdict or handoff must be written from the TUI or after the run, and stop."
       ],
@@ -202,9 +206,10 @@
       ],
       "notes": [
         "This skill is never started without an explicit user command.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
         "In a non-interactive run, run no shell command other than the allowed Quoin helpers, never commit, and skip the branch checks; the runtime checks the branch before launch.",
-        "To run the project's configured tests, run `quoin opencode test-run --task TASK --stage N`; it prints one JSON line with the outcome, and the runtime reads that result itself."
+        "To run the project's configured tests, run `quoin opencode test-run --task TASK --stage N`; it prints one JSON line with the outcome, and the runtime reads that result itself.",
+        "When the command argument holds a parenthesised context suffix naming files, read those files first. A review means fix its findings before anything else."
       ],
       "rewrites": [
         {
@@ -234,7 +239,8 @@
       "description": "Creates a detailed, implementation-ready plan for a development task, run by the planner role.",
       "extra_sections": [],
       "notes": [
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "When the command argument holds a parenthesised context suffix naming files, read those files first. A critic response means revise the existing plan against its findings and keep its earlier history."
       ],
       "rewrites": [
         {
@@ -251,8 +257,12 @@
       "notes": [
         "The read-only subagent returns its findings as its final message; the calling role writes the artifact.",
         "Tests run only in the calling role, never in the read-only subagent.",
-        "Running review in this adapter is a separate context, not model diversity.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "Running review in this adapter gives a separate context, not a different model.",
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing.",
+        "The verdict appears once, in the Verdict section: for a critic response the heading `## Verdict: PASS` or `## Verdict: REVISE` followed by a `## Summary` section, for a review a Verdict section holding only the bare value.",
+        "No other heading names the verdict, a verdict value or the words blocked, revise or changes requested in any case, and no other line starts with a verdict value after markup, container markers and a short label; no table cell is a verdict value either. A line elsewhere that names the verdict starts with the value.",
+        "Describe earlier rounds in a sentence, describe verdict formats in words, and name any HTML element that precedes the Verdict heading without angle brackets.",
+        "Put test-coverage annotations under the `## Test Coverage` section."
       ],
       "rewrites": [
         {
@@ -353,7 +363,7 @@
       "extra_sections": [],
       "notes": [
         "The planner saves each critique the quoin-critic subagent returns as the critic-response file; the subagent never writes it itself.",
-        "When the command argument ends with ` (non-interactive run)`, the task name is the word before that marker; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
+        "When the command argument ends with ` (non-interactive run)`, the task name is the word after `of`, or the first word when there is no `of`, before any parenthesised text; ask no questions, and if you cannot continue without an answer, stop and say what is missing."
       ],
       "rewrites": [
         {
