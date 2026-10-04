@@ -304,6 +304,62 @@ def take_listing(
     )
 
 
+def listing_to_json(listing: Listing) -> Dict[str, Any]:
+    """A JSON-ready form of `listing` that `listing_from_json` reads back."""
+    return {
+        "version": 1,
+        "entries": {rel: list(entry) for rel, entry in sorted(listing.entries.items())},
+        "repos": [dict(repo) for repo in listing.repos],
+        "live_task_locks": sorted(listing.live_task_locks),
+        "taken_at": listing.taken_at,
+        "truncated": bool(listing.truncated),
+        "error": listing.error,
+    }
+
+
+def _entry_from_json(value: Any) -> Optional[Entry]:
+    if not isinstance(value, list) or len(value) != 4:
+        return None
+    kind, size, mtime, digest = value
+    if kind not in ("f", "l", "d"):
+        return None
+    for number in (size, mtime):
+        if not isinstance(number, int) or isinstance(number, bool):
+            return None
+    if digest is not None and not isinstance(digest, str):
+        return None
+    return (kind, size, mtime, digest)
+
+
+def listing_from_json(data: Any) -> Optional[Listing]:
+    """The listing `data` describes, or None when any field is malformed."""
+    if not isinstance(data, dict) or data.get("version") != 1:
+        return None
+    raw_entries = data.get("entries")
+    repos = data.get("repos")
+    locks = data.get("live_task_locks")
+    taken_at = data.get("taken_at")
+    error = data.get("error")
+    if not isinstance(raw_entries, dict) or not isinstance(repos, list) or not isinstance(locks, list):
+        return None
+    if not isinstance(taken_at, str) or not isinstance(data.get("truncated"), bool):
+        return None
+    if error is not None and not isinstance(error, str):
+        return None
+    if not all(isinstance(item, str) for item in locks) or not all(isinstance(item, dict) for item in repos):
+        return None
+    entries: Dict[str, Entry] = {}
+    for rel, value in raw_entries.items():
+        entry = _entry_from_json(value)
+        if not isinstance(rel, str) or entry is None:
+            return None
+        entries[rel] = entry
+    return Listing(
+        entries=entries, repos=tuple(dict(repo) for repo in repos), live_task_locks=frozenset(locks),
+        taken_at=taken_at, truncated=data["truncated"], error=error,
+    )
+
+
 # ---------------------------------------------------------------------------
 # role rules
 # ---------------------------------------------------------------------------
