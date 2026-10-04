@@ -486,7 +486,7 @@ class Coordinator:
                 except Exception:  # noqa: BLE001
                     now = None
                 if now is not None:
-                    return window.reconcile(saved, now, writes, root), True
+                    return window.reconcile(saved, now, self._with_state_write(writes, now), root), True
         listing = run_hooks.before_boundary(root, self.task)
         if listing is not None and resumed is None:
             try:
@@ -494,6 +494,26 @@ class Coordinator:
             except Exception as exc:  # noqa: BLE001
                 self.errors.append("window-save: " + type(exc).__name__)
         return listing, False
+
+    def _with_state_write(self, writes: Mapping[str, str], now: Any) -> Dict[str, str]:
+        """`writes` plus the workflow state file as it stands now. The coordinator
+        rewrites that file between a run's attempts (the interrupted entry, a fresh
+        timestamp), so it must not count against the resumed run; a change made
+        while the resumed attempt runs still differs from this baseline."""
+        out = dict(writes)
+        try:
+            rel = os.path.relpath(
+                str(runstore.workflow_state_path(runstore.store_dir(self.project_root), self.task)),
+                str(self.project_root),
+            ).replace(os.sep, "/")
+            entry = now.entries.get(rel)
+            if entry is not None and entry[0] == "f":
+                digest = entry[3] if entry[3] is not None else window._disk_sha(self.project_root, rel)  # noqa: SLF001
+                if digest:
+                    out[rel] = digest
+        except Exception:  # noqa: BLE001 - without it the window stays as saved
+            pass
+        return out
 
     # -- tests ---------------------------------------------------------------
     def _tests_configured(self) -> bool:

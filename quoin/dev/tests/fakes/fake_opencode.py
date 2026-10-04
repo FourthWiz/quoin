@@ -895,8 +895,13 @@ def main(argv: List[str]) -> int:
         session = existing[-1].stem if existing else "ses_fake%d" % attempt
     else:
         session = "ses_fake%d" % attempt
-    (state / "sessions" / (session + ".json")).write_text(
-        json.dumps({"id": session, "last_attempt": attempt}) + "\n", encoding="utf-8")
+    session_path = state / "sessions" / (session + ".json")
+    try:
+        previous = json.loads(session_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        previous = {}
+    session_path.write_text(
+        json.dumps(dict(previous, id=session, last_attempt=attempt)) + "\n", encoding="utf-8")
     command_arg = parsed.get("command")
     commands = scenario.get("commands")
     chosen_key: Optional[str] = None
@@ -909,6 +914,16 @@ def main(argv: List[str]) -> int:
             if candidate and candidate in commands:
                 chosen_key, chosen = candidate, commands[candidate]
                 break
+    session_file = state / "sessions" / (session + ".json")
+    if commands and chosen_key is None and requested:
+        # a continuation names no command: it runs the steps of the command that opened the session
+        stored = previous
+        if stored.get("scenario_key") in commands and isinstance(stored.get("arg_info"), dict):
+            chosen_key, chosen, arg_info = stored["scenario_key"], commands[stored["scenario_key"]], stored["arg_info"]
+    if chosen_key is not None and arg_info is not None:
+        session_file.write_text(json.dumps(
+            {"id": session, "last_attempt": attempt, "scenario_key": chosen_key, "arg_info": arg_info}) + "\n",
+            encoding="utf-8")
     entry = dict(base_entry, attempt=attempt, session_id=session, parsed=parsed)
     if chosen_key is not None:
         entry["scenario_key"] = chosen_key

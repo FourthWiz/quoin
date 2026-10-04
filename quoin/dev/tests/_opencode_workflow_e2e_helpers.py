@@ -18,6 +18,7 @@ from quoin import cli
 from quoin.opencode_adapter import runstore
 
 TASK = "demo"
+MARKER = " (non-interactive run)"
 fake = dh.fake
 CRITIC_REVISE_TEXT = fake.CRITIC_PASS_TEXT.replace("PASS", "REVISE")
 STAGE_DIR = ".workflow_artifacts/demo/stage-%d"
@@ -116,7 +117,9 @@ class WorkflowProject(InstalledProject):
         captured = capsys.readouterr()
         self.last_err = captured.err
         lines = captured.out.strip().splitlines()
-        return code, json.loads(lines[-1])
+        summary = json.loads(lines[-1])
+        summary.setdefault('_stderr', self.last_err[-600:])
+        return code, summary
 
     def state(self) -> Dict[str, Any]:
         return runstore.load_workflow_state(runstore.store_dir(self.root), TASK) or {}
@@ -129,3 +132,134 @@ class WorkflowProject(InstalledProject):
 
     def commands(self) -> List[str]:
         return [i["parsed"].get("command") for i in self.runs()]
+
+
+# -- interruption and comparison helpers (resume suites) -----------------------
+
+import hashlib
+import os
+import signal
+import threading
+import time
+
+from quoin.opencode_adapter import events as oc_events
+
+
+class Crash(Exception):
+    """A simulated process crash raised from inside the coordinator."""
+
+
+def hang_attempt(*items: Dict[str, Any]) -> Dict[str, Any]:
+    """An attempt that starts a step, performs `items`, then never finishes."""
+    return {"steps": [fake._step_start("prt_h1"), *items, {"do": "hang"}]}
+
+
+def crash_attempt(*items: Dict[str, Any]) -> Dict[str, Any]:
+    """An attempt that performs `items` inside one finished step and then dies
+    by SIGKILL: an interrupted, resumable run (a cancelled run is final)."""
+    return {"steps": [fake._step_start("prt_h1"), *items, fake._step_finish("prt_hf", "tool-calls"),
+                      {"do": "crash", "signal": "SIGKILL"}]}
+
+
+def sigterm_when(proj: Any, command: str, *, nth: int = 1, settle: float = 0.8) -> threading.Thread:
+    """Send SIGTERM to this process once the `nth` launch of `command` exists
+    and has had `settle` seconds to reach its hang."""
+
+    def watch() -> None:
+        deadline = time.time() + 60
+        while time.time() < deadline:
+            seen = [c for c in proj.commands() if c == command]
+            if len(seen) >= nth:
+                time.sleep(settle)
+                os.kill(os.getpid(), signal.SIGTERM)
+                return
+            time.sleep(0.05)
+
+    thread = threading.Thread(target=watch, daemon=True)
+    thread.start()
+    return thread
+
+
+def interrupted_workflow(proj: Any, capsys: Any, command: str, *extra: str, nth: int = 1) -> Any:
+    before = signal.getsignal(signal.SIGTERM)
+    thread = sigterm_when(proj, command, nth=nth)
+    try:
+        code, summary = proj.run_workflow(capsys, *extra)
+    finally:
+        thread.join(timeout=90)
+    assert signal.getsignal(signal.SIGTERM) == before
+    return code, summary
+
+
+def _sha(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def artifact_fingerprint(proj: Any) -> Dict[str, str]:
+    """Path -> sha256 for the task folder and the source tree. Gate files are
+    compared by name only: their timestamps differ between runs."""
+    out: Dict[str, str] = {}
+    base = proj.root / ".workflow_artifacts"
+    for path in sorted(base.rglob("*")):
+        rel = path.relative_to(proj.root).as_posix()
+        if not path.is_file() or "/memory/" in "/" + rel or path.name == "cost-ledger.md":
+            continue
+        out[rel] = "gate" if path.name.startswith("gate-") else _sha(path)
+    for path in sorted((proj.root / "src").rglob("*.py")):
+        out[path.relative_to(proj.root).as_posix()] = _sha(path)
+    return out
+
+
+def all_run_ids(proj: Any) -> List[str]:
+    directory = runstore.store_dir(proj.root)
+    records, _ = runstore.list_records(directory, TASK)
+    return sorted(r["run_id"] for r in records)
+
+
+def native_event_ids(proj: Any) -> List[str]:
+    """`run:type:id` for every sidecar event that carries a native id."""
+    directory = runstore.store_dir(proj.root)
+    ids: List[str] = []
+    for run_id in all_run_ids(proj):
+        sidecar = runstore.run_paths(directory, run_id).sidecar
+        for event in runstore.read_sidecar(sidecar).events:
+            if event.native is not None and event.native.id:
+                ids.append("%s:%s:%s" % (run_id, event.native.type, event.native.id))
+    return ids
+
+
+def ledger_rows(proj: Any) -> List[str]:
+    path = proj.root / ".workflow_artifacts" / TASK / "cost-ledger.md"
+    return [l for l in path.read_text(encoding="utf-8").splitlines() if l.startswith("oc-")]
+
+
+def final_state(proj: Any) -> Dict[str, Any]:
+    state = proj.state()
+    live = sorted((e["phase"], e["stage"] if e["stage"] is not None else 0)
+                  for e in state["entries"] if not e["superseded"])
+    gates = {(e["phase"], e["stage"]): (e["gate"] or {}).get("verdict")
+             for e in state["entries"] if not e["superseded"]}
+    record_path = proj.root / ".workflow_artifacts" / "memory" / "continuation" / (TASK + ".json")
+    record = json.loads(record_path.read_text(encoding="utf-8"))
+    completed = sorted((c["phase"], c.get("stage") or 0) for c in record.get("completed") or [])
+    return {"live": live, "gates": gates, "completed": completed}
+
+
+def assert_same_outcome(interrupted: Any, reference_prints: Dict[str, Any]) -> None:
+    """The interrupted-then-continued project ends where the uninterrupted one did."""
+    got = artifact_fingerprint(interrupted)
+    want = reference_prints["artifacts"]
+    assert got == want, sorted(set(got.items()) ^ set(want.items()))
+    assert final_state(interrupted) == reference_prints["state"], (final_state(interrupted), reference_prints["state"])
+    assert all(v == "PASS" for v in final_state(interrupted)["gates"].values())
+    ids = native_event_ids(interrupted)
+    assert len(ids) == len(set(ids)), "a native event id appears twice"
+    runs = all_run_ids(interrupted)
+    rows = ledger_rows(interrupted)
+    for run_id in runs:
+        assert sum(1 for r in rows if r.startswith(run_id + " ")) == 1, run_id
+    assert len(rows) == len(runs)
+
+
+def prints_of(proj: Any) -> Dict[str, Any]:
+    return {"artifacts": artifact_fingerprint(proj), "state": final_state(proj)}
