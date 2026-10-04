@@ -969,6 +969,8 @@ class OpenCodeDriver:
             raise refuse("workflow-validation", "context-ref-invalid", "a context reference is not a path inside the project") from None
         revisions = tuple(runstore.repo_revisions(root))
         arg = task if request.stage is None else "stage %s of %s" % (request.stage, task)
+        if request.context_refs:
+            arg += " (context: %s)" % ", ".join(request.context_refs)
         if request.non_interactive:
             arg += NON_INTERACTIVE_MARKER
         argv = (str(binary), "run", "--format", "json", "--command", command_name, "--", arg)

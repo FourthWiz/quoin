@@ -303,7 +303,17 @@ def sequence(project_root, task: str, state: Optional[Mapping[str, Any]], source
     except (gate.PathUnresolved, gate.GateRefused, ValueError, OSError):
         has_arch = False
     has_entry = any(e.get("phase") == "architect" for e in (state or {}).get("entries") or [])
-    if has_arch or has_entry:
+    workflow = ((state or {}).get("settings") or {}).get("workflow")
+    if not isinstance(workflow, Mapping):
+        workflow = None
+    if workflow is not None:
+        passed_discover = any(
+            e.get("phase") == "discover" and not e.get("superseded") and _passed(e)
+            for e in (state or {}).get("entries") or []
+        )
+        if workflow.get("from_discover") is True and not passed_discover:
+            items.append(("discover", None))
+    if has_arch or has_entry or (workflow is not None and workflow.get("include_architect") is not False):
         items.append(("architect", None))
     stages = listed_stages(project_root, task, source_dir)
     for stage in ([None] if stages is None else stages):
@@ -470,7 +480,7 @@ def _native(directory: Optional[Path], task: str, pending: Sequence[Tuple[str, O
     return item, status, {"run_id": run["run_id"], "session_id": session}
 
 
-def _artifacts(project_root, task: str, state, mod) -> List[Dict[str, str]]:
+def _artifacts(project_root, task: str, state, mod, pin_to_state: bool = False) -> List[Dict[str, str]]:
     has_discover = any(e.get("phase") == "discover" for e in (state or {}).get("entries") or [])
     refs = evidence.DISCOVER_FILES if has_discover else ()
 
@@ -489,6 +499,9 @@ def _artifacts(project_root, task: str, state, mod) -> List[Dict[str, str]]:
             "artifacts-incomplete", "a task file has a name the record cannot hold; rename it",
             [repr(rel) for rel in bad[:20]],
         )
+    if pin_to_state:
+        known = latest_shas(state)
+        hashes = {rel: known.get(rel, sha) for rel, sha in hashes.items()}
     return [{"path": rel, "sha256": sha, "type": _artifact_type(rel)} for rel, sha in hashes.items()]
 
 
@@ -526,7 +539,7 @@ def _merge_text(previous: Sequence[Any], new: Sequence[str], key: Callable[[Any]
 def build_record(
     project_root, task: str, *, scope: Mapping[str, Any], scope_source: str, source_dir,
     decisions: Sequence[str] = (), notes: Sequence[str] = (), previous: Optional[Mapping[str, Any]] = None,
-    clock: Callable[[], float] = time.time, runner=None, bytes_runner=None,
+    clock: Callable[[], float] = time.time, runner=None, bytes_runner=None, pin_to_state: bool = False,
 ) -> Dict[str, Any]:
     mod = core(source_dir)
     _task(task)
@@ -594,7 +607,7 @@ def build_record(
         "completed": completed,
         "pending": pending,
         "decisions": merged_decisions,
-        "artifacts": _artifacts(project_root, task, state, mod),
+        "artifacts": _artifacts(project_root, task, state, mod, pin_to_state),
         "repo_revisions": _repo_revisions(project_root, mod, runner, bytes_runner),
         "validation": validation,
         "provenance": provenance,
