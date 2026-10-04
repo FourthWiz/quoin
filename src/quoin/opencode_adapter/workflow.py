@@ -299,8 +299,45 @@ class Coordinator:
 
     def save_state(self, state: Dict[str, Any]) -> None:
         state["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self.clock()))
+        expected_ok = self._state_matches_expected()
         runstore.write_workflow_state(runstore.store_dir(self.project_root, create=True), state)
-        self._note_state_write()
+        if expected_ok:
+            self._note_state_write()
+
+    def _state_path_rel(self) -> Tuple[Path, str]:
+        path = runstore.workflow_state_path(runstore.store_dir(self.project_root), self.task)
+        return path, os.path.relpath(str(path), str(self.project_root)).replace(os.sep, "/")
+
+    def _state_matches_expected(self) -> bool:
+        """True when the state file on disk, before the coordinator rewrites it,
+        is what the open run's window expects: the last write noted for it, else
+        the saved listing entry. A file changed in between (an agent edit during
+        an interrupted attempt) is not expected, and the rewrite is then left
+        unnoted so the boundary reconcile still reports it. No open run or no
+        window means nothing to protect."""
+        try:
+            open_id = run_hooks.open_run(self.project_root, self.task)
+            if open_id is None:
+                return True
+            loaded = self.window.load(open_id)
+            if loaded is None:
+                return True
+            saved, writes = loaded
+            path, rel = self._state_path_rel()
+            try:
+                on_disk: Optional[str] = hashlib.sha256(path.read_bytes()).hexdigest()
+            except FileNotFoundError:
+                on_disk = None
+            if rel in writes:
+                return on_disk == writes[rel]
+            entry = saved.entries.get(rel)
+            if entry is None:
+                return on_disk is None
+            if entry[0] != "f":
+                return False
+            return entry[3] is not None and on_disk == entry[3]
+        except Exception:  # noqa: BLE001 - an unreadable window only makes the check stricter
+            return False
 
     def _note_state_write(self) -> None:
         """Note the workflow state file in the window of the open run, so a
@@ -310,9 +347,8 @@ class Coordinator:
             open_id = run_hooks.open_run(self.project_root, self.task)
             if open_id is None:
                 return
-            path = runstore.workflow_state_path(runstore.store_dir(self.project_root), self.task)
+            path, rel = self._state_path_rel()
             digest = hashlib.sha256(path.read_bytes()).hexdigest()
-            rel = os.path.relpath(str(path), str(self.project_root)).replace(os.sep, "/")
             self.window.note_write(open_id, rel, digest)
         except Exception:  # noqa: BLE001 - an unnoted write only makes the window stricter
             pass
@@ -343,7 +379,8 @@ class Coordinator:
             path = handoff.write(self.project_root, self.task, record, source_dir=self.source_dir)
             if open_id is not None:
                 self._note_record_writes(open_id, path)
-                self._note_state_write()
+                if self._state_matches_expected():  # a state file changed behind the window stays unnoted
+                    self._note_state_write()
             return str(path)
         except Exception as exc:  # noqa: BLE001
             self.errors.append("record-refresh: " + type(exc).__name__)
