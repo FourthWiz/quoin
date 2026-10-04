@@ -47,6 +47,26 @@ REASON_CODES = (
     "repo-head-changed", "repo-missing", "review-not-approved", "run-evidence-partial",
     "run-not-completed", "state-invalid", "tests-failed", "verdict-unparseable",
 )
+# Specific reasons a recorded implement entry may carry beside `tests-failed`.
+TESTS_REASON_CODES = (
+    "tests-settings-changed", "tests-not-run", "tests-result-stale", "tests-timeout",
+    "tests-real-tree-changed", "tests-workspace-failed",
+)
+FINDING_SUPERSEDED = "finding-superseded"
+# Codes added for the headless coordinator; kept beside, not inside, the
+# original tuple so the closed set above stays what earlier readers pinned.
+EXTENDED_REASON_CODES = (FINDING_SUPERSEDED,) + TESTS_REASON_CODES
+_TESTS_REASON_DETAILS = {
+    "tests-settings-changed": (
+        "the test settings changed or were configured under another state root; configure the test command "
+        "again with `quoin run --runtime opencode --workflow --test-command ...`, then re-run implement"
+    ),
+    "tests-not-run": "no test result was recorded for this implement run",
+    "tests-result-stale": "the stored test result belongs to another run or attempt",
+    "tests-timeout": "the test run exceeded its time limit",
+    "tests-real-tree-changed": "the test run changed the real working tree",
+    "tests-workspace-failed": "the isolated test workspace could not be built",
+}
 WARNING_CODES = (
     "boundary-unverified", "critic-not-run", "ledger-appended-during-run", "run-evidence-absent",
     "tests-not-configured",
@@ -766,6 +786,11 @@ def critic_status(
             return [("WARN", "critic-not-run", "no critic response was recorded")]
         return [("FAIL", "critic-missing", "no critic response was recorded for this plan")]
     out: List[Tuple[str, str, str]] = []
+    if recorded and (origin == "coordinator" or entry.get("outputs_recorded") is True):
+        highest = max(int(m.group(1)) for m in (_CRITIC_RE.match(os.path.basename(n.replace("\\", "/"))) for n in recorded) if m)
+        newer = [n for n, _p in _numbered(sdir, _CRITIC_RE) if n > highest]
+        if newer:
+            out.append(("FAIL", FINDING_SUPERSEDED, "critic-response-%d.md is newer than the recorded responses" % max(newer)))
     cap = settings.get("max_critic_rounds")
     cap = cap if isinstance(cap, int) and not isinstance(cap, bool) and cap >= 1 else DEFAULT_MAX_CRITIC_ROUNDS
     text = _read_text(used[-1], MAX_TEXT_BYTES)
@@ -1109,6 +1134,12 @@ def _check_verdict(project_root, phase, entry, origin, sdir, settings, paths) ->
             return _check("phase-verdict", [_fail("verdict-unparseable", detail)])
         if verdict != "APPROVED":
             return _check("phase-verdict", [_fail("review-not-approved", "the review verdict is %s" % verdict)])
+        match = _REVIEW_RE.match(paths[0].name)
+        if match and sdir is not None and (origin == "coordinator" or entry.get("outputs_recorded") is True):
+            newer = [n for n, _p in _numbered(sdir, _REVIEW_RE) if n > int(match.group(1))]
+            if newer:
+                return _check("phase-verdict", [_fail(
+                    FINDING_SUPERSEDED, "review-%d.md is newer than the recorded review" % max(newer))])
         return _check("phase-verdict", [("PASS", "", "")])
     return _skip("phase-verdict", "this phase has no verdict file")
 
@@ -1121,7 +1152,11 @@ def _check_tests(phase, entry, settings) -> Check:
     tests = entry.get("tests")
     code = tests.get("exit_code") if isinstance(tests, Mapping) else None
     if not isinstance(code, int) or isinstance(code, bool) or code != 0:
-        return _check("tests", [_fail("tests-failed", "the recorded test run did not exit 0")])
+        items = [_fail("tests-failed", "the recorded test run did not exit 0")]
+        reason = entry.get("tests_reason")
+        if isinstance(reason, str) and reason in TESTS_REASON_CODES:
+            items.append(_fail(reason, _TESTS_REASON_DETAILS[reason]))
+        return _check("tests", items)
     return _check("tests", [("PASS", "", "")])
 
 
