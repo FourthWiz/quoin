@@ -20,7 +20,7 @@ import hashlib
 import json
 import os
 import re
-import select
+import selectors
 import shutil
 import signal
 import stat
@@ -442,6 +442,8 @@ def _remove_workspace(base: str, made: Sequence[Tuple[_Repo, str]], links: Seque
 # ---------------------------------------------------------------------------
 
 
+EXIT_DRAIN_S = 1.0
+
 def _execute(command: Sequence[str], cwd: str, env: Mapping[str, str], timeout_s: float,
              cap: int) -> Tuple[Optional[int], bool, str, str]:
     """`(exit code, timed out, output sha256, output tail text)`."""
@@ -464,19 +466,28 @@ def _execute(command: Sequence[str], cwd: str, env: Mapping[str, str], timeout_s
     hashed = 0
     tail = b""
     expired = False
-    clean = False
     assert proc.stdout is not None
     fd = proc.stdout.fileno()
+    selector = selectors.DefaultSelector()
+    selector.register(fd, selectors.EVENT_READ)
+    exit_grace_end: Optional[float] = None
     try:
         # The read is bounded by the deadline rather than by end of output: a
         # child that left the process group can hold the pipe open forever.
+        # Once the child itself has exited, output is drained for a short
+        # grace period only, so a grandchild holding the pipe neither stalls
+        # the run nor turns a clean exit into a timeout.
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                expired = True
+            now = time.monotonic()
+            if exit_grace_end is None and proc.poll() is not None:
+                exit_grace_end = now + EXIT_DRAIN_S
+            if exit_grace_end is not None and now >= exit_grace_end:
                 break
-            ready, _, _ = select.select([fd], [], [], min(remaining, 0.5))
-            if not ready:
+            remaining = deadline - now
+            if remaining <= 0:
+                expired = proc.poll() is None
+                break
+            if not selector.select(min(remaining, 0.2)):
                 continue
             chunk = os.read(fd, 65536)
             if not chunk:
@@ -491,10 +502,11 @@ def _execute(command: Sequence[str], cwd: str, env: Mapping[str, str], timeout_s
                 proc.wait(timeout=max(deadline - time.monotonic(), 0.0))
             except subprocess.TimeoutExpired:
                 expired = True
-        clean = not expired
     finally:
-        if expired or not clean:
-            kill_group()
+        # Always reap the whole group, including after a clean exit, so
+        # background processes a suite leaves behind do not outlive the run.
+        kill_group()
+        selector.close()
         proc.stdout.close()
         proc.wait()
     return proc.returncode, expired, digest.hexdigest(), _clean_tail(tail)
@@ -524,7 +536,7 @@ def _sweep_dead_workspaces(work_dir: Path, repos: Sequence[_Repo]) -> None:
             continue
         except PermissionError:
             continue
-        except OSError:
+        except (OSError, OverflowError):
             pass
         shutil.rmtree(str(work_dir / name), ignore_errors=True)
         removed = True

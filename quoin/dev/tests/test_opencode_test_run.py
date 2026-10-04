@@ -408,3 +408,42 @@ def test_work_directories_of_dead_runs_are_swept(world):
     stale.mkdir()
     assert run(world).outcome == "PASSED"
     assert not stale.exists()
+
+
+def test_background_children_do_not_outlive_a_clean_run(world):
+    pidfile = world.tmp / "bg.pid"
+    configure(
+        world,
+        command=["sh", "-c", "sleep 47 >/dev/null 2>&1 & echo $! > \"$0\"; exit 0", str(pidfile)],
+        include=(),
+    )
+    began = time.monotonic()
+    result = run(world)
+    assert result.outcome == "PASSED" and result.timed_out is False
+    assert time.monotonic() - began < 20
+    pid = int(pidfile.read_text())
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            break
+        time.sleep(0.05)
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
+
+
+def test_a_clean_exit_with_a_pipe_held_open_is_not_a_timeout(world):
+    configure(world, command=["sh", "-c", "sleep 47 & exit 0"], include=(), timeout_s=30)
+    began = time.monotonic()
+    result = run(world)
+    assert result.outcome == "PASSED" and result.timed_out is False
+    assert time.monotonic() - began < 15
+
+
+def test_an_implausible_pid_prefix_does_not_abort_the_run(world):
+    configure(world, command=["true"], include=())
+    work = world.state / "tests" / paths.project_key(world.root) / "work"
+    work.mkdir(parents=True, mode=0o700)
+    (work / ("9" * 40 + "-x")).mkdir()
+    assert run(world).outcome == "PASSED"

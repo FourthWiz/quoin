@@ -239,3 +239,17 @@ rather than open questions:
 - The gate role's own edits to the workflow record are denied in its permission
   map; the gate helper still writes the record from its own process, and the
   boundary check still treats that file as the gate's to change.
+- Files over the hash cap, or past the total hash budget, are compared by size
+  and mtime only, and code started by test-run can reset an mtime. The limit
+  sits beside the other test-run residuals; comparing ctime as well is a
+  possible tightening.
+- The settings digest lives under the driver's own state root. The coordinator
+  must pass that same root when it configures test-run; recomputing it from
+  other inputs makes every implement test run refuse with a settings-changed
+  reason, and settings hand-edited in the workflow record always refuse. In
+  both cases the gate reports missing tests rather than the underlying reason.
+- The printed resume hint carries the non-interactive flag while the stored
+  hint does not, so advice built from the stored hint still suggests an
+  interactive restart. This is deliberate for now.
+- A closed-run rerun that re-reports its stored violation has no dedicated
+  test yet.

@@ -124,11 +124,15 @@ class _Walker:
             info = os.fstat(fd)
             if not stat.S_ISREG(info.st_mode):
                 return None
-            while True:
-                chunk = os.read(fd, _HASH_CHUNK)
+            # Read no further than the size recorded for the listing, so a
+            # file that grows while it is hashed cannot overrun the budget.
+            left = size
+            while left > 0:
+                chunk = os.read(fd, min(_HASH_CHUNK, left))
                 if not chunk:
                     break
                 digest.update(chunk)
+                left -= len(chunk)
                 self.hashed += len(chunk)
         except OSError:
             return None
