@@ -33,6 +33,7 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
        disabling detection must not silently green-light an APPROVE — this
        is the OPPOSITE of branch_hygiene's env opt-out which exits 0.
+       (except --print-interpreter, which runs no tests and is answered first)
   4  — a .py source changed AND its selectors resolved to the empty set
        (changed source with nothing to run).  Distinct from 3 so the gate
        message can say "no affected tests found for changed sources."
@@ -47,6 +48,7 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
 
 Env:
   QUOIN_DISABLE_AFFECTED_TESTS=1 — exit 3 immediately (fail-CLOSED opt-out)
+      (except --print-interpreter, which runs no tests and is answered first)
   QUOIN_REQUIRE_TASK_CONTEXT — literal "0" ONLY forces legacy always-run even
       when --require-task-context is passed (disarms the exit-5 branch); unset
       or any other value honors the flag (IVG-151).
@@ -2742,8 +2744,17 @@ def main(argv: list[str] | None = None) -> int:
           only with --require-task-context in --project-root mode when
           QUOIN_REQUIRE_TASK_CONTEXT!=0 (IVG-151)
     """
-    # Env opt-out — exits 3 (NOT 0) so disabling cannot silently green-light APPROVE
-    if os.environ.get("QUOIN_DISABLE_AFFECTED_TESTS", "").strip() == "1":
+    # Env opt-out — exits 3 (NOT 0) so disabling cannot silently green-light APPROVE.
+    # --print-interpreter is the one exception: it runs no tests and only reports
+    # which interpreter a run would use, so the fail-closed rationale does not
+    # apply and it is answered first. The argv is scanned up front (rather than
+    # moving this check below argparse) so bad arguments under the knob still
+    # exit 3.
+    _argv = sys.argv[1:] if argv is None else list(argv)
+    if (
+        "--print-interpreter" not in _argv
+        and os.environ.get("QUOIN_DISABLE_AFFECTED_TESTS", "").strip() == "1"
+    ):
         print(json.dumps({"disabled": True}))
         return 3
 
@@ -2836,12 +2847,33 @@ def main(argv: list[str] | None = None) -> int:
             "Print the resolved interpreter and exit 0, without running anything else. "
             "Anchors at --project-root itself, not the resolved git repo; may diverge "
             "from the interpreter a real run selects when a repo-local .venv differs "
-            "from a project-level one."
+            "from a project-level one; use --interpreter-anchor repo for the "
+            "interpreter a real run selects."
+        ),
+    )
+    parser.add_argument(
+        "--interpreter-anchor",
+        choices=["project-root", "repo"],
+        default="project-root",
+        dest="interpreter_anchor",
+        help=(
+            "With --print-interpreter: anchor the venv lookup at the project root "
+            "(default) or at the single git repo resolved under it, which is what a "
+            "real run uses. Inert without --print-interpreter."
+        ),
+    )
+    parser.add_argument(
+        "--interpreter-only",
+        action="store_true",
+        dest="interpreter_only",
+        help=(
+            "With --print-interpreter: print only the bare interpreter path on one "
+            "line (ignores --format). Inert without --print-interpreter."
         ),
     )
 
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(_argv)
         if (
             not args.print_interpreter
             and args.project_root is None
@@ -2859,11 +2891,28 @@ def main(argv: list[str] | None = None) -> int:
     # so args.project_root can legally be None here, hence the Path.cwd() guard.
     if args.print_interpreter:
         anchor = args.project_root if args.project_root is not None else Path.cwd()
+        anchor_label = "project-root"
+        if args.interpreter_anchor == "repo":
+            try:
+                repo_anchor = resolve_repo(anchor)
+            except RuntimeError:
+                repo_anchor = None
+                anchor_label = "project-root (multiple repos)"
+            else:
+                if repo_anchor is None:
+                    anchor_label = "project-root (repo unresolved)"
+                else:
+                    anchor = repo_anchor
+                    anchor_label = "repo"
         interp, interp_reason, interp_found = resolve_python_detail(
             anchor, probe="import pytest"
         )
+        if args.interpreter_only:
+            print(str(interp))
+            return 0
         print(f"interpreter: {interp}")
         print(f"interpreter_reason: {interp_reason}")
+        print(f"interpreter_anchor: {anchor_label}")
         for found in interp_found:
             print(f"interpreter_problem: {found}")
         return 0
@@ -2882,7 +2931,9 @@ def main(argv: list[str] | None = None) -> int:
         # what the ticket removes).
         # Precedence invariants (pin — do NOT reorder):
         #   - QUOIN_DISABLE_AFFECTED_TESTS=1 already returned 3 at the very top
-        #     of main() (before argparse), so disable NATURALLY wins over this.
+        #     of main() (before argparse) for every invocation except
+        #     --print-interpreter, which runs no tests and is answered first;
+        #     so disable NATURALLY wins over this.
         #   - QUOIN_REQUIRE_TASK_CONTEXT literal "0" forces legacy always-run
         #     (mirrors the QUOIN_DISABLE_* literal-value parsing convention).
         if (

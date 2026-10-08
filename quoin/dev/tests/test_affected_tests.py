@@ -1730,6 +1730,14 @@ def _capture_help() -> str:
     return buf.getvalue()
 
 
+def _cli_capture_env(args, env=None):
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        rc = _cli(args, env=env)
+    return rc, buf.getvalue()
+
+
 class TestPrintInterpreter:
     def test_exits_0_with_two_lines(self, tmp_path):
         import io, contextlib
@@ -1758,10 +1766,116 @@ class TestPrintInterpreter:
                    "--require-task-context"])
         assert rc == 0
 
-    def test_disable_still_wins(self, tmp_path):
-        rc = _cli(["--print-interpreter", "--project-root", str(tmp_path)],
-                  env={"QUOIN_DISABLE_AFFECTED_TESTS": "1"})
-        assert rc == 3
+    def test_print_interpreter_answered_despite_disable_knob(self, tmp_path):
+        """--print-interpreter runs no tests, so the fail-closed reason for the
+        disable knob (never green-light an APPROVE) does not apply: it is
+        answered first instead of exiting 3."""
+        rc, out = _cli_capture_env(
+            ["--print-interpreter", "--interpreter-only", "--project-root", str(tmp_path)],
+            env={"QUOIN_DISABLE_AFFECTED_TESTS": "1"},
+        )
+        assert rc == 0
+        lines = out.splitlines()
+        assert len(lines) == 1
+        assert not lines[0].lstrip().startswith("{")
+
+    def test_interpreter_only_prints_bare_path_under_default_format(self, tmp_path):
+        rc, out = _cli_capture_env(
+            ["--print-interpreter", "--interpreter-only", "--project-root", str(tmp_path)]
+        )
+        assert rc == 0
+        lines = out.splitlines()
+        assert len(lines) == 1
+        assert Path(lines[0]).is_absolute()
+
+    def test_third_line_names_anchor_default(self, tmp_path):
+        rc, out = _cli_capture_env(["--print-interpreter", "--project-root", str(tmp_path)])
+        assert rc == 0
+        assert "interpreter_anchor: project-root" in out.splitlines()
+
+    def _repo_with_venv(self, tmp_path):
+        project_venv = _make_fake_venv(tmp_path)
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        (repo / ".git").mkdir()
+        repo_venv = _make_fake_venv(repo)
+        return project_venv, repo_venv
+
+    def test_anchor_repo_selects_repo_local_venv(self, tmp_path):
+        project_venv, repo_venv = self._repo_with_venv(tmp_path)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture_env(
+                ["--print-interpreter", "--interpreter-anchor", "repo",
+                 "--project-root", str(tmp_path)]
+            )
+            rc2, out2 = _cli_capture_env(
+                ["--print-interpreter", "--interpreter-anchor", "repo",
+                 "--interpreter-only", "--project-root", str(tmp_path)]
+            )
+        assert rc == 0 and rc2 == 0
+        expected = str(_at.discover_repos(tmp_path)[0].resolve() / ".venv" / "bin" / "python")
+        assert f"interpreter: {expected}" in out.splitlines()
+        assert "interpreter_anchor: repo" in out.splitlines()
+        assert out2.strip() == expected
+        assert str(project_venv) not in out
+
+    def test_anchor_repo_none_falls_back(self, tmp_path):
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture_env(
+                ["--print-interpreter", "--interpreter-anchor", "repo",
+                 "--project-root", str(tmp_path)]
+            )
+        assert rc == 0
+        assert "interpreter_anchor: project-root (repo unresolved)" in out.splitlines()
+
+    def test_anchor_repo_multiple_repos_falls_back(self, tmp_path):
+        for name in ("a", "b"):
+            (tmp_path / name / ".git").mkdir(parents=True)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture_env(
+                ["--print-interpreter", "--interpreter-anchor", "repo",
+                 "--project-root", str(tmp_path)]
+            )
+        assert rc == 0
+        assert "interpreter_anchor: project-root (multiple repos)" in out.splitlines()
+
+    def test_anchor_repo_reason_venv(self, tmp_path):
+        _, repo_venv = self._repo_with_venv(tmp_path)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture_env(
+                ["--print-interpreter", "--interpreter-anchor", "repo",
+                 "--project-root", str(tmp_path)]
+            )
+        assert "interpreter_reason: venv" in out.splitlines()
+        # the venv path is reported as the link itself, not its resolved target
+        assert not any(
+            line.startswith("interpreter: ") and line.endswith(str(Path(sys.executable).resolve()))
+            and ".venv" not in line
+            for line in out.splitlines()
+        )
+
+    def test_anchor_repo_reason_env_override(self, tmp_path):
+        self._repo_with_venv(tmp_path)
+        stub = tmp_path / "usable-python"
+        stub.write_text("#!/bin/sh\nexit 0\n")
+        stub.chmod(0o755)
+        with mock.patch.object(_at, "_probe_interpreter", return_value=True):
+            rc, out = _cli_capture_env(
+                ["--print-interpreter", "--interpreter-anchor", "repo",
+                 "--project-root", str(tmp_path)],
+                env={"QUOIN_PYTHON": str(stub)},
+            )
+        assert "interpreter_reason: env-override" in out.splitlines()
+        assert f"interpreter: {stub}" in out.splitlines()
+
+    def test_anchor_repo_reason_disabled(self, tmp_path):
+        self._repo_with_venv(tmp_path)
+        rc, out = _cli_capture_env(
+            ["--print-interpreter", "--interpreter-anchor", "repo",
+             "--project-root", str(tmp_path)],
+            env={"QUOIN_DISABLE_VENV_PROBE": "1"},
+        )
+        assert "interpreter_reason: disabled" in out.splitlines()
 
     def test_project_level_vs_repo_local_venv_divergence(self, tmp_path):
         """Pins the documented anchor divergence: --print-interpreter anchors
