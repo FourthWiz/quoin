@@ -1296,7 +1296,7 @@ python3 __QUOIN_HOME__/scripts/run_state.py --clear --project-root "$PROJECT_ROO
 
 ### end_of_task failure recovery (inline finish)
 
-If the Phase 6 subagent dies (stream-idle timeout, error return, context exhaustion) or is skipped, the orchestrator MUST — before any archive step — perform the cost aggregation itself, following `end_of_task/SKILL.md` Sub-phase B Steps 4 and 5 as a pointer, never a copy: read the ledger, apply the col-8 inline-first precedence rule, and write `.workflow_artifacts/<task-name>/cost-summary.json` at the identical path Sub-phase B resolves. On any aggregation failure, still write a partial `cost-summary.json` carrying `fallback_used: true` and a non-empty `fallback_note` naming the inline-finish origin. Only then archive. Bounded to the same `~15 tool uses` scope cap Sub-phase B already declares.
+If the Phase 6 subagent dies (stream-idle timeout, error return, context exhaustion) or is skipped, the orchestrator MUST — before any archive step — perform the cost aggregation itself, following `end_of_task/SKILL.md` Sub-phase B Steps 4 and 5 as a pointer, never a copy: run `python3 __QUOIN_HOME__/scripts/cost_ledger_summary.py --ledger .workflow_artifacts/<task-name>/cost-ledger.md --project-path "$(pwd)" --out .workflow_artifacts/<task-name>/cost-summary.json` from the project root (falling back to the Sub-phase B manual steps if it is missing or fails), which writes `cost-summary.json` at the identical path Sub-phase B resolves. On any aggregation failure, still write a partial `cost-summary.json` carrying `fallback_used: true` and a non-empty `fallback_note` naming the inline-finish origin. Only then archive. Bounded to the same `~15 tool uses` scope cap Sub-phase B already declares.
 
 After completion, present the final report:
 ```
@@ -1313,7 +1313,7 @@ Cost: $X.XX (N sessions tracked)
 Next: run /pr to create a pull request from the branch.
 ```
 
-The `Cost:` line is mandatory in every report — never silently omitted (AC-7). Its value comes from `python3 __QUOIN_HOME__/scripts/cost_summary.py --format json <task-dir>/cost-summary.json`: total present with `is_partial` false → `Cost: $X.XX (N sessions tracked)`; total present with `is_partial` true → `Cost: ~$X.XX (partial) (N sessions tracked)`; total null, file missing, or aggregation skipped → `Cost: totals unavailable — cost aggregation did not complete`. Carry the F-09 one-phase-undercount note above into this line per its own instruction.
+The `Cost:` line is mandatory in every report — never silently omitted (AC-7). Its value comes from `python3 __QUOIN_HOME__/scripts/cost_summary.py --format json <task-dir>/cost-summary.json`: nothing priced (`priced_rows` and `estimated_count` both present and both 0, even though `grand_total` is `0.0`) → `Cost: totals unavailable — nothing could be priced`; `estimated_count > 0` → `Cost: ~$X.XX (partial — $Y.YY estimated from token counts) (N sessions tracked)`; total present with `is_partial` true → `Cost: ~$X.XX (partial) (N sessions tracked)`; total present with `is_partial` false → `Cost: $X.XX (N sessions tracked)`; total null, file missing, or aggregation skipped → `Cost: totals unavailable — cost aggregation did not complete`. Carry the F-09 one-phase-undercount note above into this line per its own instruction.
 
 ## Checkpoint interaction protocol
 

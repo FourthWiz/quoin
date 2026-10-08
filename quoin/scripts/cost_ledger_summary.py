@@ -248,10 +248,8 @@ def build_summary(
     priced_rows = inline_count + repriced_count + cohort_priced_rows
 
     summary: Dict[str, Any] = {
-        "per_phase": {k: {"cost": round(v["cost"], 6), "count": int(v["count"])}
-                      for k, v in sorted(per_phase.items())},
-        "per_model": {k: {"cost": round(v["cost"], 6), "count": int(v["count"])}
-                      for k, v in sorted(per_model.items())},
+        "per_phase": {k: round(v["cost"], 6) for k, v in sorted(per_phase.items())},
+        "per_model": {k: round(v["cost"], 6) for k, v in sorted(per_model.items())},
         "estimated_per_phase": {k: round(v, 6) for k, v in sorted(estimated_per_phase.items())},
         "task_total": round(resolved_total, 6),
         # Rows whose category is not "task" are dropped by the row parser, so

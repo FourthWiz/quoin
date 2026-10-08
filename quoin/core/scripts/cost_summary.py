@@ -44,6 +44,9 @@ _TOTAL_KEY_LADDER = (
 )
 
 
+_PASSTHROUGH_KEYS = ("estimated_total", "estimated_count", "priced_rows", "phases_excluded")
+
+
 def _is_finite_number(val: object) -> bool:
     """Return True if val is a finite real number (int or float, not NaN/inf)."""
     if not isinstance(val, (int, float)):
@@ -143,7 +146,13 @@ def main(argv=None):
 
     value, is_partial = normalize_total(data)
     if args.format == "json":
-        print(json.dumps({"total": value, "is_partial": is_partial}))
+        out = {"total": value, "is_partial": is_partial}
+        # Estimate and coverage fields are passed through only when the summary
+        # carries them, so a summary without them keeps the two-key shape.
+        for key in _PASSTHROUGH_KEYS:
+            if isinstance(data, dict) and key in data:
+                out[key] = data[key]
+        print(json.dumps(out))
     else:
         print((value, is_partial))
     return 0

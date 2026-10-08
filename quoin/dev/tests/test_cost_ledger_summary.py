@@ -81,7 +81,7 @@ def test_reprice_via_ledger_sid(tmp_path, home):
     s, _ = _run(ledger, home)
     assert s["repriced_count"] == 1
     assert s["estimated_count"] == 0
-    assert s["per_phase"]["plan"]["cost"] == pytest.approx(OPUS_USD, abs=1e-6)
+    assert s["per_phase"]["plan"] == pytest.approx(OPUS_USD, abs=1e-6)
 
 
 def test_reprice_via_unique_glob(tmp_path, home):
@@ -128,7 +128,7 @@ def test_inline_resolved_row_precedence(tmp_path, home):
     ])
     s, _ = _run(ledger, home)
     assert s["repriced_count"] == 0
-    assert s["per_phase"]["plan"]["cost"] == pytest.approx(0.5)
+    assert s["per_phase"]["plan"] == pytest.approx(0.5)
 
 
 def test_legacy_session_rows_cohort_merge(tmp_path, home):
@@ -140,7 +140,7 @@ def test_legacy_session_rows_cohort_merge(tmp_path, home):
     ])
     s, _ = _run(ledger, home)
     assert s["shared_sessions_total"] == pytest.approx(OPUS_USD, abs=1e-6)
-    assert s["per_phase"]["implement"]["cost"] == pytest.approx(OPUS_USD, abs=1e-6)
+    assert s["per_phase"]["implement"] == pytest.approx(OPUS_USD, abs=1e-6)
     assert "plan" not in s["per_phase"]
     assert s["resolved_total"] == pytest.approx(2 * OPUS_USD, abs=1e-6)
 

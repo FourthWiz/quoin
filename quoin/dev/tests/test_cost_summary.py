@@ -174,3 +174,27 @@ def test_no_adapter_imports():
     assert not _re.search(r"^\s*PRICES\s*=", source, _re.MULTILINE), (
         "cost_summary.py binds PRICES — pricing import boundary violation (R-02)"
     )
+
+
+def test_json_passthrough_estimated_keys_when_present(tmp_path, capsys):
+    import json as _json
+
+    f = tmp_path / "s.json"
+    f.write_text(_json.dumps({
+        "grand_total": 3.0, "estimated_total": 1.0, "estimated_count": 2,
+        "priced_rows": 5, "phases_excluded": ["end-of-task"], "ignored_key": 1,
+    }))
+    assert _load_cost_summary().main([str(f), "--format", "json"]) == 0
+    out = _json.loads(capsys.readouterr().out)
+    assert out == {"total": 3.0, "is_partial": False, "estimated_total": 1.0,
+                   "estimated_count": 2, "priced_rows": 5,
+                   "phases_excluded": ["end-of-task"]}
+
+
+def test_json_omits_passthrough_keys_when_absent(tmp_path, capsys):
+    import json as _json
+
+    f = tmp_path / "s.json"
+    f.write_text(_json.dumps({"grand_total": 3.0}))
+    assert _load_cost_summary().main([str(f), "--format", "json"]) == 0
+    assert set(_json.loads(capsys.readouterr().out)) == {"total", "is_partial"}
