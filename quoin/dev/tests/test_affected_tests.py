@@ -2432,3 +2432,21 @@ class TestBrokenVenvCli:
                                 "--format", "text"])
         assert rc == 3
         assert "interpreter_problems (1): dangling-link:" in out
+
+
+class TestNewDocRows:
+    @pytest.mark.parametrize("src,expected", [
+        ("quoin/adapters/claude/skills/gate/SKILL.md", "test_fullsuite_recipe_interpreter.py"),
+        ("quoin/memory/autonomous-mode.md", "test_fullsuite_recipe_interpreter.py"),
+        ("quoin/memory/autonomous-mode.md", "test_pytest_bound_matches_wait_budget.py"),
+        ("quoin/adapters/claude/skills/review/SKILL.md", "test_review_fanout_ledger.py"),
+        ("quoin/adapters/claude/skills/end_of_task/SKILL.md", "test_cost_ledger_summary_wiring.py"),
+        ("quoin/adapters/claude/skills/run/SKILL.md", "test_cost_ledger_summary_wiring.py"),
+        ("quoin/memory/cost-ledger-format.md", "test_cost_ledger_summary_wiring.py"),
+        ("quoin/memory/dispatch-guide.md", "test_subprocess_timeout.py"),
+    ])
+    def test_new_doc_rows_select_new_tests(self, src, expected):
+        repo = Path(__file__).resolve().parents[3]
+        selectors, unmatched, _ignored = _at.map_changed_to_tests([src], repo)
+        assert any(s.endswith(expected) for s in selectors), (src, expected)
+        assert unmatched == []

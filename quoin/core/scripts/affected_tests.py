@@ -1887,6 +1887,44 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/tools/agentdesk/setup-agentdesk.sh",
         "quoin/dev/tests/test_install_prompts.py",
     ),
+    # Tests added with the interpreter, pytest-bound and ledger-summary work: an edit to
+    # one of these documents must select the guard that reads it.
+    (
+        "quoin/adapters/claude/skills/gate/SKILL.md",
+        "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_pytest_bound_matches_wait_budget.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/review/SKILL.md",
+        "quoin/dev/tests/test_review_fanout_ledger.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/end_of_task/SKILL.md",
+        "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
+    ),
+    (
+        "quoin/memory/cost-ledger-format.md",
+        "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
+    ),
+    (
+        "quoin/memory/dispatch-guide.md",
+        "quoin/dev/tests/test_subprocess_timeout.py",
+    ),
+    (
+        "quoin/memory/dispatch-guide.md",
+        "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

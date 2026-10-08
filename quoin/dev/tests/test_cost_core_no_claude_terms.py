@@ -45,6 +45,9 @@ IMPORT_BLACKLIST = [
     # must never import either.
     "agent_transcript_cost",
     "backfill_cost_attribution",
+    # The finalize-time ledger summary reads Claude transcripts and prices; core
+    # may call neither it nor its helpers.
+    "cost_ledger_summary",
 ]
 
 CORE_SCRIPTS_DIR = REPO_ROOT / "quoin" / "core" / "scripts"
@@ -215,7 +218,7 @@ def test_dashboard_model_py_has_no_adapter_imports():
 # elsewhere in the suite, and any future doc comment inside a core script).
 # ---------------------------------------------------------------------------
 
-_COST_ATTRIBUTION_TERMS = ["agent_transcript_cost", "backfill_cost_attribution"]
+_COST_ATTRIBUTION_TERMS = ["agent_transcript_cost", "backfill_cost_attribution", "cost_ledger_summary"]
 
 
 def test_core_scripts_directory_never_imports_cost_attribution_adapter_modules():
