@@ -524,12 +524,12 @@ def test_inline_cost_capture_flag_defaults_on_in_docs():
 
 
 def test_inline_cost_capture_flag_gated_not_unconditional_in_orchestrators():
-    """Each of the 3 scoped orchestrators (architect/thorough_plan/run) still
+    """Each of the 4 scoped orchestrators (architect/thorough_plan/review/run) still
     documents the on-behalf write as FLAG-CONDITIONAL (not unconditional), even
     though the default flipped to ON — an opt-out branch (=0) must be documented,
     and the retired opt-in-only literal (=1) must be fully gone."""
     skills_dir = pathlib.Path(__file__).parent.parent.parent / "adapters" / "claude" / "skills"
-    for name in ("architect", "thorough_plan", "run"):
+    for name in ("architect", "thorough_plan", "review", "run"):
         text = (skills_dir / name / "SKILL.md").read_text(encoding="utf-8")
         assert "QUOIN_INLINE_COST_CAPTURE" in text, f"{name}: flag must still be named"
         assert (
