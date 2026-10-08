@@ -170,3 +170,52 @@ def test_helper_runs_under_oldest_python(stub_project):
     assert r2.returncode == 0, r2.stderr
     assert r2.stdout.splitlines()[-1] == expected
     assert "helper-unavailable" not in r2.stdout
+
+
+# -- sequencing, large-selection rule and knob documentation ----------------
+
+SEQUENCING = "Never start one test suite while the other still runs."
+DISPATCH_GUIDE = REPO_ROOT / "quoin" / "memory" / "dispatch-guide.md"
+AT_PATH = REPO_ROOT / "quoin" / "core" / "scripts" / "affected_tests.py"
+
+
+def _row(start: str, end: str = "\n- [ ] ") -> str:
+    text = _gate()
+    i = text.index(start)
+    return text[i : text.index(end, i + len(start))]
+
+
+def test_sequencing_rule_at_each_site():
+    for region in (_fg_region(), _hl_slice(), _am_slice()):
+        assert region.count(SEQUENCING) == 1
+
+
+def test_foreground_large_selection_rule():
+    row = _row("- [ ] Affected-area test suite (BLOCKING hard precondition for APPROVED)")
+    assert "45" in row and "600000" in row and "wait_for.py" in row
+    post = _row("- [ ] Affected-area test suite (re-run")
+    assert "(same 45-file rule)" in post
+
+
+def test_gate_names_pytest_timeout_knob():
+    assert "QUOIN_PYTEST_TIMEOUT" in _gate()
+
+
+def test_docstring_documents_pytest_knob():
+    doc = AT_PATH.read_text(encoding="utf-8").split('"""', 2)[1]
+    assert "QUOIN_PYTEST_TIMEOUT" in doc
+    assert "max(600, QUOIN_SUBPROCESS_TIMEOUT)" not in doc
+
+
+def test_dispatch_guide_documents_pytest_knob_and_keeps_ci_mirror_bound():
+    text = DISPATCH_GUIDE.read_text(encoding="utf-8")
+    assert "QUOIN_PYTEST_TIMEOUT" in text
+    i = text.index("`ci_mirror.py` still bounds")
+    assert "max(600, QUOIN_SUBPROCESS_TIMEOUT)" in text[i : i + 200]
+
+
+def test_recipe_notes_moved_text_present_in_amode():
+    text = " ".join(_amode().split())
+    assert "**Recipe notes.**" in text
+    for phrase in ("outer project root", "silently re-enable", "fresh shell"):
+        assert phrase in text

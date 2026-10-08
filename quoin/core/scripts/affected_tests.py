@@ -55,11 +55,18 @@ Env:
   QUOIN_BASE_BRANCH — override the base branch probe order (default: tries
       origin/main, origin/master, main, master in order).
   QUOIN_SUBPROCESS_TIMEOUT — seconds, default 30; bounds every SHORT git
-      subprocess run by this module (see _subprocess_timeout()). The pytest
-      subprocess gets a generous DERIVED bound max(600, QUOIN_SUBPROCESS_TIMEOUT)
-      instead (D-05) — a TimeoutExpired there maps to exit 3 with
+      subprocess run by this module (see _subprocess_timeout()); also a
+      backward-compatible lower bound for the pytest timeout below.
+  QUOIN_PYTEST_TIMEOUT — seconds (integer >= 1); sets the pytest subprocess
+      bound exactly. Unset, the bound is clamp(12 s x selected test files, 600,
+      3300), raised to QUOIN_SUBPROCESS_TIMEOUT when that is larger (see
+      _pytest_timeout()). A TimeoutExpired maps to exit 3 with
       exit_reason="pytest-timeout" (BLOCKING-SURFACE, never a silent GREEN,
-      never a hard-RED false block; see proc P-03).
+      never a hard-RED false block; see proc P-03) and a remedy line naming the
+      bound, the selected file count and this knob. Pairing rule: the ceiling
+      plus a 300 s margin stays inside the headless wait budget
+      QUOIN_WAIT_BUDGET_SECS (default 3600); raise both together (a warning is
+      printed when the bound plus margin exceeds the budget).
   QUOIN_PYTHON — interpreter to run pytest under; used only if it exists, is
       executable and can import pytest, otherwise the venv walk continues.
   QUOIN_DISABLE_VENV_PROBE=1 — skip interpreter discovery and broken-venv
