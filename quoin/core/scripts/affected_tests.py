@@ -155,8 +155,8 @@ _WALK_EXCLUDE_NAMES: frozenset[str] = _EXCLUDE_NAMES | frozenset({
 # selected so a large selection is not killed by a bound sized for a small one.
 #   secs/file   12 s: the slowest measured full affected-area run ran 176 selected
 #               files in 717 s (4.07 s/file, 2026-10, QUOIN_SUBPROCESS_TIMEOUT=1800),
-#               so 12 s/file leaves about 3x headroom. A local full-suite run was
-#               timed on 2026-10-08 for comparison (see the changelog entry).
+#               so 12 s/file leaves about 3x headroom. A local full-suite run on
+#               2026-10-08 took 974 s over 454 test files (2.1 s/file).
 #   floor/ceiling  600 s / 3300 s: the floor is the long-standing minimum; the
 #               ceiling plus the 300 s wait margin must fit inside the headless
 #               wait budget (QUOIN_WAIT_BUDGET_SECS, default 3600 in wait_for.py:
