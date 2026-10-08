@@ -13,10 +13,11 @@ Assertions:
     QUOIN_SUBPROCESS_TIMEOUT (captured via monkeypatched subprocess.run).
   - QUOIN_SUBPROCESS_TIMEOUT=1 forces TimeoutExpired handling deterministically
     on the SHORT git subprocesses — no uncaught raise, correct fallback return.
-  - The pytest subprocess in affected_tests is bounded by the DERIVED value
-    max(600, QUOIN_SUBPROCESS_TIMEOUT) and maps TimeoutExpired to exit code 3
-    with exit_reason="pytest-timeout" (MAJ-3 / D-05 / proc P-03) — NOT exit 1,
-    NOT exit 0.
+  - The pytest subprocess in affected_tests is bounded by a value derived from
+    the number of selected test files (clamp(12 s x files, 600, 3300), raised to
+    QUOIN_SUBPROCESS_TIMEOUT when larger, replaced exactly by
+    QUOIN_PYTEST_TIMEOUT) and maps TimeoutExpired to exit code 3 with
+    exit_reason="pytest-timeout" (proc P-03) — NOT exit 1, NOT exit 0.
   - _subprocess_timeout() bad-value fallback: QUOIN_SUBPROCESS_TIMEOUT="abc"
     -> 30, asserted across every local copy of the helper (MIN-5 / D-06).
 
@@ -150,6 +151,12 @@ class TestAffectedTestsRun:
 # ---------------------------------------------------------------------------
 
 class TestAffectedTestsPytestTimeout:
+    @pytest.fixture(autouse=True)
+    def _clean_knobs(self, monkeypatch):
+        # An operator who exports these must not turn the suite red.
+        monkeypatch.delenv("QUOIN_PYTEST_TIMEOUT", raising=False)
+        monkeypatch.delenv("QUOIN_WAIT_BUDGET_SECS", raising=False)
+
     def _make_git_repo_with_one_change(self, tmp_path):
         """Hermetic repo: one committed .py source + matching test, no upstream,
         clean worktree — reaches Step 5 (pytest invocation) via base-branch-diff
@@ -214,6 +221,123 @@ class TestAffectedTestsPytestTimeout:
 
         assert rc == 3
         assert captured_timeout.get("timeout") == 900  # max(600, 900) == 900
+
+    # -- derived bound ------------------------------------------------------
+
+    def test_bound_176_files_at_least_1800(self):
+        bound, basis = _at._pytest_timeout(176)
+        assert bound == 2112 >= 1800
+        assert basis["source"] == "derived"
+
+    def test_bound_5_files_is_floor_600(self):
+        assert _at._pytest_timeout(5)[0] == 600
+
+    def test_bound_ceiling_3300(self):
+        assert _at._pytest_timeout(1000)[0] == 3300
+
+    def test_pytest_knob_exact_override(self, monkeypatch):
+        monkeypatch.setenv("QUOIN_PYTEST_TIMEOUT", "77")
+        monkeypatch.setenv("QUOIN_SUBPROCESS_TIMEOUT", "900")
+        bound, basis = _at._pytest_timeout(176)
+        assert bound == 77
+        assert basis["source"] == "env-override"
+
+    def test_subprocess_timeout_compat_raises_bound(self, monkeypatch):
+        monkeypatch.setenv("QUOIN_SUBPROCESS_TIMEOUT", "2500")
+        bound, basis = _at._pytest_timeout(176)
+        assert bound == 2500
+        assert basis["source"] == "subprocess-timeout-compat"
+
+    @pytest.mark.parametrize("raw", ["abc", "0", "-5"])
+    def test_pytest_knob_invalid_ignored(self, monkeypatch, raw):
+        monkeypatch.setenv("QUOIN_PYTEST_TIMEOUT", raw)
+        bound, basis = _at._pytest_timeout(176)
+        assert bound == 2112
+        assert basis["source"] == "derived"
+        assert basis["knob_invalid"] == raw
+
+    def test_git_subprocess_timeout_unchanged_by_pytest_knob(self, monkeypatch):
+        monkeypatch.setenv("QUOIN_PYTEST_TIMEOUT", "5000")
+        monkeypatch.delenv("QUOIN_SUBPROCESS_TIMEOUT", raising=False)
+        assert _at._subprocess_timeout() == 30
+        captured = {}
+
+        def fake_run(args, **kwargs):
+            captured.update(kwargs)
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+        monkeypatch.setattr(_at.subprocess, "run", fake_run)
+        _at._run(["git", "status"])
+        assert captured["timeout"] == 30
+
+    # -- CLI output ---------------------------------------------------------
+
+    def _force_timeout(self, monkeypatch):
+        real_run = subprocess.run
+
+        def fake_run(args, **kwargs):
+            if "pytest" in args:
+                raise subprocess.TimeoutExpired(cmd=args, timeout=kwargs.get("timeout"))
+            return real_run(args, **kwargs)
+
+        monkeypatch.setattr(_at.subprocess, "run", fake_run)
+
+    def test_forced_timeout_output_names_bound_size_and_knob(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        repo = self._make_git_repo_with_one_change(tmp_path)
+        self._force_timeout(monkeypatch)
+        rc = _at.main(["--project-root", str(repo)])
+        assert rc == 3
+        d = json.loads(capsys.readouterr().out)
+        assert d["exit_reason"] == "pytest-timeout"
+        assert d["pytest_timeout_secs"] == 600
+        assert d["pytest_timeout_basis"]["selected_files"] == 1
+        assert "600" in d["remedy"] and "1 selected" in d["remedy"]
+        assert "QUOIN_PYTEST_TIMEOUT" in d["remedy"]
+
+        rc = _at.main(["--project-root", str(repo), "--format", "text"])
+        assert rc == 3
+        text = capsys.readouterr().out
+        assert "pytest_timeout: 600 s (derived, 1 selected files)" in text
+        assert "remedy:" in text and "QUOIN_PYTEST_TIMEOUT" in text
+
+    def test_env_override_remedy_wording(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        repo = self._make_git_repo_with_one_change(tmp_path)
+        monkeypatch.setenv("QUOIN_PYTEST_TIMEOUT", "42")
+        self._force_timeout(monkeypatch)
+        _at.main(["--project-root", str(repo)])
+        d = json.loads(capsys.readouterr().out)
+        assert d["pytest_timeout_secs"] == 42
+        assert "set by QUOIN_PYTEST_TIMEOUT" in d["remedy"]
+
+    def test_select_only_reports_bound(self, tmp_path, capsys):
+        import json
+
+        repo = self._make_git_repo_with_one_change(tmp_path)
+        rc = _at.main(["--project-root", str(repo), "--select-only"])
+        assert rc == 0
+        d = json.loads(capsys.readouterr().out)
+        assert d["pytest_timeout_secs"] == 600
+        assert d["pytest_timeout_basis"]["selected_files"] == 1
+
+    def test_budget_warning_when_bound_plus_margin_exceeds_budget(self, tmp_path, monkeypatch, capsys):
+        import json
+
+        repo = self._make_git_repo_with_one_change(tmp_path)
+        monkeypatch.setenv("QUOIN_PYTEST_TIMEOUT", "3500")
+        for fmt in ("json", "text"):
+            _at.main(["--project-root", str(repo), "--select-only", "--format", fmt])
+            out = capsys.readouterr().out
+            assert "raise QUOIN_WAIT_BUDGET_SECS" in out
+        monkeypatch.setenv("QUOIN_WAIT_BUDGET_SECS", "7200")
+        for fmt in ("json", "text"):
+            _at.main(["--project-root", str(repo), "--select-only", "--format", fmt])
+            out = capsys.readouterr().out
+            assert "pytest_timeout_warning" not in out
+            assert "exceeds the headless" not in out
 
 
 # ---------------------------------------------------------------------------

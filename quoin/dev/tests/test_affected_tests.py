@@ -2002,6 +2002,45 @@ class TestMissingAndExcludedCli:
         assert d["selectors"] == [str(fake_repo / "test_foo.py")]
         assert not any(".venv" in sel for sel in d["selectors"])
 
+    @pytest.mark.parametrize("vendored", [
+        ".venv/lib/python3.14/site-packages/jsonschema/tests/test_x.py",
+        "site-packages/pkg/tests/test_x.py",
+        "build/lib/pkg/tests/test_x.py",
+        "pkg.egg-info/tests/test_x.py",
+    ])
+    def test_vendored_changed_test_is_never_selected(self, tmp_path, vendored):
+        (tmp_path / "foo.py").write_text("def foo(): return 1\n")
+        (tmp_path / "test_real.py").write_text("import foo\n")
+        vfile = tmp_path / vendored
+        vfile.parent.mkdir(parents=True)
+        vfile.write_text("def test_v(): pass\n")
+        real = str(tmp_path / "test_real.py")
+
+        rc, out = _cli_capture(["--select-only", "--files", "foo.py", "--repo-root", str(tmp_path)])
+        assert json.loads(out)["selectors"] == [real]
+
+        for form in (vendored, str(vfile)):
+            rc, out = _cli_capture(["--select-only", "--files", form, "--repo-root", str(tmp_path)])
+            d = json.loads(out)
+            assert rc == 0
+            assert d["selectors"] == []
+            assert form in d["ignored"]
+            assert d["missing_tests"] == []
+            assert d["exit_reason"] != "missing-tests-only"
+
+    def test_vendored_path_that_is_missing_on_disk_is_still_missing(self, tmp_path):
+        rc, out = _cli_capture(["--files", "build/lib/test_gone.py", "--repo-root", str(tmp_path)])
+        d = json.loads(out)
+        assert d["missing_tests"] == ["build/lib/test_gone.py"]
+
+    def test_docs_to_tests_targets_never_under_excluded_dir(self):
+        for _src, target in _at._DOCS_TO_TESTS:
+            parts = Path(target).parts
+            assert not any(
+                part in _at._WALK_EXCLUDE_NAMES or part.endswith(".egg-info")
+                for part in parts
+            ), target
+
     def test_docs_only_stays_distinguishable(self, tmp_path):
         rc, out = _cli_capture(["--files", "README.md", "--repo-root", str(tmp_path)])
         d = json.loads(out)
