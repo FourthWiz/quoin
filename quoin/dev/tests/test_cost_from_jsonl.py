@@ -300,10 +300,28 @@ def test_prices_claude5_entries_pinned():
         )
 
 
+def test_prices_claude5_5_entries_pinned():
+    """Rates as published on the official pricing page (fetched 2026-10-08)."""
+    from cost_from_jsonl import PRICES
+
+    expected = {
+        "claude-opus-5-5":   {"input": 4.00, "output": 20.00,
+                               "cache_create": 5.00, "cache_read": 0.20},
+        "claude-sonnet-5-5": {"input": 2.00, "output": 10.00,
+                               "cache_create": 2.50, "cache_read": 0.10},
+        "claude-haiku-5-5":  {"input": 0.10, "output": 0.50,
+                               "cache_create": 0.125, "cache_read": 0.01},
+    }
+    for slug, rates in expected.items():
+        assert slug in PRICES, f"{slug} missing from PRICES"
+        got = {k: PRICES[slug][k] for k in rates}
+        assert got == rates, f"{slug} rate mismatch: got {got}, expected {rates}"
+
+
 def test_last_updated_pinned():
     from cost_from_jsonl import LAST_UPDATED
 
-    assert LAST_UPDATED == "2026-09-08", (
+    assert LAST_UPDATED == "2026-10-08", (
         f"LAST_UPDATED mismatch: got {LAST_UPDATED!r}"
     )
 
@@ -539,7 +557,8 @@ _USAGE_BLOCK = {
 
 @pytest.mark.parametrize(
     "model",
-    ["claude-fable-5-1", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5"],
+    ["claude-fable-5-1", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5",
+     "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
 )
 def test_newly_priced_model_is_costable_and_priceable(tmp_path, model):
     from cost_from_jsonl import parse_session
@@ -642,3 +661,49 @@ def test_no_closed_prices_key_set_enumeration_in_suite():
         f"Found test(s) that pin a CLOSED PRICES key set — these break every time "
         f"a slug is added: {offenders}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Token-mix estimate for ledger rows that only carry a token total
+# ---------------------------------------------------------------------------
+def test_estimate_token_mix_sums_to_one():
+    from cost_from_jsonl import ESTIMATE_TOKEN_MIX
+
+    assert abs(sum(ESTIMATE_TOKEN_MIX.values()) - 1.0) < 1e-9
+
+
+def test_estimate_token_mix_keys():
+    from cost_from_jsonl import ESTIMATE_TOKEN_MIX
+
+    assert set(ESTIMATE_TOKEN_MIX) == {"input", "output", "cache_create", "cache_read"}
+
+
+def test_alias_map_targets_are_priced():
+    from cost_from_jsonl import ALIAS_TO_MODEL, is_priced
+
+    assert set(ALIAS_TO_MODEL) >= {"opus", "sonnet", "haiku", "fable"}
+    for alias, model in ALIAS_TO_MODEL.items():
+        assert is_priced(model), (alias, model)
+
+
+@pytest.mark.parametrize("alias", ["opus", "sonnet", "haiku", "fable"])
+def test_estimate_rate_for_alias_positive_for_each_alias(alias):
+    from cost_from_jsonl import estimate_rate_for_alias
+
+    rate = estimate_rate_for_alias(alias)
+    assert rate is not None and rate > 0
+
+
+def test_estimate_rate_unknown_alias_is_none():
+    from cost_from_jsonl import estimate_rate_for_alias
+
+    assert estimate_rate_for_alias("gpt") is None
+    assert estimate_rate_for_alias(None) is None
+
+
+def test_estimate_rate_matches_manual_formula():
+    from cost_from_jsonl import ESTIMATE_TOKEN_MIX, PRICES, estimate_rate_for_alias
+
+    p = PRICES["claude-opus-5-5"]
+    manual = sum(ESTIMATE_TOKEN_MIX[k] * p[k] for k in ESTIMATE_TOKEN_MIX) / 1e6
+    assert estimate_rate_for_alias("opus") == pytest.approx(manual)
