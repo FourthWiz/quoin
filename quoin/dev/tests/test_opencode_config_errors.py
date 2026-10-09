@@ -266,12 +266,16 @@ def test_every_finding_code_can_be_built_with_its_subject_shape():
         "endpoint-family-unverified": ("corp-gw-b",),
         "later-layers-can-override": (),
         "policies-supplementary": (),
+        "allowed-hosts-unset": (),
+        "trusted-policy-untrusted": ("chain-not-owned",),
     }
     assert set(shapes) == set(errors.FINDING_CODES)
     for code, subject in shapes.items():
         finding = errors.make_finding(code, False, *subject)
         assert finding.code == code and finding.subject == subject and finding.error is None
-    for token in errors.FIELD_TOKENS | set(errors.LAYER_TOKENS) | errors.REASON_CODES:
+    for token in (
+        errors.FIELD_TOKENS | set(errors.LAYER_TOKENS) | errors.REASON_CODES | errors.TRUST_TOKENS
+    ):
         assert errors._SAFE_KEY_RE.fullmatch(token) and not SECRET_SHAPE_RE.search(token)
 
 

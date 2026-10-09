@@ -144,6 +144,7 @@ _OTHER_CONFIG_CLASSES = (
     "limit-above-ceiling",
     "unknown-key",
     "invalid-type",
+    "formatter-allowlist-invalid",
     "dangling-reference",
     "env-name-collision",
     "missing-classification",

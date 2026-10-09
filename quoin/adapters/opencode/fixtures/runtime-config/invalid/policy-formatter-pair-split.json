@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "providers": {
+    "corp-gw": {
+      "kind": "openai-compatible",
+      "endpoint_family": "chat-completions",
+      "base_url": "https://gateway.example.invalid/v1",
+      "credential_ref": "keychain:quoin/work-gateway",
+      "name": "Corporate gateway"
+    },
+    "corp-gw-b": {
+      "kind": "openai-compatible",
+      "endpoint_family": "responses",
+      "base_url": "https://gateway-b.example.invalid/v1",
+      "credential_ref": "env:QUOIN_CORP_GW_B_API_KEY",
+      "use_env_proxy": true
+    }
+  },
+  "models": {
+    "work-coder": {
+      "provider": "corp-gw",
+      "model_id": "example-vendor/example-coder",
+      "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+      "provider": "corp-gw-b",
+      "model_id": "example-vendor/example-planner",
+      "qualification_ref": "local:work-planner"
+    }
+  },
+  "default_model": "work-coder",
+  "auxiliary_model": "work-planner",
+  "roles": {
+    "coordinator": {
+      "model": "work-planner",
+      "effort": "high"
+    },
+    "investigator": {
+      "model": "work-coder",
+      "effort": "medium"
+    },
+    "architect": {
+      "model": "work-planner",
+      "effort": "max"
+    },
+    "planner": {
+      "model": "work-planner",
+      "effort": "high"
+    },
+    "implementer": {
+      "model": "work-coder",
+      "effort": "medium"
+    },
+    "critic": {
+      "model": "work-planner",
+      "effort": "high"
+    },
+    "reviewer": {
+      "model": "work-planner",
+      "effort": "high"
+    },
+    "gate": {
+      "model": "work-coder",
+      "effort": "low"
+    }
+  },
+  "policy": {
+    "allowed_providers": [
+      "corp-gw",
+      "corp-gw-b"
+    ],
+    "denied_providers": [
+      "retired-gw"
+    ],
+    "allowed_hosts": [
+      "gateway.example.invalid",
+      "gateway-b.example.invalid"
+    ],
+    "denied_hosts": [
+      "untrusted.example.invalid"
+    ],
+    "sharing": "deny",
+    "external_writes": "approval-required",
+    "isolation": "managed",
+    "cross_profile_fallback": false,
+    "fallback": "stop",
+    "web_tools": "deny",
+    "package_install": "deny",
+    "mcp": {
+      "local": "allow-listed",
+      "remote": "deny",
+      "allowed": [
+        "docs-search",
+        "repo-index"
+      ]
+    },
+    "lsp": {
+      "mode": "allow-listed",
+      "allowed": [
+        "pyright",
+        "typescript"
+      ]
+    },
+    "formatter": {
+      "mode": "allow-listed",
+      "allowed": [
+        "prettier",
+        "ruff"
+      ]
+    },
+    "network": {
+      "identity_check": "required",
+      "allowed_addresses": [
+        "10.20.0.0/16",
+        "192.0.2.0/24"
+      ],
+      "pins": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ]
+    },
+    "logging": {
+      "content": "metadata"
+    },
+    "retention": {
+      "runs_days": 30,
+      "cache_days": 30,
+      "logs_days": 30,
+      "crash_days": 14,
+      "exports_days": 30
+    },
+    "repositories": {
+      "allowed_roots": [
+        "/work/repos"
+      ]
+    }
+  },
+  "limits": {
+    "max_run_seconds": 3600,
+    "max_tool_calls": 200,
+    "max_context_tokens": 128000,
+    "max_output_tokens": 8192,
+    "max_transient_retries": 3
+  },
+  "integrations": {
+    "backend": "corp-gw",
+    "enabled": [
+      "jira",
+      "slack"
+    ],
+    "mode": "read-only"
+  }
+}

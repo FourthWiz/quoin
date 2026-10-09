@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "runtime": "opencode",
+  "profile": "work",
+  "classification": "work",
+  "policy": {
+    "web_tools": "deny",
+    "mcp": {
+      "allowed": [
+        "docs-search"
+      ]
+    },
+    "lsp": {
+      "allowed": [
+        "pyright"
+      ]
+    },
+    "network": {
+      "allowed_addresses": [
+        "10.20.0.0/16"
+      ]
+    },
+    "retention": {
+      "runs_days": 7
+    },
+    "repositories": {
+      "allowed_roots": [
+        "/work/repos"
+      ]
+    }
+  }
+}

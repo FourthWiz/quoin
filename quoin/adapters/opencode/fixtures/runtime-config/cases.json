@@ -76,6 +76,30 @@
       "file": "valid/managed-strict.json",
       "layer": "managed",
       "jsonschema_valid": true
+    },
+    {
+      "id": "profile-work-isolation",
+      "file": "valid/profile-work-isolation.json",
+      "layer": "profile",
+      "jsonschema_valid": true,
+      "classification_state": "work",
+      "install_as": "work"
+    },
+    {
+      "id": "project-work-isolation",
+      "file": "valid/project-work-isolation.json",
+      "layer": "project",
+      "jsonschema_valid": true,
+      "classification_state": "work",
+      "companions": {
+        "profile": "valid/profile-work-isolation.json"
+      }
+    },
+    {
+      "id": "managed-isolation",
+      "file": "valid/managed-isolation.json",
+      "layer": "managed",
+      "jsonschema_valid": true
     }
   ],
   "invalid": [
@@ -601,6 +625,116 @@
       "expected_file_label": "profiles/work-or.json",
       "jsonschema_valid": true,
       "install_as": "work-or"
+    },
+    {
+      "id": "policy-unknown-key-mcp",
+      "file": "invalid/policy-unknown-key-mcp.json",
+      "layer": "profile",
+      "expected_class": "unknown-key",
+      "expected_path": "$.policy.mcp.extra",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-bad-mcp-mode",
+      "file": "invalid/policy-bad-mcp-mode.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.mcp.remote",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-unknown-lsp-id",
+      "file": "invalid/policy-unknown-lsp-id.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.lsp.allowed[1]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-formatter-pair-split",
+      "file": "invalid/policy-formatter-pair-split.json",
+      "layer": "profile",
+      "expected_class": "formatter-allowlist-invalid",
+      "expected_path": "$.policy.formatter.allowed",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-relative-root",
+      "file": "invalid/policy-relative-root.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.repositories.allowed_roots[0]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-unnormalised-root",
+      "file": "invalid/policy-unnormalised-root.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.repositories.allowed_roots[0]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-malformed-cidr",
+      "file": "invalid/policy-malformed-cidr.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.network.allowed_addresses[0]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-cidr-host-bits",
+      "file": "invalid/policy-cidr-host-bits.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.network.allowed_addresses[0]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-bad-pin",
+      "file": "invalid/policy-bad-pin.json",
+      "layer": "profile",
+      "expected_class": "invalid-type",
+      "expected_path": "$.policy.network.pins[0]",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-retention-zero",
+      "file": "invalid/policy-retention-zero.json",
+      "layer": "profile",
+      "expected_class": "invalid-limit",
+      "expected_path": "$.policy.retention.runs_days",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": false,
+      "install_as": "work"
+    },
+    {
+      "id": "policy-retention-too-long",
+      "file": "invalid/policy-retention-too-long.json",
+      "layer": "profile",
+      "expected_class": "invalid-limit",
+      "expected_path": "$.policy.retention.runs_days",
+      "expected_file_label": "profiles/work.json",
+      "jsonschema_valid": true,
+      "install_as": "work"
     }
   ]
 }

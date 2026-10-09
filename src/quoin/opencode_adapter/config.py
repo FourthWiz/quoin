@@ -22,13 +22,14 @@ import copy
 import functools
 import ipaddress
 import json
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
-from . import jsonio, paths, schema_check
+from . import jsonio, paths, profile_policy, schema_check
 from . import secrets as credential_refs
 from .errors import (
     SECRET_SHAPE_RE,
@@ -405,6 +406,84 @@ def _semantic(
                         make_error("invalid-type", label, ("policy", list_name, index), "wrong-type")
                     )
     errs += _ident_errors(_dict(data.get("integrations")).get("backend"), ("integrations", "backend"), label)
+    errs += _isolation_errors(policy, label)
+    return errs
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _isolation_errors(policy: Dict[str, Any], label: str) -> List[ConfigError]:
+    """Semantic checks for the isolation policy fields, shared by every layer."""
+    errs: List[ConfigError] = []
+    for kind, value in _dict(policy.get("retention")).items():
+        if _is_int(value) and not 1 <= value <= 3650:
+            errs.append(
+                make_error(
+                    "invalid-limit", label, ("policy", "retention", kind), "retention-out-of-range"
+                )
+            )
+    addresses = _dict(policy.get("network")).get("allowed_addresses")
+    if isinstance(addresses, list):
+        for index, item in enumerate(addresses):
+            if not isinstance(item, str):
+                continue
+            try:
+                ipaddress.ip_network(item, strict=True)
+            except ValueError:
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("policy", "network", "allowed_addresses", index),
+                        "wrong-type",
+                    )
+                )
+    roots = _dict(policy.get("repositories")).get("allowed_roots")
+    if isinstance(roots, list):
+        for index, item in enumerate(roots):
+            if not isinstance(item, str):
+                continue
+            if not (
+                item.startswith("/")
+                and "\x00" not in item
+                and len(item) <= 4096
+                and posixpath.normpath(item) == item
+            ):
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("policy", "repositories", "allowed_roots", index),
+                        "wrong-type",
+                    )
+                )
+    for group, ids, verified, unverifiable in (
+        ("lsp", profile_policy.LSP_BUILTIN_IDS, profile_policy.LSP_ALLOWLIST_VERIFIED,
+         "lsp-allowlist-unverifiable"),
+        ("formatter", profile_policy.FORMATTER_BUILTIN_IDS, profile_policy.FORMATTER_ALLOWLIST_VERIFIED,
+         "formatter-allowlist-unverifiable"),
+    ):
+        section = _dict(policy.get(group))
+        if section.get("mode") == "allow-listed" and not verified:
+            errs.append(make_error("invalid-type", label, ("policy", group, "mode"), unverifiable))
+        allowed = section.get("allowed")
+        if not isinstance(allowed, list):
+            continue
+        for index, item in enumerate(allowed):
+            if isinstance(item, str) and item not in ids:
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("policy", group, "allowed", index), "unknown-builtin-id"
+                    )
+                )
+        if group == "formatter":
+            named = {item for item in allowed if isinstance(item, str)}
+            for pair in profile_policy.FORMATTER_PAIRED_IDS:
+                if 0 < len(named & set(pair)) < len(pair):
+                    errs.append(
+                        make_error(
+                            "formatter-allowlist-invalid", label, ("policy", "formatter", "allowed"),
+                            "formatter-allowlist-invalid",
+                        )
+                    )
     return errs
 
 

@@ -16,6 +16,7 @@ from pathlib import Path
 import pytest
 
 import _opencode_helpers as helpers
+from quoin.opencode_adapter import profile_policy
 
 COMPAT_PATH = helpers.OPENCODE_DIR / "compatibility.md"
 ADAPTER_DIR = helpers.SOURCE_DIR.parent / "src" / "quoin" / "opencode_adapter"
@@ -175,6 +176,29 @@ def test_unverified_keys_are_not_quoted_in_adapter_code():
                 continue
             for key in unverified:
                 assert ('"%s"' % key) not in line and ("'%s'" % key) not in line, (path.name, number, key)
+
+
+def _pinned_count(key):
+    match = re.search(r"count of (\d+) is pinned", _by_key()[key][0][3])
+    assert match, key
+    return int(match.group(1))
+
+
+def test_code_constants_match_row_status():
+    assert profile_policy.LSP_ALLOWLIST_VERIFIED is is_verified("lsp-builtin-ids")
+    assert profile_policy.FORMATTER_ALLOWLIST_VERIFIED is is_verified("formatter-builtin-ids")
+    pair_verified = is_verified("formatter-ruff-uv-pair")
+    expected_pairs = (("ruff", "uv"),) if pair_verified else ()
+    assert profile_policy.FORMATTER_PAIRED_IDS == expected_pairs
+    if is_verified("lsp-builtin-ids"):
+        assert len(set(profile_policy.LSP_BUILTIN_IDS)) == _pinned_count("lsp-builtin-ids")
+        assert len(profile_policy.LSP_BUILTIN_IDS) == len(set(profile_policy.LSP_BUILTIN_IDS))
+    else:
+        assert profile_policy.LSP_BUILTIN_IDS == ()
+    if is_verified("formatter-builtin-ids"):
+        assert len(set(profile_policy.FORMATTER_BUILTIN_IDS)) == _pinned_count("formatter-builtin-ids")
+    else:
+        assert profile_policy.FORMATTER_BUILTIN_IDS == ()
 
 
 @pytest.mark.skipif(
