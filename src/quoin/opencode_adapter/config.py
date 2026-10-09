@@ -22,6 +22,7 @@ import copy
 import functools
 import ipaddress
 import json
+import os
 import posixpath
 import re
 from dataclasses import dataclass, field
@@ -44,6 +45,7 @@ from .install import PROFILE_RE
 ENDPOINT_KEYS = ("providers", "models", "default_model", "auxiliary_model")
 PROJECT_LABEL = ".quoin/runtime.json"
 MANAGED_LABEL = "managed policy"
+TRUSTED_MANAGED_LABEL = "trusted managed policy"
 
 _PLACEHOLDER_MARKERS = ("REPLACE_WITH_", "${", "{env:", "{file:")
 _LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
@@ -73,6 +75,33 @@ class LoadedConfig:
     profile: Layer
     project: Optional[Layer]
     managed: Optional[Layer]
+    # The root-owned managed policy: its content when the file is present
+    # (valid in every non-absent state) and how far it is trusted. Defaulted so
+    # a direct construction without it keeps meaning "no trusted file".
+    trusted_managed: Optional[Layer] = None
+    trusted_state: str = "absent"
+
+
+@dataclass(frozen=True)
+class TrustedSource:
+    """Where the trusted managed policy is read from and who may own it. The
+    production value takes nothing from the environment."""
+
+    path: Path
+    owner_uid: int
+    invoking_uid: int
+    top: Path
+
+    @classmethod
+    def system(cls) -> "TrustedSource":
+        return cls(paths.trusted_policy_path(), 0, os.getuid(), Path("/"))
+
+
+@dataclass(frozen=True)
+class ManagedLayers:
+    managed: Optional[Layer]
+    trusted_managed: Optional[Layer]
+    trusted_state: str
 
 
 def provider_env_name(provider_id: str) -> str:
@@ -568,6 +597,42 @@ def load_managed(env: Mapping[str, str]) -> Optional[Layer]:
     return load_layer(path, "managed", file_label=MANAGED_LABEL)
 
 
+def load_trusted_managed(source: TrustedSource) -> Tuple[Optional[Layer], str]:
+    """Read the trusted managed policy.
+
+    The state is ``absent``, ``trusted`` or ``untrusted:TOKEN`` with TOKEN in
+    `errors.TRUST_TOKENS`. The first failing check wins in the order chain,
+    file, invoking user. The content is validated in every non-absent state,
+    so an invalid file refuses whether or not it is trusted.
+    """
+    tree, token = jsonio.read_trusted_json(
+        source.path, file_label=TRUSTED_MANAGED_LABEL, owner_uid=source.owner_uid
+    )
+    if token == "absent":
+        return None, "absent"
+    layer = validate_layer_data(tree, "managed", file_label=TRUSTED_MANAGED_LABEL)
+    failure = jsonio.check_root_owned_chain(
+        source.path, owner_uid=source.owner_uid, top=source.top
+    )
+    if failure is None:
+        failure = token
+    if failure is None and source.invoking_uid == source.owner_uid:
+        failure = "invoking-user-is-root"
+    if failure is not None:
+        return layer, "untrusted:" + failure
+    return layer, "trusted"
+
+
+def load_managed_layers(
+    env: Mapping[str, str], trusted: Optional[TrustedSource] = None
+) -> ManagedLayers:
+    """Both managed layers, loaded together so no caller can merge without the
+    trusted one. `trusted=None` means the production location."""
+    managed = load_managed(env)
+    layer, state = load_trusted_managed(trusted if trusted is not None else TrustedSource.system())
+    return ManagedLayers(managed, layer, state)
+
+
 # ------------------------------------------------------ cross-layer step
 
 
@@ -637,6 +702,7 @@ def load_all(
     profile: Optional[str] = None,
     env: Mapping[str, str],
     home: Path,
+    trusted: Optional[TrustedSource] = None,
 ) -> LoadedConfig:
     """Load the project, profile and managed layers.
 
@@ -653,8 +719,14 @@ def load_all(
             [make_error("profile-not-found", "profiles/", "$", "no-profile-selected")]
         )
     selected = load_profile(name, env=env, home=home)
-    managed = load_managed(env)
+    managed_layers = load_managed_layers(env, trusted)
     errs = check_cross_layer(selected, project)
     if errs:
         raise ConfigErrors(errs)
-    return LoadedConfig(selected, project, managed)
+    return LoadedConfig(
+        selected,
+        project,
+        managed_layers.managed,
+        managed_layers.trusted_managed,
+        managed_layers.trusted_state,
+    )

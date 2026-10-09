@@ -67,7 +67,13 @@ DIAGNOSTIC_TEXT: Dict[str, str] = {
 
 SUMMARY_NOTE = "not used by the pinned runtime; not emitted"
 NO_MANAGED_TEXT = "no managed policy"
-_HOST_LIST_KEYS = ("policy.allowed_hosts", "policy.denied_hosts")
+_HOST_LIST_KEYS = (
+    "policy.allowed_hosts",
+    "policy.denied_hosts",
+    "policy.repositories.allowed_roots",
+    "policy.network.allowed_addresses",
+    "policy.network.pins",
+)
 
 
 def _redact_url(url: str) -> str:
@@ -181,7 +187,8 @@ def explain_document(
     for key, item in sorted(eff.values.items()):
         shown = _plain(item.value)
         if redact and key in _HOST_LIST_KEYS:
-            shown = [REDACTED for _ in shown]
+            # An unset restriction list stays unset; only its members are masked.
+            shown = None if shown is None else [REDACTED for _ in shown]
         values[key] = {"value": shown, "origin": list(item.origin)}
 
     hosts_allowed = list(_plain(eff.values["policy.allowed_hosts"].value)) if "policy.allowed_hosts" in eff.values else []

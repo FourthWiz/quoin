@@ -25,7 +25,7 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Mapping, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
-from . import config
+from . import config, profile_policy
 from .errors import (
     OVERRIDE_LABEL,
     ConfigError,
@@ -124,6 +124,7 @@ class EffectiveConfig:
     excluded_providers: Mapping[str, str]
     values: Mapping[str, Value]
     findings: Tuple[Finding, ...]
+    trusted_state: str = "absent"
 
 
 # ---------------------------------------------------------------- helpers
@@ -464,6 +465,104 @@ def _merge_integrations(
         values["integrations.mode"] = Value(mode, origin)
 
 
+# ------------------------------------------------- isolation policy fields
+
+
+def _field_token(name: str) -> str:
+    return name.replace(".", "-")
+
+
+def _merge_profile_policy(
+    flat: Mapping[str, Mapping[str, Any]],
+    labels: Mapping[str, str],
+    effective_class: str,
+    values: Dict[str, Value],
+    errs: List[ConfigError],
+    findings: List[Finding],
+) -> None:
+    """The isolation policy fields. `flat` maps each layer token (profile,
+    trusted-managed, managed, project) to the flat view of the fields it sets.
+    Defaults come from the effective classification, never the profile name."""
+    defaults = profile_policy.defaults_for(effective_class)
+
+    def per_layer(name: str) -> Dict[str, Any]:
+        return {layer: data.get(name) for layer, data in flat.items() if name in data}
+
+    def note_ignored(token: str, layers: Tuple[str, ...]) -> None:
+        for layer in layers:
+            findings.append(make_finding("less-restrictive-ignored", False, token, layer))
+
+    def broadening(name: str, indices: Tuple[int, ...]) -> None:
+        group, key = name.split(".")
+        for index in indices:
+            errs.append(
+                make_error(
+                    "allowlist-broadening", labels["project"], ("policy", group, key, index),
+                    "allowlist-broadening",
+                )
+            )
+
+    for name in profile_policy.ENUM_ORDER:
+        value, origin, ignored, _ = profile_policy.merge_enum(name, per_layer(name), defaults[name])
+        values["policy." + name] = Value(value, origin)
+        note_ignored(_field_token(name), ignored)
+    for name in profile_policy.GRANT_LISTS:
+        value, origin, _, bad = profile_policy.merge_grant_list(per_layer(name), defaults[name])
+        values["policy." + name] = Value(value, origin)
+        broadening(name, bad)
+    for name in profile_policy.RESTRICTION_LISTS:
+        value, origin, _, bad = profile_policy.merge_restriction_list(per_layer(name))
+        values["policy." + name] = Value(value, origin)
+        broadening(name, bad)
+    for kind in profile_policy.RETENTION_KINDS:
+        name = "retention." + kind
+        (wide, scoped), (wide_origin, scoped_origin), ignored, _ = profile_policy.merge_retention(
+            per_layer(name), defaults[name]
+        )
+        values["policy." + name] = Value(wide, wide_origin)
+        values["policy.retention.project." + kind] = Value(scoped, scoped_origin)
+        note_ignored(_field_token(name), ignored)
+
+
+def _managed_inputs(
+    loaded: config.LoadedConfig,
+) -> Tuple[Optional[Dict[str, Any]], Optional[Dict[str, Any]], Dict[str, Any], Optional[str]]:
+    """Split the managed sources by role.
+
+    Returns the combined ceiling layer for the pre-existing fields (None when
+    no managed file exists), the trusted layer data (None unless the file
+    passed every trust check), the flat ceiling view of the new fields from
+    the files that only narrow, and the trust token of an untrusted file.
+    """
+    env_data = copy.deepcopy(loaded.managed.data) if loaded.managed is not None else None
+    trusted_data = None
+    untrusted_data = None
+    token = None
+    if loaded.trusted_managed is not None:
+        if loaded.trusted_state == "trusted":
+            trusted_data = copy.deepcopy(loaded.trusted_managed.data)
+        else:
+            untrusted_data = copy.deepcopy(loaded.trusted_managed.data)
+            token = loaded.trusted_state.split(":", 1)[1]
+    ceiling = profile_policy.flatten_policy(_dict(env_data).get("policy"))
+    if untrusted_data is not None:
+        ceiling = profile_policy.combine_flat(
+            ceiling, profile_policy.flatten_policy(_dict(untrusted_data).get("policy"))
+        )
+    combined = env_data
+    for extra in (untrusted_data, trusted_data):
+        if extra is None:
+            continue
+        base = combined if combined is not None else {}
+        combined = {
+            "policy": profile_policy.combine_managed(
+                _dict(base.get("policy")), _dict(extra.get("policy")), host_key=config.host_key
+            ),
+            "limits": profile_policy.combine_limits(base.get("limits"), extra.get("limits")),
+        }
+    return combined, trusted_data, ceiling, token
+
+
 # --------------------------------------------------------- classification
 
 
@@ -522,9 +621,12 @@ def merge(
     if loaded.project is not None:
         layers["project"] = copy.deepcopy(loaded.project.data)
         labels["project"] = loaded.project.file
-    if loaded.managed is not None:
-        layers["managed"] = copy.deepcopy(loaded.managed.data)
-        labels["managed"] = loaded.managed.file
+    combined_managed, trusted_data, new_ceiling, untrusted_token = _managed_inputs(loaded)
+    if combined_managed is not None:
+        layers["managed"] = combined_managed
+        labels["managed"] = (
+            loaded.managed.file if loaded.managed is not None else config.TRUSTED_MANAGED_LABEL
+        )
     profile = layers["profile"]
 
     providers, models = _build_views(profile)
@@ -538,6 +640,15 @@ def merge(
     _merge_preferences(layers, overrides, values)
     _merge_limits(layers, labels, values, errs)
     effective_ids, excluded = _merge_security(layers, labels, providers, values, errs)
+    flat = {
+        "profile": profile_policy.flatten_policy(_dict(profile.get("policy"))),
+        "managed": new_ceiling,
+    }
+    if trusted_data is not None:
+        flat["trusted-managed"] = profile_policy.flatten_policy(_dict(trusted_data.get("policy")))
+    if "project" in layers:
+        flat["project"] = profile_policy.flatten_policy(_dict(layers["project"].get("policy")))
+    _merge_profile_policy(flat, labels, effective_class, values, errs, findings)
     if errs:
         raise ConfigErrors(dedupe_by_path(errs))
 
@@ -545,25 +656,33 @@ def merge(
         findings.append(make_finding("provider-excluded", False, pid, excluded[pid]))
     _merge_enumerated(layers, values, findings)
     _merge_integrations(layers, values, findings)
-    if loaded.managed is None:
+    if untrusted_token is not None:
+        findings.append(make_finding("trusted-policy-untrusted", False, untrusted_token))
+    if combined_managed is None:
         findings.append(make_finding("no-managed-policy", False))
     else:
         managed_policy = _dict(layers["managed"].get("policy"))
         if "allowed_providers" in managed_policy or "denied_providers" in managed_policy:
             findings.append(make_finding("provider-ids-are-labels", False))
+    if effective_class == "work" and not (
+        "allowed_hosts" in _dict(profile.get("policy"))
+        or (trusted_data is not None and "allowed_hosts" in _dict(trusted_data.get("policy")))
+    ):
+        findings.append(make_finding("allowed-hosts-unset", False))
 
     return EffectiveConfig(
         profile_name=profile["profile"],
         profile_classification=profile_class,
         project_state=project_state,
         classification=effective_class,
-        managed_present=loaded.managed is not None,
+        managed_present=combined_managed is not None,
         providers=MappingProxyType(dict(providers)),
         models=MappingProxyType(dict(models)),
         effective_providers=effective_ids,
         excluded_providers=MappingProxyType(dict(sorted(excluded.items()))),
         values=MappingProxyType(dict(sorted(values.items()))),
         findings=tuple(findings),
+        trusted_state=loaded.trusted_state,
     )
 
 
@@ -624,6 +743,7 @@ def canonical(effective: EffectiveConfig) -> Dict[str, Any]:
         "project_state": effective.project_state,
         "classification": effective.classification,
         "managed_present": effective.managed_present,
+        "trusted_state": effective.trusted_state,
         "providers": {pid: _canonical_provider(v) for pid, v in sorted(effective.providers.items())},
         "models": {name: _canonical_model(v) for name, v in sorted(effective.models.items())},
         "effective_providers": list(effective.effective_providers),

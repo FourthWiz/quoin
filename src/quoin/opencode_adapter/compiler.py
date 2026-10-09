@@ -203,11 +203,14 @@ def evaluate(
     allow_unqualified: bool = False,
     overrides: Optional[merge.Overrides] = None,
     pinned_version: Optional[str] = None,
+    trusted: Optional[config.TrustedSource] = None,
 ) -> Evaluation:
     """Load, merge, qualify and resolve. `ConfigErrors`, `AdapterDataMissing`
     and `roles.AllowUnqualifiedRefused` propagate to the caller."""
     root = Path(project_root)
-    loaded = config.load_all(project_root=root, profile=profile, env=env, home=home)
+    loaded = config.load_all(
+        project_root=root, profile=profile, env=env, home=home, trusted=trusted
+    )
     effective = merge.merge(loaded, overrides=overrides)
     pinned = pinned_version if pinned_version is not None else qualification.pinned_version()
     quals = qualification.evaluate_all(

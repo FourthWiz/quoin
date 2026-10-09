@@ -312,3 +312,443 @@ def test_policy_module_hygiene(name):
         elif isinstance(node, ast.Attribute):
             if isinstance(node.value, ast.Name) and node.value.id == "os":
                 assert node.attr not in ("environ", "getenv", "getenvb")
+
+
+# =====================================================================
+# Merge through the public loader
+# =====================================================================
+
+import copy
+import os
+from pathlib import Path
+
+from _opencode_merge_helpers import (
+    MANAGEDS,
+    PROFILE_PERSONAL,
+    PROFILE_WORK,
+    PROFILES,
+    PROJECT_PERSONAL,
+    PROJECT_WORK,
+    PROJECTS,
+    World,
+    loaded,
+)
+from quoin.opencode_adapter import compiler, explain, paths
+
+UID = os.getuid()
+GOLDEN = json.loads(
+    (Path(__file__).resolve().parent / "fixtures" / "opencode_merge_golden.json").read_text(encoding="utf-8")
+)
+PIN = "0123456789abcdef" * 4
+
+
+def nested(field, value):
+    """``("mcp.local", "any")`` -> ``{"mcp": {"local": "any"}}``."""
+    parts = field.split(".")
+    out = value
+    for part in reversed(parts):
+        out = {part: out}
+    return out
+
+
+def deep_update(target, extra):
+    for key, value in extra.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            deep_update(target[key], value)
+        else:
+            target[key] = value
+    return target
+
+
+def with_policy(base, **extra):
+    data = copy.deepcopy(fixture(base) if isinstance(base, str) else base)
+    deep_update(data.setdefault("policy", {}), copy.deepcopy(extra))
+    return data
+
+
+class Fs:
+    """On-disk layers for `config.load_all`: profile, project, the
+    environment-pointed managed file and the trusted file."""
+
+    def __init__(self, tmp_path):
+        self.tmp = Path(tmp_path)
+        self.env = {"XDG_CONFIG_HOME": str(self.tmp / "xdg"), "XDG_STATE_HOME": str(self.tmp / "state")}
+        self.home = self.tmp / "home"
+        self.root = self.tmp / "project"
+        self.top = self.tmp / "root"
+        self.directory = self.top / "etc" / "quoin" / "opencode"
+        self.directory.mkdir(parents=True)
+        for path in (self.top, self.top / "etc", self.top / "etc" / "quoin", self.directory):
+            os.chmod(path, 0o755)
+        self.trusted_path = self.directory / "managed-policy.json"
+
+    def load(self, profile=PROFILE_WORK, project=None, env_managed=None, trusted=None,
+             trusted_mode=0o644, invoking=UID + 1):
+        data = copy.deepcopy(fixture(profile) if isinstance(profile, str) else profile)
+        target = paths.profile_path(data["profile"], self.env, self.home)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(data), encoding="utf-8")
+        if project is not None:
+            (self.root / ".quoin").mkdir(parents=True, exist_ok=True)
+            (self.root / ".quoin" / "runtime.json").write_text(
+                json.dumps(fixture(project) if isinstance(project, str) else project), encoding="utf-8"
+            )
+        if env_managed is not None:
+            file = self.tmp / "managed.json"
+            file.write_text(json.dumps(env_managed), encoding="utf-8")
+            self.env[paths.ENV_MANAGED_POLICY] = str(file)
+        if trusted is not None:
+            self.trusted_path.write_text(json.dumps(trusted), encoding="utf-8")
+            os.chmod(self.trusted_path, trusted_mode)
+        source = config.TrustedSource(self.trusted_path, UID, invoking, self.top)
+        return config.load_all(
+            project_root=self.root, profile=data["profile"], env=self.env, home=self.home, trusted=source
+        )
+
+    def merge(self, **kwargs):
+        return merge.merge(self.load(**kwargs))
+
+
+@pytest.fixture
+def fs(tmp_path):
+    return Fs(tmp_path)
+
+
+WORK_PROJECT = {"schema_version": 1, "runtime": "opencode", "profile": "work", "classification": "work"}
+PERSONAL_PROJECT = {"schema_version": 1, "runtime": "opencode", "profile": "personal", "classification": "personal"}
+
+
+def project_with(base, **policy):
+    data = copy.deepcopy(base)
+    data["policy"] = policy
+    return data
+
+
+def value(eff, name):
+    return eff.values["policy." + name]
+
+
+def ignored(eff, token, layer):
+    return any(
+        f.code == "less-restrictive-ignored" and f.subject == (token, layer) for f in eff.findings
+    )
+
+
+def errs_of(exc):
+    return [(e.rejection_class, e.file, e.json_path, e.message_id) for e in exc.value.errors]
+
+
+# ------------------------------------------------------------- defaults
+
+
+def test_work_profile_silent_gets_every_work_default(fs):
+    eff = fs.merge(project=WORK_PROJECT)
+    assert eff.classification == "work"
+    for name, expected in pp.CLASSIFICATION_DEFAULTS["work"].items():
+        assert value(eff, name).value == expected, name
+        assert value(eff, name).origin == ("default",), name
+    for kind in pp.RETENTION_KINDS:
+        assert eff.values["policy.retention.project." + kind].value == 30
+
+
+def test_personal_profile_silent_gets_every_personal_default(fs):
+    eff = fs.merge(profile=PROFILE_PERSONAL, project=PERSONAL_PROJECT)
+    assert eff.classification == "personal"
+    for name, expected in pp.CLASSIFICATION_DEFAULTS["personal"].items():
+        assert value(eff, name).value == expected, name
+        assert value(eff, name).origin == ("default",), name
+
+
+def test_a_personal_project_cannot_pick_personal_defaults_for_a_work_profile(fs):
+    eff = fs.merge(project=dict(WORK_PROJECT, classification="personal"))
+    assert eff.classification == "work"
+    assert value(eff, "web_tools").value == "deny"
+
+
+def test_a_personal_profile_cannot_serve_a_work_project(fs):
+    with pytest.raises(ConfigErrors) as info:
+        fs.merge(profile=PROFILE_PERSONAL, project=dict(WORK_PROJECT, profile="personal"))
+    assert [e[0] for e in errs_of(info)] == ["personal-profile-for-work"]
+
+
+# --------------------------------------------------------- enumerated rows
+
+WIDER = [
+    ("fallback", "same-profile"), ("web_tools", "allow"), ("package_install", "allow"),
+    ("mcp.local", "any"), ("mcp.remote", "any"), ("lsp.mode", "builtin"), ("formatter.mode", "builtin"),
+    ("network.identity_check", "off"), ("logging.content", "summary"),
+]
+NARROWER = [
+    ("fallback", "stop"), ("web_tools", "deny"), ("package_install", "deny"),
+    ("mcp.local", "deny"), ("mcp.remote", "deny"), ("network.identity_check", "required"),
+    ("logging.content", "metadata"),
+]
+
+
+@pytest.mark.parametrize("field, wide", WIDER)
+def test_work_project_cannot_widen_an_enumerated_field(fs, field, wide):
+    project = project_with(WORK_PROJECT, **nested(field, wide))
+    eff = fs.merge(project=project)
+    assert value(eff, field).value == pp.CLASSIFICATION_DEFAULTS["work"][field]
+    assert value(eff, field).origin == ("default",)
+    assert ignored(eff, field.replace(".", "-"), "project")
+
+
+@pytest.mark.parametrize("field, narrow", NARROWER)
+def test_personal_project_can_narrow_an_enumerated_field(fs, field, narrow):
+    project = project_with(PERSONAL_PROJECT, **nested(field, narrow))
+    eff = fs.merge(profile=PROFILE_PERSONAL, project=project)
+    assert value(eff, field).value == narrow
+    assert value(eff, field).origin == ("project",)
+
+
+def test_profile_allow_is_narrowed_by_a_trusted_deny(fs):
+    profile = with_policy(PROFILE_WORK, web_tools="allow")
+    eff = fs.merge(profile=profile, trusted={"schema_version": 1, "policy": {"web_tools": "deny"}})
+    assert value(eff, "web_tools").value == "deny"
+    assert value(eff, "web_tools").origin == ("trusted-managed",)
+    assert ignored(eff, "web_tools", "profile")
+
+
+def test_trusted_allow_is_an_approval_when_the_profile_is_silent(fs):
+    eff = fs.merge(trusted={"schema_version": 1, "policy": {"web_tools": "allow"}})
+    assert value(eff, "web_tools").value == "allow"
+    assert pp.view(eff).approved("web_tools")
+
+
+def test_env_managed_allow_cannot_widen_the_default(fs):
+    eff = fs.merge(env_managed={"schema_version": 1, "policy": {"web_tools": "allow"}})
+    assert value(eff, "web_tools").value == "deny"
+    assert ignored(eff, "web_tools", "managed")
+    assert not pp.view(eff).approved("web_tools")
+
+
+# ------------------------------------------------------------ list rows
+
+
+def test_project_only_repository_roots_are_set_but_not_approved(fs):
+    eff = fs.merge(project=project_with(WORK_PROJECT, repositories={"allowed_roots": ["/work/a"]}))
+    assert value(eff, "repositories.allowed_roots").value == ("/work/a",)
+    assert not pp.view(eff).approved("repositories.allowed_roots")
+
+
+def test_env_managed_only_repository_roots_are_not_approved(fs):
+    eff = fs.merge(env_managed={"schema_version": 1, "policy": {"repositories": {"allowed_roots": ["/work/a"]}}})
+    assert value(eff, "repositories.allowed_roots").value == ("/work/a",)
+    assert not pp.view(eff).approved("repositories.allowed_roots")
+
+
+def test_profile_repository_roots_are_approved(fs):
+    eff = fs.merge(profile=with_policy(PROFILE_WORK, repositories={"allowed_roots": ["/work/a"]}))
+    assert pp.view(eff).approved("repositories.allowed_roots")
+
+
+def test_project_only_mcp_allowed_is_broadening(fs):
+    with pytest.raises(ConfigErrors) as info:
+        fs.merge(project=project_with(WORK_PROJECT, mcp={"allowed": ["docs"]}))
+    assert errs_of(info) == [
+        ("allowlist-broadening", ".quoin/runtime.json", "$.policy.mcp.allowed[0]", "allowlist-broadening")
+    ]
+
+
+def test_project_may_narrow_a_profile_grant_list_and_not_widen_it(fs):
+    profile = with_policy(PROFILE_WORK, mcp={"allowed": ["a", "b"]})
+    eff = fs.merge(profile=profile, project=project_with(WORK_PROJECT, mcp={"allowed": ["a"]}))
+    assert value(eff, "mcp.allowed").value == ("a",)
+    with pytest.raises(ConfigErrors) as info:
+        Fs(fs.tmp / "second").merge(profile=profile, project=project_with(WORK_PROJECT, mcp={"allowed": ["c"]}))
+    assert errs_of(info)[0][2] == "$.policy.mcp.allowed[0]"
+
+
+def test_trusted_list_narrows_the_profile_list(fs):
+    profile = with_policy(PROFILE_WORK, mcp={"allowed": ["a", "b"]})
+    eff = fs.merge(profile=profile, trusted={"schema_version": 1, "policy": {"mcp": {"allowed": ["a"]}}})
+    assert value(eff, "mcp.allowed").value == ("a",)
+
+
+def test_subnet_narrowing_is_exact_member_only(fs):
+    profile = with_policy(PROFILE_WORK, network={"allowed_addresses": ["10.0.0.0/8"]})
+    with pytest.raises(ConfigErrors) as info:
+        fs.merge(profile=profile, project=project_with(WORK_PROJECT, network={"allowed_addresses": ["10.1.0.0/16"]}))
+    assert errs_of(info)[0][2] == "$.policy.network.allowed_addresses[0]"
+
+
+@pytest.mark.parametrize("project_days, scoped, flagged", [(7, 7, False), (90, 30, True)])
+def test_retention_keeps_the_strictest_and_the_project_view(fs, project_days, scoped, flagged):
+    profile = with_policy(PROFILE_WORK, retention={"runs_days": 60})
+    eff = fs.merge(
+        profile=profile,
+        project=project_with(WORK_PROJECT, retention={"runs_days": project_days}),
+        trusted={"schema_version": 1, "policy": {"retention": {"runs_days": 30}}},
+    )
+    assert value(eff, "retention.runs_days").value == 30
+    assert eff.values["policy.retention.project.runs_days"].value == scoped
+    assert ignored(eff, "retention-runs_days", "project") is flagged
+
+
+# ----------------------------------------------------- hosts and trust
+
+
+def codes(eff):
+    return [f.code for f in eff.findings]
+
+
+def test_work_without_allowed_hosts_is_a_non_blocking_finding(fs):
+    profile = copy.deepcopy(fixture(PROFILE_WORK))
+    del profile["policy"]["allowed_hosts"]
+    eff = fs.merge(profile=profile, project=WORK_PROJECT)
+    [finding] = [f for f in eff.findings if f.code == "allowed-hosts-unset"]
+    assert finding.blocking is False
+    assert merge.compile_blockers(eff) == ()
+
+
+def test_allowed_hosts_in_the_profile_or_trusted_policy_clear_the_finding(fs):
+    assert "allowed-hosts-unset" not in codes(fs.merge())
+    profile = copy.deepcopy(fixture(PROFILE_WORK))
+    del profile["policy"]["allowed_hosts"]
+    eff = Fs(fs.tmp / "t").merge(
+        profile=profile,
+        trusted={"schema_version": 1, "policy": {"allowed_hosts": ["gateway.example.invalid"]}},
+    )
+    assert "allowed-hosts-unset" not in codes(eff)
+
+
+def test_env_managed_allowed_hosts_do_not_clear_the_finding(fs):
+    profile = copy.deepcopy(fixture(PROFILE_WORK))
+    del profile["policy"]["allowed_hosts"]
+    eff = fs.merge(
+        profile=profile,
+        env_managed={"schema_version": 1, "policy": {"allowed_hosts": ["gateway.example.invalid"]}},
+    )
+    assert "allowed-hosts-unset" in codes(eff)
+
+
+def test_personal_profile_never_gets_the_hosts_finding(fs):
+    assert "allowed-hosts-unset" not in codes(fs.merge(profile=PROFILE_PERSONAL, project=PERSONAL_PROJECT))
+
+
+def test_untrusted_file_narrows_but_grants_nothing(fs):
+    eff = fs.merge(
+        trusted={"schema_version": 1, "policy": {"web_tools": "allow", "allowed_providers": ["corp-gw"]}},
+        trusted_mode=0o666,
+    )
+    assert value(eff, "web_tools").value == "deny"
+    assert eff.effective_providers == ("corp-gw",)
+    assert [f.subject for f in eff.findings if f.code == "trusted-policy-untrusted"] == [("file-writable",)]
+    assert eff.trusted_state == "untrusted:file-writable"
+
+
+def test_trusted_file_alone_counts_as_a_managed_policy(fs):
+    eff = fs.merge(trusted={"schema_version": 1, "policy": {"sharing": "deny"}})
+    assert "no-managed-policy" not in codes(eff)
+    assert eff.managed_present is True and eff.trusted_state == "trusted"
+
+
+def test_without_any_managed_file_the_finding_stays(fs):
+    eff = fs.merge()
+    assert "no-managed-policy" in codes(eff)
+    assert eff.managed_present is False and eff.trusted_state == "absent"
+
+
+def test_trusted_limit_ceiling_below_the_profile_limit_is_refused(fs):
+    with pytest.raises(ConfigErrors) as info:
+        fs.merge(trusted={"schema_version": 1, "limits": {"max_run_seconds": 100}})
+    [(cls, _file, path, _msg)] = errs_of(info)
+    assert (cls, path) == ("limit-above-ceiling", "$.limits.max_run_seconds")
+
+
+def test_trusted_ceiling_on_existing_fields_combines_with_the_env_file(fs):
+    eff = fs.merge(
+        env_managed={"schema_version": 1, "policy": {"allowed_providers": ["corp-gw", "corp-gw-b"]}},
+        trusted={"schema_version": 1, "policy": {"allowed_providers": ["corp-gw"]}},
+    )
+    assert eff.effective_providers == ("corp-gw",)
+
+
+# ------------------------------------------- nothing changes without a file
+
+NEW_CODES = {"allowed-hosts-unset", "trusted-policy-untrusted"}
+
+
+@pytest.mark.parametrize("key", sorted(GOLDEN))
+def test_existing_combinations_keep_their_canonical_form(key):
+    profile, project, managed = key.split("|")
+    expected = GOLDEN[key]
+    try:
+        eff = merge.merge(
+            loaded(PROFILES[profile], PROJECTS[project], MANAGEDS[managed])
+        )
+    except ConfigErrors as exc:
+        assert "errors" in expected, key
+        assert [[e.rejection_class, e.file, e.json_path, e.message_id] for e in exc.errors] == expected["errors"]
+        return
+    assert "canonical" in expected, key
+    doc = merge.canonical(eff)
+    assert doc.pop("trusted_state") == "absent"
+    old = expected["canonical"]
+    doc["values"] = {k: v for k, v in doc["values"].items() if k in old["values"]}
+    doc["findings"] = [f for f in doc["findings"] if f["code"] not in NEW_CODES]
+    assert doc == old
+    assert {k for k in eff.values if k.startswith("policy.")} >= {"policy." + n for n in pp.POLICY_FIELDS}
+
+
+# ---------------------------------------------------------------- explain
+
+
+def explain_doc(world, redact):
+    return json.loads(explain.render(world.evaluate(), as_json=True, redact=redact))
+
+
+def test_explain_masks_the_new_lists_only_under_redact(tmp_path):
+    profile = with_policy(
+        PROFILE_WORK,
+        repositories={"allowed_roots": ["/work/secret-root"]},
+        network={"allowed_addresses": ["10.9.8.0/24"], "pins": [PIN]},
+    )
+    world = World(tmp_path, profile=profile)
+    plain = explain_doc(world, False)["values"]
+    masked = explain_doc(world, True)["values"]
+    assert plain["policy.repositories.allowed_roots"]["value"] == ["/work/secret-root"]
+    assert plain["policy.network.allowed_addresses"]["value"] == ["10.9.8.0/24"]
+    for key in ("policy.repositories.allowed_roots", "policy.network.allowed_addresses", "policy.network.pins"):
+        assert masked[key]["value"] == ["***"]
+    assert "secret-root" not in json.dumps(masked)
+
+
+@pytest.mark.parametrize("profile", [PROFILE_WORK, PROFILE_PERSONAL])
+def test_explain_redact_keeps_unset_lists_null(tmp_path, profile):
+    world = World(tmp_path, profile=profile)
+    for redact in (False, True):
+        values = explain_doc(world, redact)["values"]
+        for key in ("policy.repositories.allowed_roots", "policy.network.allowed_addresses", "policy.network.pins"):
+            assert values[key]["value"] is None
+
+
+def test_hosts_finding_does_not_change_launchability(tmp_path):
+    profile = copy.deepcopy(fixture(PROFILE_WORK))
+    del profile["policy"]["allowed_hosts"]
+    with_finding = World(tmp_path / "a", profile=profile).evaluate()
+    without = World(tmp_path / "b").evaluate()
+    assert any(f.code == "allowed-hosts-unset" for f in with_finding.effective.findings)
+    assert compiler.launchable(with_finding) == compiler.launchable(without)
+
+
+# ------------------------------------------------------------- secrets
+
+
+def test_seeded_secret_never_reaches_the_new_surfaces(tmp_path):
+    secret = helpers.SEEDED_SECRET
+    profile = with_policy(
+        PROFILE_WORK, repositories={"allowed_roots": ["/work/a"]}, network={"pins": [PIN]}
+    )
+    world = World(tmp_path, profile=profile)
+    for name in ("QUOIN_CORP_GW_API_KEY", "QUOIN_CORP_GW_B_API_KEY"):
+        world.env[name] = secret
+    ev = world.evaluate()
+    texts = [json.dumps(merge.canonical(ev.effective))]
+    for redact in (False, True):
+        texts.append(explain.render(ev, as_json=True, redact=redact))
+    texts += [repr(f) for f in ev.effective.findings]
+    for text in texts:
+        for form in helpers.secret_forms(secret):
+            assert form not in text
