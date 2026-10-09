@@ -1,6 +1,7 @@
 {
   "version": 1,
   "base_ref": "origin/main",
+  "task_branch": "feat/ivg-274-opencode-m3a-profile-isolation",
   "changed": {
     "quoin/dev/tests/test_opencode_runtime_config.py": "config validation reads the cited built-in id sets from profile_policy, which imports nothing from the adapter, so the import allow-list gains exactly that module",
     "quoin/dev/tests/test_opencode_config_errors.py": "two new finding codes and their closed subject set join the shape table and the token-safety loop",

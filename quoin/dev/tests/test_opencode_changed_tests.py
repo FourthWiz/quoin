@@ -14,6 +14,8 @@ from pathlib import Path
 
 import pytest
 
+from _opencode_task_scope import task_guard_active
+
 TESTS_DIR = Path(__file__).resolve().parent
 LIST_PATH = TESTS_DIR / "opencode_changed_tests.json"
 OPENCODE_PREFIXES = ("test_opencode_", "_opencode_", "test_fake_opencode")
@@ -88,6 +90,9 @@ def test_changed_tests_are_listed_with_reasons():
     root = _git_root()
     if root is None:
         pytest.skip("no base branch available")
+    reason = task_guard_active(root, data["task_branch"])
+    if reason is not None:
+        pytest.skip(reason)
     base = merge_base(root, data["base_ref"])
     if base is None:
         pytest.skip("no base branch available")
@@ -100,3 +105,37 @@ def test_changed_tests_are_listed_with_reasons():
     changed_names = {Path(path).name for path in changed} | set(changed)
     for path in listed:
         assert path in changed_names or Path(path).name in changed_names, "stale list entry: %s" % path
+
+
+def _scratch_repo(tmp_path, branch):
+    repo = tmp_path / "repo"
+    repo.mkdir(parents=True)
+    _git(repo, "init", "-q", "-b", branch)
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "-A")
+    assert _git(repo, "commit", "-q", "-m", "base").returncode == 0
+    return repo
+
+
+def test_the_task_scope_gate(tmp_path):
+    if shutil.which("git") is None:
+        pytest.skip("git is not available")
+    repo = _scratch_repo(tmp_path, "feat/the-task")
+    assert task_guard_active(repo, "feat/the-task", environ={}) is None
+    other = _scratch_repo(tmp_path / "second", "main")
+    reason = task_guard_active(other, "feat/the-task", environ={})
+    assert reason == "task-scoped guard: not on the task branch"
+    assert task_guard_active(other, "feat/the-task", environ={"QUOIN_OPENCODE_TASK_GUARDS": "1"}) is None
+    assert task_guard_active(tmp_path, "feat/the-task", environ={}) is not None
+
+
+def test_the_task_scope_gate_skips_without_git(tmp_path, monkeypatch):
+    monkeypatch.setattr(shutil, "which", lambda name: None)
+    assert task_guard_active(tmp_path, "feat/the-task", environ={}) is not None
+
+
+def test_the_recorded_task_branch_is_a_branch_name():
+    data = json.loads(LIST_PATH.read_text(encoding="utf-8"))
+    assert data["task_branch"].startswith("feat/")
