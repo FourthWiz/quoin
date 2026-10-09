@@ -39,6 +39,7 @@ EXISTING_CODES: Dict[str, str] = {
     "continue-loop-on-deny": "invalid-configuration",
     "credential-unresolved": "invalid-configuration",
     "data-dir-unsafe": "invalid-configuration",
+    "env-path-outside-profile": "invalid-configuration",
     "install-record-invalid": "workflow-validation",
     "invalid-project-root": "workflow-validation",
     "invalid-stage": "workflow-validation",
@@ -119,7 +120,7 @@ for _code in (
     "destination-plaintext",
 ):
     PLANNED_CODES[_code] = "policy-denial"
-for _code in ("profile-dir-unsafe", "env-path-outside-profile"):
+for _code in ("profile-dir-unsafe",):
     PLANNED_CODES[_code] = "invalid-configuration"
 for _code in ("profile-selection-unverified", "profile-unknown", "purge-run-active"):
     PLANNED_CODES[_code] = "workflow-validation"

@@ -303,7 +303,8 @@ def test_registry_is_read_only_and_groups_do_not_conflict():
 
 
 def test_planned_codes_are_the_declared_set():
-    assert len(launch_codes.PLANNED_CODES) == 39
+    assert len(launch_codes.PLANNED_CODES) == 38
+    assert "env-path-outside-profile" not in launch_codes.PLANNED_CODES
     assert launch_codes.category("allowed-hosts-unset") == "policy-denial"
     assert launch_codes.category("profile-dir-unsafe") == "invalid-configuration"
     assert launch_codes.category("purge-run-active") == "workflow-validation"

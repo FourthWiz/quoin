@@ -200,7 +200,8 @@ def test_build_env_state_dir_keyword(tmp_path):
 
     assert build(state_dir=tmp_path / "s")[paths.ENV_STATE_DIR] == str(tmp_path / "s")
     assert paths.ENV_STATE_DIR not in build()
-    assert set(launch_env.LAUNCHER_ENV_NAMES) == {"OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR}
+    assert set(launch_env.LAUNCHER_ENV_NAMES) == {
+        "OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR, *launch_env.HARDENING_ENV_NAMES}
     assert launch_env.allowed_ambient("PATH") and launch_env.allowed_ambient("LC_ALL")
     assert not launch_env.allowed_ambient("XDG_STATE_HOME")
 

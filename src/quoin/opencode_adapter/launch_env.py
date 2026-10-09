@@ -125,7 +125,25 @@ class LaunchEnv:
 
 
 # Variables the launcher itself sets in the child environment.
-LAUNCHER_ENV_NAMES: Tuple[str, ...] = ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR)
+HARDENING_ENV_NAMES: Tuple[str, ...] = (
+    "OPENCODE_DISABLE_MODELS_FETCH",
+    "OPENCODE_DISABLE_AUTOUPDATE",
+    "OPENCODE_DISABLE_SHARE",
+    "OPENCODE_DISABLE_LSP_DOWNLOAD",
+    "OPENCODE_DISABLE_CLAUDE_CODE",
+    "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+    "OPENCODE_PURE",
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+)
+# Storage variables the launcher points at the selected profile. They are not
+# launcher-owned names: outside a launch they are the person's own settings.
+PROFILE_STORAGE_ENV_NAMES: Tuple[str, ...] = (
+    "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR",
+    "npm_config_cache", "npm_config_userconfig", "npm_config_offline",
+)
+LAUNCHER_ENV_NAMES: Tuple[str, ...] = (
+    ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR) + HARDENING_ENV_NAMES
+)
 
 
 def _allowed_ambient(name: str) -> bool:
@@ -170,6 +188,76 @@ def _register_proxy_secret(redactor: Redactor, value: str) -> None:
         redactor.add(password)
 
 
+def hardening_env(
+    *, classification: str, sharing: str, package_install: str,
+    npm_cache: Union[str, Path], npm_userconfig: Union[str, Path],
+) -> Dict[str, str]:
+    """The flags and package-manager settings that keep a headless child from
+    fetching, updating, sharing or loading code on its own."""
+    work = classification == "work"
+    out: Dict[str, str] = {
+        "OPENCODE_DISABLE_MODELS_FETCH": "1",
+        "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        "npm_config_cache": str(npm_cache),
+    }
+    if work or sharing == "deny":
+        out["OPENCODE_DISABLE_SHARE"] = "1"
+    if work:
+        for name in (
+            "OPENCODE_DISABLE_LSP_DOWNLOAD", "OPENCODE_DISABLE_CLAUDE_CODE",
+            "OPENCODE_DISABLE_EXTERNAL_SKILLS", "OPENCODE_PURE",
+            "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+        ):
+            out[name] = "1"
+        out["npm_config_userconfig"] = str(npm_userconfig)
+        if package_install == "deny":
+            out["npm_config_offline"] = "true"
+    return out
+
+
+def credential_kinds(
+    compile_sidecar: Mapping[str, Any], providers: Union[Mapping[str, Any], Iterable[Any]],
+) -> List[Dict[str, str]]:
+    """What kind of credential each emitted variable carries; no value is read."""
+    by_id = _providers_by_id(providers)
+    out: List[Dict[str, str]] = []
+    for provider_id in sorted(set((compile_sidecar.get("credential_env") or {}).values())):
+        view = by_id.get(provider_id)
+        ref = getattr(view, "credential_ref", "") if view is not None else ""
+        try:
+            masked = credential_refs.parse(ref).masked()
+        except (ValueError, AttributeError):
+            masked = "unparseable"
+        out.append({"provider": provider_id, "ref_masked": masked, "kind": "static-api-key"})
+    return out
+
+
+def _check_containment(
+    values: Mapping[str, str], skip: Iterable[str], adapter_root: Union[str, Path],
+    profile_root: Union[str, Path],
+) -> None:
+    adapter = os.path.normpath(str(adapter_root))
+    profile = os.path.normpath(str(profile_root))
+
+    def under(path: str, base: str) -> bool:
+        return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
+
+    skipped = set(skip)
+    for name in sorted(values):
+        if name in skipped:
+            continue
+        for part in values[name].split(os.pathsep):
+            if not os.path.isabs(part):
+                continue
+            norm = os.path.normpath(part)
+            if under(norm, adapter) and not under(norm, profile):
+                raise LaunchRefused(
+                    "invalid-configuration",
+                    "env-path-outside-profile",
+                    "the launch environment variable %s points outside the selected profile" % name,
+                )
+
+
 def build_env(
     *,
     ambient: Mapping[str, str],
@@ -180,6 +268,10 @@ def build_env(
     config_path: Union[str, Path],
     redactor: Optional[Redactor] = None,
     state_dir: Optional[Union[str, Path]] = None,
+    profile_root: Optional[Union[str, Path]] = None,
+    adapter_root: Optional[Union[str, Path]] = None,
+    storage: Optional[Mapping[str, str]] = None,
+    hardening: Optional[Mapping[str, str]] = None,
 ) -> LaunchEnv:
     """Allowlist the ambient environment, then add the launcher's own
     variables and the resolved credentials the compiled file names."""
@@ -199,10 +291,17 @@ def build_env(
                     values[name] = ambient[name]
                     _register_proxy_secret(redactor, ambient[name])
 
+    for extra in (storage, hardening):
+        if extra:
+            values.update({name: str(value) for name, value in extra.items()})
+
     values["OPENCODE_CONFIG"] = str(config_path)
     values["XDG_DATA_HOME"] = str(data_dir)
     if state_dir is not None:
         values[paths.ENV_STATE_DIR] = str(state_dir)
+
+    if adapter_root is not None and profile_root is not None:
+        _check_containment(values, credential_env, adapter_root, profile_root)
 
     for env_name in sorted(credential_env):
         provider_id = credential_env[env_name]
