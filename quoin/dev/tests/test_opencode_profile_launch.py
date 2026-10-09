@@ -355,3 +355,64 @@ def test_a_critic_snapshot_is_created_under_the_profile_root(env, monkeypatch):
     )
     assert out.refusal == "stop-here"
     assert seen["state_root"] == _adapter_root(env) / "work"
+
+
+# ------------------------------------------------------------ consumer pins
+
+_SRC = Path(__file__).resolve().parents[3] / "src" / "quoin"
+
+# Every call to these helpers in production code, as (file, enclosing function, callee).
+# A new caller or a vanished one fails the test, so the storage-root census stays honest.
+ALLOWED_STATE_DIR_CALLS = {
+    ("opencode_adapter/profile_dirs.py", "adapter_root", "state_dir"):
+        "the one place a plain environment becomes the adapter root",
+    ("opencode_adapter/paths.py", "compiled_output_dir", "state_dir"):
+        "kept for callers that hold a plain environment",
+    ("opencode_adapter/launch_env.py", "data_dir", "state_dir"):
+        "pins the data directory location for existing sessions",
+}
+ALLOWED_COMPILED_CALLS = {
+    ("opencode_adapter/compiler.py", "resolve_output_dir", "compiled_output_dir"):
+        "reached only when no output directory is given",
+}
+
+
+def _calls(names):
+    import ast
+
+    found = {}
+    files = sorted((_SRC / "opencode_adapter").glob("*.py")) + [_SRC / "cli.py"]
+    for path in files:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for func in [n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]:
+            for node in ast.walk(func):
+                if isinstance(node, ast.Call):
+                    callee = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", None)
+                    if callee in names:
+                        found[(str(path.relative_to(_SRC)), func.name, callee)] = node
+    return found
+
+
+def test_state_dir_is_called_only_at_the_census_sites():
+    found = set(_calls({"state_dir"}))
+    assert found == set(ALLOWED_STATE_DIR_CALLS), (found ^ set(ALLOWED_STATE_DIR_CALLS))
+
+
+def test_compiled_output_dir_is_called_only_at_the_census_site():
+    found = set(_calls({"compiled_output_dir"}))
+    assert found == set(ALLOWED_COMPILED_CALLS), (found ^ set(ALLOWED_COMPILED_CALLS))
+
+
+def test_no_launch_or_cli_path_asks_the_compiler_for_its_default_output():
+    for key, node in _calls({"resolve_output_dir"}).items():
+        if key[0] in ("cli.py", "opencode_adapter/driver.py"):
+            kws = {k.arg: k.value for k in node.keywords}
+            import ast
+
+            assert "output" in kws and not (isinstance(kws["output"], ast.Constant) and kws["output"].value is None), key
+
+
+def test_commands_that_read_no_profile_state_do_not_name_a_state_root():
+    for name in ("gate.py", "evidence.py", "handoff.py"):
+        text = (_SRC / "opencode_adapter" / name).read_text(encoding="utf-8")
+        assert "state_root" not in text and "ENV_STATE_DIR" not in text, name

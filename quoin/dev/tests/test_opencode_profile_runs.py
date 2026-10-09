@@ -223,3 +223,25 @@ def test_a_nested_launch_naming_the_other_profile_is_refused(world):
     drv._session = profile_dirs.LaunchSession.from_launcher_env(env)
     result = run(project, "personal", task="nested-check", drv=drv)
     assert result.outcome == "REFUSED" and result.refusal["code"] == "profile-switch-in-process"
+
+
+def test_the_single_run_hook_receives_the_profile_root(world, monkeypatch, capsys):
+    from quoin import cli
+    from quoin.opencode_adapter import run_hooks
+
+    project = world(dump_scenario)
+    seen = {}
+    real = run_hooks.after_phase_run
+
+    def capture(*args, **kwargs):
+        seen["state_root"] = kwargs.get("state_root")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(run_hooks, "after_phase_run", capture)
+    monkeypatch.setattr(cli, "_make_opencode_driver", project.driver_factory())
+    monkeypatch.setattr(cli, "_opencode_backoff", lambda n: 0)
+    code = cli.main(["run", "demo", "--runtime", "opencode", "--profile", "work", "--phase", "plan",
+                     "--project-root", str(project.root)])
+    capsys.readouterr()
+    assert code == 0
+    assert seen["state_root"] == project.state / "work"
