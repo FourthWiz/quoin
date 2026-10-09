@@ -6,6 +6,9 @@
     "quoin/dev/tests/test_opencode_runtime_config.py": "config validation reads the cited built-in id sets from profile_policy, which imports nothing from the adapter, so the import allow-list gains exactly that module",
     "quoin/dev/tests/test_opencode_config_errors.py": "two new finding codes and their closed subject set join the shape table and the token-safety loop",
     "quoin/dev/tests/test_opencode_config_merge.py": "merge calls the policy helpers and the managed-layer combination in profile_policy, so the import allow-list gains exactly that module",
-    "quoin/dev/tests/test_opencode_driver_workspace.py": "the launcher-owned name tuple now also lists the hardening flags the launcher sets, so the exact-set assertion includes them"
+    "quoin/dev/tests/test_opencode_driver_workspace.py": "the launcher-owned name tuple now lists the hardening flags, and the child state variable names the profile root while XDG_STATE_HOME points at its state directory",
+    "quoin/dev/tests/_opencode_workflow_helpers.py": "the scripted coordinator driver exposes profile_state_root returning its own state root, so tests that pin under that root still meet the hook",
+    "quoin/dev/tests/test_opencode_boundary_runs.py": "the test-run pin is configured under the profile root, which is the state root a run and its child now use",
+    "quoin/dev/tests/test_opencode_workflow_cli.py": "the coordinator keeps the test pin under the profile root inside the driver state root, so the expected pin location gains the profile directory"
   }
 }

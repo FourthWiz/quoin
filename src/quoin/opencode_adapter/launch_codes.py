@@ -40,6 +40,9 @@ EXISTING_CODES: Dict[str, str] = {
     "credential-unresolved": "invalid-configuration",
     "data-dir-unsafe": "invalid-configuration",
     "env-path-outside-profile": "invalid-configuration",
+    "profile-dir-unsafe": "invalid-configuration",
+    "profile-stamp-mismatch": "policy-denial",
+    "profile-switch-in-process": "policy-denial",
     "install-record-invalid": "workflow-validation",
     "invalid-project-root": "workflow-validation",
     "invalid-stage": "workflow-validation",
@@ -84,8 +87,6 @@ COMPILED_REASON_CODES: Dict[str, str] = {
 # Codes the profile-isolation work introduces in later stages.
 PLANNED_CODES: Dict[str, str] = {}
 for _code in (
-    "profile-switch-in-process",
-    "profile-stamp-mismatch",
     "repository-not-approved",
     "approved-repositories-unset",
     "isolation-required-unverified",
@@ -120,8 +121,6 @@ for _code in (
     "destination-plaintext",
 ):
     PLANNED_CODES[_code] = "policy-denial"
-for _code in ("profile-dir-unsafe",):
-    PLANNED_CODES[_code] = "invalid-configuration"
 for _code in ("profile-selection-unverified", "profile-unknown", "purge-run-active"):
     PLANNED_CODES[_code] = "workflow-validation"
 del _code

@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import (
-    driver, evidence, gate, handoff, phase_loop, run_hooks, runstore, snapshot, testrun, window,
+    driver, evidence, gate, handoff, phase_loop, profile_dirs, run_hooks, runstore, snapshot, testrun,
+    window,
 )
 
 DEFAULT_MAX_CRITIC_ROUNDS = 2
@@ -284,7 +285,7 @@ class Coordinator:
         self.scope_source = scope_source
         self.backoff_fn = backoff_fn
         self.clock = clock
-        self.state_root = drv.state_root
+        self.state_root = profile_dirs.state_root_for(drv, options.profile)
         self.window = window.WindowStore(self.state_root, self.project_root, self.task)
         self.errors: List[str] = []
         self.seeded: List[Tuple[str, Optional[int]]] = []

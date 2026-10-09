@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from quoin.opencode_adapter import launch_env, paths, profile_dirs
+from test_opencode_driver_workspace import Setup
+from quoin.opencode_adapter import driver, launch_codes, launch_env, paths, profile_dirs, runstore
 from quoin.opencode_adapter import secrets as credential_refs
 from quoin.opencode_adapter.launch_env import LaunchRefused
 from quoin.opencode_adapter.merge import ProviderView
@@ -171,3 +172,144 @@ def test_name_tuples():
     assert set(launch_env.HARDENING_ENV_NAMES) <= set(launch_env.LAUNCHER_ENV_NAMES)
     assert not set(launch_env.PROFILE_STORAGE_ENV_NAMES) & set(launch_env.LAUNCHER_ENV_NAMES)
     assert paths.ENV_STATE_DIR in launch_env.LAUNCHER_ENV_NAMES
+
+
+# ------------------------------------------------------------- driver part
+
+
+@pytest.fixture(autouse=True)
+def _no_launcher_state(monkeypatch):
+    monkeypatch.delenv(paths.ENV_STATE_DIR, raising=False)
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    return Setup(tmp_path, monkeypatch)
+
+
+def _adapter_root(env):
+    return paths.state_dir(env.world.env, env.world.home)
+
+
+def test_child_environment_for_a_work_run(env):
+    prepared = env.driver().prepare(env.request())
+    root = _adapter_root(env) / "work"
+    values = prepared.launch_env.materialize()
+    assert values[paths.ENV_STATE_DIR] == str(root)
+    assert values["XDG_DATA_HOME"] == str(root / "data")
+    assert values["XDG_STATE_HOME"] == str(root / "state")
+    assert values["XDG_CACHE_HOME"] == str(root / "cache")
+    assert values["TMPDIR"] == str(root / "tmp")
+    assert values["npm_config_cache"] == str(root / "cache" / "npm")
+    assert values["OPENCODE_PURE"] == "1" and values["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
+    assert os.stat(root).st_mode & 0o777 == 0o700
+    index = (root / "projects.json").read_text()
+    assert os.path.realpath(env.root) in index
+
+
+def test_one_profile_per_process(env):
+    drv = env.driver()
+    drv.prepare(env.request())
+    drv.prepare(env.request(task="again"))
+    with pytest.raises(driver.PrepareRefused) as info:
+        drv.prepare(env.request(profile="other"))
+    assert info.value.code == "profile-switch-in-process"
+    assert info.value.category == launch_codes.category("profile-switch-in-process")
+
+
+def test_a_classification_change_is_refused(env):
+    session = profile_dirs.LaunchSession(("work", "personal"))
+    drv = driver.OpenCodeDriver(
+        env.root, env=dict(env.world.env, PATH=os.environ.get("PATH", "")), home=env.world.home,
+        which=lambda name: str(env.shim), version_runner=lambda path: "1.18.32",
+        resolver_factory=lambda environ, platform: _Resolver2(),
+        session=session,
+    )
+    with pytest.raises(driver.PrepareRefused) as info:
+        drv.prepare(env.request())
+    assert info.value.code == "profile-switch-in-process"
+
+
+class _Resolver2:
+    def resolve(self, ref):
+        return credential_refs.SecretValue("sk-test-0000000000")
+
+
+def test_stamp_mismatch_is_refused(env):
+    profile_dirs.prepare(_adapter_root(env), "work", "personal")
+    env.refused("profile-stamp-mismatch", env.request())
+
+
+def test_plain_driver_compiles_where_paths_says(env):
+    prepared = env.driver().prepare(env.request())
+    expected = paths.compiled_output_dir("work", env.root, env.world.env, env.world.home)
+    assert prepared.config_path.parent == expected
+
+
+def test_a_launcher_built_driver_compiles_beside_the_profile_not_inside_it(env):
+    root = profile_dirs.prepare(_adapter_root(env), "work", "work").root
+    nested = dict(
+        env.world.env, PATH=os.environ.get("PATH", ""),
+        XDG_STATE_HOME=str(root / "state"), **{paths.ENV_STATE_DIR: str(root)},
+    )
+    drv = driver.OpenCodeDriver(
+        env.root, env=nested, home=env.world.home, which=lambda name: str(env.shim),
+        version_runner=lambda path: "1.18.32", resolver_factory=lambda environ, platform: _Resolver2(),
+    )
+    prepared = drv.prepare(env.request())
+    assert prepared.config_path.parent == root / paths.project_key(env.root)
+    assert not (root / "state" / "quoin").exists()
+    assert prepared.launch_env.materialize()["OPENCODE_CONFIG"] == str(prepared.config_path)
+    with pytest.raises(driver.PrepareRefused) as info:
+        drv.prepare(env.request(profile="other"))
+    assert info.value.code == "profile-switch-in-process"
+
+
+def _interrupted(env):
+    prepared = env.driver().prepare(env.request())
+    directory = runstore.store_dir(env.root)
+    record = runstore.load_record(directory, prepared.run_id)
+    attempt = runstore.new_attempt(
+        1, pid=1, pgid=1, child_start="x", driver_pid=os.getpid(), driver_start=None, resume_mode="fresh",
+    )
+    attempt.update(state="interrupted", reason="signal")
+    record["attempts"].append(attempt)
+    record["state"] = "interrupted"
+    runstore.write_record(directory, record)
+    return prepared, directory
+
+
+def test_resume_under_another_profile_is_refused_with_a_profile_detail(env):
+    prepared, directory = _interrupted(env)
+    err = env.refused("resume-request-mismatch", env.request(profile="other"), resume_run_id=prepared.run_id)
+    assert err.detail == "profile"
+    record = runstore.load_record(directory, prepared.run_id)
+    assert record["state"] == "interrupted"
+    assert record["refusal"] == {
+        "category": "workflow-validation", "code": "resume-request-mismatch",
+        "message": "the request names a different profile than the run being resumed", "detail": "profile",
+    }
+
+
+def test_resume_under_another_task_has_no_detail(env):
+    prepared, directory = _interrupted(env)
+    err = env.refused("resume-request-mismatch", env.request(task="other-task"), resume_run_id=prepared.run_id)
+    assert err.detail is None
+    record = runstore.load_record(directory, prepared.run_id)
+    assert "detail" not in record["refusal"] and record["state"] == "interrupted"
+
+
+def test_credentials_are_recorded_masked(env):
+    prepared = env.driver().prepare(env.request())
+    record = runstore.load_record(runstore.store_dir(env.root), prepared.run_id)["prepared"]
+    assert record["static_key_in_use"] is True
+    assert record["credentials"] and all(c["kind"] == "static-api-key" for c in record["credentials"])
+    assert record["profile_root"] == "<state>/work"
+    assert str(env.tmp) not in record["profile_root"]
+
+
+def test_new_codes_are_registered_in_their_categories():
+    assert launch_codes.category("profile-switch-in-process") == "policy-denial"
+    assert launch_codes.category("profile-stamp-mismatch") == "policy-denial"
+    assert launch_codes.category("profile-dir-unsafe") == "invalid-configuration"
+    assert launch_codes.category("env-path-outside-profile") == "invalid-configuration"

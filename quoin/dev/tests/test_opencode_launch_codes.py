@@ -12,6 +12,7 @@ purposes are listed with a reason.
 from __future__ import annotations
 
 import ast
+import functools
 import re
 from pathlib import Path
 
@@ -55,6 +56,7 @@ def _modules():
     yield "cli.py", SRC_DIR / "cli.py"
 
 
+@functools.lru_cache(maxsize=None)
 def _parse(path):
     tree = ast.parse(path.read_text(encoding="utf-8"))
     parents = {}
@@ -155,7 +157,7 @@ def test_factories_still_return_a_refusal_construction():
         found = [
             n for n in ast.walk(tree)
             if isinstance(n, ast.FunctionDef)
-            and (_scope(n, parents) + "." + n.name).lstrip("<module>.") == scope.lstrip("<module>.")
+            and (_scope(n, parents) + "." + n.name).removeprefix("<module>.") == scope.removeprefix("<module>.")
         ]
         assert len(found) == 1, (module, scope)
         returns = [r for r in ast.walk(found[0]) if isinstance(r, ast.Return) and r.value is not None]
@@ -303,8 +305,9 @@ def test_registry_is_read_only_and_groups_do_not_conflict():
 
 
 def test_planned_codes_are_the_declared_set():
-    assert len(launch_codes.PLANNED_CODES) == 38
-    assert "env-path-outside-profile" not in launch_codes.PLANNED_CODES
+    assert len(launch_codes.PLANNED_CODES) == 35
+    for moved in ("env-path-outside-profile", "profile-dir-unsafe", "profile-switch-in-process", "profile-stamp-mismatch"):
+        assert moved not in launch_codes.PLANNED_CODES
     assert launch_codes.category("allowed-hosts-unset") == "policy-denial"
     assert launch_codes.category("profile-dir-unsafe") == "invalid-configuration"
     assert launch_codes.category("purge-run-active") == "workflow-validation"

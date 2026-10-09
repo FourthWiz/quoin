@@ -129,7 +129,7 @@ def test_test_command_pin_lives_under_the_driver_state_root(project, capsys, stu
     code, summary = run(project, capsys, "--test-command", "python -c pass", "--test-timeout", "30")
     assert summary["mode"] == "workflow"
     drv = stub["driver"]
-    pin = testrun.result_dir(drv.state_root, project, "demo") / testrun.PIN_NAME
+    pin = testrun.result_dir(Path(drv.state_root) / "work", project, "demo") / testrun.PIN_NAME
     assert pin.is_file()
     assert not (testrun.result_dir(other, project, "demo") / testrun.PIN_NAME).exists()
     directory = runstore.store_dir(project, create=True)

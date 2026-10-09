@@ -187,8 +187,9 @@ def test_state_root_and_the_child_state_variable(env):
     assert drv.state_root == paths.state_dir(env.world.env, env.world.home)
     prepared = drv.prepare(env.request())
     assert paths.ENV_STATE_DIR in prepared.env_names
-    assert "XDG_STATE_HOME" not in prepared.env_names
-    assert prepared.launch_env.materialize()[paths.ENV_STATE_DIR] == str(drv.state_root)
+    values = prepared.launch_env.materialize()
+    assert values[paths.ENV_STATE_DIR] == str(drv.profile_state_root("work"))
+    assert values["XDG_STATE_HOME"] == str(drv.profile_state_root("work") / "state")
 
 
 def test_build_env_state_dir_keyword(tmp_path):
@@ -221,6 +222,6 @@ def test_the_fake_sees_the_state_variable_and_no_operator_state_home(tmp_path, m
         )
         h.run_to_end(drv, prepared)
         names = project.invocations()[-1]["env_names"]
-        assert paths.ENV_STATE_DIR in names and "XDG_STATE_HOME" not in names
+        assert paths.ENV_STATE_DIR in names and "XDG_STATE_HOME" in names
     finally:
         project.cleanup()

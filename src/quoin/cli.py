@@ -2329,6 +2329,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
     from quoin import supervisor as _supervisor  # noqa: PLC0415
     from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
     from quoin.opencode_adapter import phase_loop, run_hooks, runstore  # noqa: PLC0415
+    from quoin.opencode_adapter import profile_dirs as _profile_dirs  # noqa: PLC0415
 
     project_root = pathlib.Path(args.project_root).resolve()
     ident = {
@@ -2386,7 +2387,10 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                 source_dir = mark = candidate = listing = state_root = None
                 try:
                     drv = _make_opencode_driver(project_root)
-                    state_root = getattr(drv, "state_root", None)
+                    try:
+                        state_root = _profile_dirs.state_root_for(drv, args.profile)
+                    except ValueError:
+                        state_root = None
                     request = _driver.RunRequest(
                         project_root=project_root, task=args.task, stage=args.stage,
                         phase=args.phase, profile=args.profile, budget=args.budget,

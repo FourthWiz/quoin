@@ -28,7 +28,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optio
 
 from . import compiler, doctor, frontmatter, install, jsonio, launch_env, manifest, names
 from . import paths as adapter_paths
-from . import proctree, qualification, retry, roles, runstore
+from . import profile_dirs, profile_policy, proctree, qualification, retry, roles, runstore
 from . import events as ev
 from . import secrets as credential_refs
 from .errors import ConfigErrors
@@ -125,12 +125,16 @@ _CONTEXT_REF = re.compile(
 class PrepareRefused(Exception):
     """A run was refused before any process was spawned."""
 
-    def __init__(self, category: str, code: str, message: str, run_id: Optional[str] = None) -> None:
+    def __init__(
+        self, category: str, code: str, message: str, run_id: Optional[str] = None,
+        *, detail: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.category = category
         self.code = code
         self.message = message
         self.run_id = run_id
+        self.detail = detail
 
     def __str__(self) -> str:
         return self.message
@@ -672,6 +676,7 @@ class OpenCodeDriver:
         checkpoint_every: int = 50,
         max_line_bytes: int = 1_048_576,
         stderr_read_delay_s: float = 0.0,
+        session: Optional[profile_dirs.LaunchSession] = None,
     ) -> None:
         self.project_root = Path(os.path.abspath(str(project_root)))
         self._env: Dict[str, str] = dict(os.environ if env is None else env)
@@ -698,6 +703,9 @@ class OpenCodeDriver:
         # Guards record writes made before any handle exists (reconciliation
         # and blocked resumes). Never taken from a signal handler.
         self._record_lock = threading.Lock()
+        # The one profile this process may use; a stamped launcher root in the
+        # driver's environment pre-claims it.
+        self._session = session if session is not None else profile_dirs.LaunchSession.from_launcher_env(self._env)
 
     # ------------------------------------------------------------- probe
 
@@ -707,7 +715,11 @@ class OpenCodeDriver:
     @property
     def state_root(self) -> Path:
         """The adapter state directory this driver resolves."""
-        return adapter_paths.state_dir(self._config_env(), self._home)
+        return profile_dirs.adapter_root(self._env, self._home)
+
+    def profile_state_root(self, profile: str) -> Path:
+        """The storage root of one profile under the adapter state directory."""
+        return profile_dirs.profile_root(self.state_root, profile)
 
     def _read_version(self, binary: str) -> Optional[str]:
         try:
@@ -770,6 +782,8 @@ class OpenCodeDriver:
             "code": exc.code,
             "message": shown(exc.message),
         }
+        if exc.detail is not None:
+            record["refusal"]["detail"] = exc.detail
         now = _iso(self._clock)
         if state.resume:
             attempts = record.get("attempts") or []
@@ -783,8 +797,8 @@ class OpenCodeDriver:
         except (OSError, runstore.RunStoreError):
             pass
 
-    def _refusal(self, category: str, code: str, message: str) -> PrepareRefused:
-        return PrepareRefused(category, code, message)
+    def _refusal(self, category: str, code: str, message: str, *, detail: Optional[str] = None) -> PrepareRefused:
+        return PrepareRefused(category, code, message, detail=detail)
 
     def _prepare(
         self, request: RunRequest, resume_run_id: Optional[str], state: _PrepareState
@@ -836,21 +850,27 @@ class OpenCodeDriver:
                 if existing is None:
                     raise refuse("workflow-validation", "resume-run-missing", "the run to resume has no record")
                 state.run_id = resume_run_id
+                state.record = existing
                 stored = existing.get("request") or {}
-                same = (
+                same_except_profile = (
                     stored.get("task") == task
                     and stored.get("stage") == request.stage
                     and str(stored.get("phase", "")).replace("-", "_") == phase_id
-                    and stored.get("profile") == request.profile
                     and stored.get("workspace") == request_dict["workspace"]
                     and bool(stored.get("non_interactive")) == request.non_interactive
                 )
+                same = same_except_profile and stored.get("profile") == request.profile
+                if same_except_profile and not same:
+                    raise refuse(
+                        "workflow-validation", "resume-request-mismatch",
+                        "the request names a different profile than the run being resumed",
+                        detail="profile",
+                    )
                 if not same:
                     raise refuse(
                         "workflow-validation", "resume-request-mismatch",
                         "the request does not match the run being resumed",
                     )
-                state.record = existing
                 if workspace is not None and not os.path.isdir(str(workspace)):
                     raise refuse(
                         "workflow-validation", "workspace-missing",
@@ -867,6 +887,14 @@ class OpenCodeDriver:
         if workspace is not None:
             workspace = self._check_workspace(workspace, root)
         run_cwd = workspace if workspace is not None else root
+
+        try:
+            self._session.check_profile(request.profile)
+        except profile_dirs.ProfileSwitch:
+            raise refuse(
+                "policy-denial", "profile-switch-in-process",
+                "this process already launched under another profile; start a new process to change profile",
+            ) from None
 
         # 2. platform
         if not getattr(self._proc, "SUPPORTED", False) or os.name != "posix":
@@ -911,6 +939,14 @@ class OpenCodeDriver:
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(request.profile, cfg_env, base_redact)
+        dirs = self._claim_profile_dirs(evaluation)
+        try:
+            profile_dirs.record_project(dirs, root)
+        except profile_dirs.ProfileDirUnsafe:
+            raise refuse(
+                "invalid-configuration", "profile-dir-unsafe",
+                "the profile storage directory cannot be used privately",
+            ) from None
 
         # 7. compiled pair
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
@@ -958,7 +994,7 @@ class OpenCodeDriver:
         # 10. configuration layers and environment
         redactor = launch_env.Redactor()
         child_env = self._scan_and_build_env(
-            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, cwd=run_cwd
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, cwd=run_cwd
         )
 
         # 11. limits, hashes, revisions, argv
@@ -1011,6 +1047,7 @@ class OpenCodeDriver:
         )
 
         # 12. persist
+        credentials = launch_env.credential_kinds(fresh.sidecar, evaluation.effective.providers)
         record = state.record
         assert record is not None
         summary = {
@@ -1040,6 +1077,9 @@ class OpenCodeDriver:
             ),
             "effort_diagnostic": resolution.effort_diagnostic,
             "model_priced": _model_priced(fresh.document, effective_model),
+            "credentials": credentials,
+            "static_key_in_use": bool(credentials),
+            "profile_root": self._display_path(dirs.root),
         }
         record["prepared"] = summary
         record["refusal"] = None
@@ -1168,7 +1208,8 @@ class OpenCodeDriver:
 
     def _scan_and_build_env(
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
-        evaluation: Any, metadata: Any, redactor: Any, cwd: Optional[Path] = None,
+        evaluation: Any, metadata: Any, redactor: Any, dirs: "profile_dirs.ProfileDirs",
+        cwd: Optional[Path] = None,
     ) -> Any:
         """Refuse on a configuration layer that would change the compiled
         pair, then build the child environment. May raise `LaunchRefused`."""
@@ -1182,14 +1223,53 @@ class OpenCodeDriver:
             compiled_doc=fresh.document,
             owned_agents=owned_agents, owned_commands=owned_commands,
         )
-        data = launch_env.data_dir(cfg_env, self._home, evaluation.profile)
+        classification = evaluation.effective.classification
+        sharing_entry = evaluation.effective.values.get("policy.sharing")
+        sharing = sharing_entry.value if sharing_entry is not None else "deny"
+        package_install = profile_policy.view(evaluation.effective).package_install
+        hardening = launch_env.hardening_env(
+            classification=classification, sharing=sharing, package_install=package_install,
+            npm_cache=dirs.npm_cache, npm_userconfig=dirs.npm_userconfig,
+        )
         return launch_env.build_env(
             ambient=self._env, compile_sidecar=fresh.sidecar,
             providers=evaluation.effective.providers,
             resolver=self._resolver_factory(self._env, platform=self._platform),
-            data_dir=data, config_path=config_path, redactor=redactor,
-            state_dir=self.state_root,
+            data_dir=dirs.data, config_path=config_path, redactor=redactor,
+            state_dir=dirs.root, profile_root=dirs.root, adapter_root=self.state_root,
+            storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
         )
+
+    def _claim_profile_dirs(self, evaluation: Any) -> "profile_dirs.ProfileDirs":
+        """Latch this process to the evaluated profile and prepare its storage."""
+        refuse = self._refusal
+        classification = evaluation.effective.classification
+        try:
+            self._session.claim(evaluation.profile, classification)
+        except profile_dirs.ProfileSwitch:
+            raise refuse(
+                "policy-denial", "profile-switch-in-process",
+                "this process already launched under another profile or classification; "
+                "start a new process to change it",
+            ) from None
+        try:
+            return profile_dirs.prepare(self.state_root, evaluation.profile, classification)
+        except profile_dirs.StampMismatch:
+            raise refuse(
+                "policy-denial", "profile-stamp-mismatch",
+                "the profile storage directory was created for a different profile or classification",
+            ) from None
+        except profile_dirs.ProfileDirUnsafe:
+            raise refuse(
+                "invalid-configuration", "profile-dir-unsafe",
+                "the profile storage directory cannot be used privately",
+            ) from None
+
+    def _display_path(self, path: Path) -> str:
+        try:
+            return "~/" + str(Path(path).relative_to(self._home))
+        except ValueError:
+            return "<state>/" + Path(path).name
 
     def prepare_interactive(self, profile: str) -> "InteractiveLaunch":
         """Validate a profile for an interactive TUI session, or refuse.
@@ -1217,13 +1297,21 @@ class OpenCodeDriver:
         binary, version = self._check_binary()
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
+        try:
+            self._session.check_profile(profile)
+        except profile_dirs.ProfileSwitch:
+            raise refuse(
+                "policy-denial", "profile-switch-in-process",
+                "this process already launched under another profile; start a new process to change profile",
+            ) from None
         evaluation = self._evaluate_launchable(profile, cfg_env, base_redact)
+        dirs = self._claim_profile_dirs(evaluation)
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
         config_path = compiled_dir / compiler.NATIVE_FILE
         metadata = self._load_install(root, base_redact)
         self._verify_owned(root, metadata)
         redactor = launch_env.Redactor()
-        child_env = self._scan_and_build_env(root, cfg_env, config_path, fresh, evaluation, metadata, redactor)
+        child_env = self._scan_and_build_env(root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs)
         return InteractiveLaunch(
             binary=Path(binary),
             runtime_version=version or "",
@@ -1241,7 +1329,11 @@ class OpenCodeDriver:
         when it is missing or stale. Returns the fresh build and directory."""
         refuse = self._refusal
         try:
-            directory = compiler.resolve_output_dir(evaluation, output=None, env=cfg_env, home=self._home)
+            target = profile_dirs.compiled_dir(self.state_root, evaluation.profile, evaluation.project_root)
+        except ValueError:
+            raise refuse("invalid-configuration", "compiled-output-refused", "the compiled output location is invalid") from None
+        try:
+            directory = compiler.resolve_output_dir(evaluation, output=target, env=cfg_env, home=self._home)
         except compiler.OutputRefused as exc:
             raise refuse("invalid-configuration", "compiled-output-refused", str(exc)) from None
         except OSError:
@@ -1350,7 +1442,7 @@ class OpenCodeDriver:
             proc = subprocess.Popen(
                 list(argv), cwd=str(prepared.cwd), stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-                env=prepared.launch_env.materialize(), close_fds=True,
+                env=prepared.launch_env.materialize(), close_fds=True, umask=0o077,
             )
         except BaseException as exc:
             if writer is not None:
