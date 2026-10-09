@@ -62,7 +62,16 @@ FINDING_CATEGORIES.update(
 )
 FINDING_CATEGORIES.update(_table("unqualified-gateway", "runtime-gateway-unqualified"))
 FINDING_CATEGORIES.update(
-    _table("policy-denial", "runtime-config-policy-denied", "runtime-plugin-directory-present")
+    _table(
+        "policy-denial",
+        "runtime-config-policy-denied",
+        "runtime-plugin-directory-present",
+        "isolation-verified",
+        "isolation-unverified",
+        "isolation-required-unverified",
+        "egress-shell-not-enforced",
+        "enforcement-layers",
+    )
 )
 FINDING_CATEGORIES.update(
     _table(

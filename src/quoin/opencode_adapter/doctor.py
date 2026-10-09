@@ -114,6 +114,11 @@ MESSAGES: Dict[str, str] = {
     "runtime-gateway-unqualified": "a role's model has no valid gateway qualification",
     "runtime-compile-blocked": "the profile cannot be compiled for OpenCode (%(names)s)",
     "runtime-profile-launchable": "the profile's configuration compiles and is launchable",
+    "isolation-verified": "profile isolation for this profile is attested by a root-owned declaration",
+    "isolation-unverified": "profile isolation for this profile is not attested by a root-owned declaration",
+    "isolation-required-unverified": "the profile requires managed isolation, which no root-owned declaration attests",
+    "egress-shell-not-enforced": "commands started by a shell tool are not restricted to the approved network destinations",
+    "enforcement-layers": "the layers that enforce profile isolation on this machine, and the ones that do not",
 }
 
 _REMEDIATIONS: Dict[str, str] = {
@@ -149,6 +154,11 @@ _REMEDIATIONS: Dict[str, str] = {
     "runtime-adapter-data-missing": "reinstall quoin",
     "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the pinned OpenCode version",
     "runtime-compile-blocked": "run `quoin opencode config explain --profile PROFILE` to see the blocking findings",
+    "isolation-verified": "the declaration describes how the profile was set up; it does not prove the operating system enforces it",
+    "isolation-unverified": "ask an administrator for a root-owned isolation declaration, or run the profile as a convenience profile",
+    "isolation-required-unverified": "install the root-owned isolation declaration, or set the profile isolation to convenience",
+    "egress-shell-not-enforced": "route shell commands through a network control outside OpenCode if they must not reach other destinations",
+    "enforcement-layers": "run `quoin opencode config explain --profile PROFILE` to see which settings are enforced",
     "permission-loosened": "a generated role's own permission can override a stricter user config while that role runs directly; narrow the role's own permission map instead of the user config",
 }
 
