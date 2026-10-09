@@ -313,3 +313,45 @@ def test_new_codes_are_registered_in_their_categories():
     assert launch_codes.category("profile-stamp-mismatch") == "policy-denial"
     assert launch_codes.category("profile-dir-unsafe") == "invalid-configuration"
     assert launch_codes.category("env-path-outside-profile") == "invalid-configuration"
+
+
+# ------------------------------------------------- coordinator, snapshot, test command
+
+
+def _coordinator(env, profile="work"):
+    from quoin.opencode_adapter import phase_loop, workflow
+
+    return workflow.Coordinator(
+        env.driver(), env.root, "demo", workflow.WorkflowOptions(profile=profile),
+        source_dir=None, cancel=phase_loop.CancelToken(), scope={"profile": profile}, scope_source="test",
+    )
+
+
+def test_the_coordinator_keeps_its_state_under_the_profile_root(env):
+    from quoin.opencode_adapter import testrun
+
+    coord = _coordinator(env)
+    root = _adapter_root(env) / "work"
+    assert coord.state_root == root
+    testrun.configure(env.root, "demo", command=["true"], state_root=coord.state_root)
+    pin_dirs = [p for p in root.rglob("*") if p.is_file()]
+    assert pin_dirs and all(root in p.parents for p in pin_dirs)
+    for name in ("tests", "workflow", "snapshots"):
+        assert not (_adapter_root(env) / name).exists()
+
+
+def test_a_critic_snapshot_is_created_under_the_profile_root(env, monkeypatch):
+    from quoin.opencode_adapter import snapshot
+
+    seen = {}
+
+    def fake_create(root, task, stage, **kwargs):
+        seen["state_root"] = kwargs["state_root"]
+        raise snapshot.SnapshotRefused("stop-here")
+
+    monkeypatch.setattr(snapshot, "create", fake_create)
+    out = snapshot.run_in_snapshot(
+        env.driver(), env.request(phase="critic"), kind="critic", source_dir=None, cancel=None, max_relaunch=0,
+    )
+    assert out.refusal == "stop-here"
+    assert seen["state_root"] == _adapter_root(env) / "work"

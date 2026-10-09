@@ -620,3 +620,19 @@ def test_no_store_is_profile_unknown_and_creates_nothing(project, capsys, scope)
 def test_an_invalid_profile_name_is_refused(project, capsys):
     code, data = cli_run(capsys, "--task", "t1", "--profile", "../x")
     assert code == 2 and data["refusal"]["code"] == "request-invalid"
+
+
+def test_command_env_keeps_only_launcher_set_npm_policy_and_hardening_stays_out():
+    base = {"PATH": "/bin", "QUOIN_OPENCODE_STATE_DIR": "/s", "OPENCODE_PURE": "1"}
+    forged = testrun.command_env(dict(base, npm_config_userconfig="/evil/npmrc", npm_config_offline="false"))
+    assert "npm_config_userconfig" not in forged and "npm_config_offline" not in forged
+    assert "OPENCODE_PURE" not in forged
+    genuine = testrun.command_env(dict(base, npm_config_userconfig="/s/state/npmrc", npm_config_offline="true"))
+    assert genuine["npm_config_userconfig"] == "/s/state/npmrc" and genuine["npm_config_offline"] == "true"
+
+
+def test_outside_the_launcher_a_persons_own_storage_settings_reach_the_command():
+    env = {"PATH": "/bin", "XDG_STATE_HOME": "/mine/state", "TMPDIR": "/mine/tmp", "OPENCODE_PURE": "1"}
+    out = testrun.command_env(env)
+    assert out["XDG_STATE_HOME"] == "/mine/state" and out["TMPDIR"] == "/mine/tmp"
+    assert "OPENCODE_PURE" not in out
