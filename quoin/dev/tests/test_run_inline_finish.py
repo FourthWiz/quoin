@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/ repo root
 RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
 THOROUGH_PLAN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "thorough_plan" / "SKILL.md"
 ARCHITECT_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "architect" / "SKILL.md"
+REVIEW_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "review" / "SKILL.md"
 COST_LEDGER_FORMAT = REPO_ROOT / "quoin" / "memory" / "cost-ledger-format.md"
 COST_EVENT_PATH = REPO_ROOT / "quoin" / "core" / "scripts" / "cost_event.py"
 COST_SUMMARY_PATH = REPO_ROOT / "quoin" / "core" / "scripts" / "cost_summary.py"
@@ -215,7 +216,14 @@ def _extract_predicate_line(text: str, *, is_architect: bool) -> str:
     raise AssertionError("post-check predicate line not found in text")
 
 
-def test_normalized_post_check_predicate_equal_across_all_four_copies():
+def _review_ledger_slice() -> str:
+    text = REVIEW_SKILL.read_text(encoding="utf-8")
+    i = text.index("**Ledger:**")
+    return text[i : text.index("**Merge:**", i)]
+
+
+def test_normalized_post_check_predicate_equal_across_all_five_copies():
+    """The fifth copy is the review fan-out's on-behalf block, so it cannot drift."""
     run_pred = _extract_predicate_line(RUN_SKILL.read_text(encoding="utf-8"), is_architect=False)
     tp_pred = _extract_predicate_line(THOROUGH_PLAN_SKILL.read_text(encoding="utf-8"), is_architect=False)
     arch_pred = _extract_predicate_line(ARCHITECT_SKILL.read_text(encoding="utf-8"), is_architect=True)
@@ -225,6 +233,8 @@ def test_normalized_post_check_predicate_equal_across_all_four_copies():
     assert tp_pred == EXPECTED_NORMALIZED_PREDICATE
     assert arch_pred == EXPECTED_NORMALIZED_PREDICATE
     assert fmt_pred == EXPECTED_NORMALIZED_PREDICATE
+    review_pred = _extract_predicate_line(_review_ledger_slice(), is_architect=False)
+    assert review_pred == EXPECTED_NORMALIZED_PREDICATE
 
 
 def _run_shell(shell: str, script: str, env: dict) -> "subprocess.CompletedProcess[str]":

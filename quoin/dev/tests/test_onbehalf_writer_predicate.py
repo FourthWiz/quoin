@@ -117,12 +117,14 @@ def test_self_writers_equal_onbehalf_skip_live_tree():
     assert self_writers, "expected at least one genuine self-writer on the live tree"
 
 
-def test_orchestrators_are_exactly_the_scoped_three():
-    """RHS is this plan's 3 scoped deliverables (T-03/T-04/T-05) — a closed literal,
-    not an open-world census (D-5). Triple-membership with self_writers/onbehalf_skip
-    is intentional: the asserts operate on independent tokens (D-9)."""
+def test_orchestrators_are_exactly_the_scoped_four():
+    """RHS is the scoped orchestrators — a closed literal, not an open-world census
+    (D-5). /review joined the architect/thorough_plan/run set because its parallel
+    review fan-out now writes on-behalf cost rows. Triple-membership with
+    self_writers/onbehalf_skip is intentional: the asserts operate on independent
+    tokens (D-9)."""
     orchestrators = _census(SKILLS_DIR, lambda t: ORCH_TOKEN in t)
-    assert orchestrators == {"architect", "thorough_plan", "run"}
+    assert orchestrators == {"architect", "thorough_plan", "review", "run"}
     for name in orchestrators:
         text = (SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
         assert "QUOIN_INLINE_COST_CAPTURE" in text, f"{name}: missing flag gate"

@@ -21,7 +21,8 @@
 #
 # cache_create is the 5-minute-TTL write rate (1.25x input on most models);
 # cache_read is 0.1x input on most models — except claude-fable-5-1 and the
-# Mythos 5.x family, which use 0.025x input for cache_read instead.
+# Mythos 5.x family (0.025x input), and claude-opus-5-5 and claude-sonnet-5-5
+# (0.05x input), which use a lower cache_read multiplier instead.
 #
 # Known gaps in this table (not per-model, and not fixed by IVG-260):
 #   - 1-hour-TTL cache writes are 2x input, not the 5-minute 1.25x rate. This
@@ -34,7 +35,11 @@
 #     permanent rate (the previously scheduled increase to $3.00/$15.00 on
 #     2026-09-01 will not occur) — no discount-expiry caveat applies.
 #   - This table has no long-context dimension, so a 1M-context session is
-#     priced at the base slug's standard rates.
+#     priced at the base slug's standard rates. claude-haiku-5-5 is the one
+#     model with a prompt-length tier: prompts over 100,000 tokens are billed
+#     at $0.50 / $2.50 per MTok (cache write $0.625, cache read $0.05), and the
+#     entry below holds the up-to-100,000-token rates, so long-prompt Haiku 5.5
+#     usage is under-priced.
 #
 # This table is the authoritative Claude pricing source for quoin's cost
 # tooling. The benchmark harness keeps a second, deliberately narrower table at
@@ -43,7 +48,7 @@
 # not merged, but they must agree: a test cross-checks every model in the
 # harness table against this one and fails on any drifted rate. When a shared
 # model's price changes, update both.
-LAST_UPDATED = "2026-09-08"
+LAST_UPDATED = "2026-10-08"
 _PRICING_SRC = "https://platform.claude.com/docs/en/about-claude/pricing"
 PRICES = {  # USD per 1M tokens
     "claude-opus-4-7":            {"input":  5.00, "output": 25.00,
@@ -87,6 +92,19 @@ PRICES = {  # USD per 1M tokens
     "claude-sonnet-5":            {"input":  2.00, "output": 10.00,
                                    "cache_create":  2.50, "cache_read":  0.20,
                                    "src": _PRICING_SRC, "verified": "2026-09-08"},
+    # claude-opus-5-5 and claude-sonnet-5-5: cache_read is 0.05x input on these
+    # models (not the usual 0.1x) — do not derive it from the standard multiplier.
+    "claude-opus-5-5":            {"input":  4.00, "output": 20.00,
+                                   "cache_create":  5.00, "cache_read":  0.20,
+                                   "src": _PRICING_SRC, "verified": "2026-10-08"},
+    "claude-sonnet-5-5":          {"input":  2.00, "output": 10.00,
+                                   "cache_create":  2.50, "cache_read":  0.10,
+                                   "src": _PRICING_SRC, "verified": "2026-10-08"},
+    # claude-haiku-5-5: rates for prompts up to 100,000 tokens (see the
+    # long-prompt note in the header).
+    "claude-haiku-5-5":           {"input":  0.10, "output":  0.50,
+                                   "cache_create": 0.125, "cache_read":  0.01,
+                                   "src": _PRICING_SRC, "verified": "2026-10-08"},
 }
 
 import argparse
@@ -159,6 +177,65 @@ def is_priced(model) -> bool:
     """True iff resolve_prices(model) finds a price entry (exact or
     normalized)."""
     return resolve_prices(model) is not None
+
+
+# Model alias (as written in a ledger's model column) to the priced model id an
+# estimate for a token-count-only row is based on.
+ALIAS_TO_MODEL = {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+    "fable": "claude-fable-5-1",
+}
+
+# Share of each token kind in subagent transcripts, used to turn a bare token
+# total into a dollar estimate. Derived on 2026-10-08 from every
+# ~/.claude/projects/*/*/subagents/agent-*.jsonl (the population that
+# `tok=` ledger rows come from): 1745 files, raw totals
+#   input 27794688, output 23923235, cache_create 692578097, cache_read 15897566142
+# using, from the quoin repo root:
+#   .venv/bin/python - <<'EOF'
+#   import glob, json, os
+#   keys = {"input_tokens": "input", "output_tokens": "output",
+#           "cache_creation_input_tokens": "cache_create",
+#           "cache_read_input_tokens": "cache_read"}
+#   tot = dict.fromkeys(keys.values(), 0); files = 0
+#   for p in glob.glob(os.path.expanduser("~/.claude/projects/*/*/subagents/agent-*.jsonl")):
+#       files += 1
+#       for line in open(p, encoding="utf-8", errors="ignore"):
+#           try: row = json.loads(line)
+#           except ValueError: continue
+#           m = row.get("message")
+#           if not isinstance(m, dict): continue
+#           u = m.get("usage"); model = m.get("model") or ""
+#           if not isinstance(u, dict) or not model or model == "<synthetic>": continue
+#           for src, dst in keys.items(): tot[dst] += u.get(src, 0) or 0
+#   s = sum(tot.values())
+#   print(files, tot, {k: round(v / s, 4) for k, v in tot.items()})
+#   EOF
+# Shares are rounded to 4 decimals; the largest share absorbs rounding so the
+# sum is exactly 1.0 (here the rounded shares already add up to 1.0).
+ESTIMATE_TOKEN_MIX = {
+    "input": 0.0017,
+    "output": 0.0014,
+    "cache_create": 0.0416,
+    "cache_read": 0.9553,
+}
+
+
+def estimate_rate_for_alias(alias):
+    """USD per token for a model alias under ESTIMATE_TOKEN_MIX, or None when the
+    alias is unknown or its model is not priced."""
+    model = ALIAS_TO_MODEL.get(str(alias or "").strip().lower())
+    if model is None:
+        return None
+    prices = resolve_prices(model)
+    if prices is None:
+        return None
+    per_million = sum(
+        share * prices[kind] for kind, share in ESTIMATE_TOKEN_MIX.items()
+    )
+    return per_million / 1e6
 
 
 def project_hash(project_path: str) -> str:

@@ -671,7 +671,7 @@ Spawn an Agent subagent:
         unavailable; sessions remain end_of_day_due: yes — will surface as ordinary backlog on the
         next /end_of_day]` and continue — this is best-effort, not load-bearing for finalization
         (the task is still fully finalized: committed, pushed, archived).
-    4. Cost aggregation — read cost-ledger.md and compute:
+    4. Cost aggregation — run `python3 __QUOIN_HOME__/scripts/cost_ledger_summary.py --ledger <task-dir>/cost-ledger.md --project-path "$(pwd)" --out <task-dir>/cost-summary.json` from the project root; on script missing or non-zero exit, fall back to the manual procedure a-d below and set `fallback_note` to name that origin. Manual procedure — read cost-ledger.md and compute:
        a. Binary check: `command -v npx` — if unavailable, skip ccusage and use
           cost_from_jsonl.py fallback for ALL UUIDs (see below).
        a2. Inline-first precedence rule (per ledger row, applied BEFORE the UUID
@@ -728,11 +728,11 @@ Spawn an Agent subagent:
          "fallback_note": ""
        }
        ```
-       `resolved_total` == `grand_total` (an explicit alias — both are the RESOLVED-only
-       total from step 4d, never a total that silently folds an unresolvable row into
-       $0). `unresolvable_count` is the count from step 4d (col-8 `unresolvable` rows
+       `grand_total = resolved_total + estimated_total`; estimates never appear in
+       `per_phase`/`per_model`; `phases_*` never set `fallback_used`; key list in
+       `cost-ledger-format.md`. `unresolvable_count` is the count from step 4d (col-8 `unresolvable` rows
        plus legacy rows whose JSONL lookup failed). **Set `"fallback_used": true` and a
-       non-empty `"fallback_note"` whenever `unresolvable_count > 0`** (in addition to
+       non-empty `"fallback_note"` whenever `unresolvable_count > 0` or `estimated_count > 0`** (in addition to
        the existing ccusage-unavailable trigger) — this is what makes the existing
        `costService`/`normalize_total` partial-detection fire for cost-attribution
        partiality, not just for the ccusage-fallback case.
@@ -803,7 +803,9 @@ Spawn an Agent subagent:
          implement      | $X.XX
          ...
          ---------------|--------
-         Task total     | $X.XX
+         Task total     | $X.XX   (grand_total)
+         Estimated from token counts (not in the phase rows): $Y.YY (N rows)
+           -- print only when estimated_count > 0
          Grand total    | $X.XX
 
        Model breakdown: opus: $X.XX | sonnet: $X.XX | haiku: $X.XX

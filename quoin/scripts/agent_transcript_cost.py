@@ -240,6 +240,24 @@ def last_row_usage_present(path):
 # Public entry (T-05)
 # ---------------------------------------------------------------------------
 
+def _warn_unpriced_models(priced):
+    """Name each unpriced model once on stderr so a missing price entry is visible.
+
+    stdout is the machine-readable attribution string, so this goes to stderr
+    and can never change it; any failure to write is swallowed."""
+    try:
+        for model in priced.get("models", []):
+            if not is_priced(model):
+                print(
+                    f"agent_transcript_cost: unknown model '{model}' — "
+                    f"cost_from_jsonl.PRICES needs an entry; emitting "
+                    f"tok={priced.get('tok', 0)};src=unresolved",
+                    file=sys.stderr,
+                )
+    except Exception:
+        pass
+
+
 def resolve_attribution(sid, agent_id=None, tool_use_id=None, project_path=None, home=None):
     """Compose locate -> flush-guard -> price into the col-8 attribution
     micro-map string. The single public entry the orchestrator-wiring stage
@@ -259,6 +277,7 @@ def resolve_attribution(sid, agent_id=None, tool_use_id=None, project_path=None,
         r = price_agent_jsonl(jf)
         if r["priceable"] and r["usd"] is not None:
             return f"usd={round(r['usd'], 6)};tok={r['tok']};src=nested_jsonl"
+        _warn_unpriced_models(r)
         if r["tok"] > 0:
             return f"tok={r['tok']};src=unresolved"  # unknown-model: keep tok, no usd
         return "src=unresolved"

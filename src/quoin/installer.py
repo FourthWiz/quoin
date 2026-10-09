@@ -140,6 +140,7 @@ DEPLOYED_SCRIPTS = (
     "auto_resume.py",                # IVG-280: run-continuation helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "compaction_telemetry.py",       # IVG-258 stage 5: compaction-telemetry sink reader wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "agent_transcript_cost.py",      # IVG-111 S-2: nested subagent-transcript resolver + pricer (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors cost_from_jsonl.py)
+    "cost_ledger_summary.py",        # finalize-time ledger re-pricing + token-mix estimates (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors agent_transcript_cost.py)
     "backfill_cost_attribution.py",  # IVG-111 S-5: historical col-8 backfill (adapter-only, DEPLOYED-only — no CORE twin, mirrors cost_from_jsonl.py / agent_transcript_cost.py)
     "known_red.py",  # IVG-144: known-red manifest reader/matcher (wrapped portable-core — also in CORE_SCRIPTS)
     "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper

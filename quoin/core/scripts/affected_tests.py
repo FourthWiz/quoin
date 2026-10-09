@@ -33,6 +33,7 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
        disabling detection must not silently green-light an APPROVE — this
        is the OPPOSITE of branch_hygiene's env opt-out which exits 0.
+       (except --print-interpreter, which runs no tests and is answered first)
   4  — a .py source changed AND its selectors resolved to the empty set
        (changed source with nothing to run).  Distinct from 3 so the gate
        message can say "no affected tests found for changed sources."
@@ -47,17 +48,25 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
 
 Env:
   QUOIN_DISABLE_AFFECTED_TESTS=1 — exit 3 immediately (fail-CLOSED opt-out)
+      (except --print-interpreter, which runs no tests and is answered first)
   QUOIN_REQUIRE_TASK_CONTEXT — literal "0" ONLY forces legacy always-run even
       when --require-task-context is passed (disarms the exit-5 branch); unset
       or any other value honors the flag (IVG-151).
   QUOIN_BASE_BRANCH — override the base branch probe order (default: tries
       origin/main, origin/master, main, master in order).
   QUOIN_SUBPROCESS_TIMEOUT — seconds, default 30; bounds every SHORT git
-      subprocess run by this module (see _subprocess_timeout()). The pytest
-      subprocess gets a generous DERIVED bound max(600, QUOIN_SUBPROCESS_TIMEOUT)
-      instead (D-05) — a TimeoutExpired there maps to exit 3 with
+      subprocess run by this module (see _subprocess_timeout()); also a
+      backward-compatible lower bound for the pytest timeout below.
+  QUOIN_PYTEST_TIMEOUT — seconds (integer >= 1); sets the pytest subprocess
+      bound exactly. Unset, the bound is clamp(12 s x selected test files, 600,
+      3300), raised to QUOIN_SUBPROCESS_TIMEOUT when that is larger (see
+      _pytest_timeout()). A TimeoutExpired maps to exit 3 with
       exit_reason="pytest-timeout" (BLOCKING-SURFACE, never a silent GREEN,
-      never a hard-RED false block; see proc P-03).
+      never a hard-RED false block; see proc P-03) and a remedy line naming the
+      bound, the selected file count and this knob. Pairing rule: the ceiling
+      plus a 300 s margin stays inside the headless wait budget
+      QUOIN_WAIT_BUDGET_SECS (default 3600); raise both together (a warning is
+      printed when the bound plus margin exceeds the budget).
   QUOIN_PYTHON — interpreter to run pytest under; used only if it exists, is
       executable and can import pytest, otherwise the venv walk continues.
   QUOIN_DISABLE_VENV_PROBE=1 — skip interpreter discovery and broken-venv
@@ -141,6 +150,27 @@ _WALK_EXCLUDE_NAMES: frozenset[str] = _EXCLUDE_NAMES | frozenset({
     "build",
     "dist",
 })
+
+# Bound for the pytest subprocess, derived from how many test files were
+# selected so a large selection is not killed by a bound sized for a small one.
+#   secs/file   12 s: the slowest measured full affected-area run ran 176 selected
+#               files in 717 s (4.07 s/file, 2026-10, QUOIN_SUBPROCESS_TIMEOUT=1800),
+#               so 12 s/file leaves about 3x headroom. A local full-suite run on
+#               2026-10-08 took 974 s over 454 test files (2.1 s/file).
+#   floor/ceiling  600 s / 3300 s: the floor is the long-standing minimum; the
+#               ceiling plus the 300 s wait margin must fit inside the headless
+#               wait budget (QUOIN_WAIT_BUDGET_SECS, default 3600 in wait_for.py:
+#               `grep -n '"QUOIN_WAIT_BUDGET_SECS", "3600"' quoin/core/scripts/wait_for.py`
+#               -> 3600; 3300 + 300 <= 3600).
+# At or below 45 selected files the bound is the 600 s floor, equal to the 600000 ms
+# Bash call limit, so a hung run may be cut off by the harness before this script
+# prints its remedy. That outcome is still a non-green blocking result; a healthy
+# 45-file run takes about 3 minutes.
+_PYTEST_SECS_PER_FILE = 12
+_PYTEST_TIMEOUT_FLOOR = 600
+_PYTEST_TIMEOUT_CEILING = 3300
+_PYTEST_WAIT_MARGIN = 300
+_WAIT_BUDGET_DEFAULT = 3600
 
 # Special-case mapping: certain docs/source files that are not .py themselves
 # must trigger specific test files when changed.  Each entry is a
@@ -1857,6 +1887,44 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/tools/agentdesk/setup-agentdesk.sh",
         "quoin/dev/tests/test_install_prompts.py",
     ),
+    # Tests added with the interpreter, pytest-bound and ledger-summary work: an edit to
+    # one of these documents must select the guard that reads it.
+    (
+        "quoin/adapters/claude/skills/gate/SKILL.md",
+        "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
+    (
+        "quoin/memory/autonomous-mode.md",
+        "quoin/dev/tests/test_pytest_bound_matches_wait_budget.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/review/SKILL.md",
+        "quoin/dev/tests/test_review_fanout_ledger.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/end_of_task/SKILL.md",
+        "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
+    ),
+    (
+        "quoin/memory/cost-ledger-format.md",
+        "quoin/dev/tests/test_cost_ledger_summary_wiring.py",
+    ),
+    (
+        "quoin/memory/dispatch-guide.md",
+        "quoin/dev/tests/test_subprocess_timeout.py",
+    ),
+    (
+        "quoin/memory/dispatch-guide.md",
+        "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):
@@ -2026,6 +2094,13 @@ class Selection:
     # Interpreters found but unusable, one "<kind>: <path> (<detail>)" entry
     # each; omitted from output when empty.
     interpreter_problems: list[str] = dataclasses.field(default_factory=list)
+    # Bound applied to the pytest subprocess and how it was derived; the
+    # warning is set when bound + margin would outlast the headless wait
+    # budget, the remedy only when the bound was exceeded.
+    pytest_timeout_secs: Optional[int] = None
+    pytest_timeout_basis: dict = dataclasses.field(default_factory=dict)
+    pytest_timeout_warning: str = ""
+    remedy: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -2047,6 +2122,14 @@ class Selection:
             d["interpreter_reason"] = self.interpreter_reason
         if self.interpreter_problems:
             d["interpreter_problems"] = self.interpreter_problems
+        if self.pytest_timeout_secs is not None:
+            d["pytest_timeout_secs"] = self.pytest_timeout_secs
+        if self.pytest_timeout_basis:
+            d["pytest_timeout_basis"] = self.pytest_timeout_basis
+        if self.pytest_timeout_warning:
+            d["pytest_timeout_warning"] = self.pytest_timeout_warning
+        if self.remedy:
+            d["remedy"] = self.remedy
         return d
 
 
@@ -2064,6 +2147,75 @@ def _subprocess_timeout() -> int:
         return int(os.environ.get("QUOIN_SUBPROCESS_TIMEOUT", "30"))
     except (TypeError, ValueError):
         return 30
+
+
+def _pytest_timeout(n_files: int) -> Tuple[int, dict]:
+    """Bound in seconds for the pytest subprocess, plus how it was derived.
+
+    QUOIN_PYTEST_TIMEOUT (an integer >= 1) is used exactly, with no clamping.
+    Otherwise the bound is clamp(12 s x selected test files, 600, 3300), raised
+    to QUOIN_SUBPROCESS_TIMEOUT when that is larger (the pre-existing way to
+    extend it). A value that does not parse is ignored and reported in the basis.
+    """
+    basis: dict = {
+        "selected_files": n_files,
+        "secs_per_file": _PYTEST_SECS_PER_FILE,
+        "floor": _PYTEST_TIMEOUT_FLOOR,
+        "ceiling": _PYTEST_TIMEOUT_CEILING,
+        "knob": "QUOIN_PYTEST_TIMEOUT",
+    }
+    raw = os.environ.get("QUOIN_PYTEST_TIMEOUT", "").strip()
+    if raw:
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 0
+        if value >= 1:
+            basis["source"] = "env-override"
+            return value, basis
+        basis["knob_invalid"] = raw
+    derived = min(
+        max(_PYTEST_SECS_PER_FILE * n_files, _PYTEST_TIMEOUT_FLOOR),
+        _PYTEST_TIMEOUT_CEILING,
+    )
+    compat = _subprocess_timeout()
+    if compat > derived:
+        basis["source"] = "subprocess-timeout-compat"
+        return compat, basis
+    basis["source"] = "derived"
+    return derived, basis
+
+
+def _pytest_timeout_remedy(bound: int, basis: dict) -> str:
+    """One-line fix to print when pytest exceeded its bound."""
+    if basis.get("source") == "env-override":
+        return (
+            "pytest exceeded its %d s bound (set by QUOIN_PYTEST_TIMEOUT); "
+            "raise QUOIN_PYTEST_TIMEOUT above %d to extend" % (bound, bound)
+        )
+    return (
+        "pytest exceeded its %d s bound (derived from %d selected test files at "
+        "%d s/file, floor %d, ceiling %d); raise QUOIN_PYTEST_TIMEOUT above %d to extend"
+        % (
+            bound, basis.get("selected_files", 0), _PYTEST_SECS_PER_FILE,
+            _PYTEST_TIMEOUT_FLOOR, _PYTEST_TIMEOUT_CEILING, bound,
+        )
+    )
+
+
+def _pytest_budget_warning(bound: int) -> str:
+    """Warning text when the bound plus its margin outlasts the headless wait budget."""
+    try:
+        budget = int(os.environ.get("QUOIN_WAIT_BUDGET_SECS", "").strip() or _WAIT_BUDGET_DEFAULT)
+    except ValueError:
+        budget = _WAIT_BUDGET_DEFAULT
+    if bound + _PYTEST_WAIT_MARGIN > budget:
+        return (
+            "pytest_timeout_warning: bound %d + margin %d exceeds the headless wait "
+            "budget %d; raise QUOIN_WAIT_BUDGET_SECS as well"
+            % (bound, _PYTEST_WAIT_MARGIN, budget)
+        )
+    return ""
 
 
 def _run(args: list[str]) -> tuple[str, str, int]:
@@ -2550,6 +2702,33 @@ def _is_py_test_name(name: str) -> bool:
     return name.endswith(".py") and (name.startswith("test_") or name.endswith("_test.py"))
 
 
+def _under_excluded_dir(changed_file: str, repo_root: Path) -> bool:
+    """True when a changed path sits under a directory the test walk prunes.
+
+    Only repo-relative directory components count, so a checkout that itself
+    lives under a folder named like an excluded one is not affected.
+    """
+    p = Path(changed_file)
+    if p.is_absolute():
+        try:
+            p = p.relative_to(repo_root)
+        except ValueError:
+            try:
+                p = p.relative_to(repo_root.resolve())
+            except ValueError:
+                pass
+    return any(
+        part in _WALK_EXCLUDE_NAMES or part.endswith(".egg-info")
+        for part in p.parts[:-1]
+    )
+
+
+def _exists_in_repo(changed_file: str, repo_root: Path) -> bool:
+    """Whether a changed path exists on disk (relative paths resolve against repo_root)."""
+    p = Path(changed_file)
+    return (p if p.is_absolute() else repo_root / p).exists()
+
+
 def _collect_test_files(repo_root: Path) -> list[Path]:
     """Return all test_*.py / *_test.py files under repo_root.
 
@@ -2590,7 +2769,8 @@ def map_changed_to_tests(
       0. A changed conftest.py → every test file under its directory (pytest's
          conftest scope), unioned with the steps below.
       1. Changed test files that exist → included directly as selectors;
-         missing ones → ignored.
+         missing ones, and ones under a pruned directory (vendored packages,
+         build output), → ignored. _DOCS_TO_TESTS targets are fixed repo paths.
       2. Changed non-test .py files with stem S → name-match: any test file whose
          basename matches test_{S}*.py or {S}_test.py (PRIMARY signal).
       3. Import-graph grep (BEST-EFFORT supplement): whole-word \\b{S}\\b match
@@ -2613,6 +2793,11 @@ def map_changed_to_tests(
         # Guard on .py suffix to avoid selecting non-Python test files (e.g., .sh)
         # as pytest selectors — pytest would fail to collect them (exit 4).
         if _is_py_test_name(name):
+            # Vendored or generated test modules (a venv's site-packages, build
+            # output, egg-info) are not this project's tests: never a selector.
+            if _under_excluded_dir(changed_file, repo_root):
+                ignored.append(changed_file)
+                continue
             # Include directly as a selector; resolve against repo_root if relative
             full = (repo_root / changed_file).resolve() if not fpath.is_absolute() else fpath.resolve()
             if full.exists():
@@ -2721,6 +2906,16 @@ def _format_text(sel: Selection) -> str:
             f"interpreter_problems ({len(sel.interpreter_problems)}): "
             + "; ".join(sel.interpreter_problems)
         )
+    if sel.pytest_timeout_secs is not None:
+        basis = sel.pytest_timeout_basis
+        lines.append(
+            f"pytest_timeout: {sel.pytest_timeout_secs} s "
+            f"({basis.get('source', 'derived')}, {basis.get('selected_files', 0)} selected files)"
+        )
+    if sel.pytest_timeout_warning:
+        lines.append(sel.pytest_timeout_warning)
+    if sel.remedy:
+        lines.append(f"remedy: {sel.remedy}")
     return "\n".join(lines)
 
 
@@ -2742,8 +2937,17 @@ def main(argv: list[str] | None = None) -> int:
           only with --require-task-context in --project-root mode when
           QUOIN_REQUIRE_TASK_CONTEXT!=0 (IVG-151)
     """
-    # Env opt-out — exits 3 (NOT 0) so disabling cannot silently green-light APPROVE
-    if os.environ.get("QUOIN_DISABLE_AFFECTED_TESTS", "").strip() == "1":
+    # Env opt-out — exits 3 (NOT 0) so disabling cannot silently green-light APPROVE.
+    # --print-interpreter is the one exception: it runs no tests and only reports
+    # which interpreter a run would use, so the fail-closed rationale does not
+    # apply and it is answered first. The argv is scanned up front (rather than
+    # moving this check below argparse) so bad arguments under the knob still
+    # exit 3.
+    _argv = sys.argv[1:] if argv is None else list(argv)
+    if (
+        "--print-interpreter" not in _argv
+        and os.environ.get("QUOIN_DISABLE_AFFECTED_TESTS", "").strip() == "1"
+    ):
         print(json.dumps({"disabled": True}))
         return 3
 
@@ -2836,12 +3040,33 @@ def main(argv: list[str] | None = None) -> int:
             "Print the resolved interpreter and exit 0, without running anything else. "
             "Anchors at --project-root itself, not the resolved git repo; may diverge "
             "from the interpreter a real run selects when a repo-local .venv differs "
-            "from a project-level one."
+            "from a project-level one; use --interpreter-anchor repo for the "
+            "interpreter a real run selects."
+        ),
+    )
+    parser.add_argument(
+        "--interpreter-anchor",
+        choices=["project-root", "repo"],
+        default="project-root",
+        dest="interpreter_anchor",
+        help=(
+            "With --print-interpreter: anchor the venv lookup at the project root "
+            "(default) or at the single git repo resolved under it, which is what a "
+            "real run uses. Inert without --print-interpreter."
+        ),
+    )
+    parser.add_argument(
+        "--interpreter-only",
+        action="store_true",
+        dest="interpreter_only",
+        help=(
+            "With --print-interpreter: print only the bare interpreter path on one "
+            "line (ignores --format). Inert without --print-interpreter."
         ),
     )
 
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(_argv)
         if (
             not args.print_interpreter
             and args.project_root is None
@@ -2859,11 +3084,28 @@ def main(argv: list[str] | None = None) -> int:
     # so args.project_root can legally be None here, hence the Path.cwd() guard.
     if args.print_interpreter:
         anchor = args.project_root if args.project_root is not None else Path.cwd()
+        anchor_label = "project-root"
+        if args.interpreter_anchor == "repo":
+            try:
+                repo_anchor = resolve_repo(anchor)
+            except RuntimeError:
+                repo_anchor = None
+                anchor_label = "project-root (multiple repos)"
+            else:
+                if repo_anchor is None:
+                    anchor_label = "project-root (repo unresolved)"
+                else:
+                    anchor = repo_anchor
+                    anchor_label = "repo"
         interp, interp_reason, interp_found = resolve_python_detail(
             anchor, probe="import pytest"
         )
+        if args.interpreter_only:
+            print(str(interp))
+            return 0
         print(f"interpreter: {interp}")
         print(f"interpreter_reason: {interp_reason}")
+        print(f"interpreter_anchor: {anchor_label}")
         for found in interp_found:
             print(f"interpreter_problem: {found}")
         return 0
@@ -2882,7 +3124,9 @@ def main(argv: list[str] | None = None) -> int:
         # what the ticket removes).
         # Precedence invariants (pin — do NOT reorder):
         #   - QUOIN_DISABLE_AFFECTED_TESTS=1 already returned 3 at the very top
-        #     of main() (before argparse), so disable NATURALLY wins over this.
+        #     of main() (before argparse) for every invocation except
+        #     --print-interpreter, which runs no tests and is answered first;
+        #     so disable NATURALLY wins over this.
         #   - QUOIN_REQUIRE_TASK_CONTEXT literal "0" forces legacy always-run
         #     (mirrors the QUOIN_DISABLE_* literal-value parsing convention).
         if (
@@ -3006,8 +3250,18 @@ def main(argv: list[str] | None = None) -> int:
     changed_remaining, noncollectable = partition_noncollectable(changed, nc_entries)
 
     selectors, unmatched_sources, ignored = map_changed_to_tests(changed_remaining, repo_root)
-    # Only the missing-on-disk branch can leave a test-named .py in `ignored`.
-    missing_tests = [f for f in ignored if _is_py_test_name(Path(f).name)]
+    # A test-named .py can land in `ignored` because it is gone from disk or
+    # because it is vendored; only the former is a missing test.
+    missing_tests = [
+        f for f in ignored
+        if _is_py_test_name(Path(f).name) and not _exists_in_repo(f, repo_root)
+    ]
+    pytest_bound, pytest_basis = _pytest_timeout(len(selectors))
+    bound_kw = {
+        "pytest_timeout_secs": pytest_bound,
+        "pytest_timeout_basis": pytest_basis,
+        "pytest_timeout_warning": _pytest_budget_warning(pytest_bound),
+    }
 
     # ------------------------------------------------------------------
     # Step 3: --select-only path — print and exit without running pytest
@@ -3027,6 +3281,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3053,6 +3308,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3087,6 +3343,7 @@ def main(argv: list[str] | None = None) -> int:
                 interpreter=interp,
                 interpreter_reason=interp_reason,
                 interpreter_problems=interp_problems,
+                **bound_kw,
             )
             if fmt == "text":
                 print(_format_text(sel))
@@ -3119,6 +3376,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3160,6 +3418,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3200,6 +3459,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3211,7 +3471,7 @@ def main(argv: list[str] | None = None) -> int:
         proc = subprocess.run(
             [interp, "-m", "pytest", *selectors, *args.pytest_args],
             cwd=str(repo_root),
-            timeout=max(600, _subprocess_timeout()),
+            timeout=pytest_bound,
         )
         rc = proc.returncode
     except FileNotFoundError:
@@ -3230,6 +3490,7 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3254,6 +3515,8 @@ def main(argv: list[str] | None = None) -> int:
             interpreter=interp,
             interpreter_reason=interp_reason,
             interpreter_problems=interp_problems,
+            **bound_kw,
+            remedy=_pytest_timeout_remedy(pytest_bound, pytest_basis),
         )
         if fmt == "text":
             print(_format_text(sel))
@@ -3291,6 +3554,7 @@ def main(argv: list[str] | None = None) -> int:
         interpreter=interp,
         interpreter_reason=interp_reason,
         interpreter_problems=interp_problems,
+        **bound_kw,
     )
     if fmt == "text":
         print(_format_text(sel))

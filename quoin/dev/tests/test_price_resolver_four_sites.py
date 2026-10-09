@@ -101,6 +101,51 @@ def test_four_sites_agree_on_normalized_slug(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# Positive direction — the Claude 5.5 ids
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"])
+def test_four_sites_agree_on_claude_5_5_ids(tmp_path, model):
+    cost, _ = cfj.cost_for_entry(model, _USAGE)
+    assert cost > 0
+
+    jf = tmp_path / "00000000-0000-0000-0000-0000000000f4.jsonl"
+    _write_row(jf, model, _USAGE, with_timestamp=False)
+    r2 = cfj.parse_session(jf)
+    assert r2["priceable"] is True
+    assert r2["unknown_models"] == []
+
+    jf3 = tmp_path / "today4.jsonl"
+    _write_row(jf3, model, _USAGE, with_timestamp=True)
+    day_start, day_end = sm._local_day_bounds()
+    r3 = sm.parse_session_today(jf3, day_start, day_end)
+    assert r3["priceable"] is True
+
+    r4 = atc.price_agent_jsonl(jf)
+    assert r4["priceable"] is True
+    assert r4["usd"] > 0
+
+
+def test_made_up_id_stays_unpriced(tmp_path):
+    model = "claude-opus-9-9"
+    assert cfj.resolve_prices(model) is None
+    cost, _ = cfj.cost_for_entry(model, _USAGE)
+    assert cost == 0.0
+
+    jf = tmp_path / "00000000-0000-0000-0000-0000000000f5.jsonl"
+    _write_row(jf, model, _USAGE, with_timestamp=False)
+    assert cfj.parse_session(jf)["priceable"] is False
+
+    jf3 = tmp_path / "today5.jsonl"
+    _write_row(jf3, model, _USAGE, with_timestamp=True)
+    day_start, day_end = sm._local_day_bounds()
+    assert sm.parse_session_today(jf3, day_start, day_end)["priceable"] is False
+
+    r4 = atc.price_agent_jsonl(jf)
+    assert r4["priceable"] is False
+    assert r4["usd"] is None
+
+
+# ---------------------------------------------------------------------------
 # Negative direction — a genuinely unknown, live, non-Anthropic slug
 # ---------------------------------------------------------------------------
 def test_four_sites_agree_on_unknown_slug(tmp_path):
