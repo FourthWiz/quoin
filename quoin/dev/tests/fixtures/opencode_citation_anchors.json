@@ -519,6 +519,24 @@
         "anchor": "OPENCODE_DISABLE_SHARE"
       }
     ],
+    "flag-truthy-values": [
+      {
+        "path": "packages/core/src/flag/flag.ts",
+        "lines": [
+          3,
+          6
+        ],
+        "anchor": "value === \"true\" || value === \"1\""
+      },
+      {
+        "path": "packages/opencode/src/effect/runtime-flags.ts",
+        "lines": [
+          4,
+          4
+        ],
+        "anchor": "Config.boolean(name).pipe(Config.withDefault(false))"
+      }
+    ],
     "claude-code-compat-flags": [
       {
         "path": "packages/opencode/src/session/instruction.ts",

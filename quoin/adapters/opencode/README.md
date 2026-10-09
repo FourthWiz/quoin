@@ -405,6 +405,51 @@ coordinator described under "Workflow coordinator". The driver is verified
 offline against a fake executable only: no live OpenCode run has been verified,
 and the work profile is not made supported by anything here.
 
+### Profile storage and the launch environment
+
+Each profile has its own directory under the adapter state directory
+(`$XDG_STATE_HOME/quoin/opencode/PROFILE`, mode 0700), holding `data`, `state`,
+`cache` and `tmp` for the OpenCode child, plus the compiled configuration,
+run exports, snapshots, test results and workflow windows. A launched child gets
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `TMPDIR` pointing into
+its own profile directory, `npm_config_cache` under `cache`, and runs with
+umask 077, so what it writes there is private to the user. The launcher's
+state-directory variable names the profile directory itself; a quoin command run
+inside that child reads and writes the same profile directory, including
+`config compile` and `config explain`, whose default output location follows
+it (the redacted location label in `config explain` output is a placeholder,
+not the literal path, when run under a launcher).
+
+The first launch writes a `profile.json` stamp recording the profile name and
+its classification, and every launch of that profile checks it: a profile whose
+classification changed refuses with `profile-stamp-mismatch`, a directory that
+is not private or a damaged stamp refuses with `profile-dir-unsafe`. A
+`projects.json` index in the same directory lists the projects that launched
+the profile. If it is damaged the launch refuses with `profile-dir-unsafe`;
+move the unreadable file aside and launch each project once again. Deleting it
+instead only means a purge undercounts projects until each has launched again.
+
+One process launches one profile and one classification. A second profile in
+the same process refuses with `profile-switch-in-process`, and a child process
+can never switch to another profile. Naming a different profile than a task's
+interrupted run with `quoin run` is not a resume: it starts a new run in that
+profile's own directories and continues no session of the other profile. The
+interrupted run stays resumable under its own profile until a newer run of the
+task replaces the task's latest-run pointer. An explicit resume of a stored run
+under another profile refuses with `resume-request-mismatch` and a `profile`
+detail, and `handoff` keeps refusing `profile-mismatch`.
+
+The child also gets flags that stop it fetching model catalogues, updating
+itself, sharing sessions, downloading language servers or loading code the
+profile did not configure. For a work profile all of them are set, the sharing
+and package settings of the profile decide the rest, and package installs are
+offline when the profile denies them. A personal profile gets the model-fetch,
+autoupdate and sharing flags only. An inherited path variable that points into
+another profile's directories refuses with `env-path-outside-profile`.
+
+Snapshot, test and window state moved under the profile directory. Workflows
+started before this change fail closed and need to be configured again.
+
 ### Phase runs
 
 Flags: `--profile` (required), `--phase` (required), `--stage N` (a stage of a
@@ -876,7 +921,7 @@ Limits:
 
 ## Test runs
 
-`quoin opencode test-run --task TASK [--stage N]` runs the task's configured
+`quoin opencode test-run --task TASK [--stage N] [--profile NAME]` runs the task's configured
 test command against a throwaway copy of the working tree and prints one JSON
 line (exit 0 `PASSED`, 1 `FAILED`, 2 refused). The command and the
 include directories (git-ignored subdirectories of the project) are fixed in the task's workflow state by a human-side
@@ -898,10 +943,20 @@ must therefore run its tests again. Test-run does not take the task lock, since
 it runs inside a phase run that holds it; a busy file stops two test runs of the
 same task from overlapping.
 
+Outside the launcher, `test-run` keeps its results under a profile directory,
+so it needs to know the profile. It uses `--profile` when given. Otherwise it
+takes the profile the workflow recorded for the task (from the coordinator's
+settings, or else from the task's latest run) and trusts it only when that
+profile's directory stamp agrees with the classification the profile evaluates
+to now; if nothing is recorded it refuses with `profile-unknown`, and if the
+record or the stamp cannot be confirmed it refuses with
+`profile-selection-unverified` and asks for `--profile`. Inside the launcher the
+profile is the one the child was started with.
+
 The command runs with a scrubbed environment. Under the launcher it keeps only
 the basic variables the launcher lets through (path, home, locale and similar),
 which drops the launcher's own variables, provider credentials and proxy
-settings. Outside the launcher it removes only the launcher's own names. A
+settings, and it gets the profile's own state, cache and temporary directories. Outside the launcher it removes only the launcher's own names. A
 command that needs anything else, such as `PYTHONPATH`, sets it in its own
 argv, for example `env PYTHONPATH=src python -m pytest`, and a command that
 needs a proxy must set it the same way. Review entries carry no test result

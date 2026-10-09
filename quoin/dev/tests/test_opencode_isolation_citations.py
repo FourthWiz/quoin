@@ -53,6 +53,8 @@ REQUIRED_KEYS = (
     "lsp-download-flag",
     "models-fetch-flag",
     "runtime-flag-names",
+    "flag-truthy-values",
+    "flag-config-boolean-forms",
     "claude-code-compat-flags",
     "external-skills-flag",
     "share-flag",
