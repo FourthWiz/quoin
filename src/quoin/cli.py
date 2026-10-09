@@ -763,14 +763,14 @@ def _opencode_config_evaluate(args: argparse.Namespace, *, allow_unqualified: bo
 
 
 def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import compiler, explain, paths
+    from quoin.opencode_adapter import compiler, explain, paths, profile_dirs
 
     got = _opencode_config_evaluate(args, allow_unqualified=False)
     if isinstance(got, int):
         return got
     ev, env, home = got
     try:
-        output_dir = paths.compiled_output_dir(ev.profile, ev.project_root, env, home)
+        output_dir = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
         result, gate = explain.try_build(ev)
         text = explain.render(
             ev, redact=args.redact, as_json=args.json, compile_result=result,
@@ -787,15 +787,18 @@ _COMPILE_IO_TEXT = "quoin: the compiled files could not be written or read; chec
 
 
 def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import compiler, paths
+    from quoin.opencode_adapter import compiler, paths, profile_dirs
     from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
 
     got = _opencode_config_evaluate(args, allow_unqualified=args.allow_unqualified)
     if isinstance(got, int):
         return got
     ev, env, home = got
+    output = args.output
+    if output is None:
+        output = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
     try:
-        directory = compiler.resolve_output_dir(ev, output=args.output, env=env, home=home)
+        directory = compiler.resolve_output_dir(ev, output=output, env=env, home=home)
     except compiler.OutputRefused as exc:
         print("quoin: %s\n  fix: %s" % (exc, exc.fix), file=sys.stderr)
         return 2
@@ -1989,7 +1992,34 @@ def _cmd_opencode_test_run(args: argparse.Namespace) -> int:
         if state_root is None:
             return refuse("state-dir-invalid", "the state directory variable must be an absolute path")
     else:
-        state_root = _paths.state_dir(os.environ, pathlib.Path.home())
+        from quoin.opencode_adapter import handoff as _handoff, profile_dirs as _profile_dirs  # noqa: PLC0415
+        from quoin.opencode_adapter.install import PROFILE_RE  # noqa: PLC0415
+
+        name, source = args.profile, "flag"
+        if name is None:
+            name, source = testrun.recorded_profile(project_root, args.task)
+        if source == "unreadable":
+            return refuse(
+                "profile-selection-unverified",
+                "the task's workflow state or run record cannot be read; pass --profile",
+            )
+        if name is None:
+            return refuse("profile-unknown", "no profile is recorded for the task; pass --profile")
+        if not PROFILE_RE.fullmatch(name):
+            return refuse("request-invalid", "the profile name is not valid")
+        home = pathlib.Path.home()
+        state_root = _profile_dirs.profile_root(_profile_dirs.adapter_root(os.environ, home), name)
+        if source != "flag":
+            unverified = (
+                "profile-selection-unverified",
+                "the recorded profile cannot be confirmed against its storage directory; pass --profile",
+            )
+            try:
+                scope = _handoff.scope_for_profile(project_root, name, env=_opencode_config_env(), home=home)
+            except _handoff.HandoffRefused:
+                return refuse(*unverified)
+            if _profile_dirs.stamped_classification(state_root) != scope["classification"]:
+                return refuse(*unverified)
     run = testrun.run_tests(project_root, args.task, stage, state_root=state_root)
     payload = run.to_dict()
     if run.outcome == testrun.REFUSED:
@@ -2208,6 +2238,7 @@ def _exec_tui(argv, cwd, env) -> int:
     sys.stdout.flush()
     sys.stderr.flush()
     if _is_posix():
+        previous_umask = os.umask(0o077)
         try:
             os.chdir(cwd)
             # Python ignores these two at startup and an ignored signal stays
@@ -2218,6 +2249,7 @@ def _exec_tui(argv, cwd, env) -> int:
                     signal.signal(number, signal.SIG_DFL)
             os.execve(argv[0], list(argv), env)
         except OSError as exc:
+            os.umask(previous_umask)
             print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
             return 3
     # No exec here: keep Python alive but let the TUI own Ctrl-C.
@@ -3356,6 +3388,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     opencode_test_run_p.add_argument("--task", required=True, help="Task name.")
     opencode_test_run_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
+    opencode_test_run_p.add_argument(
+        "--profile", default=None,
+        help="Runtime profile whose storage the run uses; defaults to the profile recorded for the task. "
+             "Ignored inside an agent shell, which already carries its profile.",
+    )
 
     opencode_handoff_p = opencode_sub.add_parser(
         "handoff",

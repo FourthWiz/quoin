@@ -317,3 +317,34 @@ def test_invalid_fixtures_through_compile_print_no_secret(case, tmp_path, monkey
     for form in helpers.secret_forms(helpers.SEEDED_SECRET) + list(SHAPES.values()):
         assert form not in text, case["id"]
     assert not (tmp_path / "state").exists()
+
+
+# ------------------------------------------------------------------ launcher root
+
+
+def launcher_root(world, monkeypatch):
+    """An agent shell: the launcher variable names a stamped profile root and
+    XDG_STATE_HOME points inside it."""
+    root = world.tmp / "state" / "quoin" / "opencode" / "work"
+    root.mkdir(parents=True, mode=0o700)
+    (root / "profile.json").write_text(
+        json.dumps({"created_format": 1, "profile": "work", "classification": "work"}),
+    )
+    monkeypatch.setenv(paths.ENV_STATE_DIR, str(root))
+    monkeypatch.setenv("XDG_STATE_HOME", str(root / "state"))
+    return root
+
+
+def test_compile_from_an_agent_shell_writes_where_the_parent_launch_reads(work, capsys, monkeypatch):
+    root = launcher_root(work, monkeypatch)
+    code, out, _ = run(capsys, *compile_args(work))
+    assert code == 0
+    assert (default_dir(work) / "opencode.json").is_file()
+    assert not (root / "state" / "quoin").exists()
+
+
+def test_explain_from_an_agent_shell_names_the_parent_launch_directory(work, capsys, monkeypatch):
+    launcher_root(work, monkeypatch)
+    code, out, _ = run(capsys, "explain", "--json", "--profile", "work", "--project-root", str(work.root))
+    assert code == 0
+    assert json.loads(out)["output_location"] == str(default_dir(work))

@@ -229,7 +229,11 @@ def test_command_env_outside_the_launcher_drops_only_launcher_names(monkeypatch)
     env = {"PATH": "/bin", "PYTHONPATH": "/p", "OPENCODE_CONFIG": "c", "XDG_DATA_HOME": "d"}
     assert testrun.command_env(env) == {"PATH": "/bin", "PYTHONPATH": "/p"}
     launched = dict(env, QUOIN_OPENCODE_STATE_DIR="/s", ANTHROPIC_API_KEY="k", HTTPS_PROXY="p", LC_ALL="C")
-    assert testrun.command_env(launched) == {"PATH": "/bin", "LC_ALL": "C"}
+    assert testrun.command_env(launched) == {
+        "PATH": "/bin", "LC_ALL": "C",
+        "XDG_STATE_HOME": "/s/state", "XDG_CACHE_HOME": "/s/cache", "TMPDIR": "/s/tmp",
+        "npm_config_cache": "/s/cache/npm",
+    }
 
 
 def test_environment_scrub_outside_launcher_keeps_ordinary_names(world, monkeypatch, tmp_path):
@@ -293,14 +297,18 @@ def default_state():
     return paths.state_dir(os.environ, Path.home())
 
 
+def work_root():
+    return default_state() / "work"
+
+
 def test_cli_exit_codes_and_one_json_line(project, capsys):
-    configure(project, state=default_state())
-    code, data = cli_run(capsys, "--task", "t1")
+    configure(project, state=work_root())
+    code, data = cli_run(capsys, "--task", "t1", "--profile", "work")
     assert code == 0 and data["outcome"] == "PASSED" and data["exit_code"] == 0
-    configure(project, command=["false"], include=(), state=default_state())
-    code, data = cli_run(capsys, "--task", "t1")
+    configure(project, command=["false"], include=(), state=work_root())
+    code, data = cli_run(capsys, "--task", "t1", "--profile", "work")
     assert code == 1 and data["outcome"] == "FAILED" and data["exit_code"] == 1
-    code, data = cli_run(capsys, "--task", "other")
+    code, data = cli_run(capsys, "--task", "other", "--profile", "work")
     assert code == 2 and data["refusal"]["code"] == "tests-not-configured"
 
 
@@ -317,10 +325,10 @@ def test_cli_state_dir_variable_wins_over_xdg(project, monkeypatch, capsys, tmp_
 
 def test_cli_without_variable_uses_the_adapter_state_dir(project, monkeypatch, capsys, tmp_path):
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "xdg"))
-    configure(project, command=["true"], include=(), state=default_state())
-    code, _ = cli_run(capsys, "--task", "t1")
+    configure(project, command=["true"], include=(), state=work_root())
+    code, _ = cli_run(capsys, "--task", "t1", "--profile", "work")
     assert code == 0
-    expected = paths.state_dir(os.environ, Path.home())
+    expected = paths.state_dir(os.environ, Path.home()) / "work"
     assert testrun.result_path(expected, project.root, "t1", None).is_file()
 
 
@@ -346,8 +354,8 @@ def test_cli_rejects_other_options_and_abbreviations(project, capsys, argv):
 
 
 def test_cli_accepts_the_full_stage_option(project, capsys):
-    configure(project, command=["true"], include=(), state=default_state())
-    code, data = cli_run(capsys, "--task", "t1", "--stage", "1")
+    configure(project, command=["true"], include=(), state=work_root())
+    code, data = cli_run(capsys, "--task", "t1", "--stage", "1", "--profile", "work")
     assert code == 0 and data["outcome"] == "PASSED"
 
 
@@ -447,3 +455,168 @@ def test_an_implausible_pid_prefix_does_not_abort_the_run(world):
     work.mkdir(parents=True, mode=0o700)
     (work / ("9" * 40 + "-x")).mkdir()
     assert run(world).outcome == "PASSED"
+
+
+# ---------------------------------------------------------------------------
+# profile selection outside the launcher
+# ---------------------------------------------------------------------------
+
+
+def write_stamp(root, profile, classification):
+    root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    (root / "profile.json").write_text(json.dumps(
+        {"created_format": 1, "profile": profile, "classification": classification},
+    ))
+
+
+def seed_workflow_profile(root, task, profile):
+    """The coordinator's own writer, so the key is the one production uses."""
+    from quoin.opencode_adapter import workflow
+
+    directory = runstore.store_dir(root, create=True)
+    state = runstore.new_workflow_state(task)
+    options = workflow.WorkflowOptions(profile=profile)
+    workflow.write_settings(state, options, include_architect=False, from_discover=False)
+    runstore.write_workflow_state(directory, state)
+
+
+def seed_run_record(root, task, profile):
+    directory = runstore.store_dir(root, create=True)
+    run_id = runstore.new_run_id()
+    record = runstore.new_run_record(run_id, task, {"profile": profile}, {"profile": profile})
+    runstore.write_record(directory, record)
+    runstore.write_pointer(directory, runstore.new_pointer(task, run_id))
+
+
+@pytest.fixture()
+def scope(monkeypatch):
+    from quoin.opencode_adapter import handoff
+
+    box = {"classification": "work", "refuse": False}
+
+    def fake(project_root, profile, *, env, home, **kwargs):
+        if box["refuse"]:
+            raise handoff.HandoffRefused("scope-unavailable", "cannot evaluate")
+        return {"profile": profile, "classification": box["classification"]}
+
+    monkeypatch.setattr(handoff, "scope_for_profile", fake)
+    return box
+
+
+def refusal_code(capsys):
+    code, data = cli_run(capsys, "--task", "t1")
+    assert code == 2
+    return data["refusal"]["code"], data["refusal"]["message"]
+
+
+def test_recorded_profile_prefers_the_coordinator_key(project):
+    from quoin.opencode_adapter import workflow
+
+    seed_run_record(project.root, "t1", "personal")
+    directory = runstore.store_dir(project.root)
+    state = runstore.new_workflow_state("t1")
+    workflow.write_settings(
+        state, workflow.WorkflowOptions(profile="work"), include_architect=False, from_discover=False,
+    )
+    state["settings"]["profile"] = "legacy"
+    runstore.write_workflow_state(directory, state)
+    assert testrun.recorded_profile(project.root, "t1") == ("work", "workflow-state")
+
+
+def test_recorded_profile_falls_back_to_the_legacy_key_then_the_run(project):
+    directory = runstore.store_dir(project.root, create=True)
+    state = runstore.new_workflow_state("t1")
+    state["settings"]["profile"] = "legacy"
+    runstore.write_workflow_state(directory, state)
+    assert testrun.recorded_profile(project.root, "t1") == ("legacy", "workflow-state")
+    seed_run_record(project.root, "t2", "personal")
+    assert testrun.recorded_profile(project.root, "t2") == ("personal", "run-record")
+
+
+def test_test_run_help_lists_the_profile_option(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["opencode", "test-run", "--help"])
+    assert "--profile" in capsys.readouterr().out
+
+
+def test_selection_uses_the_workflow_profile_when_its_stamp_agrees(project, capsys, scope):
+    write_stamp(work_root(), "work", "work")
+    seed_workflow_profile(project.root, "t1", "work")
+    configure(project, command=["true"], include=(), state=work_root())
+    code, data = cli_run(capsys, "--task", "t1")
+    assert code == 0 and data["outcome"] == "PASSED"
+
+
+def test_selection_from_a_run_record_needs_an_agreeing_stamp(project, capsys, scope):
+    write_stamp(work_root(), "work", "work")
+    seed_run_record(project.root, "t1", "work")
+    configure(project, command=["true"], include=(), state=work_root())
+    code, _ = cli_run(capsys, "--task", "t1")
+    assert code == 0
+
+
+def test_selection_from_the_legacy_key_is_accepted_with_a_stamp(project, capsys, scope):
+    write_stamp(work_root(), "work", "work")
+    directory = runstore.store_dir(project.root, create=True)
+    state = runstore.new_workflow_state("t1")
+    state["settings"]["profile"] = "work"
+    runstore.write_workflow_state(directory, state)
+    configure(project, command=["true"], include=(), state=work_root())
+    code, _ = cli_run(capsys, "--task", "t1")
+    assert code == 0
+
+
+def test_a_mismatching_or_missing_stamp_is_unverified(project, capsys, scope):
+    seed_workflow_profile(project.root, "t1", "work")
+    assert refusal_code(capsys)[0] == "profile-selection-unverified"
+    write_stamp(work_root(), "work", "personal")
+    assert refusal_code(capsys)[0] == "profile-selection-unverified"
+
+
+def test_a_scope_that_cannot_be_evaluated_is_unverified(project, capsys, scope):
+    write_stamp(work_root(), "work", "work")
+    seed_workflow_profile(project.root, "t1", "work")
+    scope["refuse"] = True
+    assert refusal_code(capsys)[0] == "profile-selection-unverified"
+
+
+def test_an_explicit_profile_skips_the_stamp_check(project, capsys, scope):
+    seed_workflow_profile(project.root, "t1", "personal")
+    configure(project, command=["true"], include=(), state=work_root())
+    code, _ = cli_run(capsys, "--task", "t1", "--profile", "work")
+    assert code == 0
+
+
+def test_nothing_recorded_is_profile_unknown(project, capsys, scope):
+    assert refusal_code(capsys)[0] == "profile-unknown"
+
+
+def test_a_run_record_without_a_profile_is_profile_unknown(project, capsys, scope):
+    directory = runstore.store_dir(project.root, create=True)
+    run_id = runstore.new_run_id()
+    record = runstore.new_run_record(run_id, "t1", {"profile": None}, {"profile": None})
+    runstore.write_record(directory, record)
+    runstore.write_pointer(directory, runstore.new_pointer("t1", run_id))
+    assert refusal_code(capsys)[0] == "profile-unknown"
+
+
+def test_a_damaged_workflow_state_is_reported_as_unreadable(project, capsys, scope):
+    seed_workflow_profile(project.root, "t1", "work")
+    directory = runstore.store_dir(project.root)
+    matches = [p for p in directory.rglob("*") if p.is_file() and "workflow" in p.name]
+    assert matches
+    for path in matches:
+        path.write_bytes(b"\x00 not json")
+    code, message = refusal_code(capsys)
+    assert code == "profile-selection-unverified" and "cannot be read" in message
+
+
+def test_no_store_is_profile_unknown_and_creates_nothing(project, capsys, scope):
+    before = sorted(p.name for p in (project.root / ".quoin").iterdir())
+    assert refusal_code(capsys)[0] == "profile-unknown"
+    assert sorted(p.name for p in (project.root / ".quoin").iterdir()) == before
+
+
+def test_an_invalid_profile_name_is_refused(project, capsys):
+    code, data = cli_run(capsys, "--task", "t1", "--profile", "../x")
+    assert code == 2 and data["refusal"]["code"] == "request-invalid"

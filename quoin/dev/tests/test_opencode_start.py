@@ -229,6 +229,28 @@ def test_sigpipe_and_sigxfsz_are_reset_before_exec(tmp_path, monkeypatch):
     assert seen == {"pipe": signal.SIG_DFL, "xfsz": signal.SIG_DFL}
 
 
+def test_umask_is_077_at_exec_and_restored_after_a_failed_exec(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_execve(path, argv, env):
+        current = os.umask(0o077)
+        seen["umask"] = current
+        raise OSError(2, "gone")
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(os, "execve", fake_execve)
+    original = os.umask(0o022)
+    handlers = {n: signal.getsignal(getattr(signal, n)) for n in ("SIGPIPE", "SIGXFSZ")}
+    try:
+        assert cli._exec_tui(["/x", str(tmp_path)], str(tmp_path), {}) == 3
+        assert os.umask(0o022) == 0o022
+    finally:
+        os.umask(original)
+        for name, handler in handlers.items():
+            signal.signal(getattr(signal, name), handler)
+    assert seen["umask"] == 0o077
+
+
 class _Child:
     def __init__(self, code, during):
         self.code, self.during = code, during
