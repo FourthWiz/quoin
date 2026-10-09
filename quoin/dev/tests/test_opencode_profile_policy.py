@@ -653,8 +653,12 @@ def test_without_any_managed_file_the_finding_stays(fs):
 def test_trusted_limit_ceiling_below_the_profile_limit_is_refused(fs):
     with pytest.raises(ConfigErrors) as info:
         fs.merge(trusted={"schema_version": 1, "limits": {"max_run_seconds": 100}})
-    [(cls, _file, path, _msg)] = errs_of(info)
+    [(cls, file, path, _msg)] = errs_of(info)
     assert (cls, path) == ("limit-above-ceiling", "$.limits.max_run_seconds")
+    # The error names the layer whose value is too high (the profile), never the
+    # trusted layer that set the ceiling, and never the untrusted default label.
+    assert file == "profiles/work.json"
+    assert file not in (config.TRUSTED_MANAGED_LABEL, config.MANAGED_LABEL)
 
 
 def test_trusted_ceiling_on_existing_fields_combines_with_the_env_file(fs):
