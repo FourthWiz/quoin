@@ -13,6 +13,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -161,6 +162,13 @@ def _valid_stamp(root: Path) -> Optional[Tuple[str, str]]:
     return data["profile"], data["classification"]
 
 
+def stamped_classification(root) -> Optional[str]:
+    """The classification recorded in `root`'s valid stamp, or None when the
+    stamp is missing, unreadable, invalid or names another profile."""
+    got = _valid_stamp(Path(root))
+    return None if got is None else got[1]
+
+
 def _stamped_launcher_root(env: Mapping[str, str]) -> Optional[Path]:
     value = env.get(paths.ENV_STATE_DIR)
     if not value or not os.path.isabs(value):
@@ -216,20 +224,27 @@ def prepare(adapter_root_path, profile: str, classification: str) -> ProfileDirs
     body = jsonio.dump_canonical(
         {"created_format": STAMP_FORMAT, "profile": profile, "classification": classification}
     )
+    # Publish with a hard link so a concurrent first launch never reads a
+    # half-written stamp: the link either appears complete or not at all.
+    staging = stamp_path.with_name("%s.%d.%d.tmp" % (STAMP_NAME, os.getpid(), threading.get_ident()))
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
     try:
-        fd = os.open(str(stamp_path), flags, 0o600)
-    except FileExistsError:
-        fd = None
-    except OSError:
-        raise ProfileDirUnsafe("stamp-unreadable")
-    if fd is not None:
+        fd = os.open(str(staging), flags, 0o600)
         try:
             with os.fdopen(fd, "wb") as handle:
                 handle.write(body)
-        except OSError:
-            raise ProfileDirUnsafe("stamp-unreadable")
-        return dirs
+            try:
+                os.link(str(staging), str(stamp_path))
+                return dirs
+            except FileExistsError:
+                pass
+        finally:
+            try:
+                os.unlink(str(staging))
+            except OSError:
+                pass
+    except OSError:
+        raise ProfileDirUnsafe("stamp-unreadable")
     data = _read_stamp(stamp_path)
     if data["profile"] != profile:
         raise StampMismatch("profile")
