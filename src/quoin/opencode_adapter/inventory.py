@@ -8,11 +8,17 @@ rest of the adapter.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sqlite3
 import stat
+import time
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+from . import jsonio
 
 _LEGACY_TRUTHY = frozenset(("true", "1"))
 
@@ -285,3 +291,578 @@ def read_config_files(root: Path, worktree: Path, env, home) -> Tuple[List[Tuple
         _try(candidate / "opencode.jsonc")
 
     return docs, unreadable
+
+
+# ---------------------------------------------------------------- collection
+
+LAYERS = (
+    "remote-wellknown", "account", "global", "compiled", "project", "dot-opencode",
+    "home-opencode", "config-dir-env", "managed", "managed-prefs", "env", "claude-compat", "data",
+)
+SOURCE_STATES = ("read", "absent", "unreadable", "truncated", "busy")
+MAX_FILE_BYTES = 1_048_576
+DEFAULT_MAX_ENTRIES = 5000
+SQLITE_BACKOFF = (0.1, 0.3, 0.9)
+CONFIG_ENV_NAMES = (
+    "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT",
+    "OPENCODE_DB", "OPENCODE_MODELS_URL", "OPENCODE_PERMISSION",
+)
+BENIGN_KEYS = frozenset(("$schema", "theme", "keybinds", "tui", "username", "layout"))
+COMPILED_KEYS = frozenset(("model", "small_model", "share", "autoupdate"))
+_AGENT_SUBDIRS = (("agent", "agent"), ("agents", "agent"), ("mode", "agent"), ("modes", "agent"),
+                  ("command", "command"), ("commands", "command"))
+_PLUGIN_SUBDIRS = ("plugin", "plugins")
+_TOOL_SUBDIRS = ("tool", "tools")
+_SKILL_SUBDIRS = ("skill", "skills")
+_MAX_WALK = 20000
+
+
+@dataclass(frozen=True)
+class Source:
+    kind: str
+    layer: str
+    display: str
+    sha256: Optional[str]
+    state: str
+
+
+@dataclass(frozen=True)
+class Entry:
+    kind: str
+    layer: str
+    source_index: int
+    key_path: str
+    name: str
+    value_sha256: Optional[str]
+    owned: bool
+    facts: Mapping[str, Any]
+
+
+@dataclass
+class Inventory:
+    sources: List[Source]
+    entries: List[Entry]
+    docs: List[Tuple[Path, dict]] = field(default_factory=list, repr=False)
+    markdown: List[Tuple[Path, str, str]] = field(default_factory=list, repr=False)  # (path, kind, name)
+    plugin_dirs: List[Tuple[Path, str]] = field(default_factory=list, repr=False)
+    fetch_watch: List[Entry] = field(default_factory=list, repr=False)
+    config_env: List[Entry] = field(default_factory=list, repr=False)
+    unreadable: List[Path] = field(default_factory=list, repr=False)
+
+
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def value_digest(value: Any) -> Optional[str]:
+    try:
+        return sha256_hex(jsonio.dump_canonical(value))
+    except (TypeError, ValueError, RecursionError):
+        return None
+
+
+def name_digest(text: str) -> str:
+    return "h-" + sha256_hex(text.encode("utf-8", "surrogatepass"))[:32]
+
+
+def plugin_dir_states(bases: Iterable[Path]) -> List[Tuple[Path, str]]:
+    """Plugin directories under `bases` that need attention, in visit order:
+    `populated` when one holds a top-level `.ts` or `.js` file that is not a
+    directory, `unreadable` when listing it failed."""
+    found: List[Tuple[Path, str]] = []
+    for base in bases:
+        for sub in _PLUGIN_SUBDIRS:
+            directory = Path(base) / sub
+            try:
+                populated = os.path.isdir(str(directory)) and any(
+                    entry.name.endswith((".ts", ".js")) and not entry.is_dir(follow_symlinks=False)
+                    for entry in os.scandir(str(directory))
+                )
+            except OSError:
+                found.append((directory, "unreadable"))
+                continue
+            if populated:
+                found.append((directory, "populated"))
+    return found
+
+
+def _unquote(text: str) -> Tuple[str, bool]:
+    """(value, plain). A quoted scalar is returned without its quotes."""
+    text = text.strip()
+    if len(text) >= 2 and text[0] in "\"'":
+        end = text.find(text[0], 1)
+        while text[0] == "'" and end != -1 and text[end + 1:end + 2] == "'":
+            end = text.find("'", end + 2)
+        if end == -1:
+            return text, False
+        return text[1:end], True
+    return text, False
+
+
+def scan_frontmatter(text: str) -> Dict[str, Any]:
+    """Read the top-level `model`, `permission` and `tools` keys of a markdown
+    file's YAML frontmatter without a YAML parser. Anything this scanner
+    cannot fully read (block scalars, tags, anchors, flow values, duplicate
+    keys, a missing closing fence) is reported as `unknown`."""
+    unknown: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
+    if text.startswith("\ufeff"):
+        text = text[1:]
+    lines = [line.rstrip("\r") for line in text.split("\n")]
+    if not lines or lines[0].rstrip() != "---":
+        if any(line.strip() == "---" for line in lines[:3]):
+            return unknown
+        return {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
+    end = next((i for i in range(1, len(lines)) if lines[i].rstrip() in ("---", "...")), None)
+    if end is None:
+        return unknown
+    facts: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
+    seen = set()
+    block = lines[1:end]
+    for index, line in enumerate(block):
+        if not line.strip() or line[0] in " \t#":
+            continue
+        if line.startswith(("{", "[", "<<", "&", "*", "%", "---")):
+            return unknown
+        key, sep, rest = line.partition(":")
+        if not sep:
+            return unknown
+        key, _ = _unquote(key)
+        if key in seen:
+            return unknown
+        seen.add(key)
+        value = rest.strip()
+        if value.startswith(("|", ">", "!", "&", "*", "{", "[")):
+            if key == "model":
+                return unknown
+            continue
+        if key == "permission":
+            facts["has_permission"] = True
+        elif key == "tools":
+            facts["has_tools"] = True
+        elif key == "model":
+            text_value, quoted = _unquote(value)
+            if not quoted:
+                text_value = text_value.split(" #", 1)[0].rstrip()
+            if not text_value:
+                nested = index + 1 < len(block) and block[index + 1][:1] in (" ", "\t")
+                return unknown if nested else {**facts, "model": None}
+            facts["model"] = text_value
+    return facts
+
+
+class _Builder:
+    def __init__(self, max_entries: int) -> None:
+        self.max_entries = max_entries
+        self.sources: List[Source] = []
+        self.entries: List[Entry] = []
+        self._counts: Dict[int, int] = {}
+        self._truncated: set = set()
+
+    def source(self, kind: str, layer: str, display: str, sha256: Optional[str], state: str) -> int:
+        self.sources.append(Source(kind, layer, display, sha256, state))
+        return len(self.sources) - 1
+
+    def set_state(self, index: int, state: str) -> None:
+        self.sources[index] = replace(self.sources[index], state=state)
+
+    def entry(
+        self, index: int, kind: str, key_path: str, name: str, value: Any = None, *,
+        owned: bool = False, facts: Optional[Mapping[str, Any]] = None, digest: Optional[str] = None,
+    ) -> Optional[Entry]:
+        count = self._counts.get(index, 0)
+        if count >= self.max_entries:
+            self._truncated.add(index)
+            return None
+        self._counts[index] = count + 1
+        made = Entry(
+            kind, self.sources[index].layer, index, key_path, name,
+            digest if digest is not None else (value_digest(value) if value is not None else None),
+            owned, dict(facts or {}),
+        )
+        self.entries.append(made)
+        return made
+
+    def finish(self) -> Tuple[List[Source], List[Entry]]:
+        for index in self._truncated:
+            self.set_state(index, "truncated")
+        return self.sources, self.entries
+
+
+def _document_entries(builder: _Builder, index: int, doc: Mapping[str, Any], compiled_doc: Mapping[str, Any]) -> None:
+    compiled_providers = compiled_doc.get("provider")
+    compiled_names = set(compiled_providers) if isinstance(compiled_providers, dict) else set()
+
+    def named(kind: str, key: str, value: Any, facts_of: Callable[[Any], Mapping[str, Any]] = lambda v: {}) -> None:
+        if isinstance(value, dict):
+            for name, sub in value.items():
+                builder.entry(index, kind(sub) if callable(kind) else kind, key, str(name), sub, facts=facts_of(sub))
+        else:
+            builder.entry(index, kind(value) if callable(kind) else kind, key, key, value)
+
+    def agent_facts(sub: Any) -> Mapping[str, Any]:
+        if not isinstance(sub, dict):
+            return {"unknown": True}
+        model = sub.get("model")
+        return {
+            "model": model if isinstance(model, str) else None,
+            "has_permission": "permission" in sub,
+            "has_tools": "tools" in sub,
+            "unknown": "model" in sub and not isinstance(model, str),
+        }
+
+    def mcp_kind(sub: Any) -> str:
+        if isinstance(sub, dict):
+            kind = sub.get("type")
+            if kind == "remote":
+                return "mcp-remote"
+            if kind == "local":
+                return "mcp-local"
+            if set(sub) <= {"enabled"}:
+                return "mcp-toggle"
+        return "mcp-local"
+
+    for key, value in doc.items():
+        if key == "plugin":
+            if isinstance(value, list):
+                for item in value:
+                    builder.entry(index, "plugin", key, name_digest(str(item)), item)
+            else:
+                builder.entry(index, "plugin", key, key, value)
+        elif key == "provider":
+            named("provider", key, value)
+        elif key == "enabled_providers":
+            for item in value if isinstance(value, list) else [value]:
+                builder.entry(index, "provider", key, str(item), item)
+        elif key == "disabled_providers":
+            builder.entry(index, "disabled-providers", key, key, value)
+        elif key == "mcp":
+            named(mcp_kind, key, value, lambda sub: {"enabled": sub.get("enabled") if isinstance(sub, dict) else None})
+        elif key == "lsp":
+            named("lsp", key, value)
+        elif key == "formatter":
+            named("formatter", key, value)
+        elif key == "tools":
+            named("tool", key, value)
+        elif key in ("agent", "mode"):
+            named("agent", key, value, agent_facts)
+        elif key == "command":
+            named("command", key, value, lambda sub: {
+                "model": sub.get("model") if isinstance(sub, dict) and isinstance(sub.get("model"), str) else None,
+                "unknown": isinstance(sub, dict) and "model" in sub and not isinstance(sub.get("model"), str),
+            })
+        elif key == "permission":
+            builder.entry(index, "permission", key, key, value)
+        elif key == "instructions":
+            for item in value if isinstance(value, list) else [value]:
+                url = isinstance(item, str) and item.startswith(("http://", "https://"))
+                builder.entry(index, "instruction", key, name_digest(str(item)), item, facts={"url": url})
+        elif key == "skills":
+            if isinstance(value, dict):
+                for sub_key, items in value.items():
+                    for item in items if isinstance(items, list) else [items]:
+                        url = sub_key == "urls" or (isinstance(item, str) and item.startswith(("http://", "https://")))
+                        builder.entry(index, "skill", "skills.%s" % sub_key, name_digest(str(item)), item, facts={"url": bool(url)})
+            else:
+                builder.entry(index, "skill", key, key, value)
+        elif key in COMPILED_KEYS:
+            builder.entry(index, "compiled-key", key, key, value)
+        elif key in BENIGN_KEYS:
+            builder.entry(index, "benign-key", key, key, value)
+        elif key == "watcher":
+            only_ignore = isinstance(value, dict) and set(value) <= {"ignore"}
+            builder.entry(index, "benign-key" if only_ignore else "unknown-key", key, key, value)
+        else:
+            builder.entry(index, "unknown-key", key, key, value)
+    # Provider entries know whether the compiled configuration carries them.
+    for position, entry in enumerate(builder.entries):
+        if entry.source_index == index and entry.kind == "provider":
+            builder.entries[position] = replace(entry, facts={**entry.facts, "in_compiled_set": entry.name in compiled_names})
+
+
+def _read_text(path: Path) -> Optional[str]:
+    got = jsonio.read_regular_bytes(path, max_bytes=MAX_FILE_BYTES)
+    if got is None:
+        return None
+    try:
+        return got[0].decode("utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _query_account(path: Path, sleep: Callable[[float], None]) -> Tuple[str, Dict[str, Any]]:
+    """(state, facts) for one session database. Read-only URI, never hashed."""
+    uri = Path(path).as_uri() + "?mode=ro"
+    delays = list(SQLITE_BACKOFF)
+    while True:
+        try:
+            connection = sqlite3.connect(uri, uri=True, timeout=1)
+            try:
+                row = connection.execute("SELECT active_account_id FROM account_state WHERE id = 1").fetchone()
+            finally:
+                connection.close()
+            return "read", {"account": bool(row and row[0])}
+        except sqlite3.OperationalError as exc:
+            text = str(exc).lower()
+            if "no such table" in text:
+                return "read", {"account": False}
+            if "database is locked" in text or "database is busy" in text:
+                if delays:
+                    sleep(delays.pop(0))
+                    continue
+                return "busy", {"busy": True}
+            return "unreadable", {"unknown": True}
+        except (sqlite3.Error, OSError, ValueError):
+            return "unreadable", {"unknown": True}
+
+
+def _lock_covers(directory: Path) -> bool:
+    """node_modules exists and the lock file's root entry lists every
+    dependency package.json declares, so OpenCode skips the install."""
+    if not os.path.isdir(str(directory / "node_modules")):
+        return False
+    try:
+        declared = json.loads((directory / "package.json").read_text(encoding="utf-8")).get("dependencies") or {}
+    except (OSError, ValueError, AttributeError):
+        declared = {}
+    if not declared:
+        return True
+    try:
+        lock = json.loads((directory / "package-lock.json").read_text(encoding="utf-8"))
+        root = (lock.get("packages") or {}).get("") or {}
+        locked = root.get("dependencies") or {}
+    except (OSError, ValueError, AttributeError):
+        return False
+    return isinstance(declared, dict) and isinstance(locked, dict) and set(declared) <= set(locked)
+
+
+def _walk_markdown(directory: Path):
+    count = 0
+    for current, dirnames, filenames in os.walk(str(directory), onerror=lambda exc: None):
+        dirnames.sort()
+        for filename in sorted(filenames):
+            count += 1
+            if count > _MAX_WALK:
+                return
+            if filename.endswith(".md"):
+                yield Path(current) / filename
+
+
+def collect(
+    *,
+    cwd, scan_env: Mapping[str, str], ambient_env: Optional[Mapping[str, str]] = None, home,
+    compiled_path=None, compiled_doc: Optional[Mapping[str, Any]] = None,
+    owned: Optional[Mapping[str, str]] = None, data_dir=None, managed_dir=None,
+    managed_prefs: Optional[Sequence[Any]] = None, plutil: Optional[Callable[[Path], str]] = None,
+    hardening_names: Sequence[str] = (), max_entries: int = DEFAULT_MAX_ENTRIES,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Inventory:
+    """Every configuration source OpenCode 1.18.32 reads for this launch, as
+    entries. Never raises for a filesystem condition: each failure is recorded
+    on the source that hit it."""
+    cwd, home = Path(cwd), Path(home)
+    compiled_doc = compiled_doc or {}
+    owned = owned or {}
+    ambient = scan_env if ambient_env is None else ambient_env
+    builder = _Builder(max_entries)
+    inv = Inventory([], [])
+    roots = build_roots(cwd, scan_env, home)
+
+    def shown(path) -> str:
+        return display_path(path, roots)
+
+    def same(a, b) -> bool:
+        return os.path.realpath(str(a)) == os.path.realpath(str(b))
+
+    worktree = worktree_root(cwd)
+    global_dir = xdg_config_dir(scan_env, home)
+    project_dirs = project_config_dirs(worktree, cwd)
+    config_dir_env = scan_env.get("OPENCODE_CONFIG_DIR")
+
+    # -- remote well-known config and console accounts (profile data) --------
+    if data_dir is not None:
+        opencode_data = Path(data_dir) / "opencode"
+        auth_path = opencode_data / "auth.json"
+        got = jsonio.read_regular_bytes(auth_path, max_bytes=MAX_FILE_BYTES)
+        if got is None:
+            present = os.path.lexists(str(auth_path))
+            builder.source("auth-file", "remote-wellknown", shown(auth_path), None, "unreadable" if present else "absent")
+            if present:
+                idx = len(builder.sources) - 1
+                builder.entry(idx, "remote-config", "auth", "auth.json", facts={"unknown": True}, digest=name_digest("auth.json"))
+        else:
+            try:
+                auth = json.loads(got[0].decode("utf-8"))
+                if not isinstance(auth, dict):
+                    raise ValueError("not an object")
+            except (ValueError, UnicodeDecodeError, RecursionError):
+                idx = builder.source("auth-file", "remote-wellknown", shown(auth_path), sha256_hex(got[0]), "unreadable")
+                builder.entry(idx, "remote-config", "auth", "auth.json", facts={"unknown": True}, digest=name_digest("auth.json"))
+            else:
+                idx = builder.source("auth-file", "remote-wellknown", shown(auth_path), sha256_hex(got[0]), "read")
+                for key in sorted(auth):
+                    value = auth[key]
+                    kind = value.get("type") if isinstance(value, dict) else None
+                    if kind in ("api", "oauth"):
+                        continue
+                    builder.entry(idx, "remote-config", "auth", name_digest(str(key)), facts={"type": str(kind)}, digest=name_digest(str(key)))
+        try:
+            databases = sorted(p for p in opencode_data.iterdir() if p.name.endswith(".db") and p.is_file())
+        except OSError:
+            databases = []
+        for database in databases:
+            state, facts = _query_account(database, sleep)
+            idx = builder.source("database", "account", shown(database), None, state)
+            if facts.get("account") or facts.get("busy") or facts.get("unknown"):
+                builder.entry(idx, "account-config", "account_state", database.name, facts=facts, digest=name_digest(database.name))
+
+    # -- config documents -----------------------------------------------------
+    docs, unreadable = read_config_files(cwd, worktree, scan_env, home)
+    inv.docs, inv.unreadable = docs, list(unreadable)
+    home_opencode = home / ".opencode"
+    dotted = {os.path.abspath(str(d / ".opencode")) for d in project_dirs}
+
+    def layer_of(path: Path) -> str:
+        parent = path.parent
+        if compiled_path is not None and same(path, compiled_path):
+            return "compiled"
+        if same(parent, global_dir):
+            return "global"
+        if config_dir_env and same(parent, config_dir_env):
+            return "config-dir-env"
+        if same(parent, home_opencode):
+            return "home-opencode"
+        if os.path.abspath(str(parent)) in dotted:
+            return "dot-opencode"
+        return "project"
+
+    for path in unreadable:
+        builder.source("config-file", layer_of(path), shown(path), None, "unreadable")
+    for path, doc in docs:
+        layer = layer_of(path)
+        idx = builder.source("config-file", layer, shown(path), value_digest(doc), "read")
+        if layer == "compiled":
+            builder.entry(idx, "compiled-file", "", path.name, doc, owned=True)
+            continue
+        _document_entries(builder, idx, doc, compiled_doc)
+    legacy = global_dir / "config"
+    if os.path.lexists(str(legacy)):
+        idx = builder.source("legacy-config", "global", shown(legacy), None, "read")
+        builder.entry(idx, "legacy-config", "config", "config", digest=name_digest("config"))
+
+    # -- managed files and preferences ---------------------------------------
+    if managed_dir is not None:
+        for name in ("opencode.json", "opencode.jsonc"):
+            path = Path(managed_dir) / name
+            try:
+                payload = load_config_file(path)
+            except ConfigUnreadable:
+                builder.source("config-file", "managed", shown(path), None, "unreadable")
+                inv.unreadable.append(path)
+                continue
+            if payload is not None:
+                inv.docs.append((path, payload))
+                idx = builder.source("config-file", "managed", shown(path), value_digest(payload), "read")
+                _document_entries(builder, idx, payload, compiled_doc)
+    for plist in managed_prefs or ():
+        plist = Path(plist)
+        if not os.path.lexists(str(plist)):
+            continue
+        try:
+            payload = json.loads(plutil(plist)) if plutil is not None else None
+        except Exception:  # noqa: BLE001 - any conversion failure is an unreadable source
+            payload = None
+        if not isinstance(payload, dict):
+            builder.source("managed-prefs", "managed-prefs", shown(plist), None, "unreadable")
+            inv.unreadable.append(plist)
+            continue
+        inv.docs.append((plist, payload))
+        idx = builder.source("managed-prefs", "managed-prefs", shown(plist), value_digest(payload), "read")
+        _document_entries(builder, idx, payload, compiled_doc)
+
+    # -- directories: markdown, tools, plugins, skills, fetch watch ----------
+    bases: List[Tuple[Path, str]] = [(d / ".opencode", "dot-opencode") for d in project_dirs]
+    if os.path.isdir(str(home_opencode)):
+        bases.append((home_opencode, "home-opencode"))
+    bases.append((global_dir, "global"))
+    if config_dir_env:
+        bases.append((Path(config_dir_env), "config-dir-env"))
+    seen_bases = set()
+    for base, layer in bases:
+        key = os.path.abspath(str(base))
+        if key in seen_bases or not os.path.isdir(str(base)):
+            continue
+        seen_bases.add(key)
+        idx = builder.source("directory", layer, shown(base), None, "read")
+        for sub, kind in _AGENT_SUBDIRS:
+            directory = base / sub
+            if not os.path.isdir(str(directory)):
+                continue
+            for path in _walk_markdown(directory):
+                rel_name = path.relative_to(directory).as_posix()[: -len(".md")]
+                got = jsonio.read_regular_bytes(path, max_bytes=MAX_FILE_BYTES)
+                if got is None:
+                    facts: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
+                    digest = None
+                    is_owned = False
+                else:
+                    try:
+                        facts = scan_frontmatter(got[0].decode("utf-8"))
+                    except UnicodeDecodeError:
+                        facts = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
+                    digest = sha256_hex(got[0])
+                    rel = os.path.relpath(os.path.abspath(str(path)), os.path.abspath(str(cwd))).replace(os.sep, "/")
+                    is_owned = owned.get(rel) == digest
+                inv.markdown.append((path, kind, rel_name))
+                builder.entry(idx, kind, sub, rel_name, owned=is_owned, facts=facts,
+                              digest=digest or name_digest(str(path)))
+        for sub in _TOOL_SUBDIRS:
+            directory = base / sub
+            try:
+                names = sorted(e.name for e in os.scandir(str(directory))
+                               if e.name.endswith((".js", ".ts")) and e.is_file(follow_symlinks=False))
+            except OSError:
+                names = []
+            for name in names:
+                builder.entry(idx, "tool", sub, name, digest=name_digest(name))
+        for sub in _SKILL_SUBDIRS:
+            directory = base / sub
+            try:
+                names = sorted(e.name for e in os.scandir(str(directory)))
+            except OSError:
+                names = []
+            for name in names:
+                builder.entry(idx, "skill", sub, name, digest=name_digest(name), facts={"url": False})
+        inv.plugin_dirs.extend(plugin_dir_states([base]))
+        fetch = builder.entry(
+            idx, "fetch-watch", "node_modules", base.name or "dir", digest=name_digest(layer),
+            facts={
+                "writable": os.access(str(base), os.W_OK),
+                "node_modules": os.path.isdir(str(base / "node_modules")),
+                "locked": _lock_covers(base),
+            },
+        )
+        if fetch is not None:
+            inv.fetch_watch.append(fetch)
+
+    # -- ambient environment inputs ------------------------------------------
+    idx = builder.source("environment", "env", "environment", None, "read")
+    for name in CONFIG_ENV_NAMES:
+        value = ambient.get(name)
+        if value is None:
+            continue
+        inherited = name == "OPENCODE_CONFIG" and compiled_path is not None and bool(value) and same(value, compiled_path)
+        made = builder.entry(idx, "config-env", name, name, digest=sha256_hex(value.encode("utf-8", "surrogatepass")),
+                             facts={"inherited": inherited})
+        if made is not None:
+            inv.config_env.append(made)
+
+    # -- Claude compatibility ---------------------------------------------------
+    for rel, flag in ((".claude/CLAUDE.md", "OPENCODE_DISABLE_CLAUDE_CODE"), (".claude/skills", "OPENCODE_DISABLE_EXTERNAL_SKILLS")):
+        path = home / rel
+        if os.path.lexists(str(path)):
+            idx = builder.source("claude-compat", "claude-compat", shown(path), None, "read")
+            builder.entry(idx, "claude-compat", rel, Path(rel).name, digest=name_digest(rel),
+                          facts={"flag_set": flag in hardening_names})
+
+    inv.sources, inv.entries = builder.finish()
+    return inv
