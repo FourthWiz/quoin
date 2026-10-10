@@ -25,7 +25,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
-from . import compiler, doctor, errors, install, jsonio, paths
+from . import compiler, errors, install, inventory, jsonio, paths
 from . import secrets as credential_refs
 
 MAX_OWNED_BYTES = install.MAX_OWNED_BYTES
@@ -559,23 +559,22 @@ def check_config_layers(
     """
     cwd = Path(cwd)
     home = Path(home)
-    worktree = doctor._worktree_root(cwd)  # noqa: SLF001 - shares the doctor's discovery walk
-    roots = doctor._build_roots(cwd, env, home)  # noqa: SLF001
+    worktree = inventory.worktree_root(cwd)
+    roots = inventory.build_roots(cwd, env, home)
 
     def shown(path: Path) -> str:
-        return doctor.display_path(path, roots)
+        return inventory.display_path(path, roots)
 
-    docs, findings = doctor._read_config_files(cwd, worktree, env, home, roots)  # noqa: SLF001
-    for finding in findings:
-        if finding.id == "config-unreadable":
-            raise _refuse(
-                "invalid-configuration",
-                "config-layer-unreadable",
-                "%s could not be read as configuration" % (finding.path or "a configuration file"),
-            )
+    docs, unreadable = inventory.read_config_files(cwd, worktree, env, home)
+    for path in unreadable:
+        raise _refuse(
+            "invalid-configuration",
+            "config-layer-unreadable",
+            "%s could not be read as configuration" % shown(path),
+        )
 
     compiled_file = env.get("OPENCODE_CONFIG")
-    global_dir = doctor._xdg_config_dir(env, home)  # noqa: SLF001
+    global_dir = inventory.xdg_config_dir(env, home)
     for path, doc in docs:
         if compiled_file and _same_path(path, compiled_file):
             continue
@@ -588,8 +587,8 @@ def check_config_layers(
     for name in ("opencode.json", "opencode.jsonc"):
         path = managed_root / name
         try:
-            payload = doctor._load_config_file(path)  # noqa: SLF001
-        except doctor._ConfigUnreadable:  # noqa: SLF001
+            payload = inventory.load_config_file(path)
+        except inventory.ConfigUnreadable:
             raise _refuse(
                 "invalid-configuration",
                 "config-layer-unreadable",
@@ -619,7 +618,7 @@ def check_config_layers(
 def _config_bases(cwd: Path, home: Path, worktree: Path, global_dir: Path) -> List[Path]:
     """Every ``.opencode`` style base directory OpenCode scans for markdown
     and plugin files, in scan order and without duplicates."""
-    bases: List[Path] = [d / ".opencode" for d in doctor._project_config_dirs(worktree, cwd)]  # noqa: SLF001
+    bases: List[Path] = [d / ".opencode" for d in inventory.project_config_dirs(worktree, cwd)]
     home_opencode = home / ".opencode"
     if os.path.isdir(str(home_opencode)):
         bases.append(home_opencode)
@@ -662,8 +661,8 @@ def plugin_directories(
     entries for a project, exactly as the launch check visits them. Shared
     with the doctor so both report the same directory first."""
     cwd, home = Path(cwd), Path(home)
-    worktree = doctor._worktree_root(cwd)  # noqa: SLF001
-    global_dir = doctor._xdg_config_dir(env, home)  # noqa: SLF001
+    worktree = inventory.worktree_root(cwd)
+    global_dir = inventory.xdg_config_dir(env, home)
     return _plugin_entries(_config_bases(cwd, home, worktree, global_dir) + [Path(managed_root)])
 
 
