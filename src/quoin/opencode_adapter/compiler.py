@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import config, jsonio, merge, names, paths, qualification, roles, schema_check
+from . import config, jsonio, merge, names, paths, profile_policy, qualification, roles, schema_check
 from .errors import BAD_MODEL_ID_RE, Finding, make_finding
 from .generate import ROLES
 
@@ -324,7 +324,7 @@ def build_document(ev: Evaluation) -> Dict[str, Any]:
         {"action": POLICY_ACTION, "effect": "allow", "resource": native_id}
         for native_id in sorted(provider)
     ]
-    return {
+    doc: Dict[str, Any] = {
         "$schema": CONFIG_SCHEMA_URL,
         "model": native_model_ref(by_role["coordinator"]),
         "small_model": native_model_ref(aux["title"]),
@@ -335,6 +335,37 @@ def build_document(ev: Evaluation) -> Dict[str, Any]:
         "provider": provider,
         "experimental": {"policies": policies},
     }
+    _apply_posture(doc, ev)
+    return doc
+
+
+def _surface_setting(mode: str, work: bool, builtin_ids: Sequence[str], allowed: Sequence[str]) -> Any:
+    """The ``lsp`` / ``formatter`` value for a policy mode, or ``None`` to
+    omit the key. An absent or false setting disables everything, so a
+    personal profile on defaults stays byte-identical by omitting it."""
+    if mode == "builtin":
+        return True
+    if mode == "allow-listed":
+        return {i: {"disabled": True} for i in builtin_ids if i not in set(allowed)}
+    return False if work else None
+
+
+def _apply_posture(doc: Dict[str, Any], ev: Evaluation) -> None:
+    """Emit the language server, formatter and web-fetch posture the profile
+    policy asks for (only the compiled file may set them under a work
+    profile)."""
+    view = profile_policy.view(ev.effective)
+    work = ev.effective.classification != "personal"
+    lsp = _surface_setting(view.lsp_mode, work, profile_policy.LSP_BUILTIN_IDS, view.lsp_allowed)
+    if lsp is not None:
+        doc["lsp"] = lsp
+    formatter = _surface_setting(view.formatter_mode, work, profile_policy.FORMATTER_BUILTIN_IDS, view.formatter_allowed)
+    if formatter is not None:
+        doc["formatter"] = formatter
+    if view.web_tools == "deny":
+        doc["permission"] = {"webfetch": "deny"}
+        for role in ROLES:
+            doc["agent"][names.role_agent_name(role)]["permission"] = {"webfetch": "deny", "websearch": "deny"}
 
 
 # ------------------------------------------------------------------ gates
@@ -430,6 +461,21 @@ def _gate_constants(doc: Dict[str, Any]) -> None:
         raise CompileGateError("constants")
 
 
+def _gate_posture(doc: Dict[str, Any], ev: Evaluation) -> None:
+    """Under a work profile the document must carry the language server and
+    formatter settings, and both web-denial blocks when web tools are denied."""
+    view = profile_policy.view(ev.effective)
+    if ev.effective.classification != "personal" and ("lsp" not in doc or "formatter" not in doc):
+        raise CompileGateError("constants")
+    if view.web_tools == "deny":
+        if doc.get("permission") != {"webfetch": "deny"}:
+            raise CompileGateError("constants")
+        for role in ROLES:
+            entry = doc["agent"].get(names.role_agent_name(role), {})
+            if entry.get("permission") != {"webfetch": "deny", "websearch": "deny"}:
+                raise CompileGateError("constants")
+
+
 def check_gates(doc: Dict[str, Any], ev: Evaluation) -> None:
     """Re-check the finished document. The first failing gate raises."""
     schema = _native_schema(str(paths.native_schema_path()))
@@ -439,6 +485,7 @@ def check_gates(doc: Dict[str, Any], ev: Evaluation) -> None:
     _gate_allowlist(doc, ev)
     _gate_references(doc)
     _gate_constants(doc)
+    _gate_posture(doc, ev)
 
 
 # ----------------------------------------------------------------- digest
@@ -515,7 +562,7 @@ def native_bytes(doc: Dict[str, Any]) -> bytes:
 
 PROTECTED_KEYS = (
     "$schema", "model", "small_model", "agent", "share", "autoupdate",
-    "enabled_providers", "provider", "experimental.policies",
+    "enabled_providers", "provider", "experimental.policies", "lsp", "formatter", "permission",
 )
 
 

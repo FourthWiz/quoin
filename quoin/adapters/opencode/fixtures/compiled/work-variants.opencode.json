@@ -4,31 +4,63 @@
   "small_model": "quoin-corp-gw-b/example-vendor/example-planner",
   "agent": {
     "quoin-coordinator": {
-      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+      "model": "quoin-corp-gw-b/example-vendor/example-planner",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-investigator": {
       "model": "quoin-corp-gw/example-vendor/example-coder",
-      "variant": "quoin-medium"
+      "variant": "quoin-medium",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-architect": {
-      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+      "model": "quoin-corp-gw-b/example-vendor/example-planner",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-planner": {
-      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+      "model": "quoin-corp-gw-b/example-vendor/example-planner",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-implementer": {
       "model": "quoin-corp-gw/example-vendor/example-coder",
-      "variant": "quoin-medium"
+      "variant": "quoin-medium",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-critic": {
-      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+      "model": "quoin-corp-gw-b/example-vendor/example-planner",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-reviewer": {
-      "model": "quoin-corp-gw-b/example-vendor/example-planner"
+      "model": "quoin-corp-gw-b/example-vendor/example-planner",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "quoin-gate": {
       "model": "quoin-corp-gw/example-vendor/example-coder",
-      "variant": "quoin-low"
+      "variant": "quoin-low",
+      "permission": {
+        "webfetch": "deny",
+        "websearch": "deny"
+      }
     },
     "title": {
       "model": "quoin-corp-gw-b/example-vendor/example-planner"
@@ -103,5 +135,10 @@
         "resource": "quoin-corp-gw-b"
       }
     ]
+  },
+  "lsp": false,
+  "formatter": false,
+  "permission": {
+    "webfetch": "deny"
   }
 }

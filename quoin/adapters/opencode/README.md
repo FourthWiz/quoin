@@ -369,7 +369,7 @@ these keys:
 - `native_provider` — profile provider id to native provider id.
 - `launch_requirements` — what a launcher must do:
   - `config_path_env` — the variable that carries the compiled file's path.
-  - `protected_keys` — the keys later config layers must not change: `$schema`, `model`, `small_model`, `agent`, `share`, `autoupdate`, `enabled_providers`, `provider`, `experimental.policies`.
+  - `protected_keys` — the keys later config layers must not change: `$schema`, `model`, `small_model`, `agent`, `share`, `autoupdate`, `enabled_providers`, `provider`, `experimental.policies`, `lsp`, `formatter`, `permission`.
   - `credential_env_required` — every `credential_env` name must be exported with a value.
 
 A launcher must:
