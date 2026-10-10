@@ -416,3 +416,41 @@ def test_commands_that_read_no_profile_state_do_not_name_a_state_root():
     for name in ("gate.py", "evidence.py", "handoff.py"):
         text = (_SRC / "opencode_adapter" / name).read_text(encoding="utf-8")
         assert "state_root" not in text and "ENV_STATE_DIR" not in text, name
+
+
+def test_a_latched_session_refuses_a_profile_switch_before_looking_for_the_binary(env):
+    drv = driver.OpenCodeDriver(
+        env.root, env=dict(env.world.env, PATH=os.environ.get("PATH", "")), home=env.world.home,
+        which=lambda name: None, version_runner=lambda path: None,
+        resolver_factory=lambda environ, platform: _Resolver2(),
+        session=profile_dirs.LaunchSession(("work", "work")),
+    )
+    with pytest.raises(driver.PrepareRefused) as info:
+        drv.prepare_interactive("other")
+    assert info.value.code == "profile-switch-in-process"
+
+
+def test_a_coordinator_without_a_storage_root_refuses_as_profile_unknown():
+    from quoin.opencode_adapter import phase_loop, workflow
+
+    class _Bare:
+        pass
+
+    with pytest.raises(workflow.WorkflowRefused) as info:
+        workflow.Coordinator(
+            _Bare(), ".", "demo", workflow.WorkflowOptions(profile="work"),
+            source_dir=None, cancel=phase_loop.CancelToken(), scope={}, scope_source="test",
+        )
+    assert info.value.code == "profile-unknown"
+
+
+def test_a_reserved_profile_name_cannot_make_a_coordinator(env):
+    from quoin.opencode_adapter import phase_loop, workflow
+
+    with pytest.raises(workflow.WorkflowRefused) as info:
+        workflow.Coordinator(
+            env.driver(), env.root, "demo", workflow.WorkflowOptions(profile="tests"),
+            source_dir=None, cancel=phase_loop.CancelToken(), scope={}, scope_source="test",
+        )
+    assert info.value.code == "profile-unknown"
+    assert not (_adapter_root(env) / "tests").exists()

@@ -312,6 +312,12 @@ def test_cli_exit_codes_and_one_json_line(project, capsys):
     assert code == 2 and data["refusal"]["code"] == "tests-not-configured"
 
 
+def test_a_reserved_profile_name_is_a_refusal_not_a_traceback(project, capsys):
+    code, data = cli_run(capsys, "--task", "t1", "--profile", "tests")
+    assert code == 2 and data["refusal"]["code"] == "request-invalid"
+    assert not (default_state() / "tests").exists()
+
+
 def test_cli_state_dir_variable_wins_over_xdg(project, monkeypatch, capsys, tmp_path):
     chosen = tmp_path / "chosen"
     configure(project, command=["true"], include=(), state=chosen)

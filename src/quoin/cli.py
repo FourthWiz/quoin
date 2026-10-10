@@ -2008,7 +2008,10 @@ def _cmd_opencode_test_run(args: argparse.Namespace) -> int:
         if not PROFILE_RE.fullmatch(name):
             return refuse("request-invalid", "the profile name is not valid")
         home = pathlib.Path.home()
-        state_root = _profile_dirs.profile_root(_profile_dirs.adapter_root(os.environ, home), name)
+        try:
+            state_root = _profile_dirs.profile_root(_profile_dirs.adapter_root(os.environ, home), name)
+        except ValueError:
+            return refuse("request-invalid", "the profile name is not valid")
         if source != "flag":
             unverified = (
                 "profile-selection-unverified",
@@ -2252,6 +2255,9 @@ def _exec_tui(argv, cwd, env) -> int:
             os.umask(previous_umask)
             print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
             return 3
+        except BaseException:
+            os.umask(previous_umask)
+            raise
     # No exec here: keep Python alive but let the TUI own Ctrl-C.
     previous = None
     try:

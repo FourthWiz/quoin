@@ -289,3 +289,84 @@ def test_module_hygiene():
         if isinstance(node, ast.ImportFrom) and node.module:
             assert "LaunchRefused" not in [a.name for a in node.names]
     assert "LaunchRefused" not in source
+
+
+def test_a_leftover_staging_file_from_the_old_scheme_does_not_block(adapter):
+    root = adapter / "work"
+    root.mkdir(mode=0o700)
+    pid, tid = os.getpid(), threading.get_ident()
+    (root / ("profile.json.%d.%d.tmp" % (pid, tid))).write_text("junk")
+    profile_dirs.prepare(adapter, "work", "work")
+    assert json.loads((root / "profile.json").read_text())["profile"] == "work"
+
+
+def test_an_existing_stamp_creates_no_staging_file(adapter):
+    profile_dirs.prepare(adapter, "work", "work")
+    before = sorted(os.listdir(adapter / "work"))
+    profile_dirs.prepare(adapter, "work", "work")
+    assert sorted(os.listdir(adapter / "work")) == before
+
+
+def test_a_filesystem_without_hard_links_still_gets_a_valid_stamp(adapter, monkeypatch):
+    import errno
+
+    def refuse_link(src, dst, *a, **kw):
+        raise OSError(errno.EPERM, "not permitted")
+
+    monkeypatch.setattr(os, "link", refuse_link)
+    dirs = profile_dirs.prepare(adapter, "work", "work")
+    assert json.loads(dirs.stamp.read_text()) == {
+        "created_format": 1, "profile": "work", "classification": "work",
+    }
+    assert [n for n in os.listdir(dirs.root) if n.endswith(".tmp")] == []
+
+
+def test_a_fresh_truncated_stamp_is_given_a_moment_to_finish(adapter):
+    root = adapter / "work"
+    root.mkdir(mode=0o700)
+    stamp = root / "profile.json"
+    full = json.dumps({"created_format": 1, "profile": "work", "classification": "work"})
+    stamp.write_text(full[:10])
+
+    def finish():
+        import time
+        time.sleep(0.03)
+        stamp.write_text(full)
+
+    timer = threading.Thread(target=finish)
+    timer.start()
+    try:
+        profile_dirs.prepare(adapter, "work", "work")
+    finally:
+        timer.join()
+
+
+def test_an_old_truncated_stamp_is_refused_without_waiting(adapter):
+    root = adapter / "work"
+    root.mkdir(mode=0o700)
+    stamp = root / "profile.json"
+    stamp.write_text("{")
+    os.utime(stamp, (1, 1))
+    with pytest.raises(ProfileDirUnsafe) as err:
+        profile_dirs.prepare(adapter, "work", "work")
+    assert err.value.reason == "stamp-invalid"
+
+
+@pytest.mark.parametrize("name", profile_dirs.RESERVED_NAMES)
+def test_reserved_names_are_refused_and_create_nothing(adapter, name):
+    with pytest.raises(ValueError):
+        profile_dirs.profile_root(adapter, name)
+    with pytest.raises(ProfileDirUnsafe) as err:
+        profile_dirs.prepare(adapter, name, "work")
+    assert err.value.reason == "reserved-name"
+    assert os.listdir(adapter) == []
+
+
+def test_recording_a_known_project_again_leaves_the_index_untouched(adapter, tmp_path):
+    dirs = profile_dirs.prepare(adapter, "work", "work")
+    project = tmp_path / "proj"
+    project.mkdir()
+    profile_dirs.record_project(dirs, project)
+    os.utime(dirs.index, (1, 1))
+    profile_dirs.record_project(dirs, project)
+    assert os.stat(dirs.index).st_mtime == 1

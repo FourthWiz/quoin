@@ -202,6 +202,8 @@ def test_agent_run_of_tests_uses_the_drivers_state_root(make, capsys, monkeypatc
     assert code == 0, summary
     drv = proj.last_driver
     assert drv.state_root != paths.state_dir(os.environ, Path.home())
+    child_state = drv.profile_state_root("personal") / "state"
+    assert not (child_state / "quoin" / "opencode").exists()
     ran = [line for line in proj.effects() if line.startswith("ran ")]
     assert ran and ran[0].startswith("ran 0 ") and "PASSED" in ran[0], ran
     assert "tests-settings-changed" not in ran[0]

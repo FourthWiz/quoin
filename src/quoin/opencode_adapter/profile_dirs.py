@@ -10,10 +10,13 @@ to registered launch codes.
 """
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import os
+import secrets
 import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Mapping, Optional, Tuple
@@ -27,6 +30,14 @@ STAMP_FORMAT = 1
 INDEX_FORMAT = 1
 SUBDIRS = ("data", "state", "cache", "tmp")
 LAZY_SUBDIRS = ("records", "exports", "snapshots", "tests", "workflow")
+RESERVED_NAMES = ("tests", "workflow", "snapshots", "records", "exports")
+_NO_HARDLINK_ERRNOS = tuple(
+    getattr(errno, name)
+    for name in ("EPERM", "ENOTSUP", "EOPNOTSUPP", "EXDEV", "ENOSYS")
+    if hasattr(errno, name)
+)
+_FRESH_STAMP_SECONDS = 2.0
+_FRESH_STAMP_RETRY_DELAY = 0.1
 MAX_STAMP_BYTES = 4096
 MAX_INDEX_BYTES = 1_048_576
 
@@ -35,6 +46,7 @@ _MESSAGES = {
     "stamp-unreadable": "the profile stamp cannot be read",
     "stamp-invalid": "the profile stamp is not valid",
     "index-unwritable": "the profile project index cannot be updated",
+    "reserved-name": "the profile name is reserved for adapter storage",
 }
 
 
@@ -63,6 +75,8 @@ class ProfileSwitch(ProfileDirError):
 def profile_root(adapter_root, profile: str) -> Path:
     if not isinstance(profile, str) or not PROFILE_RE.fullmatch(profile):
         raise ValueError("profile name must be validated by the caller")
+    if profile in RESERVED_NAMES:
+        raise ValueError("profile name is reserved for adapter storage")
     return Path(adapter_root) / profile
 
 
@@ -211,7 +225,74 @@ def state_root_for(drv, profile: str) -> Optional[Path]:
     return profile_root(base, profile)
 
 
+def _read_stamp_settling(stamp_path: Path) -> Dict[str, Any]:
+    """Read a stamp; one that is short or unparseable but was modified moments
+    ago may still be mid-write on a filesystem without hard links, so wait
+    briefly and read it once more before refusing."""
+    try:
+        return _read_stamp(stamp_path)
+    except ProfileDirUnsafe:
+        try:
+            age = time.time() - os.lstat(str(stamp_path)).st_mtime
+        except OSError:
+            raise ProfileDirUnsafe("stamp-unreadable")
+        if age > _FRESH_STAMP_SECONDS:
+            raise
+        time.sleep(_FRESH_STAMP_RETRY_DELAY)
+        return _read_stamp(stamp_path)
+
+
+def _stamp_matches(stamp_path: Path, profile: str, classification: str) -> None:
+    data = _read_stamp_settling(stamp_path)
+    if data["profile"] != profile:
+        raise StampMismatch("profile")
+    if data["classification"] != classification:
+        raise StampMismatch("classification")
+
+
+def _publish_stamp(stamp_path: Path, body: bytes) -> bool:
+    """Create the stamp. True when this call created it, False when another
+    launch got there first."""
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    staging = stamp_path.with_name(
+        "%s.%d.%d.%s.tmp" % (STAMP_NAME, os.getpid(), threading.get_ident(), secrets.token_hex(8))
+    )
+    try:
+        fd = os.open(str(staging), flags, 0o600)
+        try:
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(body)
+            try:
+                # A hard link appears complete or not at all, so a concurrent
+                # first launch never reads a half-written stamp.
+                os.link(str(staging), str(stamp_path))
+                return True
+            except FileExistsError:
+                return False
+            except OSError as exc:
+                if exc.errno not in _NO_HARDLINK_ERRNOS:
+                    raise
+        finally:
+            try:
+                os.unlink(str(staging))
+            except OSError:
+                pass
+        # No hard links on this filesystem: create the stamp in place. A
+        # reader can briefly see it short; _read_stamp_settling covers that.
+        try:
+            fd = os.open(str(stamp_path), flags, 0o600)
+        except FileExistsError:
+            return False
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body)
+        return True
+    except OSError:
+        raise ProfileDirUnsafe("stamp-unreadable")
+
+
 def prepare(adapter_root_path, profile: str, classification: str) -> ProfileDirs:
+    if profile in RESERVED_NAMES:
+        raise ProfileDirUnsafe("reserved-name")
     root = profile_root(adapter_root_path, profile)
     dirs = ProfileDirs.at(root)
     try:
@@ -221,35 +302,15 @@ def prepare(adapter_root_path, profile: str, classification: str) -> ProfileDirs
     except (jsonio.UnsafeDirectoryError, OSError):
         raise ProfileDirUnsafe("not-private")
     stamp_path = dirs.stamp
+    if os.path.lexists(str(stamp_path)):
+        _stamp_matches(stamp_path, profile, classification)
+        return dirs
     body = jsonio.dump_canonical(
         {"created_format": STAMP_FORMAT, "profile": profile, "classification": classification}
     )
-    # Publish with a hard link so a concurrent first launch never reads a
-    # half-written stamp: the link either appears complete or not at all.
-    staging = stamp_path.with_name("%s.%d.%d.tmp" % (STAMP_NAME, os.getpid(), threading.get_ident()))
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
-    try:
-        fd = os.open(str(staging), flags, 0o600)
-        try:
-            with os.fdopen(fd, "wb") as handle:
-                handle.write(body)
-            try:
-                os.link(str(staging), str(stamp_path))
-                return dirs
-            except FileExistsError:
-                pass
-        finally:
-            try:
-                os.unlink(str(staging))
-            except OSError:
-                pass
-    except OSError:
-        raise ProfileDirUnsafe("stamp-unreadable")
-    data = _read_stamp(stamp_path)
-    if data["profile"] != profile:
-        raise StampMismatch("profile")
-    if data["classification"] != classification:
-        raise StampMismatch("classification")
+    if _publish_stamp(stamp_path, body):
+        return dirs
+    _stamp_matches(stamp_path, profile, classification)
     return dirs
 
 
@@ -277,8 +338,9 @@ def record_project(dirs: ProfileDirs, project_root) -> None:
                     raise ProfileDirUnsafe("index-unwritable")
                 projects = list(data["projects"])
             entry = os.path.realpath(str(project_root))
-            if entry not in projects:
-                projects.append(entry)
+            if entry in projects:
+                return
+            projects.append(entry)
             projects = sorted(set(projects))
             jsonio.write_private_atomic(
                 dirs.index,

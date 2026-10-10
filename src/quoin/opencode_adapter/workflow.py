@@ -285,7 +285,12 @@ class Coordinator:
         self.scope_source = scope_source
         self.backoff_fn = backoff_fn
         self.clock = clock
-        self.state_root = profile_dirs.state_root_for(drv, options.profile)
+        try:
+            self.state_root = profile_dirs.state_root_for(drv, options.profile)
+        except ValueError:
+            self.state_root = None
+        if self.state_root is None:
+            raise WorkflowRefused("profile-unknown", "the profile storage root cannot be resolved")
         self.window = window.WindowStore(self.state_root, self.project_root, self.task)
         self.errors: List[str] = []
         self.seeded: List[Tuple[str, Optional[int]]] = []

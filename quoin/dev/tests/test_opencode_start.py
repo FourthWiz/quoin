@@ -251,6 +251,26 @@ def test_umask_is_077_at_exec_and_restored_after_a_failed_exec(tmp_path, monkeyp
     assert seen["umask"] == 0o077
 
 
+def test_umask_is_restored_when_a_non_os_error_escapes_before_exec(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    handlers = {n: signal.getsignal(getattr(signal, n)) for n in ("SIGPIPE", "SIGXFSZ")}
+
+    def broken_signal(number, handler):
+        raise ValueError("not the main thread")
+
+    monkeypatch.setattr(signal, "signal", broken_signal)
+    original = os.umask(0o022)
+    try:
+        with pytest.raises(ValueError):
+            cli._exec_tui(["/x", str(tmp_path)], str(tmp_path), {})
+        assert os.umask(0o022) == 0o022
+    finally:
+        os.umask(original)
+        monkeypatch.undo()
+        for name, handler in handlers.items():
+            signal.signal(getattr(signal, name), handler)
+
+
 class _Child:
     def __init__(self, code, during):
         self.code, self.during = code, during

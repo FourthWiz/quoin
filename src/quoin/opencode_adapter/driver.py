@@ -1294,9 +1294,6 @@ class OpenCodeDriver:
                 "workflow-validation", "adapter-data-missing",
                 "the packaged adapter data was not found; reinstall quoin",
             )
-        binary, version = self._check_binary()
-        cfg_env = self._config_env()
-        base_redact = launch_env.Redactor()
         try:
             self._session.check_profile(profile)
         except profile_dirs.ProfileSwitch:
@@ -1304,6 +1301,9 @@ class OpenCodeDriver:
                 "policy-denial", "profile-switch-in-process",
                 "this process already launched under another profile; start a new process to change profile",
             ) from None
+        binary, version = self._check_binary()
+        cfg_env = self._config_env()
+        base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(profile, cfg_env, base_redact)
         dirs = self._claim_profile_dirs(evaluation)
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
