@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
@@ -59,11 +60,12 @@ class LaunchRefused(Exception):
     refusal categories (passed in by the raise site, so this module does not
     import the driver); ``code`` is a stable machine identifier."""
 
-    def __init__(self, category: str, code: str, message: str) -> None:
+    def __init__(self, category: str, code: str, message: str, *, detail: Optional[str] = None) -> None:
         super().__init__(message)
         self.category = category
         self.code = code
         self.message = message
+        self.detail = detail
 
     def __str__(self) -> str:
         return self.message
@@ -536,6 +538,30 @@ def _managed_defaults(env: Mapping[str, str]) -> Tuple[Path, List[Path]]:
     return Path(_MANAGED_DIR_OTHER), []
 
 
+@dataclass(frozen=True)
+class Refusal:
+    """The first reason a launch would be refused. ``layer`` is a closed
+    token; ``token`` is the entry name passed through the token rule (empty
+    for a legacy refusal, whose ``message`` already carries its own text)."""
+
+    code: str
+    category: str
+    layer: str
+    token: str
+    message: str
+
+
+@dataclass(frozen=True)
+class LayerCheck:
+    inventory: inventory.Inventory
+    verdicts: List[inventory.Verdict]
+    refusal: Optional[Refusal]
+
+
+def _inventory_category(code: str) -> str:
+    return "invalid-configuration" if code == "config-layer-unreadable" else "policy-denial"
+
+
 def check_config_layers(
     *,
     cwd: Union[str, Path],
@@ -547,7 +573,12 @@ def check_config_layers(
     managed_dir: Optional[Union[str, Path]] = None,
     managed_prefs: Optional[Sequence[Union[str, Path]]] = None,
     plutil: Optional[Callable[[Path], str]] = None,
-) -> None:
+    data_dir: Optional[Union[str, Path]] = None,
+    ambient_env: Optional[Mapping[str, str]] = None,
+    expected: Optional[inventory.Expected] = None,
+    hardening_names: Sequence[str] = (),
+    capture: bool = False,
+) -> LayerCheck:
     """Refuse the launch when any configuration layer OpenCode reads would
     override the compiled file or shadow an installed ``quoin-*`` unit.
 
@@ -556,63 +587,118 @@ def check_config_layers(
     ``owned_commands`` map project-relative paths to the install record's
     sha256. When the project is not inside a git worktree OpenCode walks
     every ancestor up to the filesystem root, and so does this scan.
+
+    The source scan runs once. The long-standing deny rules replay over it in
+    their original order; only when ``expected`` is given does the inventory
+    allowlist run as well. The first refusal is the first legacy refusal if
+    any, else the inventory's. With ``capture`` false that refusal is raised
+    (a legacy one unchanged); with ``capture`` true it is returned.
     """
     cwd = Path(cwd)
     home = Path(home)
     worktree = inventory.worktree_root(cwd)
     roots = inventory.build_roots(cwd, env, home)
+    global_dir = inventory.xdg_config_dir(env, home)
+    managed_root, default_prefs = _managed_defaults(env)
+    managed_root = Path(managed_dir) if managed_dir is not None else managed_root
+    prefs = [Path(p) for p in managed_prefs] if managed_prefs is not None else default_prefs
+    convert = plutil if plutil is not None else _default_plutil
+    compiled_file = env.get("OPENCODE_CONFIG")
 
     def shown(path: Path) -> str:
         return inventory.display_path(path, roots)
 
-    docs, unreadable = inventory.read_config_files(cwd, worktree, env, home)
-    for path in unreadable:
-        raise _refuse(
-            "invalid-configuration",
-            "config-layer-unreadable",
-            "%s could not be read as configuration" % shown(path),
-        )
+    owned = dict(owned_agents)
+    owned.update(owned_commands)
+    inv = inventory.collect(
+        cwd=cwd, scan_env=env, ambient_env=ambient_env, home=home,
+        compiled_path=compiled_file, compiled_doc=compiled_doc, owned=owned, data_dir=data_dir,
+        managed_dir=managed_root, managed_prefs=prefs, plutil=convert,
+        hardening_names=tuple(hardening_names),
+    )
+    pref_keys = {os.path.abspath(str(p)) for p in prefs}
 
-    compiled_file = env.get("OPENCODE_CONFIG")
-    global_dir = inventory.xdg_config_dir(env, home)
-    for path, doc in docs:
-        if compiled_file and _same_path(path, compiled_file):
-            continue
-        below = _same_path(path.parent, global_dir)
-        _check_layer(doc, shown(path), below, compiled_doc)
+    def is_managed_file(path: Path) -> bool:
+        return path.parent == managed_root and path.name in ("opencode.json", "opencode.jsonc")
 
-    managed_root, default_prefs = _managed_defaults(env)
-    managed_root = Path(managed_dir) if managed_dir is not None else managed_root
-    prefs = [Path(p) for p in managed_prefs] if managed_prefs is not None else default_prefs
-    for name in ("opencode.json", "opencode.jsonc"):
-        path = managed_root / name
-        try:
-            payload = inventory.load_config_file(path)
-        except inventory.ConfigUnreadable:
+    def is_pref(path: Path) -> bool:
+        return os.path.abspath(str(path)) in pref_keys
+
+    layer_step = ["global"]
+
+    def replay() -> None:
+        config_docs = [(p, d) for p, d in inv.docs if not is_managed_file(p) and not is_pref(p)]
+        for path in inv.unreadable:
+            if is_managed_file(path) or is_pref(path):
+                continue
+            layer_step[0] = "global" if _same_path(path.parent, global_dir) else "project"
             raise _refuse(
                 "invalid-configuration",
                 "config-layer-unreadable",
-                "the managed configuration file %s could not be read" % path,
-            ) from None
-        if payload is not None:
-            _check_layer(payload, "managed configuration %s" % path, False, compiled_doc)
-    convert = plutil if plutil is not None else _default_plutil
-    for plist in prefs:
-        if not os.path.lexists(str(plist)):
-            continue
-        try:
-            payload = json.loads(convert(plist))
-        except Exception:  # noqa: BLE001 - any failure to convert is a refusal
-            payload = None
-        if not isinstance(payload, dict):
-            raise _refuse(
-                "invalid-configuration",
-                "config-layer-unreadable",
-                "the managed preferences file %s could not be converted" % plist,
+                "%s could not be read as configuration" % shown(path),
             )
-        _check_layer(payload, "managed preferences %s" % plist, False, compiled_doc)
+        for path, doc in config_docs:
+            if compiled_file and _same_path(path, compiled_file):
+                continue
+            below = _same_path(path.parent, global_dir)
+            layer_step[0] = "global" if below else "project"
+            _check_layer(doc, shown(path), below, compiled_doc)
 
-    _check_markdown(cwd, env, home, worktree, global_dir, managed_root, owned_agents, owned_commands, shown)
+        layer_step[0] = "managed"
+        for name in ("opencode.json", "opencode.jsonc"):
+            path = managed_root / name
+            if path in inv.unreadable:
+                raise _refuse(
+                    "invalid-configuration",
+                    "config-layer-unreadable",
+                    "the managed configuration file %s could not be read" % path,
+                )
+            for doc_path, payload in inv.docs:
+                if doc_path == path:
+                    _check_layer(payload, "managed configuration %s" % path, False, compiled_doc)
+        layer_step[0] = "managed-prefs"
+        for plist in prefs:
+            if not os.path.lexists(str(plist)):
+                continue
+            payload = next((d for p, d in inv.docs if p == plist), None)
+            if not isinstance(payload, dict):
+                raise _refuse(
+                    "invalid-configuration",
+                    "config-layer-unreadable",
+                    "the managed preferences file %s could not be converted" % plist,
+                )
+            _check_layer(payload, "managed preferences %s" % plist, False, compiled_doc)
+
+        layer_step[0] = "markdown"
+        _check_markdown(cwd, env, home, worktree, global_dir, managed_root, owned_agents, owned_commands, shown,
+                        plugin_step=layer_step)
+
+    legacy: Optional[LaunchRefused] = None
+    try:
+        replay()
+    except LaunchRefused as exc:
+        legacy = exc
+
+    verdicts: List[inventory.Verdict] = []
+    if expected is not None:
+        verdicts = inventory.evaluate(inv, expected)
+
+    refusal: Optional[Refusal] = None
+    if legacy is not None:
+        refusal = Refusal(legacy.code, legacy.category, layer_step[0], "", legacy.message)
+    else:
+        first = inventory.first_refusal(verdicts)
+        if first is not None and first.code is not None:
+            refusal = Refusal(
+                first.code, _inventory_category(first.code), first.layer, first.token,
+                inventory.refusal_message(first.code, first.layer, first.token),
+            )
+    if not capture:
+        if legacy is not None:
+            raise legacy
+        if refusal is not None:
+            raise LaunchRefused(refusal.category, refusal.code, refusal.message, detail=refusal.token or None)
+    return LayerCheck(inv, verdicts, refusal)
 
 
 def _config_bases(cwd: Path, home: Path, worktree: Path, global_dir: Path) -> List[Path]:
@@ -676,6 +762,7 @@ def _check_markdown(
     owned_agents: Mapping[str, str],
     owned_commands: Mapping[str, str],
     shown: Callable[[Path], str],
+    plugin_step: Optional[List[str]] = None,
 ) -> None:
     unique = _config_bases(cwd, home, worktree, global_dir)
 
@@ -689,6 +776,8 @@ def _check_markdown(
     # Plugin files under a config directory load automatically and can hook
     # permission requests, so any of them defeats the approval contract.
     for directory, state in _plugin_entries(unique + [managed_root]):
+        if plugin_step is not None:
+            plugin_step[0] = "plugin-dir"
         if state == "unreadable":
             raise _refuse(
                 "invalid-configuration",

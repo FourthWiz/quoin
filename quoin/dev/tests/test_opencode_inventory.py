@@ -469,3 +469,202 @@ def test_seeded_secrets_never_reach_the_entries_or_sources(world):
     inv = world.collect()
     text = repr((inv.entries, inv.sources))
     assert SECRET not in text and "h.example.com" not in text
+
+
+# ----------------------------------------------------------------- evaluate
+
+from types import SimpleNamespace
+
+from quoin.opencode_adapter import profile_policy
+
+COMPILED = {
+    "provider": {"prov": {"whitelist": ["m", "n"]}},
+    "model": "prov/m",
+    "agent": {"quoin-planner": {"model": "prov/m"}},
+}
+
+
+def _policy(classification, **explicit):
+    values = {
+        "policy." + key.replace("__", "."): SimpleNamespace(value=value, origin=("profile",))
+        for key, value in explicit.items()
+    }
+    return profile_policy.view(SimpleNamespace(values=values, classification=classification))
+
+
+def _expected(classification, **explicit):
+    return inventory.Expected.from_compiled(COMPILED, {}, _policy(classification, **explicit))
+
+
+def _judge_doc(world, doc, classification, layer="global", **explicit):
+    target = world.global_dir / "opencode.json" if layer == "global" else world.project / "opencode.json"
+    world.write(target, doc)
+    inv = world.collect(compiled_doc=COMPILED)
+    verdicts = inventory.evaluate(inv, _expected(classification, **explicit))
+    return inv, verdicts
+
+
+VERDICT_TABLE = [
+    # doc, (work verdict, code), (personal verdict, code)
+    ({"theme": "x"}, ("benign", None), ("benign", None)),
+    ({"model": "prov/m"}, ("overridden", None), ("overridden", None)),
+    ({"plugin": ["x"]}, ("refused", "inventory-plugin"), ("refused", "inventory-plugin")),
+    ({"provider": {"prov": {"options": {}}}}, ("refused", "inventory-provider"), ("recorded", None)),
+    ({"provider": {"other": {}}}, ("refused", "inventory-provider"), ("refused", "inventory-provider")),
+    ({"enabled_providers": ["prov"]}, ("refused", "inventory-provider"), ("recorded", None)),
+    ({"enabled_providers": ["other"]}, ("refused", "inventory-provider"), ("refused", "inventory-provider")),
+    ({"disabled_providers": ["x"]}, ("refused", "inventory-disabled-providers"), ("refused", "inventory-disabled-providers")),
+    ({"mcp": {"s": {"type": "local", "command": ["x"]}}}, ("refused", "inventory-mcp-local"), ("recorded", None)),
+    ({"mcp": {"s": {"type": "remote", "url": "https://x"}}}, ("refused", "inventory-mcp-remote"), ("recorded", None)),
+    ({"mcp": {"s": {"enabled": False}}}, ("benign", None), ("benign", None)),
+    ({"mcp": {"s": {"enabled": True}}}, ("refused", "inventory-mcp-local"), ("recorded", None)),
+    ({"lsp": {"ts": {"disabled": True}}}, ("refused", "inventory-lsp"), ("recorded", None)),
+    ({"formatter": {"x": {}}}, ("refused", "inventory-formatter"), ("recorded", None)),
+    ({"tools": {"bash": False}}, ("refused", "inventory-tool"), ("refused", "inventory-tool")),
+    ({"agent": {"a": {"model": "prov/zzz"}}}, ("refused", "agent-model-outside-allowlist"), ("refused", "agent-model-outside-allowlist")),
+    ({"agent": {"a": {"model": "prov/n"}}}, ("recorded", None), ("recorded", None)),
+    ({"agent": {"a": {"permission": {}}}}, ("refused", "inventory-agent-permission"), ("recorded", None)),
+    ({"mode": {"a": {}}}, ("recorded", None), ("recorded", None)),
+    ({"command": {"c": {"model": "x/y"}}}, ("refused", "command-model-outside-allowlist"), ("refused", "command-model-outside-allowlist")),
+    ({"command": {"c": {"template": "t"}}}, ("recorded", None), ("recorded", None)),
+    ({"permission": {"edit": "allow"}}, ("refused", "inventory-config-permission"), ("recorded", None)),
+    ({"instructions": ["AGENTS.md"]}, ("recorded", None), ("recorded", None)),
+    ({"instructions": ["https://example.invalid/x"]}, ("refused", "inventory-remote-instructions"), ("recorded", None)),
+    ({"skills": {"urls": ["https://example.invalid/s"]}}, ("refused", "inventory-remote-instructions"), ("recorded", None)),
+    ({"surprise": 1}, ("refused", "inventory-unknown-key"), ("recorded", None)),
+]
+
+
+@pytest.mark.parametrize("doc,work,personal", VERDICT_TABLE)
+def test_verdict_table(tmp_path, doc, work, personal):
+    for classification, want in (("work", work), ("personal", personal)):
+        world = World(tmp_path / classification)
+        inv, verdicts = _judge_doc(world, doc, classification)
+        picked = [v for v in verdicts if inv.entries[v.entry_index].layer == "global" and v.entry_index >= 0]
+        assert picked, classification
+        first = next((v for v in picked if v.verdict == "refused"), picked[0])
+        assert (first.verdict, first.code) == want, (classification, doc)
+
+
+def test_every_document_entry_gets_exactly_one_known_verdict(tmp_path):
+    emitted = set()
+    for i, (doc, _, _) in enumerate(VERDICT_TABLE):
+        for classification in ("work", "personal"):
+            inv, verdicts = _judge_doc(World(tmp_path / ("w%d%s" % (i, classification))), doc, classification)
+            positions = [v.entry_index for v in verdicts if v.entry_index >= 0]
+            assert len(positions) == len(set(positions))
+            assert all(v.verdict in inventory.VERDICTS for v in verdicts)
+            emitted.update(e.kind for e in inv.entries if e.layer == "global")
+    assert {"plugin", "provider", "mcp-local", "mcp-remote", "mcp-toggle", "lsp", "formatter", "tool", "agent",
+            "command", "permission", "instruction", "skill", "compiled-key", "benign-key", "unknown-key"} <= emitted
+
+
+def test_personal_explicit_denial_is_honoured_and_defaults_are_not(tmp_path):
+    doc = {"mcp": {"s": {"type": "local", "command": ["x"]}}, "lsp": {"ts": {}}}
+    inv, verdicts = _judge_doc(World(tmp_path / "a"), doc, "personal")
+    assert {v.verdict for v in verdicts if v.layer == "global"} == {"recorded"}
+    inv, verdicts = _judge_doc(World(tmp_path / "b"), doc, "personal", mcp__local="deny", lsp__mode="deny")
+    assert {v.code for v in verdicts if v.verdict == "refused"} == {"inventory-mcp-local", "inventory-lsp"}
+
+
+def test_work_mcp_allow_list_admits_a_named_server(tmp_path):
+    doc = {"mcp": {"s": {"type": "local", "command": ["x"]}}}
+    _, verdicts = _judge_doc(World(tmp_path), doc, "work", mcp__local="allow-listed", mcp__allowed=("s",))
+    assert [v.verdict for v in verdicts if v.layer == "global" and v.code is None and v.verdict != "prevented-offline"] == ["ok"]
+
+
+def test_config_env_verdicts(tmp_path):
+    world = World(tmp_path)
+    ambient = {"OPENCODE_CONFIG": "/elsewhere.json", "OPENCODE_CONFIG_DIR": "/d", "OPENCODE_CONFIG_CONTENT": "{}", "OPENCODE_DB": "x"}
+    inv = world.collect(ambient_env=ambient)
+    work = {inv.entries[v.entry_index].name: (v.verdict, v.code) for v in inventory.evaluate(inv, _expected("work")) if inv.entries[v.entry_index].kind == "config-env"}
+    assert work["OPENCODE_CONFIG"] == ("refused", "config-env-opencode-config")
+    assert work["OPENCODE_CONFIG_DIR"] == ("refused", "config-env-opencode-config-dir")
+    assert work["OPENCODE_CONFIG_CONTENT"] == ("refused", "config-env-opencode-config-content")
+    assert work["OPENCODE_DB"] == ("stripped", None)
+    personal = {v.verdict for v in inventory.evaluate(inv, _expected("personal")) if inv.entries[v.entry_index].kind == "config-env"}
+    assert personal == {"stripped"}
+    inherited = world.collect(ambient_env={"OPENCODE_CONFIG": str(world.compiled)})
+    assert {v.verdict for v in inventory.evaluate(inherited, _expected("work")) if inherited.entries[v.entry_index].kind == "config-env"} == {"stripped"}
+
+
+def test_remote_account_and_legacy_entries(tmp_path):
+    world = World(tmp_path)
+    world.write(world.data / "opencode" / "auth.json", {"https://x": {"type": "wellknown", "token": SECRET}})
+    db = world.data / "opencode" / "opencode.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("create table account_state (id integer primary key, active_account_id text)")
+    conn.execute("insert into account_state values (1, 'acct')")
+    conn.commit()
+    conn.close()
+    world.write(world.global_dir / "config", "x = 1")
+    inv = world.collect()
+    for classification, want in (("work", "refused"), ("personal", "recorded")):
+        got = {inv.entries[v.entry_index].kind: (v.verdict, v.code) for v in inventory.evaluate(inv, _expected(classification))}
+        assert got["remote-config"] == (want, "inventory-remote-config" if want == "refused" else None)
+        assert got["account-config"][0] == want
+        assert got["legacy-config"] == ("refused", "inventory-legacy-config")
+
+
+def test_a_busy_database_has_its_own_code_in_work(tmp_path):
+    world = World(tmp_path)
+    db = world.data / "opencode" / "opencode.db"
+    conn = sqlite3.connect(str(db), isolation_level=None)
+    conn.execute("create table account_state (id integer primary key, active_account_id text)")
+    conn.execute("begin exclusive")
+    try:
+        inv = world.collect(sleep=lambda _s: None)
+    finally:
+        conn.execute("rollback")
+        conn.close()
+    codes = {v.code for v in inventory.evaluate(inv, _expected("work")) if v.verdict == "refused"}
+    assert codes == {"inventory-account-busy"}
+    assert {v.verdict for v in inventory.evaluate(inv, _expected("personal")) if v.layer == "account"} == {"recorded"}
+
+
+def test_fetch_watch_verdicts_follow_the_offline_flag(tmp_path, monkeypatch):
+    world = World(tmp_path)
+    (world.project / ".opencode").mkdir()
+    inv = world.collect()
+    watch = lambda exp: [v for v in inventory.evaluate(inv, exp) if inv.entries[v.entry_index].kind == "fetch-watch"]
+    assert {v.verdict for v in watch(_expected("work"))} == {"prevented-offline"}
+    assert {v.verdict for v in watch(_expected("personal"))} == {"recorded"}
+    monkeypatch.setattr(inventory, "NPM_OFFLINE_VERIFIED", False)
+    assert {(v.verdict, v.code) for v in watch(_expected("work"))} == {("refused", "executable-fetch-possible")}
+
+
+def test_an_unreadable_config_source_is_refused_in_work_only(tmp_path):
+    world = World(tmp_path)
+    world.write(world.project / "opencode.json", "{")
+    inv = world.collect()
+    work = inventory.evaluate(inv, _expected("work"))
+    assert [(v.verdict, v.code) for v in work if v.entry_index == -1] == [("refused", "config-layer-unreadable")]
+    assert all(v.verdict != "refused" for v in inventory.evaluate(inv, _expected("personal")))
+
+
+def test_ordering_is_deterministic_and_first_refusal_is_the_first_in_load_order(tmp_path):
+    world = World(tmp_path)
+    world.write(world.global_dir / "opencode.json", {"permission": {}, "lsp": {"a": {}}})
+    inv = world.collect()
+    expected = _expected("work")
+    first = inventory.evaluate(inv, expected)
+    assert first == inventory.evaluate(inv, expected)
+    assert inventory.first_refusal(first).code == "inventory-config-permission"
+    assert inventory.first_refusal([]) is None
+
+
+def test_refusal_text_is_closed_and_never_carries_a_path_or_secret(tmp_path):
+    for code, text in inventory.REFUSAL_TEXT.items():
+        assert "/" not in text and "http" not in text, code
+    message = inventory.refusal_message("inventory-mcp-local", "global", inventory.entry_token(SECRET))
+    assert SECRET not in message and message.startswith(inventory.REFUSAL_TEXT["inventory-mcp-local"])
+    assert inventory.entry_token("plain-name") == "plain-name"
+    assert inventory.entry_token("a/b").startswith("h-")
+    assert inventory.entry_token("h-abc").startswith("h-") and inventory.entry_token("h-abc") != "h-abc"
+
+
+def test_npm_offline_flag_is_tied_to_the_verified_rows():
+    text = (Path(inventory.__file__).resolve().parents[3] / "quoin" / "adapters" / "opencode" / "compatibility.md").read_text(encoding="utf-8")
+    for key in ("npm-config-env", "npm-install-skip-conditions", "npm-config-precedence"):
+        assert key in text
+    assert inventory.NPM_OFFLINE_VERIFIED is True

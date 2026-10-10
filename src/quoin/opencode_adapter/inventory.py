@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import stat
 import time
@@ -866,3 +867,216 @@ def collect(
 
     inv.sources, inv.entries = builder.finish()
     return inv
+
+
+# ------------------------------------------------------------- evaluation
+
+# Whether the offline npm setting is cited as preventing dependency installs
+# (rows npm-config-env, npm-install-skip-conditions, npm-config-precedence).
+# A test ties this flag to those rows being verified.
+NPM_OFFLINE_VERIFIED = True
+
+VERDICTS = ("ok", "owned", "benign", "overridden", "recorded", "stripped", "prevented-offline", "refused")
+
+# Fixed refusal text per code. No path, URL, host or value ever appears.
+REFUSAL_TEXT: Dict[str, str] = {
+    "inventory-plugin": "a plugin is configured, which could hook permission handling",
+    "inventory-provider": "a provider block or enabled-provider entry is not controlled by the profile; add the provider to the profile or remove the block",
+    "inventory-disabled-providers": "disabled_providers changes which providers load and is not allowed",
+    "inventory-mcp-local": "a local MCP server is configured that the profile policy does not allow",
+    "inventory-mcp-remote": "a remote MCP server is configured that the profile policy does not allow",
+    "inventory-tool": "a custom tool is defined, which would run arbitrary code",
+    "inventory-lsp": "a language server entry is configured outside the compiled configuration",
+    "inventory-formatter": "a formatter entry is configured outside the compiled configuration",
+    "inventory-agent-permission": "an agent defines its own permission or tool rules",
+    "inventory-config-permission": "a top-level permission block is configured outside the compiled configuration",
+    "inventory-remote-config": "remote or account configuration is present for this profile",
+    "inventory-account-busy": "the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry",
+    "inventory-remote-instructions": "instructions or skills are loaded from a URL",
+    "inventory-unknown-key": "a configuration key the adapter does not recognise is set",
+    "inventory-legacy-config": "a legacy TOML configuration file is present",
+    "agent-model-outside-allowlist": "an agent selects a model that is not in the profile's allowed models",
+    "command-model-outside-allowlist": "a command selects a model that is not in the profile's allowed models",
+    "config-env-opencode-config": "OPENCODE_CONFIG points at a configuration file other than the compiled one",
+    "config-env-opencode-config-dir": "OPENCODE_CONFIG_DIR adds a configuration directory",
+    "config-env-opencode-config-content": "OPENCODE_CONFIG_CONTENT injects configuration",
+    "executable-fetch-possible": "a configuration directory is writable and unlocked, so a dependency install could fetch executable code",
+    "executable-fetch-detected": "an executable package was written under node_modules during the run",
+    "config-layer-unreadable": "a configuration source could not be read completely",
+}
+
+_ENV_CODES = {
+    "OPENCODE_CONFIG": "config-env-opencode-config",
+    "OPENCODE_CONFIG_DIR": "config-env-opencode-config-dir",
+    "OPENCODE_CONFIG_CONTENT": "config-env-opencode-config-content",
+}
+_BELOW_COMPILED = frozenset(("remote-wellknown", "account", "global"))
+_SECRET_LIKE = re.compile(r"(sk-|ghp_|gho_|xox|AKIA|eyJ|Bearer)", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
+
+
+def entry_token(name: str) -> str:
+    """A name safe to show: kept when it is short and plain, otherwise an
+    ``h-`` digest."""
+    if _TOKEN_RE.fullmatch(name or "") and not name.startswith("h-") and not _SECRET_LIKE.search(name):
+        return name
+    return "h-" + name_digest(name or "")[:32]
+
+
+@dataclass(frozen=True)
+class Expected:
+    compiled_doc: Mapping[str, Any]
+    owned: Mapping[str, str]
+    model_allowlist: frozenset
+    policy: Any  # profile_policy.ProfilePolicy
+
+    @classmethod
+    def from_compiled(cls, compiled_doc: Mapping[str, Any], owned: Mapping[str, str], policy: Any) -> "Expected":
+        pairs = set()
+        providers = compiled_doc.get("provider")
+        if isinstance(providers, dict):
+            for pid, entry in providers.items():
+                models = entry.get("whitelist") if isinstance(entry, dict) else None
+                for model in models if isinstance(models, list) else []:
+                    pairs.add("%s/%s" % (pid, model))
+        return cls(compiled_doc, dict(owned), frozenset(pairs), policy)
+
+
+@dataclass(frozen=True)
+class Verdict:
+    entry_index: int  # index into Inventory.entries; -1 for a source-level verdict
+    verdict: str
+    code: Optional[str]
+    source_index: int = -1
+    token: str = ""
+    layer: str = ""
+
+
+def _explicit(policy: Any, key: str) -> bool:
+    return any(origin != "default" for origin in policy.origins.get(key, ("default",)))
+
+
+def _mcp_allowed(policy: Any, remote: bool, name: str) -> bool:
+    mode = policy.mcp_remote if remote else policy.mcp_local
+    return mode == "any" or (mode == "allow-listed" and name in policy.mcp_allowed)
+
+
+def _judge(entry: Entry, expected: Expected) -> Tuple[str, Optional[str]]:  # noqa: C901 - one flat table
+    policy = expected.policy
+    work = policy.classification != "personal"
+    kind, layer, facts = entry.kind, entry.layer, entry.facts
+
+    def work_refuses(code: str, personal: Tuple[str, Optional[str]] = ("recorded", None)) -> Tuple[str, Optional[str]]:
+        return ("refused", code) if work else personal
+
+    if entry.owned or kind == "compiled-file":
+        return "owned", None
+    if kind == "benign-key":
+        return "benign", None
+    if kind == "compiled-key":
+        return "overridden", None
+    if kind == "plugin":
+        return "refused", "inventory-plugin"
+    if kind == "provider":
+        if not facts.get("in_compiled_set"):
+            return "refused", "inventory-provider"
+        if layer in _BELOW_COMPILED:
+            return work_refuses("inventory-provider")
+        return "refused", "inventory-provider"
+    if kind == "disabled-providers":
+        return "refused", "inventory-disabled-providers"
+    if kind in ("mcp-local", "mcp-remote"):
+        remote = kind == "mcp-remote"
+        code = "inventory-mcp-remote" if remote else "inventory-mcp-local"
+        key = "mcp.remote" if remote else "mcp.local"
+        if work or _explicit(policy, key):
+            return ("ok", None) if _mcp_allowed(policy, remote, entry.name) else ("refused", code)
+        return "recorded", None
+    if kind == "mcp-toggle":
+        if facts.get("enabled") is False:
+            return "benign", None
+        if work or _explicit(policy, "mcp.local"):
+            return ("ok", None) if _mcp_allowed(policy, False, entry.name) else ("refused", "inventory-mcp-local")
+        return "recorded", None
+    if kind in ("lsp", "formatter"):
+        code = "inventory-" + kind
+        if work:
+            return "refused", code
+        mode = policy.lsp_mode if kind == "lsp" else policy.formatter_mode
+        if _explicit(policy, kind + ".mode") and mode == "deny":
+            return "refused", code
+        return "recorded", None
+    if kind == "tool":
+        return "refused", "inventory-tool"
+    if kind in ("agent", "command"):
+        code = "agent-model-outside-allowlist" if kind == "agent" else "command-model-outside-allowlist"
+        model = facts.get("model")
+        if model is not None and model not in expected.model_allowlist:
+            return "refused", code
+        if facts.get("unknown"):
+            return work_refuses(code)
+        if kind == "agent" and (facts.get("has_permission") or facts.get("has_tools")):
+            return work_refuses("inventory-agent-permission")
+        return "recorded", None
+    if kind in ("instruction", "skill"):
+        if facts.get("url"):
+            return work_refuses("inventory-remote-instructions")
+        return "recorded", None
+    if kind == "permission":
+        return work_refuses("inventory-config-permission")
+    if kind == "remote-config":
+        return work_refuses("inventory-remote-config")
+    if kind == "account-config":
+        if facts.get("busy"):
+            return work_refuses("inventory-account-busy")
+        return work_refuses("inventory-remote-config")
+    if kind == "config-env":
+        code = _ENV_CODES.get(entry.name)
+        if code and work and not facts.get("inherited"):
+            return "refused", code
+        return "stripped", None
+    if kind == "unknown-key":
+        return work_refuses("inventory-unknown-key")
+    if kind == "legacy-config":
+        return "refused", "inventory-legacy-config"
+    if kind == "fetch-watch":
+        if policy.package_install == "deny" and facts.get("writable") and not facts.get("locked"):
+            if NPM_OFFLINE_VERIFIED:
+                return "prevented-offline", None
+            return "refused", "executable-fetch-possible"
+        return "recorded", None
+    return "recorded", None
+
+
+def evaluate(inv: Inventory, expected: Expected) -> List[Verdict]:
+    """One verdict per entry, plus one per unreadable or truncated source,
+    in source load order so the first refusal is deterministic. Pure."""
+    work = expected.policy.classification != "personal"
+    by_source: Dict[int, List[int]] = {}
+    for position, entry in enumerate(inv.entries):
+        by_source.setdefault(entry.source_index, []).append(position)
+    out: List[Verdict] = []
+    for index, source in enumerate(inv.sources):
+        if source.state in ("unreadable", "truncated") and source.layer != "compiled" and source.kind not in ("auth-file", "database"):
+            out.append(Verdict(-1, "refused" if work else "recorded", "config-layer-unreadable" if work else None,
+                               index, "", source.layer))
+        for position in by_source.get(index, ()):
+            entry = inv.entries[position]
+            verdict, code = _judge(entry, expected)
+            out.append(Verdict(position, verdict, code, index, entry_token(entry.name), entry.layer))
+    return out
+
+
+def first_refusal(verdicts: Iterable[Verdict]) -> Optional[Verdict]:
+    for verdict in verdicts:
+        if verdict.verdict == "refused":
+            return verdict
+    return None
+
+
+def refusal_message(code: str, layer: str, name_token: str) -> str:
+    text = REFUSAL_TEXT.get(code, "the configuration is not allowed for this profile")
+    suffix = " (layer %s" % layer
+    if name_token:
+        suffix += ", entry %s" % name_token
+    return text + suffix + ")"

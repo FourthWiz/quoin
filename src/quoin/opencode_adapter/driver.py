@@ -768,7 +768,7 @@ class OpenCodeDriver:
             self._record_refusal(state, exc)
             raise
         except launch_env.LaunchRefused as exc:
-            refusal = PrepareRefused(exc.category, exc.code, exc.message, state.run_id)
+            refusal = PrepareRefused(exc.category, exc.code, exc.message, state.run_id, detail=getattr(exc, "detail", None))
             self._record_refusal(state, refusal)
             raise refusal from None
 
@@ -1282,7 +1282,7 @@ class OpenCodeDriver:
         try:
             return self._prepare_interactive(profile)
         except launch_env.LaunchRefused as exc:
-            raise PrepareRefused(exc.category, exc.code, exc.message) from None
+            raise PrepareRefused(exc.category, exc.code, exc.message, detail=getattr(exc, "detail", None)) from None
 
     def _prepare_interactive(self, profile: str) -> "InteractiveLaunch":
         refuse = self._refusal
