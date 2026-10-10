@@ -217,6 +217,36 @@ def hardening_env(
     return out
 
 
+def expected_env_names(
+    *,
+    ambient: Mapping[str, str],
+    compile_sidecar: Mapping[str, Any],
+    providers: Union[Mapping[str, Any], Iterable[Any]],
+    storage: Optional[Mapping[str, str]] = None,
+    hardening: Optional[Mapping[str, str]] = None,
+    state_dir_set: bool = True,
+) -> List[str]:
+    """The child environment's names without resolving any credential; kept
+    equal to ``build_env(...).names()`` by a parity test."""
+    by_id = _providers_by_id(providers)
+    credential_env = compile_sidecar.get("credential_env") or {}
+    emitted = [by_id[pid] for pid in credential_env.values() if pid in by_id]
+    names = {name for name, value in ambient.items() if _allowed_ambient(name) and isinstance(value, str)}
+    if any(getattr(view, "use_env_proxy", False) for view in emitted):
+        for base in _PROXY_ENV:
+            for name in (base, base.lower()):
+                if isinstance(ambient.get(name), str):
+                    names.add(name)
+    for extra in (storage, hardening):
+        if extra:
+            names.update(extra)
+    names.update(("OPENCODE_CONFIG", "XDG_DATA_HOME"))
+    if state_dir_set:
+        names.add(paths.ENV_STATE_DIR)
+    names.update(credential_env)
+    return sorted(names)
+
+
 def credential_kinds(
     compile_sidecar: Mapping[str, Any], providers: Union[Mapping[str, Any], Iterable[Any]],
 ) -> List[Dict[str, str]]:
