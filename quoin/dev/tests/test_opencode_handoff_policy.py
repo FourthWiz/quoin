@@ -232,3 +232,13 @@ def test_with_neither_key_the_run_record_is_used(fx):
     fx.seed_run("plan", 1, "completed", profile="from-run")
     scope, source = _profile(fx)
     assert scope == {"profile": "from-run"} and source == "run-record"
+
+
+def test_the_accept_flag_never_accepts_a_run_record_for_another_profile(fx):
+    (item,) = completed(fx)
+    stamp_run(fx, item["run_id"], BASE, profile="other")
+    for accept in (True, item["run_id"]):
+        exc = refused(fx, policy(), accept_unverified=accept, resume_hint="quoin run X --continue")
+        assert exc.code == "scope-unverifiable"
+        assert "different profile" in exc.message and "prepared before this version" not in exc.message
+        assert "--accept-unverified-policy" not in exc.message

@@ -706,9 +706,20 @@ def _check_policy(
         run = None
     stored = ((run or {}).get("prepared") or {}).get("effective_config")
     recorded_profile = policy_profile if policy_profile is not None else (record.get("scope") or {}).get("profile")
-    if not isinstance(stored, Mapping) or not isinstance(stored.get("policy"), Mapping) or (
-        isinstance(recorded_profile, str) and stored.get("profile") != recorded_profile
+    if (
+        isinstance(stored, Mapping) and isinstance(stored.get("policy"), Mapping)
+        and isinstance(recorded_profile, str) and isinstance(stored.get("profile"), str)
+        and stored.get("profile") != recorded_profile
     ):
+        # A record kept for another profile says nothing about this one, and
+        # no flag can accept it: the policies are not comparable.
+        raise HandoffRefused(
+            "scope-unverifiable",
+            "the run that produced this continuation was prepared for a different profile; "
+            "continue it under that profile or start a new task",
+            (run_id,),
+        )
+    if not isinstance(stored, Mapping) or not isinstance(stored.get("policy"), Mapping):
         if accept_unverified is True or (isinstance(accept_unverified, str) and accept_unverified == run_id):
             if outcome is not None:
                 outcome["unverified_accepted"] = run_id
