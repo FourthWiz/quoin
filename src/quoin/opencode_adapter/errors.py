@@ -400,6 +400,17 @@ SECRET_SHAPE_RE = re.compile(
 
 _SAFE_KEY_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
+
+def is_plain_token(text: str) -> bool:
+    """True when `text` may be shown as a name: a short identifier that is
+    neither secret-shaped nor already a digest token. The inventory's refusal
+    text and the persisted record share this one rule."""
+    return bool(
+        _SAFE_KEY_RE.fullmatch(text or "")
+        and not SECRET_SHAPE_RE.search(text)
+        and not text.startswith("h-")
+    )
+
 # A provider model id may not contain whitespace or control characters: the
 # native reference splits at the first slash and reads the rest verbatim, so
 # such a character could never round-trip. Shared by the compiler and the

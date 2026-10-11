@@ -486,6 +486,19 @@ unless the profile explicitly denies it, and a provider block is refused when
 it names a provider outside the compiled set (for a provider inside the set, a
 global block is refused for work only).
 
+An allow-listed MCP server is admitted by name only when its definition comes
+from a file the user controls (the compiled, global, home `.opencode` or
+managed layers); a definition of the same name in a project file is refused,
+because the project could otherwise change the command that runs. Agent and
+command markdown whose frontmatter the scanner cannot read completely (an
+indented root mapping, escaped or non-identifier keys, a language-tagged
+`---yaml` fence, flow, anchor or tag values on `model`) is treated as unknown
+and refused for work. A symlinked tool file or agent directory, and a markdown
+tree larger than the scan bound, are counted rather than skipped. A personal
+profile can also be refused by a global `tools` toggle, `disabled_providers`,
+an out-of-profile provider or model, or a legacy TOML file; remove or move the
+entry, or run the launch under a profile whose policy permits it.
+
 The table is generated from the verdicts the code returns for a representative
 entry of each kind under a default work and a default personal profile; a
 docs test compares it with the code.

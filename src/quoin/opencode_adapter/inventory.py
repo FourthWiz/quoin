@@ -3,7 +3,7 @@
 The discovery helpers here were part of the doctor; the launch checks and the
 effective-configuration inventory share them so every consumer walks the same
 directories in the same order. Nothing here reads the process environment:
-callers pass mappings in. Only `jsonio` and `paths` may be imported from the
+callers pass mappings in. Only `errors`, `jsonio` and `paths` may be imported from the
 rest of the adapter.
 """
 from __future__ import annotations
@@ -19,7 +19,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from . import jsonio
+from . import errors, jsonio
 
 _LEGACY_TRUTHY = frozenset(("true", "1"))
 
@@ -193,6 +193,28 @@ def strip_jsonc(text: str) -> str:
     return "".join(result)
 
 
+def _read_capped_text(path) -> Optional[str]:
+    """UTF-8 text of a regular file (a symlink to one is followed, as
+    OpenCode does), read through one non-blocking descriptor and capped at
+    `MAX_FILE_BYTES`. `None` for a FIFO, device, oversized or unreadable
+    file, so a hostile path can neither hang nor exhaust the launch."""
+    try:
+        fd = os.open(str(path), os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    except OSError:
+        return None
+    try:
+        with os.fdopen(fd, "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size > MAX_FILE_BYTES:
+                return None
+            raw = handle.read(MAX_FILE_BYTES + 1)
+        if len(raw) > MAX_FILE_BYTES:
+            return None
+        return raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def load_config_file(path: Path) -> Optional[dict]:
     """`None` when the file does not exist. Raises `ConfigUnreadable` when
     it exists but cannot be read or parsed as a JSON object."""
@@ -204,9 +226,8 @@ def load_config_file(path: Path) -> Optional[dict]:
         raise ConfigUnreadable()
     if not stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode):
         raise ConfigUnreadable()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    text = _read_capped_text(path)
+    if text is None:
         raise ConfigUnreadable()
     try:
         payload = json.loads(strip_jsonc(text))
@@ -304,6 +325,8 @@ SOURCE_STATES = ("read", "absent", "unreadable", "truncated", "busy")
 MAX_FILE_BYTES = 1_048_576
 DEFAULT_MAX_ENTRIES = 5000
 SQLITE_BACKOFF = (0.1, 0.3, 0.9)
+# The backoff above is the only real wait; a busy connection gives up fast.
+SQLITE_CONNECT_TIMEOUT = 0.05
 CONFIG_ENV_NAMES = (
     "OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR", "OPENCODE_CONFIG_CONTENT", "OPENCODE_AUTH_CONTENT",
     "OPENCODE_DB", "OPENCODE_MODELS_URL", "OPENCODE_PERMISSION",
@@ -405,12 +428,17 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:
     """Read the top-level `model`, `permission` and `tools` keys of a markdown
     file's YAML frontmatter without a YAML parser. Anything this scanner
     cannot fully read (block scalars, tags, anchors, flow values, duplicate
-    keys, a missing closing fence) is reported as `unknown`."""
+    keys, a missing closing fence, an indented root mapping, escaped or
+    non-identifier keys, a language-tagged opening fence) is reported as
+    `unknown`. The `permission` and `tools` keys are noted from the key alone,
+    whatever shape their value has."""
     unknown: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
     if text.startswith("\ufeff"):
         text = text[1:]
     lines = [line.rstrip("\r") for line in text.split("\n")]
     if not lines or lines[0].rstrip() != "---":
+        if lines and lines[0].startswith("---"):
+            return unknown  # `---yaml`, `---json`, `---js`: a loader may still read it
         if any(line.strip() == "---" for line in lines[:3]):
             return unknown
         return {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
@@ -420,29 +448,40 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:
     facts: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
     seen = set()
     block = lines[1:end]
+    first = next((line for line in block if line.strip() and not line.lstrip().startswith("#")), None)
+    if first is not None and first[0] in " \t":
+        return unknown  # an indented root mapping: every key below is top level
     for index, line in enumerate(block):
         if not line.strip() or line[0] in " \t#":
             continue
-        if line.startswith(("{", "[", "<<", "&", "*", "%", "---")):
+        if line.startswith(("{", "[", "<<", "&", "*", "%", "---", "?", "- ", "!", "|", ">")):
             return unknown
         key, sep, rest = line.partition(":")
         if not sep:
             return unknown
-        key, _ = _unquote(key)
+        raw_key = key.strip()
+        if raw_key[:1] in "\"'":
+            key, plain = _unquote(raw_key)
+            if not plain or "\\" in key:
+                return unknown
+        else:
+            key = raw_key
+        if not key or not all(c.isalnum() or c in "_-." for c in key):
+            return unknown
         if key in seen:
             return unknown
         seen.add(key)
         value = rest.strip()
-        if value.startswith(("|", ">", "!", "&", "*", "{", "[")):
-            if key == "model":
-                return unknown
-            continue
         if key == "permission":
             facts["has_permission"] = True
         elif key == "tools":
             facts["has_tools"] = True
         elif key == "model":
+            if value.startswith(("|", ">", "!", "&", "*", "{", "[")):
+                return unknown
             text_value, quoted = _unquote(value)
+            if quoted and "\\" in text_value and value[0] == '"':
+                return unknown
             if not quoted:
                 text_value = text_value.split(" #", 1)[0].rstrip()
             if not text_value:
@@ -597,7 +636,7 @@ def _query_account(path: Path, sleep: Callable[[float], None]) -> Tuple[str, Dic
     delays = list(SQLITE_BACKOFF)
     while True:
         try:
-            connection = sqlite3.connect(uri, uri=True, timeout=1)
+            connection = sqlite3.connect(uri, uri=True, timeout=SQLITE_CONNECT_TIMEOUT)
             try:
                 row = connection.execute("SELECT active_account_id FROM account_state WHERE id = 1").fetchone()
             finally:
@@ -623,30 +662,41 @@ def _lock_covers(directory: Path) -> bool:
     if not os.path.isdir(str(directory / "node_modules")):
         return False
     try:
-        declared = json.loads((directory / "package.json").read_text(encoding="utf-8")).get("dependencies") or {}
-    except (OSError, ValueError, AttributeError):
+        declared = json.loads(_read_capped_text(directory / "package.json") or "{}").get("dependencies") or {}
+    except (ValueError, AttributeError):
         declared = {}
     if not declared:
         return True
     try:
-        lock = json.loads((directory / "package-lock.json").read_text(encoding="utf-8"))
+        lock_text = _read_capped_text(directory / "package-lock.json")
+        if lock_text is None:
+            return False
+        lock = json.loads(lock_text)
         root = (lock.get("packages") or {}).get("") or {}
         locked = root.get("dependencies") or {}
-    except (OSError, ValueError, AttributeError):
+    except (ValueError, AttributeError):
         return False
     return isinstance(declared, dict) and isinstance(locked, dict) and set(declared) <= set(locked)
 
 
-def _walk_markdown(directory: Path):
+def _walk_markdown(directory: Path, overflow: List[bool]):
+    """Yield `(path, is_symlinked_dir)` for every markdown file under
+    `directory`, and for every symlinked subdirectory (not descended into, so
+    the caller can record it). Appends to `overflow` when the walk stops at
+    the entry bound, so the caller can mark the source truncated."""
     count = 0
-    for current, dirnames, filenames in os.walk(str(directory), onerror=lambda exc: None):
+    for current, dirnames, filenames in os.walk(str(directory), onerror=lambda exc: overflow.append(True)):
         dirnames.sort()
+        for dirname in dirnames:
+            if os.path.islink(os.path.join(current, dirname)):
+                yield Path(current) / dirname, True
         for filename in sorted(filenames):
             count += 1
             if count > _MAX_WALK:
+                overflow.append(True)
                 return
             if filename.endswith(".md"):
-                yield Path(current) / filename
+                yield Path(current) / filename, False
 
 
 def collect(
@@ -709,8 +759,15 @@ def collect(
                     builder.entry(idx, "remote-config", "auth", name_digest(str(key)), facts={"type": str(kind)}, digest=name_digest(str(key)))
         try:
             databases = sorted(p for p in opencode_data.iterdir() if p.name.endswith(".db") and p.is_file())
-        except OSError:
+        except (FileNotFoundError, NotADirectoryError):
             databases = []
+        except OSError:
+            # The directory exists but cannot be listed: whether an account is
+            # signed in is unknown, which is not the same as no account.
+            databases = []
+            idx = builder.source("database", "account", shown(opencode_data), None, "unreadable")
+            builder.entry(idx, "account-config", "account_state", "opencode", facts={"unknown": True},
+                          digest=name_digest("opencode"))
         for database in databases:
             state, facts = _query_account(database, sleep)
             idx = builder.source("database", "account", shown(database), None, state)
@@ -799,7 +856,16 @@ def collect(
             directory = base / sub
             if not os.path.isdir(str(directory)):
                 continue
-            for path in _walk_markdown(directory):
+            overflow: List[bool] = []
+            for path, is_link_dir in _walk_markdown(directory, overflow):
+                if is_link_dir:
+                    # A symlinked directory is not followed; it may hold agents
+                    # or commands the scanner cannot judge, so it is unknown.
+                    link_name = path.relative_to(directory).as_posix()
+                    builder.entry(idx, kind, sub, link_name, owned=False,
+                                  facts={"model": None, "has_permission": False, "has_tools": False, "unknown": True},
+                                  digest=name_digest(str(path)))
+                    continue
                 rel_name = path.relative_to(directory).as_posix()[: -len(".md")]
                 got = jsonio.read_regular_bytes(path, max_bytes=MAX_FILE_BYTES)
                 if got is None:
@@ -817,13 +883,20 @@ def collect(
                 inv.markdown.append((path, kind, rel_name))
                 builder.entry(idx, kind, sub, rel_name, owned=is_owned, facts=facts,
                               digest=digest or name_digest(str(path)))
+            if overflow:
+                builder.set_state(idx, "truncated")
         for sub in _TOOL_SUBDIRS:
             directory = base / sub
             try:
+                # Any non-directory `.js`/`.ts` entry counts, symlinks included:
+                # OpenCode imports whatever the name resolves to.
                 names = sorted(e.name for e in os.scandir(str(directory))
-                               if e.name.endswith((".js", ".ts")) and e.is_file(follow_symlinks=False))
+                               if e.name.endswith((".js", ".ts")) and not e.is_dir(follow_symlinks=False))
+            except (FileNotFoundError, NotADirectoryError):
+                names = []
             except OSError:
                 names = []
+                builder.set_state(idx, "unreadable")
             for name in names:
                 builder.entry(idx, "tool", sub, name, digest=name_digest(name))
         for sub in _SKILL_SUBDIRS:
@@ -913,16 +986,19 @@ _ENV_CODES = {
     "OPENCODE_CONFIG_CONTENT": "config-env-opencode-config-content",
 }
 _BELOW_COMPILED = frozenset(("remote-wellknown", "account", "global"))
-_SECRET_LIKE = re.compile(r"(sk-|ghp_|gho_|xox|AKIA|eyJ|Bearer)", re.IGNORECASE)
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_-]{1,40}")
+
+
+# A refusal message is shown more widely than the record, so it digests
+# anything with a well-known credential prefix on top of the shared rule.
+_SECRET_PREFIX = re.compile(r"(sk-|ghp_|gho_|xox|AKIA|eyJ|Bearer)", re.IGNORECASE)
 
 
 def entry_token(name: str) -> str:
     """A name safe to show: kept when it is short and plain, otherwise an
-    ``h-`` digest."""
-    if _TOKEN_RE.fullmatch(name or "") and not name.startswith("h-") and not _SECRET_LIKE.search(name):
+    ``h-`` digest (`name_digest` already carries the prefix)."""
+    if errors.is_plain_token(name or "") and not _SECRET_PREFIX.search(name):
         return name
-    return "h-" + name_digest(name or "")[:32]
+    return name_digest(name or "")
 
 
 @dataclass(frozen=True)
@@ -958,9 +1034,17 @@ def _explicit(policy: Any, key: str) -> bool:
     return any(origin != "default" for origin in policy.origins.get(key, ("default",)))
 
 
-def _mcp_allowed(policy: Any, remote: bool, name: str) -> bool:
+# Layers the user (not a repository) controls. An allow-listed MCP server is
+# trusted by name, so its definition must come from one of these: a project
+# file that redefines an allowed name could otherwise run any command.
+_USER_MCP_LAYERS = frozenset(("compiled", "global", "home-opencode", "managed", "managed-prefs"))
+
+
+def _mcp_allowed(policy: Any, remote: bool, name: str, layer: str = "global") -> bool:
     mode = policy.mcp_remote if remote else policy.mcp_local
-    return mode == "any" or (mode == "allow-listed" and name in policy.mcp_allowed)
+    if mode == "any":
+        return True
+    return mode == "allow-listed" and name in policy.mcp_allowed and layer in _USER_MCP_LAYERS
 
 
 def _judge(entry: Entry, expected: Expected) -> Tuple[str, Optional[str]]:  # noqa: C901 - one flat table
@@ -992,13 +1076,13 @@ def _judge(entry: Entry, expected: Expected) -> Tuple[str, Optional[str]]:  # no
         code = "inventory-mcp-remote" if remote else "inventory-mcp-local"
         key = "mcp.remote" if remote else "mcp.local"
         if work or _explicit(policy, key):
-            return ("ok", None) if _mcp_allowed(policy, remote, entry.name) else ("refused", code)
+            return ("ok", None) if _mcp_allowed(policy, remote, entry.name, layer) else ("refused", code)
         return "recorded", None
     if kind == "mcp-toggle":
         if facts.get("enabled") is False:
             return "benign", None
         if work or _explicit(policy, "mcp.local"):
-            return ("ok", None) if _mcp_allowed(policy, False, entry.name) else ("refused", "inventory-mcp-local")
+            return ("ok", None) if _mcp_allowed(policy, False, entry.name, layer) else ("refused", "inventory-mcp-local")
         return "recorded", None
     if kind in ("lsp", "formatter"):
         code = "inventory-" + kind

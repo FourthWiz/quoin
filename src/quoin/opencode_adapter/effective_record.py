@@ -36,9 +36,7 @@ def token_or_digest(value: Any, redactor: Optional[Callable[[Any], str]] = None)
     alone, else an ``h-`` digest."""
     text = value if isinstance(value, str) else str(value)
     if (
-        errors._SAFE_KEY_RE.fullmatch(text)
-        and not errors.SECRET_SHAPE_RE.search(text)
-        and not text.startswith("h-")
+        errors.is_plain_token(text)
         and (redactor is None or redactor(text) == text)
     ):
         return text

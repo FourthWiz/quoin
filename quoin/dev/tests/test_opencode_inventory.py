@@ -44,8 +44,8 @@ def _imported_adapter_modules(path):
     return found
 
 
-def test_inventory_imports_no_adapter_module_beyond_jsonio_and_paths():
-    assert _imported_adapter_modules(INVENTORY) <= {"jsonio", "paths"}
+def test_inventory_imports_no_adapter_module_beyond_errors_jsonio_and_paths():
+    assert _imported_adapter_modules(INVENTORY) <= {"errors", "jsonio", "paths"}
 
 
 def test_launch_env_no_longer_imports_the_doctor():
