@@ -17,6 +17,7 @@
     "quoin/dev/tests/test_opencode_compiler.py": "the work document gains lsp, formatter and the web-denial permission blocks (top level and per owned role), the compiler imports profile_policy, and the protected-key list names the three new keys",
     "quoin/dev/tests/test_opencode_native_schema.py": "the native subset schema gains the optional lsp, formatter and permission keys, so the required-equals-properties check becomes required-plus-optional and the work goldens list the new keys after experimental",
     "quoin/dev/tests/fakes/fake_opencode.py": "the managed-writes scenario writes the dependency install (lock file and node_modules) only when the child environment is not offline, with an offline_env option to force the old behaviour; new npm_fetch and empty_node_modules scenarios and a make_dir step",
-    "quoin/dev/tests/test_opencode_snapshot_runs.py": "the managed-launch-writes case now expects the bookkeeping files only (the work profile runs offline), and a sibling case with offline_env false keeps the four-file assertion"
+    "quoin/dev/tests/test_opencode_snapshot_runs.py": "the managed-launch-writes case now expects the bookkeeping files only (the work profile runs offline), and a sibling case with offline_env false keeps the four-file assertion",
+    "quoin/dev/tests/_opencode_workflow_e2e_helpers.py": "the workflow test project also patches the CLI policy evaluator to evaluate against the test world's configuration, because the CLI reads the process environment, which does not carry the world's profile"
   }
 }

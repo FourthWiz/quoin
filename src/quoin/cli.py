@@ -2185,6 +2185,14 @@ def _handoff_evaluator(project_root: pathlib.Path):
     return lambda profile: handoff.scope_for_profile(project_root, profile, env=env, home=home)
 
 
+def _handoff_policy_evaluator(project_root: pathlib.Path):
+    from quoin.opencode_adapter import handoff  # noqa: PLC0415
+
+    env = _opencode_config_env()
+    home = pathlib.Path.home()
+    return lambda profile: handoff.policy_for_profile(project_root, profile, env=env, home=home)
+
+
 def _handoff_rel(project_root: pathlib.Path, path) -> str:
     return os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
 
@@ -2253,8 +2261,14 @@ def _cmd_opencode_handoff_show(args: argparse.Namespace) -> int:
         return refused
     try:
         requested = _handoff_evaluator(project_root)(args.profile) if args.profile else None
+        requested_policy = (
+            (lambda: _handoff_policy_evaluator(project_root)(args.profile)) if args.profile else None
+        )
         record = handoff.load_for_continuation(
             project_root, args.task, source_dir=source_dir, requested_scope=requested,
+            requested_policy=requested_policy, policy_profile=args.profile,
+            resume_hint="quoin run --runtime opencode --profile %s --workflow --continue %s --project-root %s" % (
+                shlex.quote(args.profile or "PROFILE"), shlex.quote(args.task), shlex.quote(str(project_root))),
         )
         directory, state, run = handoff.advice_inputs(project_root, args.task)
         advice = handoff.next_step(project_root, record, state, run, source_dir)
@@ -2430,6 +2444,7 @@ _WORKFLOW_ONLY_FLAGS = (
     ("--from-discover", "from_discover", False), ("--max-critic-rounds", "max_critic_rounds", None),
     ("--test-command", "test_command", None), ("--test-include", "test_include", None),
     ("--test-timeout", "test_timeout", None), ("--rerun-from", "rerun_from", None), ("--adopt", "adopt", None),
+    ("--accept-unverified-policy", "accept_unverified_policy", False),
 )
 
 
@@ -2588,6 +2603,7 @@ def _workflow_options(args: argparse.Namespace):
         max_relaunch=args.max_relaunch, halt_on_abort=bool(args.halt_on_abort), budget=args.budget,
         test_command=shlex.split(args.test_command) if args.test_command else None,
         test_include=tuple(args.test_include or ()), test_timeout=args.test_timeout,
+        accept_unverified_policy=bool(args.accept_unverified_policy),
     )
 
 
@@ -2672,9 +2688,14 @@ def _cmd_run_opencode_workflow(args: argparse.Namespace) -> int:
                         project_root, args.task, args.profile, evaluate=_handoff_evaluator(project_root),
                     )
                     drv = _make_opencode_driver(project_root)
+                    requested_policy = (
+                        (lambda: _handoff_policy_evaluator(project_root)(options.profile))
+                        if options.continue_ else None
+                    )
                     coord = workflow.Coordinator(
                         drv, project_root, args.task, options, source_dir=source_dir, cancel=cancel,
                         scope=scope, scope_source=scope_source, backoff_fn=_opencode_backoff,
+                        requested_policy=requested_policy,
                     )
                     coord.begin()
                     summary = coord.run_items(coord.sequence(coord.load_state()))
@@ -3774,6 +3795,13 @@ def main(argv: list[str] | None = None) -> int:
     run_p.add_argument(
         "--continue", dest="continue_", action="store_true",
         help="Only with --workflow: continue a started workflow from its state or continuation record.",
+    )
+    run_p.add_argument(
+        "--accept-unverified-policy", action="store_true",
+        help=(
+            "Only with --workflow --continue: accept the policy of a recorded run that has no "
+            "effective-config record as unknown. A recorded policy narrower than the requested one is still refused."
+        ),
     )
     run_p.add_argument(
         "--no-pause", action="store_true",

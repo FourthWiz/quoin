@@ -22,7 +22,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import errors, evidence, gate, runstore
+from . import effective_record, errors, evidence, gate, runstore
 
 ORIGIN_RUNTIME = "opencode"
 UNAVAILABLE_TELEMETRY = ("child-session-usage", "effective-effort", "parent-cost-scope")
@@ -183,6 +183,29 @@ def scope_for_profile(
     return scope_from_compiled(ev.profile, ev.effective.classification, document, limit_values)
 
 
+def policy_for_profile(
+    project_root, profile: Optional[str], *, env: Mapping[str, str], home, clock: Callable[[], float] = time.time,
+) -> Dict[str, Any]:
+    """The effective-policy section a launch of `profile` would record, for
+    comparison with a recorded run's. Refused as `scope-unavailable` when the
+    profile cannot be evaluated."""
+    from datetime import datetime, timezone  # noqa: PLC0415
+
+    from . import compiler, paths, roles  # noqa: PLC0415
+    from .errors import ConfigErrors  # noqa: PLC0415
+
+    try:
+        ev = compiler.evaluate(
+            project_root=project_root, profile=profile, env=env, home=home,
+            now=datetime.fromtimestamp(clock(), timezone.utc),
+        )
+    except (ConfigErrors, paths.AdapterDataMissing, roles.AllowUnqualifiedRefused) as exc:
+        raise HandoffRefused(
+            "scope-unavailable", "the policy scope cannot be evaluated (%s)" % type(exc).__name__,
+        ) from None
+    return effective_record.policy_section(ev.effective)
+
+
 def _store_or_none(project_root) -> Optional[Path]:
     try:
         return runstore.inspect_store(project_root)
@@ -227,7 +250,10 @@ def resolve_profile(
     recorded: Optional[str] = None
     source = "operator-flag"
     settings = (state or {}).get("settings") or {}
-    if isinstance(settings.get("profile"), str):
+    block = settings.get("workflow")
+    if isinstance(block, Mapping) and isinstance(block.get("profile"), str):
+        found, recorded, source = True, block["profile"], "workflow-state"
+    elif isinstance(settings.get("profile"), str):
         found, recorded, source = True, settings["profile"], "workflow-state"
     else:
         run = _pointer_record(directory, task)
@@ -642,11 +668,84 @@ def write(project_root, task: str, record: Mapping[str, Any], *, source_dir) -> 
 _SCOPE_ORDER = ("profile-mismatch", "classification-mismatch", "policy-widened")
 
 
+def _run_rank(directory: Optional[Path], run_id: str, index: int) -> Tuple[str, int]:
+    """Order completed entries by when their run finished: the last attempt's
+    end, else the record's last update; a run with no readable record ranks
+    below any dated one, and ties fall back to the sequence order."""
+    stamp = ""
+    if directory is not None:
+        try:
+            record = runstore.load_record(directory, run_id) or {}
+        except (runstore.RunStoreError, ValueError, OSError):
+            record = {}
+        attempts = record.get("attempts") or []
+        ended = attempts[-1].get("ended_at") if attempts and isinstance(attempts[-1], Mapping) else None
+        if isinstance(ended, str) and ended:
+            stamp = ended
+        elif isinstance(record.get("updated_at"), str):
+            stamp = record["updated_at"]
+    return stamp, index
+
+
+def _check_policy(
+    project_root, record: Mapping[str, Any], requested_policy: Any, *,
+    accept_unverified: Any, resume_hint: Optional[str], outcome: Optional[Dict[str, Any]],
+    policy_profile: Optional[str],
+) -> None:
+    candidates = [
+        (index, item["run_id"]) for index, item in enumerate(record.get("completed") or [])
+        if isinstance(item.get("run_id"), str)
+    ]
+    if not candidates:
+        return
+    directory = _store_or_none(project_root)
+    _, run_id = max(candidates, key=lambda c: _run_rank(directory, c[1], c[0]))
+    try:
+        run = runstore.load_record(directory, run_id) if directory is not None else None
+    except (runstore.RunStoreError, ValueError, OSError):
+        run = None
+    stored = ((run or {}).get("prepared") or {}).get("effective_config")
+    recorded_profile = policy_profile if policy_profile is not None else (record.get("scope") or {}).get("profile")
+    if not isinstance(stored, Mapping) or not isinstance(stored.get("policy"), Mapping) or (
+        isinstance(recorded_profile, str) and stored.get("profile") != recorded_profile
+    ):
+        if accept_unverified is True or (isinstance(accept_unverified, str) and accept_unverified == run_id):
+            if outcome is not None:
+                outcome["unverified_accepted"] = run_id
+            return
+        command = (resume_hint + " --accept-unverified-policy") if resume_hint else None
+        raise HandoffRefused(
+            "scope-unverifiable",
+            "the run that produced this continuation has no effective-config record (prepared before this "
+            "version)" + ("; continue anyway with: %s" % command if command else ""),
+            (run_id,),
+        )
+    if callable(requested_policy):
+        requested_policy = requested_policy()
+    wider = effective_record.widened(stored["policy"], requested_policy)
+    if wider:
+        raise HandoffRefused(
+            "policy-widened", "the requested policy is wider than the one the recorded run used",
+            ["effective_config.%s" % name for name in wider],
+        )
+
+
 def load_for_continuation(
     project_root, task: str, *, source_dir, requested_scope: Optional[Mapping[str, Any]] = None,
+    requested_policy: Optional[Mapping[str, Any]] = None, accept_unverified: Any = None,
+    resume_hint: Optional[str] = None, outcome: Optional[Dict[str, Any]] = None,
+    policy_profile: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """The validated record, or a `HandoffRefused`. Reads only the record and
-    directory listings."""
+    """The validated record, or a `HandoffRefused`. Reads only the record,
+    run records and directory listings.
+
+    With `requested_policy` (a mapping, or a callable producing one that runs
+    only after the scope check passed), the policy the latest completed OpenCode run
+    recorded is compared with it. `accept_unverified` is a run id (or True for
+    whichever run is compared) whose missing record is accepted as unknown;
+    when that happens `outcome["unverified_accepted"]` names the run.
+    `policy_profile` is the profile being continued (default: the record's
+    scope profile); a run record kept for another profile is unverifiable."""
     _task(task)
     mod = core(source_dir)
     location = finalized_location(project_root, task)
@@ -688,6 +787,14 @@ def load_for_continuation(
                 first, "the requested scope is not covered by the recorded one",
                 ["%s:%s" % pair for pair in found],
             )
+    # A record written by another runtime names that runtime's runs, which
+    # this store cannot hold; only this adapter's own records are compared.
+    if requested_policy is not None and record.get("origin_runtime") == ORIGIN_RUNTIME:
+        _check_policy(
+            project_root, record, requested_policy,
+            accept_unverified=accept_unverified, resume_hint=resume_hint, outcome=outcome,
+            policy_profile=policy_profile,
+        )
     return record
 
 
