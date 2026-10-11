@@ -212,3 +212,23 @@ def test_every_production_continuation_load_and_coordinator_passes_the_requested
             seen_coordinators += 1
             assert "requested_policy" in keywords
     assert seen_loads >= 2 and seen_coordinators >= 1
+
+
+def _profile(fx, requested=None):
+    return handoff.resolve_profile(fx.root, fx.task, requested, evaluate=lambda name: {"profile": name})
+
+
+def test_the_coordinators_workflow_profile_resolves_before_the_legacy_key(fx):
+    fx.settings(workflow={"profile": "from-workflow"}, profile="legacy")
+    assert _profile(fx) == ({"profile": "from-workflow"}, "workflow-state")
+
+
+def test_the_legacy_profile_key_still_resolves(fx):
+    fx.settings(profile="legacy")
+    assert _profile(fx) == ({"profile": "legacy"}, "workflow-state")
+
+
+def test_with_neither_key_the_run_record_is_used(fx):
+    fx.seed_run("plan", 1, "completed", profile="from-run")
+    scope, source = _profile(fx)
+    assert scope == {"profile": "from-run"} and source == "run-record"
