@@ -186,11 +186,23 @@ no live OpenCode run or corporate gateway has been qualified.
 
 ### Commands
 
-- `quoin opencode config explain [--profile NAME] [--project-root PATH] [--redact] [--json]`
+- `quoin opencode config explain [--profile NAME] [--project-root PATH] [--redact] [--json] [--run RUN_ID] [--export]`
   shows how the layers resolve, which roles are blocked and why, and where the
   compiled files would go. `--redact` masks endpoint hosts, keychain accounts
-  and the output location. Exit 0 when compilable, 1 when a blocking finding
-  remains, 2 for configuration or usage errors.
+  and the output location. The result ends with an effective-config section:
+  the record a launch of this profile would store (digest, sections still
+  pending, entry counts by kind and verdict, masked credential kinds,
+  environment names and storage directories), one line per inspected
+  configuration entry (verdict, kind, layer, entry token, code) and the first
+  refusal a launch would hit. It is computed the way a launch computes it but
+  creates no directory and resolves no credential; the record is always
+  redacted, with or without `--redact`. `--run RUN_ID` prints the record a
+  stored run kept instead of evaluating now, so it works even when the
+  configuration no longer evaluates; it exits 2 when the run or its record is
+  missing. `--export` also writes the live record to
+  `explain-DIGEST12.json` under the profile's `exports` directory (directory
+  0700, file 0600) and names the file on stderr. Exit 0 when compilable, 1
+  when a blocking finding remains, 2 for configuration or usage errors.
 - `quoin opencode config compile --profile NAME [--project-root PATH] [--output DIR] [--check] [--allow-unqualified]`
   writes the compiled pair (see file locations). `--check` writes nothing and
   reports whether the files on disk match a fresh build. `--allow-unqualified`
@@ -410,7 +422,8 @@ and the work profile is not made supported by anything here.
 Each profile has its own directory under the adapter state directory
 (`$XDG_STATE_HOME/quoin/opencode/PROFILE`, mode 0700), holding `data`, `state`,
 `cache` and `tmp` for the OpenCode child, plus the compiled configuration,
-run exports, snapshots, test results and workflow windows. A launched child gets
+snapshots, test results and workflow windows, and the `exports` directory that
+`config explain --export` writes to. A launched child gets
 `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `TMPDIR` pointing into
 its own profile directory, `npm_config_cache` under `cache`, and runs with
 umask 077, so what it writes there is private to the user. The launcher's
@@ -430,8 +443,11 @@ move the unreadable file aside and launch each project once again. Deleting it
 instead only means a purge undercounts projects until each has launched again.
 
 One process launches one profile and one classification. A second profile in
-the same process refuses with `profile-switch-in-process`, and a child process
-can never switch to another profile. Naming a different profile than a task's
+the same process refuses with `profile-switch-in-process`. A child process is
+held to its launcher's profile on a best-effort basis: the latch is a launcher
+variable that an agent could unset, so keeping a child away from the other
+profile's directories remains a duty of the managed boundary, not of this
+check. Naming a different profile than a task's
 interrupted run with `quoin run` is not a resume: it starts a new run in that
 profile's own directories and continues no session of the other profile. The
 interrupted run stays resumable under its own profile until a newer run of the
@@ -443,12 +459,70 @@ The child also gets flags that stop it fetching model catalogues, updating
 itself, sharing sessions, downloading language servers or loading code the
 profile did not configure. For a work profile all of them are set, the sharing
 and package settings of the profile decide the rest, and package installs are
-offline when the profile denies them. A personal profile gets the model-fetch,
-autoupdate and sharing flags only. An inherited path variable that points into
+offline when the profile denies them. A personal profile gets the model-fetch
+and autoupdate flags, and the sharing flag only when the profile denies
+sharing. An inherited path variable that points into
 another profile's directories refuses with `env-path-outside-profile`.
 
 Snapshot, test and window state moved under the profile directory. Workflows
 started before this change fail closed and need to be configured again.
+
+### Configuration inventory
+
+Before every launch the driver reads every configuration source OpenCode would
+read for the child (global and project configuration, `.opencode` directories,
+managed files and preferences, the profile's `auth.json` and session database,
+and the `OPENCODE_CONFIG*` variables) into one inventory and judges each entry.
+Under a work profile anything that could change which models run, add code or
+widen permissions is refused before the process starts; under a personal
+profile the same entries are recorded and only the few listed below are
+refused. A refusal names the code, the layer and an entry token (a short plain
+name, or an `h-` digest when the name is long or secret-shaped), never a path
+or a value. The same inventory feeds `config explain`, the doctor findings
+`inventory-refused` and `inventory-clean`, and the record stored with every run
+and every interactive start. Two behaviours depend on the profile policy: an
+MCP server, language server or formatter is recorded for a personal profile
+unless the profile explicitly denies it, and a provider block is refused when
+it names a provider outside the compiled set (for a provider inside the set, a
+global block is refused for work only).
+
+The table is generated from the verdicts the code returns for a representative
+entry of each kind under a default work and a default personal profile; a
+docs test compares it with the code.
+
+| Code | Work | Personal | Meaning |
+|---|---|---|---|
+| `inventory-plugin` | refused | refused | a plugin is configured, which could hook permission handling |
+| `inventory-provider` | refused | refused | a provider block or enabled-provider entry is not controlled by the profile; add the provider to the profile or remove the block |
+| `inventory-disabled-providers` | refused | refused | disabled_providers changes which providers load and is not allowed |
+| `inventory-mcp-local` | refused | recorded | a local MCP server is configured that the profile policy does not allow |
+| `inventory-mcp-remote` | refused | recorded | a remote MCP server is configured that the profile policy does not allow |
+| `inventory-tool` | refused | refused | a custom tool is defined, which would run arbitrary code |
+| `inventory-lsp` | refused | recorded | a language server entry is configured outside the compiled configuration |
+| `inventory-formatter` | refused | recorded | a formatter entry is configured outside the compiled configuration |
+| `inventory-agent-permission` | refused | recorded | an agent defines its own permission or tool rules |
+| `inventory-config-permission` | refused | recorded | a top-level permission block is configured outside the compiled configuration |
+| `inventory-remote-config` | refused | recorded | remote or account configuration is present for this profile |
+| `inventory-account-busy` | refused | recorded | the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry |
+| `inventory-remote-instructions` | refused | recorded | instructions or skills are loaded from a URL |
+| `inventory-unknown-key` | refused | recorded | a configuration key the adapter does not recognise is set |
+| `inventory-legacy-config` | refused | refused | a legacy TOML configuration file is present |
+| `agent-model-outside-allowlist` | refused | refused | an agent selects a model that is not in the profile's allowed models |
+| `command-model-outside-allowlist` | refused | refused | a command selects a model that is not in the profile's allowed models |
+| `config-env-opencode-config` | refused | stripped | OPENCODE_CONFIG points at a configuration file other than the compiled one |
+| `config-env-opencode-config-dir` | refused | stripped | OPENCODE_CONFIG_DIR adds a configuration directory |
+| `config-env-opencode-config-content` | refused | stripped | OPENCODE_CONFIG_CONTENT injects configuration |
+| `executable-fetch-possible` | prevented-offline | recorded | a configuration directory is writable and unlocked, so a dependency install could fetch executable code |
+| `executable-fetch-detected` | run fails | run fails when package installs are denied | an executable package was written under node_modules during the run |
+| `config-layer-unreadable` | refused | recorded | a configuration source could not be read completely |
+
+Executable packages: a work profile that denies package installs runs with
+`OPENCODE_PURE=1` and `npm_config_offline=true`, so a dependency install in a
+writable, unlocked configuration directory fetches nothing; those directories
+are recorded as `prevented-offline`. A headless run additionally compares the
+watched directories before and after each attempt and fails the attempt as a
+configuration failure if a regular file appeared or changed under
+`node_modules`. An interactive start has the prevention only.
 
 ### Phase runs
 
@@ -799,8 +873,21 @@ read, so other runtimes' transcripts and session files are not opened, and a
 new native session is started. Refusals: `continuation-missing`,
 `continuation-invalid`, `continuation-legacy-format` (only older-format files
 exist), `task-finalized`, `continuation-state-mismatch`,
-`continuation-artifact-changed`, `profile-mismatch`, `classification-mismatch`
-and `policy-widened`.
+`continuation-artifact-changed`, `profile-mismatch`, `classification-mismatch`,
+`policy-widened` and `scope-unverifiable`.
+
+When the OpenCode run that produced a continuation stored an effective-config
+record, loading the continuation also compares the policy that run used with
+the policy being requested now (the completed run that finished last is the one
+compared), and refuses `policy-widened` when the request is wider in any field,
+naming each as `effective_config.FIELD`. A run prepared before that record
+existed cannot be compared and refuses `scope-unverifiable`; the message names
+the exact command. To continue anyway, run the same command with
+`--accept-unverified-policy` (valid only with `--workflow --continue`): that
+accepts the policy of the compared run as unknown, is remembered for that run
+in the workflow state, and never overrides `policy-widened`. Once a newer run
+with a record completes, the normal comparison applies again. Records written
+by another runtime are not compared.
 
 ## Role boundaries
 
