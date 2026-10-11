@@ -719,7 +719,10 @@ def _check_policy(
             "continue it under that profile or start a new task",
             (run_id,),
         )
-    if not isinstance(stored, Mapping) or not isinstance(stored.get("policy"), Mapping):
+    if (
+        not isinstance(stored, Mapping) or not isinstance(stored.get("policy"), Mapping)
+        or not isinstance(stored.get("profile"), str)  # no profile: cannot be tied to this one
+    ):
         if accept_unverified is True or (isinstance(accept_unverified, str) and accept_unverified == run_id):
             if outcome is not None:
                 outcome["unverified_accepted"] = run_id

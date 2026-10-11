@@ -268,3 +268,53 @@ def test_the_production_policy_evaluator_passes_the_process_environment(tmp_path
     assert seen["profile"] == "work" and seen["root"] == tmp_path
     assert seen["home"] == pathlib.Path(str(tmp_path / "h"))
     assert seen["env"].get("XDG_CONFIG_HOME") == str(tmp_path / "x")
+
+
+# ------------------------------------------- round 2: line breaks, tabs, empty model
+
+@pytest.mark.parametrize("model_line", ["model:", "model: ''", 'model: ""'])
+@pytest.mark.parametrize("key,flag", [("permission", "has_permission"), ("tools", "has_tools")])
+def test_an_empty_model_does_not_hide_a_later_watched_key(model_line, key, flag):
+    got = _scan("---\n%s\n%s: {bash: allow}\n---\n" % (model_line, key))
+    assert got[flag] is True, got
+
+
+def test_a_multiline_quoted_value_is_unknown_so_an_inner_model_line_hides_nothing():
+    assert _scan('---\ndescription: "a\nmodel:\n"\npermission: {bash: allow}\n---\n')["unknown"] is True
+    assert _scan("---\ndescription: 'a\nmodel:\n'\n---\n")["unknown"] is True
+
+
+@pytest.mark.parametrize("key,flag", [("permission", "has_permission"), ("tools", "has_tools")])
+def test_a_bare_carriage_return_is_a_line_break(key, flag):
+    got = _scan("---\ndescription: x\r%s: {edit: allow}\n---\n" % key)
+    assert got[flag] is True, got
+
+
+def test_a_bare_carriage_return_before_a_model_is_read():
+    assert _scan("---\ndescription: x\rmodel: evil/model\n---\n")["model"] == "evil/model"
+
+
+@pytest.mark.parametrize("key", ["permission", "tools", "model"])
+def test_a_tab_led_line_is_unknown(key):
+    assert _scan("---\ndescription: x\n\t%s: {edit: allow}\n---\n" % key)["unknown"] is True
+    assert _scan("---\ndescription: x\n \t%s: a/b\n---\n" % key)["unknown"] is True
+
+
+def test_a_plain_model_folded_onto_an_indented_line_is_unknown():
+    assert _scan("---\nmodel: a/b\n  -evil\n---\n")["unknown"] is True
+    assert _scan("---\nmodel: a/b\nname: x\n---\n") == {
+        "model": "a/b", "has_permission": False, "has_tools": False, "unknown": False}
+
+
+def test_the_walk_counts_directories_toward_its_bound(tmp_path, monkeypatch):
+    monkeypatch.setattr(inventory, "_MAX_WALK", 5)
+    for i in range(20):
+        (tmp_path / ("d%02d" % i)).mkdir()
+    overflow = []
+    list(inventory._walk_markdown(tmp_path, overflow))
+    assert overflow
+
+
+def test_a_stored_record_without_a_profile_takes_the_unverified_path():
+    src = pathlib.Path(handoff.__file__).read_text()
+    assert 'not isinstance(stored.get("profile"), str)' in src

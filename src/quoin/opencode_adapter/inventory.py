@@ -435,7 +435,7 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:
     unknown: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
     if text.startswith("\ufeff"):
         text = text[1:]
-    lines = [line.rstrip("\r") for line in text.split("\n")]
+    lines = re.split(r"\r\n|\r|\n", text)  # js-yaml breaks lines on a bare CR too
     if not lines or lines[0].rstrip() != "---":
         if lines and lines[0].startswith("---"):
             return unknown  # `---yaml`, `---json`, `---js`: a loader may still read it
@@ -452,7 +452,12 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:
     if first is not None and first[0] in " \t":
         return unknown  # an indented root mapping: every key below is top level
     for index, line in enumerate(block):
-        if not line.strip() or line[0] in " \t#":
+        if not line.strip():
+            continue
+        stripped = line.lstrip(" \t")
+        if "\t" in line[: len(line) - len(stripped)] and not stripped.startswith("#"):
+            return unknown  # js-yaml 3 counts only spaces as indentation
+        if line[0] in " \t#":
             continue
         if line.startswith(("{", "[", "<<", "&", "*", "%", "---", "?", "- ", "!", "|", ">")):
             return unknown
@@ -472,6 +477,8 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:
             return unknown
         seen.add(key)
         value = rest.strip()
+        if value[:1] in "\"'" and value and not _unquote(value)[1]:
+            return unknown  # a quoted value that does not close on its own line
         if key == "permission":
             facts["has_permission"] = True
         elif key == "tools":
@@ -486,7 +493,12 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:
                 text_value = text_value.split(" #", 1)[0].rstrip()
             if not text_value:
                 nested = index + 1 < len(block) and block[index + 1][:1] in (" ", "\t")
-                return unknown if nested else {**facts, "model": None}
+                if nested:
+                    return unknown
+                continue
+            following = next((ln for ln in block[index + 1:] if ln.strip()), None)
+            if following is not None and following[0] in " \t":
+                return unknown  # a plain scalar folded onto the next line
             facts["model"] = text_value
     return facts
 
@@ -688,6 +700,10 @@ def _walk_markdown(directory: Path, overflow: List[bool]):
     for current, dirnames, filenames in os.walk(str(directory), onerror=lambda exc: overflow.append(True)):
         dirnames.sort()
         for dirname in dirnames:
+            count += 1
+            if count > _MAX_WALK:
+                overflow.append(True)
+                return
             if os.path.islink(os.path.join(current, dirname)):
                 yield Path(current) / dirname, True
         for filename in sorted(filenames):
@@ -1040,7 +1056,7 @@ def _explicit(policy: Any, key: str) -> bool:
 _USER_MCP_LAYERS = frozenset(("compiled", "global", "home-opencode", "managed", "managed-prefs"))
 
 
-def _mcp_allowed(policy: Any, remote: bool, name: str, layer: str = "global") -> bool:
+def _mcp_allowed(policy: Any, remote: bool, name: str, layer: str) -> bool:
     mode = policy.mcp_remote if remote else policy.mcp_local
     if mode == "any":
         return True
@@ -1082,7 +1098,9 @@ def _judge(entry: Entry, expected: Expected) -> Tuple[str, Optional[str]]:  # no
         if facts.get("enabled") is False:
             return "benign", None
         if work or _explicit(policy, "mcp.local"):
-            return ("ok", None) if _mcp_allowed(policy, False, entry.name, layer) else ("refused", "inventory-mcp-local")
+            # A toggle cannot change a server's command, so it is judged on the
+            # allow-list alone; the definition it toggles is judged by its layer.
+            return ("ok", None) if _mcp_allowed(policy, False, entry.name, "global") else ("refused", "inventory-mcp-local")
         return "recorded", None
     if kind in ("lsp", "formatter"):
         code = "inventory-" + kind
