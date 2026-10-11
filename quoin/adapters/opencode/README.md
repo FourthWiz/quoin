@@ -489,12 +489,16 @@ global block is refused for work only).
 An allow-listed MCP server is admitted by name only when its definition comes
 from a file the user controls (the compiled, global, home `.opencode` or
 managed layers); a definition of the same name in a project file is refused,
-because the project could otherwise change the command that runs. Agent and
+because the project could otherwise change the command that runs. Definitions
+from the project `.opencode` directory or `OPENCODE_CONFIG_DIR` are refused the
+same way, and a project `enabled` toggle is judged on the allow-list alone
+(it cannot change the command). Agent and
 command markdown whose frontmatter the scanner cannot read completely (an
 indented root mapping, escaped or non-identifier keys, a language-tagged
 `---yaml` fence, flow, anchor or tag values on `model`) is treated as unknown
 and refused for work. A symlinked tool file or agent directory, and a markdown
-tree larger than the scan bound, are counted rather than skipped. A personal
+tree larger than the scan bound (files and directories both count), are counted
+rather than skipped, and under the work profile that refuses the launch. A personal
 profile can also be refused by a global `tools` toggle, `disabled_providers`,
 an out-of-profile provider or model, or a legacy TOML file; remove or move the
 entry, or run the launch under a profile whose policy permits it.
@@ -894,7 +898,8 @@ record, loading the continuation also compares the policy that run used with
 the policy being requested now (the completed run that finished last is the one
 compared), and refuses `policy-widened` when the request is wider in any field,
 naming each as `effective_config.FIELD`. A run prepared before that record
-existed cannot be compared and refuses `scope-unverifiable`; the message names
+existed, or whose stored record lacks a profile, cannot be compared and refuses
+`scope-unverifiable`; the message names
 the exact command. To continue anyway, run the same command with
 `--accept-unverified-policy` (valid only with `--workflow --continue`): that
 accepts the policy of the compared run as unknown, is remembered for that run
