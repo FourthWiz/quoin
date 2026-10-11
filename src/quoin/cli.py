@@ -2307,8 +2307,14 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
             "config_path": redact(str(launch.config_path)),
             "env_names": list(launch.env_names),
             "runtime_version": launch.runtime_version,
+            "effective_config_digest": launch.effective_config_digest,
         }, sort_keys=True))
         return 0
+    try:
+        launch.write_record()
+    except Exception:  # noqa: BLE001 - the launch never proceeds without its record
+        print("quoin: opencode start refused: the effective-configuration record could not be written", file=sys.stderr)
+        return 3
     env = launch.launch_env.materialize()
     return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
 

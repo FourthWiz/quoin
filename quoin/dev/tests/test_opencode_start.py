@@ -83,7 +83,7 @@ def test_nothing_is_written_to_the_run_store_and_no_lock_is_taken(world):
 def test_dry_run_prints_and_does_not_launch(world, capsys):
     assert start(world, "--dry-run") == 0
     out = json.loads(capsys.readouterr().out)
-    assert set(out) == {"argv", "cwd", "config_path", "env_names", "runtime_version"}
+    assert set(out) == {"argv", "cwd", "config_path", "env_names", "runtime_version", "effective_config_digest"}
     assert out["argv"] == [str(world.shim), str(world.root)]
     assert "OPENCODE_CONFIG" in out["env_names"] and "ambient-provider-key-0000" not in json.dumps(out)
     assert world.calls == []
@@ -299,3 +299,39 @@ def test_non_posix_branch_reports_a_start_failure(monkeypatch, tmp_path, capsys)
     assert cli._exec_tui(["x", "y"], str(tmp_path), {}) == 3
     assert signal.getsignal(signal.SIGINT) == before
     assert capsys.readouterr().err.startswith("quoin: opencode start failed:")
+
+
+def _record_files(project):
+    return sorted((project.world.tmp / "xdg").rglob("start-*.json")) if (project.world.tmp / "xdg").exists() else []
+
+
+def test_a_real_start_writes_a_private_record_whose_digest_matches_the_dry_run(world, capsys):
+    from quoin.opencode_adapter import effective_record
+
+    assert start(world, "--dry-run") == 0
+    dry = json.loads(capsys.readouterr().out)["effective_config_digest"]
+    assert start(world) == 17
+    drv = cli._make_opencode_driver(world.root)
+    launch = drv.prepare_interactive("work")
+    files = sorted(launch.profile_root.joinpath("records").glob("start-*.json"))
+    assert len(files) == 1
+    record = json.loads(files[0].read_text(encoding="utf-8"))
+    assert record["digest"] == dry == effective_record.digest(record)
+    assert stat.S_IMODE(files[0].stat().st_mode) == 0o600
+    assert stat.S_IMODE(files[0].parent.stat().st_mode) == 0o700
+
+
+def test_a_record_write_failure_refuses_start_without_launching(world, capsys):
+    launch = cli._make_opencode_driver(world.root).prepare_interactive("work")
+    launch.profile_root.mkdir(parents=True, exist_ok=True)
+    (launch.profile_root / "records").write_text("not a directory", encoding="utf-8")
+    assert start(world) == 3
+    assert "record could not be written" in capsys.readouterr().err
+    assert world.calls == []
+
+
+def test_a_refused_start_writes_no_record(world, capsys):
+    world.version = "9.9.9"
+    assert start(world) == 3
+    capsys.readouterr()
+    assert _record_files(world) == []

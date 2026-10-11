@@ -14,6 +14,7 @@ import errno
 import fcntl
 import json
 import os
+import re
 import secrets
 import threading
 import time
@@ -200,6 +201,14 @@ def adapter_root(env: Mapping[str, str], home) -> Path:
     if root is not None:
         return root.parent
     return paths.state_dir(env, Path(home))
+
+
+def records_path(dirs: "ProfileDirs", digest: str) -> Path:
+    """Where an interactive launch's effective-configuration record lives."""
+    token = digest.split(":", 1)[-1]
+    if not re.fullmatch(r"[0-9a-f]{12,}", token):
+        raise ValueError("not a record digest")
+    return dirs.records / ("start-%s.json" % token[:12])
 
 
 def compiled_dir(adapter_root_path, profile: str, project_root) -> Path:

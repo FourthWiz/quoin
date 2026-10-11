@@ -228,6 +228,21 @@ class InteractiveLaunch:
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
     effective_config: Optional[Mapping[str, Any]] = field(default=None, repr=False, compare=False)
     effective_config_digest: Optional[str] = None
+    profile_root: Optional[Path] = field(default=None, repr=False, compare=False)
+
+    def write_record(self, profile_root: Optional[Path] = None) -> Path:
+        """Write the effective-configuration record under the profile's
+        private ``records`` directory (0700 directory, 0600 file) and return
+        its path. Raises when there is nothing to write or the write fails."""
+        root = profile_root if profile_root is not None else self.profile_root
+        if self.effective_config is None or self.effective_config_digest is None or root is None:
+            raise ValueError("the launch has no record to write")
+        dirs = profile_dirs.ProfileDirs.at(root)
+        target = profile_dirs.records_path(dirs, self.effective_config_digest)
+        jsonio.ensure_private_directory(dirs.records)
+        body = json.dumps(self.effective_config, sort_keys=True, indent=2) + "\n"
+        jsonio.write_private_atomic(target, body.encode("utf-8"), private_parent=True)
+        return target
 
 
 @dataclass(frozen=True)
@@ -1434,6 +1449,7 @@ class OpenCodeDriver:
             profile=evaluation.profile,
             effective_config=effective,
             effective_config_digest=effective["digest"],
+            profile_root=dirs.root,
         )
 
     def _compile_pair(self, evaluation: Any, cfg_env: Mapping[str, str]) -> Tuple[Any, Path]:
