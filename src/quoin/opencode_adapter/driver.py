@@ -397,6 +397,8 @@ class AttemptFacts:
     native_error: Optional[ev.ErrorPayload] = None
     agent_fallback: bool = False
     driver_error: bool = False
+    executable_fetch: bool = False
+    executable_fetch_rows: Set[str] = field(default_factory=set)
     orphan: bool = False
     eof_without_exit: bool = False
     session_lost: bool = False
@@ -451,7 +453,7 @@ def failure_for(
         return retry.Failure("config")
     if outcome.state != "failed":
         return None
-    if outcome.reason in ("agent-fallback", "delegation-failed"):
+    if outcome.reason in ("agent-fallback", "delegation-failed", "executable-fetch-detected"):
         return retry.Failure("config")
     payload = facts.native_error
     if payload is None:
@@ -488,6 +490,8 @@ def classify(facts: AttemptFacts) -> AttemptOutcome:
         return make("cancelled", "cancelled")
     if facts.approval:
         return make("awaiting_approval", "approval-required")
+    if facts.executable_fetch:
+        return make("failed", "executable-fetch-detected")
     if facts.native_error is not None and not facts.denied_halt:
         return make("failed", "error-event")
     if facts.delegation_failed:
@@ -579,6 +583,64 @@ class AttemptSeed:
     ran_anything: bool = False
     record: Optional[Dict[str, Any]] = None
     state_changing: Iterable[str] = ()
+
+
+# ------------------------------------------------- executable-fetch watch
+
+_FETCH_WALK_LIMIT = 20000
+
+
+def _node_modules_snapshot(directory: str) -> Tuple[Dict[str, Tuple[int, int]], int]:
+    """Regular files under ``directory/node_modules`` as
+    ``{relative path: (size, mtime_ns)}`` plus a count of entries past the
+    walk bound. Symlinks and directories are not followed or recorded."""
+    files: Dict[str, Tuple[int, int]] = {}
+    seen = 0
+    overflow = 0
+    root = os.path.join(directory, "node_modules")
+    stack = [""]
+    while stack:
+        rel = stack.pop()
+        try:
+            entries = list(os.scandir(os.path.join(root, rel) if rel else root))
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > _FETCH_WALK_LIMIT:
+                overflow += 1
+                continue
+            child = os.path.join(rel, entry.name) if rel else entry.name
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(child)
+                elif entry.is_file(follow_symlinks=False):
+                    info = entry.stat(follow_symlinks=False)
+                    files[child] = (info.st_size, info.st_mtime_ns)
+            except OSError:
+                continue
+    return files, overflow
+
+
+def _fetch_baseline(watch: Sequence[Tuple[str, str]]) -> List[Tuple[str, str, Dict[str, Tuple[int, int]], int]]:
+    return [(path, layer, *_node_modules_snapshot(path)) for path, layer in watch]
+
+
+def _fetched_layers(baseline: Sequence[Tuple[str, str, Dict[str, Tuple[int, int]], int]]) -> Set[str]:
+    """Layer tokens whose node_modules gained a regular file or changed one.
+    Removed files and new or removed directories do not count."""
+    layers: Set[str] = set()
+    for path, layer, before, before_overflow in baseline:
+        after, after_overflow = _node_modules_snapshot(path)
+        if after_overflow != before_overflow:
+            layers.add(layer)
+            continue
+        if any(before.get(name) != info for name, info in after.items()):
+            layers.add(layer)
+    return layers
+
 
 
 class RuntimeHandle:
@@ -1489,6 +1551,7 @@ class OpenCodeDriver:
                 max_line_bytes=self._max_line_bytes,
             )
             driver_start = self._proc.start_time(os.getpid())
+            fetch_baseline = _fetch_baseline(prepared.fetch_watch)
             proc = subprocess.Popen(
                 list(argv), cwd=str(prepared.cwd), stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
@@ -1510,7 +1573,7 @@ class OpenCodeDriver:
             stderr_ring=collections.deque(maxlen=self._stderr_tail_lines),
             deadline=self._monotonic() + float(deadline_value),
             hashes_before=hashes_before, counters_base=dict(record.get("counters_total") or {}),
-            resume_mode=seed.resume_mode, native_session_id=seed.native_session_id,
+            fetch_baseline=fetch_baseline, resume_mode=seed.resume_mode, native_session_id=seed.native_session_id,
             ran_anything=seed.ran_anything, state_changing=set(seed.state_changing), start_sequence=seed.start_sequence,
             task=prepared.request.task, started_event=None, stdout_thread=None, stderr_thread=None,
         )
@@ -1855,6 +1918,12 @@ class OpenCodeDriver:
                 event = self._emit_driver(handle, EventType.ARTIFACT_REFERENCE, payload)
                 if event is not None:
                     out.append(event)
+        baseline = getattr(handle, "fetch_baseline", None)
+        if baseline:
+            layers = _fetched_layers(baseline)
+            if layers:
+                facts.executable_fetch = True
+                facts.executable_fetch_rows |= layers
         outcome = classify(facts)
         stopped = self._emit_driver(
             handle, EventType.STOPPED,
@@ -1953,6 +2022,8 @@ class OpenCodeDriver:
                 input_hashes_after=dict(after_hashes) if after_hashes is not None else None,
                 repo_revisions_after=[dict(r) for r in revisions] if revisions is not None else None,
             )
+            if handle.facts.executable_fetch_rows:
+                entry["executable_fetch_rows"] = sorted(handle.facts.executable_fetch_rows)
             record["counters_total"] = runstore.add_counters(handle.counters_base, handle.pipeline.counters)
             record["usage_totals"] = totals.to_dict()
             record["retry_usage"] = {

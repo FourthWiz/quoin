@@ -89,11 +89,33 @@ def test_managed_launch_writes_are_not_a_violation(tmp_path, monkeypatch):
         assert run.boundary.status == "ok", run.boundary
         effects = proj.removed_state["effects"]
         assert not [line for line in effects if line.startswith("denied")], effects
+        # The work profile runs offline, so the bookkeeping files appear and the install does not.
+        for name in (".opencode/.gitignore", ".opencode/package.json"):
+            assert name in effects
+        for name in (".opencode/bun.lock", ".opencode/node_modules/@opencode-ai/plugin/package.json"):
+            assert name not in effects
+        assert run.harvest is not None and run.harvest.error is None
+        assert proj.finding_names("review-") == ["review-1.md"]
+    finally:
+        proj.cleanup()
+
+
+def test_managed_launch_writes_with_the_install_are_not_a_violation(tmp_path, monkeypatch):
+    import _opencode_driver_helpers as dh
+
+    scenario = ("opencode_managed_writes", {
+        "extra": [(".workflow_artifacts/demo/stage-1/review-1.md", dh.fake.REVIEW_APPROVED_TEXT)],
+        "offline_env": False,
+    })
+    proj = build(tmp_path, monkeypatch, scenario)
+    try:
+        run = proj.run_isolated("review")
+        assert run.boundary.status == "ok", run.boundary
+        effects = proj.removed_state["effects"]
+        assert not [line for line in effects if line.startswith("denied")], effects
         for name in (".opencode/.gitignore", ".opencode/package.json", ".opencode/bun.lock",
                      ".opencode/node_modules/@opencode-ai/plugin/package.json"):
             assert name in effects
-        assert run.harvest is not None and run.harvest.error is None
-        assert proj.finding_names("review-") == ["review-1.md"]
     finally:
         proj.cleanup()
 

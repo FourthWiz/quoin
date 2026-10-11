@@ -359,21 +359,47 @@ def _writes_paths(paths: Any = ()) -> Dict[str, Any]:
         *[{"do": "write_file", "path": p, "content": c} for p, c in paths], *_clean_finish())
 
 
-def _opencode_managed_writes(extra: Any = ()) -> Dict[str, Any]:
-    """What the pinned OpenCode does to every scanned config directory at launch."""
-    managed = [
+def _opencode_managed_writes(extra: Any = (), offline_env: bool = True) -> Dict[str, Any]:
+    """What the pinned OpenCode does to every scanned config directory at launch.
+
+    The bookkeeping files are always written; the dependency install (lock file
+    and node_modules) happens only when ``npm_config_offline`` is not ``true``
+    in the child environment. ``offline_env=False`` makes the fake behave as if
+    the variable were unset, whatever the launcher passed.
+    """
+    always = [
         (".opencode/.gitignore", "node_modules\npackage.json\nbun.lock\n"),
         (".opencode/package.json", "{}\n"),
+    ]
+    install = [
         (".opencode/bun.lock", "\n"),
         (".opencode/node_modules/@opencode-ai/plugin/package.json", "{}\n"),
     ]
+    steps = [_try_write(p, c) for p, c in always]
+    for p, c in install:
+        step = _try_write(p, c)
+        if offline_env:
+            step["unless_offline"] = True
+        steps.append(step)
     return _scenario(
-        *[_try_write(p, c) for p, c in managed],
+        *steps,
         *[_try_write(p, c) for p, c in extra],
         *_clean_finish())
 
 
+def _npm_fetch(dir: str = ".opencode") -> Dict[str, Any]:
+    """A dependency install that fetches code whatever the offline setting says."""
+    return _scenario(_try_write("%s/node_modules/evil/index.js" % dir, "module.exports = 1\n"), *_clean_finish())
+
+
+def _empty_node_modules(dir: str = ".opencode") -> Dict[str, Any]:
+    """A failed offline install that leaves only an empty node_modules directory."""
+    return _scenario({"do": "make_dir", "path": "%s/node_modules" % dir}, *_clean_finish())
+
+
 SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "npm_fetch": _npm_fetch,
+    "empty_node_modules": _empty_node_modules,
     "boundary_escape": _boundary_escape,
     "edits_path": _edits_path,
     "writes_paths": _writes_paths,
@@ -728,6 +754,8 @@ def _boundary_write(verb: str, step: Dict[str, Any], state: Path) -> None:
     """
     path = step["path"]
     content = step.get("content", "")
+    if step.get("unless_offline") and os.environ.get("npm_config_offline") == "true":
+        return
     try:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         if verb == "try_write":
@@ -808,6 +836,8 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
             target.write_text(step.get("content", ""), encoding="utf-8")
             with open(state / "effects.log", "a", encoding="utf-8") as fh:
                 fh.write("%s\n" % step["path"])
+        elif verb == "make_dir":
+            Path(step["path"]).mkdir(parents=True, exist_ok=True)
         elif verb == "append_file":
             target = Path(step["path"])
             target.parent.mkdir(parents=True, exist_ok=True)
