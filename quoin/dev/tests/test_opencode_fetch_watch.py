@@ -75,3 +75,18 @@ def test_a_removed_file_and_a_new_symlink_are_not_a_fetch(tmp_path):
 def test_the_install_without_the_offline_setting_is_detected(tmp_path):
     _prepared, handle = _run(tmp_path, "opencode_managed_writes")
     assert (handle.outcome.state, handle.outcome.reason) == ("failed", "executable-fetch-detected")
+
+
+def test_a_changed_regular_file_is_a_fetch_by_size_or_by_mtime(tmp_path):
+    base = tmp_path / "cfg"
+    (base / "node_modules" / "pkg").mkdir(parents=True)
+    target = base / "node_modules" / "pkg" / "index.js"
+    target.write_text("x", encoding="utf-8")
+    baseline = driver._fetch_baseline(((str(base), "global"),))
+    assert driver._fetched_layers(baseline) == set()
+    target.write_text("longer content", encoding="utf-8")
+    assert driver._fetched_layers(baseline) == {"global"}
+    baseline = driver._fetch_baseline(((str(base), "global"),))
+    stat = target.stat()
+    os.utime(str(target), ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+    assert driver._fetched_layers(baseline) == {"global"}

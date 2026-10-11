@@ -207,3 +207,14 @@ def test_a_database_with_an_active_account_in_the_profile_data_is_refused_under_
     conn.commit()
     conn.close()
     denv.refused("inventory-remote-config")
+
+
+@pytestmark_driver
+def test_an_ambient_config_file_with_the_compiled_files_name_elsewhere_is_refused(denv):
+    first = denv.driver().prepare(denv.request())
+    elsewhere = denv.tmp / "elsewhere"
+    elsewhere.mkdir()
+    twin = elsewhere / first.config_path.name
+    twin.write_text("{}", encoding="utf-8")
+    env = dict(denv.world.env, PATH=os.environ.get("PATH", ""), OPENCODE_CONFIG=str(twin))
+    denv.refused("config-env-opencode-config", drv=denv.driver(env=env))
