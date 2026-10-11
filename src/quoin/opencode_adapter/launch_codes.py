@@ -84,33 +84,40 @@ COMPILED_REASON_CODES: Dict[str, str] = {
     "compiled-flag-mismatch": "invalid-configuration",
 }
 
+# Codes the configuration inventory raises through a variable, plus the
+# attempt reason for a detected executable fetch (no raise site). Categories
+# are the ones the earlier plan assigned.
+INVENTORY_CODES: Dict[str, str] = {
+    "agent-model-outside-allowlist": "policy-denial",
+    "command-model-outside-allowlist": "policy-denial",
+    "config-env-opencode-config": "policy-denial",
+    "config-env-opencode-config-content": "policy-denial",
+    "config-env-opencode-config-dir": "policy-denial",
+    "executable-fetch-detected": "policy-denial",
+    "executable-fetch-possible": "policy-denial",
+    "inventory-account-busy": "policy-denial",
+    "inventory-agent-permission": "policy-denial",
+    "inventory-config-permission": "policy-denial",
+    "inventory-disabled-providers": "policy-denial",
+    "inventory-formatter": "policy-denial",
+    "inventory-legacy-config": "policy-denial",
+    "inventory-lsp": "policy-denial",
+    "inventory-mcp-local": "policy-denial",
+    "inventory-mcp-remote": "policy-denial",
+    "inventory-plugin": "policy-denial",
+    "inventory-provider": "policy-denial",
+    "inventory-remote-config": "policy-denial",
+    "inventory-remote-instructions": "policy-denial",
+    "inventory-tool": "policy-denial",
+    "inventory-unknown-key": "policy-denial",
+}
+
 # Codes the profile-isolation work introduces in later stages.
 PLANNED_CODES: Dict[str, str] = {}
 for _code in (
     "repository-not-approved",
     "approved-repositories-unset",
     "isolation-required-unverified",
-    "inventory-plugin",
-    "inventory-provider",
-    "inventory-disabled-providers",
-    "inventory-mcp-local",
-    "inventory-mcp-remote",
-    "inventory-tool",
-    "inventory-lsp",
-    "inventory-formatter",
-    "inventory-agent-permission",
-    "inventory-config-permission",
-    "inventory-remote-config",
-    "inventory-remote-instructions",
-    "inventory-unknown-key",
-    "inventory-legacy-config",
-    "agent-model-outside-allowlist",
-    "command-model-outside-allowlist",
-    "config-env-opencode-config",
-    "config-env-opencode-config-dir",
-    "config-env-opencode-config-content",
-    "executable-fetch-possible",
-    "executable-fetch-detected",
     "allowed-hosts-unset",
     "destination-not-approved",
     "web-tools-denied",
@@ -128,7 +135,7 @@ del _code
 
 def _build() -> Mapping[str, str]:
     merged: Dict[str, str] = {}
-    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, PLANNED_CODES):
+    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, PLANNED_CODES):
         for code, category in group.items():
             if code in merged and merged[code] != category:
                 raise AssertionError("launch code registered under two categories")

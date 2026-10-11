@@ -347,6 +347,7 @@ class Inventory:
     markdown: List[Tuple[Path, str, str]] = field(default_factory=list, repr=False)  # (path, kind, name)
     plugin_dirs: List[Tuple[Path, str]] = field(default_factory=list, repr=False)
     fetch_watch: List[Entry] = field(default_factory=list, repr=False)
+    fetch_dirs: List[Tuple[Path, str]] = field(default_factory=list, repr=False)  # (directory, layer), in memory only
     config_env: List[Entry] = field(default_factory=list, repr=False)
     unreadable: List[Path] = field(default_factory=list, repr=False)
 
@@ -844,6 +845,7 @@ def collect(
         )
         if fetch is not None:
             inv.fetch_watch.append(fetch)
+            inv.fetch_dirs.append((base, layer))
 
     # -- ambient environment inputs ------------------------------------------
     idx = builder.source("environment", "env", "environment", None, "read")

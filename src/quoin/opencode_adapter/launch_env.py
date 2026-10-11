@@ -26,7 +26,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
-from . import compiler, errors, install, inventory, jsonio, paths
+from . import compiler, errors, install, inventory, jsonio, launch_codes, paths
 from . import secrets as credential_refs
 
 MAX_OWNED_BYTES = install.MAX_OWNED_BYTES
@@ -589,7 +589,7 @@ class LayerCheck:
 
 
 def _inventory_category(code: str) -> str:
-    return "invalid-configuration" if code == "config-layer-unreadable" else "policy-denial"
+    return launch_codes.category(code)
 
 
 def check_config_layers(

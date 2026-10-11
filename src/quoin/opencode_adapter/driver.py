@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import json
 import os
 import queue
 import re
@@ -26,7 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
-from . import compiler, doctor, frontmatter, install, jsonio, launch_env, manifest, names
+from . import compiler, doctor, effective_record, frontmatter, install, inventory, jsonio, launch_env, manifest, names
 from . import paths as adapter_paths
 from . import profile_dirs, profile_policy, proctree, qualification, retry, roles, runstore
 from . import events as ev
@@ -205,6 +206,10 @@ class PreparedRun:
     agent: str = ""
     # Secrets live only here; never shown and never part of equality.
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
+    effective_config_digest: Optional[str] = None
+    # (absolute directory, layer token) of every scanned configuration
+    # directory; in memory only, filled only when package installs are denied.
+    fetch_watch: Tuple[Tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -221,6 +226,8 @@ class InteractiveLaunch:
     env_names: Tuple[str, ...]
     profile: str
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
+    effective_config: Optional[Mapping[str, Any]] = field(default=None, repr=False, compare=False)
+    effective_config_digest: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -993,8 +1000,9 @@ class OpenCodeDriver:
 
         # 10. configuration layers and environment
         redactor = launch_env.Redactor()
-        child_env = self._scan_and_build_env(
-            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, cwd=run_cwd
+        child_env, effective, scanned = self._scan_and_build_env(
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, cwd=run_cwd,
+            version=version or "",
         )
 
         # 11. limits, hashes, revisions, argv
@@ -1044,6 +1052,8 @@ class OpenCodeDriver:
             repo_revisions=revisions,
             agent=agent,
             launch_env=child_env,
+            effective_config_digest=effective["digest"],
+            fetch_watch=self._fetch_watch(evaluation, scanned),
         )
 
         # 12. persist
@@ -1080,6 +1090,7 @@ class OpenCodeDriver:
             "credentials": credentials,
             "static_key_in_use": bool(credentials),
             "profile_root": self._display_path(dirs.root),
+            "effective_config": effective,
         }
         record["prepared"] = summary
         record["refusal"] = None
@@ -1209,29 +1220,36 @@ class OpenCodeDriver:
     def _scan_and_build_env(
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
         evaluation: Any, metadata: Any, redactor: Any, dirs: "profile_dirs.ProfileDirs",
-        cwd: Optional[Path] = None,
+        cwd: Optional[Path] = None, version: str = "",
     ) -> Any:
-        """Refuse on a configuration layer that would change the compiled
-        pair, then build the child environment. May raise `LaunchRefused`."""
+        """Refuse on a configuration source that would change the compiled
+        pair or that the profile does not allow, then build the child
+        environment and the effective-configuration record. Returns
+        ``(child_env, record, inventory)``. May raise `LaunchRefused`."""
         owned_agents = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "agent"}
         owned_commands = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "command"}
         scan_env = {"OPENCODE_CONFIG": str(config_path)}
         if "XDG_CONFIG_HOME" in cfg_env:
             scan_env["XDG_CONFIG_HOME"] = cfg_env["XDG_CONFIG_HOME"]
-        launch_env.check_config_layers(
-            cwd=cwd if cwd is not None else root, env=scan_env, home=self._home,
-            compiled_doc=fresh.document,
-            owned_agents=owned_agents, owned_commands=owned_commands,
-        )
         classification = evaluation.effective.classification
         sharing_entry = evaluation.effective.values.get("policy.sharing")
         sharing = sharing_entry.value if sharing_entry is not None else "deny"
-        package_install = profile_policy.view(evaluation.effective).package_install
+        policy_view = profile_policy.view(evaluation.effective)
         hardening = launch_env.hardening_env(
-            classification=classification, sharing=sharing, package_install=package_install,
+            classification=classification, sharing=sharing, package_install=policy_view.package_install,
             npm_cache=dirs.npm_cache, npm_userconfig=dirs.npm_userconfig,
         )
-        return launch_env.build_env(
+        expected = inventory.Expected.from_compiled(
+            fresh.document, {**owned_agents, **owned_commands}, policy_view
+        )
+        layer_check = launch_env.check_config_layers(
+            cwd=cwd if cwd is not None else root, env=scan_env, home=self._home,
+            compiled_doc=fresh.document,
+            owned_agents=owned_agents, owned_commands=owned_commands,
+            data_dir=dirs.data, ambient_env=self._env, expected=expected,
+            hardening_names=tuple(hardening),
+        )
+        child_env = launch_env.build_env(
             ambient=self._env, compile_sidecar=fresh.sidecar,
             providers=evaluation.effective.providers,
             resolver=self._resolver_factory(self._env, platform=self._platform),
@@ -1239,6 +1257,34 @@ class OpenCodeDriver:
             state_dir=dirs.root, profile_root=dirs.root, adapter_root=self.state_root,
             storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
         )
+        child_names = set(child_env.names())
+        stripped = sorted(n for n in self._env if n.startswith("OPENCODE_") and n not in child_names)
+        other_dropped = sum(1 for n in self._env if not n.startswith("OPENCODE_") and n not in child_names)
+        effective = effective_record.build(
+            inventory=layer_check.inventory, verdicts=layer_check.verdicts,
+            profile=evaluation.profile, classification=classification,
+            opencode_version=version, compiled_digest=fresh.digest,
+            native_sha256=fresh.sidecar["native_sha256"],
+            env_names=child_env.names(),
+            launcher_names=[n for n in launch_env.LAUNCHER_ENV_NAMES if n in child_names],
+            stripped_names=stripped, stripped_other_count=other_dropped,
+            dirs_display={
+                "data": self._display_path(dirs.data), "state": self._display_path(dirs.state),
+                "cache": self._display_path(dirs.cache), "tmp": self._display_path(dirs.tmp),
+            },
+            credentials=launch_env.credential_kinds(fresh.sidecar, evaluation.effective.providers),
+            policy=effective_record.policy_section(evaluation.effective),
+            redactor=child_env.redactor,
+        )
+        # Persist exactly the redacted form, so the stored object and its digest agree.
+        effective = json.loads(effective_record.serialise(effective, child_env.redactor).decode("utf-8"))
+        return child_env, effective, layer_check.inventory
+
+    @staticmethod
+    def _fetch_watch(evaluation: Any, scanned: Any) -> Tuple[Tuple[str, str], ...]:
+        if profile_policy.view(evaluation.effective).package_install != "deny":
+            return ()
+        return tuple((str(path), layer) for path, layer in scanned.fetch_dirs)
 
     def _claim_profile_dirs(self, evaluation: Any) -> "profile_dirs.ProfileDirs":
         """Latch this process to the evaluated profile and prepare its storage."""
@@ -1311,7 +1357,9 @@ class OpenCodeDriver:
         metadata = self._load_install(root, base_redact)
         self._verify_owned(root, metadata)
         redactor = launch_env.Redactor()
-        child_env = self._scan_and_build_env(root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs)
+        child_env, effective, _scanned = self._scan_and_build_env(
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, version=version or "",
+        )
         return InteractiveLaunch(
             binary=Path(binary),
             runtime_version=version or "",
@@ -1322,6 +1370,8 @@ class OpenCodeDriver:
             env_names=tuple(child_env.names()),
             launch_env=child_env,
             profile=evaluation.profile,
+            effective_config=effective,
+            effective_config_digest=effective["digest"],
         )
 
     def _compile_pair(self, evaluation: Any, cfg_env: Mapping[str, str]) -> Tuple[Any, Path]:

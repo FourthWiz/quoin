@@ -297,16 +297,28 @@ def test_registry_is_read_only_and_groups_do_not_conflict():
         launch_codes.EXISTING_CODES,
         launch_codes.CONFIG_DERIVED_CODES,
         launch_codes.COMPILED_REASON_CODES,
+        launch_codes.INVENTORY_CODES,
         launch_codes.PLANNED_CODES,
     )
     for first in groups:
         for second in groups:
             for code in set(first) & set(second):
                 assert first[code] == second[code], code
+    for other in (launch_codes.EXISTING_CODES, launch_codes.PLANNED_CODES):
+        assert not set(launch_codes.INVENTORY_CODES) & set(other)
+
+
+def test_inventory_codes_match_the_refusal_text_table():
+    from quoin.opencode_adapter import inventory
+
+    assert set(inventory.REFUSAL_TEXT) - {"config-layer-unreadable"} == set(launch_codes.INVENTORY_CODES)
+    assert set(inventory.REFUSAL_TEXT) <= set(launch_codes.REGISTRY)
+    assert launch_codes.category("inventory-account-busy") == "policy-denial"
 
 
 def test_planned_codes_are_the_declared_set():
-    assert len(launch_codes.PLANNED_CODES) == 35
+    # 35 planned codes before the inventory group; 21 of them moved into INVENTORY_CODES.
+    assert len(launch_codes.PLANNED_CODES) == 14
     for moved in ("env-path-outside-profile", "profile-dir-unsafe", "profile-switch-in-process", "profile-stamp-mismatch"):
         assert moved not in launch_codes.PLANNED_CODES
     assert launch_codes.category("allowed-hosts-unset") == "policy-denial"
