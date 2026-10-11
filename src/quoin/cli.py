@@ -762,9 +762,70 @@ def _opencode_config_evaluate(args: argparse.Namespace, *, allow_unqualified: bo
     return ev, env, home
 
 
+_EXPLAIN_RUN_MISSING = "quoin: no effective-configuration record was found for that run"
+_EXPLAIN_RUN_INVALID = "quoin: the run id is not valid"
+_EXPLAIN_EXPORT_UNAVAILABLE = "quoin: no effective-configuration record is available to export for this configuration"
+_EXPLAIN_EXPORT_FAILED = "quoin: the export could not be written; check the profile storage directory"
+
+
+def _explain_persisted_run(args: argparse.Namespace) -> int:
+    from quoin.opencode_adapter import explain, runstore
+
+    try:
+        run_id = runstore.check_run_id(args.run)
+        directory = runstore.inspect_store(pathlib.Path(args.project_root).resolve())
+        if directory is None:
+            print(_EXPLAIN_RUN_MISSING, file=sys.stderr)
+            return 2
+        stored = runstore.load_record(directory, run_id)
+    except runstore.RunStoreError as exc:
+        print(_EXPLAIN_RUN_INVALID if exc.code == "invalid-run-id" else _EXPLAIN_RUN_MISSING, file=sys.stderr)
+        return 2
+    record = ((stored or {}).get("prepared") or {}).get("effective_config")
+    if not isinstance(record, dict):
+        print(_EXPLAIN_RUN_MISSING, file=sys.stderr)
+        return 2
+    if args.json:
+        doc = {
+            "explain_format": explain.EXPLAIN_FORMAT,
+            "run_id": run_id,
+            "effective_config": explain.effective_section(record),
+        }
+        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    else:
+        sys.stdout.write(explain.render_record_text(record))
+    return 0
+
+
+def _explain_export(ev, record: dict, home) -> int:
+    from quoin.opencode_adapter import jsonio, profile_dirs
+
+    root = profile_dirs.adapter_root(os.environ, home)
+    try:
+        dirs = profile_dirs.prepare(root, ev.profile, ev.effective.classification)
+        jsonio.ensure_private_directory(dirs.exports)
+        name = "explain-%s.json" % str(record["digest"]).split(":", 1)[-1][:12]
+        target = dirs.exports / name
+        jsonio.write_private_atomic(target, jsonio.dump_canonical(record))
+    except (profile_dirs.ProfileDirError, jsonio.UnsafeDirectoryError, OSError, ValueError):
+        print(_EXPLAIN_EXPORT_FAILED, file=sys.stderr)
+        return 2
+    try:
+        shown = "~/" + str(target.relative_to(home))
+    except ValueError:
+        shown = "<state>/" + str(target.relative_to(root))
+    print("export written: %s" % shown, file=sys.stderr)
+    return 0
+
+
 def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
     from quoin.opencode_adapter import compiler, explain, paths, profile_dirs
 
+    if getattr(args, "run", None) is not None:
+        if getattr(args, "export", False):
+            print("quoin: --export cannot be combined with --run", file=sys.stderr)
+            return 2
+        return _explain_persisted_run(args)
     got = _opencode_config_evaluate(args, allow_unqualified=False)
     if isinstance(got, int):
         return got
@@ -772,13 +833,24 @@ def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
     try:
         output_dir = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
         result, gate = explain.try_build(ev)
+        preview = _make_opencode_driver(args.project_root).effective_preview(
+            ev.profile, ambient_env=dict(os.environ), evaluation=ev
+        )
         text = explain.render(
             ev, redact=args.redact, as_json=args.json, compile_result=result,
             output_dir=output_dir, gate_failure=gate,
+            effective=explain.NO_PREVIEW if preview is None else preview,
         )
     except paths.AdapterDataMissing:
         print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
         return 2
+    if getattr(args, "export", False):
+        if preview is None:
+            print(_EXPLAIN_EXPORT_UNAVAILABLE, file=sys.stderr)
+            return 2
+        code = _explain_export(ev, preview[0], home)
+        if code != 0:
+            return code
     sys.stdout.write(text)
     return 1 if (gate is not None or compiler.compile_blockers(ev)) else 0
 
@@ -3232,6 +3304,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Mask endpoint hosts, host lists, keychain accounts and the output location.",
     )
     config_explain_p.add_argument("--json", action="store_true", help="Print JSON instead of text.")
+    config_explain_p.add_argument(
+        "--run",
+        metavar="RUN_ID",
+        help="Show the effective-configuration record stored for a run instead of evaluating now.",
+    )
+    config_explain_p.add_argument(
+        "--export",
+        action="store_true",
+        help="Also write the live effective-configuration record under the profile's exports directory.",
+    )
 
     config_compile_p = opencode_config_sub.add_parser(
         "compile",

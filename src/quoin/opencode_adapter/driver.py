@@ -1303,6 +1303,28 @@ class OpenCodeDriver:
         pair or that the profile does not allow, then build the child
         environment and the effective-configuration record. Returns
         ``(child_env, record, inventory)``. May raise `LaunchRefused`."""
+        layer_check, hardening = self._layer_check(
+            root, cfg_env, config_path, fresh, evaluation, metadata, dirs, cwd=cwd,
+            ambient=self._env, capture=False,
+        )
+        child_env = launch_env.build_env(
+            ambient=self._env, compile_sidecar=fresh.sidecar,
+            providers=evaluation.effective.providers,
+            resolver=self._resolver_factory(self._env, platform=self._platform),
+            data_dir=dirs.data, config_path=config_path, redactor=redactor,
+            state_dir=dirs.root, profile_root=dirs.root, adapter_root=self.state_root,
+            storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
+        )
+        effective = self._effective_record(
+            layer_check, fresh, evaluation, dirs, version, child_env.names(), self._env, child_env.redactor,
+        )
+        return child_env, effective, layer_check.inventory
+
+    def _layer_check(
+        self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any, evaluation: Any,
+        metadata: Any, dirs: "profile_dirs.ProfileDirs", *, cwd: Optional[Path], ambient: Mapping[str, str],
+        capture: bool,
+    ) -> Tuple[Any, Dict[str, str]]:
         owned_agents = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "agent"}
         owned_commands = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "command"}
         scan_env = {"OPENCODE_CONFIG": str(config_path)}
@@ -1323,26 +1345,25 @@ class OpenCodeDriver:
             cwd=cwd if cwd is not None else root, env=scan_env, home=self._home,
             compiled_doc=fresh.document,
             owned_agents=owned_agents, owned_commands=owned_commands,
-            data_dir=dirs.data, ambient_env=self._env, expected=expected,
-            hardening_names=tuple(hardening),
+            data_dir=dirs.data, ambient_env=ambient, expected=expected,
+            hardening_names=tuple(hardening), capture=capture,
         )
-        child_env = launch_env.build_env(
-            ambient=self._env, compile_sidecar=fresh.sidecar,
-            providers=evaluation.effective.providers,
-            resolver=self._resolver_factory(self._env, platform=self._platform),
-            data_dir=dirs.data, config_path=config_path, redactor=redactor,
-            state_dir=dirs.root, profile_root=dirs.root, adapter_root=self.state_root,
-            storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
-        )
-        child_names = set(child_env.names())
-        stripped = sorted(n for n in self._env if n.startswith("OPENCODE_") and n not in child_names)
-        other_dropped = sum(1 for n in self._env if not n.startswith("OPENCODE_") and n not in child_names)
+        return layer_check, hardening
+
+    def _effective_record(
+        self, layer_check: Any, fresh: Any, evaluation: Any, dirs: "profile_dirs.ProfileDirs",
+        version: str, env_names: Sequence[str], ambient: Mapping[str, str], redactor: Any,
+    ) -> Dict[str, Any]:
+        classification = evaluation.effective.classification
+        child_names = set(env_names)
+        stripped = sorted(n for n in ambient if n.startswith("OPENCODE_") and n not in child_names)
+        other_dropped = sum(1 for n in ambient if not n.startswith("OPENCODE_") and n not in child_names)
         effective = effective_record.build(
             inventory=layer_check.inventory, verdicts=layer_check.verdicts,
             profile=evaluation.profile, classification=classification,
             opencode_version=version, compiled_digest=fresh.digest,
             native_sha256=fresh.sidecar["native_sha256"],
-            env_names=child_env.names(),
+            env_names=list(env_names),
             launcher_names=[n for n in launch_env.LAUNCHER_ENV_NAMES if n in child_names],
             stripped_names=stripped, stripped_other_count=other_dropped,
             dirs_display={
@@ -1351,11 +1372,52 @@ class OpenCodeDriver:
             },
             credentials=launch_env.credential_kinds(fresh.sidecar, evaluation.effective.providers),
             policy=effective_record.policy_section(evaluation.effective),
-            redactor=child_env.redactor,
+            redactor=redactor,
         )
         # Persist exactly the redacted form, so the stored object and its digest agree.
-        effective = json.loads(effective_record.serialise(effective, child_env.redactor).decode("utf-8"))
-        return child_env, effective, layer_check.inventory
+        return json.loads(effective_record.serialise(effective, redactor).decode("utf-8"))
+
+    def effective_preview(
+        self, profile: str, *, ambient_env: Optional[Mapping[str, str]] = None, evaluation: Any = None,
+    ) -> Optional[Tuple[Dict[str, Any], Any]]:
+        """The effective-configuration record and layer check a launch of
+        this profile would produce now, or ``None`` when no launch could be
+        prepared (blocked configuration, missing install record, no pinned
+        runtime). Creates no directory, writes nothing and resolves no
+        credential."""
+        ambient = dict(self._env if ambient_env is None else ambient_env)
+        cfg_env = {key: ambient[key] for key in _CONFIG_ENV_KEYS if key in ambient}
+        try:
+            version = qualification.pinned_version()
+            if evaluation is None:
+                evaluation = compiler.evaluate(
+                    project_root=self.project_root, profile=profile, env=cfg_env, home=self._home,
+                    now=datetime.fromtimestamp(self._clock(), timezone.utc),
+                )
+            if not compiler.launchable(evaluation):
+                return None
+            fresh = compiler.build(evaluation)
+            metadata = install.load_metadata(self.project_root)
+            if metadata is None:
+                return None
+            target = profile_dirs.compiled_dir(self.state_root, evaluation.profile, evaluation.project_root)
+            dirs = profile_dirs.ProfileDirs.at(profile_dirs.profile_root(self.state_root, evaluation.profile))
+        except (ConfigErrors, roles.AllowUnqualifiedRefused, adapter_paths.AdapterDataMissing,
+                install.InstallError, compiler.CompileBlocked, compiler.CompileGateError, ValueError, OSError):
+            return None
+        config_path = target / compiler.NATIVE_FILE
+        layer_check, hardening = self._layer_check(
+            self.project_root, cfg_env, config_path, fresh, evaluation, metadata, dirs,
+            cwd=None, ambient=ambient, capture=True,
+        )
+        names_ = launch_env.expected_env_names(
+            ambient=ambient, compile_sidecar=fresh.sidecar, providers=evaluation.effective.providers,
+            storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
+        )
+        record = self._effective_record(
+            layer_check, fresh, evaluation, dirs, version, names_, ambient, launch_env.Redactor(),
+        )
+        return record, layer_check
 
     @staticmethod
     def _fetch_watch(evaluation: Any, scanned: Any) -> Tuple[Tuple[str, str], ...]:

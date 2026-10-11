@@ -114,6 +114,8 @@ MESSAGES: Dict[str, str] = {
     "runtime-gateway-unqualified": "a role's model has no valid gateway qualification",
     "runtime-compile-blocked": "the profile cannot be compiled for OpenCode (%(names)s)",
     "runtime-profile-launchable": "the profile's configuration compiles and is launchable",
+    "inventory-refused": "a launch of this profile would be refused: %(name)s (layer %(path)s)",
+    "inventory-clean": "the configuration sources a launch would read hold %(count)s entries, none of them refused",
     "isolation-verified": "profile isolation for this profile is attested by a root-owned declaration",
     "isolation-unverified": "profile isolation for this profile is not attested by a root-owned declaration",
     "isolation-required-unverified": "the profile requires managed isolation, which no root-owned declaration attests",
@@ -154,6 +156,7 @@ _REMEDIATIONS: Dict[str, str] = {
     "runtime-adapter-data-missing": "reinstall quoin",
     "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the pinned OpenCode version",
     "runtime-compile-blocked": "run `quoin opencode config explain --profile PROFILE` to see the blocking findings",
+    "inventory-refused": "run `quoin opencode config explain --profile PROFILE` to see the refused entry and its layer, then remove it from that layer",
     "isolation-verified": "the declaration describes how the profile was set up; it does not prove the operating system enforces it",
     "isolation-unverified": "ask an administrator for a root-owned isolation declaration, or run the profile as a convenience profile",
     "isolation-required-unverified": "install the root-owned isolation declaration, or set the profile isolation to convenience",
@@ -894,7 +897,7 @@ def _runtime_findings(root: Path, env, home, roots, proc_snapshot=None) -> List[
     return findings
 
 
-def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> List[Finding]:
+def _profile_findings(root: Path, profile: str, config_env, home, now=None, ambient_env=None) -> List[Finding]:
     """Evaluate one profile's configuration the way a phase run does and
     report what would refuse it. Opt-in, configuration only: credentials are
     never resolved, and the text is built only from closed sets (class names,
@@ -933,7 +936,9 @@ def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> L
         return [make_finding("runtime-adapter-data-missing", "error")]
 
     if compiler.launchable(evaluation):
-        return [make_finding("runtime-profile-launchable", "ok")]
+        return [make_finding("runtime-profile-launchable", "ok")] + _inventory_findings(
+            root, profile, evaluation, home, ambient_env if ambient_env is not None else config_env, now
+        )
     blockers = compiler.compile_blockers(evaluation)
     unqualified = all(
         f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
@@ -944,6 +949,30 @@ def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> L
             "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
         )]
     return [make_finding("runtime-gateway-unqualified", "error")]
+
+
+def _inventory_findings(root: Path, profile: str, evaluation, home, ambient, now) -> List[Finding]:
+    """What the launch's configuration inventory says about this profile: the
+    first refusal, else a count of the entries it inspected. The driver is
+    imported here because it imports this module at its top."""
+    from . import driver  # noqa: PLC0415
+
+    try:
+        clock = (lambda: now.timestamp()) if now is not None else None
+        kw = {"clock": clock} if clock is not None else {}
+        drv = driver.OpenCodeDriver(root, env=dict(ambient or {}), home=home, **kw)
+        preview = drv.effective_preview(profile, ambient_env=dict(ambient or {}), evaluation=evaluation)
+    except Exception:  # noqa: BLE001 - the inventory finding is advisory; the other findings stand
+        return []
+    if preview is None:
+        return []
+    record, layer_check = preview
+    refusal = layer_check.refusal
+    if refusal is not None:
+        return [make_finding("inventory-refused", "error", path=refusal.layer, name=refusal.code)]
+    entries = record.get("entries")
+    count = len(entries) if isinstance(entries, list) else int((entries or {}).get("count", 0))
+    return [make_finding("inventory-clean", "ok", count=count)]
 
 
 def run_host(
@@ -988,7 +1017,7 @@ def run_host(
     findings.extend(_binary_findings(which, version_runner, source_dir))
     findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
     if profile is not None:
-        findings.extend(_profile_findings(root, profile, config_env or {}, Path(home), now))
+        findings.extend(_profile_findings(root, profile, config_env or {}, Path(home), now, ambient_env=env))
 
     return findings
 

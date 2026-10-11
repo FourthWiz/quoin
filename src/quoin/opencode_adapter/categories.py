@@ -66,6 +66,7 @@ FINDING_CATEGORIES.update(
         "policy-denial",
         "runtime-config-policy-denied",
         "runtime-plugin-directory-present",
+        "inventory-refused",
         "isolation-verified",
         "isolation-unverified",
         "isolation-required-unverified",
@@ -120,6 +121,7 @@ FINDING_CATEGORIES.update(
         "runtime-stale-lock",
         "runtime-command-agent-not-primary",
         "runtime-profile-launchable",
+        "inventory-clean",
         "runtime-adapter-data-missing",
     )
 )
