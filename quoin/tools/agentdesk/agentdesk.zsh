@@ -3,6 +3,12 @@
 # Ghostty/Zellij + Claude default + Codex on demand
 # ============================================================
 
+# Version of the public non-interactive interface (--panes, --no-prompt,
+# --if-exists). Bumped when that interface changes. Consumers detect it with a
+# static grep for '^AGENTDESK_API_VERSION=' rather than sourcing this file,
+# because sourcing has side effects (it exports ZELLIJ_SOCKET_DIR).
+AGENTDESK_API_VERSION=1
+
 # IVG-135: work around upstream zellij socket-path length bug (#4211/#2817).
 # zellij's default socket dir (which can resolve to macOS's long $TMPDIR,
 # e.g. /var/folders/<hash>/<hash>/T/) can push the AF_UNIX socket path over
@@ -621,7 +627,10 @@ agentdesk() {
   local mode=""
   local custom_name=""
   local force_pick=""
+  local pick_flag=""
+  local panes_raw="" panes_given="" noprompt="" if_exists=""
   local -a tokens=()
+  local -a panes_tokens=()
 
   # ── Arg parsing (BEFORE Zellij guard so --help always works) ──────────────
   while [ "$#" -gt 0 ]; do
@@ -652,6 +661,35 @@ agentdesk() {
         ;;
       --pick)
         force_pick=1
+        pick_flag=1
+        ;;
+      --panes)
+        shift
+        if [ "$#" -eq 0 ]; then
+          printf 'Error: --panes requires a value (e.g. codex,codex,shell).\n' >&2
+          return 1
+        fi
+        panes_raw="$1"
+        panes_given=1
+        ;;
+      --no-prompt)
+        noprompt=1
+        ;;
+      --if-exists)
+        shift
+        if [ "$#" -eq 0 ]; then
+          printf 'Error: --if-exists requires a value (attach, new, fail).\n' >&2
+          return 1
+        fi
+        case "$1" in
+          attach|new|fail)
+            if_exists="$1"
+            ;;
+          *)
+            printf 'Error: invalid --if-exists value "%s". Valid values: attach, new, fail\n' "$1" >&2
+            return 1
+            ;;
+        esac
         ;;
       -h|--help)
         cat <<'HELP'
@@ -662,6 +700,7 @@ Usage:
   agentdesk --mode solo|duo|trio
   agentdesk claude [codex] [shell] [...]
   agentdesk --pick
+  agentdesk [--name NAME] --panes LIST [--no-prompt] [--if-exists attach|new|fail]
 
 Modes:
   solo   — one Claude pane full-width
@@ -685,6 +724,7 @@ Layout memory:
   Project key namespace (proj:) and named-session namespace (name:) are
   independent — a named session save never affects a bare project launch.
   Set AGENTDESK_PICK=1 to force the picker via environment variable.
+  --panes launches are one-shot and never update this file.
 
 Behavior:
   Re-running with a live same-named session prompts to attach to it (default) or
@@ -694,6 +734,25 @@ Behavior:
   Note: attaching (the default) reconnects to the session as-is — any --mode or
   window-type tokens passed on this invocation are ignored for an attach; reply
   'n' to build the requested layout fresh instead (see MINOR-2, T-01).
+
+Non-interactive launch (AGENTDESK_API_VERSION=1):
+  --panes LIST       explicit pane composition: window types joined by ',' or '+'
+                     (e.g. codex,codex,shell). The Spend tab is still added.
+                     Not combinable with --mode, positional tokens or --pick.
+                     Never remembered in, nor read from, the layout memory file.
+  --no-prompt        never ask anything (no dashboard question, no picker, no
+                     attach-or-new question), even in a terminal. Without
+                     --panes/--mode it uses the saved or fixed layout.
+                     AGENTDESK_PICK is ignored.
+  --if-exists attach|new|fail
+                     what to do when a same-named session already exists (live or
+                     resurrectable). Default: prompt in a terminal, new suffixed
+                     session otherwise; with --no-prompt the default is attach.
+                     On attach, --panes/--mode are ignored. Attaching needs a
+                     terminal (zellij attach fails without one), so callers
+                     without a terminal that want a guaranteed result use new or
+                     fail.
+  Example: agentdesk --name deck --panes codex,codex,shell --no-prompt --if-exists attach
 
 Examples:
   agentdesk
@@ -729,6 +788,11 @@ HELP
   if [ -n "${AGENTDESK_PICK:-}" ]; then
     force_pick=1
   fi
+  # The environment picker request is inert for the public non-interactive
+  # interface, like --pick is inert when --mode/tokens are given.
+  if [ -n "$panes_given" ] || [ -n "$noprompt" ]; then
+    force_pick=""
+  fi
 
   # ── Conflict checks (BEFORE Zellij guard) ─────────────────────────────────
   if [ -n "$mode" ] && [ "${#tokens[@]}" -gt 0 ]; then
@@ -741,6 +805,56 @@ HELP
     printf 'Error: cannot mix session name with window-type tokens.\n' >&2
     printf 'Use --name for a named session with a mode/layout (e.g. agentdesk --mode trio --name my-session).\n' >&2
     return 1
+  fi
+
+  if [ -n "$panes_given" ] && [ -n "$mode" ]; then
+    printf 'Error: --panes cannot be combined with --mode.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$panes_given" ] && [ "${#tokens[@]}" -gt 0 ]; then
+    printf 'Error: --panes cannot be combined with positional window-type tokens.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$panes_given" ] && [ -n "$pick_flag" ]; then
+    printf 'Error: --panes cannot be combined with --pick.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$noprompt" ] && [ -n "$pick_flag" ]; then
+    printf 'Error: --pick is interactive and cannot be combined with --no-prompt.\n' >&2
+    return 1
+  fi
+
+  # ── --panes list parsing (BEFORE Zellij guard; strict, no trimming) ───────
+  if [ -n "$panes_given" ]; then
+    local _pane _non_spend=0
+    local -a _pane_parts
+    _pane_parts=("${(@s:,:)${panes_raw//+/,}}")
+    if [ "${#_pane_parts[@]}" -eq 0 ]; then
+      _pane_parts=("")
+    fi
+    for _pane in "${_pane_parts[@]}"; do
+      case "$_pane" in
+        claude|codex|shell|status|ccr|spend)
+          panes_tokens+=("$_pane")
+          if [ "$_pane" != "spend" ]; then _non_spend=1; fi
+          ;;
+        "")
+          printf 'Error: --panes has an empty entry in "%s".\n' "$panes_raw" >&2
+          return 1
+          ;;
+        *)
+          printf 'Error: unknown pane "%s" in --panes. Valid: claude, codex, shell, status, ccr, spend\n' "$_pane" >&2
+          return 1
+          ;;
+      esac
+    done
+    if [ "$_non_spend" -eq 0 ]; then
+      printf 'Error: --panes needs at least one pane other than spend.\n' >&2
+      return 1
+    fi
   fi
 
   # ── Zellij guard (AFTER arg parsing) ──────────────────────────────────────
@@ -773,11 +887,30 @@ HELP
   layout_key="$(_agentdesk_layout_key "$custom_name" "$project_root")"
 
   # ── Resolve session name suffix (attach-or-new prompt, IVG-109) ───────────
-  local resolved_name
+  # Prompts only happen on a terminal and never under --no-prompt.
+  local interactive=""
+  if [ -t 0 ] && [ -z "$noprompt" ]; then interactive=1; fi
+
+  local resolved_name policy
   resolved_name="$(_agentdesk_next_session_name "$session_name")"
   if [ "$resolved_name" != "$session_name" ]; then
     # $session_name is currently a live Zellij session (collision).
-    if [ -t 0 ]; then
+    policy="$if_exists"
+    if [ -z "$policy" ] && [ -n "$noprompt" ]; then policy=attach; fi
+    if [ -z "$policy" ]; then policy=legacy; fi
+    if [ "$policy" = "attach" ]; then
+      echo "Attaching to existing session '$session_name'."
+      agentdesk-attach "$session_name"
+      return $?
+    elif [ "$policy" = "fail" ]; then
+      printf "Error: session '%s' already exists (--if-exists fail).\n" "$session_name" >&2
+      printf '(To resume it: agentdesk-attach %s)\n' "$session_name" >&2
+      return 1
+    elif [ "$policy" = "new" ]; then
+      echo "Session '$session_name' already exists; starting new session '$resolved_name' instead."
+      echo "(To resume the existing session: agentdesk-attach $session_name)"
+      session_name="$resolved_name"
+    elif [ -n "$interactive" ]; then
       printf "Session '%s' already exists. Attach to it, or start a new session '%s'? [A/n]: " \
         "$session_name" "$resolved_name" >&2
       local reply
@@ -795,7 +928,7 @@ HELP
           ;;
       esac
     else
-      # Non-TTY: preserve exact prior behavior — never prompt, never hang.
+      # Non-interactive: preserve exact prior behavior — never prompt, never hang.
       echo "Session '$session_name' already exists; starting new session '$resolved_name' instead."
       echo "(To resume the existing session: agentdesk-attach $session_name)"
       session_name="$resolved_name"
@@ -838,7 +971,9 @@ HELP
   # These env vars are read by the layout injection block (T-05) below.
   # Must run before the if/elif layout branch so all branches see the flags.
   # _agentdesk_open_dashboard self-skips on non-TTY and always returns 0.
-  _agentdesk_open_dashboard
+  if [ -z "$noprompt" ]; then
+    _agentdesk_open_dashboard
+  fi
 
   # ── Resolve layout (D-08 branch order) ────────────────────────────────────
   # Declare ALL locals before the if/elif chain, outside any redirection block.
@@ -846,8 +981,17 @@ HELP
   local layout_path="" layout_tmp=""
   local saved_value="" saved_value_loaded=""
   local -a effective_tokens=() picked_tokens=()
+  local persist_layout=1
 
-  if [ -n "$mode" ] || [ "${#tokens[@]}" -gt 0 ]; then
+  if [ "${#panes_tokens[@]}" -gt 0 ]; then
+    # Branch 0: explicit --panes list — one-shot, never loaded or persisted
+    layout_tmp="$(_agentdesk_gen_layout "${panes_tokens[@]}")"
+    layout_path="$layout_tmp"
+    persist_layout=""
+    # shellcheck disable=SC2064
+    trap "rm -f $layout_tmp" EXIT INT TERM
+
+  elif [ -n "$mode" ] || [ "${#tokens[@]}" -gt 0 ]; then
     # Branch 1: explicit mode or tokens — generate KDL at runtime
     if [ -n "$mode" ]; then
       case "$mode" in
@@ -869,7 +1013,7 @@ HELP
   elif [ -n "$force_pick" ]; then
     # Branch 2: --pick or AGENTDESK_PICK=1 — force interactive picker
     # --pick is inert when --mode/tokens are given (branch 1 wins above).
-    if [ -t 0 ]; then
+    if [ -n "$interactive" ]; then
       # TTY: show picker
       local picked
       picked="$(_agentdesk_pick_layout)"
@@ -915,7 +1059,7 @@ HELP
       fi
     else
       # Corrupt saved value — fall through to branch 4/5
-      if [ -t 0 ]; then
+      if [ -n "$interactive" ]; then
         local picked
         picked="$(_agentdesk_pick_layout)"
         local picker_rc=$?
@@ -940,7 +1084,7 @@ HELP
       fi
     fi
 
-  elif [ -t 0 ]; then
+  elif [ -n "$interactive" ]; then
     # Branch 4: no saved layout + TTY — first-run interactive picker
     local picked
     picked="$(_agentdesk_pick_layout)"
@@ -976,7 +1120,9 @@ HELP
 
   # Save layout AFTER existence check passes (D-05): never persist a value
   # whose layout file is missing (would fail every subsequent launch).
-  _agentdesk_save_layout "$layout_key" "$saved_value" 2>/dev/null || true
+  if [ -n "$persist_layout" ]; then
+    _agentdesk_save_layout "$layout_key" "$saved_value" 2>/dev/null || true
+  fi
 
   echo "Starting agent desk:"
   echo "  PROJECT_ROOT=$PROJECT_ROOT"
@@ -995,7 +1141,7 @@ HELP
   # Branch 3 (saved-layout restore) note: if AGENTDESK_DASHBOARD=1, this block
   # injects a Dashboard tab into the restored layout path — no regeneration via
   # _agentdesk_gen_layout. The saved layout file on disk is never modified.
-  if [ "${AGENTDESK_DASHBOARD:-0}" = "1" ]; then
+  if [ -z "$noprompt" ] && [ "${AGENTDESK_DASHBOARD:-0}" = "1" ]; then
     local dash_tab_tmp
     # BSD mktemp only randomizes *trailing* X's; a suffix after XXXXXX creates a
     # literal path that collides on the second call ("File exists"). Drop the suffix,

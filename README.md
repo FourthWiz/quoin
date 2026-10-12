@@ -430,6 +430,7 @@ agentdesk <session-name>               # named session with fixed layout
 agentdesk --mode solo|duo|trio         # preset layout
 agentdesk --mode trio --name my-sess   # named preset-layout session
 agentdesk claude [codex] [shell] [...]  # custom layout from window-type tokens
+agentdesk --name deck --panes codex,codex,shell --no-prompt   # scripted launch, no questions
 ```
 
 **Preset modes:**
@@ -458,10 +459,24 @@ agentdesk claude codex       # custom two-pane layout
 agentdesk claude claude      # two Claude panes side-by-side
 ```
 
-If Zellij is not running, agentdesk starts a new session. agentdesk never
-re-attaches: if a session with the chosen name already exists, it starts a
-fresh session with a numeric suffix (foo_1, foo_2, …). To resume an existing
+If Zellij is not running, agentdesk starts a new session. If a session with
+the chosen name already exists, agentdesk in a terminal asks whether to attach
+or start a new one; non-interactive runs start a fresh session with a numeric
+suffix (foo_1, foo_2, ...). `--if-exists` overrides this. To resume an existing
 session, use `agentdesk-attach SESSION-NAME`.
+
+**Scripted launch:**
+
+- `--panes LIST` starts the session with an explicit pane set (for example
+  `codex,codex,shell`, joined by `,` or `+`). The Spend tab is still added, and
+  the list is never saved to the layout memory file.
+- `--no-prompt` asks nothing: no dashboard question, no picker, no
+  attach-or-new question.
+- `--if-exists attach|new|fail` decides what happens when the session name is
+  already taken. With `--no-prompt` the default is `attach`. `attach` needs a
+  terminal (Ghostty and other terminal launchers are fine).
+- `AGENTDESK_API_VERSION` in `agentdesk.zsh` marks the version of this
+  interface; tools can detect it with a plain grep without sourcing the file.
 
 ## Architecture
 
