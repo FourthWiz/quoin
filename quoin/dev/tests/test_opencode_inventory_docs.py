@@ -22,6 +22,8 @@ REPRESENTATIVE = {
     "inventory-formatter": ("formatter", "project", "f", {}),
     "inventory-agent-permission": (
         "agent", "project", "a", {"model": None, "has_permission": True, "has_tools": False, "unknown": False}),
+    "inventory-agent-unreadable": (
+        "command", "project", "c", {"model": None, "has_permission": False, "has_tools": False, "unknown": True}),
     "inventory-config-permission": ("permission", "global", "permission", {}),
     "inventory-remote-config": ("remote-config", "global", "auth", {"type": "wellknown"}),
     "inventory-account-busy": ("account-config", "account", "db", {"busy": True}),

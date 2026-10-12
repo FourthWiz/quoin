@@ -728,10 +728,15 @@ def _check_policy(
                 outcome["unverified_accepted"] = run_id
             return
         command = (resume_hint + " --accept-unverified-policy") if resume_hint else None
+        if isinstance(stored, Mapping) and isinstance(stored.get("policy"), Mapping):
+            cause = ("the run that produced this continuation recorded its policy without a profile, "
+                     "so it cannot be tied to this profile")
+        else:
+            cause = ("the run that produced this continuation has no effective-config record (prepared before this "
+                     "version)")
         raise HandoffRefused(
             "scope-unverifiable",
-            "the run that produced this continuation has no effective-config record (prepared before this "
-            "version)" + ("; continue anyway with: %s" % command if command else ""),
+            cause + ("; continue anyway with: %s" % command if command else ""),
             (run_id,),
         )
     if callable(requested_policy):

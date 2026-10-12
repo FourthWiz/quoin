@@ -411,96 +411,177 @@ def plugin_dir_states(bases: Iterable[Path]) -> List[Tuple[Path, str]]:
     return found
 
 
+_WS = " \t"
+_KEY_CHARS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.")
+# Printable ASCII plus tab, CR and LF. Anything else in a frontmatter block
+# (a non-ASCII space, a control character) is a place where Python and the
+# YAML loader OpenCode uses could disagree, so the block is unknown.
+_FRONTMATTER_CHARS = re.compile(r"[^\t\r\n\x20-\x7e]")
+_DOCUMENT_END = re.compile(r"\.\.\.(?:[ \t]+(?:#.*)?)?")
+_COMMENT = re.compile(r"[ \t]#")
+# Plain scalars YAML resolves to something other than a string: null, a
+# boolean, a number (including `.inf` and `0x1f`) or a date.
+_NON_STRING_PLAIN = re.compile(r"~|null|true|false|[-+.0-9].*", re.IGNORECASE)
+
+
 def _unquote(text: str) -> Tuple[str, bool]:
-    """(value, plain). A quoted scalar is returned without its quotes."""
-    text = text.strip()
-    if len(text) >= 2 and text[0] in "\"'":
-        end = text.find(text[0], 1)
-        while text[0] == "'" and end != -1 and text[end + 1:end + 2] == "'":
-            end = text.find("'", end + 2)
-        if end == -1:
-            return text, False
-        return text[1:end], True
-    return text, False
+    """(value, quoted). A quoted scalar that closes on this line, followed by
+    nothing but spaces, tabs or a comment, is returned without its quotes (a
+    doubled single quote inside single quotes is one quote). Anything else
+    comes back as it was, with `quoted` False."""
+    text = text.strip(_WS)
+    if len(text) < 2 or text[0] not in "\"'":
+        return text, False
+    quote = text[0]
+    end = text.find(quote, 1)
+    while quote == "'" and end != -1 and text[end + 1:end + 2] == "'":
+        end = text.find("'", end + 2)
+    if end == -1:
+        return text, False
+    tail = text[end + 1:]
+    if tail.strip(_WS) and not (tail[:1] in _WS and tail.lstrip(_WS).startswith("#")):
+        return text, False
+    inner = text[1:end]
+    return (inner.replace("''", "'") if quote == "'" else inner), True
 
 
-def scan_frontmatter(text: str) -> Dict[str, Any]:
+def _closed_flow(value: str) -> bool:
+    """True when a flow value closes on its own line with nothing but spaces,
+    tabs or a comment after it. Quotes are not tracked, so a bracket inside a
+    quoted item can only make the value look unclosed (and so unknown)."""
+    depth = 0
+    for position, char in enumerate(value):
+        if char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                tail = value[position + 1:]
+                return not tail.strip(_WS) or (tail[:1] in _WS and tail.lstrip(_WS).startswith("#"))
+    return False
+
+
+def _blank_or_comment(line: str) -> bool:
+    stripped = line.lstrip(_WS)
+    return not stripped or stripped.startswith("#")
+
+
+def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict grammar, read top to bottom
     """Read the top-level `model`, `permission` and `tools` keys of a markdown
-    file's YAML frontmatter without a YAML parser. Anything this scanner
-    cannot fully read (block scalars, tags, anchors, flow values, duplicate
-    keys, a missing closing fence, an indented root mapping, escaped or
-    non-identifier keys, a language-tagged opening fence) is reported as
-    `unknown`. The `permission` and `tools` keys are noted from the key alone,
+    file's YAML frontmatter without a YAML parser.
+
+    The block is closed where gray-matter closes it (the first later line that
+    starts with `---`) and is read with a deliberately small grammar: printable
+    ASCII only, one `key: value` per unindented line, plain or single-line
+    quoted values. Anything outside that grammar (a non-ASCII or control
+    character, block scalars, tags, anchors, multi-line flow or quoted values,
+    duplicate keys, a missing closing fence, an indented root mapping, escaped
+    or non-identifier keys, a language-tagged opening fence, content after a
+    `...` document end) is reported as `unknown`, which the work profile
+    refuses. The `permission` and `tools` keys are noted from the key alone,
     whatever shape their value has."""
     unknown: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
-    if text.startswith("\ufeff"):
+    clean: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
+    if text.startswith("﻿"):
         text = text[1:]
-    lines = re.split(r"\r\n|\r|\n", text)  # js-yaml breaks lines on a bare CR too
-    if not lines or lines[0].rstrip() != "---":
-        if lines and lines[0].startswith("---"):
-            return unknown  # `---yaml`, `---json`, `---js`: a loader may still read it
-        if any(line.strip() == "---" for line in lines[:3]):
+    if not text.startswith("---"):
+        head = re.split(r"\r\n|\r|\n", text, maxsplit=3)[:3]
+        if any(line.strip(_WS) == "---" for line in head):
             return unknown
-        return {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
-    end = next((i for i in range(1, len(lines)) if lines[i].rstrip() in ("---", "...")), None)
-    if end is None:
+        return clean
+    rest = text[3:]
+    newline = rest.find("\n")
+    if newline == -1 or not re.fullmatch(r"[ \t]*\r?", rest[:newline]):
+        return unknown  # `----`, `---yaml`, `---json`, or a fence line ended by a bare CR
+    close = rest.find("\n---")
+    if close == -1:
+        return unknown  # gray-matter would read the whole file as frontmatter
+    body = rest[newline + 1:close] if close > newline else ""
+    if _FRONTMATTER_CHARS.search(rest[:close]):
         return unknown
-    facts: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
+    block = re.split(r"\r\n|\r|\n", body)  # js-yaml breaks lines on a bare CR too
+    for position, line in enumerate(block):
+        if line.startswith("..."):
+            if not _DOCUMENT_END.fullmatch(line) or not all(_blank_or_comment(ln) for ln in block[position + 1:]):
+                return unknown
+            block = block[:position]
+            break
+    facts = dict(clean)
     seen = set()
-    block = lines[1:end]
-    first = next((line for line in block if line.strip() and not line.lstrip().startswith("#")), None)
-    if first is not None and first[0] in " \t":
+    first = next((line for line in block if not _blank_or_comment(line)), None)
+    if first is not None and first[0] in _WS:
         return unknown  # an indented root mapping: every key below is top level
     for index, line in enumerate(block):
-        if not line.strip():
+        stripped = line.lstrip(_WS)
+        if not stripped:
             continue
-        stripped = line.lstrip(" \t")
         if "\t" in line[: len(line) - len(stripped)] and not stripped.startswith("#"):
             return unknown  # js-yaml 3 counts only spaces as indentation
         if line[0] in " \t#":
             continue
-        if line.startswith(("{", "[", "<<", "&", "*", "%", "---", "?", "- ", "!", "|", ">")):
+        if line.startswith(("{", "[", "]", "}", "<<", "&", "*", "%", "-", "?", "!", "|", ">", ",", "@", "`")):
             return unknown
-        key, sep, rest = line.partition(":")
-        if not sep:
-            return unknown
-        raw_key = key.strip()
-        if raw_key[:1] in "\"'":
-            key, plain = _unquote(raw_key)
-            if not plain or "\\" in key:
+        if line[0] in "\"'":
+            raw_key, plain = _unquote_key(line)
+            if raw_key is None:
                 return unknown
+            key, rest_of_line = raw_key, plain
         else:
-            key = raw_key
-        if not key or not all(c.isalnum() or c in "_-." for c in key):
+            key, sep, rest_of_line = line.partition(":")
+            if not sep:
+                return unknown
+            key = key.rstrip(_WS)
+        if rest_of_line[:1] not in ("", " ", "\t"):
+            return unknown  # `a:b` is one plain scalar to YAML, not a key
+        if not key or not all(c in _KEY_CHARS for c in key):
             return unknown
         if key in seen:
             return unknown
         seen.add(key)
-        value = rest.strip()
-        if value[:1] in "\"'" and value and not _unquote(value)[1]:
+        value = rest_of_line.strip(_WS)
+        if value and value[0] in "\"'" and not _unquote(value)[1]:
             return unknown  # a quoted value that does not close on its own line
+        if value and value[0] in "[{" and not _closed_flow(value):
+            return unknown  # a flow value continued on a later line, or followed by more text
         if key == "permission":
             facts["has_permission"] = True
         elif key == "tools":
             facts["has_tools"] = True
         elif key == "model":
-            if value.startswith(("|", ">", "!", "&", "*", "{", "[")):
+            if value.startswith(("|", ">", "!", "&", "*", "{", "[", "@", "`", "%")):
                 return unknown
             text_value, quoted = _unquote(value)
-            if quoted and "\\" in text_value and value[0] == '"':
+            if quoted and value[0] == '"' and "\\" in text_value:
                 return unknown
             if not quoted:
-                text_value = text_value.split(" #", 1)[0].rstrip()
-            if not text_value:
-                nested = index + 1 < len(block) and block[index + 1][:1] in (" ", "\t")
-                if nested:
-                    return unknown
-                continue
-            following = next((ln for ln in block[index + 1:] if ln.strip()), None)
-            if following is not None and following[0] in " \t":
-                return unknown  # a plain scalar folded onto the next line
-            facts["model"] = text_value
+                text_value = "" if text_value.startswith("#") else _COMMENT.split(text_value, 1)[0].rstrip(_WS)
+            later = next((ln for ln in block[index + 1:] if not _blank_or_comment(ln)), None)
+            if later is not None and later[0] in _WS:
+                return unknown  # a nested value under an empty model, or a plain scalar folded onto it
+            if not quoted and _NON_STRING_PLAIN.fullmatch(text_value):
+                return unknown  # a non-string model: OpenCode would not read it as a model name
+            if text_value:
+                facts["model"] = text_value
     return facts
+
+
+def _unquote_key(line: str) -> Tuple[Optional[str], str]:
+    """For a line whose key is quoted: (key, text after the colon), or
+    (None, "") when the key is not a closed, escape-free quoted scalar
+    followed by a colon."""
+    quote = line[0]
+    end = line.find(quote, 1)
+    while quote == "'" and end != -1 and line[end + 1:end + 2] == "'":
+        end = line.find("'", end + 2)
+    if end == -1:
+        return None, ""
+    inner = line[1:end]
+    if quote == '"' and "\\" in inner:
+        return None, ""
+    after = line[end + 1:].lstrip(_WS)
+    if not after.startswith(":"):
+        return None, ""
+    return (inner.replace("''", "'") if quote == "'" else inner), after[1:]
 
 
 class _Builder:
@@ -691,28 +772,45 @@ def _lock_covers(directory: Path) -> bool:
     return isinstance(declared, dict) and isinstance(locked, dict) and set(declared) <= set(locked)
 
 
-def _walk_markdown(directory: Path, overflow: List[bool]):
+def _walk_markdown(directory: Path, problems: List[str]):
     """Yield `(path, is_symlinked_dir)` for every markdown file under
     `directory`, and for every symlinked subdirectory (not descended into, so
-    the caller can record it). Appends to `overflow` when the walk stops at
-    the entry bound, so the caller can mark the source truncated."""
+    the caller can record it). Appends `"unreadable"` to `problems` for a
+    directory that cannot be listed and `"truncated"` when the walk stops at
+    the entry bound. Each listing is read one entry at a time, so a single huge
+    directory is never read past the bound."""
     count = 0
-    for current, dirnames, filenames in os.walk(str(directory), onerror=lambda exc: overflow.append(True)):
-        dirnames.sort()
-        for dirname in dirnames:
-            count += 1
-            if count > _MAX_WALK:
-                overflow.append(True)
-                return
-            if os.path.islink(os.path.join(current, dirname)):
-                yield Path(current) / dirname, True
-        for filename in sorted(filenames):
-            count += 1
-            if count > _MAX_WALK:
-                overflow.append(True)
-                return
-            if filename.endswith(".md"):
-                yield Path(current) / filename, False
+    pending = [str(directory)]
+    while pending:
+        current = pending.pop()
+        subdirs: List[str] = []
+        files: List[str] = []
+        try:
+            with os.scandir(current) as listing:
+                for item in listing:
+                    count += 1
+                    if count > _MAX_WALK:
+                        problems.append("truncated")
+                        return
+                    try:
+                        is_dir = item.is_dir()
+                    except OSError:
+                        is_dir = False
+                    (subdirs if is_dir else files).append(item.name)
+        except OSError:
+            problems.append("unreadable")
+            continue
+        descend = []
+        for name in sorted(subdirs):
+            path = os.path.join(current, name)
+            if os.path.islink(path):
+                yield Path(path), True
+            else:
+                descend.append(path)
+        for name in sorted(files):
+            if name.endswith(".md"):
+                yield Path(current) / name, False
+        pending.extend(reversed(descend))
 
 
 def collect(
@@ -872,8 +970,8 @@ def collect(
             directory = base / sub
             if not os.path.isdir(str(directory)):
                 continue
-            overflow: List[bool] = []
-            for path, is_link_dir in _walk_markdown(directory, overflow):
+            problems: List[str] = []
+            for path, is_link_dir in _walk_markdown(directory, problems):
                 if is_link_dir:
                     # A symlinked directory is not followed; it may hold agents
                     # or commands the scanner cannot judge, so it is unknown.
@@ -899,8 +997,10 @@ def collect(
                 inv.markdown.append((path, kind, rel_name))
                 builder.entry(idx, kind, sub, rel_name, owned=is_owned, facts=facts,
                               digest=digest or name_digest(str(path)))
-            if overflow:
-                builder.set_state(idx, "truncated")
+            if problems:
+                state = "unreadable" if "unreadable" in problems else "truncated"
+                if builder.sources[idx].state != "unreadable":
+                    builder.set_state(idx, state)
         for sub in _TOOL_SUBDIRS:
             directory = base / sub
             try:
@@ -980,6 +1080,7 @@ REFUSAL_TEXT: Dict[str, str] = {
     "inventory-lsp": "a language server entry is configured outside the compiled configuration",
     "inventory-formatter": "a formatter entry is configured outside the compiled configuration",
     "inventory-agent-permission": "an agent defines its own permission or tool rules",
+    "inventory-agent-unreadable": "an agent or command definition could not be read completely, so its model and rules are unknown",
     "inventory-config-permission": "a top-level permission block is configured outside the compiled configuration",
     "inventory-remote-config": "remote or account configuration is present for this profile",
     "inventory-account-busy": "the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry",
@@ -1118,7 +1219,7 @@ def _judge(entry: Entry, expected: Expected) -> Tuple[str, Optional[str]]:  # no
         if model is not None and model not in expected.model_allowlist:
             return "refused", code
         if facts.get("unknown"):
-            return work_refuses(code)
+            return work_refuses("inventory-agent-unreadable")
         if kind == "agent" and (facts.get("has_permission") or facts.get("has_tools")):
             return work_refuses("inventory-agent-permission")
         return "recorded", None

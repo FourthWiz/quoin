@@ -492,13 +492,32 @@ managed layers); a definition of the same name in a project file is refused,
 because the project could otherwise change the command that runs. Definitions
 from the project `.opencode` directory or `OPENCODE_CONFIG_DIR` are refused the
 same way, and a project `enabled` toggle is judged on the allow-list alone
-(it cannot change the command). Agent and
-command markdown whose frontmatter the scanner cannot read completely (an
-indented root mapping, escaped or non-identifier keys, a language-tagged
-`---yaml` fence, flow, anchor or tag values on `model`) is treated as unknown
-and refused for work. A symlinked tool file or agent directory, and a markdown
-tree larger than the scan bound (files and directories both count), are counted
-rather than skipped, and under the work profile that refuses the launch. A personal
+(it cannot change the command).
+
+Agent and command frontmatter is read by a small, strict scanner rather than a
+YAML parser. It closes the block where OpenCode's loader does (the first later
+line that starts with `---`) and accepts printable ASCII only: any non-ASCII
+character (including non-breaking and other Unicode spaces) or control
+character anywhere in the block makes the file unknown. So do constructs
+outside its grammar: an indented root mapping, escaped or non-identifier keys,
+a key whose colon is not followed by a space, a language-tagged `---yaml`
+fence, a `...` document end followed by anything but blank or comment lines,
+a quoted or flow value that does not close on its own line or has text glued
+after it, block, flow, anchor or tag values on `model`, a `model` that YAML
+reads as null, a boolean, a number or a date, and an empty `model` followed
+(after any blank or comment lines) by an indented value. An unknown file is
+refused for work with `inventory-agent-unreadable` and recorded for personal.
+Ordinary files (one `key: value` per line, comments, blank lines, CRLF line
+ends, block-scalar descriptions, nested `permission` and `tools` blocks) read
+as known. Because of the ASCII rule, a work profile refuses an agent or command
+whose description contains, for example, an accented letter; keep work-profile
+agent frontmatter in ASCII.
+
+A symlinked tool file or agent directory, and a markdown tree larger than the
+scan bound (files and directories both count), are counted rather than
+skipped; a directory that cannot be listed marks its source unreadable, and a
+tree past the bound marks it truncated. Under the work profile either refuses
+the launch. A personal
 profile can also be refused by a global `tools` toggle, `disabled_providers`,
 an out-of-profile provider or model, or a legacy TOML file; remove or move the
 entry, or run the launch under a profile whose policy permits it.
@@ -518,6 +537,7 @@ docs test compares it with the code.
 | `inventory-lsp` | refused | recorded | a language server entry is configured outside the compiled configuration |
 | `inventory-formatter` | refused | recorded | a formatter entry is configured outside the compiled configuration |
 | `inventory-agent-permission` | refused | recorded | an agent defines its own permission or tool rules |
+| `inventory-agent-unreadable` | refused | recorded | an agent or command definition could not be read completely, so its model and rules are unknown |
 | `inventory-config-permission` | refused | recorded | a top-level permission block is configured outside the compiled configuration |
 | `inventory-remote-config` | refused | recorded | remote or account configuration is present for this profile |
 | `inventory-account-busy` | refused | recorded | the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry |

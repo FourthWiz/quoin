@@ -97,6 +97,7 @@ INVENTORY_CODES: Dict[str, str] = {
     "executable-fetch-possible": "policy-denial",
     "inventory-account-busy": "policy-denial",
     "inventory-agent-permission": "policy-denial",
+    "inventory-agent-unreadable": "policy-denial",
     "inventory-config-permission": "policy-denial",
     "inventory-disabled-providers": "policy-denial",
     "inventory-formatter": "policy-denial",
