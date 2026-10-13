@@ -1,10 +1,51 @@
 'use strict';
 // Elgato local WebSocket API. No external network connections or npm dependencies.
 const {spawn} = require('node:child_process');
-const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
-const base = process.env.QUOIN_DECK_RUNTIME || path.join(os.homedir(),'Library/Application Support/QuoinStreamDeck');
+
+function loadConfig(dir = __dirname){
+  try{
+    const cfg = JSON.parse(fs.readFileSync(path.join(dir,'plugin-config.json'),'utf8'));
+    if(!cfg || typeof cfg.python!=='string' || typeof cfg.runtime!=='string' || typeof cfg.state_root!=='string')return null;
+    return cfg;
+  }catch(e){return null;}
+}
+function buildInvocation(cfg, action, extra){
+  const argv = ['-E','-s',path.join(cfg.runtime,'current','dashboard.py'),action,...(extra?[JSON.stringify(extra)]:[])];
+  const env = {...process.env, QUOIN_DECK_RUNTIME: cfg.runtime, QUOIN_DECK_STATE_ROOT: cfg.state_root};
+  return [cfg.python, argv, env];
+}
+function invoke(cfg, action, extra, timeoutMs = cfg.invoke_timeout_ms || 20000){
+  return new Promise((resolve,reject)=>{
+    const [bin,argv,env] = buildInvocation(cfg, action, extra);
+    let done=false, out='', err='';
+    const settle = (fn,v)=>{ if(done)return; done=true; clearTimeout(timer); fn(v); };
+    const child = spawn(bin, argv, {env, stdio:['ignore','pipe','pipe']});
+    const timer = setTimeout(()=>{ try{child.kill('SIGKILL');}catch(e){} settle(reject,new Error('timeout')); }, timeoutMs);
+    child.stdout.on('data',x=>out+=x); child.stderr.on('data',x=>err+=x);
+    child.on('error',e=>settle(reject,e));
+    child.on('close',code=>code?settle(reject,new Error(err||'Action failed')):settle(resolve,out));
+  });
+}
+// Only the failure class is written, never an error message (messages can carry payload text).
+function writeHealth(cfg, obj){
+  const dir = path.join(cfg.state_root,'state');
+  fs.mkdirSync(dir,{recursive:true,mode:0o700});
+  const target = path.join(dir,'health.json'), temp = target+'.'+process.pid+'.tmp';
+  fs.writeFileSync(temp, JSON.stringify(obj), {mode:0o600});
+  fs.renameSync(temp, target);
+}
+function errorType(e){
+  const m = String(e && e.message || '');
+  if(m==='timeout')return 'timeout';
+  if(e && e.code==='ENOENT')return 'spawn';
+  if(e instanceof SyntaxError)return 'parse';
+  return 'exit';
+}
+
+function start(){
+const cfg = loadConfig();
 const args = process.argv.slice(2);
 const arg = flag => args[args.indexOf(flag)+1];
 const ws = new WebSocket('ws://127.0.0.1:'+arg('-port'));
@@ -15,7 +56,7 @@ const colors={working:'#175583',attention:'#bd4d10',done:'#227648',idle:'#3c4859
 function send(event,context,payload){if(ws.readyState===1)ws.send(JSON.stringify({event,context,payload}));}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));}
 function icon(lines,color){return 'data:image/svg+xml;base64,'+Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" rx="14" fill="${color}"/>${lines.map((s,i)=>`<text x="72" y="${30+i*28}" fill="white" font-family="Helvetica,Arial" font-size="${i===0?18:14}" text-anchor="middle">${esc(s)}</text>`).join('')}</svg>`).toString('base64');}
-function invoke(action,extra){return new Promise((resolve,reject)=>{const child=spawn('/usr/bin/python3',[path.join(base,'dashboard.py'),action,...(extra?[JSON.stringify(extra)]:[])],{stdio:['ignore','pipe','pipe']});let out='',err=''; child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>err+=s);child.on('error',reject);child.on('close',code=>code?reject(new Error(err||'Action failed')):resolve(out));});}
+const call=(action,extra)=>invoke(cfg,action,extra);
 function render(){
  const pages=Math.max(1,Math.ceil(agents.length/9));page=Math.min(page,pages-1);
  const waiting=agents.filter(a=>a.status==='attention');
@@ -38,11 +79,12 @@ function render(){
  if(lastAttention!==null && signature.some(id=>!lastAttention.includes(id)))spawn('/usr/bin/afplay',['/System/Library/Sounds/Glass.aiff'],{stdio:'ignore'}).on('error',()=>{});
  lastAttention=signature;
 }
-async function refresh(){if(busy)return;busy=true;try{agents=JSON.parse(await invoke('snapshot'));fs.writeFileSync(path.join(base,'health.json'),JSON.stringify({updated:Date.now(),agents:agents.length}));render();}catch(e){fs.writeFileSync(path.join(base,'health.json'),JSON.stringify({updated:Date.now(),error:e.message}));send('logMessage',undefined,{message:'Quoin snapshot: '+e.message});}finally{busy=false;}}
+async function refresh(){if(busy||!cfg)return;busy=true;try{agents=JSON.parse(await call('snapshot'));writeHealth(cfg,{updated:Date.now(),agents:agents.length});render();}catch(e){try{writeHealth(cfg,{updated:Date.now(),error_type:errorType(e)});}catch(h){}send('logMessage',undefined,{message:'Quoin snapshot: '+errorType(e)});}finally{busy=false;}}
+function renderNoConfig(){for(const [context] of contexts){send('setImage',context,{image:icon(['НЕТ КОНФИГА','plugin-config.json'],'#6b2b2b'),target:0});}}
 ws.addEventListener('open',()=>{ws.send(JSON.stringify({event:arg('-registerEvent'),uuid:arg('-pluginUUID')}));refresh();});
 ws.addEventListener('message',async ({data})=>{
  try{const m=JSON.parse(data);
- if(m.event==='willAppear'){contexts.set(m.context,{settings:m.payload.settings||{}});render();}
+ if(m.event==='willAppear'){contexts.set(m.context,{settings:m.payload.settings||{}});cfg?render():renderNoConfig();}
  if(m.event==='willDisappear')contexts.delete(m.context);
  if(m.event==='didReceiveSettings'){const v=contexts.get(m.context);if(v){v.settings=m.payload.settings||{};render();}}
  const v=contexts.get(m.context);if(!v)return;
@@ -51,15 +93,20 @@ ws.addEventListener('message',async ({data})=>{
    if(actionBusy)return;actionBusy=true;
    try{
    const held=Date.now()-(v.down||Date.now())>650,role=v.settings.role||'agent';
-   if(role==='agent' && v.pressed)await invoke('focus',v.pressed);
+   if(role==='agent' && v.pressed)await call('focus',v.pressed);
    else if(role==='attention'){
      if(held){page=(page+1)%Math.max(1,Math.ceil(agents.length/9));render();}
-     else{const waiting=agents.filter(a=>a.status==='attention');if(waiting.length)await invoke('focus',waiting[pressedAttention++%waiting.length]);}
-   }else if(role!=='agent')await invoke(role==='desk'&&held?'menu':role);
+     else{const waiting=agents.filter(a=>a.status==='attention');if(waiting.length)await call('focus',waiting[pressedAttention++%waiting.length]);}
+   }else if(role!=='agent')await call(role==='desk'&&held?'menu':role);
    await refresh();
    }finally{actionBusy=false;}
  }
- }catch(e){send('showAlert',JSON.parse(data).context,{});send('logMessage',undefined,{message:'Quoin action: '+e.message});}
+ }catch(e){send('showAlert',JSON.parse(data).context,{});send('logMessage',undefined,{message:'Quoin action: '+errorType(e)});}
 });
 ws.addEventListener('close',()=>process.exit(0));
-setInterval(refresh,2500);setInterval(render,1000);
+if(!cfg)send('logMessage',undefined,{message:'Quoin: plugin-config.json missing or invalid'});
+setInterval(refresh,2500);setInterval(()=>cfg?render():renderNoConfig(),1000);
+}
+
+module.exports = {loadConfig, buildInvocation, invoke, writeHealth};
+if (require.main === module) start();
