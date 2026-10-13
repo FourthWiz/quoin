@@ -165,8 +165,10 @@ def deck_home(tmp_path, monkeypatch):
         lambda cmd, mode=os.F_OK | os.X_OK, path=None: real_which(cmd, mode, path or pinned),
     )
     monkeypatch.setattr(pathlib.Path, "home", classmethod(lambda cls: pathlib.Path(str(home))))
+    python = fakebin / "python"
+    python.symlink_to(sys.executable)
     (runtime / "install-manifest.json").write_text(json.dumps({
-        "binaries": {k: v for k, v in FAKE_BINS.items()},
+        "binaries": dict(FAKE_BINS, python=str(python)),
         "zellij_socket_dir": str(zsock),
     }))
     state = types.SimpleNamespace(
@@ -227,7 +229,9 @@ def payload(deck_home, monkeypatch):
 
             def recording_load(*a, **kw):
                 env = real_load(*a, **kw)
-                deck_home.recorded.append(env)
+                # Loads with an explicit environ dict are self-contained table tests.
+                if not a and "environ" not in kw:
+                    deck_home.recorded.append(env)
                 return env
 
             monkeypatch.setattr(deckenv, "load", recording_load)
