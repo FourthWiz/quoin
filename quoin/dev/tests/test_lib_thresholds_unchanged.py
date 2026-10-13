@@ -31,7 +31,8 @@ def test_four_bps_literals_present():
 
 def test_compute_utilization_formula_unchanged():
     text = _text()
-    # The load-bearing awk formula: printf "%d\n", (b / bpt / lim) * 10000
+    # The load-bearing awk formula, now the byte-estimate fallback used when a
+    # transcript has no usage record: printf "%d\n", (b / bpt / lim) * 10000
     assert re.search(
         r'printf\s+"%d\\n",\s*\(b\s*/\s*bpt\s*/\s*lim\)\s*\*\s*10000',
         text,

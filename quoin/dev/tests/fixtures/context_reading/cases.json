@@ -1,0 +1,722 @@
+{
+ "cases": [
+  {
+   "id": "base-200k",
+   "file": "base_200k.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "opus55-live",
+   "file": "opus55_live.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1708,
+    "source": "real",
+    "tokens": 170852,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "suffix-1m",
+   "file": "suffix_1m.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "peak-unknown",
+   "file": "peak_unknown.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1200,
+    "source": "real",
+    "tokens": 120000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "unknown-default",
+   "file": "unknown_default.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "override",
+   "file": "opus55_live.jsonl",
+   "env": {
+    "QUOIN_EFFECTIVE_CONTEXT_LIMIT": "400000"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 4271,
+    "source": "real",
+    "tokens": 170852,
+    "window": 400000
+   }
+  },
+  {
+   "id": "override-invalid-abc",
+   "file": "base_200k.jsonl",
+   "env": {
+    "QUOIN_EFFECTIVE_CONTEXT_LIMIT": "abc"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "override-invalid-0",
+   "file": "base_200k.jsonl",
+   "env": {
+    "QUOIN_EFFECTIVE_CONTEXT_LIMIT": "0"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "override-invalid-1234567890",
+   "file": "base_200k.jsonl",
+   "env": {
+    "QUOIN_EFFECTIVE_CONTEXT_LIMIT": "1234567890"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "disable-1m-1",
+   "file": "disable_1m.jsonl",
+   "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "disable-1m-TRUE",
+   "file": "disable_1m.jsonl",
+   "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "TRUE"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "disable-1m-yes",
+   "file": "disable_1m.jsonl",
+   "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "yes"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "disable-1m-on",
+   "file": "disable_1m.jsonl",
+   "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "on"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "disable-1m-off-0",
+   "file": "disable_1m.jsonl",
+   "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "0"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "disable-1m-off-false",
+   "file": "disable_1m.jsonl",
+   "env": {
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT": "false"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "high-200k",
+   "file": "high_200k.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 9250,
+    "source": "real",
+    "tokens": 185000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "clamp-structured",
+   "file": "clamp_structured.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "clamp-text",
+   "file": "clamp_text.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "clamp-text-string-content",
+   "file": "clamp_text_string.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "clamp-latched-older",
+   "file": "clamp_older.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 7500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "clamp-neg-prose",
+   "file": "clamp_neg_prose.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "clamp-neg-tool-use",
+   "file": "clamp_neg_tool_use.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "clamp-neg-tool-result",
+   "file": "clamp_neg_tool_result.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "clamp-neg-other-synthetic",
+   "file": "clamp_neg_other.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "clamp-neg-not-flagged",
+   "file": "clamp_neg_flag.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "clamp-neg-sidechain",
+   "file": "clamp_neg_side.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 150000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "sidechain-newest",
+   "file": "sidechain_newest.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "sidechain-no-peak",
+   "file": "sidechain_no_peak.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 6000,
+    "source": "real",
+    "tokens": 120000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "synthetic-newest",
+   "file": "synthetic_newest.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "compact-newer",
+   "file": "compact_newer.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 178,
+    "source": "real",
+    "tokens": 17869,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "compact-older",
+   "file": "compact_older.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1500,
+    "source": "real",
+    "tokens": 30000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "compact-only",
+   "file": "compact_only.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1202,
+    "source": "real",
+    "tokens": 24043,
+    "window": 200000
+   }
+  },
+  {
+   "id": "compact-no-post",
+   "file": "compact_no_post.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "compact-pre-out-of-range",
+   "file": "compact_pre_bound.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 6000,
+    "source": "real",
+    "tokens": 120000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "compact-raises-peak",
+   "file": "compact_peak.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 200,
+    "source": "real",
+    "tokens": 20000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "compact-sidechain-ignored",
+   "file": "compact_side.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "env-1m",
+   "file": "base_200k.jsonl",
+   "env": {
+    "ANTHROPIC_MODEL": "claude-opus-4-6[1m]"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 1000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "settings-user-1m",
+   "file": "base_200k.jsonl",
+   "env": {},
+   "settings": {
+    "user": "opus[1m]"
+   },
+   "expect": {
+    "bps": 1000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "settings-project-1m",
+   "file": "base_200k.jsonl",
+   "env": {},
+   "settings": {
+    "project": "claude-opus-4-6[1m]"
+   },
+   "expect": {
+    "bps": 1000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "settings-local-1m",
+   "file": "base_200k.jsonl",
+   "env": {},
+   "settings": {
+    "project_local": "claude-opus-4-6[1M]"
+   },
+   "expect": {
+    "bps": 1000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "settings-precedence-local",
+   "file": "base_200k.jsonl",
+   "env": {},
+   "settings": {
+    "project_local": "claude-opus-4-6",
+    "user": "opus[1m]"
+   },
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "settings-precedence-env",
+   "file": "base_200k.jsonl",
+   "env": {
+    "ANTHROPIC_MODEL": "claude-opus-4-6"
+   },
+   "settings": {
+    "user": "opus[1m]",
+    "project": "opus[1m]"
+   },
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "settings-ignored-for-native-1m",
+   "file": "opus55_live.jsonl",
+   "env": {},
+   "settings": {
+    "user": "claude-opus-4-6"
+   },
+   "expect": {
+    "bps": 1708,
+    "source": "real",
+    "tokens": 170852,
+    "window": 1000000
+   }
+  },
+  {
+   "id": "tail-midline",
+   "file": "tail_midline.jsonl",
+   "env": {
+    "QUOIN_CONTEXT_TAIL_BYTES": "4096"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "tail-toolresult",
+   "file": "tail_toolresult.jsonl",
+   "env": {
+    "QUOIN_CONTEXT_TAIL_BYTES": "4096"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 86,
+    "source": "estimated",
+    "tokens": null,
+    "window": null
+   }
+  },
+  {
+   "id": "tail-boundary-equal",
+   "file": "tail_eq.jsonl",
+   "env": {
+    "QUOIN_CONTEXT_TAIL_BYTES": "4096"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "tail-boundary-plus-one",
+   "file": "tail_plus1.jsonl",
+   "env": {
+    "QUOIN_CONTEXT_TAIL_BYTES": "4096"
+   },
+   "settings": {},
+   "expect": {
+    "bps": 34,
+    "source": "estimated",
+    "tokens": null,
+    "window": null
+   }
+  },
+  {
+   "id": "unicode-crlf",
+   "file": "unicode_crlf.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "malformed",
+   "file": "malformed.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "string-field",
+   "file": "string_field.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "bool-field",
+   "file": "bool_field.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "zero-usage",
+   "file": "zero_usage.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1,
+    "source": "estimated",
+    "tokens": null,
+    "window": null
+   }
+  },
+  {
+   "id": "no-usage-object",
+   "file": "no_usage.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 1,
+    "source": "estimated",
+    "tokens": null,
+    "window": null
+   }
+  },
+  {
+   "id": "empty-file",
+   "file": "empty.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 0,
+    "source": "estimated",
+    "tokens": null,
+    "window": null
+   }
+  },
+  {
+   "id": "model-missing",
+   "file": "model_missing.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 5000,
+    "source": "real",
+    "tokens": 100000,
+    "window": 200000
+   }
+  },
+  {
+   "id": "last-usage-wins",
+   "file": "last_wins.jsonl",
+   "env": {},
+   "settings": {},
+   "expect": {
+    "bps": 3000,
+    "source": "real",
+    "tokens": 60000,
+    "window": 200000
+   }
+  }
+ ]
+}

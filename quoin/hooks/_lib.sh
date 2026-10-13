@@ -66,9 +66,24 @@ read_constants() {
     export BPT LIMIT STOP_BPS BLOCK_BPS STALE_DAYS SESSIONSTART_SWEEP_DAYS COMPACT_FIRST_BPS PANIC_BPS DISCOVERY_STALE_DAYS SERENA_STALE_DAYS RUN_STATE_STALE_DAYS PRECOMPACT_NORUN_CHECKPOINT TELEMETRY_MAX_BYTES
 }
 
-# compute_utilization <transcript_path> — returns a basis-point INTEGER (0..10000)
-# representing the utilization of the effective context limit.
-# Example: returns "8540" for 85.40% utilization.
+# compute_utilization <transcript_path> [project_root] — returns a basis-point
+# INTEGER representing the utilization of the model's context window.
+# Example: returns "8540" for 85.40% utilization. Unclamped, so values above
+# 10000 are normal on overflow.
+#
+# Thin wrapper over compute_context_reading (below): the number is read from the
+# newest assistant usage record in the transcript tail and divided by the model's
+# real context window. When no usage can be read (no jq, empty or non-JSONL file)
+# it falls back to the byte estimate in _ctx_estimate.
+#
+# Returns non-zero if transcript_path is empty or file is unreadable.
+compute_utilization() {
+    _cu_out=$(compute_context_reading "$1" "${2:-}") || return 1
+    printf '%s\n' "${_cu_out%% *}"
+}
+
+# _ctx_estimate <transcript_path> — byte-size estimate of utilization, used when
+# no usage record can be read. Prints a basis-point integer.
 #
 # Uses POSIX awk for arithmetic (NOT bc — bc is not in POSIX core).
 # 64-bit awk integers required: POSIX awk on darwin AND GNU defaults to 64-bit
@@ -78,20 +93,230 @@ read_constants() {
 #
 # Portability: wc -c < FILE works on darwin BSD AND GNU; do NOT use stat -c %s
 # (GNU-only — explicitly rejected per architecture rev-6.1 MIN-1).
-#
-# Returns non-zero if transcript_path is empty or file is unreadable.
-compute_utilization() {
-    _transcript_path="$1"
-    if [ -z "$_transcript_path" ] || ! [ -r "$_transcript_path" ]; then
-        return 1
-    fi
-    _bytes=$(wc -c < "$_transcript_path" 2>/dev/null) || return 1
+_ctx_estimate() {
+    _ccr_est_path="$1"
+    _ccr_est_bytes=$(wc -c < "$_ccr_est_path" 2>/dev/null) || return 1
     # Remove leading whitespace from wc output (BSD wc includes leading spaces)
-    _bytes=$(printf '%s' "$_bytes" | awk '{print $1}')
+    _ccr_est_bytes=$(printf '%s' "$_ccr_est_bytes" | awk '{print $1}')
     # awk arithmetic: (bytes / bpt / limit) * 10000 → basis-point integer
     # BPT may be a decimal like "8.0"; awk handles floating-point naturally
-    awk -v b="$_bytes" -v bpt="$BPT" -v lim="$LIMIT" \
+    awk -v b="$_ccr_est_bytes" -v bpt="$BPT" -v lim="$LIMIT" \
         'BEGIN{ printf "%d\n", (b / bpt / lim) * 10000 }'
+}
+
+# _ctx_positive_int <raw> — print raw as a positive integer of at most 9 digits
+# (leading zeros stripped); print nothing and return 1 otherwise. Digits are
+# validated before any arithmetic so a hostile value cannot reach $(( )).
+_ctx_positive_int() {
+    _cpi_raw="$1"
+    case "$_cpi_raw" in
+        ''|*[!0-9]*) return 1 ;;
+    esac
+    while :; do
+        case "$_cpi_raw" in
+            0?*) _cpi_raw=${_cpi_raw#0} ;;
+            *) break ;;
+        esac
+    done
+    [ "$_cpi_raw" = "0" ] && return 1
+    [ "${#_cpi_raw}" -le 9 ] || return 1
+    printf '%s\n' "$_cpi_raw"
+}
+
+# _ctx_tail_bytes — print how many trailing transcript bytes to scan
+# (QUOIN_CONTEXT_TAIL_BYTES; default 2097152, capped at 67108864).
+_ctx_tail_bytes() {
+    _ctb_raw="${QUOIN_CONTEXT_TAIL_BYTES:-}"
+    case "$_ctb_raw" in
+        ''|*[!0-9]*) printf '%s\n' 2097152; return 0 ;;
+    esac
+    while :; do
+        case "$_ctb_raw" in
+            0?*) _ctb_raw=${_ctb_raw#0} ;;
+            *) break ;;
+        esac
+    done
+    if [ "$_ctb_raw" = "0" ]; then
+        printf '%s\n' 2097152
+    elif [ "${#_ctb_raw}" -ge 9 ] || [ "$_ctb_raw" -gt 67108864 ]; then
+        printf '%s\n' 67108864
+    else
+        printf '%s\n' "$_ctb_raw"
+    fi
+}
+
+# _ctx_truthy <raw> — success when raw is 1/true/yes/on (any case).
+_ctx_truthy() {
+    case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+        1|true|yes|on) return 0 ;;
+    esac
+    return 1
+}
+
+# _ctx_has_1m <model> — success when the model string carries a [1m] suffix.
+_ctx_has_1m() {
+    case "$(printf '%s' "$1" | tr 'A-Z' 'a-z')" in
+        *'[1m]'*) return 0 ;;
+    esac
+    return 1
+}
+
+# _ctx_settings_model <project_root> — print the first non-empty model string
+# from ANTHROPIC_MODEL, project settings.local.json, project settings.json, then
+# the user settings.json. Prints nothing when none is set.
+_ctx_settings_model() {
+    _csm_proj="$1"
+    if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+        printf '%s\n' "$ANTHROPIC_MODEL"
+        return 0
+    fi
+    for _csm_file in "$_csm_proj/.claude/settings.local.json" \
+                     "$_csm_proj/.claude/settings.json" \
+                     "${HOME:-/nonexistent}/.claude/settings.json"; do
+        [ -r "$_csm_file" ] || continue
+        _csm_val=$(jq -r 'if (.model | type) == "string" then .model else "" end' "$_csm_file" 2>/dev/null) || continue
+        if [ -n "$_csm_val" ]; then
+            printf '%s\n' "$_csm_val"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# jq program that scans transcript lines (one JSON record per line) and prints
+# "tokens window_hint has_1m peak clamp" for the newest reading, or nothing when
+# no usage record qualifies. Sidechain and synthetic error records never count as
+# usage. The model rules between the markers mirror the Python reader in
+# context_budget_guard.py (a drift test compares the two blocks).
+_CTX_JQ_PROGRAM='
+def num: if type == "number" then . else 0 end;
+def inrange: type == "number" and . >= 1 and . <= 999999999999;
+def ctxlower: ascii_downcase;
+# ctx-rules-begin
+def _ctx_strip: [
+  "^(us|eu|apac|global)[.]",
+  "^anthropic[.]",
+  "-v[0-9]+(:[0-9]+)?$",
+  ":[0-9]+$",
+  "@[0-9]{8}$",
+  "-[0-9]{8}$"
+];
+def _ctx_rules: [
+  ["^claude-(fable|mythos)(-|$)", 1000000],
+  ["^claude-(opus|sonnet|haiku)-([5-9]|[1-9][0-9]+)(-[0-9]+)?$", 1000000],
+  ["^claude-opus-4-(7|8)$", 1000000],
+  ["^claude-", 200000]
+];
+# ctx-rules-end
+def normalize:
+  (if type == "string" then ctxlower else "" end)
+  | split("[1m]") | join("")
+  | reduce _ctx_strip[] as $p (.; sub($p; ""));
+def window_hint:
+  normalize as $m
+  | ([_ctx_rules[] as $rule | select($m | test($rule[0])) | $rule[1]] | first) // 0;
+def has1m: type == "string" and (ctxlower | contains("[1m]"));
+def clamptext:
+  if type == "string" then contains("Usage credits required for 1M context")
+  elif type == "array" then
+    any(.[]; type == "object" and .type == "text" and (.text | type) == "string"
+             and (.text | contains("Usage credits required for 1M context")))
+  else false end;
+reduce (inputs | try fromjson catch null) as $r (
+  {t: null, m: "", pk: 0, cl: false};
+  if ($r | type) != "object" then .
+  else
+    . as $s
+    | try (
+        if $r.isSidechain == true then .
+        elif $r.type == "assistant" and ($r.message | type) == "object" then
+          $r.message as $msg
+          | if $msg.model == "<synthetic>" then
+              if $r.isApiErrorMessage == true
+                 and ($r.apiError == "long_context_credits_required"
+                      or ($msg.content | clamptext))
+              then .cl = true else . end
+            elif ($msg.usage | type) == "object" then
+              $msg.usage as $u
+              | ((($u.input_tokens | num) + ($u.cache_read_input_tokens | num)
+                  + ($u.cache_creation_input_tokens | num)) | floor) as $sum
+              | if $sum >= 1 and $sum <= 999999999999 then
+                  .t = $sum
+                  | .m = (if ($msg.model | type) == "string" then $msg.model else "" end)
+                  | .pk = ([.pk, $sum] | max)
+                else . end
+            else . end
+        elif $r.type == "system" and $r.subtype == "compact_boundary"
+             and ($r.compactMetadata | type) == "object" then
+          $r.compactMetadata as $md
+          | (if ($md.preTokens | inrange) then .pk = ([.pk, ($md.preTokens | floor)] | max) else . end)
+          | (if ($md.postTokens | inrange) then .t = ($md.postTokens | floor) else . end)
+        else . end
+      ) catch $s
+  end
+)
+| if .t == null then empty
+  else [.t, (.m | window_hint), (if (.m | has1m) then 1 else 0 end), .pk, (if .cl then 1 else 0 end)]
+       | map(tostring) | join(" ")
+  end
+'
+
+# compute_context_reading <transcript_path> [project_root] — one-line reading of
+# how full the context window is. Prints "<bps> real <tokens> <window>" when a
+# usage record was read, or "<bps> estimated - -" when it fell back to the byte
+# estimate. project_root (default $PWD) locates project settings for the [1m]
+# probe. Returns non-zero when the path is empty or unreadable.
+compute_context_reading() {
+    _ccr_path="$1"
+    _ccr_proj="${2:-$PWD}"
+    if [ -z "$_ccr_path" ] || ! [ -r "$_ccr_path" ]; then
+        return 1
+    fi
+    command -v jq >/dev/null 2>&1 || { _ccr_est=$(_ctx_estimate "$_ccr_path") || return 1; printf '%s estimated - -\n' "$_ccr_est"; return 0; }
+    _ccr_size=$(wc -c < "$_ccr_path" 2>/dev/null) || return 1
+    _ccr_size=$(printf '%s' "$_ccr_size" | awk '{print $1}')
+    _ccr_tail=$(_ctx_tail_bytes)
+    if [ "$_ccr_size" -gt "$_ccr_tail" ]; then
+        _ccr_out=$(tail -c "$_ccr_tail" "$_ccr_path" 2>/dev/null | tail -n +2 | jq -R -n -r "$_CTX_JQ_PROGRAM" 2>/dev/null)
+    else
+        _ccr_out=$(jq -R -n -r "$_CTX_JQ_PROGRAM" < "$_ccr_path" 2>/dev/null)
+    fi
+    _ccr_tok=""; _ccr_hint=""; _ccr_h1m=""; _ccr_peak=""; _ccr_clamp=""
+    read -r _ccr_tok _ccr_hint _ccr_h1m _ccr_peak _ccr_clamp <<EOF
+$_ccr_out
+EOF
+    # Every field must be plain digits within bounds before arithmetic.
+    _ccr_ok=1
+    for _ccr_f in "$_ccr_tok" "$_ccr_hint" "$_ccr_h1m" "$_ccr_peak" "$_ccr_clamp"; do
+        case "$_ccr_f" in
+            ''|*[!0-9]*) _ccr_ok=0 ;;
+        esac
+        [ "${#_ccr_f}" -le 12 ] || _ccr_ok=0
+    done
+    if [ "$_ccr_ok" = "1" ] && [ "$_ccr_tok" -ge 1 ] && [ "$_ccr_h1m" -le 1 ] && [ "$_ccr_clamp" -le 1 ]; then
+        _ccr_win=$(_ctx_positive_int "${QUOIN_EFFECTIVE_CONTEXT_LIMIT:-}") || _ccr_win=""
+        if [ -z "$_ccr_win" ]; then
+            if _ctx_truthy "${CLAUDE_CODE_DISABLE_1M_CONTEXT:-}"; then
+                _ccr_win=200000
+            elif [ "$_ccr_clamp" = "1" ]; then
+                _ccr_win=200000
+            elif [ "$_ccr_h1m" = "1" ] || [ "$_ccr_hint" = "1000000" ]; then
+                _ccr_win=1000000
+            elif _ctx_has_1m "$(_ctx_settings_model "$_ccr_proj")"; then
+                _ccr_win=1000000
+            elif [ "$_ccr_hint" -gt 0 ]; then
+                _ccr_win="$_ccr_hint"
+            elif [ "$_ccr_peak" -gt 200000 ]; then
+                _ccr_win=1000000
+            else
+                _ccr_win=200000
+            fi
+        fi
+        printf '%s real %s %s\n' "$(( _ccr_tok * 10000 / _ccr_win ))" "$_ccr_tok" "$_ccr_win"
+        return 0
+    fi
+    _ccr_est=$(_ctx_estimate "$_ccr_path") || return 1
+    printf '%s estimated - -\n' "$_ccr_est"
 }
 
 # _run_state_validate_stale_days <raw> <default> — echo a validated,
