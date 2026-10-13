@@ -287,6 +287,11 @@ if printf '%s' "$out" | grep -q 'additionalContext' 2>/dev/null; then
   else
     fail "branch(2): 88% fixture → advisory JSON but missing 88. in message: $out"
   fi
+  if printf '%s' "$out" | grep -q 'context at ~88\.' 2>/dev/null && printf '%s' "$out" | grep -q '(estimated)' 2>/dev/null; then
+    ok "branch(2): 88% fixture (no usage records) → labeled as an estimate"
+  else
+    fail "branch(2): 88% fixture → expected 'context at ~88.' and '(estimated)': $out"
+  fi
 else
   fail "branch(2): 88% fixture → expected advisory JSON, got: $out"
 fi
@@ -314,6 +319,11 @@ if printf '%s' "$out" | grep -q '97\.' 2>/dev/null; then
   ok "branch(3): 97% fixture → 97.xx% present in message"
 else
   fail "branch(3): 97% fixture → missing 97. in message: $out"
+fi
+if printf '%s' "$out" | grep -q 'context at ~97\.' 2>/dev/null && printf '%s' "$out" | grep -q '(estimated)' 2>/dev/null; then
+  ok "branch(3): 97% fixture (no usage records) → labeled as an estimate"
+else
+  fail "branch(3): 97% fixture → expected 'context at ~97.' and '(estimated)': $out"
 fi
 # Verify pending-prompt file was written
 if [ -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-prompt-sess-block.txt" ]; then

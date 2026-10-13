@@ -1,0 +1,1 @@
+{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-5-5","content":[{"type":"text","text":"The error says: API Error: Usage credits required for 1M context · run /model to switch to a standard-context model"}],"usage":{"input_tokens":10,"cache_read_input_tokens":149490,"cache_creation_input_tokens":500,"output_tokens":5}}}

@@ -21,6 +21,7 @@ transcript_path=$(printf '%s' "$STDIN" | jq -r '.transcript_path // empty' 2>/de
 # Guard: session_id required for a usable sentinel filename
 [ -z "$session_id" ] && exit 0
 [ -z "$cwd" ] && cwd="$PWD"
+_ctx_proj="$cwd"
 cwd=$(resolve_project_root "$cwd")
 
 MEMORY_DIR="${cwd}/.workflow_artifacts/memory"
@@ -122,14 +123,35 @@ printf 'compacted_at=%s\nsession_id=%s\n' "$compacted_at" "$session_id" \
   if [ -n "$_tel_ba" ]; then
     _tel_est=$(awk -v b="$_tel_ba" -v bpt="${BPT:-8.0}" 'BEGIN{ printf "%d", b / bpt }' 2>/dev/null) || _tel_est=""
   fi
+  # Real token reading (best-effort): the value is recorded only when it came
+  # from transcript usage and the newest reading is a compact boundary; any failure leaves the fields null.
+  _tel_rt=""; _tel_rw=""; _tel_src=""
+  if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
+    _tel_rd=$(compute_context_reading "$transcript_path" "$_ctx_proj" --kind 2>/dev/null) || _tel_rd=""
+    _tel_rbps=""; _tel_rsrc=""; _tel_rtok=""; _tel_rwin=""; _tel_rkind=""
+    read -r _tel_rbps _tel_rsrc _tel_rtok _tel_rwin _tel_rkind <<TELEOF
+$_tel_rd
+TELEOF
+    if [ "$_tel_rsrc" = "real" ] && [ "$_tel_rkind" = "compact" ]; then
+      case "$_tel_rtok$_tel_rwin" in
+        ''|*[!0-9]*) ;;
+        *) _tel_rt="$_tel_rtok"; _tel_rw="$_tel_rwin" ;;
+      esac
+    fi
+  fi
+  if [ -n "$_tel_rt" ]; then _tel_src="real"; elif [ -n "$_tel_est" ]; then _tel_src="estimated"; fi
   jq -nc --arg half "post" --arg sid "$session_id" --arg seq "$_tel_seq" \
     --arg ts "$_tel_ts" --arg ba "$_tel_ba" --arg eta "$_tel_est" \
+    --arg rta "$_tel_rt" --arg rw "$_tel_rw" --arg rsrc "$_tel_src" \
     --arg trig "$_tel_trigger" --arg cslen "$_tel_cslen" \
     '{v: 1, half: $half, session_id: $sid,
       event_seq: (if $seq == "" then null else ($seq|tonumber) end),
       ts: $ts,
       bytes_after: (if $ba == "" then null else ($ba|tonumber) end),
       est_tokens_after: (if $eta == "" then null else ($eta|tonumber) end),
+      real_tokens_after: (if $rta == "" then null else ($rta|tonumber) end),
+      real_window: (if $rw == "" then null else ($rw|tonumber) end),
+      reading_source: (if $rsrc == "" then null else $rsrc end),
       trigger: $trig,
       compact_summary_len: (if $cslen == "" then null else ($cslen|tonumber) end)}' \
     >> "$_tel_sink" 2>/dev/null || exit 0

@@ -14,7 +14,7 @@
 | WorktreeCreate | `*` | `worktreecreate.sh` | 10s | Nested-git worktree isolation for source-mutating skills. Reads the dispatch sidecar; when a single nested repo resolves and the harness omits path/branch, self-generates `quoin/wt-<ts>-<pid>` + a worktree under `${TMPDIR:-/tmp}/quoin-worktrees` (outside the Drive tree; project `.worktrees/` fallback) and runs `git worktree add` (bounded by `QUOIN_SUBPROCESS_TIMEOUT`), printing the path to stdout. Fail-OPEN (exits 0, no stdout on any skip/error); audit log records `selfgen=1`. Opt-out: `QUOIN_WORKTREE_SELFGEN=0`. |
 | Stop | `*` | `stop.sh` | 10s | Continues an interrupted /run in the session that armed it. Two shell early exits (no memory dir, no arm file) before any Python start; decision in `scripts/auto_resume.py`. CLI from `quoin-runtime.json`, else PATH. Fail-OPEN. Opt-out: `QUOIN_AUTO_RESUME=0`. |
 
-All hooks fail-OPEN (exit 0 on any error). jq is a soft-required dependency (`brew install jq`). Tunable constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, `QUOIN_PANIC_BPS`, etc.) use `${QUOIN_*:-default}` expansion; thresholds use integer basis-points arithmetic (e.g., `8500` = 85.00%, `9000` = 90.00%).
+All hooks fail-OPEN (exit 0 on any error). jq is a soft-required dependency (`brew install jq`). Tunable constants (`QUOIN_BYTES_PER_TOKEN` is the byte-estimate fallback only; `QUOIN_EFFECTIVE_CONTEXT_LIMIT` is an explicit window override on the real-usage path; `QUOIN_CONTEXT_TAIL_BYTES` bounds the transcript tail scanned for real usage, read inline; `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, `QUOIN_PANIC_BPS`, etc.) use `${QUOIN_*:-default}` expansion; thresholds use integer basis-points arithmetic (e.g., `8500` = 85.00%, `9000` = 90.00%).
 
 Hook-side tunable constants (defined in `_lib.sh:read_constants()` and exported to all hook scripts):
 - `QUOIN_COMPACT_FIRST_BPS` (default 9000 = 90.00%) — threshold at which `/checkpoint` emits a high-util notice and prompts the user to run `/compact` before saving.
@@ -82,12 +82,16 @@ of its own sentinel writes.
 | `ts` | both | UTC timestamp, second granularity. |
 | `bytes_before` / `est_tokens_before` | `pre` | Transcript size and its `BPT`-derived token estimate at compaction start; `null` when the transcript path is unreadable. |
 | `bytes_after` / `est_tokens_after` | `post` | Same, at compaction end. |
+| `real_tokens_before` | `pre` | Tokens from the newest transcript usage record at compaction start; `null` when only the byte estimate exists. |
+| `real_tokens_after` | `post` | Post-compaction tokens, filled only when the newest reading is a compact boundary; `null` while Claude Code writes that boundary after PostCompact returns. |
+| `real_window` | both | The context window the real reading was measured against; `null` with the real value. |
+| `reading_source` | both | Source of the `real_tokens_*` value: `real` when filled, `estimated` when only the `est_` figure exists, `null` when neither does. |
 | `task` / `phase` / `subphase` / `step` | `pre` | The active run-state record's fields at compaction start, or empty strings when no run is active. A `post` never restates these — the run may have advanced between the two halves, so a duplicated copy could disagree with its own pair; the pair carries run identity once, on the `pre`. |
 | `trigger` | `post` | The compaction trigger string from the hook's own stdin payload. |
 | `compact_summary_len` | `post` | A **codepoint count** of the harness-supplied compaction summary — the only observable of summariser behavior this sink records. The summary text itself is never bound to a shell variable and never written. quoin does not pin which model produces the summary. |
 
-The `est_` prefix marks every token figure as a `BPT`-derived estimate, never
-an exact count.
+The `est_` prefix marks every `est_` token figure as a `BPT`-derived estimate, never
+an exact count; `real_` figures come from transcript usage.
 
 **`event_seq` derivation and its two reset boundaries.** `precompact.sh`
 derives its own "pre" sequence number by counting `"half":"pre"` lines for
