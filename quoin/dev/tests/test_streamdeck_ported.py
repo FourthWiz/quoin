@@ -1,5 +1,6 @@
 """Prototype tests ported to the payload tree (the hooks-merge test moves with the merge code)."""
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -43,7 +44,8 @@ def test_metadata_only_and_no_desktop_threads(payload, tmp_path, monkeypatch):
 
 def test_closed_pane_cannot_focus(payload):
     dashboard = payload("dashboard")
-    with patch.object(dashboard.c, "load", return_value={}), patch.object(dashboard, "panes", return_value=[]), \
+    with patch.object(dashboard.c, "load", return_value={}), \
+            patch.object(dashboard, "list_panes", return_value=(True, [])), \
             patch.object(dashboard.c, "apple") as apple:
         with pytest.raises(RuntimeError):
             dashboard.focus({"session": "test", "pane": "1"})
@@ -68,12 +70,16 @@ def test_navigation_is_addressed(payload):
     c = payload("controller")
     with patch.object(c, "sessions", return_value=[("wanted", True)]), patch.object(c, "run") as run:
         c.execute("next-pane", {"session": "wanted"})
-        assert run.call_args.args[0] == ["zellij", "--session", "wanted", "action", "focus-next-pane"]
+        argv = run.call_args.args[0]
+        assert os.path.basename(argv[0]) == "zellij"
+        assert argv[1:] == ["--session", "wanted", "action", "focus-next-pane"]
 
 
 def test_project_path_is_one_argument(payload):
     c = payload("controller")
+    deckenv = payload("deckenv")
     project = "/tmp/project with spaces; $(nope)"
+    deckenv.set_surface(deckenv.current(), deckenv.current().socket_dir, "wanted", "surface-1")
     with patch.object(c, "apple", return_value="surface-1"), patch.object(c, "sessions", return_value=[("wanted", True)]), \
             patch.object(c, "run") as run:
         c.execute("claude", {"session": "wanted", "project": project, "surfaces": {"wanted": "surface-1"}})
@@ -110,9 +116,9 @@ def test_no_selection_does_not_mutate_session(payload):
         run.assert_not_called()
 
 
-def test_state_roundtrip(payload, tmp_path):
+def test_state_roundtrip(payload, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOIN_DECK_STATE_ROOT", str(tmp_path / "state"))
     c = payload("controller")
-    with patch.object(c, "STATE", tmp_path / "state"):
-        cfg = {"project": "/tmp/тест", "session": "test", "projects": {}}
-        c.save(cfg)
-        assert c.load() == cfg
+    cfg = {"project": "/tmp/тест", "session": "test", "projects": {}}
+    c.save(cfg)
+    assert c.load() == cfg

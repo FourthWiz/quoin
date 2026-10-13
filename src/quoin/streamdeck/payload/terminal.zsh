@@ -1,25 +1,41 @@
 #!/bin/zsh
 # Arguments stay separate throughout: no interpolation into shell commands.
+# PATH comes only from the environment the deck set up (recorded binary dirs).
 set -e
-export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"
 mode="$1"
 session="$2"
 project="$3"
-source "$HOME/.config/agentdesk/agentdesk.zsh"
+
+wait_for_enter() {
+  if [ -t 0 ]; then
+    printf '\nНажми Enter, чтобы закрыть.'
+    read -r reply
+  fi
+  return 0
+}
+
 cd -- "$project"
 export PROJECT_ROOT="$project"
 case "$mode" in
   new)
-    # Agent Desk rejects --name combined with positional pane types.
-    # Seed this new named session's layout, then use its normal startup path.
-    _agentdesk_save_layout "$(_agentdesk_layout_key "$session" "$project")" 'codex+codex+shell'
-    # A hardware button must not stop at the optional web-dashboard question.
-    _agentdesk_open_dashboard() { return 0; }
-    agentdesk --name "$session"
+    ad="${QUOIN_DECK_AGENTDESK:-}"
+    if [ -z "$ad" ] || [ ! -r "$ad" ] || ! grep -q '^AGENTDESK_API_VERSION=' "$ad"; then
+      print -u2 'Agent Desk не установлен — запустите `quoin streamdeck install`.'
+      wait_for_enter
+      exit 1
+    fi
+    source "$ad"
+    agentdesk --name "$session" --panes codex,codex,shell --no-prompt --if-exists attach
     ;;
   attach) zellij attach "$session" ;;
-  claude) exec claude ;;
-  codex) exec codex ;;
+  claude|codex)
+    if command -v "$mode" >/dev/null; then
+      exec "$mode"
+    fi
+    print -u2 "$mode не найден в PATH — переустановите: quoin streamdeck install запишет путь."
+    wait_for_enter
+    exit 127
+    ;;
   shell) exec /bin/zsh -l ;;
   git)
     if command -v lazygit >/dev/null; then
