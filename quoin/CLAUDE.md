@@ -400,7 +400,7 @@ The 10 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block
 
 The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink (compaction continuity): `__QUOIN_HOME__/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope) is quoin's only non-`QUOIN_*` var write: `quoin/docs/hooks-guide.md`.
 
-All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, etc.) use integer basis-points arithmetic. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
+All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, etc.) use integer basis-points arithmetic. Context % is read from real transcript usage against the detected window (`QUOIN_EFFECTIVE_CONTEXT_LIMIT` is an explicit override), with a byte-estimate fallback. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
 
 Opt-in mods (asked in a TTY): `install.sh --with-context-tracker`, `--with-workflow-tasks` (undo `--remove-*`); hooks-guide.md.
 

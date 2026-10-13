@@ -52,7 +52,7 @@ def _hermetic_env(tmp_path: Path, extra=None) -> dict:
     return env
 
 
-def _write_settings(tmp_path: Path, settings: dict) -> Path:
+def _write_settings(tmp_path: Path, settings: dict, bom: bool = False) -> Path:
     project = tmp_path / "project"
     project.mkdir(exist_ok=True)
     layers = {
@@ -63,12 +63,13 @@ def _write_settings(tmp_path: Path, settings: dict) -> Path:
     for layer, model in settings.items():
         path = layers[layer]
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"model": model}), encoding="utf-8")
+        body = json.dumps({"model": model}).encode("utf-8")
+        path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + body)
     return project
 
 
-def run_shell(shell, transcript, project, env, fn="compute_context_reading"):
-    script = '. "$1"; read_constants; %s "$2" "$3"' % fn
+def run_shell(shell, transcript, project, env, fn="compute_context_reading", kind=False):
+    script = '. "$1"; read_constants; %s "$2" "$3"%s' % (fn, ' --kind' if kind else '')
     proc = subprocess.run(
         [shell, "-c", script, "x", str(LIB_SH), str(transcript), str(project)],
         capture_output=True, text=True, env=env, timeout=60,
@@ -78,7 +79,7 @@ def run_shell(shell, transcript, project, env, fn="compute_context_reading"):
 
 
 def parse_shell(out):
-    bps, source, tokens, window = out.strip().split(" ")
+    bps, source, tokens, window = out.strip().split(" ")[:4]
     return (
         int(bps),
         source,
@@ -111,10 +112,15 @@ def _expected(case):
 @pytest.mark.parametrize("shell", SHELLS)
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_shell_reader_matches_expectation(case, shell, tmp_path):
-    project = _write_settings(tmp_path, case["settings"])
+    project = _write_settings(tmp_path, case["settings"], case.get("settings_bom", False))
     env = _hermetic_env(tmp_path, case["env"])
     out, _ = run_shell(shell, FIXTURES / case["file"], project, env)
     assert parse_shell(out) == _expected(case)
+    assert len(out.strip().split(" ")) == 4, "default output must stay four fields"
+    if "kind" in case["expect"]:
+        kout, _ = run_shell(shell, FIXTURES / case["file"], project, env, kind=True)
+        assert kout.strip().split(" ")[4:] == [case["expect"]["kind"]]
+        assert parse_shell(kout) == _expected(case)
     # compute_utilization is a thin wrapper: it prints exactly field 1.
     util_out, _ = run_shell(shell, FIXTURES / case["file"], project, env, fn="compute_utilization")
     assert util_out.strip() == str(case["expect"]["bps"])
@@ -122,7 +128,7 @@ def test_shell_reader_matches_expectation(case, shell, tmp_path):
 
 @pytest.mark.parametrize("case", CASES, ids=CASE_IDS)
 def test_python_reader_matches_expectation(case, tmp_path):
-    project = _write_settings(tmp_path, case["settings"])
+    project = _write_settings(tmp_path, case["settings"], case.get("settings_bom", False))
     env = _hermetic_env(tmp_path, case["env"])
     assert run_python(FIXTURES / case["file"], project, env) == _expected(case)
 
@@ -259,3 +265,47 @@ def test_shell_reading_of_a_two_megabyte_transcript_is_fast(tmp_path):
     elapsed = time.monotonic() - start
     assert parse_shell(out) == ((50499 * 10000) // 1000000, "real", 50499, 1000000)
     assert elapsed < 3.0, elapsed
+
+
+# ---- numeric / decoding guards in the Python reader ---------------------------
+
+def _load_core():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("context_budget_guard_core", CORE_GUARD)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_scan_survives_recursion_error_on_one_line(monkeypatch):
+    core = _load_core()
+    real_loads = core.json.loads
+
+    def loads(text, *a, **kw):
+        if "MARKER" in text:
+            raise RecursionError("nested too deep")
+        return real_loads(text, *a, **kw)
+
+    monkeypatch.setattr(core.json, "loads", loads)
+    usage = {"input_tokens": 100000, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    good = json.dumps({"type": "assistant", "message": {"model": "claude-opus-4-6", "usage": usage}})
+    lines = [good.encode(), b'{"MARKER": 1}']
+    tokens, model, _peak, _clamp = core._scan(lines)
+    assert tokens == 100000 and model == "claude-opus-4-6"
+
+
+def test_settings_model_survives_recursion_error(monkeypatch, tmp_path):
+    core = _load_core()
+    project = tmp_path / "project"
+    (project / ".claude").mkdir(parents=True)
+    (project / ".claude" / "settings.local.json").write_text('{"model": "MARKER"}', encoding="utf-8")
+    (project / ".claude" / "settings.json").write_text('{"model": "claude-opus-4-6[1m]"}', encoding="utf-8")
+    real_loads = core.json.loads
+
+    def loads(text, *a, **kw):
+        if "MARKER" in text:
+            raise RecursionError("nested too deep")
+        return real_loads(text, *a, **kw)
+
+    monkeypatch.setattr(core.json, "loads", loads)
+    assert core._settings_model(project, {}) == "claude-opus-4-6[1m]"

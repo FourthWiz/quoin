@@ -405,10 +405,11 @@ To preview what auto-cleanup would trash without running a full save: use `--no-
 
 **Auto-detection sequence (only when SELECTED_MODE is unset):**
 
-**A. High-util check (inverted):** Read the current utilization. Invoke via Bash tool:
+**A. High-util check (inverted):** Read the current utilization. Always re-read here rather than reusing the bare value from Step 1.47, because the source label is needed. Invoke via Bash tool:
 ```sh
-. __QUOIN_HOME__/hooks/_lib.sh && read_constants && compute_utilization TRANSCRIPT_PATH
+. __QUOIN_HOME__/hooks/_lib.sh && read_constants && compute_context_reading TRANSCRIPT_PATH
 ```
+The output is `<util_bps> <source> <tokens> <window>`; the first field is `util_bps` and the second is the source (`real` from transcript usage, `estimated` from the byte-estimate fallback).
 Where `TRANSCRIPT_PATH` is the current session's JSONL path (obtain from the harness
 system context, or from `~/.claude/projects/<project-hash>/<uuid>.jsonl`).
 
@@ -418,8 +419,8 @@ This constant is defined in `_lib.sh:read_constants()` as:
 
 If `util_bps >= COMPACT_FIRST_BPS`:
   - Set `_HIGH_UTIL_NOTICE=true`.
-  - Compute `PCT_VALUE` from `util_bps` (e.g., "92.13" for 9213 basis points):
-    `pct_int=$((util_bps / 100)); pct_dec=$(printf '%02d' $((util_bps % 100))); PCT_VALUE="${pct_int}.${pct_dec}"`
+  - Compute `PCT_VALUE` from `util_bps` and the source (e.g., `92.13% (real)` or `~92.13% (estimated)` for 9213 basis points):
+    `pct_int=$((util_bps / 100)); pct_dec=$(printf '%02d' $((util_bps % 100))); if [ "$source" = real ]; then PCT_VALUE="${pct_int}.${pct_dec}% (real)"; else PCT_VALUE="~${pct_int}.${pct_dec}% (estimated)"; fi`
   - Continue to sub-step B. (Do NOT write a deferred-checkpoint marker. The save runs immediately
     in Steps 1–6; the high-util notice is surfaced in Step 5 only.)
 
@@ -722,7 +723,7 @@ the mode-specific report text). Always include:
 
 If `_HIGH_UTIL_NOTICE=true`, append after the normal confirmation:
 ```
-Context is at ${PCT_VALUE}% (>= COMPACT_FIRST_BPS=90.00%). Checkpoint saved. To free context, choose one:
+Context is at ${PCT_VALUE} (>= COMPACT_FIRST_BPS=90.00%). Checkpoint saved. To free context, choose one:
   1. Start a fresh session (run /checkpoint --restore there).
   2. Run /compact in this session (the auto-written precompact checkpoint will subsume this save; you do not need to re-run /checkpoint after).
 ```

@@ -320,8 +320,12 @@ def _scan(lines):
     clamp = False
     for raw in lines:
         try:
-            rec = json.loads(raw.decode("utf-8", errors="replace"))
-        except ValueError:
+            text = raw.decode("utf-8", errors="replace")
+            # jq accepts exactly one leading byte-order mark on any line.
+            if text.startswith("\ufeff"):
+                text = text[1:]
+            rec = json.loads(text)
+        except (ValueError, RecursionError):
             continue
         if not isinstance(rec, dict):
             continue
@@ -401,8 +405,8 @@ def _settings_model(project_root, environ) -> str:
         candidates.append(Path(home) / ".claude" / "settings.json")
     for candidate in candidates:
         try:
-            data = json.loads(candidate.read_text(encoding="utf-8", errors="replace"))
-        except (OSError, ValueError):
+            data = json.loads(candidate.read_text(encoding="utf-8-sig", errors="replace"))
+        except (OSError, ValueError, RecursionError):
             continue
         if isinstance(data, dict) and isinstance(data.get("model"), str) and data["model"]:
             return data["model"]

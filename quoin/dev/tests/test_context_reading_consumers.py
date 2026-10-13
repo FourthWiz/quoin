@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,13 +43,15 @@ def _record(model: str, total: int) -> str:
                   "cache_creation_input_tokens": 500, "output_tokens": 5}}}) + "\n"
 
 
-def _run_hook(tmp_path: Path, transcript: Path):
+def _run_hook(tmp_path: Path, transcript: Path, process_cwd: Path = None, session="sess-consumers"):
+    """Run the prompt hook. process_cwd, when given, differs from the stdin cwd so
+    only the cwd the hook is told about can locate project settings."""
     project = _project(tmp_path)
-    stdin = json.dumps({"session_id": "sess-consumers", "transcript_path": str(transcript),
+    stdin = json.dumps({"session_id": session, "transcript_path": str(transcript),
                         "cwd": str(project), "prompt": "continue"})
     return subprocess.run(
         ["sh", str(HOOK)], input=stdin, capture_output=True, text=True,
-        env=_env(tmp_path), cwd=str(project), timeout=60,
+        env=_env(tmp_path), cwd=str(process_cwd or project), timeout=60,
     )
 
 
@@ -57,7 +60,7 @@ def test_prompt_hook_advises_at_real_utilization(tmp_path):
     transcript.write_text(_record("claude-opus-4-6", 150000), encoding="utf-8")
     proc = _run_hook(tmp_path, transcript)
     assert proc.returncode == 0
-    assert "context at 75.00%" in proc.stdout
+    assert "context at 75.00% (real)" in proc.stdout
 
 
 def test_prompt_hook_stays_quiet_when_a_big_tool_result_inflated_the_file(tmp_path):
@@ -132,3 +135,84 @@ def test_guard_runs_under_python_38(tmp_path):
     proc = _guard(["--transcript", str(byte_file), "--threshold-bps", "9999"], tmp_path, python=_python38())
     assert proc.returncode == 0, proc.stderr
     assert "source=estimated" in proc.stderr
+
+
+# ---- advisory labels ---------------------------------------------------------
+
+_LABEL = re.compile(r"context at (~[0-9]+\.[0-9]{2}% \(estimated\)|[0-9]+\.[0-9]{2}% \(real\))")
+
+
+def _real_transcript(tmp_path: Path, total: int) -> Path:
+    path = tmp_path / "real.jsonl"
+    path.write_text(_record("claude-opus-4-6", total), encoding="utf-8")
+    return path
+
+
+def _byte_transcript(tmp_path: Path, size: int) -> Path:
+    path = tmp_path / "bytes.jsonl"
+    path.write_bytes(b"x" * size)
+    return path
+
+
+def _active_run_state(tmp_path: Path) -> None:
+    memory = _project(tmp_path) / ".workflow_artifacts" / "memory"
+    (memory / "run-state-labels.json").write_text(
+        json.dumps({"task": "labels", "active": True, "schema": 1, "at_stage_boundary": False}, indent=2),
+        encoding="utf-8")
+
+
+# (source, branch, run-state) -> a transcript landing in that hook branch.
+_MATRIX = [
+    ("real", "advisory-run", 150000),
+    ("real", "advisory-norun", 150000),
+    ("real", "high", 190000),
+    ("estimated", "advisory-run", 960000),
+    ("estimated", "advisory-norun", 960000),
+    ("estimated", "high", 1152000),
+]
+
+
+@pytest.mark.parametrize("source,branch,size", _MATRIX, ids=[f"{s}-{b}" for s, b, _ in _MATRIX])
+def test_every_advisory_carries_its_source_label(source, branch, size, tmp_path):
+    transcript = _real_transcript(tmp_path, size) if source == "real" else _byte_transcript(tmp_path, size)
+    if branch == "advisory-run":
+        _active_run_state(tmp_path)
+    proc = _run_hook(tmp_path, transcript)
+    assert proc.returncode == 0
+    match = _LABEL.search(proc.stdout)
+    assert match, proc.stdout
+    assert ("(real)" in match.group(1)) == (source == "real")
+    if branch == "high":
+        payload = json.loads(proc.stdout)
+        assert _LABEL.search(payload["systemMessage"]).group(0) == match.group(0)
+        assert (tmp_path / "project" / ".workflow_artifacts" / "memory" / "pending-prompt-sess-consumers.txt").exists()
+    elif branch == "advisory-run":
+        assert "consider running /checkpoint" in proc.stdout
+    else:
+        assert "No checkpoint is needed" in proc.stdout
+
+
+def test_stdin_cwd_locates_project_settings(tmp_path):
+    """150,000 tokens on a 200k window advises; the [1m] project setting widens the
+    window and silences it. The hook process runs from elsewhere, so only the cwd in
+    the hook input can find the settings file."""
+    transcript = _real_transcript(tmp_path, 150000)
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    project = _project(tmp_path)
+    plain = _run_hook(tmp_path, transcript, process_cwd=elsewhere)
+    assert "context at 75.00% (real)" in plain.stdout
+    (project / ".claude").mkdir()
+    (project / ".claude" / "settings.json").write_text(
+        json.dumps({"model": "claude-opus-4-6[1m]"}), encoding="utf-8")
+    widened = _run_hook(tmp_path, transcript, process_cwd=elsewhere)
+    assert widened.returncode == 0
+    assert "context at" not in widened.stdout
+
+
+def test_advisory_format_strings_are_all_labeled():
+    lines = [ln for ln in HOOK.read_text(encoding="utf-8").splitlines() if "context at " in ln]
+    printfs = [ln for ln in lines if "printf" in ln]
+    assert len(printfs) == 3, printfs
+    assert any("consider running /checkpoint" in ln for ln in printfs)
+    assert all("context at %s%d.%s%%%s" in ln for ln in printfs), printfs

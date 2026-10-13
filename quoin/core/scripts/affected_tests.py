@@ -1949,6 +1949,30 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/memory/dispatch-guide.md",
         "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
     ),
+    (
+        "quoin/hooks/userpromptsubmit.sh",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/hooks/precompact.sh",
+        "quoin/dev/tests/test_context_reading_telemetry.py",
+    ),
+    (
+        "quoin/hooks/postcompact.sh",
+        "quoin/dev/tests/test_context_reading_telemetry.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
+    (
+        "quoin/memory/hooks-table.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
+    (
+        "quoin/memory/checkpoint-spec.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):

@@ -82,8 +82,9 @@ Hook scripts read these values at runtime via `${QUOIN_*:-default}` parameter ex
 
 | Constant | Default | Env var override | Notes |
 |----------|---------|-----------------|-------|
-| `BPT` | `8.0` | `QUOIN_BYTES_PER_TOKEN` | Bytes per token for byte-count utilization estimate (V-03 calibrated) |
-| `LIMIT` | `150000` | `QUOIN_EFFECTIVE_CONTEXT_LIMIT` | Effective token limit used as 100% denominator |
+| `BPT` | `8.0` | `QUOIN_BYTES_PER_TOKEN` | Bytes per token for the byte-estimate fallback (V-03 calibrated) |
+| `LIMIT` | `150000` | `QUOIN_EFFECTIVE_CONTEXT_LIMIT` | Unset: the window is detected per model (200k / 1M). Set: an explicit window override on the real path, and the estimate denominator (150000 when unset) |
+| `CONTEXT_TAIL_BYTES` | `2097152` (cap `67108864`) | `QUOIN_CONTEXT_TAIL_BYTES` | Bytes of transcript tail scanned for the newest usage record; read inline, not exported |
 | `STOP_BPS` | `7000` | `QUOIN_STOP_BPS` | Advisory threshold in basis-points (7000 = 70.00%) |
 | `BLOCK_BPS` | `9500` | `QUOIN_BLOCK_BPS` | High-context advisory threshold in basis-points (9500 = 95.00%) |
 | `STALE_DAYS` | `7` | `QUOIN_STALE_SENTINEL_DAYS` | Days after which pending-prompt-*.txt / pending-restore-*.txt are swept; long-lived sessions may extend to 14+ |
@@ -97,6 +98,40 @@ Hook scripts read these values at runtime via `${QUOIN_*:-default}` parameter ex
 `read_constants()` exports 13 names; the table above now covers 8 of them (`POLLUTION_THRESHOLD`, `SUBPROCESS_TIMEOUT` and `WORKTREE_SELFGEN` are read inline elsewhere and are not among the 13). `hooks-table.md` is the complete list, including the 5 exported names still missing here (`SESSIONSTART_SWEEP_DAYS`, `COMPACT_FIRST_BPS`, `PANIC_BPS`, `DISCOVERY_STALE_DAYS`, `SERENA_STALE_DAYS` — pre-existing omissions, backlogged) plus every skill-side and script-side knob.
 
 **Basis-points convention:** Utilization values and threshold comparisons use INTEGER basis-points (0..10000) throughout. POSIX `[ ]` does integer comparison only; basis-points eliminate all floating-point comparison hazards. `compute_utilization()` in `_lib.sh` returns a basis-point integer (e.g., `8540` = 85.40% utilization).
+
+## Context reading
+
+The context-utilization advisory is measured from real token usage, not from transcript size.
+
+- **What is read.** The newest main-chain assistant record's usage: `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`. Sidechain (subagent) records and synthetic error records never count. A compact-boundary record carrying `postTokens` replaces the reading when it is newer than the last usage record.
+- **Window.** Resolved in this order: an explicit `QUOIN_EFFECTIVE_CONTEXT_LIMIT` override; `CLAUDE_CODE_DISABLE_1M_CONTEXT` (200k); a recorded "Usage credits required for 1M context" clamp (200k); a `[1m]` suffix on the record's model, on `ANTHROPIC_MODEL`, or on the `model` in project `settings.local.json`, project `settings.json` or user `settings.json` (1M); the model table (models that are natively 1M, or 200k); an observed peak above 200k (1M); otherwise 200k.
+- **Fallback.** When no usage record can be read (no `jq`, an empty or unparseable tail, a transcript with no usage), the hook falls back to a byte estimate: transcript bytes divided by `QUOIN_BYTES_PER_TOKEN`, then by `QUOIN_EFFECTIVE_CONTEXT_LIMIT` (150000 when unset).
+- **Labels.** Every advisory names its source: `context at 17.08% (real) — …` for a measured value and `context at ~40.12% (estimated) — …` for the fallback. The `/checkpoint` high-utilization notice uses the same labels.
+- **Scan window.** Only the last `QUOIN_CONTEXT_TAIL_BYTES` of the transcript are scanned (default 2097152, capped at 67108864; read inline, not exported). The scan costs about 70 ms per prompt on macOS at the default (mostly BSD `tail -c`, flat with file size) and about 2 s per prompt at the cap.
+
+**Migration.** `QUOIN_EFFECTIVE_CONTEXT_LIMIT` used to be the 100% denominator for every reading. It now pins the window on the real path, so a value exported under the old meaning (for example 150000) makes a 1M-window session over-warn. Unset it unless you want to force a window.
+
+**Known divergences between the shell and Python readers.**
+- Without `jq` the hook can only estimate, while the phase-boundary guard (`context_budget_guard.py`) still reads real usage.
+- An invalid `QUOIN_EFFECTIVE_CONTEXT_LIMIT` on the estimate path: the awk estimate has no validation, the Python estimate falls back to 150000.
+- Lines nested deeper than 256 levels: `jq` skips the line, Python parses it until its own recursion limit (about a thousand levels on older interpreters, several thousand on newer ones). A usage record is never nested that deeply in practice.
+- A 1M-credits clamp is forgotten once its record scrolls out of the scanned tail.
+- Settings files holding several concatenated JSON values are read by `jq` as the first value only.
+
+**Telemetry fields.** Compaction telemetry rows gain `real_tokens_before` (pre rows), `real_tokens_after` (post rows), `real_window` and `reading_source`. All are `null` when no real value exists. `reading_source` names the source of the `real_tokens_*` value: `real` when filled, `estimated` when only the byte estimate exists, `null` when neither does. In measurements of six compactions, the compact-boundary record was written after the PostCompact hook returned (the hook's measured transcript size equalled the boundary line's start offset every time), so `real_tokens_after` is normally `null` today; the first advisory after the compaction reads the post-compaction tokens instead. If Claude Code starts writing the boundary first, the field fills with no change here.
+
+### 200k-window tier reachability
+
+Claude Code auto-compacts at `window − min(max output, 20000) − 13000` tokens: 167,000 tokens (83.50%) on a 200k window and about 967,000 tokens (96.70%) on a 1M window. Thresholds stay measured against the true window, so on a 200k window some tiers sit beyond the point where the platform has already compacted.
+
+| Tier (default) | 200k window | 1M window |
+|---|---|---|
+| `STOP_BPS` 7000 | 140,000 — reachable | 700,000 — reachable |
+| `COMPACT_FIRST_BPS` 9000 | 180,000 — unreachable | 900,000 — reachable |
+| `BLOCK_BPS` 9500 | 190,000 — unreachable | 950,000 — reachable |
+| `PANIC_BPS` 10000 | 200,000 — unreachable | 1,000,000 — unreachable |
+
+"Unreachable" means auto-compaction normally fires first; the tier still triggers if auto-compact is disabled or one turn overshoots. For 200k-window sessions, `QUOIN_COMPACT_FIRST_BPS=7800`, `QUOIN_BLOCK_BPS=8000` and `QUOIN_PANIC_BPS=8300` (156,000 / 160,000 / 166,000 tokens) keep every tier below the compaction point. These knobs are global: in a 1M session they fire at 780,000 / 800,000 / 830,000 tokens. `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and the auto-compact window setting move Claude Code's own point.
 
 ## Compaction continuity (IVG-258)
 

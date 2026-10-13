@@ -34,8 +34,8 @@ sentinel_globs() {
 
 # read_constants — sources env-var defaults for tunable constants.
 # After calling, the following are exported:
-#   BPT            — bytes per token (e.g., "8.0")
-#   LIMIT          — effective context limit in tokens (e.g., 150000)
+#   BPT            — bytes per token for the byte-estimate fallback (e.g., "8.0")
+#   LIMIT          — explicit window override on the real path; estimate denominator (150000 when unset)
 #   STOP_BPS       — stop/advisory threshold in basis-points (e.g., 7000)
 #   BLOCK_BPS      — block threshold in basis-points (e.g., 9500)
 #   STALE_DAYS     — sentinel staleness threshold in days (e.g., 7)
@@ -184,8 +184,9 @@ _ctx_settings_model() {
 }
 
 # jq program that scans transcript lines (one JSON record per line) and prints
-# "tokens window_hint has_1m peak clamp" for the newest reading, or nothing when
-# no usage record qualifies. Sidechain and synthetic error records never count as
+# "tokens window_hint has_1m peak clamp kind" for the newest reading (kind is 0
+# for a usage record, 1 for a compact boundary), or nothing when no usage record
+# qualifies. Sidechain and synthetic error records never count as
 # usage. The model rules between the markers mirror the Python reader in
 # context_budget_guard.py (a drift test compares the two blocks).
 _CTX_JQ_PROGRAM='
@@ -223,7 +224,7 @@ def clamptext:
              and (.text | contains("Usage credits required for 1M context")))
   else false end;
 reduce (inputs | try fromjson catch null) as $r (
-  {t: null, m: "", pk: 0, cl: false};
+  {t: null, m: "", pk: 0, cl: false, k: 0};
   if ($r | type) != "object" then .
   else
     . as $s
@@ -242,6 +243,7 @@ reduce (inputs | try fromjson catch null) as $r (
                   + ($u.cache_creation_input_tokens | num)) | floor) as $sum
               | if $sum >= 1 and $sum <= 999999999999 then
                   .t = $sum
+                  | .k = 0
                   | .m = (if ($msg.model | type) == "string" then $msg.model else "" end)
                   | .pk = ([.pk, $sum] | max)
                 else . end
@@ -250,29 +252,34 @@ reduce (inputs | try fromjson catch null) as $r (
              and ($r.compactMetadata | type) == "object" then
           $r.compactMetadata as $md
           | (if ($md.preTokens | inrange) then .pk = ([.pk, ($md.preTokens | floor)] | max) else . end)
-          | (if ($md.postTokens | inrange) then .t = ($md.postTokens | floor) else . end)
+          | (if ($md.postTokens | inrange) then .t = ($md.postTokens | floor) | .k = 1 else . end)
         else . end
       ) catch $s
   end
 )
 | if .t == null then empty
-  else [.t, (.m | window_hint), (if (.m | has1m) then 1 else 0 end), .pk, (if .cl then 1 else 0 end)]
+  else [.t, (.m | window_hint), (if (.m | has1m) then 1 else 0 end), .pk, (if .cl then 1 else 0 end), .k]
        | map(tostring) | join(" ")
   end
 '
 
-# compute_context_reading <transcript_path> [project_root] — one-line reading of
-# how full the context window is. Prints "<bps> real <tokens> <window>" when a
-# usage record was read, or "<bps> estimated - -" when it fell back to the byte
-# estimate. project_root (default $PWD) locates project settings for the [1m]
-# probe. Returns non-zero when the path is empty or unreadable.
+# compute_context_reading <transcript_path> [project_root] [--kind] — one-line
+# reading of how full the context window is. Prints "<bps> real <tokens>
+# <window>" when a usage record was read, or "<bps> estimated - -" when it fell
+# back to the byte estimate. project_root (default $PWD) locates project
+# settings for the [1m] probe. With a third argument of exactly --kind, a fifth
+# field is appended: "usage" or "compact" for a real reading (compact means the
+# newest reading is a compact boundary), "-" for an estimate. Returns non-zero
+# when the path is empty or unreadable.
 compute_context_reading() {
     _ccr_path="$1"
     _ccr_proj="${2:-$PWD}"
+    _ccr_wantkind=0
+    [ "${3:-}" = "--kind" ] && _ccr_wantkind=1
     if [ -z "$_ccr_path" ] || ! [ -r "$_ccr_path" ]; then
         return 1
     fi
-    command -v jq >/dev/null 2>&1 || { _ccr_est=$(_ctx_estimate "$_ccr_path") || return 1; printf '%s estimated - -\n' "$_ccr_est"; return 0; }
+    command -v jq >/dev/null 2>&1 || { _ccr_est=$(_ctx_estimate "$_ccr_path") || return 1; _ccr_emit_est "$_ccr_est"; return 0; }
     _ccr_size=$(wc -c < "$_ccr_path" 2>/dev/null) || return 1
     _ccr_size=$(printf '%s' "$_ccr_size" | awk '{print $1}')
     _ccr_tail=$(_ctx_tail_bytes)
@@ -281,19 +288,19 @@ compute_context_reading() {
     else
         _ccr_out=$(jq -R -n -r "$_CTX_JQ_PROGRAM" < "$_ccr_path" 2>/dev/null)
     fi
-    _ccr_tok=""; _ccr_hint=""; _ccr_h1m=""; _ccr_peak=""; _ccr_clamp=""
-    read -r _ccr_tok _ccr_hint _ccr_h1m _ccr_peak _ccr_clamp <<EOF
+    _ccr_tok=""; _ccr_hint=""; _ccr_h1m=""; _ccr_peak=""; _ccr_clamp=""; _ccr_kind=""
+    read -r _ccr_tok _ccr_hint _ccr_h1m _ccr_peak _ccr_clamp _ccr_kind <<EOF
 $_ccr_out
 EOF
     # Every field must be plain digits within bounds before arithmetic.
     _ccr_ok=1
-    for _ccr_f in "$_ccr_tok" "$_ccr_hint" "$_ccr_h1m" "$_ccr_peak" "$_ccr_clamp"; do
+    for _ccr_f in "$_ccr_tok" "$_ccr_hint" "$_ccr_h1m" "$_ccr_peak" "$_ccr_clamp" "$_ccr_kind"; do
         case "$_ccr_f" in
             ''|*[!0-9]*) _ccr_ok=0 ;;
         esac
         [ "${#_ccr_f}" -le 12 ] || _ccr_ok=0
     done
-    if [ "$_ccr_ok" = "1" ] && [ "$_ccr_tok" -ge 1 ] && [ "$_ccr_h1m" -le 1 ] && [ "$_ccr_clamp" -le 1 ]; then
+    if [ "$_ccr_ok" = "1" ] && [ "$_ccr_tok" -ge 1 ] && [ "$_ccr_h1m" -le 1 ] && [ "$_ccr_clamp" -le 1 ] && [ "$_ccr_kind" -le 1 ]; then
         _ccr_win=$(_ctx_positive_int "${QUOIN_EFFECTIVE_CONTEXT_LIMIT:-}") || _ccr_win=""
         if [ -z "$_ccr_win" ]; then
             if _ctx_truthy "${CLAUDE_CODE_DISABLE_1M_CONTEXT:-}"; then
@@ -312,11 +319,26 @@ EOF
                 _ccr_win=200000
             fi
         fi
-        printf '%s real %s %s\n' "$(( _ccr_tok * 10000 / _ccr_win ))" "$_ccr_tok" "$_ccr_win"
+        if [ "$_ccr_wantkind" = "1" ]; then
+            if [ "$_ccr_kind" = "1" ]; then _ccr_kname=compact; else _ccr_kname=usage; fi
+            printf '%s real %s %s %s\n' "$(( _ccr_tok * 10000 / _ccr_win ))" "$_ccr_tok" "$_ccr_win" "$_ccr_kname"
+        else
+            printf '%s real %s %s\n' "$(( _ccr_tok * 10000 / _ccr_win ))" "$_ccr_tok" "$_ccr_win"
+        fi
         return 0
     fi
     _ccr_est=$(_ctx_estimate "$_ccr_path") || return 1
-    printf '%s estimated - -\n' "$_ccr_est"
+    _ccr_emit_est "$_ccr_est"
+}
+
+# _ccr_emit_est <bps> — print the estimated-reading line, with the kind field
+# when compute_context_reading was asked for it.
+_ccr_emit_est() {
+    if [ "${_ccr_wantkind:-0}" = "1" ]; then
+        printf '%s estimated - - -\n' "$1"
+    else
+        printf '%s estimated - -\n' "$1"
+    fi
 }
 
 # _run_state_validate_stale_days <raw> <default> — echo a validated,
