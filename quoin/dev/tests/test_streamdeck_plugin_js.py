@@ -68,6 +68,56 @@ def test_module_behaviour(tmp_path):
     assert not (PLUGIN.parent / "health.json").exists()
 
 
+GROUP_HARNESS = r"""
+const p = require(process.argv[2]);
+const cfg = {python: process.argv[3], runtime: '/r', state_root: '/s', invoke_timeout_ms: 300};
+(async () => {
+  const out = {};
+  for (const action of ['menu', 'snapshot']) {
+    const t = Date.now();
+    try { out[action] = await p.invoke(cfg, action); } catch (e) { out[action] = 'ERR:' + e.message; }
+    out[action + '_ms'] = Date.now() - t;
+  }
+  console.log(JSON.stringify(out));
+})();
+"""
+
+
+def _pid_alive(pid):
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+
+
+def test_only_snapshot_and_focus_are_bounded_and_killed_as_a_group(tmp_path):
+    marker = tmp_path / "grandchild.pid"
+    fake = tmp_path / "fake-python"
+    # Interactive action: outlives the 300 ms bound, then answers. Bounded action: starts a grandchild, then hangs.
+    fake.write_text(
+        "#!/bin/sh\n"
+        'case "$4" in\n'
+        '  menu) sleep 1; echo menu-done;;\n'
+        '  *) sleep 30 & echo $! > "%s"; wait;;\n'
+        "esac\n" % marker
+    )
+    fake.chmod(0o755)
+    harness = tmp_path / "group.js"
+    harness.write_text(GROUP_HARNESS)
+    result = subprocess.run([h.NODE, str(harness), str(PLUGIN), str(fake)], capture_output=True, text=True,
+                            timeout=30, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["menu"].strip() == "menu-done" and out["menu_ms"] >= 900
+    assert out["snapshot"] == "ERR:timeout" and out["snapshot_ms"] < 2000
+    grandchild = int(marker.read_text())
+    deadline = time.monotonic() + 3
+    while _pid_alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _pid_alive(grandchild)
+
+
 def test_static_shape():
     text = PLUGIN.read_text()
     assert "/usr/bin/python3" not in text and "versions/" not in text and "'versions'" not in text

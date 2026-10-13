@@ -149,9 +149,9 @@ def test_icons_are_valid_png_and_match_the_generator(tmp_path):
 
 def test_payload_files_and_fingerprint_ignore_noise(tmp_path):
     root = tmp_path / "payload"
-    shutil.copytree(h.PAYLOAD_DIR, root)
+    shutil.copytree(h.PAYLOAD_DIR, root, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".DS_Store"))
     before = streamdeck.payload_fingerprint(str(root))
-    (root / "__pycache__").mkdir()
+    (root / "__pycache__").mkdir(exist_ok=True)
     (root / "__pycache__" / "x.pyc").write_bytes(b"x")
     (root / ".DS_Store").write_bytes(b"x")
     (root / "plugin" / "stale.pyc").write_bytes(b"x")

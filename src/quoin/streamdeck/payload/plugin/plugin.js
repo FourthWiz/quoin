@@ -16,13 +16,20 @@ function buildInvocation(cfg, action, extra){
   const env = {...process.env, QUOIN_DECK_RUNTIME: cfg.runtime, QUOIN_DECK_STATE_ROOT: cfg.state_root};
   return [cfg.python, argv, env];
 }
-function invoke(cfg, action, extra, timeoutMs = cfg.invoke_timeout_ms || 20000){
+// Only the non-interactive calls are bounded; menus, sessions, project and error dialogs wait on the user.
+const BOUNDED_ACTIONS = new Set(['snapshot','focus']);
+function invoke(cfg, action, extra, timeoutMs = BOUNDED_ACTIONS.has(action) ? (cfg.invoke_timeout_ms || 20000) : 0){
   return new Promise((resolve,reject)=>{
     const [bin,argv,env] = buildInvocation(cfg, action, extra);
-    let done=false, out='', err='';
-    const settle = (fn,v)=>{ if(done)return; done=true; clearTimeout(timer); fn(v); };
-    const child = spawn(bin, argv, {env, stdio:['ignore','pipe','pipe']});
-    const timer = setTimeout(()=>{ try{child.kill('SIGKILL');}catch(e){} settle(reject,new Error('timeout')); }, timeoutMs);
+    const bounded = timeoutMs > 0;
+    let done=false, out='', err='', timer=null;
+    const settle = (fn,v)=>{ if(done)return; done=true; if(timer)clearTimeout(timer); fn(v); };
+    // A bounded call leads its own process group so the timeout can reap python and anything it started.
+    const child = spawn(bin, argv, {env, stdio:['ignore','pipe','pipe'], detached: bounded});
+    if(bounded)timer = setTimeout(()=>{
+      try{process.kill(-child.pid,'SIGKILL');}catch(e){try{child.kill('SIGKILL');}catch(e2){}}
+      settle(reject,new Error('timeout'));
+    }, timeoutMs);
     child.stdout.on('data',x=>out+=x); child.stderr.on('data',x=>err+=x);
     child.on('error',e=>settle(reject,e));
     child.on('close',code=>code?settle(reject,new Error(err||'Action failed')):settle(resolve,out));
