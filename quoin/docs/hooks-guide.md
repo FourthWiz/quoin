@@ -114,9 +114,9 @@ The context-utilization advisory is measured from real token usage, not from tra
 **Known divergences between the shell and Python readers.**
 - Without `jq` the hook can only estimate, while the phase-boundary guard (`context_budget_guard.py`) still reads real usage.
 - An invalid `QUOIN_EFFECTIVE_CONTEXT_LIMIT` on the estimate path: the awk estimate has no validation, the Python estimate falls back to 150000.
-- Lines nested deeper than 256 levels: `jq` skips the line, Python parses it until its own recursion limit (about a thousand levels on older interpreters, several thousand on newer ones). A usage record is never nested that deeply in practice.
+- Lines nested deeper than 256 levels: `jq` skips the line, Python parses it until its own recursion limit (from about a thousand to over a hundred thousand levels, depending on the interpreter; the 256 figure is the `jq` 1.7 limit). A usage record is never nested that deeply in practice.
 - A 1M-credits clamp is forgotten once its record scrolls out of the scanned tail.
-- Settings files holding several concatenated JSON values are read by `jq` as the first value only.
+- Settings files holding several concatenated JSON values are read by `jq` value by value: a `[1m]` in any of them counts, while Python skips the whole file ("Extra data").
 
 **Telemetry fields.** Compaction telemetry rows gain `real_tokens_before` (pre rows), `real_tokens_after` (post rows), `real_window` and `reading_source`. All are `null` when no real value exists. `reading_source` names the source of the `real_tokens_*` value: `real` when filled, `estimated` when only the byte estimate exists, `null` when neither does. In measurements of six compactions, the compact-boundary record was written after the PostCompact hook returned (the hook's measured transcript size equalled the boundary line's start offset every time), so `real_tokens_after` is normally `null` today; the first advisory after the compaction reads the post-compaction tokens instead. If Claude Code starts writing the boundary first, the field fills with no change here.
 

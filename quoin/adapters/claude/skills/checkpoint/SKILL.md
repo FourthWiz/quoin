@@ -419,7 +419,7 @@ This constant is defined in `_lib.sh:read_constants()` as:
 
 If `util_bps >= COMPACT_FIRST_BPS`:
   - Set `_HIGH_UTIL_NOTICE=true`.
-  - Compute `PCT_VALUE` from `util_bps` and the source (e.g., `92.13% (real)` or `~92.13% (estimated)` for 9213 basis points):
+  - Assign the fields from the captured output with `read -r util_bps source _ <<< "$OUTPUT"`, then compute `PCT_VALUE` from `util_bps` and the source (e.g., `92.13% (real)` or `~92.13% (estimated)` for 9213 basis points):
     `pct_int=$((util_bps / 100)); pct_dec=$(printf '%02d' $((util_bps % 100))); if [ "$source" = real ]; then PCT_VALUE="${pct_int}.${pct_dec}% (real)"; else PCT_VALUE="~${pct_int}.${pct_dec}% (estimated)"; fi`
   - Continue to sub-step B. (Do NOT write a deferred-checkpoint marker. The save runs immediately
     in Steps 1–6; the high-util notice is surfaced in Step 5 only.)
