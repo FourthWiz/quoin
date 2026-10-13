@@ -35,12 +35,19 @@ def _now_ms(now):
     return int(float(now) * 1000)
 
 
+class _SettingsError:
+    def __init__(self, code, path, detail):
+        self.code, self.path, self.detail = code, path, detail
+
+
 def _read_settings(path):
     try:
         data, _ = jsonfile.read(path)
         return data, None
     except jsonfile.MalformedJSON as exc:
-        return {}, exc
+        return {}, _SettingsError("SETTINGS_MALFORMED", exc.path, exc.detail)
+    except OSError as exc:
+        return {}, _SettingsError("SETTINGS_UNREADABLE", path, "%s: %s" % (type(exc).__name__, exc.strerror or exc))
 
 
 def _sha256(path):
@@ -168,7 +175,7 @@ def _check_valid(rep, paths, data, package_version, package_fingerprint, now, re
         settings_path = entries[0]["settings_path"]
         settings, error = _read_settings(settings_path)
         if error is not None:
-            rep.problem("SETTINGS_MALFORMED", "%s: %s" % (settings_path, error.detail))
+            rep.problem(error.code, "%s: %s" % (settings_path, error.detail))
             continue
         states = hooks_merge.inspect(settings, runtime, entries[0]["command"], runtime_names=names, recorded=recorded_cmds)
         rep.d["hooks"][runtime] = states
@@ -260,7 +267,7 @@ def collect(paths, *, package_version, package_fingerprint, platform_info, now, 
             d["tombstones"] = len(det.tombstones)
         for err in (claude_err, codex_err):
             if err is not None:
-                rep.info("SETTINGS_MALFORMED", "%s: %s" % (err.path, err.detail))
+                rep.info(err.code, "%s: %s" % (err.path, err.detail))
         return d
     d["state"] = "installed"
     _check_valid(rep, paths, data, package_version, package_fingerprint, now, read_text)

@@ -68,7 +68,7 @@ def test_installer_and_cli_only_imported_lazily(name):
     parents = parents_map(root)
     for node in ast.walk(root):
         if isinstance(node, ast.ImportFrom) and node.module == "quoin" and {a.name for a in node.names} & {"installer", "cli"}:
-            assert name == "prereqs" and "deploy" in enclosing_functions(node, parents)
+            assert name == "prereqs" and "deploy_agentdesk_files" in enclosing_functions(node, parents)
 
 
 def test_no_runtime_dependencies_added():

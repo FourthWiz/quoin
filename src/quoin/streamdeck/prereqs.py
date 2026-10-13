@@ -102,17 +102,28 @@ def _real_runner(argv):
         return 127
 
 
+def deploy_agentdesk_files(agentdesk_path):
+    """Copy the packaged Agent Desk files next to `agentdesk_path`; 0 on success, 1 when no source tree resolves."""
+    # Lazy: the installer is only needed when the user accepts this item.
+    import pathlib
+    from quoin import cli, installer
+    try:
+        source_dir = cli._resolve_source_dir(None)
+    except SystemExit:
+        # Source resolution exits the process when no source tree is found; the consent
+        # engine only catches Exception, so report it as a failed deploy instead.
+        return 1
+    installer.deploy_agentdesk(source_dir, pathlib.Path(os.path.dirname(agentdesk_path)))
+    return 0
+
+
 def default_ctx(paths, flags, recorded=None, legacy=None):
     import datetime
     flags = dict(flags or {})
     flags.setdefault("agentdesk", paths.agentdesk)
 
     def deploy():
-        # Lazy: the installer is only needed when the user accepts this item.
-        import pathlib
-        from quoin import cli, installer
-        installer.deploy_agentdesk(cli._resolve_source_dir(None), pathlib.Path(os.path.dirname(paths.agentdesk)))
-        return 0
+        return deploy_agentdesk_files(paths.agentdesk)
 
     return Ctx(
         which=shutil.which,
@@ -222,6 +233,14 @@ def check_python(ctx, results, memo):
     notes = []
     for source, path in python_candidates(ctx):
         label = "--python flag" if source == "flag" else source
+        if not os.path.isabs(path):
+            # A bare name would be resolved through PATH at probe time, which can land on the
+            # CLT stub; resolve it first so the gate sees the real target.
+            resolved = ctx.which(path)
+            if not resolved or not os.path.isabs(resolved):
+                notes.append("%s: %s not found on PATH" % (label, path))
+                continue
+            path = resolved
         if path == CLT_STUB or ctx.realpath(path) == CLT_STUB:
             if not _clt_ok(ctx, memo):
                 notes.append("%s: CLT not installed (xcode-select -p failed); %s not probed" % (label, CLT_STUB))

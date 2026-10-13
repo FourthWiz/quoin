@@ -197,10 +197,86 @@ def test_contract_state_dir_agrees_with_plugin_export(lifecycle_home, payload, a
         paths=paths, component_version="1.0.0", payload_fingerprint="f", quoin_version="0", platform={},
         mode="active", binaries=data["binaries"], zellij_socket_dir=data["zellij_socket_dir"], files=[],
         version_dir=data["version_dir"], previous_version_dir=None, hooks=[], plugin={}, prereqs={},
-        features_unavailable=[], adopted_from=None, legacy_owned_events=[], now=lc.NOW)
+        features_unavailable=[], adopted_from=None, legacy_owned_events={}, now=lc.NOW)
     manifest.write(paths.manifest, data)
     manifest_only = deckenv.load(environ=deckenv_environ(lifecycle_home))
     exported = payload_build.plugin_config(data["binaries"]["python"]["path"], paths.runtime, paths.state_root)["state_root"]
     with_export = deckenv.load(environ=deckenv_environ(lifecycle_home, QUOIN_DECK_STATE_ROOT=exported))
     assert manifest_only.state_dir == with_export.state_dir == paths.state
     assert manifest_only.config_path == with_export.config_path == paths.config
+
+
+# ------------------------------------------------- legacy_owned_events, paths, socket, unreadable
+
+def _owned_manifest(installed, owned):
+    data = copy.deepcopy(installed.manifest)
+    data["legacy_owned_events"] = owned
+    return data
+
+
+def test_legacy_owned_events_round_trips_as_a_per_runtime_map(lifecycle_home, installed):
+    owned = {"claude": ["SessionStart", "Stop"], "codex": ["PreToolUse"]}
+    built = manifest.new_manifest(
+        paths=installed.paths, component_version="1.0.0", payload_fingerprint="f", quoin_version="0", platform={},
+        mode="active", binaries=installed.manifest["binaries"], zellij_socket_dir=installed.manifest["zellij_socket_dir"],
+        files=installed.manifest["files"], version_dir=installed.manifest["version_dir"], previous_version_dir=None,
+        hooks=installed.manifest["hooks"], plugin={}, prereqs={}, features_unavailable=[], adopted_from=None,
+        legacy_owned_events=owned, now=lc.NOW)
+    assert built["legacy_owned_events"] == owned
+    owned["claude"].append("Stop")  # the manifest holds its own copy
+    assert built["legacy_owned_events"]["claude"] == ["SessionStart", "Stop"]
+    manifest.write(installed.paths.manifest, built)
+    assert manifest.load(installed.paths.manifest)["legacy_owned_events"] == built["legacy_owned_events"]
+
+
+@pytest.mark.parametrize("owned,fragment", [
+    (["claude", "codex"], "legacy_owned_events must be an object"),
+    ({"gemini": ["Stop"]}, "not a known runtime"),
+    ({"claude": "Stop"}, "must be a list"),
+    ({"claude": ["Interrupt"]}, "not in the claude registry"),
+    ({"codex": ["Notification"]}, "not in the codex registry"),
+])
+def test_legacy_owned_events_validation_fails(installed, owned, fragment):
+    found = problems(_owned_manifest(installed, owned))
+    assert any(fragment in p for p in found), found
+    with pytest.raises(manifest.ManifestError):
+        manifest.write(installed.paths.manifest, _owned_manifest(installed, owned))
+
+
+def test_legacy_owned_events_valid_shapes(installed):
+    assert problems(_owned_manifest(installed, {})) == []
+    assert problems(_owned_manifest(installed, {"claude": [], "codex": ["Interrupt"]})) == []
+
+
+@pytest.mark.parametrize("plugin_dir", ["/home/u/tool-versions/p", "/home/u/versionsx/p", "/home/u/my_versions"])
+def test_versions_lookalike_paths_are_valid(installed, plugin_dir):
+    data = mutated(installed, lambda d: d["paths"].update(plugin_dir=plugin_dir))
+    assert not any("versions/" in p for p in problems(data))
+
+
+def test_versions_lookalike_hook_command_is_valid(installed):
+    data = mutated(installed, lambda d: d["hooks"][0].update(command="/home/u/tool-versions/codex/quoin-deck-hook claude"))
+    assert not any("versions/" in p for p in problems(data))
+
+
+@pytest.mark.parametrize("path", ["/a/versions/1/p", "/a/versions", "/a/b/versions/c"])
+def test_versions_component_paths_are_rejected(installed, path):
+    data = mutated(installed, lambda d: d["paths"].update(plugin_dir=path))
+    assert any("versions/" in p for p in problems(data))
+
+
+@pytest.mark.parametrize("value,ok", [("relative/sock", False), ("", False), (5, False), (None, True), ("/tmp/zs", True)])
+def test_zellij_socket_dir_validation(installed, value, ok):
+    data = mutated(installed, lambda d: d.update(zellij_socket_dir=value))
+    found = [p for p in problems(data) if "zellij_socket_dir" in p]
+    assert (not found) == ok, found
+
+
+def test_unreadable_manifest_is_a_manifest_error_not_a_traceback(lifecycle_home):
+    paths = lifecycle_home.resolve()
+    os.makedirs(paths.manifest)  # a directory where the file should be: open() raises IsADirectoryError
+    with pytest.raises(manifest.ManifestError) as exc:
+        manifest.load(paths.manifest)
+    assert "unreadable" in str(exc.value)
+    with pytest.raises(manifest.ManifestError):
+        manifest.write(paths.manifest, lc.make_installed(lifecycle_home).manifest)

@@ -10,6 +10,7 @@ import datetime
 import json
 import os
 import re
+import shlex
 
 from . import hooks_merge, jsonfile
 
@@ -74,7 +75,7 @@ def new_manifest(*, paths, component_version, payload_fingerprint, quoin_version
         "prereqs": _plain(prereqs),
         "features_unavailable": list(features_unavailable),
         "adopted_from": _plain(adopted_from),
-        "legacy_owned_events": list(legacy_owned_events),
+        "legacy_owned_events": copy.deepcopy(legacy_owned_events) if legacy_owned_events is not None else {},
     }
 
 
@@ -84,6 +85,18 @@ def _is_abs(value):
 
 def _bin_path(entry):
     return entry.get("path") if isinstance(entry, dict) else entry
+
+
+def _has_versions_component(value):
+    return "versions" in value.replace("\\", "/").split("/")
+
+
+def _command_in_versions(command):
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        tokens = command.split()
+    return any("/" in token and _has_versions_component(token) for token in tokens)
 
 
 def validate(data):
@@ -110,8 +123,25 @@ def validate(data):
         if _is_abs(state) and state != os.path.join(os.path.dirname(config), "state"):
             problems.append("paths.state must be <dirname(paths.config)>/state (state-dir invariant)")
     for key, value in paths.items():
-        if isinstance(value, str) and "versions/" in value:
+        if isinstance(value, str) and _has_versions_component(value):
             problems.append("paths.%s must not point into versions/ (stable-path rule)" % key)
+    socket_dir = data.get("zellij_socket_dir")
+    if socket_dir is not None and not _is_abs(socket_dir):
+        problems.append("zellij_socket_dir must be an absolute path or null")
+    owned = data.get("legacy_owned_events")
+    if owned is not None:
+        if not isinstance(owned, dict):
+            problems.append("legacy_owned_events must be an object of runtime -> event list")
+        else:
+            for runtime, events in owned.items():
+                if runtime not in hooks_merge.EVENTS:
+                    problems.append("legacy_owned_events.%s is not a known runtime" % runtime)
+                elif not isinstance(events, list):
+                    problems.append("legacy_owned_events.%s must be a list" % runtime)
+                else:
+                    for event in events:
+                        if event not in hooks_merge.EVENTS[runtime]:
+                            problems.append("legacy_owned_events.%s: %r is not in the %s registry" % (runtime, event, runtime))
     binaries = data.get("binaries")
     if not isinstance(binaries, dict):
         problems.append("binaries missing")
@@ -172,7 +202,7 @@ def validate(data):
         command = entry.get("command")
         if not isinstance(command, str) or not command:
             problems.append("hooks[%d].command missing" % i)
-        elif "versions/" in command:
+        elif _command_in_versions(command):
             problems.append("hooks[%d].command must not point into versions/ (stable-path rule)" % i)
         if not isinstance(entry.get("timeout"), int) or isinstance(entry.get("timeout"), bool):
             problems.append("hooks[%d].timeout must be an integer" % i)
@@ -187,6 +217,8 @@ def load(path):
             raw = handle.read()
     except FileNotFoundError:
         return None
+    except OSError as exc:
+        raise ManifestError(["manifest is unreadable: %s: %s" % (type(exc).__name__, exc.strerror or exc)])
     try:
         data = json.loads(raw.decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as exc:
@@ -206,6 +238,8 @@ def write(path, data):
             raw = handle.read()
     except FileNotFoundError:
         raw = None
+    except OSError as exc:
+        raise ManifestError(["manifest is unreadable: %s: %s" % (type(exc).__name__, exc.strerror or exc)])
     jsonfile.write_atomic(path, data, expected_raw=raw, default_mode=0o644, create_parents=True)
 
 

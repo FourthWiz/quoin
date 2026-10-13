@@ -219,7 +219,7 @@ def make_installed(lh, mode="active", now=NOW, claude_only=False, flags=None, en
         binaries=bins, zellij_socket_dir=str(lh.root / "zsock"), files=files,
         version_dir=str(version_dir), previous_version_dir=None, hooks=hook_records,
         plugin={"deployed": plugin_deployed}, prereqs=prereq_record, features_unavailable=[],
-        adopted_from=None, legacy_owned_events=[], now=now)
+        adopted_from=None, legacy_owned_events={}, now=now)
     manifest.write(paths.manifest, data)
     return types.SimpleNamespace(paths=paths, manifest=data, version_dir=version_dir)
 

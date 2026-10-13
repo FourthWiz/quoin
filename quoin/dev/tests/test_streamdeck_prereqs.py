@@ -72,6 +72,45 @@ def test_clt_gate_follows_realpath(tmp_path):
     assert check("python", ok).path == link
 
 
+@pytest.mark.parametrize("source", ["flag", "legacy", "recorded"])
+def test_relative_candidate_resolving_to_the_stub_is_gated(tmp_path, source):
+    # A bare name must not reach the probe: PATH would land on the CLT stub.
+    fake = FakeCtx(tmp_path, probes={CLT: (1, "", "")}, which={"python3": "/usr/bin/python3"},
+                   **SOURCES[source]("python3"))
+    res = check("python", fake)
+    assert not res.ok and "CLT not installed" in res.detail
+    assert fake.probed("python3") == [] and fake.probed("/usr/bin/python3") == []
+    assert fake.probe_calls.count(CLT) == 1
+
+
+def test_relative_candidate_resolving_to_the_stub_probes_after_clt_ok(tmp_path):
+    fake = FakeCtx(tmp_path, probes={CLT: (0, "", ""), **py_probe("/usr/bin/python3")},
+                   which={"python3": "/usr/bin/python3"}, flags={"python": "python3"})
+    res = check("python", fake)
+    assert res.ok and res.path == "/usr/bin/python3"
+    assert fake.probed("python3") == []
+
+
+def test_relative_candidate_resolving_via_symlink_to_the_stub_is_gated(tmp_path):
+    link = "/opt/shim/python3"
+    fake = FakeCtx(tmp_path, probes={CLT: (1, "", "")}, which={"py": link}, flags={"python": "py"},
+                   realpath_map={link: "/usr/bin/python3"})
+    assert not check("python", fake).ok and fake.probed(link) == []
+
+
+def test_relative_candidate_resolving_elsewhere_is_probed_by_absolute_path(tmp_path):
+    fake = FakeCtx(tmp_path, probes=py_probe("/opt/x/bin/python3"), which={"python3.12": "/opt/x/bin/python3"},
+                   flags={"python": "python3.12"})
+    res = check("python", fake)
+    assert res.ok and res.path == "/opt/x/bin/python3" and CLT not in fake.probe_calls
+
+
+def test_unresolvable_relative_candidate_is_skipped(tmp_path):
+    fake = FakeCtx(tmp_path, flags={"python": "./nope"})
+    res = check("python", fake)
+    assert not res.ok and "not found on PATH" in res.detail and fake.probe_calls == []
+
+
 def test_no_xcode_probe_for_other_pythons(tmp_path):
     # A candidate that wins before the literal /usr/bin/python3 fallback never triggers the CLT probe.
     fake = FakeCtx(tmp_path, probes=py_probe("/opt/x/bin/python3"), legacy={"python": "/opt/x/bin/python3"})
@@ -354,3 +393,24 @@ def test_core_missing_and_checked_at(tmp_path):
     write_app(ok.apps, "7.6.0")
     done = pr.resolve(ok.ctx, pr.run_checks(ok.ctx))
     assert done.core_missing == [] and done.prereqs["node"]["state"] == "ok"
+
+
+def test_agentdesk_deploy_converts_systemexit_into_a_failed_install(tmp_path, monkeypatch):
+    from quoin import cli
+    calls = []
+
+    def no_source(explicit):
+        raise SystemExit(2)
+    monkeypatch.setattr(cli, "_resolve_source_dir", no_source)
+    monkeypatch.setattr("quoin.installer.deploy_agentdesk", lambda *a: calls.append(a))
+    assert pr.deploy_agentdesk_files(str(tmp_path / "ad" / "agentdesk.zsh")) == 1
+    assert calls == []
+
+
+def test_agentdesk_deploy_copies_into_the_agentdesk_directory(tmp_path, monkeypatch):
+    from quoin import cli
+    calls = []
+    monkeypatch.setattr(cli, "_resolve_source_dir", lambda explicit: tmp_path / "src")
+    monkeypatch.setattr("quoin.installer.deploy_agentdesk", lambda *a: calls.append(a))
+    assert pr.deploy_agentdesk_files(str(tmp_path / "ad" / "agentdesk.zsh")) == 0
+    assert calls == [(tmp_path / "src", tmp_path / "ad")]

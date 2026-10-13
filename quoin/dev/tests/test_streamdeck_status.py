@@ -291,3 +291,30 @@ def test_codex_trust_hint(lifecycle_home, monkeypatch, scan_fallback):
     assert any("no trust record - review in Codex /hooks" in i["detail"] for i in report["info"])
     config.unlink()
     assert any("no Codex config" in i["detail"] for i in run(lifecycle_home)["info"])
+
+
+def test_unreadable_manifest_is_a_problem_code(lifecycle_home):
+    lh = lifecycle_home
+    lh.runtime.mkdir(parents=True)
+    (lh.runtime / "install-manifest.json").mkdir()
+    report = run(lh)
+    assert report["exit_code"] == 11 and "MANIFEST_INVALID" in codes(report)
+    assert any("unreadable" in p["detail"] for p in report["problems"])
+
+
+def test_unreadable_recorded_settings_path_is_a_problem_code(lifecycle_home):
+    inst = lc.make_installed(lifecycle_home)
+    os.remove(inst.paths.claude_settings)
+    os.mkdir(inst.paths.claude_settings)  # a directory where the settings file should be
+    report = run(lifecycle_home)
+    assert report["exit_code"] == 11
+    assert any(p["code"] == "SETTINGS_UNREADABLE" and inst.paths.claude_settings in p["detail"] for p in report["problems"])
+
+
+def test_unreadable_settings_without_manifest_is_info_only(lifecycle_home):
+    lh = lifecycle_home
+    paths = lh.resolve()
+    os.makedirs(os.path.dirname(paths.claude_settings), exist_ok=True)
+    os.mkdir(paths.claude_settings)
+    report = run(lh)
+    assert "SETTINGS_UNREADABLE" in codes(report, "info")
