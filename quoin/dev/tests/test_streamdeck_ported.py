@@ -27,18 +27,18 @@ def test_question_done_and_interrupt(payload):
     assert monitor.transition(a, {"hook_event_name": "Interrupt"})["status"] == "attention"
 
 
-def test_metadata_only_and_no_desktop_threads(payload, tmp_path):
+def test_metadata_only_and_no_desktop_threads(payload, tmp_path, monkeypatch):
+    monkeypatch.setenv("QUOIN_DECK_STATE_ROOT", str(tmp_path / "st"))
     monitor = payload("monitor")
-    with patch.object(monitor, "STATE", tmp_path / "st"):
-        state = tmp_path / "st"
-        data = dict(session_id="test", hook_event_name="UserPromptSubmit", prompt="SECRET", cwd="/work")
-        monitor.record("claude", data, environ={}, identity=(1, "birth"))
-        assert not (state / "agents").exists()
-        monitor.record("claude", data, environ={"ZELLIJ_SESSION_NAME": "test", "ZELLIJ_PANE_ID": "1"},
-                       identity=(1, "birth"))
-        text = next((state / "agents").glob("*.json")).read_text()
-        assert "SECRET" not in text
-        assert json.loads(text)["status"] == "working"
+    state = tmp_path / "st" / "state"
+    data = dict(session_id="test", hook_event_name="UserPromptSubmit", prompt="SECRET", cwd="/work")
+    monitor.record("claude", data, environ={}, identity=(1, "birth"))
+    assert not (state / "agents").exists()
+    monitor.record("claude", data, environ={"ZELLIJ_SESSION_NAME": "test", "ZELLIJ_PANE_ID": "1"},
+                   identity=(1, "birth"))
+    text = next((state / "agents").glob("*.json")).read_text()
+    assert "SECRET" not in text
+    assert json.loads(text)["status"] == "working"
 
 
 def test_closed_pane_cannot_focus(payload):

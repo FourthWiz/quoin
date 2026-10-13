@@ -271,3 +271,53 @@ def load_frozen(monkeypatch, deck_home, answers=None):
 
     monkeypatch.setattr(controller, "run", fake_run)
     return types.SimpleNamespace(controller=controller, dashboard=dashboard, calls=calls, legacy=legacy)
+
+
+RUNTIME_FILES = ("monitor.py", "dashboard.py", "controller.py", "deckenv.py", "terminal.zsh")
+
+
+def stage_runtime(tmp):
+    """A deployed-looking runtime: versions/1.0.0 plus a `current` symlink and a manifest."""
+    base = tmp / "App Support" / "QuoinStreamDeck"
+    version = base / "versions" / "1.0.0"
+    version.mkdir(parents=True)
+    for name in RUNTIME_FILES:
+        shutil.copy2(PAYLOAD_DIR / name, version / name)
+    (base / "current").symlink_to("versions/1.0.0")
+    fakes = tmp / "stage-fakes"
+    fakes.mkdir()
+    bins = {}
+    for name in ("zellij", "osascript", "open"):
+        _write_fake(fakes / name, name)
+        bins[name] = str(fakes / name)
+    state_root = tmp / "stage-state"
+    zsock = tmp / "stage-zsock"
+    zsock.mkdir()
+    bins["python"] = sys.executable
+    (base / "install-manifest.json").write_text(json.dumps({
+        "paths": {"config": str(state_root / "config.json"), "state": str(state_root / "state")},
+        "binaries": bins, "zellij_socket_dir": str(zsock),
+    }))
+    home = tmp / "stage-home"
+    home.mkdir()
+    env = {"HOME": str(home), "PATH": "/usr/bin:/bin", "QUOIN_DECK_RUNTIME": str(base),
+           "QUOIN_DECK_STATE_ROOT": str(state_root), "ZELLIJ_SOCKET_DIR": str(zsock)}
+    cwd = tmp / "stage-cwd"
+    cwd.mkdir()
+
+    def command(script, *args, python=None):
+        return [python or sys.executable, "-E", "-s", str(base / "current" / script)] + list(args)
+
+    def run(cmd, stdin=b"", extra_env=None, timeout=10):
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                cwd=str(cwd), env=dict(env, **(extra_env or {})), start_new_session=True)
+        try:
+            out, err = proc.communicate(stdin, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, 9)
+            proc.communicate()
+            raise
+        return proc.returncode, out, err
+
+    return types.SimpleNamespace(runtime=base, state_root=state_root, state_dir=state_root / "state",
+                                 zsock=zsock, env=env, command=command, run=run, fakes=fakes, cwd=cwd, home=home)
