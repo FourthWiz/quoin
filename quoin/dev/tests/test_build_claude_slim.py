@@ -128,7 +128,7 @@ def test_classification_table_matches_plan_table():
     keep_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_KEEP_HEADINGS)
     drop_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_DROP_HEADINGS)
     assert keep_bytes == 7311, keep_bytes  # finalization-rule bullet shortened
-    assert drop_bytes == 32133, drop_bytes  # hooks section now notes the real-usage context reading (+163)
+    assert drop_bytes == 32100, drop_bytes  # hooks section now notes the real-usage context reading (+130)
 
 
 def test_classification_table_is_bijective_with_source_headings():
