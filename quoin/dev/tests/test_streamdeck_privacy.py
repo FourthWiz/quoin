@@ -80,6 +80,10 @@ def feed_events(staged):
 def test_no_sentinel_reaches_disk(staged):
     count = feed_events(staged)
     assert len(list((staged.state_dir / "agents").glob("*.json"))) >= 2
+    roots = [staged.runtime, staged.state_root, staged.home]
+    needles = all_sentinels(count)
+    # Records are garbage-collected by the snapshot below, so check them while they exist.
+    assert scan(roots, needles) == []
 
     rc, out, err = staged.run(staged.command("dashboard.py", "snapshot"))
     assert rc == 0, err
@@ -91,8 +95,7 @@ def test_no_sentinel_reaches_disk(staged):
     staged.run(staged.command("dashboard.py", "focus", target))
     staged.run(staged.command("dashboard.py", "no-such-action"))
 
-    hits = scan([staged.runtime, staged.state_root, staged.home], all_sentinels(count))
-    assert hits == []
+    assert scan(roots, needles) == []
 
 
 def test_error_log_holds_the_type_only(payload, deck_home):

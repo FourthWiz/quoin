@@ -56,6 +56,7 @@ def run_monitor(staged, kind, stdin, extra=None, args=True):
     ("empty", b""),
     ("nonobject", b"[1, 2]"),
     ("oversized", b" " * ((1 << 20) + 1)),
+    ("oversized_valid", event() + b" " * ((1 << 20) + 1)),
 ])
 def test_exit_zero_and_silent(staged, name, stdin):
     rc, out, err = run_monitor(staged, "claude", stdin)
