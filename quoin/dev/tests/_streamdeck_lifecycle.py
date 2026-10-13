@@ -156,8 +156,8 @@ def _fake_exec(path):
     return str(path)
 
 
-def make_installed(lh, mode="active", now=NOW, claude_only=False):
-    paths = lh.resolve()
+def make_installed(lh, mode="active", now=NOW, claude_only=False, flags=None, environ=None):
+    paths = lh.resolve(flags, environ)
     runtime = lh.runtime
     version_dir = runtime / "versions" / "1.0.0"
     version_dir.mkdir(parents=True)
@@ -193,7 +193,7 @@ def make_installed(lh, mode="active", now=NOW, claude_only=False):
     if mode == "active":
         kinds = ("claude",) if claude_only else ("claude", "codex")
         for kind in kinds:
-            settings = str(lh.claude_settings if kind == "claude" else lh.codex_home / "hooks.json")
+            settings = paths.claude_settings if kind == "claude" else paths.codex_hooks
             command = hooks_merge.managed_command(str(runtime), kind)
             created = {}
 
@@ -209,8 +209,8 @@ def make_installed(lh, mode="active", now=NOW, claude_only=False):
                                      "timeout": 3, "created_event_key": bool(created.get(event))})
     os.makedirs(paths.state, exist_ok=True)
     health = {"updated": int(now.timestamp() * 1000) - 10_000, "agents": 0}
-    (lh.state_root / "state").mkdir(parents=True, exist_ok=True)
-    (lh.state_root / "state" / "health.json").write_text(json.dumps(health))
+    with open(paths.health, "w") as handle:
+        json.dump(health, handle)
     prereq_record = {n: {"state": "ok", "path": None, "version": None, "checked_at": "2026-10-13T12:00:00Z"}
                      for n in ("python", "streamdeck-app", "node", "agentdesk", "zellij", "ghostty", "homebrew")}
     data = manifest.new_manifest(

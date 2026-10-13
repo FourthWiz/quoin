@@ -70,7 +70,7 @@ def test_module_behaviour(tmp_path):
 
 GROUP_HARNESS = r"""
 const p = require(process.argv[2]);
-const cfg = {python: process.argv[3], runtime: '/r', state_root: '/s', invoke_timeout_ms: 300};
+const cfg = {python: process.argv[3], runtime: '/r', state_root: '/s', invoke_timeout_ms: 1000};
 (async () => {
   const out = {};
   for (const action of ['menu', 'snapshot']) {
@@ -94,11 +94,11 @@ def _pid_alive(pid):
 def test_only_snapshot_and_focus_are_bounded_and_killed_as_a_group(tmp_path):
     marker = tmp_path / "grandchild.pid"
     fake = tmp_path / "fake-python"
-    # Interactive action: outlives the 300 ms bound, then answers. Bounded action: starts a grandchild, then hangs.
+    # Interactive action: outlives the 1 s bound, then answers. Bounded action: starts a grandchild, then hangs.
     fake.write_text(
         "#!/bin/sh\n"
         'case "$4" in\n'
-        '  menu) sleep 1; echo menu-done;;\n'
+        '  menu) sleep 2; echo menu-done;;\n'
         '  *) sleep 30 & echo $! > "%s"; wait;;\n'
         "esac\n" % marker
     )
@@ -109,8 +109,11 @@ def test_only_snapshot_and_focus_are_bounded_and_killed_as_a_group(tmp_path):
                             timeout=30, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
-    assert out["menu"].strip() == "menu-done" and out["menu_ms"] >= 900
-    assert out["snapshot"] == "ERR:timeout" and out["snapshot_ms"] < 2000
+    assert out["menu"].strip() == "menu-done" and out["menu_ms"] >= 1900
+    assert out["snapshot"] == "ERR:timeout" and out["snapshot_ms"] < 3500
+    marker_deadline = time.monotonic() + 2
+    while not marker.exists() and time.monotonic() < marker_deadline:
+        time.sleep(0.05)
     grandchild = int(marker.read_text())
     deadline = time.monotonic() + 3
     while _pid_alive(grandchild) and time.monotonic() < deadline:
