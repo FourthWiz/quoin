@@ -35,6 +35,7 @@ fi
 session_id=$(printf '%s' "$STDIN" | jq -r '.session_id // empty' 2>/dev/null) || exit 0
 cwd=$(printf '%s' "$STDIN" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
 [ -z "$cwd" ] && cwd="$PWD"
+_ctx_proj="$cwd"
 cwd=$(resolve_project_root "$cwd")
 
 # STEP 1b: Recent-session record (append before compaction wipes context)
@@ -265,14 +266,35 @@ fi
       _tel_est=$(awk -v b="$_tel_bytes" -v bpt="${BPT:-8.0}" 'BEGIN{ printf "%d", b / bpt }' 2>/dev/null) || _tel_est=""
     fi
   fi
+  # Real token reading (best-effort): the value is recorded only when it came
+  # from transcript usage; any failure leaves the fields null.
+  _tel_rt=""; _tel_rw=""; _tel_src=""
+  if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
+    _tel_rd=$(compute_context_reading "$transcript_path" "$_ctx_proj" --kind 2>/dev/null) || _tel_rd=""
+    _tel_rbps=""; _tel_rsrc=""; _tel_rtok=""; _tel_rwin=""; _tel_rkind=""
+    read -r _tel_rbps _tel_rsrc _tel_rtok _tel_rwin _tel_rkind <<TELEOF
+$_tel_rd
+TELEOF
+    if [ "$_tel_rsrc" = "real" ]; then
+      case "$_tel_rtok$_tel_rwin" in
+        ''|*[!0-9]*) ;;
+        *) _tel_rt="$_tel_rtok"; _tel_rw="$_tel_rwin" ;;
+      esac
+    fi
+  fi
+  if [ -n "$_tel_rt" ]; then _tel_src="real"; elif [ -n "$_tel_est" ]; then _tel_src="estimated"; fi
   _tel_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || _tel_ts=$(date +%Y-%m-%dT%H:%M:%SZ)
   jq -nc --arg half "pre" --arg sid "$session_id" --arg seq "$_tel_seq" \
     --arg ts "$_tel_ts" --arg bb "$_tel_bytes" --arg etb "$_tel_est" \
+    --arg rtb "$_tel_rt" --arg rw "$_tel_rw" --arg rsrc "$_tel_src" \
     --arg task "$rs_task" --arg phase "$rs_phase" --arg subphase "$rs_subphase" \
     --arg step "$rs_step" \
     '{v: 1, half: $half, session_id: $sid, event_seq: ($seq|tonumber), ts: $ts,
       bytes_before: (if $bb == "" then null else ($bb|tonumber) end),
       est_tokens_before: (if $etb == "" then null else ($etb|tonumber) end),
+      real_tokens_before: (if $rtb == "" then null else ($rtb|tonumber) end),
+      real_window: (if $rw == "" then null else ($rw|tonumber) end),
+      reading_source: (if $rsrc == "" then null else $rsrc end),
       task: $task, phase: $phase, subphase: $subphase, step: $step}' \
     >> "$_tel_sink" 2>/dev/null || exit 0
 ) 9>&2 2>/dev/null || true

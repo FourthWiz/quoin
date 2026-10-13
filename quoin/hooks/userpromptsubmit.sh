@@ -158,6 +158,7 @@ esac
 # STEP 0.9: Idle-session advisory (parent shell, after STEP 0 exemption check)
 _idle_cwd=$(printf '%s' "$STDIN" | jq -r '.cwd // empty' 2>/dev/null)
 [ -z "$_idle_cwd" ] && _idle_cwd="$PWD"
+_ctx_proj="$_idle_cwd"
 _idle_cwd=$(resolve_project_root "$_idle_cwd")
 _idle_sid=$(printf '%s' "$STDIN" | jq -r '.session_id // empty' 2>/dev/null)
 if [ -n "$_idle_sid" ]; then
@@ -173,9 +174,21 @@ fi
 transcript_path=$(printf '%s' "$STDIN" | jq -r '.transcript_path // empty' 2>/dev/null) || exit 0
 [ -z "$transcript_path" ] && exit 0
 
-# STEP 2: Compute utilization (returns basis-point integer 0..10000)
-util=$(compute_utilization "$transcript_path") || exit 0
-[ -z "$util" ] && exit 0
+# STEP 2: Read context utilization (basis points 0..10000) from the transcript's
+# real token usage, falling back to the byte estimate. The source is carried into
+# each advisory so an estimate is never mistaken for a measured value.
+_ctx_line=$(compute_context_reading "$transcript_path" "$_ctx_proj") || exit 0
+read -r util _ctx_src _ctx_rest <<EOF
+$_ctx_line
+EOF
+case "$util" in ''|*[!0-9]*) exit 0 ;; esac
+if [ "$_ctx_src" = "real" ]; then
+  _ctx_mark=""
+  _ctx_tag=" (real)"
+else
+  _ctx_mark="~"
+  _ctx_tag=" (estimated)"
+fi
 
 # STEP 3: Branch on utilization
 if [ "$util" -lt "$STOP_BPS" ]; then
@@ -200,11 +213,11 @@ elif [ "$util" -ge "$STOP_BPS" ] && [ "$util" -lt "$BLOCK_BPS" ]; then
   pct_int=$((util / 100))
   pct_dec=$(printf '%02d' $((util % 100)))
   if run_state_probe "${_adv_cwd}/.workflow_artifacts/memory"; then
-    printf '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "context at %d.%s%% — consider running /checkpoint and starting a fresh session"}}\n' \
-      "$pct_int" "$pct_dec"
+    printf '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "context at %s%d.%s%%%s — consider running /checkpoint and starting a fresh session"}}\n' \
+      "$_ctx_mark" "$pct_int" "$pct_dec" "$_ctx_tag"
   else
-    printf '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "context at %d.%s%% — start a fresh session when convenient; run /continue_work there to restore context. No checkpoint is needed: no active run in this project."}}\n' \
-      "$pct_int" "$pct_dec"
+    printf '{"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "additionalContext": "context at %s%d.%s%%%s — start a fresh session when convenient; run /continue_work there to restore context. No checkpoint is needed: no active run in this project."}}\n' \
+      "$_ctx_mark" "$pct_int" "$pct_dec" "$_ctx_tag"
   fi
   exit 0
 else
@@ -279,8 +292,8 @@ else
   else
     _cp_clause=" and start a fresh session (/continue_work restores context; no checkpoint is needed — no active run in this project)"
   fi
-  _msg=$(printf '[quoin-context] context at %d.%s%% — finish the current stage, prefer subagents for heavy reads,%s. Your prompt was also appended to pending-prompt-%s.txt (prompt text only — no checkpoint was written).%s' \
-    "$pct_int" "$pct_dec" "$_cp_clause" "$session_id" "$_purge_note")
+  _msg=$(printf '[quoin-context] context at %s%d.%s%%%s — finish the current stage, prefer subagents for heavy reads,%s. Your prompt was also appended to pending-prompt-%s.txt (prompt text only — no checkpoint was written).%s' \
+    "$_ctx_mark" "$pct_int" "$pct_dec" "$_ctx_tag" "$_cp_clause" "$session_id" "$_purge_note")
   jq -nc --arg m "$_msg" '{systemMessage: $m, hookSpecificOutput: {hookEventName: "UserPromptSubmit", additionalContext: $m}}'
   exit 0
 fi

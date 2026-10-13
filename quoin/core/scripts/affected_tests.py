@@ -884,6 +884,30 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_lib_thresholds_unchanged.py",
     ),
     (
+        "quoin/hooks/_lib.sh",
+        "quoin/dev/tests/test_context_reading_parity.py",
+    ),
+    (
+        "quoin/hooks/_lib.sh",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/hooks/_lib.sh",
+        "quoin/dev/tests/test_context_budget_guard.py",
+    ),
+    (
+        "quoin/core/scripts/context_budget_guard.py",
+        "quoin/dev/tests/test_context_reading_parity.py",
+    ),
+    (
+        "quoin/core/scripts/context_budget_guard.py",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/dev/tests/fixtures/context_reading/cases.json",
+        "quoin/dev/tests/test_context_reading_parity.py",
+    ),
+    (
         "quoin/memory/hooks-table.md",
         "quoin/dev/tests/test_hook_stanza_count_parity.py",
     ),
@@ -1924,6 +1948,30 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/memory/dispatch-guide.md",
         "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
+    ),
+    (
+        "quoin/hooks/userpromptsubmit.sh",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/hooks/precompact.sh",
+        "quoin/dev/tests/test_context_reading_telemetry.py",
+    ),
+    (
+        "quoin/hooks/postcompact.sh",
+        "quoin/dev/tests/test_context_reading_telemetry.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
+    (
+        "quoin/memory/hooks-table.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
+    (
+        "quoin/memory/checkpoint-spec.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
     ),
 )
 
