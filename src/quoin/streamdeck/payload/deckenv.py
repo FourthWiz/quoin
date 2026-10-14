@@ -31,6 +31,9 @@ _LSTART = re.compile(LSTART_RE)
 CORE_BINS = ("zellij", "osascript", "open", "python", "agentdesk")
 TOOL_BINS = ("claude", "codex", "ccr", "lazygit", "python3")
 DEFAULT_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+LOG_CAP = 256 * 1024
+SESSION_MAX = 256
+PROJECTS_CAP = 200
 _API_RE = re.compile(r"^AGENTDESK_API_VERSION=(\d+)", re.M)
 
 
@@ -156,7 +159,7 @@ def load(environ=None):
     for value in recorded_core + [tools[n] for n in TOOL_BINS if n in tools]:
         if os.path.isabs(value):
             dirs.append(os.path.dirname(value))
-    dirs.extend(p for p in env_in.get("PATH", DEFAULT_PATH).split(":") if p)
+    dirs.extend(p for p in env_in.get("PATH", DEFAULT_PATH).split(":") if p and os.path.isabs(p))
     seen = set()
     ordered = []
     for entry in dirs:
@@ -165,7 +168,7 @@ def load(environ=None):
             ordered.append(entry)
 
     sock = manifest.get("zellij_socket_dir")
-    socket_dir = sock if _nonempty(sock) else agentdesk_socket_dir(env_in)
+    socket_dir = sock if _nonempty(sock) and os.path.isabs(sock) else agentdesk_socket_dir(env_in)
 
     candidate = _bin_path(recorded.get("agentdesk")) or (
         paths["agentdesk"] if _nonempty(paths.get("agentdesk")) else None)
@@ -292,6 +295,30 @@ def iter_records(env, include_shadowed=False):
         yield path, data if isinstance(data, dict) else None, "legacy-shadowed" if shadowed else "legacy"
 
 
+def valid_session(name):
+    """A session name that is safe to pass as a zellij argument."""
+    if not isinstance(name, str) or name == "" or len(name) > SESSION_MAX or name.startswith("-"):
+        return False
+    return not any(ord(ch) < 32 or ord(ch) == 127 for ch in name)
+
+
+def remember_project(config, session, project, cap=PROJECTS_CAP):
+    """Insert or refresh a session -> project entry and keep only the newest `cap`."""
+    projects = config.get("projects")
+    if not isinstance(projects, dict):
+        projects = config["projects"] = {}
+    projects.pop(session, None)
+    projects[session] = project
+    while len(projects) > cap:
+        del projects[next(iter(projects))]
+    return config
+
+
+def open_lock(path):
+    """Open (creating, 0600) a lock file without following a symlink at the final component."""
+    return os.open(path, os.O_NOFOLLOW | os.O_CREAT | os.O_WRONLY, 0o600)
+
+
 def surface_key(socket, session):
     return socket + "\t" + session
 
@@ -356,10 +383,19 @@ def _clean(text):
     return "".join(" " if (ord(ch) < 32 or ord(ch) == 127) else ch for ch in text)
 
 
+def _rotate_log(path):
+    try:
+        if os.lstat(path).st_size > LOG_CAP:
+            os.replace(path, path + ".1")
+    except OSError:
+        pass
+
+
 def _append_log(env, line):
     try:
         ensure_dir(env.state_dir)
-        fd = os.open(env.errors_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        _rotate_log(env.errors_log)
+        fd = os.open(env.errors_log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
         try:
             os.write(fd, line.encode("utf-8", "replace"))
         finally:

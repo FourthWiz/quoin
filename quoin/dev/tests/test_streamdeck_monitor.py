@@ -219,3 +219,19 @@ def test_errors_log_holds_type_only(staged):
     assert (rc, out, err) == (0, b"", b"")
     log = (staged.state_dir / "errors.log").read_text()
     assert "ValueError" in log and secret not in log
+
+
+def test_session_starting_with_a_dash_is_skipped(payload):
+    monitor = payload("monitor")
+    monitor.record("claude", json.loads(event()), environ=dict(ZENV, ZELLIJ_SESSION_NAME="-x"), identity=(1, ""))
+    assert records(payload) == []
+
+
+def test_symlinked_lock_is_not_followed_and_monitor_exits_zero(staged, tmp_path):
+    state = staged.state_dir
+    state.mkdir(parents=True)
+    victim = tmp_path / "victim.lock"
+    victim.write_text("keep")
+    os.symlink(str(victim), str(state / "monitor.lock"))
+    assert run_monitor(staged, "claude", event()) == (0, b"", b"")
+    assert victim.read_text() == "keep"

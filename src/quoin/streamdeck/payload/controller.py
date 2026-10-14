@@ -84,6 +84,12 @@ def config_socket(config):
     return config.get('socket') or env().socket_dir
 
 
+def check_session(name):
+    if not deckenv.valid_session(name):
+        raise RuntimeError('Недопустимое имя сессии: ' + repr(name)[:80])
+    return name
+
+
 def select(config):
     socket = config_socket(config)
     available = sessions(socket)
@@ -93,14 +99,14 @@ def select(config):
     picked = choose(labels, 'Выбери сессию. Все кнопки панели будут управлять ею.')
     if not picked:
         return False
-    name = available[labels.index(picked)][0]
+    name = check_session(available[labels.index(picked)][0])
     project = config.get('projects', {}).get(name)
     if not project:
         project = folder()
         if not project:
             return False
     config.update(session=name, project=project, socket=socket)
-    config.setdefault('projects', {})[name] = project
+    deckenv.remember_project(config, name, project)
     save(config)
     return True
 
@@ -130,6 +136,7 @@ def require_live(config):
     name = config.get('session')
     if not name:
         raise RuntimeError('Сначала нажми «Открыть Desk» или «Сессии».')
+    check_session(name)
     socket = config_socket(config)
     if not dict(sessions(socket)).get(name, False):
         raise RuntimeError('Сессия не запущена: ' + name + '. Нажми «Открыть Desk», чтобы подключить её.')
@@ -140,6 +147,8 @@ def require_live(config):
 
 def execute(action, config):
     e = env()
+    if config.get('session'):
+        check_session(config['session'])
     if action in ('prev-tab', 'next-tab'):
         apple('on run argv\n tell application "Ghostty"\n if (count of windows) is 0 then return\n set w to front window\n set n to count of tabs of w\n set i to index of selected tab of w\n set targetIndex to ((i - 1 + (item 1 of argv as integer) + n) mod n) + 1\n select tab (tab targetIndex of w)\n activate window w\n end tell\nend run',
               '-1' if action == 'prev-tab' else '1')
@@ -173,7 +182,7 @@ def execute(action, config):
         else:
             name = 'quoin-deck-' + time.strftime('%m%d-%H%M%S')
             config.update(session=name, socket=e.socket_dir)
-            config.setdefault('projects', {})[name] = config['project']
+            deckenv.remember_project(config, name, config['project'])
             save(config)
             terminal('new', config, e.socket_dir)
         return
@@ -184,6 +193,7 @@ def execute(action, config):
         owner = deckenv.find_surface_owner(e, surface)
         if owner is None:
             raise RuntimeError('Сначала нажми кнопку нужного агента или Desk, чтобы выбрать вкладку для новой панели.')
+        check_session(owner[1])
         config['socket'], config['session'] = owner
         config['project'] = config.get('projects', {}).get(owner[1], config['project'])
     name = require_live(config)
@@ -202,7 +212,11 @@ def execute(action, config):
 def main():
     e = env()
     deckenv.ensure_dir(e.state_dir)
-    fd = os.open(e.controller_lock, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fd = deckenv.open_lock(e.controller_lock)
+    except OSError as exc:
+        deckenv.log_error(e, exc)
+        return
     try:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

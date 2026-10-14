@@ -139,7 +139,7 @@ def transition(old, event):
 
 
 def _lock(path, deadline):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    fd = deckenv.open_lock(path)
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -160,6 +160,8 @@ def record(kind, event, environ=None, identity=None, deadline=None):
     sid = event.get("session_id")
     # Desktop threads and background subagents are not separately addressable panes.
     if not session or not pane or not isinstance(sid, str) or not sid or event.get("agent_id"):
+        return
+    if not deckenv.valid_session(session):
         return
     if deadline is None:
         deadline = time.monotonic() + DEADLINE_S

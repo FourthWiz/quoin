@@ -361,3 +361,70 @@ def test_log_error_swallows_failures(de, tmp_path):
     open(env.state_root, "w").close()  # state_dir cannot be created under a file
     de.log_error(env, ValueError("x"))
     de.log_error_type_only(env, ValueError("x"))
+
+
+def test_relative_and_empty_inherited_path_entries_are_dropped(de, tmp_path):
+    env = make_env(de, tmp_path, None, path="/usr/bin:.::rel/bin:/bin")
+    assert env.path_env.split(":") == ["/usr/bin", "/bin"]
+
+
+def test_relative_manifest_socket_dir_is_ignored(de, tmp_path):
+    env = make_env(de, tmp_path, {"zellij_socket_dir": "rel/sock"}, extra={"ZELLIJ_SOCKET_DIR": str(tmp_path / "zs")})
+    assert env.socket_dir == str(tmp_path / "zs")
+    env = make_env(de, tmp_path, {"zellij_socket_dir": "/abs/sock"})
+    assert env.socket_dir == "/abs/sock"
+
+
+def test_error_log_rotates_at_the_cap_and_keeps_one_generation(de, tmp_path):
+    env = records_env(de, tmp_path)
+    de.ensure_dir(env.state_dir)
+    with open(env.errors_log, "wb") as handle:
+        handle.write(b"x" * (de.LOG_CAP + 1))
+    de.log_error(env, ValueError("fresh"))
+    assert os.path.getsize(env.errors_log + ".1") == de.LOG_CAP + 1
+    assert open(env.errors_log).read().count("\n") == 1
+    with open(env.errors_log, "wb") as handle:
+        handle.write(b"y" * (de.LOG_CAP + 1))
+    de.log_error(env, ValueError("again"))
+    assert open(env.errors_log + ".1", "rb").read(1) == b"y"
+    assert not os.path.exists(env.errors_log + ".2")
+
+
+def test_symlinked_error_log_and_lock_are_not_followed(de, tmp_path):
+    env = records_env(de, tmp_path)
+    de.ensure_dir(env.state_dir)
+    victim = tmp_path / "victim"
+    victim.write_text("keep")
+    os.symlink(str(victim), env.errors_log)
+    de.log_error(env, ValueError("x"))
+    assert victim.read_text() == "keep"
+    os.symlink(str(victim), env.monitor_lock)
+    with pytest.raises(OSError):
+        de.open_lock(env.monitor_lock)
+    assert victim.read_text() == "keep"
+
+
+def test_open_lock_creates_a_private_file(de, tmp_path):
+    path = str(tmp_path / "l.lock")
+    fd = de.open_lock(path)
+    os.close(fd)
+    assert mode(path) == 0o600
+
+
+@pytest.mark.parametrize("name,ok", [("sess", True), ("a b", True), ("-x", False), ("", False), (None, False),
+                                     ("a\nb", False), ("a\x00", False), ("x" * 257, False), ("x" * 256, True), (5, False)])
+def test_valid_session(de, name, ok):
+    assert de.valid_session(name) is ok
+
+
+def test_remember_project_caps_and_refreshes(de):
+    config = {"projects": {}}
+    for i in range(205):
+        de.remember_project(config, "s%d" % i, "/p%d" % i)
+    assert len(config["projects"]) == 200
+    assert "s0" not in config["projects"] and "s204" in config["projects"]
+    de.remember_project(config, "s5", "/new")
+    assert list(config["projects"])[-1] == "s5" and config["projects"]["s5"] == "/new"
+    bare = {}
+    de.remember_project(bare, "a", "/a")
+    assert bare == {"projects": {"a": "/a"}}

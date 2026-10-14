@@ -173,3 +173,27 @@ def test_single_flight_lock(payload):
         execute.assert_not_called()
     finally:
         os.close(fd)
+
+
+@pytest.mark.parametrize("bad", ["-x", "a\nb", "x" * 300])
+def test_invalid_session_names_are_refused(payload, bad):
+    c = payload("controller")
+    with patch.object(c, "sessions", return_value=[("a", True)]), patch.object(c, "run") as run:
+        with pytest.raises(RuntimeError, match="сесси"):
+            c.require_live({"session": bad})
+        with pytest.raises(RuntimeError, match="сесси"):
+            c.execute("next-pane", {"session": bad, "project": "/tmp"})
+        run.assert_not_called()
+    with patch.object(c, "sessions", return_value=[(bad, True)]), patch.object(c, "choose", return_value=bad + " • active"), \
+            patch.object(c, "folder", return_value="/tmp"):
+        with pytest.raises(RuntimeError, match="сесси"):
+            c.select({"projects": {}})
+
+
+def test_projects_map_is_capped_at_200_newest(payload):
+    c = payload("controller")
+    config = {"projects": {"s%d" % i: "/p" for i in range(200)}, "project": "/tmp"}
+    with patch.object(c, "sessions", return_value=[("fresh", True)]), patch.object(c, "choose", return_value="fresh • active"), \
+            patch.object(c, "folder", return_value="/proj"), patch.object(c, "save"):
+        assert c.select(config) is True
+    assert len(config["projects"]) == 200 and "s0" not in config["projects"] and config["projects"]["fresh"] == "/proj"
