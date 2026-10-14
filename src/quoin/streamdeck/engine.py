@@ -226,6 +226,56 @@ def _remove_any(path):
         pass
 
 
+def _real_within(path, root):
+    real_root = os.path.realpath(root)
+    real = os.path.realpath(path)
+    return real == real_root or real.startswith(real_root + os.sep)
+
+
+def _direct_child(path, parent, prefixes):
+    """True when `path` is `parent/<name>` with a name starting with one of `prefixes` (lexical, no dots)."""
+    if not isinstance(path, str) or not os.path.isabs(path) or os.path.normpath(path) != path:
+        return False
+    if os.path.normpath(os.path.dirname(path)) != os.path.normpath(parent):
+        return False
+    return os.path.basename(path).startswith(tuple(prefixes))
+
+
+def marker_path_ok(paths, kind, value):
+    """Whether a path or relative name read from an operation marker lies inside the roots this component owns.
+
+    A marker is a plain file on disk, so a damaged or edited one must never steer a delete or rename outside the
+    runtime directory, the plugins directory or the rollback area.
+    """
+    try:
+        if not isinstance(value, str) or not value:
+            return False
+        if kind == "rel":
+            from . import manifest as _manifest
+            if not _manifest._rel_ok(value):
+                return False
+            target = os.path.join(paths.runtime, value)
+            return _real_within(os.path.dirname(target), paths.runtime)
+        if kind == "rollback_dir":
+            return _direct_child(value, paths.staging, ("rollback-",)) and _real_within(paths.staging, paths.runtime)
+        if kind == "version_aside":
+            inner = os.path.dirname(value)
+            outer = os.path.dirname(inner)
+            return os.path.basename(inner) == "aside" and os.path.basename(value) not in ("", ".", "..") \
+                and marker_path_ok(paths, "rollback_dir", outer)
+        if kind == "version_dir":
+            return _direct_child(value, paths.versions_dir, ("",)) and _real_within(paths.versions_dir, paths.runtime)
+        if kind == "plugin_aside":
+            return _direct_child(value, paths.plugins_dir, (".quoin-plugin-old-", ".quoin-plugin-new-",
+                                                           ".quoin-plugin-kept-"))
+        if kind == "created_path":
+            return os.path.normpath(value) in {os.path.normpath(p) for p in (
+                paths.versions_dir, paths.plugins_dir, paths.bin_dir, paths.profile_dir)}
+    except (OSError, ValueError):
+        return False
+    return False
+
+
 def _tree_signature(root):
     out = {}
     for base, dirs, files in os.walk(root):
@@ -359,8 +409,9 @@ def carry_from_marker(marker, manifest_hooks, kind=None):
     aside = previous.get("plugin_aside")
     if isinstance(aside, dict) and aside.get("path") and not aside.get("kept"):
         carry.stale["plugin_asides"].append(aside["path"])
-    if previous.get("version_dir_aside"):
-        carry.stale["version_dir_asides"].append(previous["version_dir_aside"])
+    version_aside = previous.get("version_dir_aside")
+    if isinstance(version_aside, dict) and version_aside.get("path"):
+        carry.stale["version_dir_asides"].append(version_aside["path"])
     carry.legacy_owned_events = copy.deepcopy(draft.get("legacy_owned_events"))
     carry.binaries = copy.deepcopy(draft.get("binaries"))
     carry.mode = draft.get("mode")
@@ -511,10 +562,22 @@ def _set_symlink(link, target):
     return True
 
 
-def rollback(paths, marker):
-    """Undo a staging install/upgrade. Never called for an uninstall marker."""
+def rollback(paths, marker, warn=None):
+    """Undo a staging install/upgrade. Never called for an uninstall marker.
+
+    Every path taken from the marker is checked against the roots this component owns; a path that fails is
+    skipped and reported through `warn`, never touched.
+    """
     if marker.get("op") == "uninstall":
         raise RuntimeError("an uninstall marker is roll-forward only")
+    warn = warn or (lambda text: None)
+
+    def ok(kind, value):
+        if marker_path_ok(paths, kind, value):
+            return True
+        warn("warning: ignored an unexpected path in the operation record: %r" % (value,))
+        return False
+
     previous = marker.get("previous") or {}
     # current
     target = previous.get("current_target")
@@ -525,16 +588,21 @@ def rollback(paths, marker):
         _set_symlink(paths.current, target)
     # tracked files
     rollback_dir = marker.get("rollback_dir")
+    if rollback_dir and not ok("rollback_dir", rollback_dir):
+        rollback_dir = None
     for rel in previous.get("existing") or []:
+        if not ok("rel", rel):
+            continue
         src = os.path.join(rollback_dir or "", rel)
         if rollback_dir and os.path.exists(src):
             _restore_file(src, os.path.join(paths.runtime, rel))
     for rel in previous.get("created") or []:
-        _remove_any(os.path.join(paths.runtime, rel))
+        if ok("rel", rel):
+            _remove_any(os.path.join(paths.runtime, rel))
     # plugin
     aside = previous.get("plugin_aside")
     if isinstance(aside, dict) and aside.get("path"):
-        if os.path.lexists(aside["path"]):
+        if ok("plugin_aside", aside["path"]) and os.path.lexists(aside["path"]):
             if os.path.lexists(paths.plugin_dir):
                 _remove_any(paths.plugin_dir)
             os.rename(aside["path"], paths.plugin_dir)
@@ -544,21 +612,24 @@ def rollback(paths, marker):
     # version dir
     version_aside = previous.get("version_dir_aside")
     version_dir = (marker.get("draft") or {}).get("version_dir")
+    if version_dir and not ok("version_dir", version_dir):
+        version_dir = None
     if isinstance(version_aside, dict) and version_aside.get("path") and os.path.lexists(version_aside["path"]):
-        if version_dir and os.path.lexists(version_dir):
-            _remove_any(version_dir)
-        os.rename(version_aside["path"], version_aside["original"])
+        if ok("version_aside", version_aside["path"]) and ok("version_dir", version_aside.get("original")):
+            if version_dir and os.path.lexists(version_dir):
+                _remove_any(version_dir)
+            os.rename(version_aside["path"], version_aside["original"])
     elif previous.get("version_dir_created") and version_dir:
         _remove_any(version_dir)
     # adoption: records written by the new monitor stay visible to the restored prototype
     if marker.get("adoption") or previous.get("adoption"):
         migrations.reverse_sweep(paths)
     for created in reversed(previous.get("created_paths") or []):
+        if not ok("created_path", created):
+            continue
         try:
             if os.path.isdir(created) and not os.path.islink(created):
                 os.rmdir(created)
-            elif os.path.lexists(created):
-                os.unlink(created)
         except OSError:
             pass
     if rollback_dir:
@@ -592,7 +663,7 @@ class _Fail(Exception):
 
 
 def _effective_paths(env, recorded):
-    """Resolved paths, except that a valid manifest's recorded paths win unless a flag was passed (D-20)."""
+    """Resolved paths, except that a valid manifest's recorded paths win unless a flag was passed."""
     paths, notes = env.paths, []
     rec = recorded.get("paths") if isinstance(recorded, dict) else None
     if not isinstance(rec, dict) or manifest.validate(recorded):
@@ -695,6 +766,24 @@ class _Run:
     def say(self, text):
         self.lines.append(text)
         self.env.out(text)
+
+    def _remove_marker_leftovers(self, stale, previous):
+        """Delete the leftovers an earlier run recorded, skipping (and reporting) anything outside our roots."""
+        paths = self.paths
+        kinds = (("rollback_dirs", "rollback_dir"), ("plugin_asides", "plugin_aside"),
+                 ("version_dir_asides", "version_aside"))
+        for key, kind in kinds:
+            for path in stale.get(key) or []:
+                if not marker_path_ok(paths, kind, path):
+                    self.say("warning: ignored an unexpected path in the operation record: %r" % (path,))
+                elif ".quoin-plugin-kept-" not in path:
+                    _remove_any(path)
+        aside = previous.get("plugin_aside")
+        if isinstance(aside, dict) and aside.get("path") and not aside.get("kept"):
+            if not marker_path_ok(paths, "plugin_aside", aside["path"]):
+                self.say("warning: ignored an unexpected path in the operation record: %r" % (aside["path"],))
+            elif ".quoin-plugin-kept-" not in aside["path"]:
+                _remove_any(aside["path"])
 
     # -- fault injection
     def _fault(self, name):
@@ -825,7 +914,7 @@ class _Run:
             return carry_from_marker(None, hooks, "none")
         if kind == "staging":
             try:
-                rollback(paths, marker)
+                rollback(paths, marker, self.say)
             except Exception as exc:
                 raise OperationError("could not roll back the interrupted operation (%s); the marker was left in "
                                      "place" % (exc,))
@@ -851,7 +940,14 @@ class _Run:
     # -- locked section
     def _locked(self, state, consent):
         env = self.env
-        carry = self._recover(state)
+        under_lock = read_state(env, self.op)
+        if under_lock.marker_kind != state.marker_kind or under_lock.marker != state.marker:
+            # Another run finished (or failed) between our first look and taking the lock. Recovering from the
+            # stale view could undo finished work, so stop and let the user re-run against the current state.
+            raise OperationError("another quoin streamdeck operation changed the install state while this one was "
+                                 "waiting; re-run the command")
+        carry = self._recover(under_lock)
+        state = under_lock
         fresh = read_state(env, self.op)
         adoption = route_adoption(fresh.facts, self._marker_for_route(fresh))
         key = (adoption, fresh.facts.manifest_mode, fresh.paths.runtime)
@@ -1221,12 +1317,12 @@ class _Run:
             if not self.carry.completing:
                 self._previous()["plugin_aside"] = {"path": aside, "kept": not ours}
                 self._save()
+            elif ours:
+                self.store.data["stale"]["plugin_asides"].append(aside)
+                self._save()
             os.rename(paths.plugin_dir, aside)
             if not ours:
                 self.say("warning: the existing plugin directory is not ours; it was kept as %s" % aside)
-            elif self.carry.completing:
-                self.store.data["stale"]["plugin_asides"].append(aside)
-                self._save()
         elif not self.carry.completing:
             self._previous()["plugin_created"] = True
             self._save()
@@ -1485,13 +1581,7 @@ class _Run:
                 if name not in keep:
                     _remove_any(os.path.join(paths.versions_dir, name))
         stale = self.store.data["stale"]
-        for key in ("rollback_dirs", "plugin_asides", "version_dir_asides"):
-            for path in stale.get(key) or []:
-                _remove_any(path)
-        previous_marker = self.store.data.get("previous") or {}
-        aside = previous_marker.get("plugin_aside")
-        if isinstance(aside, dict) and aside.get("path") and not aside.get("kept"):
-            _remove_any(aside["path"])
+        self._remove_marker_leftovers(stale, self.store.data.get("previous") or {})
         try:
             os.rmdir(paths.staging)  # only when empty
         except OSError:
@@ -1703,12 +1793,11 @@ class _Uninstall(_Run):
     # -- the locked part
     def _locked_uninstall(self):
         env = self.env
-        marker_now = manifest.read_operation_marker(env.paths)
+        state = self._read()
         if self.selected is not None:
-            refusal = check_partial_uninstall(marker_now, self.selected)
+            refusal = check_partial_uninstall(state.marker, self.selected)
             if refusal:
                 raise OperationError(refusal)
-        state = self._read()
         carry = self._recover(state)
         state = self._read()
         hooks = carry.prev_hooks if carry.completing else ((state.manifest or {}).get("hooks") or [])
@@ -1850,14 +1939,7 @@ class _Uninstall(_Run):
             if os.path.lexists(path):
                 _remove_any(path)
                 self.changed = True
-        stale = marker.get("stale") or {}
-        for key in ("rollback_dirs", "plugin_asides", "version_dir_asides"):
-            for path in stale.get(key) or []:
-                if ".quoin-plugin-kept-" not in path:
-                    _remove_any(path)
-        aside = (marker.get("previous") or {}).get("plugin_aside")
-        if isinstance(aside, dict) and aside.get("path") and not aside.get("kept"):
-            _remove_any(aside["path"])
+        self._remove_marker_leftovers(marker.get("stale") or {}, marker.get("previous") or {})
         try:
             os.rmdir(paths.bin_dir)
         except OSError:

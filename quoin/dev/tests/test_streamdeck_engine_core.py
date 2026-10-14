@@ -351,7 +351,7 @@ def test_open_marker_completing_run_inherits_the_predecessor(tmp_path):
                "binaries": {"node": {"mode": "external", "path": "/n"}}, "wired": True},
         carried_hooks=[hook_record("SessionStart", True)],
         stale={"rollback_dirs": ["/old-rb"], "plugin_asides": ["/aside"], "version_dir_asides": []},
-        previous={"plugin_aside": {"path": "/pa", "kept": False}, "version_dir_aside": "/va"})
+        previous={"plugin_aside": {"path": "/pa", "kept": False}, "version_dir_aside": {"path": "/va", "original": "/v"}})
     carry = engine.carry_from_marker(predecessor, [hook_record("Stop", False), hook_record("Notification", False)])
     assert carry.completing and carry.adoption is True
     store = engine.MarkerStore(str(tmp_path / "operation.json"))

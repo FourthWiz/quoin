@@ -271,8 +271,8 @@ def collect(paths, *, package_version, package_fingerprint, platform_info, now, 
         d["state"] = "operation-incomplete"
         if marker.get("op") == "uninstall":
             runtimes = marker.get("runtimes")
-            command = "uninstall" + (" --runtimes %s" % ",".join(runtimes) if isinstance(runtimes, list) and runtimes
-                                     else "")
+            usable = isinstance(runtimes, list) and runtimes and all(isinstance(r, str) for r in runtimes)
+            command = "uninstall" + (" --runtimes %s" % ",".join(runtimes) if usable else "")
         else:
             command = "install"
         rep.problem("OPERATION_INCOMPLETE", "op %s, phase %s, steps done %s; run `quoin streamdeck %s` to "
