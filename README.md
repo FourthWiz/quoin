@@ -478,6 +478,24 @@ session, use `agentdesk-attach SESSION-NAME`.
 - `AGENTDESK_API_VERSION` in `agentdesk.zsh` marks the version of this
   interface; tools can detect it with a plain grep without sourcing the file.
 
+## Stream Deck (optional)
+
+An optional 15-key Stream Deck panel shows your running Claude and Codex agents (orange when one needs you, blue
+while it works, green when it is done) and focuses their Zellij panes in Ghostty. It is macOS only and never
+installed by `pip install quoin` or `quoin install`. You manage it yourself:
+
+```bash
+quoin streamdeck install     # check prerequisites, then install the plugin, hooks and profile
+quoin streamdeck upgrade     # bring the installed component up to date
+quoin streamdeck status      # read-only health report
+quoin streamdeck uninstall   # remove it; --purge also removes config and state
+```
+
+`pip install --upgrade quoin` updates only the package; run `quoin streamdeck upgrade` afterwards to update the
+installed component. The guide, [`quoin/docs/streamdeck/README.md`](quoin/docs/streamdeck/README.md), covers
+prerequisites, hooks and Codex trust, moving over from the prototype, and recovery. What is verified by tests and
+what still needs hardware is in [`quoin/docs/streamdeck/VALIDATION.md`](quoin/docs/streamdeck/VALIDATION.md).
+
 ## Architecture
 
 ![Quoin architecture](quoin/docs/images/quoin-architecture.png)
@@ -525,6 +543,8 @@ For runtime-neutral effort vocabulary, see
 - [`quoin/docs/runtime-portability-status.md`](quoin/docs/runtime-portability-status.md) - current migration status by runtime
 - [`quoin/docs/runtime-parity-matrix.md`](quoin/docs/runtime-parity-matrix.md) - evidence-based runtime parity matrix
 - [`quoin/docs/effort-levels.md`](quoin/docs/effort-levels.md) - runtime-neutral effort vocabulary
+- [`quoin/docs/streamdeck/README.md`](quoin/docs/streamdeck/README.md) - the optional Stream Deck component: install, hooks, recovery
+- [`quoin/docs/streamdeck/VALIDATION.md`](quoin/docs/streamdeck/VALIDATION.md) - what is tested, what was checked by hand, and what is not yet verified
 
 ## Boundaries
 
