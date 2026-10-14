@@ -440,3 +440,14 @@ def test_agentdesk_deploy_copies_into_the_agentdesk_directory(tmp_path, monkeypa
     monkeypatch.setattr("quoin.installer.deploy_agentdesk", lambda *a: calls.append(a))
     assert pr.deploy_agentdesk_files(str(tmp_path / "ad" / "agentdesk.zsh")) == 0
     assert calls == [(tmp_path / "src", tmp_path / "ad")]
+
+
+def test_a_relative_brew_is_never_run(tmp_path):
+    fake = ctx_with_python(tmp_path, which={"brew": "brew"}, stdin_tty=True, stdout_tty=True, answers=["y"])
+    results = pr.run_checks(fake.ctx)
+    results["homebrew"] = pr.CheckResult(True, "brew", None, "")  # found, but only by a bare name
+    outcome = pr.resolve(fake.ctx, results)
+    assert fake.runner_calls == []
+    assert outcome.prereqs["streamdeck-app"]["state"] == "failed"
+    assert ("streamdeck-app: Homebrew was found without an absolute path; run "
+            "brew install --cask elgato-stream-deck yourself") in outcome.lines

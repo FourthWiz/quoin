@@ -751,3 +751,34 @@ def test_a_carry_built_elsewhere_is_filtered_before_it_overlays_the_manifest(lif
     state = types.SimpleNamespace(manifest={"binaries": {"python": {"path": "/abs/python3"}}})
     carry = engine.Carry(completing=True, binaries={"python": {"path": "rel/python"}, "zellij": {"path": "/abs/z"}})
     assert run._recorded_binaries(state, carry) == {"python": {"path": "/abs/python3"}, "zellij": {"path": "/abs/z"}}
+
+
+# ------------------------------------------------------------------ state directories during an install
+
+def test_an_install_refuses_a_symlinked_state_dir_and_completes_once_it_is_fixed(lifecycle_home):
+    lh = lifecycle_home
+    target = lh.root / "somewhere-else"
+    target.mkdir()
+    lh.state_root.mkdir(parents=True, mode=0o700)
+    os.symlink(str(target), str(lh.state_root / "state"))
+    before = lc.tree_snapshot(target)
+    with pytest.raises(engine.OperationError) as exc:
+        engine.install(ops.make_env(lh))
+    assert "is a symlink" in str(exc.value)
+    assert lc.tree_snapshot(target) == before
+    assert status_exit(lh) == 12
+    os.unlink(str(lh.state_root / "state"))
+    result = engine.install(ops.make_env(lh, now=ops.LATER))
+    assert result.exit_code == 0 and not marker_path(lh).exists()
+    assert status_exit(lh) != 12
+
+
+def test_an_install_tightens_a_loose_agents_dir(lifecycle_home):
+    lh = lifecycle_home
+    agents = lh.state_root / "state" / "agents"
+    agents.mkdir(parents=True)
+    os.chmod(str(lh.state_root / "state"), 0o700)
+    os.chmod(str(agents), 0o755)
+    result = engine.install(ops.make_env(lh))
+    assert any("tightened permissions on %s" % agents in line for line in result.lines)
+    assert (os.stat(str(agents)).st_mode & 0o777) == 0o700

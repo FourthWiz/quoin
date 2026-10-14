@@ -102,6 +102,8 @@ def main():
         subprocess.run([interpreter(), "-E", "-s", TARGET] + sys.argv[1:], stdin=sys.stdin,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                        env=child_env({"QUOIN_DECK_VIA": "legacy"}), timeout=2.5)
+    except OSError:
+        drain()
     except BaseException:
         pass
     return 0

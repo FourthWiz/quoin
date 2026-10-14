@@ -151,7 +151,39 @@ def test_a_directory_owned_by_someone_else_is_refused(lifecycle_home, monkeypatc
         return result
 
     monkeypatch.setattr(os, "stat", fake_stat)
+    monkeypatch.setattr(os, "lstat", fake_stat)
     with pytest.raises(mg.MigrationError, match=paths.state):
+        mg.ensure_state_dirs(paths)
+
+
+def test_a_symlinked_state_dir_is_refused_but_a_symlinked_root_is_allowed(lifecycle_home, tmp_path):
+    paths = lifecycle_home.resolve()
+    real_root = tmp_path / "dotfiles-state"
+    real_root.mkdir(mode=0o700)
+    os.makedirs(os.path.dirname(paths.state_root), exist_ok=True)
+    os.symlink(str(real_root), paths.state_root)
+    assert mg.ensure_state_dirs(paths) == []
+    assert os.path.isdir(paths.agents_dir) and not os.path.islink(paths.state)
+    target = tmp_path / "elsewhere"
+    target.mkdir(mode=0o755)
+    os.rmdir(paths.agents_dir)
+    os.rmdir(paths.state)
+    os.symlink(str(target), paths.state)
+    with pytest.raises(mg.MigrationError, match="is a symlink"):
+        mg.ensure_state_dirs(paths)
+    assert os.listdir(str(target)) == [] and stat.S_IMODE(os.stat(str(target)).st_mode) == 0o755
+
+
+def test_a_symlinked_agents_dir_is_refused_and_a_loose_one_is_tightened(lifecycle_home, tmp_path):
+    paths = lifecycle_home.resolve()
+    mg.ensure_state_dirs(paths)
+    os.chmod(paths.agents_dir, 0o755)
+    notes = mg.ensure_state_dirs(paths)
+    assert len(notes) == 1 and paths.agents_dir in notes[0]
+    assert stat.S_IMODE(os.stat(paths.agents_dir).st_mode) == 0o700
+    os.rmdir(paths.agents_dir)
+    os.symlink(str(tmp_path), paths.agents_dir)
+    with pytest.raises(mg.MigrationError, match="is a symlink"):
         mg.ensure_state_dirs(paths)
 
 
@@ -364,3 +396,21 @@ def test_errors_log_is_appended_bounded_and_the_legacy_file_removed(paths):
     mg.move_errors_log(paths)
     assert os.path.getsize(new) == mg.LOG_CAP and not os.path.exists(legacy)
     assert mg.move_errors_log(paths) is False
+
+
+def test_a_busy_legacy_lock_costs_one_wait_for_the_whole_pass(paths, monkeypatch):
+    monkeypatch.setattr(mg, "LOCK_WAIT_S", 0.2)
+    legacy = legacy_dir(paths)
+    for i in range(5):
+        put(legacy, "r%d.json" % i, id="r%d" % i, updated=float(i))
+    fd = os.open(os.path.join(paths.state_root, "monitor.lock"), os.O_WRONLY | os.O_CREAT, 0o600)
+    fcntl.flock(fd, fcntl.LOCK_EX)
+    try:
+        start = time.monotonic()
+        report = mg.merge_agents(paths)
+        elapsed = time.monotonic() - start
+    finally:
+        os.close(fd)
+    assert sorted(report["skipped"]) == ["r%d.json" % i for i in range(5)]
+    assert report["moved"] == []
+    assert elapsed < 0.6

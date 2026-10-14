@@ -4,6 +4,7 @@ import os
 import stat
 import subprocess
 import sys
+import threading
 import time
 
 import pytest
@@ -226,3 +227,51 @@ def test_entry_points(lifecycle_home):
     points = shims.entry_points(paths)
     assert points == {"hook_shim": paths.hook_shim, "terminal_entry": paths.terminal_entry,
                       "root_monitor": os.path.join(paths.runtime, "monitor.py")}
+
+
+# ------------------------------------------------------------------ the monitor forwarder when the child cannot start
+
+def feed_the_forwarder(rt, python, total=2 * 1024 * 1024, chunk=64 * 1024):
+    """Run the forwarder, writing `total` bytes to its stdin in chunks; report what it accepted and any broken pipe."""
+    script = rt.tmp / "monitor-forwarder.py"
+    write_exec(script, shims.render_forwarder("monitor.py", rt.runtime, python))
+    proc = subprocess.Popen([rt.python, str(script), "claude"], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, env={"HOME": "/nonexistent", "PATH": "/usr/bin:/bin"})
+    seen = {"accepted": 0, "broken": False}
+
+    def writer():
+        try:
+            for _ in range(total // chunk):
+                proc.stdin.write(b"x" * chunk)
+                proc.stdin.flush()
+                seen["accepted"] += chunk
+        except (BrokenPipeError, OSError):
+            seen["broken"] = True
+        finally:
+            try:
+                proc.stdin.close()
+            except (BrokenPipeError, OSError):
+                seen["broken"] = True
+
+    thread = threading.Thread(target=writer)
+    thread.start()
+    out, err = proc.stdout.read(), proc.stderr.read()
+    code = proc.wait(timeout=30)
+    thread.join(30)
+    return code, out, err, seen, total
+
+
+@pytest.mark.parametrize("flavour", ["garbage bytes", "missing interpreter"])
+def test_the_monitor_forwarder_drains_its_input_when_the_child_cannot_start(rt, flavour):
+    sentinel = rt.tmp / "monitor-ran"
+    (rt.current / "monitor.py").write_text("open(%r, 'w').write('ran')\n" % str(sentinel))
+    broken = rt.tmp / "broken-python"
+    if flavour == "garbage bytes":
+        broken.write_bytes(b"\x00\x01\x02 not a program")
+    else:
+        broken.write_text("#!/nonexistent/interpreter\n")
+    broken.chmod(0o755)
+    code, out, _err, seen, total = feed_the_forwarder(rt, str(broken))
+    assert code == 0 and out == b""
+    assert not seen["broken"] and seen["accepted"] == total
+    assert not sentinel.exists()

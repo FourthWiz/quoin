@@ -10,6 +10,7 @@ import copy
 import fcntl
 import json
 import os
+import stat
 import tempfile
 import time
 
@@ -153,13 +154,14 @@ def _number(value):
 class _Locks:
     """Hold the given lock files (non-blocking, retried) for the duration of a `with` block."""
 
-    def __init__(self, paths, create):
+    def __init__(self, paths, create, deadline=None):
         self.paths = [(p, c) for p, c in zip(paths, create)]
+        self.deadline = deadline
         self.fds = []
         self.ok = False
 
     def __enter__(self):
-        deadline = time.monotonic() + LOCK_WAIT_S
+        deadline = self.deadline if self.deadline is not None else time.monotonic() + LOCK_WAIT_S
         for path, create in self.paths:
             if not create and not os.path.lexists(path):
                 continue
@@ -210,10 +212,17 @@ def ensure_state_dirs(paths):
     notes = []
     for directory in (paths.state_root, paths.state, paths.agents_dir):
         if os.path.lexists(directory):
-            info = os.stat(directory)
+            # The state root may be a symlink the user set up (dotfile managers do); the two directories this
+            # component creates inside it must be real directories.
+            own = directory != paths.state_root
+            info = os.lstat(directory) if own else os.stat(directory)
+            if own and (stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode)):
+                raise MigrationError("%s is a symlink (or not a directory); refusing to use it" % directory)
+            if not stat.S_ISDIR(info.st_mode):
+                raise MigrationError("%s is not a directory; refusing to use it" % directory)
             if info.st_uid != os.getuid():
                 raise MigrationError("%s is owned by another user; refusing to use it" % directory)
-            if directory == paths.state and (info.st_mode & 0o077):
+            if own and (info.st_mode & 0o077):
                 os.chmod(directory, 0o700)
                 notes.append("tightened permissions on %s to 0700" % directory)
             continue
@@ -228,10 +237,11 @@ def merge_agents(paths, now=None):
     """Move legacy `state_root/agents/*.json` records into `state/agents/`; newest `updated` wins."""
     report = {"moved": [], "dropped": [], "left": [], "skipped": []}
     legacy_dir = os.path.join(paths.state_root, "agents")
+    deadline = time.monotonic() + LOCK_WAIT_S  # one wait for the whole pass, not one per record
     for name in _json_names(legacy_dir):
         source = os.path.join(legacy_dir, name)
         target = os.path.join(paths.agents_dir, name)
-        with _Locks([_legacy_lock(paths), _new_lock(paths)], [False, True]) as locks:
+        with _Locks([_legacy_lock(paths), _new_lock(paths)], [False, True], deadline) as locks:
             if not locks.ok:
                 report["skipped"].append(name)
                 continue

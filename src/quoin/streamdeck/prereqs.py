@@ -491,8 +491,13 @@ def resolve(ctx, results, *, mode="ask"):
                     rc = ctx.deploy_agentdesk()
                 else:
                     argv = list(plan.argv)
-                    brew_path = results["homebrew"].path if "homebrew" in results else None
-                    if argv and argv[0] == "brew" and isinstance(brew_path, str) and os.path.isabs(brew_path):
+                    if argv and argv[0] == "brew":
+                        brew_path = results["homebrew"].path if "homebrew" in results else None
+                        if not (isinstance(brew_path, str) and os.path.isabs(brew_path)):
+                            say("%s: Homebrew was found without an absolute path; run %s yourself"
+                                % (name, plan.display))
+                            states[name] = "failed"
+                            continue
                         argv[0] = brew_path
                     rc = ctx.runner(argv)
             except Exception as exc:

@@ -162,3 +162,21 @@ def test_same_second_backups_prune_by_creation_order(tmp_path):
     assert len(kept) == 5
     contents = [json.loads((root / name / "s.json").read_text())["n"] for name in kept]
     assert contents == [7, 8, 9, 10, 11]
+
+
+def test_numbered_same_second_folders_sort_by_number_not_by_text(tmp_path):
+    src = tmp_path / "s.json"
+    src.write_text('{"n": 1}')
+    root = tmp_path / "backups"
+    root.mkdir()
+    now = datetime.datetime(2026, 10, 13, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    base = "quoin-20261013T120000Z"
+    (root / base).mkdir()
+    (root / base / "s.json").write_text("{}")
+    for n in range(2, 101):
+        folder = root / ("%s-%02d" % (base, n))
+        folder.mkdir()
+        (folder / "s.json").write_text("{}")
+    dest = jsonfile.backup(src, root, now=now)
+    assert os.path.basename(os.path.dirname(dest)) == base + "-101"
+    assert {p.name for p in root.iterdir()} == {"%s-%02d" % (base, n) for n in range(97, 102)}

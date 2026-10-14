@@ -8,6 +8,7 @@ import copy
 import datetime
 import json
 import os
+import re
 import shutil
 import uuid
 
@@ -120,6 +121,17 @@ def update(path, mutate, *, retries=3, **kwargs):
                 raise ConcurrentModification(path)
 
 
+_BACKUP_NAME = re.compile(r"^(quoin-\d{8}T\d{6}Z)(?:-(\d+))?$")
+
+
+def _backup_order(entry):
+    """Sort key for backup folders: timestamp, then the numeric suffix (a bare folder counts as 1)."""
+    match = _BACKUP_NAME.match(entry)
+    if not match:
+        return (entry, 0)
+    return (match.group(1), int(match.group(2)) if match.group(2) else 1)
+
+
 def backup(path, backups_root, *, now, keep=5):
     """Copy `path` into backups_root/quoin-<UTC ts>[-NN]/ and prune old quoin-* dirs.
 
@@ -133,9 +145,9 @@ def backup(path, backups_root, *, now, keep=5):
     base = "quoin-" + stamp
     name = os.path.basename(path)
     os.makedirs(backups_root, exist_ok=True)
-    same_second = sorted(entry for entry in os.listdir(backups_root)
-                         if (entry == base or entry.startswith(base + "-"))
-                         and os.path.isdir(os.path.join(backups_root, entry)))
+    same_second = sorted((entry for entry in os.listdir(backups_root)
+                          if (entry == base or entry.startswith(base + "-"))
+                          and os.path.isdir(os.path.join(backups_root, entry))), key=_backup_order)
     if not same_second:
         folder = os.path.join(backups_root, base)
     else:
@@ -148,8 +160,9 @@ def backup(path, backups_root, *, now, keep=5):
     os.makedirs(folder, exist_ok=True)
     dest = os.path.join(folder, name)
     shutil.copy2(path, dest)
-    ours = sorted(entry for entry in os.listdir(backups_root)
-                  if entry.startswith("quoin-") and os.path.isdir(os.path.join(backups_root, entry)))
+    ours = sorted((entry for entry in os.listdir(backups_root)
+                   if entry.startswith("quoin-") and os.path.isdir(os.path.join(backups_root, entry))),
+                  key=_backup_order)
     for entry in ours[:-keep] if keep > 0 else ours:
         shutil.rmtree(os.path.join(backups_root, entry), ignore_errors=True)
     return dest
