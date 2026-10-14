@@ -202,6 +202,8 @@ def _present_world(lh, missing, app_version):
         sdef.write_text("<command name='new surface configuration'/>")
     if "homebrew" not in missing:
         which["brew"] = _write_exec(lh.root / "toolbin" / "brew")
+    for name in ("osascript", "open"):
+        which[name] = str(lh.fakebin / name)
     if "codex" not in missing:
         which["codex"] = _write_exec(lh.root / "toolbin" / "codex")
     return which, probes

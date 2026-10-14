@@ -1339,7 +1339,7 @@ class _Run:
 
         changed, _ = jsonfile.update(settings_path, mutate, create_parents=False) if os.path.exists(settings_path) \
             else (False, {})
-        self.removed_kinds = getattr(self, "removed_kinds", set()) | {kind}
+        self.removed_kinds = self.removed_kinds | {kind}
         if changed:
             self.changed = True
             if kind == "claude":
@@ -1382,12 +1382,14 @@ class _Run:
     def _final_hooks(self):
         if self.mode != "active":
             return []
-        written = {r["runtime"] for r in self._draft()["hooks"]}
+        written = {r["runtime"] for r in self._draft()["hooks"]} - self.removed_kinds
         kept = []
         for kind in RUNTIME_KINDS:
+            if kind in self.removed_kinds:
+                continue
             if kind in written:
                 kept.extend(r for r in self._draft()["hooks"] if r["runtime"] == kind)
-            elif kind not in getattr(self, "removed_kinds", set()):
+            else:
                 kept.extend(self._prev_records(kind))
         return kept
 
