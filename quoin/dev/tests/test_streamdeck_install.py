@@ -343,3 +343,53 @@ def test_marker_draft_matches_the_settings_actually_written_after_a_conflict(lif
     created = [e for e in hooks_merge.EVENTS["claude"] if len(written["hooks"][e]) == 1]
     assert {r["event"]: r["created_event_key"] for r in seen["draft_at_write"]} == {e: True for e in hooks_merge.EVENTS["claude"]}
     assert set(created) == set(hooks_merge.EVENTS["claude"]) and "Custom" in written["hooks"]
+
+
+# ------------------------------------------------------------------ hooks stay inert while the operation runs
+
+@pytest.mark.parametrize("column", ["fresh", "upgrade"])
+def test_hook_commands_are_inert_at_every_step_boundary(lifecycle_home, column):
+    lh = lifecycle_home
+    if column == "upgrade":
+        lc.make_installed(lh, component_version="0.9.0", version_dir_name="0.9.0")
+    seen = []
+
+    def check(name):
+        seen.append(name)
+        ops.assert_hooks_inert(ops.run_hook_commands(lh))
+
+    check("before")
+    run = engine.upgrade if column == "upgrade" else engine.install
+    run(ops.make_env(lh, on_step=check))
+    assert seen[1:] == list(engine.STEPS)
+    check("after")
+
+
+# ------------------------------------------------------------------ recorded paths and dry-run consent
+
+def test_an_upgrade_uses_the_recorded_paths_unless_a_flag_is_given(lifecycle_home):
+    lh = lifecycle_home
+    custom = lh.root / "custom-plugins"
+    flags = {"plugins_dir": str(custom)}
+    env = ops.make_env(lh, flags=flags)
+    env.paths = lh.resolve(flags)
+    engine.install(env)
+    recorded_dir = custom / "local.quoin.agentdesk.sdPlugin"
+    assert recorded_dir.is_dir() and not lh.plugins.exists()
+    result = engine.upgrade(ops.make_env(lh, now=ops.LATER))
+    assert any(line.startswith("note: using the recorded plugin_dir") for line in result.lines)
+    assert not lh.plugins.exists() and recorded_dir.is_dir()
+    assert load(lh.runtime / "install-manifest.json")["paths"]["plugin_dir"] == str(recorded_dir)
+    env = ops.make_env(lh, flags={"plugins_dir": str(lh.plugins)}, now=ops.LATER)
+    env.paths = lh.resolve({"plugins_dir": str(lh.plugins)})
+    engine.upgrade(env)
+    assert lh.plugin_dir.is_dir()
+
+
+def test_a_dry_run_never_runs_an_installer_even_when_asked_to_install_everything(lifecycle_home):
+    lh = lifecycle_home
+    env = ops.make_env(lh, missing=("node",), app_version="7.0", prereqs="all", tty=True, dry_run=True)
+    before = lc.tree_snapshot(lh.root)
+    result = engine.install(env)
+    assert env.fake_ctx.runner_calls == [] and env.fake_ctx.deployed == []
+    assert lc.tree_snapshot(lh.root) == before and any("dry run" in line for line in result.lines)

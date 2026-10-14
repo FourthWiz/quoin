@@ -382,3 +382,23 @@ def test_deactivation_in_a_completing_chain_is_honoured(lifecycle_home):
     assert owned_hooks(lh) == 0
     again = engine.install(ops.make_env(lh, now=LATER2 + datetime.timedelta(hours=1)))
     assert again.mode == "active" and lh.plugin_dir.is_dir()
+
+
+def test_created_flags_reach_the_marker_before_the_settings_file_is_written(lifecycle_home, monkeypatch):
+    lh = lifecycle_home
+    foreign_fixtures(lh)
+    created = expected_created(pre_install_events(lh))
+    real = jsonfile.update
+
+    def crash_right_after_the_write(path, mutate, **kwargs):
+        result = real(path, mutate, **kwargs)
+        if str(path) == str(lh.claude_settings):
+            raise RuntimeError("crash right after the settings write")
+        return result
+
+    monkeypatch.setattr(jsonfile, "update", crash_right_after_the_write)
+    with pytest.raises(engine.OperationError):
+        engine.install(ops.make_env(lh))
+    flags = draft_flags(marker_of(lh))
+    for event in hooks_merge.EVENTS["claude"]:
+        assert flags[("claude", event)] is (event in created["claude"]), event
