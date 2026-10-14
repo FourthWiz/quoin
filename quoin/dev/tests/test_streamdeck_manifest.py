@@ -308,3 +308,15 @@ def test_unreadable_manifest_is_a_manifest_error_not_a_traceback(lifecycle_home)
     assert "unreadable" in str(exc.value)
     with pytest.raises(manifest.ManifestError):
         manifest.write(paths.manifest, lc.make_installed(lifecycle_home).manifest)
+
+
+def test_record_optional_tools_without_an_exclusion_keeps_every_absolute_hit():
+    table = {"claude": "/a/claude", "codex": "relative/codex", "ccr": "/a/ccr", "python3": "/v/bin/python3"}
+    assert manifest.record_optional_tools(table.get) == {
+        "claude": {"path": "/a/claude"}, "ccr": {"path": "/a/ccr"}, "python3": {"path": "/v/bin/python3"}}
+
+
+def test_record_optional_tools_skips_excluded_hits_without_searching_further():
+    table = {"claude": "/a/claude", "ccr": "/a/ccr", "python3": "/v/bin/python3", "lazygit": "/v/bin/lazygit"}
+    got = manifest.record_optional_tools(table.get, exclude=lambda path: path.startswith("/v/"))
+    assert got == {"claude": {"path": "/a/claude"}, "ccr": {"path": "/a/ccr"}}

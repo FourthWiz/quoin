@@ -246,7 +246,8 @@ class FakeCtx:
 
     def __init__(self, tmp, *, which=None, probes=None, stdin_tty=False, stdout_tty=False, answers=(),
                  runner_rc=None, deploy_rc=0, flags=None, recorded=None, legacy=None, realpath_map=None,
-                 virtual_env=None, sys_prefix="/venv/prefix", environ=None, installs=None, now=None):
+                 virtual_env=None, sys_prefix="/venv/prefix", sys_is_venv=False, environ=None, installs=None,
+                 now=None):
         self.which_table = dict(which or {})
         self.probes = dict(probes or {})
         self.probe_calls = []
@@ -277,6 +278,7 @@ class FakeCtx:
             home=str(tmp / "home"),
             sys_prefix=sys_prefix,
             virtual_env=virtual_env,
+            sys_is_venv=sys_is_venv,
             flags=dict(flags or {}),
             recorded=dict(recorded or {}),
             legacy=dict(legacy or {}),

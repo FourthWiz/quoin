@@ -250,6 +250,53 @@ def _str_list(value):
     return [item for item in value if isinstance(item, str)]
 
 
+def usable_python(entry):
+    """The interpreter path of a `binaries.python` record, or None when it cannot safely be run.
+
+    One rule for everything that receives the interpreter (the hook shim, the forwarders, the plugin
+    configuration and the preflight refusal): the record is a dict, its path is an absolute string without a
+    newline or NUL, and it names an executable regular file.
+    """
+    if not isinstance(entry, dict):
+        return None
+    path = entry.get("path")
+    if not isinstance(path, str) or not os.path.isabs(path) or "\0" in path or "\n" in path:
+        return None
+    if not os.path.isfile(path) or not os.access(path, os.X_OK):
+        return None
+    return path
+
+
+def _no_python_reason(entry):
+    if entry is None:
+        return "none recorded"
+    if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+        return "the recorded entry is not a path record"
+    return "%s is not an executable file" % entry["path"]
+
+
+def _no_python_message(entry):
+    return ("the deck would stay active but no usable python is recorded (%s); pass --python PATH (python 3.9 or "
+            "later) and re-run, or run `quoin streamdeck uninstall`" % _no_python_reason(entry))
+
+
+def _clean_binaries(value):
+    """(binary records worth keeping, names dropped) for a `binaries` mapping read from an operation record.
+
+    Only dict records that pass the manifest's own per-entry rule survive; everything else is dropped so a
+    damaged record can neither crash the run nor put an entry in the manifest that it would later reject.
+    """
+    if not isinstance(value, dict):
+        return {}, ["binaries"]
+    kept, dropped = {}, []
+    for key, entry in value.items():
+        if isinstance(key, str) and isinstance(entry, dict) and manifest.binary_problem(key, entry) is None:
+            kept[key] = copy.deepcopy(entry)
+        else:
+            dropped.append(key if isinstance(key, str) else repr(key))
+    return kept, dropped
+
+
 def _staging_child_ok(paths, value):
     """`value` is a real (not symlinked) `rollback-*` directory directly inside the real staging directory."""
     return _direct_child(value, paths.staging, ("rollback-",)) and _real_within(paths.staging, paths.runtime) \
@@ -406,6 +453,7 @@ class Carry:
     stale: dict = field(default_factory=lambda: {"rollback_dirs": [], "plugin_asides": [], "version_dir_asides": []})
     legacy_owned_events: Optional[dict] = None
     binaries: Optional[dict] = None
+    dropped_binaries: list = field(default_factory=list)
     mode: Optional[str] = None
     wired: bool = False
     deactivated: bool = False
@@ -439,7 +487,8 @@ def carry_from_marker(marker, manifest_hooks, kind=None):
     if isinstance(version_aside, dict) and version_aside.get("path"):
         carry.stale["version_dir_asides"].append(version_aside["path"])
     carry.legacy_owned_events = copy.deepcopy(draft.get("legacy_owned_events"))
-    carry.binaries = copy.deepcopy(draft.get("binaries"))
+    if draft.get("binaries") is not None:
+        carry.binaries, carry.dropped_binaries = _clean_binaries(draft.get("binaries"))
     carry.mode = draft.get("mode")
     carry.wired = bool(draft.get("wired"))
     carry.deactivated = bool(draft.get("deactivated"))
@@ -481,7 +530,7 @@ def open_marker(store, *, op, phase, completing, carry, prev_hooks, adoption, dr
     draft_now = draft_now or {}
     carry = carry or Carry()
     if completing:
-        binaries = copy.deepcopy(carry.binaries or {})
+        binaries = _clean_binaries(carry.binaries or {})[0]
         binaries.update(copy.deepcopy(draft_now.get("binaries") or {}))
         mode = draft_now.get("mode") or carry.mode
         legacy_owned = copy.deepcopy(carry.legacy_owned_events) if carry.legacy_owned_events is not None \
@@ -712,6 +761,8 @@ def _effective_paths(env, recorded):
             use[key] = value
     if all(use.get(k) == v for k, v in paths.manifest_paths().items()):
         return paths, notes
+    if use["runtime"] != paths.runtime and "runtime_dir" not in explicit:
+        _require_matching_manifest(paths, use["runtime"])
     plugin_dir, config, hooks = use["plugin_dir"], use["config"], use["codex_hooks"]
     codex_home = os.path.dirname(hooks)
     effective = dataclasses.replace(
@@ -720,6 +771,16 @@ def _effective_paths(env, recorded):
         codex_home=codex_home, codex_hooks=hooks, codex_config=os.path.join(codex_home, os.path.basename(paths.codex_config)),
         agentdesk=use["agentdesk"])
     return effective, notes
+
+
+def _require_matching_manifest(paths, recorded_runtime):
+    """A manifest that records another runtime is only followed when that runtime holds a manifest saying the same."""
+    there = manifest.load_any(os.path.join(recorded_runtime, os.path.basename(paths.manifest)))
+    rec = there.get("paths") if isinstance(there, dict) else None
+    if isinstance(rec, dict) and not manifest.validate(there) and rec.get("runtime") == recorded_runtime:
+        return
+    raise OperationError("the install manifest at %s records the runtime %s, which holds no matching manifest; "
+                         "pass --runtime-dir to choose one" % (paths.manifest, recorded_runtime))
 
 
 def _read_settings(path, kind):
@@ -787,6 +848,7 @@ class _Run:
         self.removed_kinds = set()
         self.deactivated = False
         self.keep_recorded = False
+        self._warned = set()
 
     # -- output
     def say(self, text):
@@ -842,9 +904,17 @@ class _Run:
         self._refuse(state)
         carry = carry_from_marker(state.marker if state.marker_kind not in ("none",) else None,
                                   (state.manifest or {}).get("hooks"), state.marker_kind)
+        self._warn_dropped(carry)
         consent = self._consent(state, carry)
+        refusal = None
+        try:
+            self._python_preflight(state, carry, consent)
+        except OperationError as exc:
+            if not env.dry_run:
+                raise
+            refusal = exc.message
         if env.dry_run:
-            return self._dry_run(state, carry, consent)
+            return self._dry_run(state, carry, consent, refusal)
         os.makedirs(state.paths.runtime, exist_ok=True)
         self.lock_fd = self._lock(state.paths)
         try:
@@ -855,6 +925,25 @@ class _Run:
                     os.close(self.lock_fd)
                 except OSError:
                     pass
+
+    def _warn_dropped(self, carry):
+        for key in carry.dropped_binaries:
+            if key not in self._warned:
+                self._warned.add(key)
+                self.say("warning: ignored an unusable binary record in the operation record: %s" % key)
+
+    # -- python
+    def _require_python(self, consent, mode):
+        """Refuse a run that would leave the deck active with no interpreter to run its hooks and plugin."""
+        if mode != "active" or not self.keep_recorded or "python" not in consent["outcome"].core_missing:
+            return
+        entry = consent["recorded"].get("python")
+        if usable_python(entry) is None:
+            raise OperationError(_no_python_message(entry))
+
+    def _python_preflight(self, state, carry, consent):
+        mode = self._decide_mode(state, carry, consent, dry=True)
+        self._require_python(consent, mode)
 
     # -- refusals
     def _refuse(self, state):
@@ -897,7 +986,8 @@ class _Run:
     def _recorded_binaries(self, state, carry):
         recorded = copy.deepcopy((state.manifest or {}).get("binaries") or {})
         if carry.completing and carry.binaries:
-            recorded.update(copy.deepcopy(carry.binaries))  # what the interrupted run just verified wins
+            # what the interrupted run just verified wins, as far as it is usable
+            recorded.update(_clean_binaries(carry.binaries)[0])
         return recorded
 
     def _marker_for_route(self, state):
@@ -917,12 +1007,15 @@ class _Run:
                                               tuple(sorted(outcome.core_missing)))}
 
     # -- dry run
-    def _dry_run(self, state, carry, consent):
+    def _dry_run(self, state, carry, consent, refusal=None):
         env = self.env
         if state.marker_kind == "staging":
             self.say("dry run: would roll back an interrupted operation")
         elif state.marker_kind != "none":
             self.say("dry run: would complete an interrupted operation")
+        if refusal is not None:
+            self.say("dry run: the real run would refuse: %s" % refusal)
+            return Result(1, None, False, self.lines, state.manifest)
         outcome = consent["outcome"]
         mode = self._decide_mode(state, carry, consent, dry=True)
         self.say("dry run: would %s the Stream Deck component %s (%s)" % (self.op, env.component_version, mode))
@@ -985,7 +1078,9 @@ class _Run:
             consent = dict(consent)
             consent["adoption"] = adoption
         self.carry = carry
+        self._warn_dropped(carry)
         mode = self._decide_mode(fresh, carry, consent)
+        self._require_python(consent, mode)
         return self._pipeline(fresh, carry, consent, mode)
 
     # -- mode
@@ -1052,7 +1147,8 @@ class _Run:
         if ad.ok:
             api = int(ad.version) if (ad.version or "").isdigit() else ad.version
             found["agentdesk"] = {"path": ad.path, "api_version": api}
-        found.update(manifest.record_optional_tools(ctx.which))
+        found.update(manifest.record_optional_tools(
+            ctx.which, exclude=lambda path: prereqs.inside_python_env(ctx, path, include_base_prefix=False)))
         if self.keep_recorded:
             for key in ("python", "node", "zellij", "ghostty_app", "agentdesk"):
                 if key not in found and key in recorded:
@@ -1280,7 +1376,13 @@ class _Run:
 
     def _python_for_shim(self):
         entry = self.binaries.get("python")
-        return entry["path"] if isinstance(entry, dict) else None
+        python = usable_python(entry)
+        if python is None and entry is not None and "python" not in self._warned:
+            self._warned.add("python")
+            shown = entry.get("path") if isinstance(entry, dict) else entry
+            self.say("warning: the recorded python %s is not usable; hooks only drain their input until quoin "
+                     "streamdeck install records a working interpreter" % (shown,))
+        return python
 
     def _write_entry_points(self):
         paths = self.paths
@@ -1325,7 +1427,9 @@ class _Run:
                 self.changed = self.plugin_changed = True
             return
         node = self.binaries.get("node") or {}
-        python = self.binaries.get("python") or {}
+        python = usable_python(self.binaries.get("python"))
+        if python is None:
+            raise OperationError(_no_python_message(self.binaries.get("python")))
         if not self.carry.completing and not os.path.isdir(paths.plugins_dir):
             self._previous().setdefault("created_paths", []).append(paths.plugins_dir)
             self._save()
@@ -1333,7 +1437,7 @@ class _Run:
         os.makedirs(paths.staging, exist_ok=True)
         new = os.path.join(paths.staging, "plugin-" + _token())
         payload_build.build_plugin_dir(
-            new, node_mode=node.get("mode", "external"), node_path=node.get("path"), python=python.get("path"),
+            new, node_mode=node.get("mode", "external"), node_path=node.get("path"), python=python,
             runtime=paths.runtime, state_root=os.path.dirname(paths.config))
         if os.path.isdir(paths.plugin_dir) and _tree_signature(new) == _tree_signature(paths.plugin_dir):
             _remove_any(new)
@@ -1777,6 +1881,12 @@ class _Uninstall(_Run):
             refusal = check_partial_uninstall(state.marker, self.selected)
             if refusal:
                 raise OperationError(refusal)
+        if env.purge and "state_root" not in (env.flags or {}) \
+                and (state.paths.config != env.paths.config or state.paths.state != env.paths.state):
+            recorded_root = os.path.dirname(state.paths.config) if state.paths.config != env.paths.config \
+                else os.path.dirname(state.paths.state)
+            raise OperationError("the component state is recorded at %s; pass --state-root %s to purge it"
+                                 % (recorded_root, recorded_root))
         hooks = (state.manifest or {}).get("hooks") or []
         if self._nothing(state, hooks, self._legacy_owned(state, Carry())):
             return self._say_nothing(state)

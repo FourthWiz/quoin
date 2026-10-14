@@ -116,6 +116,27 @@ def _rel_ok(rel):
     return all(seg not in ("", ".", "..") for seg in rel.split("/"))
 
 
+def binary_problem(key, entry):
+    """Why a `binaries` entry is not acceptable (the manifest's own per-entry rule), or None."""
+    if key not in CORE_BINARY_KEYS and key not in OPTIONAL_TOOL_KEYS:
+        return "binaries.%s is not a known key" % key
+    if key == "node" and isinstance(entry, dict):
+        mode = entry.get("mode")
+        if mode not in ("external", "bundled"):
+            return "binaries.node.mode must be external or bundled"
+        if mode == "bundled":
+            if entry.get("path") is not None:
+                return "binaries.node.path must be null for bundled mode"
+        elif not _is_abs(entry.get("path")):
+            return "binaries.node.path must be an absolute path for external mode"
+        return None
+    if key == "node":
+        return "binaries.node must be an object with a mode"
+    if not _is_abs(_bin_path(entry)):
+        return "binaries.%s path must be absolute" % key
+    return None
+
+
 def validate(data):
     problems = []
     if not isinstance(data, dict):
@@ -168,24 +189,9 @@ def validate(data):
         problems.append("binaries missing")
         binaries = {}
     for key, entry in binaries.items():
-        if key not in CORE_BINARY_KEYS and key not in OPTIONAL_TOOL_KEYS:
-            problems.append("binaries.%s is not a known key" % key)
-            continue
-        if key == "node" and isinstance(entry, dict):
-            mode = entry.get("mode")
-            if mode not in ("external", "bundled"):
-                problems.append("binaries.node.mode must be external or bundled")
-            elif mode == "bundled":
-                if entry.get("path") is not None:
-                    problems.append("binaries.node.path must be null for bundled mode")
-            elif not _is_abs(entry.get("path")):
-                problems.append("binaries.node.path must be an absolute path for external mode")
-            continue
-        if key == "node":
-            problems.append("binaries.node must be an object with a mode")
-            continue
-        if not _is_abs(_bin_path(entry)):
-            problems.append("binaries.%s path must be absolute" % key)
+        problem = binary_problem(key, entry)
+        if problem:
+            problems.append(problem)
     files = data.get("files")
     if not isinstance(files, list):
         problems.append("files must be a list")
@@ -281,11 +287,12 @@ def same_except_verified(a, b):
     return a == b
 
 
-def record_optional_tools(which):
+def record_optional_tools(which, exclude=None):
+    """{tool: {"path": ...}} for the optional tools `which` finds; `exclude(path)` true skips a hit."""
     out = {}
     for name in OPTIONAL_TOOL_KEYS:
         found = which(name)
-        if isinstance(found, str) and os.path.isabs(found):
+        if isinstance(found, str) and os.path.isabs(found) and not (exclude is not None and exclude(found)):
             out[name] = {"path": found}
     return out
 

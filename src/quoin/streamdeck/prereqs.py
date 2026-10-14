@@ -71,6 +71,7 @@ class Ctx:
     legacy: dict = field(default_factory=dict)
     out: Callable = print
     now: Callable = None
+    sys_is_venv: bool = False
 
 
 @dataclass
@@ -139,6 +140,7 @@ def default_ctx(paths, flags, recorded=None, legacy=None):
         home=paths.home,
         sys_prefix=sys.prefix,
         virtual_env=os.environ.get("VIRTUAL_ENV"),
+        sys_is_venv=sys.prefix != getattr(sys, "base_prefix", sys.prefix),
         flags=flags,
         recorded=dict(recorded or {}),
         legacy=dict(legacy or {}),
@@ -203,6 +205,24 @@ def _login_which(ctx, name):
 
 # ---------------------------------------------------------------------- checks
 
+def inside_python_env(ctx, path, *, include_base_prefix):
+    """True when `path` lives in a Python environment quoin may be running from.
+
+    `site-packages` and the active `VIRTUAL_ENV` always count. The interpreter prefix counts when it is a virtual
+    environment's, or when `include_base_prefix` is set (python discovery also skips the base interpreter's own
+    directories; tool discovery must not, because `/usr/local/bin` holds ordinary tools).
+    """
+    if not isinstance(path, str):
+        return False
+    if "site-packages" in path:
+        return True
+    if ctx.virtual_env and path.startswith(ctx.virtual_env.rstrip("/") + "/"):
+        return True
+    if ctx.sys_prefix and (include_base_prefix or ctx.sys_is_venv):
+        return path.startswith(ctx.sys_prefix.rstrip("/") + "/")
+    return False
+
+
 def python_candidates(ctx):
     """[(source, path)] in priority order, de-duplicated by unresolved path."""
     out, seen = [], set()
@@ -220,11 +240,7 @@ def python_candidates(ctx):
     add("legacy", ctx.legacy.get("python"))
     add("fallback", CLT_STUB)
     found = ctx.which("python3")
-    if found and not (
-        (ctx.sys_prefix and found.startswith(ctx.sys_prefix.rstrip("/") + "/"))
-        or (ctx.virtual_env and found.startswith(ctx.virtual_env.rstrip("/") + "/"))
-        or "site-packages" in found
-    ):
+    if found and not inside_python_env(ctx, found, include_base_prefix=True):
         add("path", found)
     return out
 
