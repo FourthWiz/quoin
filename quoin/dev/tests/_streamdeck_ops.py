@@ -202,6 +202,8 @@ def _present_world(lh, missing, app_version):
         sdef.write_text("<command name='new surface configuration'/>")
     if "homebrew" not in missing:
         which["brew"] = _write_exec(lh.root / "toolbin" / "brew")
+    if "codex" not in missing:
+        which["codex"] = _write_exec(lh.root / "toolbin" / "codex")
     return which, probes
 
 
@@ -210,6 +212,11 @@ def make_env(lh, *, missing=(), tty=False, answers=(), prereqs="ask", runtimes=N
              environ=None, app_version="7.6", payload_dir=None, platform=DARWIN, running=False):
     """An `engine.Env` whose every outside effect is a recording fake."""
     engine = importlib.import_module("quoin.streamdeck.engine")
+    if environ is None:
+        zsock = lh.root / "zsock"
+        zsock.mkdir(exist_ok=True)
+        zsock.chmod(0o700)
+        environ = {"ZELLIJ_SOCKET_DIR": str(zsock)}
     missing = set(missing)
     which, probes = _present_world(lh, missing, app_version)
     fake = FakeCtx(lh.root, which=which, probes=probes, stdin_tty=tty, stdout_tty=tty, answers=answers,
