@@ -348,3 +348,61 @@ def snapshot_owned(lh):
     for label, path in (("claude", lh.claude_settings), ("codex", lh.codex_home / "hooks.json")):
         out["settings/" + label] = ("file", _file_digest(str(path)))
     return out
+
+
+# ------------------------------------------------------------------ prototype fixtures
+
+FOREIGN_CLAUDE = {"type": "command", "command": "/usr/local/bin/notify stop"}
+FOREIGN_CODEX = {"type": "command", "command": "/usr/local/bin/codex-notify"}
+
+
+def _mixed_hooks(path, kind):
+    """Put foreign entries before and after the prototype's entry on some events."""
+    with open(str(path)) as handle:
+        data = json.load(handle)
+    foreign = FOREIGN_CLAUDE if kind == "claude" else FOREIGN_CODEX
+    hooks = data["hooks"]
+    hooks["Stop"] = [{"hooks": [dict(foreign)]}] + hooks["Stop"] + [{"hooks": [
+        {"type": "command", "command": "bash %s/hooks/stop.sh" % os.path.dirname(str(path))}]}]
+    hooks["PreToolUse"] = hooks["PreToolUse"] + [{"matcher": "Bash", "hooks": [dict(foreign, command="/usr/local/bin/guard")]}]
+    hooks["CustomEvent"] = [{"hooks": [dict(foreign, command="/usr/local/bin/custom")]}]
+    lc.write_json(path, data)
+
+
+def make_adoption_fixture(lh, *, plugin_manifest=True, agents=3, mixed=True):
+    """A prototype install with foreign hooks, a Stream Deck profile folder, config state and legacy agent records."""
+    lc.make_prototype(lh, python=lc.fixture_python(lh), plugin_manifest=plugin_manifest)
+    codex_hooks = lh.codex_home / "hooks.json"
+    if mixed:
+        _mixed_hooks(lh.claude_settings, "claude")
+        _mixed_hooks(codex_hooks, "codex")
+    node = lh.root / "legacy" / "node"
+    node.parent.mkdir(exist_ok=True)
+    node.write_text("#!/bin/sh\nexit 0\n")
+    node.chmod(0o755)
+    (lh.plugin_dir / "launch.sh").write_text(
+        '#!/bin/sh\ncd -- "$(dirname -- "$0")"\nexec %s plugin.js "$@"\n' % node)
+    profile = lh.plugins.parent / "ProfilesV2" / "x.sdProfile"
+    profile.mkdir(parents=True)
+    (profile / "manifest.json").write_text('{"Name": "mine"}\n')
+    lc.write_json(lh.state_root / "config.json", {
+        "project": "/work/p", "session": "main", "projects": {"main": "/work/p"},
+        "surfaces": {"main": "surface-1"}})
+    for index in range(agents):
+        lc.write_json(lh.state_root / "agents" / ("rec%d.json" % index), {
+            "kind": "claude", "session": "s%d" % index, "pane": str(index), "updated": 1000.0 + index,
+            "id": "rec%d" % index})
+    return profile
+
+
+def prototype_snapshot(lh):
+    """Everything the prototype owns, byte-exact, for no-teardown comparisons."""
+    out = {}
+    for label, root in (("runtime", lh.runtime), ("plugin", lh.plugin_dir)):
+        if os.path.isdir(str(root)):
+            for rel, value in tree_snapshot(root).items():
+                if "__pycache__" not in rel.split(os.sep) and rel != ".install.lock":
+                    out["%s/%s" % (label, rel)] = value
+    for label, path in (("claude", lh.claude_settings), ("codex", lh.codex_home / "hooks.json")):
+        out["settings/" + label] = ("file", _file_digest(str(path)))
+    return out

@@ -269,8 +269,14 @@ def collect(paths, *, package_version, package_fingerprint, platform_info, now, 
     marker = manifest.read_operation_marker(paths)
     if marker is not None:
         d["state"] = "operation-incomplete"
-        rep.problem("OPERATION_INCOMPLETE", "op %s, phase %s, steps done %s" % (
-            marker.get("op"), marker.get("phase"), marker.get("steps_done")))
+        if marker.get("op") == "uninstall":
+            runtimes = marker.get("runtimes")
+            command = "uninstall" + (" --runtimes %s" % ",".join(runtimes) if isinstance(runtimes, list) and runtimes
+                                     else "")
+        else:
+            command = "install"
+        rep.problem("OPERATION_INCOMPLETE", "op %s, phase %s, steps done %s; run `quoin streamdeck %s` to "
+                    "complete it" % (marker.get("op"), marker.get("phase"), marker.get("steps_done"), command))
         return d
     try:
         data = manifest.load(paths.manifest)

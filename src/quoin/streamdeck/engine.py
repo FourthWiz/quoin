@@ -439,6 +439,7 @@ class Facts:
     manifest_mode: Optional[str]
     detection: str
     own_evidence: bool
+    revival: bool = False
 
 
 def route_adoption(facts, marker):
@@ -447,7 +448,7 @@ def route_adoption(facts, marker):
         return True
     kind = classify_marker(marker)
     if kind == "none":
-        return facts.detection == "prototype"
+        return facts.detection == "prototype" and not facts.revival
     if kind in ("committed", "staging") and marker["op"] in ("install", "upgrade"):
         return bool(marker.get("adoption"))
     if kind == "uninstall":
@@ -463,6 +464,13 @@ def own_install_evidence(paths):
     return os.path.isfile(shim) and not manifest.is_tombstone(shim)
 
 
+def is_revival(paths):
+    """Only inert stubs remain (listed by `uninstalled.json`): a reinstall revives them, it is not an adoption."""
+    if not manifest.read_uninstalled(paths) or os.path.lexists(paths.plugin_dir):
+        return False
+    return not any(os.path.lexists(s) and not manifest.is_tombstone(s) for s in paths.legacy_root_scripts)
+
+
 def collect_facts(paths):
     """Read-only facts for `route_adoption` (settings read tolerantly)."""
     def tolerant(path):
@@ -473,7 +481,7 @@ def collect_facts(paths):
     det = manifest.detect(paths, tolerant(paths.claude_settings), tolerant(paths.codex_hooks))
     loaded = manifest.load_any(paths.manifest)
     mode = loaded.get("mode") if isinstance(loaded, dict) else None
-    return Facts(mode, det.state, own_install_evidence(paths))
+    return Facts(mode, det.state, own_install_evidence(paths), is_revival(paths))
 
 
 # ------------------------------------------------------------------ rollback
@@ -655,7 +663,8 @@ def read_state(env, op, *, read_kinds=RUNTIME_KINDS):
     marker = manifest.read_operation_marker(paths)
     kind = classify_marker(marker)
     detection = manifest.detect(paths, claude[0], codex[0])
-    facts = Facts(data.get("mode") if data else None, detection.state, own_install_evidence(paths))
+    facts = Facts(data.get("mode") if data else None, detection.state, own_install_evidence(paths),
+                  is_revival(paths))
     return State(paths=paths, notes=notes, manifest=data, manifest_problem=problem, detection=detection,
                  claude=claude, codex=codex, marker=marker, marker_kind=kind,
                  installed_version=data.get("component_version") if data else None,
@@ -959,6 +968,8 @@ class _Run:
         if previous_installed and previous_installed != env.component_version:
             self.say("upgrading from %s to %s" % (previous_installed, env.component_version))
         self.selected = self._selected_runtimes(state, consent)
+        self.legacy_agents = [a for a in migrations.collect_agents(paths) if a.get("via") == "legacy"] \
+            if self.adoption else []
         if self.adoption:
             owned = (carry.legacy_owned_events if carry.legacy_owned_events is not None
                      else migrations.legacy_owned(state.claude[0], state.codex[0], manifest.runtime_names(paths)))
@@ -1517,6 +1528,15 @@ class _Run:
                 self.say("Claude Code: start new sessions (review in /hooks if asked)")
             if self.codex_changed:
                 self.say("Codex: review the changed hooks in Codex /hooks (trust is never written by quoin)")
+            if self.adoption and self.codex_changed:
+                self.say("Codex hook definitions changed once (prototype -> managed); review them in Codex /hooks")
+            if self.adoption and "codex" not in self.selected \
+                    and (self.legacy_owned or {}).get("codex"):
+                self.say("Codex was left on the legacy hooks (not selected by --runtimes)")
+            if self.legacy_agents:
+                self.say("restart these agents to pick up managed hooks:")
+                for agent in self.legacy_agents:
+                    self.say("  %s session %s pane %s" % (agent.get("kind"), agent.get("session"), agent.get("pane")))
             if self.plugin_changed and stream_deck_running(env.sysops):
                 self.say("Stream Deck is running: the new plugin takes effect after you restart Stream Deck")
 
@@ -1555,14 +1575,333 @@ def check_partial_uninstall(marker, runtimes):
            "to complete it"
 
 
+class _Uninstall(_Run):
+    """Roll-forward removal of the component. Every step is idempotent, so re-running converges."""
+
+    def __init__(self, env):
+        super().__init__(env, "uninstall")
+        self.selected = list(env.runtimes) if env.runtimes is not None else None
+        self.tombstoned = []
+
+    # -- helpers
+    def _kinds(self):
+        return self.selected if self.selected is not None else list(RUNTIME_KINDS)
+
+    def _read(self):
+        return read_state(self.env, "uninstall", read_kinds=tuple(self._kinds()))
+
+    def _recorded(self, hooks):
+        return tuple(r["command"] for r in hooks if isinstance(r.get("command"), str))
+
+    def _legacy_owned(self, state, carry):
+        recorded = (state.manifest or {}).get("legacy_owned_events")
+        if isinstance(recorded, dict) and recorded:
+            return recorded
+        if carry.legacy_owned_events:
+            return carry.legacy_owned_events
+        if state.detection.state == "prototype":
+            return migrations.legacy_owned(state.claude[0], state.codex[0], manifest.runtime_names(state.paths))
+        return {}
+
+    def _removal(self, state, kind, hooks, legacy_owned, data):
+        paths = state.paths
+        names = manifest.runtime_names(paths)
+        removable = [r["event"] for r in hooks if r.get("runtime") == kind and r.get("created_event_key")]
+        removable += list((legacy_owned or {}).get(kind) or [])
+        return hooks_merge.remove(data, kind, runtime_names=names, recorded=self._recorded(hooks),
+                                  removable_event_keys=removable, only_runtime=paths.runtime)
+
+    def _purge_targets(self, paths):
+        found = [p for p in (paths.config, paths.state, os.path.join(paths.state_root, "agents"))
+                 if os.path.lexists(p)]
+        return found
+
+    def _nothing(self, state, hooks, legacy_owned):
+        if state.manifest is not None or state.marker_kind != "none" or state.manifest_problem:
+            return False
+        if state.detection.state == "prototype" and not self._kept_plugin_only(state):
+            return False
+        for kind in self._kinds():
+            data = (state.claude if kind == "claude" else state.codex)[0]
+            if self._removal(state, kind, hooks, legacy_owned, data)[1].changed:
+                return False
+        if self.env.purge and (state.detection.tombstones or self._purge_targets(state.paths)
+                               or os.path.lexists(state.paths.uninstalled) or os.path.lexists(state.paths.lock)):
+            return False
+        return True
+
+    def _kept_plugin_only(self, state):
+        """Only a plugin directory that is not ours is left (it is kept, so there is nothing to remove)."""
+        return state.detection.state == "prototype" and state.detection.reasons == ["plugin directory present"] \
+            and _plugin_uuid(state.paths.plugin_dir) != payload_build.PLUGIN_UUID
+
+    def _say_nothing(self, state):
+        stubs = [p for p in state.detection.tombstones if os.path.lexists(p)]
+        if not stubs:
+            stubs = [p for p in manifest.read_uninstalled(state.paths) if os.path.lexists(p)]
+        suffix = ""
+        if stubs and not self.env.purge:
+            suffix = " (%d inert hook stub%s remain; `quoin streamdeck uninstall --purge` removes them)" % (
+                len(stubs), "" if len(stubs) == 1 else "s")
+        self.say("nothing to remove" + suffix)
+        if self._kept_plugin_only(state):
+            self.say("warning: the plugin directory %s was kept (it is not ours or has no readable manifest.json)"
+                     % state.paths.plugin_dir)
+        return Result(0, None, False, self.lines, None)
+
+    # -- entry
+    def execute(self):
+        env = self.env
+        state = self._read()
+        for note in state.notes:
+            self.say(note)
+        if self.selected is not None:
+            refusal = check_partial_uninstall(state.marker, self.selected)
+            if refusal:
+                raise OperationError(refusal)
+        hooks = (state.manifest or {}).get("hooks") or []
+        if self._nothing(state, hooks, self._legacy_owned(state, Carry())):
+            return self._say_nothing(state)
+        if env.dry_run:
+            return self._dry_run_uninstall(state, hooks)
+        os.makedirs(state.paths.runtime, exist_ok=True)
+        self.lock_fd = self._lock(state.paths)
+        try:
+            return self._locked_uninstall()
+        finally:
+            try:
+                os.close(self.lock_fd)
+            except OSError:
+                pass
+
+    def _dry_run_uninstall(self, state, hooks):
+        paths = state.paths
+        if state.marker_kind == "staging":
+            self.say("dry run: would roll back an interrupted operation")
+        elif state.marker_kind != "none":
+            self.say("dry run: would complete an interrupted operation")
+        legacy_owned = self._legacy_owned(state, Carry())
+        for kind in self._kinds():
+            data = (state.claude if kind == "claude" else state.codex)[0]
+            report = self._removal(state, kind, hooks, legacy_owned, data)[1]
+            if report.changed:
+                self.say("dry run: would remove the %s hook entries (%s)" % (kind, ", ".join(report.removed)))
+        if self.selected is None:
+            for path in (paths.plugin_dir, paths.versions_dir, paths.current, paths.profile_dir, paths.hook_shim,
+                         paths.terminal_entry, paths.manifest):
+                if os.path.lexists(path):
+                    self.say("dry run: would remove %s" % path)
+            for script in paths.legacy_root_scripts:
+                if os.path.lexists(script):
+                    self.say("dry run: would %s %s" % ("replace with an inert stub" if script.endswith("monitor.py")
+                                                       else "remove", script))
+            if self.env.purge:
+                for path in self._purge_targets(paths):
+                    self.say("dry run: would remove %s" % path)
+        return Result(0, None, False, self.lines, state.manifest)
+
+    # -- the locked part
+    def _locked_uninstall(self):
+        env = self.env
+        marker_now = manifest.read_operation_marker(env.paths)
+        if self.selected is not None:
+            refusal = check_partial_uninstall(marker_now, self.selected)
+            if refusal:
+                raise OperationError(refusal)
+        state = self._read()
+        carry = self._recover(state)
+        state = self._read()
+        hooks = carry.prev_hooks if carry.completing else ((state.manifest or {}).get("hooks") or [])
+        legacy_owned = self._legacy_owned(state, carry)
+        if not carry.completing and self._nothing(state, hooks, legacy_owned):
+            return self._say_nothing(state)
+        self.state, self.paths, self.carry = state, state.paths, carry
+        paths = state.paths
+        adoption = bool(carry.adoption) or state.detection.state == "prototype" \
+            or (state.manifest or {}).get("mode") == "adoption-pending"
+        self.store = MarkerStore(paths.operation_marker)
+        open_marker(self.store, op="uninstall", phase="committed", completing=carry.completing, carry=carry,
+                    prev_hooks=hooks, adoption=adoption, previous={}, runtimes=self.selected,
+                    draft_now={"legacy_owned_events": legacy_owned},
+                    started_at=_iso(env.now))
+        self.store.data["draft"]["hooks"] = [copy.deepcopy(r) for r in hooks if r.get("runtime") in self._kinds()]
+        self.store.save()
+        self.hooks, self.legacy_owned = hooks, legacy_owned
+        self.removed_any = False
+        try:
+            for kind in RUNTIME_KINDS:
+                with self.step("uninstall:%s_settings" % kind):
+                    if kind in self._kinds():
+                        self._uninstall_settings(kind)
+            if self.selected is not None:
+                self._finish_partial(state)
+            else:
+                with self.step("uninstall:tombstones"):
+                    self._tombstones()
+                with self.step("uninstall:remove_files"):
+                    self._remove_files(state)
+                with self.step("uninstall:manifest"):
+                    _remove_any(paths.manifest)
+                self.store.clear()
+        except OperationError:
+            raise
+        except Exception as exc:
+            raise OperationError("uninstall was interrupted (%s: %s); re-run `quoin streamdeck uninstall` to "
+                                 "complete it" % (type(exc).__name__, exc))
+        if self.selected is None and env.purge:
+            self._purge()
+        self._report_uninstall(state)
+        return Result(0, None, self.changed, self.lines, None)
+
+    def _uninstall_settings(self, kind):
+        paths, env = self.paths, self.env
+        path = paths.claude_settings if kind == "claude" else paths.codex_hooks
+        if not os.path.exists(path):
+            return
+        current = jsonfile.read(path)[0]
+        _, dry = self._removal(self.state, kind, self.hooks, self.legacy_owned, current)
+        if not dry.changed:
+            return
+        jsonfile.backup(path, paths.backups, now=env.now)
+        reports = {}
+
+        def mutate(data):
+            new, report = self._removal(self.state, kind, self.hooks, self.legacy_owned, data)
+            reports["report"] = report
+            return new
+
+        changed, _ = jsonfile.update(path, mutate)
+        if changed:
+            self.changed = True
+            self.removed_any = True
+            report = reports["report"]
+            if kind == "codex" and report.shifted_events:
+                self.say("Codex will ask you to re-review these events in /hooks: %s" % ", ".join(report.shifted_events))
+
+    def _finish_partial(self, state):
+        paths = self.paths
+        data = state.manifest
+        if data is not None:
+            new = copy.deepcopy(data)
+            new["hooks"] = [r for r in data.get("hooks") or [] if r.get("runtime") not in self.selected]
+            if data.get("mode") == "adoption-pending":
+                owned = dict(data.get("legacy_owned_events") or {})
+                for kind in self.selected:
+                    owned.pop(kind, None)
+                new["legacy_owned_events"] = owned
+            if new != data:
+                new["updated_at"] = _iso(self.env.now)
+                manifest.write(paths.manifest, new)
+                self.changed = True
+        self.store.clear()
+
+    def _tombstones(self):
+        paths = self.paths
+        listed = []
+        for target, kind in ((paths.hook_shim, "sh"), (os.path.join(paths.runtime, "monitor.py"), "python")):
+            if os.path.lexists(target):
+                if write_file_atomic(target, shims.render_tombstone(kind).encode("utf-8"), 0o755):
+                    self.changed = True
+            if os.path.lexists(target):
+                listed.append(target)
+        for old in manifest.read_uninstalled(paths):
+            if old not in listed and os.path.lexists(old) and manifest.is_tombstone(old):
+                listed.append(old)
+        self.tombstoned = listed
+        if listed:
+            payload = {"tombstones": listed, "uninstalled_at": _iso(self.env.now)}
+            raw = _read_bytes(paths.uninstalled)
+            jsonfile.write_atomic(paths.uninstalled, payload, expected_raw=raw, default_mode=0o644,
+                                  create_parents=True)
+
+    def _under(self, path, root):
+        real_root = os.path.realpath(root)
+        real = os.path.realpath(path)
+        return real == real_root or real.startswith(real_root + os.sep)
+
+    def _remove_files(self, state):
+        paths = self.paths
+        runtime = paths.runtime
+        marker = self.store.data
+        plugin_ours = os.path.isdir(paths.plugin_dir) and _plugin_uuid(paths.plugin_dir) == payload_build.PLUGIN_UUID
+        if os.path.lexists(paths.plugin_dir) and not plugin_ours:
+            self.say("warning: the plugin directory %s was kept (it is not ours or has no readable manifest.json)"
+                     % paths.plugin_dir)
+        keep = {os.path.normpath(p) for p in self.tombstoned}
+        for entry in (state.manifest or {}).get("files") or []:
+            rel = entry.get("rel")
+            if not isinstance(rel, str) or entry.get("root") != "runtime" or rel.startswith("versions/"):
+                continue
+            target = os.path.join(runtime, rel)
+            if os.path.normpath(target) in keep or not os.path.lexists(target):
+                continue
+            if self._under(target, runtime) and not os.path.islink(target):
+                _remove_any(target)
+                self.changed = True
+        if plugin_ours:
+            _remove_any(paths.plugin_dir)
+            self.changed = True
+        for name in shims.FORWARDER_NAMES:
+            target = os.path.join(runtime, name)
+            if name != "monitor.py" and os.path.lexists(target):
+                _remove_any(target)
+                self.changed = True
+        for path in (paths.current, paths.versions_dir, paths.staging, paths.profile_dir, paths.terminal_entry):
+            if os.path.lexists(path):
+                _remove_any(path)
+                self.changed = True
+        stale = marker.get("stale") or {}
+        for key in ("rollback_dirs", "plugin_asides", "version_dir_asides"):
+            for path in stale.get(key) or []:
+                if ".quoin-plugin-kept-" not in path:
+                    _remove_any(path)
+        aside = (marker.get("previous") or {}).get("plugin_aside")
+        if isinstance(aside, dict) and aside.get("path") and not aside.get("kept"):
+            _remove_any(aside["path"])
+        try:
+            os.rmdir(paths.bin_dir)
+        except OSError:
+            pass
+
+    def _purge(self):
+        paths = self.paths
+        agents = migrations.collect_agents(paths)
+        if agents:
+            self.say("restart these agents now: their hooks fail once the stubs are gone:")
+            for agent in agents:
+                self.say("  %s session %s pane %s" % (agent.get("kind"), agent.get("session"), agent.get("pane")))
+        for path in [paths.hook_shim, os.path.join(paths.runtime, "monitor.py")]:
+            if os.path.lexists(path) and manifest.is_tombstone(path):
+                os.unlink(path)
+        for path in (paths.uninstalled, paths.lock, paths.config, paths.state,
+                     os.path.join(paths.state_root, "agents"), os.path.join(paths.state_root, "errors.log"),
+                     os.path.join(paths.state_root, "monitor.lock"), os.path.join(paths.state_root, "health.json")):
+            _remove_any(path)
+        for directory in (paths.bin_dir, paths.state_root, paths.runtime):
+            try:
+                os.rmdir(directory)
+            except OSError:
+                pass
+        self.changed = True
+
+    def _report_uninstall(self, state):
+        if self.selected is not None:
+            self.say("removed the %s hook entries; the Stream Deck component stays installed"
+                     % ", ".join(self.selected))
+            if state.manifest is None and state.detection.state == "prototype":
+                self.say("the prototype stays in place for the other runtime")
+            return
+        self.say("Stream Deck component removed")
+        stubs = [p for p in self.tombstoned if os.path.lexists(p)]
+        if stubs and not self.env.purge:
+            self.say("%d inert hook stub%s remain so running agents keep working; `quoin streamdeck uninstall "
+                     "--purge` removes them (restart your agents first)" % (len(stubs), "" if len(stubs) == 1 else "s"))
+        self.say("Stream Deck: delete the Quoin Live Agents profile in the app if you imported it")
+
+
 def uninstall(env):
     macos_info = env.platform_info
     if not macos_info.supported:
         env.out("quoin streamdeck: macOS only (found %s); nothing to remove" % macos_info.system)
         return Result(0, None, False, [], None)
-    if env.runtimes is not None:
-        marker = manifest.read_operation_marker(env.paths)
-        refusal = check_partial_uninstall(marker, env.runtimes)
-        if refusal:
-            raise OperationError(refusal)
-    raise NotImplementedError("uninstall is not available yet")
+    return _Uninstall(env).execute()
