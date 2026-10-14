@@ -430,6 +430,7 @@ agentdesk <session-name>               # named session with fixed layout
 agentdesk --mode solo|duo|trio         # preset layout
 agentdesk --mode trio --name my-sess   # named preset-layout session
 agentdesk claude [codex] [shell] [...]  # custom layout from window-type tokens
+agentdesk --name deck --panes codex,codex,shell --no-prompt   # scripted launch, no questions
 ```
 
 **Preset modes:**
@@ -458,10 +459,42 @@ agentdesk claude codex       # custom two-pane layout
 agentdesk claude claude      # two Claude panes side-by-side
 ```
 
-If Zellij is not running, agentdesk starts a new session. agentdesk never
-re-attaches: if a session with the chosen name already exists, it starts a
-fresh session with a numeric suffix (foo_1, foo_2, …). To resume an existing
+If Zellij is not running, agentdesk starts a new session. If a session with
+the chosen name already exists, agentdesk in a terminal asks whether to attach
+or start a new one; non-interactive runs start a fresh session with a numeric
+suffix (foo_1, foo_2, ...). `--if-exists` overrides this. To resume an existing
 session, use `agentdesk-attach SESSION-NAME`.
+
+**Scripted launch:**
+
+- `--panes LIST` starts the session with an explicit pane set (for example
+  `codex,codex,shell`, joined by `,` or `+`). The Spend tab is still added, and
+  the list is never saved to the layout memory file.
+- `--no-prompt` asks nothing: no dashboard question, no picker, no
+  attach-or-new question.
+- `--if-exists attach|new|fail` decides what happens when the session name is
+  already taken. With `--no-prompt` the default is `attach`. `attach` needs a
+  terminal (Ghostty and other terminal launchers are fine).
+- `AGENTDESK_API_VERSION` in `agentdesk.zsh` marks the version of this
+  interface; tools can detect it with a plain grep without sourcing the file.
+
+## Stream Deck (optional)
+
+An optional 15-key Stream Deck panel shows your running Claude and Codex agents (orange when one needs you, blue
+while it works, green when it is done) and focuses their Zellij panes in Ghostty. It is macOS only and never
+installed by `pip install quoin` or `quoin install`. You manage it yourself:
+
+```bash
+quoin streamdeck install     # check prerequisites, then install the plugin, hooks and profile
+quoin streamdeck upgrade     # bring the installed component up to date
+quoin streamdeck status      # read-only health report
+quoin streamdeck uninstall   # remove it; --purge also removes config and state
+```
+
+`pip install --upgrade quoin` updates only the package; run `quoin streamdeck upgrade` afterwards to update the
+installed component. The guide, [`quoin/docs/streamdeck/README.md`](quoin/docs/streamdeck/README.md), covers
+prerequisites, hooks and Codex trust, moving over from the prototype, and recovery. What is verified by tests and
+what still needs hardware is in [`quoin/docs/streamdeck/VALIDATION.md`](quoin/docs/streamdeck/VALIDATION.md).
 
 ## Architecture
 
@@ -510,6 +543,8 @@ For runtime-neutral effort vocabulary, see
 - [`quoin/docs/runtime-portability-status.md`](quoin/docs/runtime-portability-status.md) - current migration status by runtime
 - [`quoin/docs/runtime-parity-matrix.md`](quoin/docs/runtime-parity-matrix.md) - evidence-based runtime parity matrix
 - [`quoin/docs/effort-levels.md`](quoin/docs/effort-levels.md) - runtime-neutral effort vocabulary
+- [`quoin/docs/streamdeck/README.md`](quoin/docs/streamdeck/README.md) - the optional Stream Deck component: install, hooks, recovery
+- [`quoin/docs/streamdeck/VALIDATION.md`](quoin/docs/streamdeck/VALIDATION.md) - what is tested, what was checked by hand, and what is not yet verified
 
 ## Boundaries
 

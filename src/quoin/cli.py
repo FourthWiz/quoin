@@ -549,6 +549,11 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
                 "To finish agentdesk setup (zellij, lazygit and fzf via Homebrew, plus a "
                 "~/.zshrc line), re-run the install with --setup-agentdesk."
             )
+        try:
+            from quoin.streamdeck import notice as _sd_notice
+            _sd_notice.maybe_print()
+        except Exception:
+            pass
 
     # T-06: CLAUDE.md placement differs by mode (D-02)
     if is_project_mode:
@@ -3435,6 +3440,77 @@ def main(argv: list[str] | None = None) -> int:
         help="Override quoin data source directory (same as 'quoin install --source-dir')",
     )
 
+    streamdeck_p = sub.add_parser(
+        "streamdeck",
+        description=(
+            "Optional Stream Deck integration (opt-in, macOS only). Plain `quoin install` never installs it; "
+            "these commands manage the component, its plugin and its Claude Code / Codex hooks."
+        ),
+        help="Optional Stream Deck integration (opt-in): install, upgrade, status, uninstall",
+    )
+    streamdeck_sub = streamdeck_p.add_subparsers(
+        dest="streamdeck_command", title="streamdeck commands", metavar="<subcommand>"
+    )
+
+    def _sd_paths(p):
+        p.add_argument("--runtime-dir", dest="runtime_dir", metavar="DIR", help="Component runtime directory.")
+        p.add_argument("--plugins-dir", dest="plugins_dir", metavar="DIR", help="Stream Deck plugins directory.")
+        p.add_argument("--state-root", dest="state_root", metavar="DIR", help="Agent Desk Stream Deck state root.")
+        p.add_argument("--claude-settings", dest="claude_settings", metavar="FILE", help="Claude Code settings.json.")
+        p.add_argument("--codex-home", dest="codex_home", metavar="DIR", help="Codex home directory.")
+        p.add_argument("--agentdesk", metavar="PATH", help="Path to agentdesk.zsh.")
+
+    def _sd_runtimes(value):
+        names = [n.strip() for n in value.split(",") if n.strip()]
+        bad = [n for n in names if n not in ("claude", "codex")]
+        if bad or not names:
+            raise argparse.ArgumentTypeError("expected a comma-separated list of claude, codex (got %r)" % value)
+        return list(dict.fromkeys(names))
+
+    for _verb, _help in (("install", "Install the component, its plugin and hooks (adopts a prototype install)."),
+                         ("upgrade", "Upgrade an installed component to this package's version.")):
+        _p = streamdeck_sub.add_parser(_verb, description=_help, help=_help)
+        _sd_paths(_p)
+        _p.add_argument("--runtimes", type=_sd_runtimes, default=None, metavar="claude,codex",
+                        help="Hooks to manage (default both; passing it explicitly without a runtime removes "
+                             "that runtime's hooks).")
+        _p.add_argument("--python", metavar="PATH", help="Python interpreter to use for the hooks.")
+        _p.add_argument("--node", metavar="auto|bundled|PATH", default=None,
+                        help="Node for the plugin: auto, bundled, or a path.")
+        _p.add_argument("--prereqs", choices=("ask", "all", "none"), default="ask",
+                        help="Install missing prerequisites: ask (default), all, or none.")
+        _p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
+        _p.add_argument("--open-profile", action="store_true", help="Open the profile in Stream Deck afterwards.")
+        _p.add_argument("--allow-downgrade", action="store_true",
+                        help="Replace an installed component that is newer than this package.")
+
+    _sd_uninstall_p = streamdeck_sub.add_parser(
+        "uninstall",
+        description="Remove the component and its hooks, leaving inert hook stubs for running agents.",
+        help="Remove the component and its hooks.",
+    )
+    _sd_paths(_sd_uninstall_p)
+    _sd_uninstall_p.add_argument("--runtimes", type=_sd_runtimes, default=None, metavar="claude,codex",
+                                 help="Remove only these runtimes' hooks and keep the rest installed.")
+    _sd_uninstall_p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
+    _sd_uninstall_p.add_argument("--purge", action="store_true",
+                                 help="Also remove the inert stubs, the config and the state.")
+
+    _sd_codes = ""
+    if "streamdeck" in (sys.argv if argv is None else argv):
+        from quoin.streamdeck import status as _sd_status
+        _sd_codes = "problem codes: " + ", ".join(_sd_status.PROBLEM_CODES)
+    _sd_status_p = streamdeck_sub.add_parser(
+        "status",
+        description="Read-only report on the installed component.",
+        help="Show the state of the component (read-only).",
+        epilog="exit codes: 0 healthy, 10 not installed, 11 problems found, 12 an operation was interrupted\n"
+               + _sd_codes,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _sd_paths(_sd_status_p)
+    _sd_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
     router_p = sub.add_parser(
         "router",
         description=(
@@ -3737,6 +3813,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         opencode_p.print_help()
         return 1
+    elif args.command == "streamdeck":
+        # Lazy import: the optional component stays out of the install path.
+        if args.streamdeck_command is None:
+            streamdeck_p.print_help()
+            return 1
+        from quoin.streamdeck import cli as _sd
+        return _sd.run(args)
     elif args.command == "router":
         # Lazy import keeps quoin install path import-clean (R-11 / D-01).
         from quoin import router as _router

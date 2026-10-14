@@ -104,6 +104,13 @@ Notes:
 - **Skill precedence:** User scope (`~/.claude/skills/`) overrides project scope (`.claude/skills/`) for same-named skills. A prior home install will shadow project skills — run `quoin doctor --scope project` to detect conflicts.
 - **Manual uninstall:** `rm -rf .claude/` removes the project-scope install. The CLAUDE.md quoin section can be removed with the quoin markers at the project root.
 
+## Optional: Stream Deck
+
+A Stream Deck panel for your running agents is available on macOS. Plain `quoin install` never installs it. To
+manage it, use `quoin streamdeck install`, `quoin streamdeck upgrade`, `quoin streamdeck status` and
+`quoin streamdeck uninstall`. After `pip install --upgrade quoin`, run `quoin streamdeck upgrade` to update the
+installed component. See `quoin/docs/streamdeck/README.md` in the Quoin repository.
+
 ## Files
 
 - `~/.claude/CLAUDE.md` — shared rules all skills follow (user-level)

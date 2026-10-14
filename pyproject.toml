@@ -38,6 +38,17 @@ path = "src/quoin/__about__.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/quoin"]
+exclude = [
+    "**/.DS_Store",
+    "**/__pycache__",
+    "**/*.pyc",
+    "src/quoin/streamdeck/payload/**/dist",
+    "src/quoin/streamdeck/payload/**/*.json",
+    "src/quoin/streamdeck/payload/**/*.log",
+    "src/quoin/streamdeck/payload/**/*.lock",
+    "src/quoin/streamdeck/payload/state",
+    "src/quoin/streamdeck/payload/agents",
+]
 
 [tool.hatch.build.targets.wheel.force-include]
 "quoin/skills" = "src/quoin/data/skills"
@@ -52,7 +63,9 @@ packages = ["src/quoin"]
 "quoin/CLAUDE.slim.md" = "src/quoin/data/CLAUDE.slim.md"
 "quoin/memory" = "src/quoin/data/memory"
 "quoin/plugins" = "src/quoin/data/plugins"
-"quoin/tools/agentdesk" = "src/quoin/data/tools/agentdesk"
+"quoin/tools/agentdesk/agentdesk.zsh" = "src/quoin/data/tools/agentdesk/agentdesk.zsh"
+"quoin/tools/agentdesk/setup-agentdesk.sh" = "src/quoin/data/tools/agentdesk/setup-agentdesk.sh"
+"quoin/tools/agentdesk/KEYBIND-VERIFY.md" = "src/quoin/data/tools/agentdesk/KEYBIND-VERIFY.md"
 
 [tool.hatch.build.targets.sdist]
 include = [
@@ -71,6 +84,17 @@ exclude = [
     "quoin/.pytest_cache/",
     "quoin/**/__pycache__/",
     "quoin/**/*.pyc",
+    "quoin/tools/agentdesk/streamdeck/",
+    "**/.DS_Store",
+    "**/dist/",
+    "src/**/__pycache__/",
+    "src/**/*.pyc",
+    "src/quoin/streamdeck/payload/**/dist/",
+    "src/quoin/streamdeck/payload/**/*.json",
+    "src/quoin/streamdeck/payload/**/*.log",
+    "src/quoin/streamdeck/payload/**/*.lock",
+    "src/quoin/streamdeck/payload/state/",
+    "src/quoin/streamdeck/payload/agents/",
 ]
 
 [tool.pytest.ini_options]
