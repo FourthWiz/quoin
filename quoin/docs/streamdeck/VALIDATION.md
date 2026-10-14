@@ -3,7 +3,7 @@
 - Date: 2026-10-14
 - Component version: 1.0.0
 - Quoin version: 0.45.0
-- Branch: `feat/streamdeck-optional-component`, HEAD at the time of writing: `092aa5b3`
+- Branch: `feat/streamdeck-optional-component`, HEAD at the time of writing: `3bccb267`
 
 This record separates three things: what the automated tests prove, what was checked by hand, and what has not been
 checked yet. Nothing here has been published; the package and the component exist only on this branch.
@@ -28,7 +28,25 @@ the table says a child process runs with a temporary home.
 
 ### Last run
 
-To be recorded after the final full run.
+Run on 2026-10-14 on macOS, Python 3.14, with the repository's own virtual environment. Every command was run
+from the repository root as `python -m pytest -p no:cacheprovider` with the listed files.
+
+| Selection | Result |
+|---|---|
+| `quoin/dev/tests/test_[a-l]*.py`, without the two slow files below | 4367 passed, 7 skipped |
+| `quoin/dev/tests/test_[0-9]*.py` and `test_[m-q]*.py` | 6174 passed, 23 skipped |
+| `quoin/dev/tests/test_[r-z]*.py`, without the two slow files below | 3796 passed |
+| `test_streamdeck_packaging.py` and `test_streamdeck_wheel_e2e.py`, run alone | 8 passed, none skipped |
+
+The three first selections cover every test file in the folder except the two slow ones. All skips are in tests
+unrelated to the component; none of the Stream Deck tests was skipped, so both planted-tree builds, the wheel
+build, the clean virtual environment and the full wheel lifecycle really ran.
+
+- The preamble check (`quoin/scripts/build_preambles.py --check`) passes.
+- The authored-content lint reports no findings on the files this branch adds.
+- The component payload fingerprint is unchanged by this work.
+- The real home folder, the installed prototype and the live Stream Deck setup were compared before and after the
+  runs and are identical.
 
 ## Verified manually
 
