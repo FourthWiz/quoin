@@ -174,7 +174,7 @@ def test_batch_ps_parity_with_single_ps(w, monkeypatch):
         assert w.de.is_c_lstart(found[os.getpid()])
 
 
-# ---------------------------------------------------------------- GC (AC-8.8)
+# ---------------------------------------------------------------- GC
 
 def test_gc_matrix(w):
     p = {}
@@ -312,7 +312,7 @@ def test_output_keys_are_whitelisted_and_additive(w):
     assert unknown["id"] == "pane:%s:s:5" % w.sock and unknown["kind"] == "codex" and unknown["socket"] == w.sock
 
 
-# ---------------------------------------------------------------- focus (AC-8.8 / AC-8.9)
+# ---------------------------------------------------------------- focus
 
 def focus_spies(w):
     log = {"apple": [], "run": []}
@@ -365,7 +365,7 @@ def test_title_fallback_used_when_name_is_unique(w):
     assert w.de.get_surface(w.env, w.sock, "s") == "surf-9" and "terminal" not in log
 
 
-# ---------------------------------------------------------------- compatibility (R-04)
+# ---------------------------------------------------------------- compatibility
 
 def test_new_records_are_accepted_by_the_frozen_prototype(payload, deck_home, monkeypatch):
     dash, mon, de = payload("dashboard", "monitor", "deckenv")

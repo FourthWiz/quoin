@@ -46,7 +46,7 @@ def drop_owned(data, event):
         hooks_merge.classify(h.get("command"), runtime_names=("QuoinStreamDeck",)) for h in g["hooks"])]
 
 
-# ------------------------------------------------------------- AC-2.3 fixture table
+# ------------------------------------------------------------- fixture table
 
 def scenario_not_installed(lh):
     return 10, None

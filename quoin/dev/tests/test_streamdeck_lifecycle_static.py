@@ -11,8 +11,8 @@ PKG = REPO / "src" / "quoin" / "streamdeck"
 TESTS = pathlib.Path(__file__).resolve().parent
 LIFECYCLE = ("paths", "macos", "jsonfile", "hooks_merge", "manifest", "prereqs", "status", "shims", "migrations",
              "engine", "cli", "notice")
-STAGE4_TESTS = ("shims", "migrations", "engine_core", "install", "faults", "adoption", "upgrade", "uninstall", "cli",
-                "core_install")
+OPERATION_TESTS = ("shims", "migrations", "engine_core", "install", "faults", "adoption", "upgrade", "uninstall",
+                   "cli", "core_install", "marker_safety", "hardening", "docs")
 GUARDS = ("forbid_dangerous_subprocess", "forbid_real_home_io", "forbid_real_seams")
 PAYLOAD_SCRIPTS = ("deckenv", "monitor", "dashboard", "controller")
 
@@ -196,8 +196,8 @@ def test_nothing_writes_codex_trust():
             assert "hooks.state" not in text, path.name
 
 
-@pytest.mark.parametrize("name", STAGE4_TESTS)
-def test_stage_four_tests_use_the_guards_and_stay_off_the_real_seams(name):
+@pytest.mark.parametrize("name", OPERATION_TESTS)
+def test_operation_tests_use_the_guards_and_stay_off_the_real_seams(name):
     root = tree("test_streamdeck_" + name, TESTS)
     marks = [n for n in ast.walk(root) if isinstance(n, ast.Assign)
              and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in n.targets)]
@@ -217,8 +217,8 @@ def test_stage_four_tests_use_the_guards_and_stay_off_the_real_seams(name):
 PLANNING_ID = re.compile(r"\b[TDRQ]-\d{2}\b|\bAC-\d|\bFR-\d|\b(MAJ|MIN|CRIT)-\d|\bround \d")
 
 
-@pytest.mark.parametrize("name", STAGE4_TESTS)
-def test_stage_four_tests_carry_no_planning_ids(name):
+@pytest.mark.parametrize("name", OPERATION_TESTS)
+def test_operation_tests_carry_no_planning_ids(name):
     text = (TESTS / ("test_streamdeck_%s.py" % name)).read_text(encoding="utf-8")
     hits = [m.group(0) for m in PLANNING_ID.finditer(text)]
     assert not hits, (name, hits)

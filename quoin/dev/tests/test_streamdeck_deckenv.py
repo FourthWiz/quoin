@@ -42,7 +42,7 @@ def exe(path):
     return str(path)
 
 
-# ------------------------------------------------------------------ T-03
+# ------------------------------------------------------------------ paths, manifest and environment
 
 def test_defaults_without_manifest(de, tmp_path):
     env = make_env(de, tmp_path)
@@ -235,7 +235,7 @@ def test_no_import_time_side_effects(payload, tmp_path):
     assert sorted(os.listdir(tmp_path)) == before and dict(os.environ) == environ_before
 
 
-# ------------------------------------------------------------------ T-04
+# ------------------------------------------------------------------ directories and file modes
 
 def mode(path):
     return stat.S_IMODE(os.stat(path).st_mode)

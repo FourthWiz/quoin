@@ -38,7 +38,7 @@ def fake_ps(tmp_path, table="", lstart=C_LSTART, sleep=0):
     return script, d / "log"
 
 
-# ------------------------------------------------------------ AC-4.6 via deployed command line
+# ------------------------------------------------------------ via the deployed command line
 
 @pytest.fixture
 def staged(tmp_path):
