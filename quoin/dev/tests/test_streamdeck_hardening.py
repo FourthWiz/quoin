@@ -782,3 +782,11 @@ def test_an_install_tightens_a_loose_agents_dir(lifecycle_home):
     result = engine.install(ops.make_env(lh))
     assert any("tightened permissions on %s" % agents in line for line in result.lines)
     assert (os.stat(str(agents)).st_mode & 0o777) == 0o700
+
+
+# ------------------------------------------------------------------ apps directory override
+
+def test_the_apps_directory_defaults_and_can_be_overridden():
+    assert prereqs.apps_dir_from({}) == "/Applications"
+    assert prereqs.apps_dir_from({prereqs.ENV_APPS_DIR: ""}) == "/Applications"
+    assert prereqs.apps_dir_from({prereqs.ENV_APPS_DIR: "/x/Apps"}) == "/x/Apps"

@@ -118,6 +118,14 @@ def deploy_agentdesk_files(agentdesk_path):
     return 0
 
 
+ENV_APPS_DIR = "QUOIN_STREAMDECK_APPS_DIR"
+
+
+def apps_dir_from(environ):
+    """Where the Stream Deck and Ghostty apps are looked for: the override when set and non-empty, else /Applications."""
+    return environ.get(ENV_APPS_DIR) or "/Applications"
+
+
 def default_ctx(paths, flags, recorded=None, legacy=None):
     import datetime
     flags = dict(flags or {})
@@ -136,7 +144,7 @@ def default_ctx(paths, flags, recorded=None, legacy=None):
         runner=_real_runner,
         deploy_agentdesk=deploy,
         environ=dict(os.environ),
-        apps_dir="/Applications",
+        apps_dir=apps_dir_from(os.environ),
         home=paths.home,
         sys_prefix=sys.prefix,
         virtual_env=os.environ.get("VIRTUAL_ENV"),

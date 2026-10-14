@@ -6,7 +6,7 @@ repo's .gitignore files and once without, because hatchling honours a root
 .gitignore even outside a git checkout: only the second build proves the
 pyproject rules on their own.
 
-The build child inherits the real environment minus PYTHONPYCACHEPREFIX (the
+The build child (see `_streamdeck_build`) inherits the real environment minus PYTHONPYCACHEPREFIX (the
 real HOME lets pip's cache satisfy the isolated build requirement offline),
 runs with cwd and every output under tmp_path, and never touches brew,
 osascript, zellij or the installer. It deliberately does not use the HOME
@@ -15,15 +15,13 @@ redirect guard.
 import os
 import pathlib
 import re
-import shutil
-import subprocess
-import sys
 import tarfile
 import zipfile
 
 import pytest
 
 import quoin.streamdeck as sd
+from _streamdeck_build import build, copy_tracked_tree, skip_or_fail
 
 REPO = pathlib.Path(__file__).resolve().parents[3]
 LIFECYCLE = ("paths", "macos", "jsonfile", "hooks_merge", "manifest", "prereqs", "status")
@@ -46,9 +44,6 @@ FORBIDDEN_MEMBER_PARTS = (
     "payload/health.json",
 )
 FORBIDDEN_BASENAMES = ("x.json", "x.txt", "x.md", "x.js")
-NETWORK_ERRORS = re.compile(
-    r"Could not find a version|No matching distribution|Connection|Temporary failure|Name or service|"
-    r"ProxyError|Failed to establish|Network is unreachable|Max retries|timed out|SSLError|No such host", re.I)
 
 
 def pyproject_text():
@@ -101,17 +96,7 @@ def test_gitignore_hides_payload_state():
 # ------------------------------------------------------------------ planted-tree build
 
 def build_planted_tree(dst, gitignore=True):
-    listing = subprocess.run(["git", "-C", str(REPO), "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
-                             capture_output=True, check=True).stdout.decode().split("\0")
-    for rel in listing:
-        if not rel or rel.startswith(("quoin/dev/", "quoin/benchmarks/")):
-            continue
-        src = REPO / rel
-        if not src.is_file():
-            continue
-        target = pathlib.Path(dst) / rel
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(src, target)
+    copy_tracked_tree(dst)
     if not gitignore:
         for base, _, files in os.walk(dst):
             if ".gitignore" in files:
@@ -137,20 +122,9 @@ def test_planted_tree_wheel_and_sdist(tmp_path, gitignore):
     pytest.importorskip("build")
     tree = build_planted_tree(tmp_path / "tree", gitignore=gitignore)
     out = tmp_path / "out"
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONPYCACHEPREFIX"}
-    try:
-        proc = subprocess.run([sys.executable, "-m", "build", "--sdist", "--wheel", "--outdir", str(out), str(tree)],
-                              capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=600)
-    except subprocess.TimeoutExpired as exc:
-        tail = ((exc.stderr or b"")[-600:] if isinstance(exc.stderr, bytes) else (exc.stderr or "")[-600:])
-        if isinstance(tail, bytes):
-            tail = tail.decode("utf-8", "replace")
-        pytest.fail("build timed out after 600 s: %s" % tail)
+    proc, _artifacts = build(tree, out, kinds=("--sdist", "--wheel"))
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout)[-600:]
-        if NETWORK_ERRORS.search(proc.stderr or ""):
-            pytest.skip("isolated build could not resolve its build requirement: %s" % tail)
-        pytest.fail("build failed: %s" % tail)
+        skip_or_fail(proc)
     wheel = next(out.glob("*.whl"))
     sdist = next(out.glob("*.tar.gz"))
     wheel_names, sdist_names = archive_names(wheel), archive_names(sdist)

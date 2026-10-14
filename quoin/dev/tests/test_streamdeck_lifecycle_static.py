@@ -222,3 +222,12 @@ def test_stage_four_tests_carry_no_planning_ids(name):
     text = (TESTS / ("test_streamdeck_%s.py" % name)).read_text(encoding="utf-8")
     hits = [m.group(0) for m in PLANNING_ID.finditer(text)]
     assert not hits, (name, hits)
+
+
+def test_default_ctx_takes_the_apps_directory_from_the_override_helper():
+    func = next(n for n in ast.walk(tree("prereqs")) if isinstance(n, ast.FunctionDef) and n.name == "default_ctx")
+    values = [kw.value for node in ast.walk(func) if isinstance(node, ast.Call) for kw in node.keywords
+              if kw.arg == "apps_dir"]
+    assert len(values) == 1
+    call = values[0]
+    assert isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "apps_dir_from"
