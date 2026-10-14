@@ -1008,6 +1008,7 @@ class _Run:
                     self._settings("codex")
                 with self.step("finalize"):
                     manifest_data = self._finalize()
+            self.store.clear()
         except Exception as exc:
             self._failed(exc)
         self._report(manifest_data)
@@ -1446,7 +1447,6 @@ class _Run:
             self.changed = True
         manifest.write(paths.manifest, data)
         self._cleanup(data)
-        self.store.clear()
         return data
 
     def _cleanup(self, data):
@@ -1481,6 +1481,10 @@ class _Run:
         aside = previous_marker.get("plugin_aside")
         if isinstance(aside, dict) and aside.get("path") and not aside.get("kept"):
             _remove_any(aside["path"])
+        try:
+            os.rmdir(paths.staging)  # only when empty
+        except OSError:
+            pass
         kept_dirs = []
         if os.path.isdir(paths.plugins_dir):
             kept_dirs = sorted(n for n in os.listdir(paths.plugins_dir) if n.startswith(".quoin-plugin-kept-"))

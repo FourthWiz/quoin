@@ -339,6 +339,8 @@ def snapshot_owned(lh):
             for rel, value in tree_snapshot(root).items():
                 if label == "runtime" and rel == ".install.lock":
                     continue
+                if "__pycache__" in rel.split(os.sep):
+                    continue  # running a hook with the interpreter writes bytecode next to the payload
                 out["%s/%s" % (label, rel)] = value
     manifest_path = str(lh.runtime / "install-manifest.json")
     if os.path.exists(manifest_path):
