@@ -265,25 +265,35 @@ overwrite of the identical path with no CAS/lock), not merely assumed.
 ```python
 re.sub(r'[^A-Za-z0-9-]', '-', project_path)
 ```
-`[src: quoin/core/scripts/get_session_uuid.py:47]`. The function's own docstring states the
+`[src: quoin/core/scripts/get_session_uuid.py:71]`. The function's own docstring states the
 empirical rule this implements: "replace ANY character that is NOT `[A-Za-z0-9-]` with `-`.
 This covers `/` -> `-`, `.` -> `-`, `@` -> `-`, `_` -> `-`, ` ` -> `-`, etc."
-`[src: quoin/core/scripts/get_session_uuid.py:38-39]`, and explicitly flags that
+`[src: quoin/core/scripts/get_session_uuid.py:62-63]`, and explicitly flags that
 `CLAUDE.md`'s older description ("project path with / replaced by -") is "a simplification"
-`[src: quoin/core/scripts/get_session_uuid.py:42-43]`.
+`[src: quoin/core/scripts/get_session_uuid.py:66-67]`.
 
-**SID-selection algorithm** (`get_session_uuid()`): resolve
-`~/.claude/projects/<project_hash(project_path)>/`, glob `*.jsonl`, filter out Google-Drive
-conflict copies matching `r" \d{1,3}(\.[^ ]*)?$"` (e.g. `"UUID 2.jsonl"`)
-`[src: quoin/core/scripts/get_session_uuid.py:88]`, then sort the remainder by mtime
-descending and return the stem of the newest file `[src: quoin/core/scripts/get_session_uuid.py:89-96]`.
-On any exception, or if no files match, it falls back to a synthetic
-`unknown-<phase_slug>-<YYYYMMDDTHHMMSSZ>` UUID, where `phase_slug` replaces `-` with `_`
-`[src: quoin/core/scripts/get_session_uuid.py:54-63]`.
+**SID-selection algorithm** (`get_session_uuid()`), in precedence order:
+1. The `CLAUDE_CODE_SESSION_ID` environment variable, when it is UUID-shaped
+   (`_UUID_RE` + `_env_session_uuid()`), is returned as-is and without checking that a transcript
+   exists `[src: quoin/core/scripts/get_session_uuid.py:111-113]`. The harness exports it to Bash
+   tool calls and it names the running session exactly, which a newest-file guess cannot do while
+   a concurrent session in the same project is writing. A malformed value is ignored (stderr note).
+2. Otherwise resolve `~/.claude/projects/<project_hash(project_path)>/`, glob `*.jsonl`, filter out
+   Google-Drive conflict copies matching `r" \d{1,3}(\.[^ ]*)?$"` (e.g. `"UUID 2.jsonl"`)
+   `[src: quoin/core/scripts/get_session_uuid.py:120]`, then sort the remainder by mtime
+   descending and return the stem of the newest file `[src: quoin/core/scripts/get_session_uuid.py:121-128]`.
+3. On any exception, or if no files match, fall back to a synthetic
+   `unknown-<phase_slug>-<YYYYMMDDTHHMMSSZ>` UUID, where `phase_slug` replaces `-` with `_`
+   `[src: quoin/core/scripts/get_session_uuid.py:78-87]`.
+
+`session_age_guard.py` and `context_budget_guard.py` resolve the current transcript with the same
+env-first order (explicit `--current-uuid`/`--transcript` still win), looking for `<uuid>.jsonl` in
+the project dir and then in any single `~/.claude/projects/*/` dir; if the env session's transcript
+is found nowhere they fail OPEN rather than measure a different session.
 
 **`--print-hash` CLI contract:** `python3 get_session_uuid.py --print-hash [--project-path
 PATH]` resolves `PATH` (or cwd if absent) and prints `project_hash(PATH)` to stdout, exit 0,
-**without** performing the JSONL lookup `[src: quoin/core/scripts/get_session_uuid.py:129-153]`.
+**without** performing the JSONL lookup `[src: quoin/core/scripts/get_session_uuid.py:161-185]`.
 
 **Shell-parity rule:** any shell script that needs the project hash MUST call
 `get_session_uuid.py --print-hash --project-path "$cwd"` rather than reimplementing the
@@ -297,7 +307,7 @@ character — it is a **strictly narrower transformation** than the Python regex
 (`re.sub(r'[^A-Za-z0-9-]', '-', ...)`), which also replaces `.`, `@`, `_`, spaces, and any
 other non-`[A-Za-z0-9-]` character. For any project path containing a `.`, `@`, or space
 (the example in `get_session_uuid.py`'s own docstring is a Google-Drive path containing both
-`.` and `@` and spaces `[src: quoin/core/scripts/get_session_uuid.py:40-41]`), `sessionend.sh`'s
+`.` and `@` and spaces `[src: quoin/core/scripts/get_session_uuid.py:64-65]`), `sessionend.sh`'s
 `sed`-derived hash will **not** match the real on-disk `~/.claude/projects/<hash>/` directory
 name, and the subsequent `jsonl_dir="$HOME/.claude/projects/$proj_hash"` lookup
 `[src: quoin/hooks/sessionend.sh:175]` will silently fail (`[ -d "$jsonl_dir" ] || exit 0`

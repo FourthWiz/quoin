@@ -99,6 +99,60 @@ import os
 import re
 import sys
 from pathlib import Path
+from typing import Optional
+
+# Claude Code exports the running session's id to Bash tool calls. Strict shape
+# check: the value is joined into a path and a glob pattern.
+_UUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+
+
+def _env_session_uuid(environ=None) -> Optional[str]:
+    """Return the session UUID from CLAUDE_CODE_SESSION_ID, or None.
+
+    Unset/empty -> None silently; a malformed value -> None with a stderr note.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    if not raw:
+        return None
+    if not _UUID_RE.match(raw):
+        print(
+            "[context-budget-guard] ignoring malformed CLAUDE_CODE_SESSION_ID",
+            file=sys.stderr,
+        )
+        return None
+    return raw
+
+
+def _find_uuid_jsonl(projects_base: Path, project_dir: Path, uuid: str) -> Optional[Path]:
+    """Locate <uuid>.jsonl: the project dir first, then any single project dir
+    (newest by mtime when several hold the same UUID).
+
+    The cross-project lookup covers a session whose cwd hash differs from the
+    project root's hash (worktrees, subdirectories). Never recursive.
+    """
+    name = f"{uuid}.jsonl"
+    if project_dir.exists():
+        candidate = project_dir / name
+        if candidate.exists():
+            return candidate
+    try:
+        matches = list(projects_base.glob(f"*/{name}"))
+    except OSError:
+        return None
+    best = None
+    best_mtime = -1.0
+    for candidate in matches:
+        try:
+            mt = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if mt > best_mtime:
+            best, best_mtime = candidate, mt
+    return best
+
 
 # Drive conflict-copy filter (reused verbatim from get_session_uuid.py, ivg-75)
 # — a conflict copy "UUID 2.jsonl" newer than the real file must not be picked.
@@ -119,7 +173,8 @@ def _resolve_transcript(args) -> Path | None:
     """Resolve the transcript file to measure, or None (→ fail-OPEN).
 
     Precedence: --transcript, else --current-uuid → <hash>/<uuid>.jsonl, else
-    newest non-conflict *.jsonl by mtime under ~/.claude/projects/<hash>/.
+    CLAUDE_CODE_SESSION_ID (project dir, then any project dir), else newest
+    non-conflict *.jsonl by mtime under ~/.claude/projects/<hash>/.
     """
     # 1. Explicit transcript path wins — the runtime-neutral entry point.
     if args.transcript:
@@ -142,7 +197,23 @@ def _resolve_transcript(args) -> Path | None:
     else:
         project_root = Path(args.project_root).resolve()
 
-    project_dir = Path.home() / ".claude" / "projects" / _project_hash(project_root)
+    projects_base = Path.home() / ".claude" / "projects"
+    project_dir = projects_base / _project_hash(project_root)
+
+    # The session id the harness exports names the current transcript exactly;
+    # prefer it over the mtime guess, which picks a concurrent session's file.
+    env_uuid = None if args.current_uuid else _env_session_uuid()
+    if env_uuid:
+        target = _find_uuid_jsonl(projects_base, project_dir, env_uuid)
+        if target is None:
+            print(
+                f"[context-budget-guard] env session jsonl not found for {env_uuid} "
+                f"under {projects_base} — fail-OPEN",
+                file=sys.stderr,
+            )
+            return None
+        return target
+
     if not project_dir.exists():
         print(
             f"[context-budget-guard] project dir not found: {project_dir} — fail-OPEN",
@@ -487,7 +558,8 @@ def main() -> int:
         type=str,
         default=None,
         help="UUID of the current session's jsonl (without .jsonl). "
-             "If omitted, the most recent non-conflict *.jsonl by mtime is used.",
+             "If omitted, CLAUDE_CODE_SESSION_ID is used; the most recent "
+             "non-conflict *.jsonl by mtime only when that is unset or malformed.",
     )
     parser.add_argument(
         "--transcript",

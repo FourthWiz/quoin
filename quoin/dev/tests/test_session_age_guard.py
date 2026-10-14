@@ -205,7 +205,7 @@ class TestSessionAgeGuard:
 
     def test_stdlib_only(self):
         """AST scan: script must not import anything outside the allowed stdlib set."""
-        allowed = {"pathlib", "sys", "argparse", "os", "time", "json", "re"}
+        allowed = {"pathlib", "sys", "argparse", "os", "time", "json", "re", "typing"}
 
         source = SCRIPT.read_text()
         tree = ast.parse(source)
