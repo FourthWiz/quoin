@@ -231,9 +231,13 @@ def python_candidates(ctx):
 
 def check_python(ctx, results, memo):
     notes = []
+    tried = set()
     for source, path in python_candidates(ctx):
         label = "--python flag" if source == "flag" else source
         if not os.path.isabs(path):
+            if "/" in path:
+                notes.append("%s: %s relative path not accepted" % (label, path))
+                continue
             # A bare name would be resolved through PATH at probe time, which can land on the
             # CLT stub; resolve it first so the gate sees the real target.
             resolved = ctx.which(path)
@@ -241,6 +245,9 @@ def check_python(ctx, results, memo):
                 notes.append("%s: %s not found on PATH" % (label, path))
                 continue
             path = resolved
+        if path in tried:
+            continue
+        tried.add(path)
         if path == CLT_STUB or ctx.realpath(path) == CLT_STUB:
             if not _clt_ok(ctx, memo):
                 notes.append("%s: CLT not installed (xcode-select -p failed); %s not probed" % (label, CLT_STUB))
@@ -464,7 +471,14 @@ def resolve(ctx, results, *, mode="ask"):
                 states[name] = "declined"
                 continue
             try:
-                rc = ctx.deploy_agentdesk() if plan.kind == "quoin-agentdesk" else ctx.runner(list(plan.argv))
+                if plan.kind == "quoin-agentdesk":
+                    rc = ctx.deploy_agentdesk()
+                else:
+                    argv = list(plan.argv)
+                    brew_path = results["homebrew"].path if "homebrew" in results else None
+                    if argv and argv[0] == "brew" and isinstance(brew_path, str) and os.path.isabs(brew_path):
+                        argv[0] = brew_path
+                    rc = ctx.runner(argv)
             except Exception as exc:
                 say("%s: install failed (%s)" % (name, type(exc).__name__))
                 states[name] = "failed"

@@ -106,9 +106,35 @@ def test_relative_candidate_resolving_elsewhere_is_probed_by_absolute_path(tmp_p
 
 
 def test_unresolvable_relative_candidate_is_skipped(tmp_path):
-    fake = FakeCtx(tmp_path, flags={"python": "./nope"})
+    fake = FakeCtx(tmp_path, flags={"python": "nope"})
     res = check("python", fake)
     assert not res.ok and "not found on PATH" in res.detail and fake.probe_calls == []
+
+
+def test_relative_path_with_a_slash_is_not_accepted(tmp_path):
+    fake = FakeCtx(tmp_path, flags={"python": "./nope"})
+    res = check("python", fake)
+    assert not res.ok and "relative path not accepted" in res.detail and "not found on PATH" not in res.detail
+    assert fake.probe_calls == []
+
+
+def test_python_candidates_are_probed_once_after_resolution(tmp_path):
+    probes = py_probe("/opt/x/python3", "3.8.0")
+    fake = FakeCtx(tmp_path, probes=probes, legacy={"python": "python3"}, recorded={"python": {"path": "/opt/x/python3"}},
+                   which={"python3": "/opt/x/python3"})
+    res = check("python", fake)
+    assert not res.ok
+    assert fake.probe_calls.count(("/opt/x/python3", "-E", "-s", "-c", PYV)) == 1
+
+
+def test_brew_installs_run_with_the_resolved_brew_path(tmp_path):
+    fake = FakeCtx(tmp_path, probes={("/bin/zsh", "-lc", "command -v brew"): (0, "/login/brew\n", ""),
+                                     **py_probe("/opt/x/python3")},
+                   legacy={"python": "/opt/x/python3"}, stdin_tty=True, stdout_tty=True, answers=["y", "n", "n", "n"])
+    results = pr.run_checks(fake.ctx)
+    assert results["homebrew"].path == "/login/brew"
+    pr.resolve(fake.ctx, results)
+    assert fake.runner_calls and all(call[0] == "/login/brew" for call in fake.runner_calls)
 
 
 def test_no_xcode_probe_for_other_pythons(tmp_path):
@@ -280,11 +306,11 @@ def ghostty_install(fake):
 
 
 INSTALLS = {
-    "streamdeck-app": (("brew", "install", "--cask", "elgato-stream-deck"), app_install),
-    "node": (("brew", "install", "node"), node_install),
+    "streamdeck-app": (("/b/brew", "install", "--cask", "elgato-stream-deck"), app_install),
+    "node": (("/b/brew", "install", "node"), node_install),
     "agentdesk": ("deploy", agentdesk_install),
-    "zellij": (("brew", "install", "zellij"), zellij_install),
-    "ghostty": (("brew", "install", "--cask", "ghostty"), ghostty_install),
+    "zellij": (("/b/brew", "install", "zellij"), zellij_install),
+    "ghostty": (("/b/brew", "install", "--cask", "ghostty"), ghostty_install),
 }
 ORDER = ["streamdeck-app", "node", "agentdesk", "zellij", "ghostty"]
 
@@ -332,7 +358,7 @@ def test_failed_install_continues_to_the_next_item(tmp_path):
 def test_accepted_but_still_missing_is_failed(tmp_path):
     fake = make(tmp_path, accept="zellij", effective=False)
     out = pr.resolve(fake.ctx, pr.run_checks(fake.ctx))
-    assert fake.runner_calls == [("brew", "install", "zellij")]
+    assert fake.runner_calls == [("/b/brew", "install", "zellij")]
     assert out.prereqs["zellij"]["state"] == "failed"
 
 
@@ -362,7 +388,7 @@ def test_all_on_a_tty_accepts_without_asking(tmp_path):
     out = pr.resolve(fake.ctx, pr.run_checks(fake.ctx), mode="all")
     assert fake.prompts == []
     assert out.prereqs["zellij"]["state"] == "installed" and out.prereqs["ghostty"]["state"] == "installed"
-    assert ("brew", "install", "--cask", "ghostty") in fake.runner_calls
+    assert ("/b/brew", "install", "--cask", "ghostty") in fake.runner_calls
 
 
 def test_eof_declines_the_rest(tmp_path):

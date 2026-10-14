@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 
 from . import hooks_merge, jsonfile, manifest
 
@@ -35,6 +36,19 @@ def _now_ms(now):
     return int(float(now) * 1000)
 
 
+PROBLEM_CODES = (
+    "OPERATION_INCOMPLETE", "MANIFEST_INVALID", "PROTOTYPE_UNADOPTED", "SETTINGS_UNREADABLE",
+    "SETTINGS_MALFORMED", "FILE_MISSING", "FILE_MODIFIED", "MODE_DORMANT", "MODE_ADOPTION_PENDING",
+    "CURRENT_MISSING", "CURRENT_MISMATCH", "HOOKS_NONE_RECORDED", "HOOK_MISSING", "HOOK_DUPLICATE",
+    "HOOK_STALE", "HOOK_SHADOWED", "PREREQ_CORE_MISSING", "BINARY_VANISHED", "HEALTH_STALE",
+)
+INFO_CODES = (
+    "PATHS_DIFFER", "UPGRADE_AVAILABLE", "UNMANAGED_LEFTOVER", "CODEX_TRUST", "PREREQ_FEATURE_UNAVAILABLE",
+    "OPTIONAL_TOOL_MISSING", "PLUGIN_NEVER_RAN", "HEALTH_UNREADABLE", "PLUGIN_SNAPSHOT_ERROR",
+    "SETTINGS_UNREADABLE", "SETTINGS_MALFORMED",
+)
+
+
 class _SettingsError:
     def __init__(self, code, path, detail):
         self.code, self.path, self.detail = code, path, detail
@@ -50,7 +64,13 @@ def _read_settings(path):
         return {}, _SettingsError("SETTINGS_UNREADABLE", path, "%s: %s" % (type(exc).__name__, exc.strerror or exc))
 
 
+class NotRegular(OSError):
+    pass
+
+
 def _sha256(path):
+    if not stat.S_ISREG(os.lstat(path).st_mode):
+        raise NotRegular("not a regular file")
     digest = hashlib.sha256()
     with open(path, "rb") as handle:
         for chunk in iter(lambda: handle.read(1 << 20), b""):
@@ -100,8 +120,7 @@ def _leftovers(rep, runtime):
             rep.info("UNMANAGED_LEFTOVER", os.path.join(runtime, name))
 
 
-def _trust_hint(rep, rec_paths, data, names, recorded, read_text):
-    hooks_path = rec_paths["codex_hooks"]
+def _trust_hint(rep, hooks_path, data, names, recorded, read_text):
     config = os.path.join(os.path.dirname(hooks_path), "config.toml")
     owned = hooks_merge.owned_commands(data, "codex", runtime_names=names, recorded=recorded)
     if not owned:
@@ -140,19 +159,23 @@ def _check_valid(rep, paths, data, package_version, package_fingerprint, now, re
         rep.d["files"]["checked"] += 1
         try:
             actual = _sha256(target)
-        except OSError:
+        except OSError as exc:
             rep.d["files"]["missing"].append(entry["rel"])
-            rep.problem("FILE_MISSING", target)
+            rep.problem("FILE_MISSING", "%s (not a regular file)" % target if isinstance(exc, NotRegular) else target)
             continue
         if actual != entry["sha256"]:
             rep.d["files"]["modified"].append(entry["rel"])
             rep.problem("FILE_MODIFIED", target)
     mode = data["mode"]
-    reasons = data.get("reasons") or data.get("adopted_from") or ""
+    reasons = data.get(manifest.MODE_REASON_KEY)
+    if not reasons:
+        reasons = [name for name, entry in sorted((data.get("prereqs") or {}).items())
+                   if name in CORE_PREREQS and not (isinstance(entry, dict) and entry.get("state") in ("ok", "installed"))]
+    reasons = ", ".join(reasons)
     if mode == "dormant":
-        rep.problem("MODE_DORMANT", "installed without plugin and hooks; missing core prerequisites %s" % (reasons or ""))
+        rep.problem("MODE_DORMANT", "installed without plugin and hooks; missing core prerequisites %s" % reasons)
     elif mode == "adoption-pending":
-        rep.problem("MODE_ADOPTION_PENDING", "prototype not yet adopted %s" % (reasons or ""))
+        rep.problem("MODE_ADOPTION_PENDING", "prototype not yet adopted; missing core prerequisites %s" % reasons)
     if mode in ("active", "dormant"):
         link = os.path.join(rec["runtime"], "current")
         try:
@@ -183,7 +206,7 @@ def _check_valid(rep, paths, data, package_version, package_fingerprint, now, re
             if state != "ok":
                 rep.problem("HOOK_" + state.upper(), "%s:%s in %s" % (runtime, event, settings_path))
         if runtime == "codex":
-            _trust_hint(rep, rec, settings, names, recorded_cmds, read_text)
+            _trust_hint(rep, settings_path, settings, names, recorded_cmds, read_text)
     prereqs = data.get("prereqs") or {}
     rep.d["prereqs"] = prereqs
     for name, entry in sorted(prereqs.items()):

@@ -318,3 +318,55 @@ def test_unreadable_settings_without_manifest_is_info_only(lifecycle_home):
     os.mkdir(paths.claude_settings)
     report = run(lh)
     assert "SETTINGS_UNREADABLE" in codes(report, "info")
+
+
+def test_codex_trust_hint_follows_the_recorded_settings_path(lifecycle_home):
+    inst = lc.make_installed(lifecycle_home)
+    custom = lifecycle_home.root / "elsewhere" / "hooks.json"
+    custom.parent.mkdir()
+    os.replace(inst.paths.codex_hooks, custom)
+    rewrite_manifest(inst, lambda d: [h.update(settings_path=str(custom)) for h in d["hooks"] if h["runtime"] == "codex"])
+    key = "%s:session_start:0:0" % custom
+    (custom.parent / "config.toml").write_text('[hooks.state."%s"]\ntrusted_hash = "x"\n' % key)
+    report = run(lifecycle_home)
+    assert {t["event"]: t["present"] for t in report["codex_trust"]}["SessionStart"] is True
+
+
+def test_a_fifo_at_a_recorded_file_path_is_missing_without_hanging(lifecycle_home):
+    import signal
+    inst = lc.make_installed(lifecycle_home)
+    target = inst.version_dir / "monitor.py"
+    target.unlink()
+    os.mkfifo(str(target))
+
+    def boom(*_):
+        raise AssertionError("status blocked on a FIFO")
+    signal.signal(signal.SIGALRM, boom)
+    signal.alarm(5)
+    try:
+        report = run(lifecycle_home)
+    finally:
+        signal.alarm(0)
+    problems = [p for p in report["problems"] if p["code"] == "FILE_MISSING"]
+    assert problems and "not a regular file" in problems[0]["detail"]
+
+
+def test_dormant_detail_names_the_missing_core_prereqs(lifecycle_home):
+    inst = lc.make_installed(lifecycle_home, mode="dormant")
+    rewrite_manifest(inst, lambda d: d["prereqs"]["node"].update(state="missing"))
+    detail = next(p["detail"] for p in run(lifecycle_home)["problems"] if p["code"] == "MODE_DORMANT")
+    assert "node" in detail
+    rewrite_manifest(inst, lambda d: d.update(mode_reasons=["python"]))
+    detail = next(p["detail"] for p in run(lifecycle_home)["problems"] if p["code"] == "MODE_DORMANT")
+    assert "python" in detail and "node" not in detail
+
+
+def test_every_emitted_code_is_listed():
+    import re
+    text = open(status.__file__).read()
+    emitted_problems = set(re.findall(r'problem\("([A-Z_]+)",', text))
+    emitted_info = set(re.findall(r'info\("([A-Z_]+)",', text))
+    assert emitted_problems <= set(status.PROBLEM_CODES)
+    assert emitted_info <= set(status.INFO_CODES)
+    for code in ("SETTINGS_UNREADABLE", "SETTINGS_MALFORMED", "MANIFEST_INVALID", "PROTOTYPE_UNADOPTED"):
+        assert code in status.PROBLEM_CODES

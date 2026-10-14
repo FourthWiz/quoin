@@ -1,4 +1,5 @@
 """Manifest schema, validation, detection, and the contract with the payload's deckenv."""
+import shlex
 import copy
 import datetime
 import json
@@ -64,7 +65,7 @@ def test_constants_match_the_payload(deck_home, payload):
     ("missing path", lambda d: d["paths"].pop("agentdesk"), "paths.agentdesk"),
     ("state invariant", lambda d: d["paths"].update(state="/elsewhere/state"), "state-dir invariant"),
     ("config basename", lambda d: d["paths"].update(config="/a/other.json", state="/a/state"), "config.json"),
-    ("versions path", lambda d: d["paths"].update(plugin_dir="/a/versions/1/p"), "versions/"),
+    ("versions path", lambda d: d["paths"].update(plugin_dir=d["paths"]["runtime"] + "/versions/1/p"), "versions/"),
     ("relative binary", lambda d: d["binaries"].update(zellij={"path": "zellij"}), "binaries.zellij"),
     ("unknown optional", lambda d: d["binaries"].update(emacs={"path": "/x/emacs"}), "binaries.emacs"),
     ("external node null path", lambda d: d["binaries"].update(node={"mode": "external", "path": None}), "binaries.node"),
@@ -79,7 +80,13 @@ def test_constants_match_the_payload(deck_home, payload):
     ("hook runtime", lambda d: d["hooks"][0].update(runtime="gemini"), "hooks[0].runtime"),
     ("hook event", lambda d: d["hooks"][0].update(event="Nope"), "hooks[0].event"),
     ("hook settings", lambda d: d["hooks"][0].update(settings_path="rel"), "settings_path"),
-    ("hook versions", lambda d: d["hooks"][0].update(command="/rt/versions/1/x claude"), "versions/"),
+    ("hook versions", lambda d: d["hooks"][0].update(command=shlex.quote(d["paths"]["runtime"] + "/versions/1/x") + " claude"), "versions/"),
+    ("hook versions behind semicolon", lambda d: d["hooks"][0].update(command="x; " + shlex.quote(d["paths"]["runtime"] + "/versions/y") + " claude"), "versions/"),
+    ("file rel dot", lambda d: d["files"][0].update(rel="."), "files[0].rel"),
+    ("file rel dot segment", lambda d: d["files"][0].update(rel="a/./b"), "files[0].rel"),
+    ("file rel empty segment", lambda d: d["files"][0].update(rel="a//b"), "files[0].rel"),
+    ("file rel backslash", lambda d: d["files"][0].update(rel="a\\b"), "files[0].rel"),
+    ("mode reasons shape", lambda d: d.update(mode_reasons="node"), "mode_reasons"),
     ("hook timeout", lambda d: d["hooks"][0].update(timeout="3"), "timeout"),
     ("hook created", lambda d: d["hooks"][0].update(created_event_key=None), "created_event_key"),
 ])
@@ -259,10 +266,31 @@ def test_versions_lookalike_hook_command_is_valid(installed):
     assert not any("versions/" in p for p in problems(data))
 
 
-@pytest.mark.parametrize("path", ["/a/versions/1/p", "/a/versions", "/a/b/versions/c"])
-def test_versions_component_paths_are_rejected(installed, path):
-    data = mutated(installed, lambda d: d["paths"].update(plugin_dir=path))
+@pytest.mark.parametrize("suffix", ["/versions/1/p", "/versions", "/versions/c/d"])
+def test_versions_component_paths_are_rejected(installed, suffix):
+    data = mutated(installed, lambda d: d["paths"].update(plugin_dir=d["paths"]["runtime"] + suffix))
     assert any("versions/" in p for p in problems(data))
+
+
+def test_versions_elsewhere_than_under_the_runtime_is_accepted(installed):
+    data = mutated(installed, lambda d: d["paths"].update(plugin_dir="/home/versions/Plugins/p.sdPlugin"))
+    assert not any("versions/" in p for p in problems(data))
+
+
+def test_mode_reasons_list_of_strings_is_valid(installed):
+    data = mutated(installed, lambda d: d.update(mode_reasons=["node"]))
+    assert problems(data) == []
+
+
+def test_load_any_parses_without_validating(tmp_path):
+    path = tmp_path / "m.json"
+    assert manifest.load_any(str(path)) is None
+    path.write_text('{"schema": 99}')
+    assert manifest.load_any(str(path)) == {"schema": 99}
+    path.write_text("[1]")
+    assert manifest.load_any(str(path)) is None
+    path.write_text("{oops")
+    assert manifest.load_any(str(path)) is None
 
 
 @pytest.mark.parametrize("value,ok", [("relative/sock", False), ("", False), (5, False), (None, True), ("/tmp/zs", True)])

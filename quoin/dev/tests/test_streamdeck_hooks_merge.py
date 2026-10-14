@@ -165,3 +165,43 @@ def test_legacy_only_events():
     data = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": LEGACY}]}],
                       "SessionStart": [{"hooks": [{"type": "command", "command": LEGACY}, {"command": "x"}]}]}}
     assert hm.legacy_only_events(data, "claude", NAMES) == ["Stop"]
+
+
+def test_managed_command_rejects_an_unknown_kind():
+    with pytest.raises(ValueError):
+        hm.managed_command(RT, "x")
+
+
+def test_merge_that_collapses_a_duplicate_before_a_foreign_entry_reports_the_shift():
+    data = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": CMD}]},
+                               {"hooks": [{"type": "command", "command": CMD}]},
+                               foreign("keep")]}}
+    new, report = hm.merge(data, "claude", CMD, runtime_names=NAMES)
+    assert "Stop" in report.shifted_events
+    assert new["hooks"]["Stop"][-1] == foreign("keep")
+
+
+def test_merge_in_place_and_append_never_shift():
+    legacy_data = {"hooks": {"Stop": [foreign("a"), {"hooks": [{"type": "command", "command": LEGACY, "timeout": 3}]}, foreign("b")]}}
+    new, report = hm.merge(legacy_data, "claude", CMD, runtime_names=NAMES)
+    assert report.shifted_events == [] and report.changed
+
+
+def test_remove_only_runtime_keeps_another_runtimes_managed_entries():
+    other = hm.managed_command(RT2, "claude")
+    data = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": CMD}, {"type": "command", "command": other},
+                                          {"type": "command", "command": LEGACY}]}]}}
+    new, report = hm.remove(data, "claude", runtime_names=NAMES, only_runtime=RT)
+    commands = [h["command"] for g in new["hooks"]["Stop"] for h in g["hooks"]]
+    assert commands == [other] and report.removed == ["Stop"]
+    new, _ = hm.remove(data, "claude", runtime_names=NAMES, recorded=(other,), only_runtime=RT)
+    assert new["hooks"]["Stop"] == []
+
+
+def test_managed_commands_elsewhere_lists_other_runtimes_only():
+    other = hm.managed_command(RT2, "claude")
+    data = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": CMD}, {"type": "command", "command": other}]}],
+                      "SessionStart": [{"hooks": [{"type": "command", "command": other}]}]}}
+    assert hm.managed_commands_elsewhere(data, "claude", RT) == [other]
+    assert hm.managed_commands_elsewhere(data, "claude", RT2) == [CMD]
+    assert hm.managed_commands_elsewhere({}, "claude", RT) == []

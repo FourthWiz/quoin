@@ -108,3 +108,11 @@ def test_guard_blocks_brew_argv():
     with pytest.raises(h.GuardViolation):
         subprocess.Popen(["brew", "--version"])
     h.VIOLATIONS.clear()
+
+
+def test_profile_staging_and_plugin_config_names(lifecycle_home):
+    p = lifecycle_home.resolve()
+    assert p.profile_dir == os.path.join(p.runtime, "profile")
+    assert p.profile == os.path.join(p.runtime, "profile", "Quoin Live Agents.streamDeckProfile")
+    assert p.staging == os.path.join(p.runtime, "staging")
+    assert p.plugin_config == os.path.join(p.plugin_dir, "plugin-config.json")

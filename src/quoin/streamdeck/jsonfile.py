@@ -121,16 +121,35 @@ def update(path, mutate, *, retries=3, **kwargs):
 
 
 def backup(path, backups_root, *, now, keep=5):
-    """Copy `path` into backups_root/quoin-<UTC ts>/ and prune old quoin-* dirs."""
+    """Copy `path` into backups_root/quoin-<UTC ts>[-NN]/ and prune old quoin-* dirs.
+
+    Backups taken in the same second share one folder unless that folder already
+    holds a file with this basename; then the first free `-02`, `-03`, ... folder
+    is used, so nothing is overwritten and names sort in creation order.
+    """
     if not os.path.isfile(path):
         return None
     stamp = now.astimezone(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") if now.tzinfo else now.strftime("%Y%m%dT%H%M%SZ")
-    folder = os.path.join(backups_root, "quoin-" + stamp)
+    base = "quoin-" + stamp
+    name = os.path.basename(path)
+    os.makedirs(backups_root, exist_ok=True)
+    same_second = sorted(entry for entry in os.listdir(backups_root)
+                         if (entry == base or entry.startswith(base + "-"))
+                         and os.path.isdir(os.path.join(backups_root, entry)))
+    if not same_second:
+        folder = os.path.join(backups_root, base)
+    else:
+        last = same_second[-1]
+        if os.path.lexists(os.path.join(backups_root, last, name)):
+            suffix = int(last.rsplit("-", 1)[1]) if last != base and last.rsplit("-", 1)[1].isdigit() else 1
+            folder = os.path.join(backups_root, "%s-%02d" % (base, suffix + 1))
+        else:
+            folder = os.path.join(backups_root, last)
     os.makedirs(folder, exist_ok=True)
-    dest = os.path.join(folder, os.path.basename(path))
+    dest = os.path.join(folder, name)
     shutil.copy2(path, dest)
-    ours = sorted(name for name in os.listdir(backups_root)
-                  if name.startswith("quoin-") and os.path.isdir(os.path.join(backups_root, name)))
-    for name in ours[:-keep] if keep > 0 else ours:
-        shutil.rmtree(os.path.join(backups_root, name), ignore_errors=True)
+    ours = sorted(entry for entry in os.listdir(backups_root)
+                  if entry.startswith("quoin-") and os.path.isdir(os.path.join(backups_root, entry)))
+    for entry in ours[:-keep] if keep > 0 else ours:
+        shutil.rmtree(os.path.join(backups_root, entry), ignore_errors=True)
     return dest

@@ -95,9 +95,11 @@ def test_launch_sh_quoting(tmp_path):
 def test_plugin_config_rejects_versions_and_relative():
     cfg = pb.plugin_config("/py/python", "/rt/QuoinStreamDeck", "/state")
     assert cfg == {"python": "/py/python", "runtime": "/rt/QuoinStreamDeck", "state_root": "/state"}
-    for bad in (("/py", "/rt/versions/1.0.0", "/s"), ("py", "/rt", "/s"), ("/py", "/rt", "s")):
+    for bad in (("/rt/versions/3/python", "/rt", "/s"), ("/py", "/rt", "/rt/versions/state"),
+                ("py", "/rt", "/s"), ("/py", "/rt", "s")):
         with pytest.raises(ValueError):
             pb.plugin_config(*bad)
+    assert pb.plugin_config("/py", "/home/versions/rt", "/s")["runtime"] == "/home/versions/rt"
 
 
 @pytest.mark.parametrize("mode", ["external", "bundled"])

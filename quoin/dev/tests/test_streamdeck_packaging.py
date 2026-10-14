@@ -138,8 +138,14 @@ def test_planted_tree_wheel_and_sdist(tmp_path, gitignore):
     tree = build_planted_tree(tmp_path / "tree", gitignore=gitignore)
     out = tmp_path / "out"
     env = {k: v for k, v in os.environ.items() if k != "PYTHONPYCACHEPREFIX"}
-    proc = subprocess.run([sys.executable, "-m", "build", "--sdist", "--wheel", "--outdir", str(out), str(tree)],
-                          capture_output=True, text=True, cwd=str(tmp_path), env=env)
+    try:
+        proc = subprocess.run([sys.executable, "-m", "build", "--sdist", "--wheel", "--outdir", str(out), str(tree)],
+                              capture_output=True, text=True, cwd=str(tmp_path), env=env, timeout=600)
+    except subprocess.TimeoutExpired as exc:
+        tail = ((exc.stderr or b"")[-600:] if isinstance(exc.stderr, bytes) else (exc.stderr or "")[-600:])
+        if isinstance(tail, bytes):
+            tail = tail.decode("utf-8", "replace")
+        pytest.fail("build timed out after 600 s: %s" % tail)
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout)[-600:]
         if NETWORK_ERRORS.search(proc.stderr or ""):

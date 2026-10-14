@@ -70,8 +70,16 @@ class Paths:
         return os.path.join(self.bin_dir, "quoin-deck-terminal")
 
     @property
+    def profile_dir(self):
+        return os.path.join(self.runtime, "profile")
+
+    @property
     def profile(self):
-        return os.path.join(self.runtime, "prototype-backup.sdProfile")
+        return os.path.join(self.profile_dir, "Quoin Live Agents.streamDeckProfile")
+
+    @property
+    def staging(self):
+        return os.path.join(self.runtime, "staging")
 
     @property
     def backups(self):
@@ -79,7 +87,7 @@ class Paths:
 
     @property
     def plugin_config(self):
-        return os.path.join(self.plugin_dir, "config.json")
+        return os.path.join(self.plugin_dir, "plugin-config.json")
 
     @property
     def health(self):

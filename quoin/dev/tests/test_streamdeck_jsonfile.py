@@ -131,3 +131,34 @@ def test_backup_prunes_only_our_directories(tmp_path):
     assert (root / "20261013-prototype").is_dir()
     assert (root / ours[0] / "s.json").read_text() == "{}"
     assert jsonfile.backup(tmp_path / "missing.json", root, now=datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)) is None
+
+
+def test_backups_of_one_run_share_a_folder_and_a_clash_gets_a_numbered_one(tmp_path):
+    a, b = tmp_path / "a" / "settings.json", tmp_path / "b" / "hooks.json"
+    for path, text in ((a, '{"a": 1}'), (b, '{"b": 1}')):
+        path.parent.mkdir()
+        path.write_text(text)
+    root = tmp_path / "backups"
+    root.mkdir()
+    now = datetime.datetime(2026, 10, 13, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    first = jsonfile.backup(a, root, now=now)
+    second = jsonfile.backup(b, root, now=now)
+    assert os.path.dirname(first) == os.path.dirname(second)
+    a.write_text('{"a": 2}')
+    third = jsonfile.backup(a, root, now=now)
+    assert os.path.basename(os.path.dirname(third)).endswith("120000Z-02")
+    assert json.loads(open(first).read()) == {"a": 1} and json.loads(open(third).read()) == {"a": 2}
+
+
+def test_same_second_backups_prune_by_creation_order(tmp_path):
+    src = tmp_path / "s.json"
+    root = tmp_path / "backups"
+    root.mkdir()
+    now = datetime.datetime(2026, 10, 13, 12, 0, 0, tzinfo=datetime.timezone.utc)
+    for i in range(12):
+        src.write_text('{"n": %d}' % i)
+        jsonfile.backup(src, root, now=now)
+    kept = sorted(p.name for p in root.iterdir())
+    assert len(kept) == 5
+    contents = [json.loads((root / name / "s.json").read_text())["n"] for name in kept]
+    assert contents == [7, 8, 9, 10, 11]

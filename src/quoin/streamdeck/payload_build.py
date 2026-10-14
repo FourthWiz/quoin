@@ -49,12 +49,18 @@ def render_launch_sh(node_path):
     return '#!/bin/sh\ncd -- "$(dirname -- "$0")" || exit 1\nexec %s plugin.js "$@"\n' % shlex.quote(node_path)
 
 
+def _under_versions(value, runtime):
+    versions = os.path.normpath(os.path.join(runtime, "versions"))
+    target = os.path.normpath(value)
+    return target == versions or target.startswith(versions + os.sep)
+
+
 def plugin_config(python, runtime, state_root):
     values = {"python": python, "runtime": runtime, "state_root": state_root}
     for key, value in values.items():
         if not isinstance(value, str) or not os.path.isabs(value):
             raise ValueError("%s must be an absolute path" % key)
-        if "/versions/" in value:
+        if key != "runtime" and _under_versions(value, runtime):
             raise ValueError("%s must not point into versions/" % key)
     return values
 

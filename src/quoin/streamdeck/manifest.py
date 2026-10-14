@@ -22,6 +22,7 @@ PLUGIN_UUID = "local.quoin.agentdesk"
 ACTION_UUID = "local.quoin.agentdesk.dashboard"
 CORE_BINARY_KEYS = ("python", "node", "zellij", "osascript", "open", "ghostty_app", "agentdesk")
 OPTIONAL_TOOL_KEYS = ("claude", "codex", "ccr", "lazygit", "python3")
+MODE_REASON_KEY = "mode_reasons"
 MODES = ("active", "dormant", "adoption-pending")
 PATH_KEYS = ("runtime", "plugin_dir", "config", "state", "claude_settings", "codex_hooks", "agentdesk")
 FILE_KINDS = ("code", "shim", "forwarder", "plugin", "profile")
@@ -87,16 +88,32 @@ def _bin_path(entry):
     return entry.get("path") if isinstance(entry, dict) else entry
 
 
-def _has_versions_component(value):
-    return "versions" in value.replace("\\", "/").split("/")
+def _under_versions(value, runtime):
+    """True when `value` is <runtime>/versions or below it (normpath, no realpath)."""
+    if not isinstance(value, str) or not isinstance(runtime, str):
+        return False
+    versions = os.path.normpath(os.path.join(runtime, "versions"))
+    target = os.path.normpath(value)
+    return target == versions or target.startswith(versions + os.sep)
 
 
-def _command_in_versions(command):
+def _command_tokens(command):
     try:
-        tokens = shlex.split(command)
+        lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+        lexer.whitespace_split = True
+        return list(lexer)
     except ValueError:
-        tokens = command.split()
-    return any("/" in token and _has_versions_component(token) for token in tokens)
+        return command.split()
+
+
+def _command_in_versions(command, runtime):
+    return any("/" in token and _under_versions(token, runtime) for token in _command_tokens(command))
+
+
+def _rel_ok(rel):
+    if rel == "" or rel.startswith("/") or "\\" in rel:
+        return False
+    return all(seg not in ("", ".", "..") for seg in rel.split("/"))
 
 
 def validate(data):
@@ -122,12 +139,16 @@ def validate(data):
             problems.append("paths.config must be named config.json (state-dir invariant)")
         if _is_abs(state) and state != os.path.join(os.path.dirname(config), "state"):
             problems.append("paths.state must be <dirname(paths.config)>/state (state-dir invariant)")
+    runtime_dir = paths.get("runtime")
     for key, value in paths.items():
-        if isinstance(value, str) and _has_versions_component(value):
+        if key != "runtime" and isinstance(value, str) and _under_versions(value, runtime_dir):
             problems.append("paths.%s must not point into versions/ (stable-path rule)" % key)
     socket_dir = data.get("zellij_socket_dir")
     if socket_dir is not None and not _is_abs(socket_dir):
         problems.append("zellij_socket_dir must be an absolute path or null")
+    reasons = data.get(MODE_REASON_KEY)
+    if reasons is not None and not (isinstance(reasons, list) and all(isinstance(r, str) for r in reasons)):
+        problems.append("%s must be a list of strings" % MODE_REASON_KEY)
     owned = data.get("legacy_owned_events")
     if owned is not None:
         if not isinstance(owned, dict):
@@ -174,8 +195,8 @@ def validate(data):
             problems.append("files[%d] is not an object" % i)
             continue
         rel = entry.get("rel")
-        if not isinstance(rel, str) or os.path.isabs(rel) or ".." in rel.split("/") or rel == "":
-            problems.append("files[%d].rel must be a relative path without '..'" % i)
+        if not isinstance(rel, str) or not _rel_ok(rel):
+            problems.append("files[%d].rel must be a relative path without empty, '.' or '..' segments" % i)
         if entry.get("root") not in FILE_ROOTS:
             problems.append("files[%d].root must be runtime or plugin" % i)
         if not (isinstance(entry.get("sha256"), str) and _HEX64.match(entry["sha256"])):
@@ -202,7 +223,7 @@ def validate(data):
         command = entry.get("command")
         if not isinstance(command, str) or not command:
             problems.append("hooks[%d].command missing" % i)
-        elif _command_in_versions(command):
+        elif _command_in_versions(command, runtime_dir):
             problems.append("hooks[%d].command must not point into versions/ (stable-path rule)" % i)
         if not isinstance(entry.get("timeout"), int) or isinstance(entry.get("timeout"), bool):
             problems.append("hooks[%d].timeout must be an integer" % i)
@@ -227,6 +248,16 @@ def load(path):
     if problems:
         raise ManifestError(problems)
     return data
+
+
+def load_any(path):
+    """Parse the manifest without validating it; None when absent, unreadable or not an object."""
+    try:
+        with open(path, "rb") as handle:
+            data = json.loads(handle.read().decode("utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def write(path, data):
