@@ -45,6 +45,8 @@ PATH_FLAGS = ("runtime_dir", "plugins_dir", "state_root", "claude_settings", "co
 UNREADABLE = {"phase": "unreadable"}
 TRACKED_ROOT_SCRIPTS = shims.FORWARDER_NAMES
 PROFILE_NAME = "Quoin Live Agents.streamDeckProfile"
+# Every name `_Run._tracked` can produce; the only runtime-relative names an operation record may refer to.
+TRACKED_RELS = ("bin/quoin-deck-hook", "bin/quoin-deck-terminal", "profile/" + PROFILE_NAME) + shims.FORWARDER_NAMES
 SAFE_EXIT = 0
 
 
@@ -241,6 +243,20 @@ def _direct_child(path, parent, prefixes):
     return os.path.basename(path).startswith(tuple(prefixes))
 
 
+def _str_list(value):
+    """The `str` items of a list read from a marker; anything that is not a list gives an empty list."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, str)]
+
+
+def _staging_child_ok(paths, value):
+    """`value` is a real (not symlinked) `rollback-*` directory directly inside the real staging directory."""
+    return _direct_child(value, paths.staging, ("rollback-",)) and _real_within(paths.staging, paths.runtime) \
+        and not os.path.islink(value) \
+        and os.path.realpath(value) == os.path.join(os.path.realpath(paths.staging), os.path.basename(value))
+
+
 def marker_path_ok(paths, kind, value):
     """Whether a path or relative name read from an operation marker lies inside the roots this component owns.
 
@@ -252,17 +268,27 @@ def marker_path_ok(paths, kind, value):
             return False
         if kind == "rel":
             from . import manifest as _manifest
-            if not _manifest._rel_ok(value):
+            if not _manifest._rel_ok(value) or value not in TRACKED_RELS:
                 return False
             target = os.path.join(paths.runtime, value)
             return _real_within(os.path.dirname(target), paths.runtime)
         if kind == "rollback_dir":
-            return _direct_child(value, paths.staging, ("rollback-",)) and _real_within(paths.staging, paths.runtime)
+            return _staging_child_ok(paths, value)
         if kind == "version_aside":
             inner = os.path.dirname(value)
             outer = os.path.dirname(inner)
             return os.path.basename(inner) == "aside" and os.path.basename(value) not in ("", ".", "..") \
-                and marker_path_ok(paths, "rollback_dir", outer)
+                and marker_path_ok(paths, "rollback_dir", outer) and not os.path.islink(value) \
+                and os.path.realpath(inner) == os.path.join(os.path.realpath(paths.staging), os.path.basename(outer),
+                                                             "aside")
+        if kind == "current_target":
+            if os.path.isabs(value):
+                absolute = value
+            elif value.startswith("versions/"):
+                absolute = os.path.join(paths.runtime, value)
+            else:
+                return False
+            return marker_path_ok(paths, "version_dir", os.path.normpath(absolute))
         if kind == "version_dir":
             return _direct_child(value, paths.versions_dir, ("",)) and _real_within(paths.versions_dir, paths.runtime)
         if kind == "plugin_aside":
@@ -402,7 +428,7 @@ def carry_from_marker(marker, manifest_hooks, kind=None):
     carry.prev_hooks = union_hooks(manifest_hooks, draft.get("hooks"), marker.get("carried_hooks"))
     stale = marker.get("stale") if isinstance(marker.get("stale"), dict) else {}
     for key in carry.stale:
-        carry.stale[key] = list(stale.get(key) or [])
+        carry.stale[key] = _str_list(stale.get(key))
     if marker.get("rollback_dir"):
         carry.stale["rollback_dirs"].append(marker["rollback_dir"])
     previous = marker.get("previous") if isinstance(marker.get("previous"), dict) else {}
@@ -584,19 +610,19 @@ def rollback(paths, marker, warn=None):
     if target is None:
         if os.path.islink(paths.current):
             os.unlink(paths.current)
-    else:
+    elif ok("current_target", target):
         _set_symlink(paths.current, target)
     # tracked files
     rollback_dir = marker.get("rollback_dir")
     if rollback_dir and not ok("rollback_dir", rollback_dir):
         rollback_dir = None
-    for rel in previous.get("existing") or []:
+    for rel in _str_list(previous.get("existing")):
         if not ok("rel", rel):
             continue
         src = os.path.join(rollback_dir or "", rel)
         if rollback_dir and os.path.exists(src):
             _restore_file(src, os.path.join(paths.runtime, rel))
-    for rel in previous.get("created") or []:
+    for rel in _str_list(previous.get("created")):
         if ok("rel", rel):
             _remove_any(os.path.join(paths.runtime, rel))
     # plugin
@@ -624,7 +650,7 @@ def rollback(paths, marker, warn=None):
     # adoption: records written by the new monitor stay visible to the restored prototype
     if marker.get("adoption") or previous.get("adoption"):
         migrations.reverse_sweep(paths)
-    for created in reversed(previous.get("created_paths") or []):
+    for created in reversed(_str_list(previous.get("created_paths"))):
         if not ok("created_path", created):
             continue
         try:
@@ -770,10 +796,11 @@ class _Run:
     def _remove_marker_leftovers(self, stale, previous):
         """Delete the leftovers an earlier run recorded, skipping (and reporting) anything outside our roots."""
         paths = self.paths
-        kinds = (("rollback_dirs", "rollback_dir"), ("plugin_asides", "plugin_aside"),
-                 ("version_dir_asides", "version_aside"))
+        # version asides live inside a rollback dir, so they are checked before the dir itself goes
+        kinds = (("version_dir_asides", "version_aside"), ("plugin_asides", "plugin_aside"),
+                 ("rollback_dirs", "rollback_dir"))
         for key, kind in kinds:
-            for path in stale.get(key) or []:
+            for path in _str_list(stale.get(key)):
                 if not marker_path_ok(paths, kind, path):
                     self.say("warning: ignored an unexpected path in the operation record: %r" % (path,))
                 elif ".quoin-plugin-kept-" not in path:
@@ -941,7 +968,8 @@ class _Run:
     def _locked(self, state, consent):
         env = self.env
         under_lock = read_state(env, self.op)
-        if under_lock.marker_kind != state.marker_kind or under_lock.marker != state.marker:
+        if under_lock.marker_kind != state.marker_kind or under_lock.marker != state.marker \
+                or under_lock.paths != state.paths:
             # Another run finished (or failed) between our first look and taking the lock. Recovering from the
             # stale view could undo finished work, so stop and let the user re-run against the current state.
             raise OperationError("another quoin streamdeck operation changed the install state while this one was "
@@ -1757,7 +1785,7 @@ class _Uninstall(_Run):
         os.makedirs(state.paths.runtime, exist_ok=True)
         self.lock_fd = self._lock(state.paths)
         try:
-            return self._locked_uninstall()
+            return self._locked_uninstall(state.paths)
         finally:
             try:
                 os.close(self.lock_fd)
@@ -1791,9 +1819,12 @@ class _Uninstall(_Run):
         return Result(0, None, False, self.lines, state.manifest)
 
     # -- the locked part
-    def _locked_uninstall(self):
+    def _locked_uninstall(self, locked_paths):
         env = self.env
         state = self._read()
+        if state.paths != locked_paths:
+            raise OperationError("another quoin streamdeck operation changed the install state while this one was "
+                                 "waiting; re-run the command")
         if self.selected is not None:
             refusal = check_partial_uninstall(state.marker, self.selected)
             if refusal:
