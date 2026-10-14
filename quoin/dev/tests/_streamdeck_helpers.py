@@ -11,6 +11,7 @@ import json
 import os
 import pathlib
 import pwd
+import re
 import shutil
 import stat
 import subprocess
@@ -37,13 +38,20 @@ FORBIDDEN_ROOTS = tuple(
         ".config",
         "Library/Application Support/QuoinStreamDeck",
         "Library/Application Support/com.elgato.StreamDeck",
+        ".zshrc",
+        ".zprofile",
+        ".local/bin",
+        "Library/LaunchAgents",
     )
 ) + ("/tmp/zellij-agentdesk-%d" % _UID, "/private/tmp/zellij-agentdesk-%d" % _UID)
 
 FAKE_BINS = {}  # name -> absolute path, filled by deck_home
-DANGEROUS = {"kill", "pkill", "killall", "brew", "launchctl"}
+DANGEROUS = {"kill", "pkill", "killall", "pgrep", "brew", "launchctl"}
+ZELLIJ_KILLS = ("kill-session", "kill-all-sessions", "delete-session", "delete-all-sessions")
+_QUIT_APP = re.compile(r"quit\s+app", re.I)
 FAKE_ONLY = {"osascript", "open", "zellij"}
 VIOLATIONS = []
+CALLS = []  # every argv the subprocess guard saw in the current test, allowed or not
 
 
 class GuardViolation(AssertionError):
@@ -65,6 +73,12 @@ def _is_forbidden(value):
     return any(_under(text, root) for root in FORBIDDEN_ROOTS)
 
 
+def _in_tmp(path):
+    import tempfile
+    real = os.path.realpath(tempfile.gettempdir())
+    return os.path.realpath(path).startswith(real + os.sep) or os.path.abspath(path).startswith(real + os.sep)
+
+
 def check_call(argv, env=None):
     """Raise GuardViolation when a subprocess call could touch the real machine."""
     if isinstance(argv, (str, bytes, os.PathLike)):
@@ -81,6 +95,13 @@ def check_call(argv, env=None):
     for item in argv:
         if _is_forbidden(item):
             raise GuardViolation("argv touches a forbidden root: %s" % os.fsdecode(item))
+    texts = [os.fsdecode(item) for item in argv]
+    if base == "osascript" and any(_QUIT_APP.search(t) for t in texts[1:]):
+        raise GuardViolation("osascript would quit an app")
+    if base == "zellij" and any(t in ZELLIJ_KILLS for t in texts[1:]):
+        raise GuardViolation("zellij would kill a session")
+    if base == "open" and any(t.endswith(".streamDeckProfile") and not _in_tmp(t) for t in texts[1:]):
+        raise GuardViolation("open would import a real Stream Deck profile")
     effective = os.environ if env is None else env
     if effective.get("HOME") == REAL_HOME:
         raise GuardViolation("child env carries the real HOME")
@@ -182,12 +203,29 @@ def deck_home(tmp_path, monkeypatch):
     purge_payload_modules()
 
 
+def _record(argv):
+    if isinstance(argv, (str, bytes, os.PathLike)):
+        argv = [argv]
+    try:
+        CALLS.append([os.fsdecode(item) for item in argv])
+    except TypeError:
+        pass
+
+
+@pytest.fixture
+def subprocess_calls(forbid_dangerous_subprocess):
+    """Every argv the guard saw in this test (allowed or not), in order."""
+    return CALLS
+
+
 @pytest.fixture
 def forbid_dangerous_subprocess(monkeypatch):
     VIOLATIONS.clear()
+    CALLS.clear()
     real_init = subprocess.Popen.__init__
 
     def guarded_init(self, args, *a, **kw):
+        _record(args)
         try:
             check_call(args, kw.get("env"))
         except GuardViolation as exc:
@@ -200,6 +238,7 @@ def forbid_dangerous_subprocess(monkeypatch):
             argv = a[0] if a else kw.get("command", "")
             if real is os.posix_spawn:
                 argv = a[1] if len(a) > 1 else kw.get("argv", [])
+            _record(argv)
             try:
                 check_call(argv, kw.get("env"))
             except GuardViolation as exc:

@@ -12,13 +12,14 @@ import os
 import shlex
 import shutil
 import stat
+import sys
 import types
 
 import pytest
 
 import _streamdeck_helpers as h
 from _streamdeck_helpers import GuardViolation, deck_home, forbid_dangerous_subprocess  # noqa: F401
-from quoin.streamdeck import hooks_merge, jsonfile, manifest, paths as paths_mod, prereqs
+from quoin.streamdeck import hooks_merge, jsonfile, manifest, paths as paths_mod, payload_build, prereqs
 import quoin.streamdeck as sd
 
 NOW = datetime.datetime(2026, 10, 13, 12, 0, 0, tzinfo=datetime.timezone.utc)
@@ -119,7 +120,15 @@ def legacy_command(runtime):
     return "/usr/bin/python3 %s %s" % (shlex.quote(os.path.join(str(runtime), "monitor.py")), "claude")
 
 
-def make_prototype(lh):
+def fixture_python(lh):
+    """A python3 shim in the test's fakebin; hook commands built with it never touch /usr/bin/python3."""
+    path = lh.fakebin / "python3"
+    if not path.is_symlink() and not path.exists():
+        path.symlink_to(sys.executable)
+    return str(path)
+
+
+def make_prototype(lh, python="/usr/bin/python3", plugin_manifest=False):
     runtime = lh.runtime
     runtime.mkdir(parents=True)
     for name in ("monitor.py", "dashboard.py", "controller.py", "terminal.zsh"):
@@ -132,8 +141,10 @@ def make_prototype(lh):
     lh.plugin_dir.mkdir(parents=True)
     (lh.plugin_dir / "launch.sh").write_text('#!/bin/sh\ncd -- "$(dirname -- "$0")"\nexec /opt/x/bin/node plugin.js "$@"\n')
     (lh.plugin_dir / "plugin.js").write_text("//")
+    if plugin_manifest:
+        (lh.plugin_dir / "manifest.json").write_text(json.dumps(payload_build.plugin_manifest("external"), indent=2) + "\n")
     for kind, path in (("claude", lh.claude_settings), ("codex", lh.codex_home / "hooks.json")):
-        cmd = "/usr/bin/python3 %s %s" % (shlex.quote(str(runtime / "monitor.py")), kind)
+        cmd = "%s %s %s" % (python, shlex.quote(str(runtime / "monitor.py")), kind)
         data = {"theme": "dark"}
         data["hooks"] = {ev: [{"hooks": [{"type": "command", "command": cmd, "timeout": 3}]}]
                          for ev in hooks_merge.EVENTS[kind]}
@@ -156,10 +167,13 @@ def _fake_exec(path):
     return str(path)
 
 
-def make_installed(lh, mode="active", now=NOW, claude_only=False, flags=None, environ=None):
+def make_installed(lh, mode="active", now=NOW, claude_only=False, flags=None, environ=None,
+                   component_version=None, version_dir_name=None):
     paths = lh.resolve(flags, environ)
     runtime = lh.runtime
-    version_dir = runtime / "versions" / "1.0.0"
+    component_version = component_version or sd.COMPONENT_VERSION
+    version_dir_name = version_dir_name or "1.0.0"
+    version_dir = runtime / "versions" / version_dir_name
     version_dir.mkdir(parents=True)
     files = []
     for name in sd.RUNTIME_FILES:
@@ -170,19 +184,22 @@ def make_installed(lh, mode="active", now=NOW, claude_only=False, flags=None, en
     _fake_exec(runtime / "bin" / "quoin-deck-terminal")
     files.append(_file_entry(runtime, runtime, str(shim), "shim", "runtime"))
     if mode != "adoption-pending":
-        os.symlink("versions/1.0.0", str(runtime / "current"))
+        os.symlink("versions/" + version_dir_name, str(runtime / "current"))
     plugin_deployed = mode == "active"
     if plugin_deployed:
         lh.plugin_dir.mkdir(parents=True)
         for name in ("plugin.js", "manifest.json"):
-            (lh.plugin_dir / name).write_text("// %s\n" % name)
+            if name == "manifest.json":
+                (lh.plugin_dir / name).write_text(json.dumps(payload_build.plugin_manifest("external"), indent=2) + "\n")
+            else:
+                (lh.plugin_dir / name).write_text("// %s\n" % name)
             files.append(_file_entry(lh.plugin_dir, lh.plugin_dir, str(lh.plugin_dir / name), "plugin", "plugin"))
     bins = {}
     for name in TOOL_NAMES:
         bins[name] = {"path": _fake_exec(lh.root / "toolbin" / name)}
     bins["node"] = {"mode": "external", "path": bins["node"]["path"]}
     app = lh.apps / "Ghostty.app"
-    app.mkdir()
+    app.mkdir(exist_ok=True)
     bins["ghostty_app"] = {"path": str(app)}
     agentdesk = lh.home / ".config" / "agentdesk" / "agentdesk.zsh"
     agentdesk.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +231,7 @@ def make_installed(lh, mode="active", now=NOW, claude_only=False, flags=None, en
     prereq_record = {n: {"state": "ok", "path": None, "version": None, "checked_at": "2026-10-13T12:00:00Z"}
                      for n in ("python", "streamdeck-app", "node", "agentdesk", "zellij", "ghostty", "homebrew")}
     data = manifest.new_manifest(
-        paths=paths, component_version=sd.COMPONENT_VERSION, payload_fingerprint=sd.payload_fingerprint(),
+        paths=paths, component_version=component_version, payload_fingerprint=sd.payload_fingerprint(),
         quoin_version="0.0.0", platform={"system": "darwin", "macos": "15.0", "machine": "arm64"}, mode=mode,
         binaries=bins, zellij_socket_dir=str(lh.root / "zsock"), files=files,
         version_dir=str(version_dir), previous_version_dir=None, hooks=hook_records,
@@ -229,7 +246,7 @@ class FakeCtx:
 
     def __init__(self, tmp, *, which=None, probes=None, stdin_tty=False, stdout_tty=False, answers=(),
                  runner_rc=None, deploy_rc=0, flags=None, recorded=None, legacy=None, realpath_map=None,
-                 virtual_env=None, sys_prefix="/venv/prefix", environ=None, installs=None):
+                 virtual_env=None, sys_prefix="/venv/prefix", environ=None, installs=None, now=None):
         self.which_table = dict(which or {})
         self.probes = dict(probes or {})
         self.probe_calls = []
@@ -245,6 +262,7 @@ class FakeCtx:
         (tmp / "apps").mkdir(exist_ok=True)
         self.apps = tmp / "apps"
         self.stdin_tty, self.stdout_tty = stdin_tty, stdout_tty
+        self._clock = "2026-10-13T12:00:00Z" if now is None else now.strftime("%Y-%m-%dT%H:%M:%SZ")
         self.ctx = prereqs.Ctx(
             which=lambda name: self.which_table.get(name),
             realpath=lambda p: self.realpath_map.get(p, p),
@@ -263,7 +281,7 @@ class FakeCtx:
             recorded=dict(recorded or {}),
             legacy=dict(legacy or {}),
             out=self.lines.append,
-            now=lambda: "2026-10-13T12:00:00Z",
+            now=lambda: self._clock,
         )
 
     def _probe(self, argv, timeout=5):
