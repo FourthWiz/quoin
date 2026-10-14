@@ -127,7 +127,8 @@ def _env_session_uuid(environ=None) -> Optional[str]:
 
 
 def _find_uuid_jsonl(projects_base: Path, project_dir: Path, uuid: str) -> Optional[Path]:
-    """Locate <uuid>.jsonl: the project dir first, then any single project dir.
+    """Locate <uuid>.jsonl: the project dir first, then any single project dir
+    (newest by mtime when several hold the same UUID).
 
     The cross-project lookup covers a session whose cwd hash differs from the
     project root's hash (worktrees, subdirectories). Never recursive.
@@ -138,11 +139,19 @@ def _find_uuid_jsonl(projects_base: Path, project_dir: Path, uuid: str) -> Optio
         if candidate.exists():
             return candidate
     try:
-        for candidate in projects_base.glob(f"*/{name}"):
-            return candidate
+        matches = list(projects_base.glob(f"*/{name}"))
     except OSError:
-        pass
-    return None
+        return None
+    best = None
+    best_mtime = -1.0
+    for candidate in matches:
+        try:
+            mt = candidate.stat().st_mtime
+        except OSError:
+            continue
+        if mt > best_mtime:
+            best, best_mtime = candidate, mt
+    return best
 
 
 # Drive conflict-copy filter (reused verbatim from get_session_uuid.py, ivg-75)

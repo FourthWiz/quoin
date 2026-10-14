@@ -97,6 +97,15 @@ def test_env_uuid_found_under_other_project_hash(tmp_path, kind):
 
 
 @pytest.mark.parametrize("kind", GUARDS)
+def test_env_uuid_duplicate_across_projects_picks_newest(tmp_path, kind):
+    _jsonl(tmp_path, ENV_UUID, project_hash="-other-a", mtime=1_000_000_000)
+    newer = _jsonl(tmp_path, ENV_UUID, project_hash="-other-b", mtime=2_000_000_000)
+    _jsonl(tmp_path, ENV_UUID, project_hash="-other-c", mtime=1_500_000_000)
+    _, parts, _ = _run_guard(kind, tmp_path, ENV_UUID)
+    assert _chosen_path(parts) == str(newer)
+
+
+@pytest.mark.parametrize("kind", GUARDS)
 def test_env_uuid_found_when_project_dir_missing(tmp_path, kind):
     target = _jsonl(tmp_path, ENV_UUID, project_hash="-elsewhere")
     _, parts, _ = _run_guard(kind, tmp_path, ENV_UUID)
