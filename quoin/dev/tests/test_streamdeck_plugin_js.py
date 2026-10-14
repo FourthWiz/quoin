@@ -127,3 +127,43 @@ def test_static_shape():
     assert "e.message" not in text.split("function writeHealth")[1].split("function errorType")[0]
     assert "require.main === module" in text
     assert "base" not in [w for w in text.replace("(", " ").replace(")", " ").split() if w == "base"]
+
+
+CLEANUP_HARNESS = r"""
+const fs = require('node:fs'), path = require('node:path');
+const p = require(process.argv[2]);
+const dir = process.argv[3];
+const cfg = {python: process.argv[4], runtime: '/r', state_root: path.join(dir, 'sr'), invoke_timeout_ms: 20000};
+(async () => {
+  const out = {};
+  const pending = p.invoke(cfg, 'snapshot').catch(e => 'ERR:' + e.message);
+  for (let i = 0; i < 100 && !fs.existsSync(process.argv[5]); i++) await new Promise(r => setTimeout(r, 50));
+  p.killBounded();
+  out.settled = await pending;
+  const state = path.join(dir, 'sr', 'state');
+  fs.mkdirSync(state, {recursive: true});
+  fs.writeFileSync(path.join(state, 'health.json.' + process.pid + '.tmp'), 'stale');
+  p.writeHealth(cfg, {updated: 2});
+  out.health = JSON.parse(fs.readFileSync(path.join(state, 'health.json'), 'utf8'));
+  console.log(JSON.stringify(out));
+})();
+"""
+
+
+def test_kill_bounded_reaps_children_and_a_stale_health_temp_is_replaced(tmp_path):
+    marker = tmp_path / "gc.pid"
+    fake = tmp_path / "fake-python"
+    fake.write_text('#!/bin/sh\nsleep 30 & echo $! > "%s"; wait\n' % marker)
+    fake.chmod(0o755)
+    harness = tmp_path / "cleanup.js"
+    harness.write_text(CLEANUP_HARNESS)
+    result = subprocess.run([h.NODE, str(harness), str(PLUGIN), str(tmp_path), str(fake), str(marker)],
+                            capture_output=True, text=True, timeout=30, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    assert out["health"] == {"updated": 2} and out["settled"].startswith("ERR:")
+    grandchild = int(marker.read_text())
+    deadline = time.monotonic() + 3
+    while _pid_alive(grandchild) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert not _pid_alive(grandchild)

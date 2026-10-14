@@ -295,6 +295,30 @@ def iter_records(env, include_shadowed=False):
         yield path, data if isinstance(data, dict) else None, "legacy-shadowed" if shadowed else "legacy"
 
 
+_DEADLINE = [None]
+
+
+def set_deadline(seconds):
+    """Bound every subprocess started through `bound` for the next `seconds` (monotonic)."""
+    _DEADLINE[0] = time.monotonic() + seconds
+
+
+def clear_deadline():
+    _DEADLINE[0] = None
+
+
+def bound(timeout):
+    """`timeout` limited by the remaining deadline; raises TimeoutExpired once it is spent."""
+    deadline = _DEADLINE[0]
+    if deadline is None:
+        return timeout
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        import subprocess
+        raise subprocess.TimeoutExpired("budget", 0)
+    return remaining if timeout is None else min(timeout, remaining)
+
+
 def valid_session(name):
     """A session name that is safe to pass as a zellij argument."""
     if not isinstance(name, str) or name == "" or len(name) > SESSION_MAX or name.startswith("-"):

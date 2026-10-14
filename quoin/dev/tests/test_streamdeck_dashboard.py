@@ -395,3 +395,108 @@ def test_new_records_are_accepted_by_the_frozen_prototype(payload, deck_home, mo
         for key, kind in proto.items():
             assert isinstance(entry[key], kind), key
     assert sum(1 for c in frozen.calls if c[1] == "list-sessions") == 1
+
+
+# ---------------------------------------------------------------- budgets, legacy records, pruning
+
+def sleeping_fake(deck_home, name, seconds):
+    path = deck_home.fakebin / name
+    log = path.with_suffix(".log")
+    path.write_text('#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nsleep %s\n' % (log, seconds))
+    path.chmod(0o755)
+    return log
+
+
+def test_snapshot_is_bounded_by_the_overall_budget(payload, deck_home, monkeypatch):
+    dash, mon, de = payload("dashboard", "monitor", "deckenv")
+    env = de.current()
+    log = sleeping_fake(deck_home, "zellij", 30)
+    monkeypatch.setattr(dash, "SNAPSHOT_BUDGET_S", 2)
+    monkeypatch.setattr(dash, "PROBE_TIMEOUT", 1)
+    de.ensure_dir(env.agents_dir)
+    paths = []
+    for i in range(4):
+        rec = dict(id="r%d" % i, kind="claude", session="s%d" % i, pane="3", socket="/sock/%d" % i,
+                   socket_inferred=False, status="working", pending={}, event="Stop", created=1.0,
+                   updated=time.time(), via="managed", project="/p")
+        path = os.path.join(env.agents_dir, "r%d.json" % i)
+        de.write_json_atomic(path, rec)
+        paths.append(path)
+    start = time.monotonic()
+    out = dash.snapshot()
+    assert time.monotonic() - start < dash.SNAPSHOT_BUDGET_S + 2.5
+    assert len(out) == 4 and {r["status"] for r in out} == {"offline"}
+    assert all(os.path.exists(p) for p in paths)
+    assert len(log.read_text().splitlines()) <= 2
+
+
+def test_focus_is_bounded_and_never_issues_focus_pane_id(w, deck_home):
+    log_osa = sleeping_fake(deck_home, "osascript", 30)
+    w.mp.setattr(w.dash, "FOCUS_BUDGET_S", 2)
+    w.de.set_surface(w.env, w.sock, "s", "surf")
+    start = time.monotonic()
+    with pytest.raises(RuntimeError) as exc:
+        w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
+    assert time.monotonic() - start < 2 + 2.5
+    assert str(exc.value) and "\n" not in str(exc.value)
+    zlog = deck_home.fakebin / "zellij.log"
+    assert not zlog.exists() or "focus-pane-id" not in zlog.read_text()
+    assert log_osa.exists()
+
+
+def test_legacy_record_without_the_inferred_flag_is_offline_not_deleted(w):
+    path = w.write("proto", layout="legacy", session="gone")
+    rec = json.load(open(path))
+    rec.pop("socket_inferred")
+    w.de.write_json_atomic(path, rec)
+    out = w.snap()
+    assert [(r["id"], r["status"]) for r in out] == [("proto", "offline")]
+    assert os.path.exists(path)
+
+
+def test_surfaces_pruned_only_after_a_successful_listing(w):
+    w.write("a")
+    w.de.set_surface(w.env, w.sock, "s", "keep")
+    w.de.set_surface(w.env, w.sock, "gone", "drop")
+    w.de.set_surface(w.env, "/unknown/sock", "x", "other")
+    w.sessions[w.sock] = (False, {})
+    w.snap()
+    assert set(json.load(open(w.env.surfaces_path))) == {w.sock + "\ts", w.sock + "\tgone", "/unknown/sock\tx"}
+    w.sessions[w.sock] = (True, {"s": True})
+    w.snap()
+    assert set(json.load(open(w.env.surfaces_path))) == {w.sock + "\ts", "/unknown/sock\tx"}
+
+
+def test_invalid_session_in_a_legacy_record_is_offline_and_never_reaches_zellij(w):
+    w.mp.undo()
+    calls = []
+    import subprocess as sp
+    real = sp.run
+
+    def spy(args, *a, **k):
+        calls.append(list(args))
+        return real(args, *a, **k)
+    w.mp.setattr(w.dash.subprocess, "run", spy)
+    path = w.write("bad", layout="legacy", session="-x")
+    out = w.dash.snapshot()
+    assert [(r["id"], r["status"]) for r in out if r["id"] == "bad"] == [("bad", "offline")]
+    assert os.path.exists(path)
+    assert not any("-x" in argv for argv in calls)
+    with pytest.raises(RuntimeError):
+        w.dash.focus({"session": "-x", "pane": "3"})
+    assert not any("-x" in argv for argv in calls)
+
+
+def test_focus_failure_path_shows_no_dialog(payload, deck_home, tmp_path):
+    runtime = deck_home.runtime
+    dash = runtime / "dash-launch.py"
+    code = ("import sys\nsys.argv=['dashboard.py','focus','{\"session\":\"s\",\"pane\":\"3\"}']\n"
+            "sys.path.insert(0, %r)\nimport runpy\nrunpy.run_path(%r, run_name='__main__')\n"
+            % (str(h.PAYLOAD_DIR), str(h.PAYLOAD_DIR / "dashboard.py")))
+    dash.write_text(code)
+    osa = deck_home.fakebin / "osascript"
+    env = dict(os.environ, QUOIN_DECK_RUNTIME=str(runtime), HOME=str(deck_home.home))
+    proc = subprocess.run([sys.executable, "-E", "-s", str(dash)], env=env, capture_output=True, text=True, timeout=20)
+    assert proc.returncode == 1
+    log = osa.with_suffix(".log")
+    assert not log.exists() or "display dialog" not in log.read_text()

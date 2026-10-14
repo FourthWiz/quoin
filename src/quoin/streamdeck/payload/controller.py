@@ -28,7 +28,7 @@ def run_raw(args, timeout=20, socket=None):
     """Run an argv list with the deck's zellij environment; returns the CompletedProcess."""
     e = env()
     return subprocess.run(args, env=e.zellij_env(socket or e.socket_dir), text=True,
-                          capture_output=True, timeout=timeout)
+                          capture_output=True, timeout=deckenv.bound(timeout))
 
 
 def run(args, check=True, timeout=20, socket=None):

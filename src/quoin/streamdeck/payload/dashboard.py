@@ -15,12 +15,14 @@ PS = '/bin/ps'
 TTL_S = 7 * 24 * 3600
 PROBE_TIMEOUT = 3
 MAX_PID = 99999
+SNAPSHOT_BUDGET_S = 10
+FOCUS_BUDGET_S = 15
 
 
 def _zellij(args, socket, timeout=PROBE_TIMEOUT):
     e = deckenv.current()
     return subprocess.run([e.bins['zellij']] + list(args), env=e.zellij_env(socket), capture_output=True,
-                          text=True, timeout=timeout)
+                          text=True, timeout=deckenv.bound(timeout))
 
 
 def list_sessions(socket):
@@ -64,7 +66,7 @@ def pid_identities(pids):
     try:
         result = subprocess.run([PS, '-o', 'pid=,lstart=', '-p', ','.join(str(p) for p in wanted)],
                                 env=deckenv.ps_env(), capture_output=True, text=True, errors='replace',
-                                timeout=PROBE_TIMEOUT)
+                                timeout=deckenv.bound(PROBE_TIMEOUT))
     except (subprocess.SubprocessError, OSError):
         return False, {}
     if result.returncode == 1 and not result.stdout.strip() and not result.stderr.strip():
@@ -92,7 +94,7 @@ def _number(value):
 
 def _take_lock(path):
     try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+        fd = deckenv.open_lock(path)
     except OSError:
         return None
     deadline = time.monotonic() + 0.3
@@ -135,6 +137,33 @@ def _delete_guarded(candidates, lock_path):
 
 
 def snapshot():
+    deckenv.set_deadline(SNAPSHOT_BUDGET_S)
+    try:
+        return _snapshot()
+    finally:
+        deckenv.clear_deadline()
+
+
+def _prune_surfaces(e, sessions_cache):
+    """Drop surface ids of sessions a successful list-sessions says no longer exist."""
+    surfaces = deckenv.read_json(e.surfaces_path, None)
+    if not isinstance(surfaces, dict) or not surfaces:
+        return
+    kept = {}
+    for key, value in surfaces.items():
+        socket, _, session = key.partition('\t')
+        answer = sessions_cache.get(socket)
+        if answer is not None and answer[0] and session not in answer[1]:
+            continue
+        kept[key] = value
+    if len(kept) != len(surfaces):
+        try:
+            deckenv.write_json_atomic(e.surfaces_path, kept)
+        except OSError:
+            pass
+
+
+def _snapshot():
     e = deckenv.current()
     now = time.time()
     items = list(deckenv.iter_records(e, include_shadowed=True))
@@ -182,6 +211,8 @@ def snapshot():
         offline = False
         if status == 'closed' or now - seen > TTL_S:
             remove = True
+        elif not deckenv.valid_session(session):
+            offline = True
         elif (pid_ok and valid_pid(rec.get('pid')) and deckenv.is_c_lstart(rec.get('process_started'))
               and identities.get(rec['pid']) != rec['process_started'].strip()):
             remove = True
@@ -190,7 +221,7 @@ def snapshot():
             if not ok:
                 offline = True
             elif not known.get(session):
-                if rec.get('socket_inferred') is True:
+                if rec.get('socket_inferred') is True or (side == 'legacy' and 'socket_inferred' not in rec):
                     offline = True
                 else:
                     remove = True
@@ -226,7 +257,7 @@ def snapshot():
         if not ok:
             continue
         for session, live in sorted(known.items()):
-            if not live:
+            if not live or not deckenv.valid_session(session):
                 continue
             pok, panes = panes_of(socket, session)
             if not pok:
@@ -242,6 +273,7 @@ def snapshot():
                     records.append(dict(id='pane:' + socket + ':' + session + ':' + pane, kind=kind, session=session,
                                         pane=pane, socket=socket, project=p.get('pane_cwd', ''),
                                         status='unknown', created=0, updated=0))
+    _prune_surfaces(e, sessions_cache)
     return sorted(records, key=lambda r: (r['session'], int(r['pane']) if r['pane'].isdigit() else 0))
 
 
@@ -258,10 +290,22 @@ def _name_is_unique(session, socket):
 
 
 def focus(record):
+    deckenv.set_deadline(FOCUS_BUDGET_S)
+    try:
+        _focus(record)
+    except subprocess.TimeoutExpired:
+        raise RuntimeError('Не удалось переключиться вовремя.')
+    finally:
+        deckenv.clear_deadline()
+
+
+def _focus(record):
     e = deckenv.current()
     session, pane = record.get('session'), record.get('pane')
     if not isinstance(session, str) or not session or pane is None:
         raise RuntimeError('Эта панель уже закрыта.')
+    if not deckenv.valid_session(session):
+        raise RuntimeError('Недопустимое имя сессии.')
     pane = str(pane)
     socket = deckenv.record_socket(record, e)
     ok, panes = list_panes(socket, session)
@@ -274,6 +318,8 @@ def focus(record):
     if surface:
         try:
             c.apple(c.FOCUS_SCRIPT, surface, timeout=10)
+        except subprocess.TimeoutExpired:
+            surface = None
         except Exception:
             surface = None
     if not surface and _name_is_unique(session, socket):
@@ -285,10 +331,10 @@ def focus(record):
     if not surface:
         config.update(session=session, socket=socket, project=record.get('project') or config['project'])
         c.terminal('attach', config, socket=socket)
-    c.run([e.bins['zellij'], '--session', session, 'action', 'focus-pane-id', 'terminal_' + pane], socket=socket)
+    c.run([e.bins['zellij'], '--session', session, 'action', 'focus-pane-id', 'terminal_' + pane], socket=socket, timeout=3)
     config = c.load()
     config.update(session=session, socket=socket, project=record.get('project') or config['project'])
-    config.setdefault('projects', {})[session] = config['project']
+    deckenv.remember_project(config, session, config['project'])
     c.save(config)
 
 
@@ -328,8 +374,9 @@ if __name__ == '__main__':
             print('[]')
         else:
             print(str(exc), file=sys.stderr)
-            try:
-                c.dialog(str(exc))
-            except Exception:
-                pass
+            if not (len(sys.argv) > 1 and sys.argv[1] == 'focus'):
+                try:
+                    c.dialog(str(exc))
+                except Exception:
+                    pass
         sys.exit(1)

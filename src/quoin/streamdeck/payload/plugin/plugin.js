@@ -18,6 +18,14 @@ function buildInvocation(cfg, action, extra){
 }
 // Only the non-interactive calls are bounded; menus, sessions, project and error dialogs wait on the user.
 const BOUNDED_ACTIONS = new Set(['snapshot','focus']);
+// Bounded children lead their own process group; the plugin reaps them if it exits first.
+const liveBounded = new Set();
+function killBounded(){
+  for(const pid of liveBounded){
+    try{process.kill(-pid,'SIGKILL');}catch(e){try{process.kill(pid,'SIGKILL');}catch(e2){}}
+  }
+  liveBounded.clear();
+}
 function invoke(cfg, action, extra, timeoutMs = BOUNDED_ACTIONS.has(action) ? (cfg.invoke_timeout_ms || 20000) : 0){
   return new Promise((resolve,reject)=>{
     const [bin,argv,env] = buildInvocation(cfg, action, extra);
@@ -26,13 +34,15 @@ function invoke(cfg, action, extra, timeoutMs = BOUNDED_ACTIONS.has(action) ? (c
     const settle = (fn,v)=>{ if(done)return; done=true; if(timer)clearTimeout(timer); fn(v); };
     // A bounded call leads its own process group so the timeout can reap python and anything it started.
     const child = spawn(bin, argv, {env, stdio:['ignore','pipe','pipe'], detached: bounded});
+    if(bounded && child.pid)liveBounded.add(child.pid);
+    const forget = ()=>{ if(child.pid)liveBounded.delete(child.pid); };
     if(bounded)timer = setTimeout(()=>{
       try{process.kill(-child.pid,'SIGKILL');}catch(e){try{child.kill('SIGKILL');}catch(e2){}}
       settle(reject,new Error('timeout'));
     }, timeoutMs);
     child.stdout.on('data',x=>out+=x); child.stderr.on('data',x=>err+=x);
-    child.on('error',e=>settle(reject,e));
-    child.on('close',code=>code?settle(reject,new Error(err||'Action failed')):settle(resolve,out));
+    child.on('error',e=>{forget();settle(reject,e);});
+    child.on('close',(code,sig)=>{forget();(code||sig)?settle(reject,new Error(err||'Action failed')):settle(resolve,out);});
   });
 }
 // Only the failure class is written, never an error message (messages can carry payload text).
@@ -40,7 +50,8 @@ function writeHealth(cfg, obj){
   const dir = path.join(cfg.state_root,'state');
   fs.mkdirSync(dir,{recursive:true,mode:0o700});
   const target = path.join(dir,'health.json'), temp = target+'.'+process.pid+'.tmp';
-  fs.writeFileSync(temp, JSON.stringify(obj), {mode:0o600});
+  try{fs.unlinkSync(temp);}catch(e){}
+  fs.writeFileSync(temp, JSON.stringify(obj), {mode:0o600, flag:'wx'});
   fs.renameSync(temp, target);
 }
 function errorType(e){
@@ -110,10 +121,10 @@ ws.addEventListener('message',async ({data})=>{
  }
  }catch(e){send('showAlert',JSON.parse(data).context,{});send('logMessage',undefined,{message:'Quoin action: '+errorType(e)});}
 });
-ws.addEventListener('close',()=>process.exit(0));
+ws.addEventListener('close',()=>{killBounded();process.exit(0);});
 if(!cfg)send('logMessage',undefined,{message:'Quoin: plugin-config.json missing or invalid'});
 setInterval(refresh,2500);setInterval(()=>cfg?render():renderNoConfig(),1000);
 }
 
-module.exports = {loadConfig, buildInvocation, invoke, writeHealth};
+module.exports = {loadConfig, buildInvocation, invoke, writeHealth, killBounded};
 if (require.main === module) start();
