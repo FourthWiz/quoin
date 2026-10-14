@@ -1,4 +1,4 @@
-"""Install, upgrade and (later) uninstall pipeline for the optional Stream Deck component.
+"""Install, upgrade and uninstall pipeline for the optional Stream Deck component.
 
 The engine is the only writer of the component's files. It is built around three
 ideas:
@@ -620,7 +620,7 @@ def _effective_paths(env, recorded):
     effective = dataclasses.replace(
         paths, runtime=use["runtime"], plugins_dir=os.path.dirname(plugin_dir), plugin_dir=plugin_dir,
         state_root=os.path.dirname(config), config=config, state=use["state"], claude_settings=use["claude_settings"],
-        codex_home=codex_home, codex_hooks=hooks, codex_config=os.path.join(codex_home, "config.toml"),
+        codex_home=codex_home, codex_hooks=hooks, codex_config=os.path.join(codex_home, os.path.basename(paths.codex_config)),
         agentdesk=use["agentdesk"])
     return effective, notes
 

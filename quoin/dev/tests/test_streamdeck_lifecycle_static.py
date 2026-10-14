@@ -9,7 +9,11 @@ import pytest
 REPO = pathlib.Path(__file__).resolve().parents[3]
 PKG = REPO / "src" / "quoin" / "streamdeck"
 TESTS = pathlib.Path(__file__).resolve().parent
-LIFECYCLE = ("paths", "macos", "jsonfile", "hooks_merge", "manifest", "prereqs", "status")
+LIFECYCLE = ("paths", "macos", "jsonfile", "hooks_merge", "manifest", "prereqs", "status", "shims", "migrations",
+             "engine", "cli", "notice")
+STAGE4_TESTS = ("shims", "migrations", "engine_core", "install", "faults", "adoption", "upgrade", "uninstall", "cli",
+                "core_install")
+GUARDS = ("forbid_dangerous_subprocess", "forbid_real_home_io", "forbid_real_seams")
 PAYLOAD_SCRIPTS = ("deckenv", "monitor", "dashboard", "controller")
 
 
@@ -95,9 +99,9 @@ def test_no_lifecycle_module_imports_payload_scripts(name):
         assert root not in PAYLOAD_SCRIPTS and not any(full.endswith("." + s) for s in PAYLOAD_SCRIPTS), (name, full)
 
 
-def test_only_prereqs_may_use_subprocess_input_or_isatty():
+def test_only_prereqs_and_engine_may_use_subprocess_input_or_isatty():
     for name in LIFECYCLE:
-        if name == "prereqs":
+        if name in ("prereqs", "engine"):
             continue
         for node in ast.walk(tree(name)):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
@@ -106,6 +110,11 @@ def test_only_prereqs_may_use_subprocess_input_or_isatty():
                 func = node.func
                 assert not (isinstance(func, ast.Name) and func.id == "input"), name
                 assert not (isinstance(func, ast.Attribute) and func.attr == "isatty"), name
+    for node in ast.walk(tree("engine")):
+        if isinstance(node, ast.Call):
+            func = node.func
+            assert not (isinstance(func, ast.Name) and func.id == "input")
+            assert not (isinstance(func, ast.Attribute) and func.attr == "isatty")
 
 
 def test_prereqs_effects_live_in_the_named_functions():
@@ -153,3 +162,63 @@ def test_status_is_read_only_by_construction():
                 mode = node.args[1] if len(node.args) > 1 else next((k.value for k in node.keywords if k.arg == "mode"), None)
                 if mode is not None:
                     assert isinstance(mode, ast.Constant) and mode.value in ("r", "rb"), ast.dump(node)
+
+
+def test_engine_effects_live_in_the_named_functions():
+    root = tree("engine")
+    parents = parents_map(root)
+    seen = 0
+    for node in ast.walk(root):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id == "subprocess":
+                seen += 1
+                assert {"_real_probe", "_real_run"} & set(enclosing_functions(node, parents)), ast.dump(func)
+    assert seen >= 2
+
+
+def test_only_the_cli_and_the_notice_resolve_paths():
+    for name in LIFECYCLE:
+        found = False
+        for node in ast.walk(tree(name)):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "resolve":
+                owner = node.func.value
+                if isinstance(owner, ast.Name) and owner.id in ("paths", "paths_mod"):
+                    found = True
+        assert found == (name in ("cli", "notice")), name
+
+
+def test_nothing_writes_codex_trust():
+    for path in PKG.glob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        assert "trusted_hash" not in text.replace("no trusted_hash", "") or path.name in ("status.py",), path.name
+        if path.name != "status.py":
+            assert "hooks.state" not in text, path.name
+
+
+@pytest.mark.parametrize("name", STAGE4_TESTS)
+def test_stage_four_tests_use_the_guards_and_stay_off_the_real_seams(name):
+    root = tree("test_streamdeck_" + name, TESTS)
+    marks = [n for n in ast.walk(root) if isinstance(n, ast.Assign)
+             and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in n.targets)]
+    assert marks, name
+    declared = {c.value for c in ast.walk(marks[0].value) if isinstance(c, ast.Constant)}
+    assert set(GUARDS) <= declared, name
+    forbidden = {"default_ctx", "_real_probe", "_real_run", "_real_runner", "default_sysops"}
+    for node in ast.walk(root):
+        if isinstance(node, ast.Name):
+            assert node.id not in forbidden, (name, node.id)
+        if isinstance(node, ast.Attribute):
+            assert node.attr not in forbidden, (name, node.attr)
+        if isinstance(node, ast.alias):
+            assert node.name not in forbidden, (name, node.name)
+
+
+PLANNING_ID = re.compile(r"\b[TDRQ]-\d{2}\b|\bAC-\d|\bFR-\d|\b(MAJ|MIN|CRIT)-\d|\bround \d")
+
+
+@pytest.mark.parametrize("name", STAGE4_TESTS)
+def test_stage_four_tests_carry_no_planning_ids(name):
+    text = (TESTS / ("test_streamdeck_%s.py" % name)).read_text(encoding="utf-8")
+    hits = [m.group(0) for m in PLANNING_ID.finditer(text)]
+    assert not hits, (name, hits)
