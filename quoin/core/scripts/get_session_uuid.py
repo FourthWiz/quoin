@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Portable core implementation of session UUID capture for cost ledger.
 
-Finds the Claude Code session JSONL file for the current project and returns
-its stem (the UUID used by Claude Code as the session identifier).
+Returns the current Claude Code session UUID: the CLAUDE_CODE_SESSION_ID
+environment variable when valid, else the stem of the newest session JSONL
+for the current project.
 
 Public API:
   project_hash(project_path: str) -> str
-  get_session_uuid(project_path=None, home=None, phase=None) -> str
+  get_session_uuid(project_path=None, home=None, phase=None, environ=None) -> str
   main(argv=None) -> int
 
 Exit codes:
@@ -18,10 +19,33 @@ Fallback UUID form: unknown-<phase_slug>-<YYYYMMDD>T<HHMMSS>Z
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Mapping, Optional
+
+# Claude Code exports the running session's id to Bash tool calls. Strict shape
+# check: guards against odd values leaking into the cost ledger.
+_UUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+
+
+def _env_session_uuid(environ: Optional[Mapping[str, str]] = None) -> Optional[str]:
+    """Return the session UUID from CLAUDE_CODE_SESSION_ID, or None.
+
+    Unset/empty -> None silently; a malformed value -> None with a stderr note.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    if not raw:
+        return None
+    if not _UUID_RE.match(raw):
+        print("[get-session-uuid] ignoring malformed CLAUDE_CODE_SESSION_ID", file=sys.stderr)
+        return None
+    return raw
 
 
 # ---------------------------------------------------------------------------
@@ -67,18 +91,26 @@ def get_session_uuid(
     project_path: str | None = None,
     home: str | None = None,
     phase: str | None = None,
+    environ: Optional[Mapping[str, str]] = None,
 ) -> str:
-    """Find the most-recently-modified JSONL under ~/.claude/projects/<hash>/.
+    """Return the current session UUID.
 
-    Returns the JSONL stem (session UUID). Falls back to a synthetic
-    unknown-<phase_slug>-<timestamp> UUID on any error (fail-open).
+    Precedence: the CLAUDE_CODE_SESSION_ID environment variable (returned
+    as-is, without checking for the file: the harness id is authoritative and
+    the transcript may live under a different project hash), else the
+    most-recently-modified JSONL under ~/.claude/projects/<hash>/, else a
+    synthetic unknown-<phase_slug>-<timestamp> UUID (fail-open).
 
     Args:
         project_path: Absolute path to the project root. Defaults to cwd.
         home: Home directory override (for testing). Defaults to Path.home().
         phase: Phase name for fallback UUID discrimination (e.g., 'implement').
+        environ: Environment mapping override (for testing). Defaults to os.environ.
     """
     try:
+        env_uuid = _env_session_uuid(environ)
+        if env_uuid:
+            return env_uuid
         proj_path = project_path or str(Path.cwd())
         home_path = Path(home) if home else Path.home()
         proj_dir = home_path / ".claude" / "projects" / project_hash(proj_path)

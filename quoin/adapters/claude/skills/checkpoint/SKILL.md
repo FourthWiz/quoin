@@ -488,7 +488,7 @@ Read the following sources (best-effort; skip gracefully if any file is absent):
    - Unfinished work list (from `## Unfinished work` block)
 
    **UUID-anchored session-state lookup (Step 1.1):**
-   (a) Obtain the current session UUID. Priority: harness-provided system context UUID; else `python3 __QUOIN_HOME__/scripts/get_session_uuid.py --phase checkpoint` (which resolves the correct on-disk hash via the broad-regex transform — any char not in [A-Za-z0-9-] → '-' — and returns the freshest JSONL stem).
+   (a) Obtain the current session UUID. Priority: harness-provided system context UUID; else `python3 __QUOIN_HOME__/scripts/get_session_uuid.py --phase checkpoint` (which resolves the correct on-disk hash via the broad-regex transform — any char not in [A-Za-z0-9-] → '-' — and returns the session UUID: `CLAUDE_CODE_SESSION_ID` when set and well-formed, otherwise the freshest JSONL stem).
    (b) If a UUID is obtained, grep `${_PROJECT_ROOT}/.workflow_artifacts/memory/sessions/*.md` for the UUID. Use `grep -iE` (case-insensitive on the full pattern) because the live tree has both uppercase and lowercase UUID values. Pattern: `grep -iE "^([[:space:]]*-[[:space:]]*)?(Session UUID:[[:space:]]*)${session_id}"`. The session-state file template uses the bulleted form `- Session UUID: <UUID>` — the pattern must match both `Session UUID:` and `- Session UUID:` prefixes.
    (c) If exactly one match is found: use that file. Tag with INFO line `[checkpoint] session-state located by UUID anchor: <path>`.
    (d) If zero matches AND a UUID was obtained: emit one-line WARNING `[checkpoint] WARNING: no session-state file contains Session UUID '<UUID>'; falling back to mtime ordering`; then fall back to `ls -t` most-recently-modified.
