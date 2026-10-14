@@ -6,6 +6,9 @@ quoin/core/. The portable cost-event schema is at
 quoin/core/scripts/cost_event.py. Adding runtime-neutral functionality
 belongs there, not here.
 
+Current-session resolution: --current-uuid, else the CLAUDE_CODE_SESSION_ID
+environment variable, else the newest *.jsonl by mtime in the project dir.
+
 Usage:
   python3 ~/.claude/scripts/session_age_guard.py [--threshold-hours 6.0] \
       [--project-root ABS_PATH] [--current-uuid UUID]
@@ -36,6 +39,51 @@ import re
 import sys
 import time
 from pathlib import Path
+from typing import Optional
+
+# Claude Code exports the running session's id to Bash tool calls. Strict shape
+# check: the value is joined into a path and a glob pattern.
+_UUID_RE = re.compile(
+    r"^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$"
+)
+
+
+def _env_session_uuid(environ=None) -> Optional[str]:
+    """Return the session UUID from CLAUDE_CODE_SESSION_ID, or None.
+
+    Unset/empty -> None silently; a malformed value -> None with a stderr note.
+    """
+    env = os.environ if environ is None else environ
+    raw = (env.get("CLAUDE_CODE_SESSION_ID") or "").strip()
+    if not raw:
+        return None
+    if not _UUID_RE.match(raw):
+        print(
+            "[session-age-guard] ignoring malformed CLAUDE_CODE_SESSION_ID",
+            file=sys.stderr,
+        )
+        return None
+    return raw
+
+
+def _find_uuid_jsonl(projects_base: Path, project_dir: Path, uuid: str) -> Optional[Path]:
+    """Locate <uuid>.jsonl: the project dir first, then any single project dir.
+
+    The cross-project lookup covers a session whose cwd hash differs from the
+    project root's hash (worktrees, subdirectories). Never recursive.
+    """
+    name = f"{uuid}.jsonl"
+    if project_dir.exists():
+        candidate = project_dir / name
+        if candidate.exists():
+            return candidate
+    try:
+        for candidate in projects_base.glob(f"*/{name}"):
+            return candidate
+    except OSError:
+        pass
+    return None
+
 
 
 def _project_hash(project_root: Path) -> str:
@@ -88,7 +136,8 @@ def main() -> int:
         type=str,
         default=None,
         help="UUID of the current session's jsonl file (without .jsonl). "
-             "If omitted, the most recent *.jsonl by mtime is used.",
+             "If omitted, CLAUDE_CODE_SESSION_ID is used; the most recent "
+             "*.jsonl by mtime is a fallback only when that is unset or malformed.",
     )
     args = parser.parse_args()
 
@@ -107,7 +156,9 @@ def main() -> int:
     projects_base = Path.home() / ".claude" / "projects"
     project_dir = projects_base / project_hash
 
-    if not project_dir.exists():
+    env_uuid = None if args.current_uuid else _env_session_uuid()
+
+    if not project_dir.exists() and not env_uuid:
         print(
             f"[session-age-guard] project dir not found: {project_dir} — fail-OPEN",
             file=sys.stderr,
@@ -116,7 +167,25 @@ def main() -> int:
         return 0
 
     # Find the target jsonl
-    if args.current_uuid:
+    if env_uuid:
+        target = _find_uuid_jsonl(projects_base, project_dir, env_uuid)
+        if target is None:
+            print(
+                f"[session-age-guard] env session jsonl not found for {env_uuid} "
+                f"under {projects_base} — fail-OPEN",
+                file=sys.stderr,
+            )
+            print("OK|0.00|")
+            return 0
+        jsonl_files = [target]
+    elif args.current_uuid:
+        if not project_dir.exists():
+            print(
+                f"[session-age-guard] project dir not found: {project_dir} — fail-OPEN",
+                file=sys.stderr,
+            )
+            print("OK|0.00|")
+            return 0
         target = project_dir / f"{args.current_uuid}.jsonl"
         if not target.exists():
             print(

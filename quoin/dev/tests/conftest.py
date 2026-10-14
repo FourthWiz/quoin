@@ -334,3 +334,16 @@ def _install_prompts_non_interactive():
         yield
     finally:
         mp.undo()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_ambient_claude_session_id():
+    """Tests run inside a Claude session that exports CLAUDE_CODE_SESSION_ID;
+    clear it so mtime-based session resolution tests are hermetic. Tests that
+    exercise the variable set it explicitly."""
+    mp = pytest.MonkeyPatch()
+    mp.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
+    try:
+        yield
+    finally:
+        mp.undo()
