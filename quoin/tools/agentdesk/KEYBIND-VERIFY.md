@@ -39,7 +39,7 @@ shell receive the keys they expect while Zellij keeps a full set of mode keys:
 ## Key map
 
 Alt chords work on the Latin layout; the Russian layout has an alias on the same
-physical key. Esc and Enter also leave every mode except locked.
+physical key. On a stock-default config, Esc and Enter also leave every mode except locked; a custom config that clears the defaults may not keep them.
 
 | Mode | Old key | New key | Russian layout | Leave the mode |
 |------|---------|---------|----------------|----------------|
@@ -129,7 +129,11 @@ backup from the first change. Running the step a second time prints
 
 If Option does not send Alt in your terminal, the Alt mode keys cannot be typed.
 The Ctrl mode keys stay as they were and only `Ctrl q` is removed. Manage
-sessions from the command line instead:
+sessions from the command line instead.
+
+If an earlier setup commented out `Ctrl o` (session mode) in your config, it stays
+commented out at this tier, so session mode is only reachable with `Alt s`. Until
+Option sends Alt, use the command line:
 
 ```sh
 zellij action detach          # from inside a pane
@@ -166,7 +170,8 @@ Option press would silently swallow the next keystroke.
 | Alt x, Alt z | rare zsh widgets | used for tab, tmux |
 | Alt s | Agent Desk session mode (kept) | used for session |
 | Alt p, Alt o | Zellij group toggle / tab move vs Claude Code model picker / fast mode | freed at tier 2 |
-| Alt b, d, f, t, w | readline and Claude Code word and toggle keys | not used |
+| Alt b, d, t, w | readline and Claude Code word and toggle keys | not used |
+| Alt f | Zellij floating panes (stock bind, with a Russian alias) | kept |
 
 ## Decision record
 

@@ -148,7 +148,10 @@ clipboard_backend_label() {
   esac
 }
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd)" || SCRIPT_DIR=""
+if [ -z "$SCRIPT_DIR" ] || [ ! -f "$SCRIPT_DIR/setup-agentdesk.sh" ]; then
+  SCRIPT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/agentdesk"
+fi
 
 check_command() {
   local cmd="$1"
@@ -572,8 +575,6 @@ def check(text):
             return infos, None, "keybinds node never closes"
         if infos[close]["code"].strip() != "}":
             return infos, None, "the keybinds closing brace shares its line"
-        if close == header:
-            return infos, None, "keybinds node is on one line"
     return infos, (nodes[0] if nodes else None), ""
 
 
@@ -869,7 +870,7 @@ manage_ghostty_option_as_alt() {
 _agentdesk_ghostty_revert_note() {
   local xdg="${XDG_CONFIG_HOME:-$HOME/.config}"
   local app="$HOME/Library/Application Support/com.mitchellh.ghostty"
-  local f found=0
+  local f b found=0
 
   for f in "$xdg/ghostty/config" "$xdg/ghostty/config.ghostty" "$app/config" "$app/config.ghostty"; do
     if [ -f "$f" ] && grep -q '^# \[agentdesk: added\] treat the left Option key as Alt' "$f" 2>/dev/null; then
@@ -886,6 +887,31 @@ _agentdesk_ghostty_revert_note() {
   if [ "$found" = "0" ]; then
     echo "Ghostty: no Agent Desk edit found; nothing to undo there."
   fi
+}
+
+# Checksum of a file ("none" when absent), to tell whether a merge changed it.
+_agentdesk_keybind_fingerprint() {
+  if [ -f "$1" ]; then
+    cksum < "$1" 2>/dev/null || echo "unreadable"
+  else
+    echo "none"
+  fi
+}
+
+# Tier recorded in the begin marker of the Agent Desk key map region: 1, 2, or 0 when absent.
+_agentdesk_keybind_tier() {
+  local line
+  line="$(grep -m1 '^[[:space:]]*// \[agentdesk: added\] keybinds v2 begin tier[12]' "$1" 2>/dev/null || true)"
+  case "$line" in
+    *"begin tier2"*) echo 2 ;;
+    *"begin tier1"*) echo 1 ;;
+    *) echo 0 ;;
+  esac
+}
+
+# True when an earlier setup commented out a bind of one of the given keys (pipe-separated, any case).
+_agentdesk_keybind_has_freed() {
+  grep -i -E -q "^[[:space:]]*// \[agentdesk: freed\][[:space:]]+bind[[:space:]]+\"($2)\"" "$1" 2>/dev/null
 }
 
 run_keybind_steps() {
@@ -917,11 +943,29 @@ run_keybind_steps() {
     tier=1
   fi
 
+  local before after eff
+  before="$(_agentdesk_keybind_fingerprint "$ZELLIJ_CONFIG")"
   manage_zellij_keybinds "$ZELLIJ_CONFIG" "$tier"
+  after="$(_agentdesk_keybind_fingerprint "$ZELLIJ_CONFIG")"
+  eff="$(_agentdesk_keybind_tier "$ZELLIJ_CONFIG")"
 
-  if [ "$tier" = "1" ]; then
+  # Report what the config holds now, not what was requested.
+  if [ "$eff" = "0" ]; then
+    echo "Keybindings: not applied. The Zellij config was left unchanged (see the warning above, if any)."
+    echo "  Nothing was removed or rebound; Ctrl q and the Ctrl mode keys still behave as before."
+  elif [ "$eff" = "1" ] && [ "$tier" = "2" ] && [ "$before" = "$after" ]; then
+    echo "Keybindings: not applied. The Zellij config was left unchanged (see the warning above, if any)."
+    echo "  The existing Agent Desk key map still frees only Ctrl q; the Ctrl mode keys are unchanged."
+  elif [ "$eff" = "1" ]; then
     echo "Keybindings: Alt delivery is not confirmed, so only Ctrl q was removed (quit is Alt s, then q)."
     echo "  The Ctrl mode keys (Ctrl t/b/g/s/p/n/h) stay bound to Zellij modes for now."
+    if _agentdesk_keybind_has_freed "$ZELLIJ_CONFIG" 'Ctrl o'; then
+      echo "  Ctrl o (session mode) was already freed on this config by an earlier setup, so session mode"
+      echo "  needs Alt s until Option sends Alt; use the command-line fallbacks below meanwhile."
+    fi
+    if _agentdesk_keybind_has_freed "$ZELLIJ_CONFIG" 'Alt left|Alt right'; then
+      echo "  Alt Left and Alt Right (Option-arrow) were also freed in locked mode by that earlier setup."
+    fi
     echo "  Without working Alt keys, leave or clean up sessions with the command line:"
     echo "    zellij action detach"
     echo "    zellij kill-session NAME"
@@ -929,7 +973,14 @@ run_keybind_steps() {
     echo "  Once Option sends Alt, re-run: bash \"$SCRIPT_DIR/setup-agentdesk.sh\" --keybinds-only"
     echo "  (or add --assume-alt to skip the Ghostty check)."
   else
-    echo "Keybindings: Alt delivery confirmed; Ctrl t/b/g/s/p/n/h are free for your programs."
+    if [ "$tier" = "1" ]; then
+      echo "Keybindings: this config already has the Alt key map with the Ctrl mode keys freed (kept, never downgraded)."
+      echo "  Alt delivery is not confirmed on this run. If Option does not send Alt, you can enter no mode from"
+      echo "  normal, and the Ctrl mode keys remain freed. To restore them run:"
+      echo "    bash \"$SCRIPT_DIR/setup-agentdesk.sh\" --revert-keybinds"
+    else
+      echo "Keybindings: Alt delivery confirmed; Ctrl t/b/g/s/p/n/h are free for your programs."
+    fi
     echo "  Mode keys: Alt a pane, Alt x tab, Alt r resize, Alt m move, Alt v scroll, Alt s session, Alt z tmux, Alt g lock."
     echo "  Quit: Alt s, then q."
   fi
