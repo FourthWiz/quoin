@@ -502,6 +502,7 @@ def _agentdesk_home_isolation(request, tmp_path_factory):
     # zsh startup files come from ZDOTDIR when set; keep them inside the temp home.
     monkeypatch.setenv("ZDOTDIR", str(home))
     for name in (
+        "AGENTDESK_COMPACT_BAR",
         "AGENTDESK_DASHBOARD",
         "AGENTDESK_DASHBOARD_URL_FILE",
         "AGENTDESK_PICK",

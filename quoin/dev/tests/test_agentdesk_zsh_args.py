@@ -448,16 +448,18 @@ def test_kdl_solo_valid(tmp_path: Path) -> None:
     _assert_kdl_valid(kdl)
     assert 'tab name="main"' in kdl
     assert 'pane name="Claude Code"' in kdl
-    assert 'split_direction' not in kdl, "Solo layout should not have a split"
+    # The horizontal wrapper is always present; a solo layout has no strip and
+    # no size split inside the tiled area.
+    main = kdl.split('tab name="main"', 1)[1].split("floating_panes {", 1)[0]
+    assert "size=\"" not in main, "Solo layout should not have a size split"
 
 
 def test_kdl_duo_valid(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude shell → valid 2-pane side-by-side KDL."""
+    """_agentdesk_gen_layout claude shell → agent on top, Shell strip below."""
     kdl = _gen_layout("claude shell", tmp_path)
     _assert_kdl_valid(kdl)
-    assert 'split_direction="vertical"' in kdl, "Duo should split side-by-side"
-    assert 'pane name="Claude Code"' in kdl
-    assert 'pane name="Shell"' in kdl
+    assert 'pane name="Claude Code" size="75%"' in kdl, "Agent should take the top 75%"
+    assert 'pane name="Shell" size="25%"' in kdl, "Shell strip should take 25%"
 
 
 def test_kdl_trio_valid_no_leaks(tmp_path: Path) -> None:
@@ -470,16 +472,18 @@ def test_kdl_trio_valid_no_leaks(tmp_path: Path) -> None:
     assert 'pane name="Claude Code"' in kdl
     assert 'pane name="Codex"' in kdl
     assert 'pane name="Shell"' in kdl
-    # 3 main panes + 1 Spend tab (always included)
+    # 3 main panes + the floating Spend pane (always included)
     assert kdl.count('command "zsh"') == 4, "Trio must have 3 main panes + 1 Spend pane"
 
 
-def test_kdl_four_panes_stack_horizontal(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout with 4 tokens → horizontal stack, valid KDL."""
+def test_kdl_four_panes_agents_on_top_shell_strip(tmp_path: Path) -> None:
+    """_agentdesk_gen_layout with 4 tokens → three agents on top, Shell strip below."""
     kdl = _gen_layout("claude claude codex shell", tmp_path)
     _assert_kdl_valid(kdl)
-    assert 'split_direction="horizontal"' in kdl, ">3 panes should stack vertically"
-    assert kdl.count('command "zsh"') == 5  # 4 main panes + 1 Spend tab (always included)
+    assert 'split_direction="horizontal"' in kdl
+    assert 'pane name="Shell" size="25%"' in kdl
+    assert 'pane size="75%" split_direction="vertical"' in kdl
+    assert kdl.count('command "zsh"') == 5  # 4 main panes + the floating Spend pane
 
 
 def test_kdl_escaping_matches_fixed_layout(tmp_path: Path) -> None:
@@ -671,6 +675,8 @@ def test_agentdesk_spend_token_valid(tmp_path: Path) -> None:
     assert 'pane name="Token Spend"' in kdl, (
         f"KDL missing pane name 'Token Spend': {kdl[:400]}"
     )
+    # With only spend requested, one tiled Shell is added next to the floating pane.
+    assert 'pane name="Shell"' in kdl
     _assert_kdl_valid(kdl)
 
 
@@ -1112,34 +1118,41 @@ def _run_agentdesk_with_sessions_and_attach(
 # Spend tab tests (agentdesk-spend-tab)
 # ============================================================
 
-def test_agentdesk_spend_own_tab_with_main(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude spend → main tab + separate Spend tab."""
+def _floating_section(kdl: str) -> str:
+    """The text of the floating_panes block of the main tab."""
+    assert "floating_panes {" in kdl, f"Expected a floating_panes block: {kdl[:400]}"
+    return kdl.split("floating_panes {", 1)[1].split("swap_tiled_layout", 1)[0]
+
+
+def test_agentdesk_spend_floating_with_main(tmp_path: Path) -> None:
+    """_agentdesk_gen_layout claude spend → one main tab with a floating Token Spend pane."""
     kdl = _gen_layout("claude spend", tmp_path)
     assert 'tab name="main"' in kdl, f"Expected main tab: {kdl[:400]}"
-    assert 'tab name="Spend"' in kdl, f"Expected Spend tab: {kdl[:400]}"
-    assert 'pane name="Token Spend"' in kdl, f"Expected Token Spend pane: {kdl[:400]}"
+    assert 'tab name="Spend"' not in kdl, "Spend is floating, not a tab"
+    assert 'pane name="Token Spend"' in _floating_section(kdl)
     assert "spend_monitor.py" in kdl, f"Expected spend_monitor.py in KDL: {kdl[:400]}"
-    assert kdl.count('tab name=') == 2, (
-        f"Expected exactly 2 tabs (main + Spend), got: {kdl.count('tab name=')}"
+    assert kdl.count('tab name=') == 1, (
+        f"Expected exactly 1 tab, got: {kdl.count('tab name=')}"
     )
     _assert_kdl_valid(kdl)
 
 
-def test_agentdesk_spend_only_token_just_spend_tab(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout spend → only a Spend tab, no main tab."""
+def test_agentdesk_spend_only_token_main_tab_with_shell(tmp_path: Path) -> None:
+    """_agentdesk_gen_layout spend → main tab with a Shell plus the floating Spend pane."""
     kdl = _gen_layout("spend", tmp_path)
-    assert 'tab name="Spend"' in kdl, f"Expected Spend tab: {kdl[:400]}"
-    assert 'tab name="main"' not in kdl, f"main tab must be absent when spend is only token: {kdl[:400]}"
+    assert 'tab name="main"' in kdl, f"Expected main tab: {kdl[:400]}"
+    assert 'tab name="Spend"' not in kdl
+    assert 'pane name="Token Spend"' in _floating_section(kdl)
     _assert_kdl_valid(kdl)
 
 
 def test_agentdesk_spend_separated_from_multi_main(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude codex spend shell → main has vertical split + separate Spend tab."""
+    """_agentdesk_gen_layout claude codex spend shell → Token Spend only inside floating_panes."""
     kdl = _gen_layout("claude codex spend shell", tmp_path)
     assert 'split_direction="vertical"' in kdl, (
-        f"3 main tokens (claude/codex/shell) should produce vertical split: {kdl[:400]}"
+        f"claude/codex on top should produce a vertical split: {kdl[:400]}"
     )
-    assert 'tab name="Spend"' in kdl, f"Expected separate Spend tab: {kdl[:400]}"
+    assert 'tab name="Spend"' not in kdl
     assert 'pane name="Claude Code"' in kdl
     assert 'pane name="Codex"' in kdl
     assert 'pane name="Shell"' in kdl
@@ -1148,21 +1161,19 @@ def test_agentdesk_spend_separated_from_multi_main(tmp_path: Path) -> None:
     assert count == 4, (
         f"Expected 4 command panes (3 main + 1 spend), got {count}"
     )
-    # Token Spend pane must NOT be inside the main tab's split
-    main_tab_end = kdl.find('tab name="Spend"')
-    assert main_tab_end > 0, "Spend tab must follow main tab"
-    main_section = kdl[:main_tab_end]
+    main_section = kdl.split("floating_panes {", 1)[0]
     assert 'pane name="Token Spend"' not in main_section, (
-        "Token Spend pane must not appear inside the main tab"
+        "Token Spend pane must not appear among the tiled panes"
     )
+    assert kdl.count('pane name="Token Spend"') == 1
     _assert_kdl_valid(kdl)
 
 
 def test_agentdesk_spend_always_present(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude codex shell → Spend tab always present even without spend token."""
+    """_agentdesk_gen_layout claude codex shell → floating Spend always present, even without a spend token."""
     kdl = _gen_layout("claude codex shell", tmp_path)
-    assert 'tab name="Spend"' in kdl, (
-        f"Spend tab must always be present in generated layouts: {kdl[:400]}"
+    assert 'pane name="Token Spend"' in _floating_section(kdl), (
+        f"Floating Spend must always be present in generated layouts: {kdl[:400]}"
     )
     assert 'tab name="main"' in kdl, f"main tab must be present: {kdl[:400]}"
     _assert_kdl_valid(kdl)

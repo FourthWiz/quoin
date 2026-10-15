@@ -100,6 +100,7 @@ def _env(tmp_path, rt_dir, sessions=(), extra=None, with_server=False):
     for key in (
         "ZELLIJ", "ZELLIJ_SESSION_NAME", "ZELLIJ_SOCKET_DIR", "AGENTDESK_PICK",
         "AGENTDESK_DASHBOARD", "AGENTDESK_DASHBOARD_URL_FILE", "XDG_CONFIG_HOME",
+        "AGENTDESK_COMPACT_BAR",
     ):
         env.pop(key, None)
     env.update(
@@ -197,8 +198,19 @@ def _kdl(cap):
     text = (cap / "layout.kdl").read_text()
     tabs = re.findall(r'tab name="([^"]+)"', text)
     main = text.split('tab name="main"', 1)[1].split("tab name=", 1)[0]
+    # Floating panes (Token Spend) are not part of the tiled main panes.
+    main = main.split("floating_panes {", 1)[0]
     panes = re.findall(r'pane name="([^"]+)"', main)
     return text, tabs, panes
+
+
+def _floating(cap):
+    text = (cap / "layout.kdl").read_text()
+    main = text.split('tab name="main"', 1)[1].split("tab name=", 1)[0]
+    if "floating_panes {" not in main:
+        return []
+    floating = main.split("floating_panes {", 1)[1]
+    return re.findall(r'pane name="([^"]+)"', floating)
 
 
 def _assert_created(res, session):
@@ -257,9 +269,12 @@ def _assert_named_layout(res):
     assert res.rc == 0, res.text
     _assert_created(res, "deck-1")
     text, tabs, panes = _kdl(res.cap)
-    assert panes == ["Codex", "Codex", "Shell"]
+    assert panes == ["Codex · A", "Codex · B", "Shell"]
     assert 'split_direction="vertical"' in text
-    assert tabs == ["main", "Spend"]
+    assert tabs == ["main"]
+    assert _floating(res.cap) == ["Token Spend"]
+    # Stream Deck finds agent panes by a case-insensitive substring of the title.
+    assert [p for p in panes if "codex" in p.lower()] == ["Codex · A", "Codex · B"]
     for p in PROMPTS:
         assert p not in res.text
 
@@ -279,7 +294,7 @@ def test_panes_plus_separator_equivalent(tmp_path, rt_dir):
                     _env(tmp_path, rt_dir), tmp_path, rt_dir)
     assert res.rc == 0, res.text
     _assert_created(res, "deck-1")
-    assert _kdl(res.cap)[2] == ["Codex", "Codex", "Shell"]
+    assert _kdl(res.cap)[2] == ["Codex · A", "Codex · B", "Shell"]
 
 
 def test_panes_does_not_create_or_change_last_layout(tmp_path, rt_dir):
@@ -314,7 +329,8 @@ def test_panes_spend_token_deduplicated(tmp_path, rt_dir):
                     _env(tmp_path, rt_dir), tmp_path, rt_dir)
     assert res.rc == 0, res.text
     text, tabs, panes = _kdl(res.cap)
-    assert tabs.count("Spend") == 1
+    assert "Spend" not in tabs
+    assert _floating(res.cap) == ["Token Spend"]
     assert panes == ["Codex"]
 
 
@@ -731,3 +747,134 @@ def test_user_env_dashboard_is_left_untouched(tmp_path, rt_dir):
     assert "Dashboard" in _tab_names(cap, 2)
     # Only the user's own variable remains; the URL-file variable stays unset.
     assert [l.removeprefix("export ") for l in leaked] == ["AGENTDESK_DASHBOARD=1"]
+
+
+# ── generated layout: launch call, bar mode, dashboard tab ─────────────────────
+
+LAYOUT_ARGS = ["--name", "deck-1", "--panes", "claude,shell", "--no-prompt"]
+
+
+def _main_tiled(cap):
+    text = (cap / "layout.kdl").read_text()
+    return text.split('tab name="main"', 1)[1].split("floating_panes {", 1)[0]
+
+
+def test_create_call_turns_auto_layout_off(tmp_path, rt_dir):
+    res = _run_pipe(NAMED, _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    flat = _flat_argv(res)
+    i = flat.index("--session")
+    assert flat[i + 1] == "deck-1"
+    assert flat[i + 2 : i + 5] == ["options", "--auto-layout", "false"]
+
+
+def test_attach_call_has_no_options(tmp_path, rt_dir):
+    env = _env(tmp_path, rt_dir, sessions=["deck-1"])
+    res = _run_pty(NAMED + ["--if-exists", "attach"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    flat = _flat_argv(res)
+    assert "--auto-layout" not in flat and "options" not in flat
+    assert (res.cap / "attach.txt").read_text() == "deck-1"
+
+
+def test_stream_deck_invocation_creates_the_documented_layout(tmp_path, rt_dir):
+    args = ["--name", "deck-1", "--panes", "codex,codex,shell", "--no-prompt",
+            "--if-exists", "attach"]
+    res = _run_pipe(args, _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    _assert_named_layout(res)
+
+
+@pytest.mark.parametrize("mode,names,sized", [
+    ("solo", ["Claude Code"], False),
+    ("duo", ["Claude Code", "Shell"], True),
+    ("trio", ["Claude Code", "Codex", "Shell"], True),
+])
+def test_modes_produce_the_documented_shapes(tmp_path, rt_dir, mode, names, sized):
+    res = _run_pipe(["--name", "deck-1", "--mode", mode, "--no-prompt"],
+                    _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert _kdl(res.cap)[2] == names
+    tiled = _main_tiled(res.cap)
+    assert ('size="' in tiled) is sized
+    if mode == "trio":
+        assert 'size="75%" split_direction="vertical"' in tiled
+        assert 'pane name="Shell" size="25%"' in tiled
+
+
+@pytest.mark.parametrize("extra,args,compact", [
+    (None, LAYOUT_ARGS + ["--compact-bar"], True),
+    ({"AGENTDESK_COMPACT_BAR": "1"}, LAYOUT_ARGS, True),
+    ({"AGENTDESK_COMPACT_BAR": "yes"}, LAYOUT_ARGS, False),
+    ({"AGENTDESK_COMPACT_BAR": "0"}, LAYOUT_ARGS, False),
+    (None, LAYOUT_ARGS, False),
+])
+def test_compact_bar_opt_in(tmp_path, rt_dir, extra, args, compact):
+    res = _run_pipe(args, _env(tmp_path, rt_dir, extra=extra), tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    text = (res.cap / "layout.kdl").read_text()
+    if compact:
+        assert "zellij:compact-bar" in text and "zellij:status-bar" not in text
+    else:
+        assert "zellij:status-bar" in text and "compact-bar" not in text
+
+
+def test_compact_bar_is_not_remembered(tmp_path, rt_dir):
+    res = _run_pty(["--name", "deck-1", "--mode", "duo", "--compact-bar"],
+                   _env(tmp_path, rt_dir), tmp_path, rt_dir, input_text="n\n")
+    assert res.rc == 0, res.text
+    state = _state_file(tmp_path)
+    assert state.exists()
+    assert "compact" not in state.read_text().lower()
+    again = _run_pty(["--name", "deck-1"], _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    assert "zellij:status-bar" in (again.cap / "layout.kdl").read_text()
+
+
+def test_clean_state_conflicts_with_compact_bar(tmp_path, rt_dir):
+    res = _run_pipe(["--clean-state", "--compact-bar"], _env(tmp_path, rt_dir),
+                    tmp_path, rt_dir)
+    assert res.rc == 1
+    assert "--clean-state cannot be combined with --compact-bar" in res.err
+
+
+def test_inherited_compact_bar_env_does_not_reach_launches(tmp_path, rt_dir, monkeypatch):
+    monkeypatch.setenv("AGENTDESK_COMPACT_BAR", "1")
+    res = _run_pipe(LAYOUT_ARGS, _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    text = (res.cap / "layout.kdl").read_text()
+    assert "zellij:status-bar" in text and "compact-bar" not in text
+    explicit = _run_pipe(LAYOUT_ARGS, _env(tmp_path, rt_dir,
+                         extra={"AGENTDESK_COMPACT_BAR": "1"}), tmp_path, rt_dir)
+    assert "zellij:compact-bar" in (explicit.cap / "layout.kdl").read_text()
+
+
+def test_help_describes_the_layout(tmp_path, rt_dir):
+    res = _run_pipe(["--help"], _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    for s in ("--compact-bar", "AGENTDESK_COMPACT_BAR", "Alt [", "floating",
+              "Alt f, or pane mode then w"):
+        assert s in res.out, s
+    assert "The Spend tab is still added" not in res.out
+
+
+def _dashboard_tab_text(text):
+    return text.split('tab name="Dashboard"', 1)[1]
+
+
+@pytest.mark.parametrize("flag,bar", [(None, "zellij:status-bar"), ("--compact-bar", "zellij:compact-bar")])
+def test_dashboard_tab_on_a_generated_layout_has_bars(tmp_path, rt_dir, flag, bar):
+    args = LAYOUT_ARGS + ["--dashboard"] + ([flag] if flag else [])
+    res = _run_pipe(args, _env(tmp_path, rt_dir, with_server=True), tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    text = (res.cap / "layout.kdl").read_text()
+    assert text.rstrip("\n").split("\n")[-1] == "}"
+    tab = _dashboard_tab_text(text)
+    assert bar in tab
+    if flag is None:
+        assert "zellij:tab-bar" in tab
+    assert "dashboard_server.py" in tab
+    zellij = shutil.which("zellij")
+    if zellij:
+        env = _env(tmp_path, rt_dir)
+        env["PATH"] = f"{Path(zellij).parent}:/usr/bin:/bin"
+        done = subprocess.run(
+            [zellij, "--layout", str(res.cap / "layout.kdl"), "setup", "--check"],
+            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
+        )
+        assert done.returncode == 0, done.stderr + done.stdout
