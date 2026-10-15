@@ -5,14 +5,23 @@ installs and upgrades it only when you ask.
 
 ## What it does
 
-The panel shows one key per agent and a few action keys:
+The panel shows one key per Zellij session and a few action keys:
 
-- Keys 1-9 are agents. Each shows the runtime (Claude or Codex), the project, the session and pane, and a status
-  colour: orange NEEDS YOU (the agent asks a question or a permission), blue WORKING (working), green DONE (finished its
-  turn and no background subagent is still running). Other states are grey (IDLE, NO SIGNAL, OFFLINE). Pressing an agent key focuses that agent's
-  Zellij pane in Ghostty.
-- Key 10 is the attention queue: it shows how many agents wait for you and the current page. A press focuses the
-  next waiting agent; holding it turns to the next page of nine agents.
+- Keys 1-9 are sessions. Each shows the session name and how many agents it holds, the project folder when all its
+  agents share one, and the combined status of its agents. The most urgent status wins, in this order: orange NEEDS
+  YOU (an agent asks a question or a permission), green DONE (finished its turn and no background subagent is still
+  running), blue WORKING, then grey IDLE, NO SIGNAL and OFFLINE. An orange session key blinks. More than nine
+  sessions page.
+- Pressing a session key opens it. Key 1 becomes BACK with the session name, and keys 2-9 show that session's agents,
+  each with the runtime (Claude or Codex), the project, the session and pane, and its own status colour. More than
+  eight agents page. Pressing an agent there focuses its Zellij pane in Ghostty and keeps the session open. BACK
+  returns to the session page you left. If the open session closes, the panel returns to the session list on its own.
+- An agent record without a session gets its own key after the sessions.
+- Key 10 is the attention queue: it counts the agents that wait for you in all sessions. A press focuses the next
+  waiting agent in any session without changing what the panel shows; holding it turns to the next page of whatever
+  the panel is showing, and its page line follows that view. A hold turns the page at once and no longer triggers a
+  fresh snapshot refresh afterwards, so the page may show data up to one refresh interval (about 2.5 seconds) old. The
+  Glass sound still plays when a new agent starts waiting.
 - The bottom row holds Desk (two Codex panes and a shell through Agent Desk; hold for its menu), + Claude and
   + Codex (a new pane), and previous and next Ghostty tab.
 
@@ -182,7 +191,7 @@ renamed copy of it); then select it on your device. `upgrade` never opens it, so
 double-click the file. Quoin never edits or deletes profiles. The plugin and action UUIDs are fixed, so an
 imported "Quoin — Live Agents" profile keeps working across upgrades.
 
-A Quoin key dragged onto another profile by hand has no role or slot, so it always shows the first agent. Use the
+A Quoin key dragged onto another profile by hand has no role or slot, so it always shows the first key of the current view (the first session, or BACK while a session is open). Use the
 generated profile, or set each key's settings to match it.
 
 Restart Stream Deck to load a new plugin version. Quoin never quits or restarts it; the output tells you when it
