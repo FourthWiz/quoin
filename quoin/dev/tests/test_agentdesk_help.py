@@ -41,9 +41,11 @@ def _mock_env(tmp_path: Path, drop_tools: tuple = ()) -> dict:
         stub.write_text("#!/bin/zsh\nexit 0\n")
         stub.chmod(0o755)
 
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
     env = {
         "PATH": f"{mock_bin}:/usr/bin:/bin",
-        "HOME": os.environ.get("HOME", str(tmp_path)),
+        "HOME": str(home),
         "PROJECT_ROOT": str(tmp_path),
     }
     return env

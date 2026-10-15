@@ -32,6 +32,18 @@ pytestmark = pytest.mark.skipif(
 SUBPROCESS_TIMEOUT = 30
 
 
+def _isolate_home(env: dict, tmp_path: Path) -> dict:
+    """Point HOME at a private dir under tmp_path and drop dashboard/pick
+    variables a developer shell may carry, so no launcher run can read or write
+    the real home. Builders that need their own HOME override it afterwards."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env["HOME"] = str(home)
+    for key in ("AGENTDESK_DASHBOARD", "AGENTDESK_DASHBOARD_URL_FILE", "AGENTDESK_PICK"):
+        env.pop(key, None)
+    return env
+
+
 def _make_mock_env(tmp_path: Path) -> dict:
     """Build an env dict with a mock zellij wrapper in $PATH.
 
@@ -48,6 +60,7 @@ def _make_mock_env(tmp_path: Path) -> dict:
         stub.chmod(0o755)
 
     env = {**os.environ, "PATH": f"{mock_bin}:{os.environ['PATH']}"}
+    _isolate_home(env, tmp_path)
     # Ensure PROJECT_ROOT is set to avoid _agentdesk_realpath issues
     env["PROJECT_ROOT"] = str(tmp_path)
     # Unset ZELLIJ so the "already inside Zellij" guard does not fire
@@ -1071,6 +1084,7 @@ def _make_mock_env_with_sessions(tmp_path: Path, sessions: list) -> dict:
     zellij_stub.chmod(0o755)
 
     env = {**os.environ, "PATH": f"{mock_bin}:{os.environ['PATH']}"}
+    _isolate_home(env, tmp_path)
     env["PROJECT_ROOT"] = str(tmp_path)
     env.pop("ZELLIJ", None)
     env.pop("ZELLIJ_SESSION_NAME", None)
@@ -1133,6 +1147,7 @@ def _make_mock_env_with_sessions_and_attach(tmp_path: Path, sessions: list) -> d
     zellij_stub.chmod(0o755)
 
     env = {**os.environ, "PATH": f"{mock_bin}:{os.environ['PATH']}"}
+    _isolate_home(env, tmp_path)
     env["PROJECT_ROOT"] = str(tmp_path)
     env["AGENTDESK_TEST_ATTACH_MARKER"] = str(tmp_path / "attach_called.txt")
     env.pop("ZELLIJ", None)
