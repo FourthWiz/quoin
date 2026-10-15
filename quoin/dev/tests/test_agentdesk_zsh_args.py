@@ -2084,3 +2084,51 @@ def test_open_dashboard_no_orphan_structural_guard(tmp_path: Path) -> None:
         f"server launch (found: {bg_launch.group()!r}). "
         "The function must NOT launch a background process — server belongs in T-05 pane."
     )
+
+
+# ── generic state set/get and dashboard keys ─────────────────────────────────
+
+def _state_lines(tmp_path: Path) -> list:
+    state = tmp_path / "fake_home" / ".config" / "agentdesk" / "last-layout"
+    return state.read_text().splitlines() if state.exists() else []
+
+
+def test_state_set_get_round_trip(tmp_path: Path) -> None:
+    result = _run_zsh_fn_state(
+        "_agentdesk_state_set k1 'a=b=c'; _agentdesk_state_set k2 v2; "
+        "_agentdesk_state_get k1; _agentdesk_state_get k2",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["a=b=c", "v2"]
+
+
+def test_state_wrappers_delegate(tmp_path: Path) -> None:
+    result = _run_zsh_fn_state(
+        "_agentdesk_save_layout via-wrapper w1; _agentdesk_state_get via-wrapper; "
+        "_agentdesk_state_set via-set s1; _agentdesk_load_layout via-set",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["w1", "s1"]
+
+
+def test_dash_key_namespacing(tmp_path: Path) -> None:
+    result = _run_zsh_fn_state("_agentdesk_dash_key proj:abc", tmp_path)
+    assert result.stdout.strip() == "dash:proj:abc"
+
+
+def test_dash_and_layout_keys_coexist(tmp_path: Path) -> None:
+    script = (
+        "_agentdesk_save_layout proj:X claude+shell; "
+        "_agentdesk_state_set \"$(_agentdesk_dash_key proj:X)\" yes; "
+        "_agentdesk_load_layout proj:X; "
+        "_agentdesk_state_get dash:proj:X; "
+        "_agentdesk_state_set dash:proj:X no; "
+        "_agentdesk_load_layout proj:X; "
+        "_agentdesk_state_get dash:proj:X"
+    )
+    result = _run_zsh_fn_state(script, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["claude+shell", "yes", "claude+shell", "no"]
+    assert sorted(_state_lines(tmp_path)) == ["dash:proj:X=no", "proj:X=claude+shell"]

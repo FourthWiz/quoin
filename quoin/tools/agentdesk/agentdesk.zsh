@@ -170,11 +170,12 @@ _agentdesk_layout_key() {
   fi
 }
 
-# Save a layout value for a key to the state file.
+# Set a value for a key in the state file (layout memory and dashboard answers
+# share one file; keys are namespaced: name:, proj:, dash:name:, dash:proj:).
 # Atomic write via temp file in same directory (same filesystem → atomic mv rename).
 # Fail-open: any error → return 0.
 # Keys must be backslash-free (guaranteed by encoder); awk -v interprets C-escapes.
-_agentdesk_save_layout() {
+_agentdesk_state_set() {
   local key="$1"
   local value="$2"
   local state_file
@@ -206,11 +207,14 @@ _agentdesk_save_layout() {
   return 0
 }
 
-# Load a saved layout value for a key from the state file.
+# Save a layout value for a key (wrapper kept for existing callers).
+_agentdesk_save_layout() { _agentdesk_state_set "$@"; }
+
+# Read the value for a key from the state file.
 # Fail-open: file missing or key absent → echo nothing, return 1.
 # key must be backslash-free (guaranteed by encoder); awk -v interprets C-escapes.
 # Values may contain '='; sub() strips only the first '=' so values round-trip correctly.
-_agentdesk_load_layout() {
+_agentdesk_state_get() {
   local key="$1"
   local state_file
   state_file="$(_agentdesk_state_file)"
@@ -230,6 +234,16 @@ _agentdesk_load_layout() {
 
   printf '%s\n' "$value"
   return 0
+}
+
+# Load a saved layout value for a key (wrapper kept for existing callers).
+_agentdesk_load_layout() { _agentdesk_state_get "$@"; }
+
+# Key under which the dashboard answer is remembered for a layout key
+# (dash:proj:<enc> / dash:name:<name>). Exact-key readers of the layout keys
+# never match these lines.
+_agentdesk_dash_key() {
+  printf 'dash:%s\n' "$1"
 }
 
 # Restore a saved layout value to a layout_path.
