@@ -18,7 +18,7 @@ the table says a child process runs with a temporary home.
 | Agent Desk public launch | `test_agentdesk_public_launch.py`, `test_agentdesk_help.py`, `test_agentdesk_zsh_args.py`, `test_agentdesk_setup_flag.py`, `test_agentdesk_deploy.py`, `test_agentdesk_keybinds.py`, `test_agentdesk_mktemp_templates.py` | the launch interface the deck uses (`--name`, `--panes`, `--no-prompt`, `--if-exists`), its help text, argument parsing, the setup flag and what `quoin install` deploys |
 | Payload: monitor | `test_streamdeck_monitor.py`, `test_streamdeck_privacy.py` | record bounds and shape, deadlines, and that no prompt, tool data, assistant text, transcript path or notification body is stored |
 | Payload: dashboard and controller | `test_streamdeck_dashboard.py`, `test_streamdeck_controller.py`, `test_streamdeck_terminal.py` | agent snapshots, garbage collection of dead records, pane addressing, controller actions and the Ghostty terminal entry |
-| Payload: shared environment and plugin | `test_streamdeck_deckenv.py`, `test_streamdeck_plugin_js.py`, `test_streamdeck_payload_static.py`, `test_streamdeck_payload_build.py`, `test_streamdeck_payload_runtime.py`, `test_streamdeck_ported.py` | the Zellij socket directory rule, plugin invocation and health file, Python 3.9 syntax of the payload, plugin and profile generation, and behaviour carried over from the prototype |
+| Payload: shared environment and plugin | `test_streamdeck_deckenv.py`, `test_streamdeck_plugin_js.py`, `test_streamdeck_plugin_grouping.py`, `test_streamdeck_payload_static.py`, `test_streamdeck_payload_build.py`, `test_streamdeck_payload_runtime.py`, `test_streamdeck_ported.py` | the Zellij socket directory rule, plugin invocation and health file, session grouping, the open-session view and key handling, Python 3.9 syntax of the payload, plugin and profile generation, and behaviour carried over from the prototype |
 | Lifecycle library | `test_streamdeck_paths.py`, `test_streamdeck_jsonfile.py`, `test_streamdeck_hooks_merge.py`, `test_streamdeck_core_hooks_roundtrip.py`, `test_streamdeck_manifest.py`, `test_streamdeck_prereqs.py`, `test_streamdeck_status.py`, `test_streamdeck_migrations.py`, `test_streamdeck_shims.py` | path resolution, atomic JSON writes and backups, hook merging (including a round trip with the hooks Quoin's own installer deploys), manifest rules, the prerequisite consent matrix, every status class (read only), state migrations and the rendered entry points |
 | Operations | `test_streamdeck_install.py`, `test_streamdeck_upgrade.py`, `test_streamdeck_faults.py`, `test_streamdeck_adoption.py`, `test_streamdeck_uninstall.py`, `test_streamdeck_engine_core.py`, `test_streamdeck_cli.py`, `test_streamdeck_core_install.py` | fresh install, repeat install, upgrade, a failure injected at every step with the hook commands executed afterwards, prototype adoption, uninstall with stubs and purge, the command line, and that plain `quoin install` creates nothing of the component (checked in process with every external effect stubbed) |
 | Hardening | `test_streamdeck_hardening.py`, `test_streamdeck_marker_safety.py`, `test_streamdeck_guards.py`, `test_streamdeck_lifecycle_static.py` | operation records that name links, whole folders or other runtimes; recorded runtimes and purge roots; the recorded Python being usable; binary records inside an interrupted run's record; tools from the Python environment never recorded; state folder links; and static guards that keep the operation tests off the real machine |
@@ -67,14 +67,18 @@ Each item says how to check it and what to expect.
 - Real hook delivery.
   - Steps: with the component installed and the Codex entries trusted, start a Codex session and a new Claude Code
     session; trigger a permission request, approve it, then let the turn end.
-  - Expected: the agent's key turns orange on the request, blue after the approval, green when the turn ends.
+  - Expected: the session key and the agent's key in the open session turn orange on the request, blue after the approval, green when the turn ends.
 - Physical key presses for every role.
-  - Steps: press agent keys 1-9, press and hold the attention key, press and hold Desk, press + Claude, + Codex,
-    and previous and next tab.
-  - Expected: an agent key focuses its pane; the attention key focuses the next waiting agent and a hold pages; a
-    Desk hold opens its menu; + Claude and + Codex open a new pane; the tab keys move between Ghostty tabs.
+  - Steps: press a session key (it opens, with BACK on key 1), press an agent in it, press BACK, close the open
+    session's last agent, press the attention key while a session is open, press and hold the attention key, use a
+    session named with 20 or more characters, press and hold Desk, press + Claude, + Codex, and previous and next tab.
+  - Expected: a session key opens its agents; an agent key focuses its pane and the session stays open; BACK returns
+    to the page you left; closing the open session's last agent returns the panel to the session list; the attention
+    key focuses a waiting agent in another session and the view stays; a hold pages the current view; a long session
+    name still shows its agent count; a Desk hold opens its menu; + Claude and + Codex open a new pane; the tab keys
+    move between Ghostty tabs.
 - Ghostty transition, including a manually opened legacy tab.
-  - Steps: open an agent's session in a Ghostty tab by hand, then press its key.
+  - Steps: open an agent's session in a Ghostty tab by hand, then press its session key and then its agent key.
   - Expected: the existing tab is focused instead of a duplicate being opened.
 - Real-machine migration with the documented sequence.
   - Steps: follow "Migrating the prototype install" in the guide on the machine that runs the prototype.
