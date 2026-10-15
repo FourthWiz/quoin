@@ -62,20 +62,24 @@ function errorType(e){
   return 'exit';
 }
 
-function start(){
-const cfg = loadConfig();
-const args = process.argv.slice(2);
-const arg = flag => args[args.indexOf(flag)+1];
-const ws = new WebSocket('ws://127.0.0.1:'+arg('-port'));
-const contexts = new Map();
-let agents=[], page=0, lastAttention=null, busy=false, pressedAttention=0, actionBusy=false;
 const labels={working:'WORKING',attention:'NEEDS YOU',done:'DONE',idle:'IDLE',unknown:'NO SIGNAL',offline:'OFFLINE'};
 const colors={working:'#175583',attention:'#bd4d10',done:'#227648',idle:'#3c4859',unknown:'#4c4559',offline:'#453b3b'};
-function send(event,context,payload){if(ws.readyState===1)ws.send(JSON.stringify({event,context,payload}));}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));}
 function icon(lines,color){return 'data:image/svg+xml;base64,'+Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="144" height="144"><rect width="144" height="144" rx="14" fill="${color}"/>${lines.map((s,i)=>`<text x="72" y="${30+i*28}" fill="white" font-family="Helvetica,Arial" font-size="${i===0?18:14}" text-anchor="middle">${esc(s)}</text>`).join('')}</svg>`).toString('base64');}
-const call=(action,extra)=>invoke(cfg,action,extra);
+function agentFace(rec, nowMs){
+  const status=rec.status;
+  let color=colors[status]||colors.unknown;
+  if(status==='attention' && Math.floor(nowMs/1000)%2)color='#e27916';
+  const session=String(rec.session ?? ''), pane=String(rec.pane ?? '');
+  return {lines:[rec.kind==='claude'?'CLAUDE':'CODEX',path.basename(String(rec.project||rec.session||'')).slice(0,16),`${session.slice(-9)} · ${pane}`,labels[status]||labels.unknown],color};
+}
+
+function createPanel({send, call, refresh = async()=>{}, playSound = ()=>{}, now = Date.now, hasConfig = true}){
+const contexts = new Map();
+let agents=[], page=0, lastAttention=null, pressedAttention=0, actionBusy=false;
+function setAgents(list){agents=Array.isArray(list)?list:[];}
 function render(){
+ if(!hasConfig){renderNoConfig();return;}
  const pages=Math.max(1,Math.ceil(agents.length/9));page=Math.min(page,pages-1);
  const waiting=agents.filter(a=>a.status==='attention');
  for(const [context,v] of contexts){
@@ -83,9 +87,7 @@ function render(){
    const role=v.settings.role||'agent';
    if(role==='agent'){
      const slot=Number(v.settings.slot)||0; target=agents[page*9+slot]||null;
-     if(target){let status=target.status; color=colors[status]||colors.unknown;
-       if(status==='attention' && Math.floor(Date.now()/1000)%2)color='#e27916';
-       lines=[target.kind==='claude'?'CLAUDE':'CODEX',path.basename(target.project||target.session).slice(0,16),`${target.session.slice(-9)} · ${target.pane}`,labels[status]||labels.unknown];
+     if(target){({lines,color}=agentFace(target,now()));
      }else{lines=['—','Agent '+(page*9+slot+1),'',''];color='#18202a';}
    }else if(role==='attention'){lines=['ATTENTION',String(waiting.length),`Page ${page+1}/${pages}`,'Hold: next page'];color=waiting.length?'#bd4d10':'#273b43';}
    else{lines=({desk:['DESK','2 Codex + Shell','','Hold: menu'],claude:['+ CLAUDE','New pane'],codex:['+ CODEX','New pane'],'prev-tab':['← TAB','Ghostty'],'next-tab':['TAB →','Ghostty']})[role]||['Agent Desk'];}
@@ -94,23 +96,20 @@ function render(){
    if(img!==v.image){send('setImage',context,{image:img,target:0});send('setTitle',context,{title:'',target:0});v.image=img;}
  }
  const signature=waiting.map(a=>a.id).sort();
- if(lastAttention!==null && signature.some(id=>!lastAttention.includes(id)))spawn('/usr/bin/afplay',['/System/Library/Sounds/Glass.aiff'],{stdio:'ignore'}).on('error',()=>{});
+ if(lastAttention!==null && signature.some(id=>!lastAttention.includes(id)))playSound();
  lastAttention=signature;
 }
-async function refresh(){if(busy||!cfg)return;busy=true;try{agents=JSON.parse(await call('snapshot'));writeHealth(cfg,{updated:Date.now(),agents:agents.length});render();}catch(e){try{writeHealth(cfg,{updated:Date.now(),error_type:errorType(e)});}catch(h){}send('logMessage',undefined,{message:'Quoin snapshot: '+errorType(e)});}finally{busy=false;}}
 function renderNoConfig(){for(const [context] of contexts){send('setImage',context,{image:icon(['NO CONFIG','plugin-config.json'],'#6b2b2b'),target:0});}}
-ws.addEventListener('open',()=>{ws.send(JSON.stringify({event:arg('-registerEvent'),uuid:arg('-pluginUUID')}));refresh();});
-ws.addEventListener('message',async ({data})=>{
- try{const m=JSON.parse(data);
- if(m.event==='willAppear'){contexts.set(m.context,{settings:m.payload.settings||{}});cfg?render():renderNoConfig();}
+async function onMessage(m){
+ if(m.event==='willAppear'){contexts.set(m.context,{settings:m.payload.settings||{}});render();}
  if(m.event==='willDisappear')contexts.delete(m.context);
  if(m.event==='didReceiveSettings'){const v=contexts.get(m.context);if(v){v.settings=m.payload.settings||{};render();}}
  const v=contexts.get(m.context);if(!v)return;
- if(m.event==='keyDown'){v.down=Date.now();v.pressed=v.target;}
+ if(m.event==='keyDown'){v.down=now();v.pressed=v.target;}
  if(m.event==='keyUp'){
    if(actionBusy)return;actionBusy=true;
    try{
-   const held=Date.now()-(v.down||Date.now())>650,role=v.settings.role||'agent';
+   const held=now()-(v.down||now())>650,role=v.settings.role||'agent';
    if(role==='agent' && v.pressed)await call('focus',v.pressed);
    else if(role==='attention'){
      if(held){page=(page+1)%Math.max(1,Math.ceil(agents.length/9));render();}
@@ -119,12 +118,30 @@ ws.addEventListener('message',async ({data})=>{
    await refresh();
    }finally{actionBusy=false;}
  }
- }catch(e){send('showAlert',JSON.parse(data).context,{});send('logMessage',undefined,{message:'Quoin action: '+errorType(e)});}
+}
+return {contexts, setAgents, render, onMessage};
+}
+
+function start(){
+const cfg = loadConfig();
+const args = process.argv.slice(2);
+const arg = flag => args[args.indexOf(flag)+1];
+const ws = new WebSocket('ws://127.0.0.1:'+arg('-port'));
+let busy=false;
+function send(event,context,payload){if(ws.readyState===1)ws.send(JSON.stringify({event,context,payload}));}
+const call=(action,extra)=>invoke(cfg,action,extra);
+const playSound=()=>spawn('/usr/bin/afplay',['/System/Library/Sounds/Glass.aiff'],{stdio:'ignore'}).on('error',()=>{});
+const panel=createPanel({send, call, refresh, playSound, now:Date.now, hasConfig:!!cfg});
+async function refresh(){if(busy||!cfg)return;busy=true;try{const list=JSON.parse(await call('snapshot'));panel.setAgents(list);writeHealth(cfg,{updated:Date.now(),agents:Array.isArray(list)?list.length:0});panel.render();}catch(e){try{writeHealth(cfg,{updated:Date.now(),error_type:errorType(e)});}catch(h){}send('logMessage',undefined,{message:'Quoin snapshot: '+errorType(e)});}finally{busy=false;}}
+ws.addEventListener('open',()=>{ws.send(JSON.stringify({event:arg('-registerEvent'),uuid:arg('-pluginUUID')}));refresh();});
+ws.addEventListener('message',async ({data})=>{
+ try{await panel.onMessage(JSON.parse(data));}
+ catch(e){send('showAlert',JSON.parse(data).context,{});send('logMessage',undefined,{message:'Quoin action: '+errorType(e)});}
 });
 ws.addEventListener('close',()=>{killBounded();process.exit(0);});
 if(!cfg)send('logMessage',undefined,{message:'Quoin: plugin-config.json missing or invalid'});
-setInterval(refresh,2500);setInterval(()=>cfg?render():renderNoConfig(),1000);
+setInterval(refresh,2500);setInterval(()=>panel.render(),1000);
 }
 
-module.exports = {loadConfig, buildInvocation, invoke, writeHealth, killBounded};
+module.exports = {loadConfig, buildInvocation, invoke, writeHealth, killBounded, createPanel, agentFace, icon, labels, colors};
 if (require.main === module) start();
