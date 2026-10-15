@@ -793,17 +793,17 @@ def _run_dashboard_fn_with_pty(
     input_text: str,
     tmp_path: Path,
     timeout: int = SUBPROCESS_TIMEOUT,
+    fn_call: str = "_agentdesk_dashboard_resolve '' '' '' '' 1 dash:proj:x",
 ) -> subprocess.CompletedProcess:
-    """Run _agentdesk_open_dashboard with a real PTY as stdin.
+    """Run a zsh expression with a real PTY as stdin.
 
     Uses pty.openpty() to provide a file descriptor that satisfies [ -t 0 ],
-    so the TTY guard inside _agentdesk_open_dashboard passes and the real
-    function body executes.  input_text is written to the PTY master side
-    after the subprocess is started; the child reads it via 'read -r reply'.
+    so terminal-only code paths run. input_text is written to the PTY master
+    side after the subprocess is started; the child reads it via 'read -r'.
     stdout and stderr are captured via PIPE (not the PTY) so assertions are
     straightforward.
     """
-    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_open_dashboard'
+    script = f'source "{AGENTDESK_ZSH}"\n{fn_call}'
     master_fd, slave_fd = pty.openpty()
     stdout_b: bytes = b""
     stderr_b: bytes = b""
@@ -844,130 +844,51 @@ def _run_dashboard_fn_with_pty(
     )
 
 
-def test_open_dashboard_non_tty_skips(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with piped stdin (non-TTY) returns 0 with no prompt
-    and does not invoke the server stub.
-
-    stdin piped = [ ! -t 0 ] fires → function returns immediately.
-    """
+def test_dashboard_resolve_non_tty_defaults_to_no(tmp_path: Path) -> None:
+    """With no flag, env or terminal the resolver answers no without asking."""
     env = _make_dashboard_env(tmp_path)
-    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_open_dashboard'
+    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_dashboard_resolve "" "" "" "" "" dash:proj:x'
     result = subprocess.run(
-        ["zsh", "-c", script],
-        env=env,
-        input="",  # piped → non-TTY
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        timeout=SUBPROCESS_TIMEOUT,
+        ["zsh", "-c", script], env=env, input="", capture_output=True, text=True,
+        cwd=str(tmp_path), timeout=SUBPROCESS_TIMEOUT,
     )
     assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
-    # No prompt should appear on stderr (function returned before printf)
-    assert "Open quoin dashboard" not in result.stderr, (
-        f"Prompt should not appear on non-TTY: stderr={result.stderr!r}"
-    )
-    # Server marker file must NOT exist (server never launched)
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), "Browser opener should NOT have been called on non-TTY"
+    assert result.stdout.strip() == "no default"
+    assert "Open quoin dashboard" not in result.stderr
+    assert not (tmp_path / "open_called.txt").exists()
 
 
-def test_open_dashboard_declines_default(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with PTY stdin 'n\\n' returns 0 and does not
-    start the server or open a browser.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
+def test_dashboard_resolve_declines_default(tmp_path: Path) -> None:
+    """A terminal answer of 'n' resolves to no, and nothing is opened."""
     env = _make_dashboard_env(tmp_path)
     result = _run_dashboard_fn_with_pty(env, "n\n", tmp_path)
     assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), "Browser opener should NOT have been called on 'n' reply"
+    assert result.stdout.strip() == "no asked"
+    assert "Open quoin dashboard" in result.stderr
+    assert not (tmp_path / "open_called.txt").exists()
 
 
-def test_open_dashboard_accepts_exports_flags(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with PTY stdin 'y\\n' exports AGENTDESK_DASHBOARD=1
-    and AGENTDESK_DASHBOARD_URL_FILE, and returns 0. (T-05/MAJ-2 fix replacement test A)
-
-    This replaces the now-removed test_open_dashboard_accepts_opens_url which checked
-    that the function backgrounded a server — the new architecture moves server launch
-    into a zellij pane injected by T-05; the helper is now a decision + flag-setup only.
-
-    STRUCTURAL GUARD: proves the helper sets the right exports and does NOT spawn a
-    background server process (no dashboard_server.py child alive after the function
-    returns). T-08's manual pgrep after agentdesk-kill is the authoritative orphan check.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
+def test_dashboard_resolve_accepts_and_url_file_helper_creates_path(tmp_path: Path) -> None:
+    """'y' resolves to yes without exporting anything; the URL-file helper then
+    prints a real temp path and the browser opener is not touched."""
     env = _make_dashboard_env(tmp_path, with_server=True)
-    # Print env vars after the function call so we can assert them.
-    script = (
-        f'source "{AGENTDESK_ZSH}"\n'
-        '_agentdesk_open_dashboard\n'
-        'echo "DASH=${AGENTDESK_DASHBOARD}"\n'
-        'echo "URLFILE=${AGENTDESK_DASHBOARD_URL_FILE}"\n'
+    result = _run_dashboard_fn_with_pty(
+        env, "y\n", tmp_path,
+        fn_call=(
+            "_agentdesk_dashboard_resolve '' '' '' '' 1 dash:proj:x\n"
+            "f=\"$(_agentdesk_dashboard_url_file)\"; echo \"URLFILE=$f\"; "
+            "[ -f \"$f\" ] && echo EXISTS\n"
+            "typeset -m 'AGENTDESK_DASHBOARD*'"
+        ),
     )
-    import pty
-    master_fd, slave_fd = pty.openpty()
-    stdout_b: bytes = b""
-    stderr_b: bytes = b""
-    rc: int = -1
-    try:
-        proc = subprocess.Popen(
-            ["zsh", "-c", script],
-            stdin=slave_fd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=str(tmp_path),
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        try:
-            os.write(master_fd, b"y\n")
-        except OSError:
-            pass
-        try:
-            stdout_b, stderr_b = proc.communicate(timeout=SUBPROCESS_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout_b, stderr_b = proc.communicate()
-        rc = proc.returncode
-    finally:
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-
-    out = stdout_b.decode(errors="replace")
-    err = stderr_b.decode(errors="replace")
-    assert rc == 0, f"rc={rc}, stderr={err}"
-    assert "DASH=1" in out, f"Expected AGENTDESK_DASHBOARD=1 in stdout: {out!r}"
-    assert "URLFILE=" in out, f"Expected AGENTDESK_DASHBOARD_URL_FILE line in stdout: {out!r}"
-    # URLFILE must be non-empty (a real mktemp path)
-    url_file_line = [l for l in out.splitlines() if l.startswith("URLFILE=")]
-    assert url_file_line, f"No URLFILE= line in stdout: {out!r}"
-    url_file_val = url_file_line[0][len("URLFILE="):]
-    assert url_file_val, "AGENTDESK_DASHBOARD_URL_FILE should not be empty after 'y'"
-    # Structural guard: verify agentdesk.zsh source does NOT contain `python3 ... &`
-    # inside _agentdesk_open_dashboard. We check the source rather than pgrep (which
-    # would find unrelated running instances in the same test session).
-    zsh_src = AGENTDESK_ZSH.read_text(encoding="utf-8")
-    # The function body should not background any server — find the function and check.
-    fn_start = zsh_src.find("_agentdesk_open_dashboard()")
-    fn_end = zsh_src.find("\n}", fn_start)
-    fn_body = zsh_src[fn_start:fn_end + 2] if fn_start != -1 else ""
-    assert "dashboard_server.py" not in fn_body or "& " not in fn_body or \
-           "python3" not in fn_body.split("dashboard_server.py")[0].split("\n")[-1], (
-        "STRUCTURAL GUARD FAIL: _agentdesk_open_dashboard appears to background "
-        "the server (found 'python3 ... dashboard_server.py ... &' pattern in function body). "
-        "The function must NOT launch a background process — server belongs in T-05 pane."
-    )
-    # Browser opener should NOT have been called (browser-open moved to T-05 poller)
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), (
-        "Browser opener should NOT be called by _agentdesk_open_dashboard "
-        "(browser-open is now in the T-05 bounded poller, not the helper)"
-    )
+    assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
+    lines = result.stdout.splitlines()
+    assert lines[0] == "yes asked"
+    url_line = [l for l in lines if l.startswith("URLFILE=")]
+    assert url_line and url_line[0][len("URLFILE="):]
+    assert "EXISTS" in lines
+    assert not any(l.startswith("AGENTDESK_DASHBOARD") for l in lines)
+    assert not (tmp_path / "open_called.txt").exists()
 
 
 def test_open_dashboard_poller_opens_url(tmp_path: Path) -> None:
@@ -1020,20 +941,18 @@ rm -f "$_dash_url_file"
     )
 
 
-def test_open_dashboard_missing_server_noop(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with PTY stdin 'y\\n' but no server script returns 0
-    and prints the 'not found' note to stderr without crashing.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
+def test_dashboard_url_file_helper_missing_server(tmp_path: Path) -> None:
+    """Without the dashboard server script the helper prints the skip note,
+    returns 1 and creates nothing."""
     env = _make_dashboard_env(tmp_path, with_server=False)
-    result = _run_dashboard_fn_with_pty(env, "y\n", tmp_path)
-    assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
-    assert "not found" in result.stderr, (
-        f"Expected 'not found' note in stderr: {result.stderr!r}"
+    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_dashboard_url_file; echo "RC=$?"'
+    result = subprocess.run(
+        ["zsh", "-c", script], env=env, input="", capture_output=True, text=True,
+        cwd=str(tmp_path), timeout=SUBPROCESS_TIMEOUT,
     )
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), "Browser opener should NOT be called when server is absent"
+    assert "RC=1" in result.stdout
+    assert "not found" in result.stderr
+    assert not (tmp_path / "open_called.txt").exists()
 
 
 # ============================================================
@@ -2007,83 +1926,19 @@ rm -f "$dash_tab_tmp"
     )
 
 
-def test_open_dashboard_no_orphan_structural_guard(tmp_path: Path) -> None:
-    """T-07 Test B (no-orphan structural guard): _agentdesk_open_dashboard with 'y'
-    sets AGENTDESK_DASHBOARD=1 and the function body does NOT background a server.
-
-    NOTE: This is a STRUCTURAL GUARD proving the helper stopped spawning background
-    processes. It verifies the source code and runtime export behavior.
-    It is NOT an authoritative orphan-prevention proof (system-wide pgrep is unreliable
-    in test environments where other tests also run dashboard_server.py).
-    The authoritative check is T-08's manual pgrep after agentdesk-kill.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
-    env = _make_dashboard_env(tmp_path, with_server=True)
-
-    # Script: run the function and capture exported env vars.
-    script = (
-        f'source "{AGENTDESK_ZSH}"\n'
-        '_agentdesk_open_dashboard\n'
-        'rc=$?\n'
-        'echo "RC=$rc"\n'
-        'echo "DASH=${AGENTDESK_DASHBOARD}"\n'
-    )
-    master_fd, slave_fd = pty.openpty()
-    stdout_b: bytes = b""
-    stderr_b: bytes = b""
-    rc: int = -1
-    try:
-        proc = subprocess.Popen(
-            ["zsh", "-c", script],
-            stdin=slave_fd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=str(tmp_path),
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        try:
-            os.write(master_fd, b"y\n")
-        except OSError:
-            pass
-        try:
-            stdout_b, stderr_b = proc.communicate(timeout=SUBPROCESS_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout_b, stderr_b = proc.communicate()
-        rc = proc.returncode
-    finally:
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-
-    out = stdout_b.decode(errors="replace")
-    err = stderr_b.decode(errors="replace")
-    assert rc == 0, f"Function must return 0; rc={rc}, stderr={err}"
-    assert "DASH=1" in out, f"AGENTDESK_DASHBOARD=1 not set after 'y'; stdout={out!r}"
-
-    # SOURCE STRUCTURAL GUARD: verify the function body does NOT contain a background
-    # `python3 ... dashboard_server.py ...` launch. We check the source because
-    # system-wide pgrep is unreliable in CI (other tests launch the server too).
-    # Ack: this test fails on `git stash` of T-03 changes (the old function backgrounds
-    # the server → `python3 "$server_script" --no-browser > ... &` present in body).
-    zsh_src = AGENTDESK_ZSH.read_text(encoding="utf-8")
-    fn_start = zsh_src.find("_agentdesk_open_dashboard()")
-    assert fn_start != -1, "_agentdesk_open_dashboard() not found in agentdesk.zsh"
-    # Find the closing `}` of the function (next `\n}` after function start)
-    fn_end = zsh_src.find("\n}", fn_start)
-    fn_body = zsh_src[fn_start:fn_end + 2] if fn_end != -1 else zsh_src[fn_start:]
-    # The function body must NOT contain `python3 ... &` backgrounding the server
+def test_dashboard_helpers_do_not_background_a_server() -> None:
+    """Structural guard: the decision and URL-file helpers never start the
+    dashboard server (it belongs in an injected pane) and never export or unset
+    a dashboard variable."""
     import re
-    bg_launch = re.search(r'python3[^\n]+dashboard_server\.py[^\n]+&', fn_body)
-    assert bg_launch is None, (
-        "STRUCTURAL GUARD FAIL: _agentdesk_open_dashboard body contains a background "
-        f"server launch (found: {bg_launch.group()!r}). "
-        "The function must NOT launch a background process — server belongs in T-05 pane."
-    )
+    src = AGENTDESK_ZSH.read_text(encoding="utf-8")
+    start = src.index("_agentdesk_dashboard_ask() {")
+    end = src.index("\n}\n", src.index("_agentdesk_dashboard_url_file() {")) + 3
+    body = src[start:end]
+    assert "dashboard_server.py" in body  # the presence check lives here
+    assert re.search(r"python3[^\n]+dashboard_server\.py[^\n]+&", body) is None
+    assert "export AGENTDESK_DASHBOARD" not in src
+    assert "unset AGENTDESK_DASHBOARD" not in src
 
 
 # ── generic state set/get and dashboard keys ─────────────────────────────────

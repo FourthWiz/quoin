@@ -47,7 +47,13 @@ prev=""
 for a in "$@"; do
   if [ "$prev" = "--new-session-with-layout" ]; then
     cp "$a" "$cap/layout.kdl"
+    n=$(ls "$cap"/layout-*.kdl 2>/dev/null | wc -l | tr -d ' ')
+    cp "$a" "$cap/layout-$((n + 1)).kdl"
     printf '%s' "$a" > "$cap/layout_path.txt"
+    printf '[%s]\n' "$AGENTDESK_DASHBOARD_URL_FILE" >> "$cap/dash_env.log"
+    if [ -n "$AGENTDESK_DASHBOARD_URL_FILE" ]; then
+      printf 'http://127.0.0.1:1\n' > "$AGENTDESK_DASHBOARD_URL_FILE"
+    fi
   fi
   prev="$a"
 done
@@ -65,12 +71,16 @@ def rt_dir():
     shutil.rmtree(path, ignore_errors=True)
 
 
-def _env(tmp_path, rt_dir, sessions=(), extra=None):
+def _env(tmp_path, rt_dir, sessions=(), extra=None, with_server=False):
     home = tmp_path / "home"
     (home / ".config" / "zellij" / "layouts").mkdir(parents=True, exist_ok=True)
     (home / ".config" / "zellij" / "layouts" / "agent-desk.kdl").write_text(
         "layout {\n}\n"
     )
+    if with_server:
+        scripts = home / ".claude" / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        (scripts / "dashboard_server.py").write_text("# stub dashboard server\n")
     (tmp_path / "tmpdir").mkdir(exist_ok=True)
     (tmp_path / "proj").mkdir(exist_ok=True)
     cap = tmp_path / "cap"
@@ -237,7 +247,9 @@ def test_help_documents_public_interface(tmp_path, rt_dir):
     assert res.rc == 0
     for s in ("--panes", "--no-prompt", "--if-exists", "attach|new|fail",
               "AGENTDESK_API_VERSION", "--mode solo|duo|trio", "--pick",
-              "AGENTDESK_PICK", "prompts to attach", "Non-interactive"):
+              "AGENTDESK_PICK", "prompts to attach", "Non-interactive",
+              "--dashboard", "--no-dashboard", "--ask-dashboard",
+              "AGENTDESK_DASHBOARD=1|0", "--clean-state"):
         assert s in res.out, s
 
 
@@ -457,3 +469,222 @@ def test_legacy_mode_still_persists_layout(tmp_path, rt_dir):
     res = _run_pipe(["--mode", "duo", "--name", "m"], _env(tmp_path, rt_dir), tmp_path, rt_dir)
     assert res.rc == 0, res.text
     assert "name:m=claude+shell" in _state_file(tmp_path).read_text()
+
+
+# ── dashboard memory, overrides and no shell exports ─────────────────────────
+
+def _seed(tmp_path, *lines):
+    state = _state_file(tmp_path)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text("".join(f"{l}\n" for l in lines))
+
+
+def _state_lines(tmp_path):
+    state = _state_file(tmp_path)
+    return state.read_text().splitlines() if state.exists() else []
+
+
+def _tab_names(cap, n=None):
+    path = cap / ("layout.kdl" if n is None else f"layout-{n}.kdl")
+    return re.findall(r'tab name="([^"]+)"', path.read_text())
+
+
+def _layout_count(cap):
+    return len(list(cap.glob("layout-*.kdl")))
+
+
+def _launch(tmp_path, rt_dir, args, input_text="", pty_mode=True, extra=None,
+            with_server=True):
+    env = _env(tmp_path, rt_dir, extra=extra, with_server=with_server)
+    run = _run_pty if pty_mode else _run_pipe
+    if pty_mode:
+        return run(args, env, tmp_path, rt_dir, input_text=input_text)
+    return run(args, env, tmp_path, rt_dir)
+
+
+def _quiet(res):
+    assert DASHBOARD_PROMPT not in res.text, res.text
+    assert PICKER_PROMPT not in res.text, res.text
+
+
+@pytest.mark.parametrize("answer,stored,expect_tab", [("n", "no", False), ("y", "yes", True)])
+def test_dashboard_answer_is_asked_once(tmp_path, rt_dir, answer, stored, expect_tab):
+    first = _launch(tmp_path, rt_dir, ["--name", "deck-1"], f"{answer}\n\n")
+    assert first.rc == 0, first.text
+    assert DASHBOARD_PROMPT in first.text
+    assert f"dash:name:deck-1={stored}" in _state_lines(tmp_path)
+    assert "name:deck-1=__FIXED__" in _state_lines(tmp_path)
+    assert _layout_count(first.cap) == 1
+    assert ("Dashboard" in _tab_names(first.cap)) is expect_tab
+
+    second = _launch(tmp_path, rt_dir, ["--name", "deck-1"], "")
+    assert second.rc == 0, second.text
+    _quiet(second)
+    assert _layout_count(second.cap) == 2
+    assert ("Dashboard" in _tab_names(second.cap)) is expect_tab
+
+
+@pytest.mark.parametrize("stored,env_value,expect_tab", [
+    ("no", "1", True), ("yes", "0", False),
+])
+def test_dashboard_env_overrides_stored_answer(tmp_path, rt_dir, stored, env_value, expect_tab):
+    _seed(tmp_path, "name:deck-1=__FIXED__", f"dash:name:deck-1={stored}")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1"],
+                  extra={"AGENTDESK_DASHBOARD": env_value})
+    assert res.rc == 0, res.text
+    _quiet(res)
+    assert ("Dashboard" in _tab_names(res.cap)) is expect_tab
+    assert f"dash:name:deck-1={stored}" in _state_lines(tmp_path)
+
+
+@pytest.mark.parametrize("stored,flag,expect_tab", [
+    ("yes", "--no-dashboard", False), ("no", "--dashboard", True),
+])
+def test_dashboard_flag_overrides_stored_answer(tmp_path, rt_dir, stored, flag, expect_tab):
+    _seed(tmp_path, "name:deck-1=__FIXED__", f"dash:name:deck-1={stored}")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", flag])
+    assert res.rc == 0, res.text
+    _quiet(res)
+    assert ("Dashboard" in _tab_names(res.cap)) is expect_tab
+    assert f"dash:name:deck-1={stored}" in _state_lines(tmp_path)
+
+
+def test_no_prompt_ignores_stored_yes_and_dashboard_flag_adds_tab(tmp_path, rt_dir):
+    _seed(tmp_path, "name:deck-1=__FIXED__", "dash:name:deck-1=yes")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--no-prompt"])
+    assert res.rc == 0, res.text
+    _quiet(res)
+    assert "Dashboard" not in _tab_names(res.cap)
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--no-prompt", "--dashboard"])
+    assert res.rc == 0, res.text
+    _quiet(res)
+    assert "Dashboard" in _tab_names(res.cap)
+
+
+def test_panes_launch_asks_but_never_stores_answer(tmp_path, rt_dir):
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--panes", "shell"], "y\n")
+    assert res.rc == 0, res.text
+    assert DASHBOARD_PROMPT in res.text
+    assert not [l for l in _state_lines(tmp_path) if l.startswith("dash:")]
+
+
+def test_ask_dashboard_asks_again_and_stores(tmp_path, rt_dir):
+    _seed(tmp_path, "name:deck-1=__FIXED__", "dash:name:deck-1=no")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--ask-dashboard"], "y\n")
+    assert res.rc == 0, res.text
+    assert DASHBOARD_PROMPT in res.text
+    assert "dash:name:deck-1=yes" in _state_lines(tmp_path)
+    assert "Dashboard" in _tab_names(res.cap)
+
+
+def test_pick_re_asks_dashboard_and_stores(tmp_path, rt_dir):
+    _seed(tmp_path, "name:deck-1=__FIXED__", "dash:name:deck-1=no")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--pick"], "y\n\n")
+    assert res.rc == 0, res.text
+    assert DASHBOARD_PROMPT in res.text and PICKER_PROMPT in res.text
+    assert "dash:name:deck-1=yes" in _state_lines(tmp_path)
+
+
+def test_stale_dashboard_env_from_old_shell_is_ignored(tmp_path, rt_dir):
+    _seed(tmp_path, "name:deck-1=__FIXED__", "dash:name:deck-1=no")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1"], extra={
+        "AGENTDESK_DASHBOARD": "1", "AGENTDESK_DASHBOARD_URL_FILE": "/stale",
+    })
+    assert res.rc == 0, res.text
+    _quiet(res)
+    assert "Dashboard" not in _tab_names(res.cap)
+    assert (res.cap / "dash_env.log").read_text().splitlines() == ["[]"]
+
+
+def test_non_tty_stored_yes_does_not_ask_or_add_tab(tmp_path, rt_dir):
+    _seed(tmp_path, "dash:name:deck-1=yes")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1"], pty_mode=False)
+    assert res.rc == 0, res.text
+    _quiet(res)
+    assert "Dashboard" not in _tab_names(res.cap)
+
+
+def test_non_tty_dashboard_flag_needs_server(tmp_path, rt_dir):
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--dashboard"], pty_mode=False)
+    assert res.rc == 0, res.text
+    assert "Dashboard" in _tab_names(res.cap)
+    other = tmp_path / "second"
+    other.mkdir()
+    (other / "proj").mkdir()
+    res = _launch(other, rt_dir, ["--name", "deck-1", "--dashboard"], pty_mode=False,
+                  with_server=False)
+    assert res.rc == 0, res.text
+    assert "not found" in res.err
+    assert "Dashboard" not in _tab_names(res.cap)
+
+
+def test_server_missing_still_stores_yes_answer(tmp_path, rt_dir):
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1"], "y\n\n", with_server=False)
+    assert res.rc == 0, res.text
+    assert "not found" in res.err
+    assert "Dashboard" not in _tab_names(res.cap)
+    assert "dash:name:deck-1=yes" in _state_lines(tmp_path)
+
+
+def _resolve_env(tmp_path, rt_dir, extra):
+    return _env(tmp_path, rt_dir, extra=extra)
+
+
+@pytest.mark.parametrize("url_file,expected", [("", "yes env"), ("/something", "no default")])
+def test_resolver_treats_empty_url_file_as_unset(tmp_path, rt_dir, url_file, expected):
+    env = _resolve_env(tmp_path, rt_dir, {
+        "AGENTDESK_DASHBOARD": "1", "AGENTDESK_DASHBOARD_URL_FILE": url_file,
+    })
+    out = subprocess.run(
+        ["zsh", "-c", 'source "$0"; _agentdesk_dashboard_resolve "" "" "" "" "" dash:x',
+         str(AGENTDESK_ZSH)],
+        env=env, capture_output=True, text=True, timeout=SUBPROCESS_TIMEOUT,
+        stdin=subprocess.DEVNULL,
+    )
+    assert out.stdout.strip() == expected, out.stderr
+
+
+@pytest.mark.parametrize("args", [
+    ["--dashboard", "--no-dashboard"],
+    ["--ask-dashboard", "--no-prompt"],
+    ["--ask-dashboard", "--dashboard"],
+])
+def test_dashboard_flag_conflicts(tmp_path, rt_dir, args):
+    res = _launch(tmp_path, rt_dir, args, pty_mode=False)
+    assert res.rc == 1, res.text
+    assert "Error" in res.err
+    assert res.argv_lines == []
+
+
+def _two_launches(tmp_path, rt_dir, extra=None):
+    env = _env(tmp_path, rt_dir, extra=extra, with_server=True)
+    script = (
+        'source "$0"\n'
+        'agentdesk --name a --panes shell --dashboard\n'
+        'agentdesk --name b --panes shell\n'
+        "typeset -m 'AGENTDESK_DASHBOARD*'\n"
+    )
+    out = subprocess.run(
+        ["zsh", "-c", script, str(AGENTDESK_ZSH)], env=env, capture_output=True,
+        text=True, cwd=str(tmp_path / "proj"), timeout=SUBPROCESS_TIMEOUT,
+        stdin=subprocess.DEVNULL,
+    )
+    assert out.returncode == 0, out.stderr
+    leaked = [l for l in out.stdout.splitlines()
+              if re.match(r"^(export )?AGENTDESK_DASHBOARD", l)]
+    return tmp_path / "cap", leaked
+
+
+def test_dashboard_flag_does_not_leak_into_shell(tmp_path, rt_dir):
+    cap, leaked = _two_launches(tmp_path, rt_dir)
+    assert "Dashboard" in _tab_names(cap, 1)
+    assert "Dashboard" not in _tab_names(cap, 2)
+    assert leaked == []
+
+
+def test_user_env_dashboard_is_left_untouched(tmp_path, rt_dir):
+    cap, leaked = _two_launches(tmp_path, rt_dir, extra={"AGENTDESK_DASHBOARD": "1"})
+    assert "Dashboard" in _tab_names(cap, 1)
+    assert "Dashboard" in _tab_names(cap, 2)
+    # Only the user's own variable remains; the URL-file variable stays unset.
+    assert [l.removeprefix("export ") for l in leaked] == ["AGENTDESK_DASHBOARD=1"]

@@ -316,11 +316,13 @@ _agentdesk_pane_cmd() {
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo '\''CCR (OpenRouter) - project root:'\'' \"$PWD\" && if command -v ccr >/dev/null 2>&1; then if [ -f \"$HOME/.claude-code-router/config.sqlite\" ]; then ccr default-claude-code; else ccr code; fi; else echo '\''ccr not found'\''; fi; zsh'
       ;;
     dashboard)
-      # T-06: Internal-only token — set by AGENTDESK_DASHBOARD flag, not by user picker.
-      # Primary path: T-05 injects the Dashboard tab directly via KDL heredoc.
-      # This case supports `agentdesk claude shell dashboard` for advanced users.
-      # CO-UPDATE WARNING: if the command string changes (e.g. new flags), also update
-      # the T-05 heredoc in agentdesk() near "tab name=\"Dashboard\"".
+      # Internal-only token, not offered by the layout picker. The launcher
+      # normally injects the Dashboard tab itself (see the injection block in
+      # agentdesk()) and passes the URL-file path to Zellij as a launch-scoped
+      # environment value. This case supports `agentdesk claude shell dashboard`
+      # for advanced users.
+      # CO-UPDATE WARNING: if the command string changes (e.g. new flags), also
+      # update the injected tab near "tab name=\"Dashboard\"" in agentdesk().
       printf '%s' 'exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$AGENTDESK_DASHBOARD_URL_FILE\"'
       ;;
   esac
@@ -567,9 +569,8 @@ _agentdesk_parse_custom_tokens() {
 
 # ============================================================
 # _agentdesk_open_url <url>
-# Reusable browser-open helper (T-03/MAJ-1 fix).
-# Extracted from the original _agentdesk_open_dashboard lines 581-587.
-# Called by the T-05 bounded poller to open the dashboard URL once available.
+# Reusable browser-open helper, called by the bounded poller in agentdesk() to
+# open the dashboard URL once the dashboard pane has written it.
 # ============================================================
 _agentdesk_open_url() {
   local url="$1"
@@ -583,58 +584,87 @@ _agentdesk_open_url() {
 }
 
 # ============================================================
-# _agentdesk_open_dashboard
-# Opt-in quoin dashboard prompt shown BEFORE layout resolution (T-03/CRIT-1 fix).
+# Dashboard decision helpers
 #
-# This function is now a DECISION + URL-FILE SETUP helper only — it no longer
-# launches the server. The server runs as a managed zellij pane injected by T-05.
-#
-# User-mode only: deployed via deploy_agentdesk (not project mode); the server
-# is reached via the $HOME/.claude deploy path (same convention as the status
-# pane). Non-interactive / scripted desks are silently skipped via [ -t 0 ].
-#
-# Behavior:
-#   - Skips (returns 0) immediately when stdin is not a TTY.
-#   - Prompts "Open quoin dashboard? [y/N]:" — default No.
-#   - On No/empty: returns 0, AGENTDESK_DASHBOARD remains unset.
-#   - On Yes: creates a temp URL-file path, exports AGENTDESK_DASHBOARD=1
-#     and AGENTDESK_DASHBOARD_URL_FILE=<path>. NO server launch here.
-#   - Always returns 0; any internal failure prints a note to stderr.
+# The dashboard question is asked once per project (or named session) and the
+# answer is remembered in the saved-state file. Nothing here exports a variable
+# or starts a server: the decision is printed for the caller, and the server
+# runs inside a Zellij pane injected into the layout, so its lifetime is the
+# session's lifetime.
 # ============================================================
-_agentdesk_open_dashboard() {
-  # Guard: skip entirely when stdin is not a TTY (non-interactive / scripted desks).
-  [ ! -t 0 ] && return 0
 
-  printf 'Open quoin dashboard? [y/N]: ' >&2
+# Ask the dashboard question on the terminal. Prompt goes to stderr so the
+# answer ("yes" or "no") is the only thing on stdout.
+_agentdesk_dashboard_ask() {
   local reply
+  printf 'Open quoin dashboard? [y/N]: ' >&2
   read -r reply
-
-  # Default No: only explicit y/Y/yes/YES proceeds.
   case "$reply" in
-    [Yy]|[Yy][Ee][Ss]) ;;
-    *) return 0 ;;
+    [Yy]|[Yy][Ee][Ss]) printf 'yes\n' ;;
+    *) printf 'no\n' ;;
   esac
+}
 
-  local server_script="$HOME/.claude/scripts/dashboard_server.py"
+# _agentdesk_dashboard_resolve <flag> <noprompt> <ask> <pick> <tty> <dash_key>
+# Prints "<yes|no> <source>" with source one of
+# flag|noprompt|asked|env|stored|default. Precedence:
+#   --dashboard/--no-dashboard > --no-prompt (no) > --ask-dashboard (tty) >
+#   AGENTDESK_DASHBOARD=1|0 (ignored while a URL-file value is also set, which
+#   marks a stale value inherited from an older launcher) > --pick re-ask (tty)
+#   > stored answer (tty) > ask (tty) > no.
+# Stored answers and questions are interactive-only. Never writes state.
+_agentdesk_dashboard_resolve() {
+  local flag="$1" noprompt="$2" ask="$3" pick="$4" tty="$5" dash_key="$6"
+  local ans stored
 
-  # Presence guard: skip gracefully when the server is absent (e.g. project-scope
-  # installs where deploy_agentdesk did not run, or the quoin install is stale).
-  if [ ! -f "$server_script" ]; then
-    printf 'agentdesk: dashboard server not found at %s; skipping\n' "$server_script" >&2
+  if [ "$flag" = "yes" ] || [ "$flag" = "no" ]; then
+    printf '%s flag\n' "$flag"
     return 0
   fi
+  if [ -n "$noprompt" ]; then
+    printf 'no noprompt\n'
+    return 0
+  fi
+  if [ -n "$ask" ] && [ -n "$tty" ]; then
+    ans="$(_agentdesk_dashboard_ask)"
+    printf '%s asked\n' "$ans"
+    return 0
+  fi
+  if [ -z "${AGENTDESK_DASHBOARD_URL_FILE:-}" ]; then
+    case "${AGENTDESK_DASHBOARD-}" in
+      1) printf 'yes env\n'; return 0 ;;
+      0) printf 'no env\n'; return 0 ;;
+    esac
+  fi
+  if [ -z "$tty" ]; then
+    printf 'no default\n'
+    return 0
+  fi
+  if [ -n "$pick" ]; then
+    ans="$(_agentdesk_dashboard_ask)"
+    printf '%s asked\n' "$ans"
+    return 0
+  fi
+  stored="$(_agentdesk_state_get "$dash_key")"
+  case "$stored" in
+    yes|no) printf '%s stored\n' "$stored"; return 0 ;;
+  esac
+  ans="$(_agentdesk_dashboard_ask)"
+  printf '%s asked\n' "$ans"
+}
 
-  # Create a deterministic temp path for the URL file.
-  # The dashboard pane (T-05) will write the bound URL here atomically via --url-file.
-  # The foreground poller (T-05) reads this same path.
+# Create the URL-file path the dashboard pane writes its bound URL to and the
+# launcher's poller reads. Prints the path; returns 1 (with a note on stderr)
+# when the dashboard server is not installed, e.g. project-scope installs.
+_agentdesk_dashboard_url_file() {
+  local server_script="$HOME/.claude/scripts/dashboard_server.py"
+  if [ ! -f "$server_script" ]; then
+    printf 'agentdesk: dashboard server not found at %s; skipping\n' "$server_script" >&2
+    return 1
+  fi
   local url_file
-  url_file="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-url-XXXXXX")"
-
-  export AGENTDESK_DASHBOARD=1
-  export AGENTDESK_DASHBOARD_URL_FILE="$url_file"
-  return 0
-  # NOTE: no `python3 ... &` here. The server runs inside a zellij pane injected
-  # into the layout by T-05. Its lifetime == the zellij session's lifetime.
+  url_file="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-url-XXXXXX")" || return 1
+  printf '%s\n' "$url_file"
 }
 
 # Print the named-session keys that survive a state cleanup so test leftovers
@@ -775,6 +805,7 @@ agentdesk() {
   local pick_flag=""
   local panes_raw="" panes_given="" noprompt="" if_exists=""
   local clean_state="" dry_run=""
+  local dash_on="" dash_off="" dash_ask=""
   local -a tokens=()
   local -a panes_tokens=()
 
@@ -820,6 +851,15 @@ agentdesk() {
         ;;
       --no-prompt)
         noprompt=1
+        ;;
+      --dashboard)
+        dash_on=1
+        ;;
+      --no-dashboard)
+        dash_off=1
+        ;;
+      --ask-dashboard)
+        dash_ask=1
         ;;
       --clean-state)
         clean_state=1
@@ -867,6 +907,18 @@ Window types (positional):
   ccr      start an open-model CCR (OpenRouter) session in pane
   spend    realtime token-spend monitor
 
+Dashboard:
+  The "Open quoin dashboard?" question is asked once per project (or named
+  session) and the answer is remembered in the same state file.
+  --dashboard / --no-dashboard   one-shot override; the remembered answer is
+                     not changed and nothing is asked.
+  --ask-dashboard    ask again now and remember the new answer. --pick also
+                     asks again.
+  AGENTDESK_DASHBOARD=1|0        override the remembered answer without asking.
+  --no-prompt never asks and never adds the dashboard unless --dashboard is
+  also given. --panes launches never store an answer. Non-interactive launches
+  never ask and use only the flag or environment override.
+
 State maintenance:
   agentdesk --clean-state [--dry-run]
                      remove saved entries that point at test or scratch
@@ -904,7 +956,8 @@ Non-interactive launch (AGENTDESK_API_VERSION=1):
                      Never remembered in, nor read from, the layout memory file.
   --no-prompt        never ask anything (no dashboard question, no picker, no
                      attach-or-new question), even in a terminal. Without
-                     --panes/--mode it uses the saved or fixed layout.
+                     --panes/--mode it uses the saved or fixed layout. The
+                     dashboard is not added unless --dashboard is also given.
                      AGENTDESK_PICK is ignored.
   --if-exists attach|new|fail
                      what to do when a same-named session already exists (live or
@@ -959,6 +1012,8 @@ HELP
     [ -z "$_cs_conflict" ] && [ -n "$pick_flag" ] && _cs_conflict="--pick"
     [ -z "$_cs_conflict" ] && [ -n "$custom_name" ] && _cs_conflict="a session name"
     [ -z "$_cs_conflict" ] && [ -n "$if_exists" ] && _cs_conflict="--if-exists"
+    [ -z "$_cs_conflict" ] && { [ -n "$dash_on" ] || [ -n "$dash_off" ] || [ -n "$dash_ask" ]; } \
+      && _cs_conflict="a dashboard flag"
     if [ -n "$_cs_conflict" ]; then
       printf 'Error: --clean-state cannot be combined with %s.\n' "$_cs_conflict" >&2
       return 1
@@ -1011,6 +1066,21 @@ HELP
 
   if [ -n "$noprompt" ] && [ -n "$pick_flag" ]; then
     printf 'Error: --pick is interactive and cannot be combined with --no-prompt.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$dash_on" ] && [ -n "$dash_off" ]; then
+    printf 'Error: --dashboard and --no-dashboard are mutually exclusive.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$dash_ask" ] && { [ -n "$dash_on" ] || [ -n "$dash_off" ]; }; then
+    printf 'Error: --ask-dashboard cannot be combined with --dashboard or --no-dashboard.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$dash_ask" ] && [ -n "$noprompt" ]; then
+    printf 'Error: --ask-dashboard is interactive and cannot be combined with --no-prompt.\n' >&2
     return 1
   fi
 
@@ -1149,14 +1219,22 @@ HELP
     return 1
   fi
 
-  # ── Offer dashboard BEFORE layout resolution (T-03/CRIT-1 fix) ───────────
-  # _agentdesk_open_dashboard sets AGENTDESK_DASHBOARD=1 and
-  # AGENTDESK_DASHBOARD_URL_FILE=<path> when the user answers yes.
-  # These env vars are read by the layout injection block (T-05) below.
-  # Must run before the if/elif layout branch so all branches see the flags.
-  # _agentdesk_open_dashboard self-skips on non-TTY and always returns 0.
-  if [ -z "$noprompt" ]; then
-    _agentdesk_open_dashboard
+  # ── Decide on the dashboard BEFORE layout resolution ──────────────────────
+  # The decision is a local: nothing is exported, so it can never leak into the
+  # user's shell or a later launch. Only an answer given to a question is
+  # remembered (stored with the layout below).
+  local dash_decision="" dash_answer="" dash_source="" dash_url_file=""
+  local dash_flag=""
+  [ -n "$dash_on" ] && dash_flag=yes
+  [ -n "$dash_off" ] && dash_flag=no
+  local dash_tty=""
+  [ -t 0 ] && dash_tty=1
+  read -r dash_decision dash_source <<< "$(_agentdesk_dashboard_resolve \
+    "$dash_flag" "$noprompt" "$dash_ask" "$force_pick" "$dash_tty" \
+    "$(_agentdesk_dash_key "$layout_key")")"
+  dash_answer="$dash_decision"
+  if [ "$dash_decision" = "yes" ]; then
+    dash_url_file="$(_agentdesk_dashboard_url_file)" || dash_decision=no
   fi
 
   # ── Resolve layout (D-08 branch order) ────────────────────────────────────
@@ -1306,6 +1384,9 @@ HELP
   # whose layout file is missing (would fail every subsequent launch).
   if [ -n "$persist_layout" ]; then
     _agentdesk_save_layout "$layout_key" "$saved_value" 2>/dev/null || true
+    if [ "$dash_source" = "asked" ]; then
+      _agentdesk_state_set "$(_agentdesk_dash_key "$layout_key")" "$dash_answer" 2>/dev/null || true
+    fi
   fi
 
   echo "Starting agent desk:"
@@ -1316,16 +1397,15 @@ HELP
   echo
 
   # ── T-05: Inject Dashboard tab into chosen layout (D-04/CRIT-2 fix) ────────
-  # When AGENTDESK_DASHBOARD=1 (set by _agentdesk_open_dashboard above), inject
-  # a Dashboard tab into whichever layout was chosen — preserving ALL existing tabs.
-  # This is a new temp file; $layout_path is updated to point to it.
-  # When AGENTDESK_DASHBOARD != 1, $layout_path is used unchanged (byte-identical
-  # to the previous behavior).
+  # When the dashboard decision above is yes, inject a Dashboard tab into
+  # whichever layout was chosen — preserving ALL existing tabs. This is a new
+  # temp file; $layout_path is updated to point to it. Otherwise $layout_path is
+  # used unchanged.
   #
-  # Branch 3 (saved-layout restore) note: if AGENTDESK_DASHBOARD=1, this block
-  # injects a Dashboard tab into the restored layout path — no regeneration via
-  # _agentdesk_gen_layout. The saved layout file on disk is never modified.
-  if [ -z "$noprompt" ] && [ "${AGENTDESK_DASHBOARD:-0}" = "1" ]; then
+  # For a restored saved layout the tab is injected into the restored layout
+  # path — no regeneration via _agentdesk_gen_layout. The saved layout file on
+  # disk is never modified.
+  if [ "$dash_decision" = "yes" ]; then
     local dash_tab_tmp
     # BSD mktemp only randomizes *trailing* X's; a suffix after XXXXXX creates a
     # literal path that collides on the second call ("File exists"). Drop the suffix,
@@ -1340,13 +1420,13 @@ HELP
     # Strip the final `}` (closing brace of the top-level `layout { ... }` block)
     # and append the Dashboard tab KDL before re-closing.
     # The url-file path is expanded HERE at injection time so the actual path is
-    # baked into the KDL — the poller reads the same path from AGENTDESK_DASHBOARD_URL_FILE.
+    # baked into the KDL — the poller reads the same path.
     sed '$d' "$layout_path" > "$dash_tab_tmp"
     cat >> "$dash_tab_tmp" <<DASHTAB
     tab name="Dashboard" {
         pane name="quoin dashboard" {
             command "zsh"
-            args "-lc" "exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$AGENTDESK_DASHBOARD_URL_FILE\""
+            args "-lc" "exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$dash_url_file\""
         }
     }
 }
@@ -1358,7 +1438,7 @@ DASHTAB
     # D-03 bounded browser-open poller: spawned BEFORE zellij blocks the foreground.
     # Polls the url-file for ≤10s (50 × 0.2s hard cap), opens the browser, then exits.
     # Cannot orphan — always self-terminates. This is the ONLY `&` in the new flow.
-    local _dash_url_file="$AGENTDESK_DASHBOARD_URL_FILE"
+    local _dash_url_file="$dash_url_file"
     ( i=0
       while [ "$i" -lt 50 ]; do
         if [ -f "$_dash_url_file" ] && grep -q '^http' "$_dash_url_file" 2>/dev/null; then
@@ -1389,7 +1469,9 @@ DASHTAB
     return 1
   fi
 
-  PROJECT_ROOT="$project_root" zellij --new-session-with-layout "$layout_path" --session "$session_name"
+  # AGENTDESK_DASHBOARD_URL_FILE is set for this launch only (empty when the
+  # dashboard is off, so a stale exported value never reaches pane commands).
+  AGENTDESK_DASHBOARD_URL_FILE="$dash_url_file" PROJECT_ROOT="$project_root" zellij --new-session-with-layout "$layout_path" --session "$session_name"
 }
 
 agentdesk-attach() {
