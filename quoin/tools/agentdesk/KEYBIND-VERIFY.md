@@ -178,3 +178,24 @@ Option press would silently swallow the next keystroke.
 An "unlock-first" preset (every mode behind a single unlock key) was evaluated
 and not adopted: it replaces the whole interaction model, cannot be undone by a
 marker-scoped revert, and depends on the same Option-as-Alt setting.
+
+## Layout checks
+
+Manual checks of the generated layout. Run them in a real terminal after
+installing; each row says what you should see.
+
+| Check | Expected |
+|-------|----------|
+| `agentdesk claude claude shell` | Two Claude panes (`Claude · A`, `Claude · B`) side by side on top, a full-width `Shell` strip below. |
+| Token Spend at start | Not visible. |
+| `Alt f` (Russian layout: `Alt а`) | Shows Token Spend as a floating pane; the same key hides it again. If Option is not delivered as Alt, use pane mode then `w`. |
+| Stream Deck "floating" key | Does the same as `Alt f`. |
+| `Alt ]` (Russian layout: `Alt ъ`) | Cycles the arrangement: even, focus-left, stacked, then back to the start shape. `Alt [` (Russian layout: `Alt х`) cycles backwards. Focus-left needs at least two tiled panes. |
+| `Alt n` in a fresh desk | Splits the focused pane and does not rearrange the others. |
+| Stream Deck "Desk" key | Creates `Codex · A`, `Codex · B` and `Shell`; its agent buttons find both Codex panes. |
+| `agentdesk --compact-bar` | One bar line at the bottom instead of the tab bar and status bar. |
+| Dashboard tab (when enabled) | The tab has its own tab bar and status bar (or the compact bar with `--compact-bar`). |
+| Floating Codex helper open, then `Alt f` | The floating layer also shows the 80% x 75% Token Spend pane behind the helper. This is accepted; hide it with the same key. |
+
+Swap layouts fill panes in Zellij's own pane order, so the even arrangement can
+place the shell between two agents.

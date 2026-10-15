@@ -620,3 +620,11 @@ def test_dashboard_helper_adds_the_layouts_own_bars(tmp_path, bars, expected):
     (dash,) = [t for t in tabs(parsed) if props(t).get("name") == "Dashboard"]
     assert bar_plugins(dash) == expected
     assert names_in(dash) == ["quoin dashboard"]
+
+
+def test_isolation_fixture_strips_the_compact_bar_variable():
+    # The agentdesk isolation fixture clears the variable before each test, so a
+    # value exported in the developer's shell can never flip default-bar checks.
+    assert "AGENTDESK_COMPACT_BAR" not in os.environ
+    conftest = (Path(__file__).parent / "conftest.py").read_text()
+    assert '"AGENTDESK_COMPACT_BAR"' in conftest

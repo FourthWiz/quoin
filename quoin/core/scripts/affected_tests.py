@@ -1927,6 +1927,18 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/tools/agentdesk/setup-agentdesk.sh",
         "quoin/dev/tests/test_agentdesk_keybinds_live.py",
     ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_layout.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_layout_live.py",
+    ),
+    (
+        "quoin/tools/agentdesk/KEYBIND-VERIFY.md",
+        "quoin/dev/tests/test_agentdesk_keybinds_v2.py",
+    ),
     # Tests added with the interpreter, pytest-bound and ledger-summary work: an edit to
     # one of these documents must select the guard that reads it.
     (

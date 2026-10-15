@@ -510,6 +510,6 @@ def test_keybind_verify_keeps_old_checks_and_drops_stale_notes() -> None:
     assert "Option+Left" in doc and "Ctrl o" in doc
     assert "Ghostty does NOT need changes" not in doc
     assert "known collision" not in doc.lower()
-    assert "## Layout checks" not in doc
+    assert "## Layout checks" in doc
     assert "zellij --config ~/.config/zellij/config.kdl setup --check" in doc
     assert "\nzellij setup --check" not in doc

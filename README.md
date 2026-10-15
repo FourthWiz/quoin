@@ -438,8 +438,15 @@ agentdesk --name deck --panes codex,codex,shell --no-prompt   # scripted launch,
 | Mode | Panes |
 |------|-------|
 | `solo` | One Claude Code pane, full-width |
-| `duo` | Claude Code + Shell, side-by-side |
-| `trio` | Claude Code + Codex + Shell, side-by-side |
+| `duo` | Claude Code on top, a Shell strip below |
+| `trio` | Claude Code and Codex side by side on top, a Shell strip below |
+
+**Layout:** agents (Claude, Codex, CCR) sit on top and shells and status share a
+strip below; repeated agents are named `Claude · A`, `Claude · B` and so on.
+Token Spend is a floating pane that starts hidden. Swap between arrangements
+(even, focus-left, stacked) with Alt [ and Alt ]. `--compact-bar` or
+`AGENTDESK_COMPACT_BAR=1` replaces the tab bar and status bar with a single
+one-line bar (per launch, not remembered).
 
 **Window-type tokens** (positional, mutually exclusive with `--mode`):
 
@@ -468,8 +475,9 @@ session, use `agentdesk-attach SESSION-NAME`.
 **Scripted launch:**
 
 - `--panes LIST` starts the session with an explicit pane set (for example
-  `codex,codex,shell`, joined by `,` or `+`). The Spend tab is still added, and
-  the list is never saved to the layout memory file.
+  `codex,codex,shell`, joined by `,` or `+`). Token Spend is still available as a
+  hidden floating pane (toggle: Alt f, or pane mode then w), and the list is never
+  saved to the layout memory file.
 - `--no-prompt` asks nothing: no dashboard question, no picker, no
   attach-or-new question.
 - `--if-exists attach|new|fail` decides what happens when the session name is
