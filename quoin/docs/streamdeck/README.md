@@ -19,8 +19,9 @@ The panel shows one key per Zellij session and a few action keys:
 - An agent record without a session gets its own key after the sessions.
 - Key 10 is the attention queue: it counts the agents that wait for you in all sessions. A press focuses the next
   waiting agent in any session without changing what the panel shows; holding it turns to the next page of whatever
-  the panel is showing, and its page line follows that view. The Glass sound still plays when a new agent starts
-  waiting.
+  the panel is showing, and its page line follows that view. A hold turns the page at once and no longer triggers a
+  fresh snapshot refresh afterwards, so the page may show data up to one refresh interval (about 2.5 seconds) old. The
+  Glass sound still plays when a new agent starts waiting.
 - The bottom row holds Desk (two Codex panes and a shell through Agent Desk; hold for its menu), + Claude and
   + Codex (a new pane), and previous and next Ghostty tab.
 

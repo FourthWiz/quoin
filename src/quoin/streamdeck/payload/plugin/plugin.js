@@ -192,10 +192,11 @@ async function onMessage(m){
  if(m.event==='keyUp'){
    const held=now()-(v.down||now())>650,role=v.settings.role||'agent';
    // Opening a session, going back and turning the page only change the view, so they never wait behind a slow focus call.
+   // These presses (including holding the attention key) skip the busy flag and the trailing refresh, so the page shows data up to one refresh interval old.
    if(role==='agent'){
      const t=v.pressed;
      if(t && (t.type==='session' || t.type==='back')){view=reconcile(press(view,t).view,groupAgents(agents));render();return;}
-   }else if(role==='attention' && held){view=reconcile(nextPage(view,groupAgents(agents)),groupAgents(agents));render();return;}
+   }else if(role==='attention' && held){const items=groupAgents(agents);view=reconcile(nextPage(view,items),items);render();return;}
    if(actionBusy)return;actionBusy=true;
    try{
    if(role==='agent'){const r=press(view,v.pressed);if(r.focus)await call('focus',r.focus);}
@@ -218,7 +219,7 @@ function send(event,context,payload){if(ws.readyState===1)ws.send(JSON.stringify
 const call=(action,extra)=>invoke(cfg,action,extra);
 const playSound=()=>spawn('/usr/bin/afplay',['/System/Library/Sounds/Glass.aiff'],{stdio:'ignore'}).on('error',()=>{});
 const panel=createPanel({send, call, refresh, playSound, now:Date.now, hasConfig:!!cfg});
-async function refresh(){if(busy||!cfg)return;busy=true;try{const list=JSON.parse(await call('snapshot'));panel.setAgents(list);writeHealth(cfg,{updated:Date.now(),agents:Array.isArray(list)?list.length:0});panel.render();}catch(e){try{writeHealth(cfg,{updated:Date.now(),error_type:errorType(e)});}catch(h){}send('logMessage',undefined,{message:'Quoin snapshot: '+errorType(e)});}finally{busy=false;}}
+async function refresh(){if(busy||!cfg)return;busy=true;try{const list=JSON.parse(await call('snapshot'));if(!Array.isArray(list))throw new SyntaxError('snapshot is not a list');panel.setAgents(list);writeHealth(cfg,{updated:Date.now(),agents:list.length});panel.render();}catch(e){try{writeHealth(cfg,{updated:Date.now(),error_type:errorType(e)});}catch(h){}send('logMessage',undefined,{message:'Quoin snapshot: '+errorType(e)});}finally{busy=false;}}
 ws.addEventListener('open',()=>{ws.send(JSON.stringify({event:arg('-registerEvent'),uuid:arg('-pluginUUID')}));refresh();});
 ws.addEventListener('message',async ({data})=>{
  try{await panel.onMessage(JSON.parse(data));}

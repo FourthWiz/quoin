@@ -74,7 +74,7 @@ Each item says how to check it and what to expect.
     session named with 20 or more characters, press and hold Desk, press + Claude, + Codex, and previous and next tab.
   - Expected: a session key opens its agents; an agent key focuses its pane and the session stays open; BACK returns
     to the page you left; closing the open session's last agent returns the panel to the session list; the attention
-    key focuses a waiting agent in another session and the view stays; a hold pages the current view; a long session
+    key focuses a waiting agent in another session and the view stays; a hold pages the current view at once (it no longer triggers a refresh afterwards, by design); a long session
     name still shows its agent count; a Desk hold opens its menu; + Claude and + Codex open a new pane; the tab keys
     move between Ghostty tabs.
 - Ghostty transition, including a manually opened legacy tab.

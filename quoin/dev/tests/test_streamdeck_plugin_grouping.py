@@ -286,6 +286,14 @@ def test_bottom_row_presses_call_their_action(tmp_path, role, held, action):
     assert [c["action"] for c in actions(out)] == [action]
 
 
+@pytest.mark.parametrize("payload", [None, {"a": 1}, "text"])
+def test_non_list_snapshot_is_reported_as_a_parse_error(tmp_path, payload):
+    steps = appear(("k0", "agent", 0)) + [{"op": "open"}, {"op": "snapshot", "list": payload}]
+    out, _ = run_scenario(tmp_path, steps)
+    health = json.loads((tmp_path / "deck" / "sr" / "state" / "health.json").read_text())
+    assert health["error_type"] == "parse" and "agents" not in health
+
+
 def test_glass_plays_once_per_new_waiting_agent(tmp_path):
     base = [rec("a1", session="a"), rec("a2", session="b"), rec("a3", session="c")]
 
@@ -567,7 +575,6 @@ const contexts = [], out = {faces: [], marks: []};
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 (async () => {
   for (const step of scenario.steps) {
-    const wait = step.nowait ? sleep(20) : null;
     if (step.op === 'appear') {
       contexts.push(step.ctx);
       await message({event: 'willAppear', context: step.ctx, payload: {settings: {role: step.role, slot: step.slot}}});
@@ -706,11 +713,11 @@ def test_an_opened_session_that_vanishes_falls_back_to_the_list(tmp_path):
 
 def test_attention_press_reaches_other_sessions_without_changing_the_view(tmp_path):
     agents = many("a", 2) + many("b", 2, status="attention") + many("c", 1, status="attention")
-    steps = deck() + [{"op": "snapshot", "list": agents}] + tap("k0") + [{"op": "faces", "ctxs": ["att", "k0"]}] + tap("att") + tap("att") + [
+    steps = deck() + [{"op": "snapshot", "list": agents}] + tap("k0") + [{"op": "faces", "ctxs": ["att", "k0"]}] + tap("att") + tap("att") + tap("att") + [
         {"op": "faces", "ctxs": ["att", "k0", "k1"]}]
     out = run_panel(tmp_path, steps)
     assert out["faces"][0]["att"]["lines"][1] == "3"
-    assert [c["arg"]["id"] for c in out["calls"]] == ["b-1", "b-2"]
+    assert [c["arg"]["id"] for c in out["calls"]] == ["b-1", "b-2", "c-1"]
     assert out["faces"][1]["k0"]["lines"] == ["← BACK", "a", "", ""]
 
 
