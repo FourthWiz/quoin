@@ -5,6 +5,7 @@ python and an intercepted sound player, so nothing here reaches the real home,
 the live runtime or the speakers.
 """
 import json
+import re
 import subprocess
 
 import pytest
@@ -763,3 +764,41 @@ def test_flat_agent_list_survives_odd_snapshot_data(tmp_path):
     out = run_panel(tmp_path, steps)
     assert out["faces"][0]["k0"]["lines"] == ["—", "", "", ""]
     assert out["faces"][1]["k0"]["lines"][0] == "z · 1" and out["faces"][1]["att"]["lines"][1] == "1"
+
+
+FORBIDDEN_MODULES = {"node:http", "node:https", "node:http2", "node:net", "node:tls", "node:dgram"}
+REQUIRE = re.compile(r"require\(\s*(['\"])([^'\"]+)\1\s*\)")
+
+
+def local_only_violations(text):
+    problems = []
+    found = REQUIRE.findall(text)
+    if len(found) != len(re.findall(r"\brequire\(", text)):
+        problems.append("computed or unparsed require")
+    for _, name in found:
+        if not name.startswith("node:") or name in FORBIDDEN_MODULES:
+            problems.append("require " + name)
+    if re.search(r"\bfetch\s*\(", text):
+        problems.append("fetch call")
+    if text.count("new WebSocket(") != 1:
+        problems.append("WebSocket count")
+    if text.count("ws://127.0.0.1:") != 1:
+        problems.append("socket address count")
+    return problems
+
+
+def test_plugin_stays_local_only():
+    assert local_only_violations(PLUGIN.read_text()) == []
+
+
+@pytest.mark.parametrize("extra", [
+    "\nrequire('node:net');", "\nrequire('left-pad');", "\nconst m = 'x'; require(m);",
+    "\nfetch(url);", "\nnew WebSocket('ws://127.0.0.1:2');", "\nrequire('node:https');",
+])
+def test_local_only_guard_catches_planted_violations(extra):
+    assert local_only_violations(PLUGIN.read_text() + extra)
+
+
+def test_local_only_guard_ignores_the_word_network_in_comments():
+    assert "network" in PLUGIN.read_text()
+    assert local_only_violations(PLUGIN.read_text()) == []
