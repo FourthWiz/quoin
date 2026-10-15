@@ -74,6 +74,88 @@ function agentFace(rec, nowMs){
   return {lines:[rec.kind==='claude'?'CLAUDE':'CODEX',path.basename(String(rec.project||rec.session||'')).slice(0,16),`${session.slice(-9)} · ${pane}`,labels[status]||labels.unknown],color};
 }
 
+// Panel model: pure functions over the snapshot list and a small view object. No I/O, no clock.
+const STATUS_ORDER=['attention','done','working','idle','unknown','offline'];
+function rank(status){const i=STATUS_ORDER.indexOf(status);return i<0?STATUS_ORDER.indexOf('unknown'):i;}
+function hasSession(rec){return typeof rec.session==='string' && rec.session.trim()!=='';}
+function groupKey(rec){return JSON.stringify([String(rec.socket ?? ''),rec.session]);}
+function aggregateStatus(records){
+  let best=STATUS_ORDER.indexOf('unknown');
+  if(!records.length)return STATUS_ORDER[best];
+  best=STATUS_ORDER.length;
+  for(const r of records)best=Math.min(best,rank(r.status));
+  return STATUS_ORDER[best];
+}
+function groupAgents(records){
+  if(!Array.isArray(records))return [];
+  const groups=new Map(), standalone=[];
+  for(const rec of records){
+    if(!rec || typeof rec!=='object' || Array.isArray(rec))continue;
+    if(!hasSession(rec)){standalone.push(Object.freeze({type:'agent',agent:rec}));continue;}
+    const key=groupKey(rec);
+    if(!groups.has(key))groups.set(key,{key,socket:String(rec.socket ?? ''),session:rec.session,list:[]});
+    groups.get(key).list.push(rec);
+  }
+  const sessions=[...groups.values()].sort((a,b)=>a.session<b.session?-1:a.session>b.session?1:a.socket<b.socket?-1:a.socket>b.socket?1:0).map(g=>{
+    const projects=new Set(g.list.map(r=>typeof r.project==='string'?r.project:''));
+    const shared=projects.size===1?[...projects][0]:'';
+    return Object.freeze({type:'session',key:g.key,socket:g.socket,session:g.session,agents:Object.freeze(g.list),
+      status:aggregateStatus(g.list),project:shared?path.basename(shared):''});
+  });
+  return [...sessions,...standalone];
+}
+function initialView(){return {mode:'collapsed',collapsedPage:0,expandedKey:null,expandedPage:0};}
+function expandedGroup(view,items){return items.find(i=>i.type==='session' && i.key===view.expandedKey)||null;}
+function pageCount(view,items){
+  if(view.mode==='expanded'){const g=expandedGroup(view,items);return Math.max(1,Math.ceil((g?g.agents.length:0)/8));}
+  return Math.max(1,Math.ceil(items.length/9));
+}
+function currentPage(view){return view.mode==='expanded'?view.expandedPage:view.collapsedPage;}
+function reconcile(view,items){
+  if(view.mode==='expanded' && !expandedGroup(view,items))view={...view,mode:'collapsed',expandedKey:null,expandedPage:0};
+  const last=pageCount(view,items)-1;
+  return view.mode==='expanded'
+    ?{...view,expandedPage:Math.max(0,Math.min(view.expandedPage,last))}
+    :{...view,collapsedPage:Math.max(0,Math.min(view.collapsedPage,last))};
+}
+function layoutSlots(view,items){
+  const slots=[];
+  if(view.mode==='expanded'){
+    const g=expandedGroup(view,items);
+    slots.push(g?Object.freeze({type:'back',group:g}):null);
+    for(let i=1;i<9;i++){const a=g?g.agents[view.expandedPage*8+i-1]:undefined;slots.push(a?Object.freeze({type:'agent',agent:a}):null);}
+    return slots;
+  }
+  for(let i=0;i<9;i++){
+    const item=items[view.collapsedPage*9+i];
+    slots.push(!item?null:item.type==='session'?Object.freeze({type:'session',group:item}):item);
+  }
+  return slots;
+}
+function press(view,target){
+  if(!target)return {view,focus:null};
+  if(target.type==='session')return {view:{...view,mode:'expanded',expandedKey:target.group.key,expandedPage:0},focus:null};
+  if(target.type==='back')return {view:{...view,mode:'collapsed',expandedKey:null,expandedPage:0},focus:null};
+  if(target.type==='agent')return {view,focus:target.agent};
+  return {view,focus:null};
+}
+function nextPage(view,items){
+  const next=(currentPage(view)+1)%pageCount(view,items);
+  return view.mode==='expanded'?{...view,expandedPage:next}:{...view,collapsedPage:next};
+}
+function face(target,nowMs){
+  if(!target)return {lines:['—','','',''],color:'#18202a'};
+  if(target.type==='back')return {lines:['← BACK',target.group.session.slice(0,16),'',''],color:'#213a4e'};
+  if(target.type==='agent')return agentFace(target.agent,nowMs);
+  const g=target.group, suffix=' · '+g.agents.length;
+  let color=colors[g.status]||colors.unknown;
+  if(g.status==='attention' && Math.floor(nowMs/1000)%2)color='#e27916';
+  return {lines:[g.session.slice(0,Math.max(0,12-suffix.length))+suffix,g.project.slice(0,16),'',labels[g.status]||labels.unknown],color};
+}
+function attentionFace(waiting,page,pages){
+  return {lines:['ATTENTION',String(waiting),'Page '+(page+1)+'/'+pages,'Hold: next page'],color:waiting?'#bd4d10':'#273b43'};
+}
+
 function createPanel({send, call, refresh = async()=>{}, playSound = ()=>{}, now = Date.now, hasConfig = true}){
 const contexts = new Map();
 let agents=[], page=0, lastAttention=null, pressedAttention=0, actionBusy=false;
@@ -143,5 +225,7 @@ if(!cfg)send('logMessage',undefined,{message:'Quoin: plugin-config.json missing 
 setInterval(refresh,2500);setInterval(()=>panel.render(),1000);
 }
 
-module.exports = {loadConfig, buildInvocation, invoke, writeHealth, killBounded, createPanel, agentFace, icon, labels, colors};
+module.exports = {loadConfig, buildInvocation, invoke, writeHealth, killBounded, createPanel, agentFace, icon, labels, colors,
+  STATUS_ORDER, rank, hasSession, groupKey, aggregateStatus, groupAgents, initialView, pageCount, reconcile,
+  layoutSlots, press, nextPage, currentPage, face, attentionFace};
 if (require.main === module) start();
