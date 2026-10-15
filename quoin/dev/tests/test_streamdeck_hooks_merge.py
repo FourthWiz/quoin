@@ -17,7 +17,8 @@ LEGACY = "/usr/bin/python3 %s claude" % shlex.quote(RT + "/monitor.py")
 # Frozen copy of the prototype's event lists (base events plus per-runtime extras), in its order.
 PROTO_BASE = ("SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest",
               "PostToolUse", "Stop", "PreCompact", "PostCompact")
-PROTO_CLAUDE = PROTO_BASE + ("PostToolUseFailure", "Notification", "StopFailure", "Elicitation", "ElicitationResult")
+PROTO_CLAUDE = PROTO_BASE + ("PostToolUseFailure", "Notification", "StopFailure", "Elicitation", "ElicitationResult",
+                              "SubagentStart", "SubagentStop")
 PROTO_CODEX = PROTO_BASE + ("Interrupt",)
 
 

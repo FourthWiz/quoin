@@ -1,5 +1,6 @@
 """Session-targeted Stream Deck control for Quoin Agent Desk (macOS)."""
 import fcntl
+import json
 import os
 import re
 import shlex
@@ -137,14 +138,41 @@ def owner_from_title(e, config, surface, title):
     name = title.split(' | ', 1)[0].strip() if ' | ' in title else ''
     if not name or not deckenv.valid_session(name):
         return None
-    for socket in dict.fromkeys([config_socket(config), e.socket_dir]):
+    candidates = [config_socket(config), e.socket_dir]
+    candidates += [deckenv.record_socket(r, e) for _, r, _ in deckenv.iter_records(e) if isinstance(r, dict)]
+    live = []
+    for socket in dict.fromkeys(candidates):
         try:
-            live = dict(sessions(socket)).get(name, False)
+            if dict(sessions(socket)).get(name, False):
+                live.append(socket)
         except Exception:
             continue
-        if live:
-            deckenv.set_surface(e, socket, name, surface)
-            return socket, name
+    # The same name live on two servers cannot be told apart from the title.
+    if len(live) != 1:
+        return None
+    deckenv.set_surface(e, live[0], name, surface)
+    return live[0], name
+
+
+def adopted_project(e, config, socket, name):
+    """Project folder of a session the deck never started: remembered, else its agents', else a pane's cwd."""
+    remembered = config.get('projects', {}).get(name)
+    if isinstance(remembered, str) and os.path.isdir(remembered):
+        return remembered
+    records = [r for _, r, _ in deckenv.iter_records(e)
+               if isinstance(r, dict) and r.get('session') == name and deckenv.record_socket(r, e) == socket
+               and isinstance(r.get('project'), str) and os.path.isdir(r['project'])]
+    if records:
+        return max(records, key=lambda r: r.get('updated') or 0)['project']
+    try:
+        panes = json.loads(run([e.bins['zellij'], '--session', name, 'action', 'list-panes', '--json'], socket=socket))
+    except Exception:
+        return None
+    panes = [p for p in panes if isinstance(p, dict) and not p.get('is_plugin') and not p.get('exited')]
+    for pane in sorted(panes, key=lambda p: not p.get('is_focused')):
+        cwd = pane.get('pane_cwd')
+        if isinstance(cwd, str) and os.path.isdir(cwd):
+            return cwd
     return None
 
 
@@ -207,12 +235,24 @@ def execute(action, config):
             raise RuntimeError('Press Desk or the key of the agent you want first.')
         found = apple('on run\n tell application "Ghostty"\n set t to focused terminal of selected tab of front window\n return (id of t) & linefeed & (name of t)\n end tell\nend run')
         surface, _, title = found.partition('\n')
-        owner = deckenv.find_surface_owner(e, surface) or owner_from_title(e, config, surface, title)
+        owner = deckenv.find_surface_owner(e, surface)
+        adopted = owner is None
+        if adopted:
+            owner = owner_from_title(e, config, surface, title)
         if owner is None:
             raise RuntimeError('Press the key of an agent, or Desk, first to pick the tab for the new pane.')
         check_session(owner[1])
+        if adopted:
+            project = adopted_project(e, config, *owner)
+            if project is None:
+                raise RuntimeError('Could not tell which project ' + owner[1] + ' belongs to. Press the key of one of its agents first.')
+            config['project'] = project
+            deckenv.remember_project(config, owner[1], project)
+        else:
+            config['project'] = config.get('projects', {}).get(owner[1], config['project'])
         config['socket'], config['session'] = owner
-        config['project'] = config.get('projects', {}).get(owner[1], config['project'])
+        if adopted:
+            save(config)
     name = require_live(config)
     socket = config_socket(config)
     prefix = [e.bins['zellij'], '--session', name]

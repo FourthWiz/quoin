@@ -136,18 +136,88 @@ def test_plus_agent_refuses_unknown_or_ambiguous_surface(payload):
         run.assert_not_called()
 
 
-def test_plus_agent_resolves_a_tab_the_deck_did_not_open_from_its_title(payload):
+def _adopted(c, de, tmp_path, **kw):
+    project = tmp_path / "adopted-proj"
+    project.mkdir(exist_ok=True)
+    return str(project)
+
+
+def test_plus_agent_resolves_a_tab_the_deck_did_not_open_from_its_title(payload, tmp_path):
     c = payload("controller")
     de = payload("deckenv")
     env = de.current()
-    cfg = {"session": "other", "project": "/tmp/pr", "projects": {"adopted": "/tmp/adopted"}}
+    project = _adopted(c, de, tmp_path)
+    cfg = {"session": "other", "project": "/tmp/stale", "projects": {"adopted": project}}
     found = "surf-new\nadopted | Claude Code"
     with patch.object(c, "apple", return_value=found), patch.object(c, "sessions", return_value=[("adopted", True)]), \
-            patch.object(c, "run") as run:
+            patch.object(c, "run") as run, patch.object(c, "save"):
         c.execute("claude", dict(cfg))
     argv = run.call_args.args[0]
-    assert argv[1:3] == ["--session", "adopted"] and argv[-1] == "/tmp/adopted"
+    assert argv[1:3] == ["--session", "adopted"] and argv[-1] == project
     assert de.get_surface(env, env.socket_dir, "adopted") == "surf-new"
+
+
+def test_adopted_tab_takes_its_project_from_the_agent_record(payload, tmp_path):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    project = _adopted(c, de, tmp_path)
+    de.ensure_dir(env.agents_dir)
+    de.write_json_atomic(os.path.join(env.agents_dir, "a.json"),
+                         {"session": "adopted", "pane": "0", "socket": env.socket_dir, "project": project, "updated": 5})
+    cfg = {"session": "other", "project": "/tmp/stale", "projects": {}}
+    with patch.object(c, "apple", return_value="surf-n\nadopted | Claude Code"), \
+            patch.object(c, "sessions", return_value=[("adopted", True)]), patch.object(c, "run") as run, \
+            patch.object(c, "save") as save:
+        c.execute("codex", cfg)
+    argv = run.call_args.args[0]
+    assert argv[argv.index("--cwd") + 1] == project and argv[-1] == project
+    assert cfg["projects"]["adopted"] == project and save.called
+
+
+def test_adopted_tab_falls_back_to_the_pane_cwd_and_never_to_the_stale_project(payload, tmp_path):
+    c = payload("controller")
+    de = payload("deckenv")
+    project = _adopted(c, de, tmp_path)
+    panes = json.dumps([{"is_plugin": True, "pane_cwd": "/nope"}, {"pane_cwd": "/missing/dir"},
+                        {"pane_cwd": project, "is_focused": True}])
+
+    def fake_run(argv, **kw):
+        return panes if "list-panes" in argv else ""
+    cfg = {"session": "other", "project": "/tmp/stale", "projects": {}}
+    with patch.object(c, "apple", return_value="surf-n\nadopted | Claude Code"), \
+            patch.object(c, "sessions", return_value=[("adopted", True)]), patch.object(c, "run", side_effect=fake_run) as run, \
+            patch.object(c, "save"):
+        c.execute("shell", cfg)
+    assert run.call_args.args[0][run.call_args.args[0].index("--cwd") + 1] == project
+
+    def no_panes(argv, **kw):
+        if "list-panes" in argv:
+            raise RuntimeError("no server")
+        return ""
+    cfg = {"session": "other", "project": "/tmp/stale", "projects": {}}
+    with patch.object(c, "apple", return_value="surf-m\nfresh | Claude Code"), \
+            patch.object(c, "sessions", return_value=[("fresh", True)]), patch.object(c, "run", side_effect=no_panes) as run, \
+            patch.object(c, "save"):
+        with pytest.raises(RuntimeError, match="which project fresh belongs to"):
+            c.execute("shell", cfg)
+    assert not any("--cwd" in call.args[0] for call in run.call_args_list)
+
+
+def test_title_fallback_refuses_a_name_live_on_two_servers(payload):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+
+    def sessions(socket=None):
+        return [("adopted", True)]
+    cfg = {"session": "other", "project": "/tmp", "socket": "/other/sock", "projects": {}}
+    with patch.object(c, "apple", return_value="surf-n\nadopted | Claude Code"), patch.object(c, "sessions", sessions), \
+            patch.object(c, "run") as run:
+        with pytest.raises(RuntimeError, match="pick the tab"):
+            c.execute("claude", cfg)
+    run.assert_not_called()
+    assert de.get_surface(env, "/other/sock", "adopted") is None
 
 
 @pytest.mark.parametrize("title,live", [("adopted | Claude Code", False), ("not-a-session", True), ("-x | y", True)])

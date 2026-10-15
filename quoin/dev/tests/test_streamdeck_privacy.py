@@ -15,7 +15,7 @@ pytestmark = pytest.mark.usefixtures("deck_home", "forbid_dangerous_subprocess")
 CLAUDE_EVENTS = (
     "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest",
     "PostToolUse", "Stop", "PreCompact", "PostCompact", "PostToolUseFailure",
-    "Notification", "StopFailure", "Elicitation", "ElicitationResult",
+    "Notification", "StopFailure", "Elicitation", "ElicitationResult", "SubagentStart", "SubagentStop",
 )
 CODEX_EVENTS = (
     "SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse",

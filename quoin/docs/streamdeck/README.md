@@ -9,7 +9,7 @@ The panel shows one key per agent and a few action keys:
 
 - Keys 1-9 are agents. Each shows the runtime (Claude or Codex), the project, the session and pane, and a status
   colour: orange NEEDS YOU (the agent asks a question or a permission), blue WORKING (working), green DONE (finished its
-  turn). Other states are grey (IDLE, NO SIGNAL, OFFLINE). Pressing an agent key focuses that agent's
+  turn and no background subagent is still running). Other states are grey (IDLE, NO SIGNAL, OFFLINE). Pressing an agent key focuses that agent's
   Zellij pane in Ghostty.
 - Key 10 is the attention queue: it shows how many agents wait for you and the current page. A press focuses the
   next waiting agent; holding it turns to the next page of nine agents.
@@ -156,8 +156,10 @@ The component adds one managed entry per event, in its own group without a match
 
 (`codex` instead of `claude` for Codex.) The events are:
 
-- Claude Code (14): SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
-  PreCompact, PostCompact, PostToolUseFailure, Notification, StopFailure, Elicitation, ElicitationResult.
+- Claude Code (16): SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
+  PreCompact, PostCompact, PostToolUseFailure, Notification, StopFailure, Elicitation, ElicitationResult,
+  SubagentStart, SubagentStop. The last two only let the deck keep WORKING until the last background subagent
+  stops; a subagent that never reports its stop stops counting after three hours.
 - Codex (10): SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
   PreCompact, PostCompact, Interrupt.
 
