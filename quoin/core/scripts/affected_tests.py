@@ -1911,6 +1911,22 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/tools/agentdesk/setup-agentdesk.sh",
         "quoin/dev/tests/test_install_prompts.py",
     ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_keybinds.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_keybinds_v2.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_ghostty.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_keybinds_live.py",
+    ),
     # Tests added with the interpreter, pytest-bound and ledger-summary work: an edit to
     # one of these documents must select the guard that reads it.
     (
