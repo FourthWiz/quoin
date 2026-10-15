@@ -1047,7 +1047,7 @@ HELP
   # ── Zellij guard (AFTER arg parsing) ──────────────────────────────────────
   if [ -n "${ZELLIJ:-}" ]; then
     echo "You are already inside a Zellij session."
-    echo "Detach first with: Ctrl+o, then d"
+    echo "Detach with Alt+s, then d (needs Ghostty macos-option-as-alt), or run: zellij action detach"
     return 1
   fi
 
@@ -1125,9 +1125,6 @@ HELP
   # ── Prepare workflow artifacts ─────────────────────────────────────────────
   mkdir -p "$project_root/.workflow_artifacts"
 
-  touch "$project_root/.workflow_artifacts/current-plan.md"
-  touch "$project_root/.workflow_artifacts/review.md"
-  touch "$project_root/.workflow_artifacts/lessons-learned.md"
   touch "$project_root/.workflow_artifacts/repos.md"
 
   {

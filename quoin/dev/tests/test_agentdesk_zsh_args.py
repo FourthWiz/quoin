@@ -2284,3 +2284,73 @@ def test_clean_state_backup_name_never_overwrites(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert (state_dir / "last-layout.bak.20260101-000000").read_text() == "older backup\n"
     assert (state_dir / "last-layout.bak.20260101-000000-1").read_bytes() == original
+
+
+# ── detach hint and workflow-artifact placeholders ───────────────────────────
+
+_AGENTDESK_TOOLS_DIR = AGENTDESK_ZSH.parent
+_LEGACY_SETUP = _AGENTDESK_TOOLS_DIR / "setup-agentdesk.sh"
+_PLACEHOLDERS = ("current-plan.md", "review.md", "lessons-learned.md")
+
+
+def test_no_stale_detach_hint_in_launcher_files() -> None:
+    for path in _AGENTDESK_TOOLS_DIR.rglob("*"):
+        if path.is_file():
+            assert "Ctrl+o, then d" not in path.read_text(encoding="utf-8"), path
+
+
+def test_inside_zellij_prints_working_detach_hint(tmp_path: Path) -> None:
+    env = _make_state_env(tmp_path)
+    env["ZELLIJ"] = "1"
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"\nagentdesk claude'],
+        env=env, input="", capture_output=True, text=True, cwd=str(tmp_path),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 1
+    assert "Alt+s, then d" in result.stdout
+    assert "zellij action detach" in result.stdout
+
+
+def test_legacy_inline_launcher_has_new_hint_and_no_placeholders() -> None:
+    text = _LEGACY_SETUP.read_text(encoding="utf-8")
+    start_marker = 'cat > "$helpers_tmp" <<\'EOF\'\n'
+    start = text.index(start_marker) + len(start_marker)
+    end = text.index("\nEOF\n", start)
+    body = text[start:end]
+    assert "agentdesk() {" in body
+    assert "Alt+s, then d" in body and "zellij action detach" in body
+    for name in _PLACEHOLDERS:
+        assert f'touch "$project_root/.workflow_artifacts/{name}"' not in body
+    assert 'touch "$project_root/.workflow_artifacts/repos.md"' in body
+
+
+def test_launch_creates_no_placeholder_files(tmp_path: Path) -> None:
+    project = tmp_path / "freshproj"
+    project.mkdir()
+    env = _make_state_env(tmp_path)
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"\nagentdesk claude shell'],
+        env=env, input="", capture_output=True, text=True, cwd=str(project),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    names = sorted(p.name for p in (project / ".workflow_artifacts").iterdir())
+    assert "repos.md" in names
+    for name in _PLACEHOLDERS:
+        assert name not in names
+
+
+def test_launch_leaves_existing_plan_file_untouched(tmp_path: Path) -> None:
+    project = tmp_path / "existingproj"
+    (project / ".workflow_artifacts").mkdir(parents=True)
+    plan = project / ".workflow_artifacts" / "current-plan.md"
+    plan.write_text("keep me\n")
+    env = _make_state_env(tmp_path)
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"\nagentdesk claude shell'],
+        env=env, input="", capture_output=True, text=True, cwd=str(project),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert plan.read_text() == "keep me\n"
