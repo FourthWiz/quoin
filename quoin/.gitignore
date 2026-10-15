@@ -1,5 +1,7 @@
 # Runtime / personal artifacts — never commit to the distributable quoin package
 .workflow_artifacts/
+# Test fixtures model a project's .workflow_artifacts tree and must be committed in full.
+!/dev/tests/fixtures/**/.workflow_artifacts/
 .claude/
 settings.local.json
 

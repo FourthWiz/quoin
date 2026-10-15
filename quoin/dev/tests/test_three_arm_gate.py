@@ -730,6 +730,10 @@ class TestDriverPlanOnly:
         monkeypatch.setattr(gate_mod, "worktree_head", fake_worktree_head)
         monkeypatch.setattr(gate_mod, "candidate_about_version_matches", lambda root, py: True)
         monkeypatch.setattr(gate_mod, "_install_py", lambda: "/usr/bin/python3")
+        # The real probe asks the running interpreter where `import quoin` lands, which depends on
+        # how the checkout was installed (a worktree may borrow another checkout's virtualenv).
+        monkeypatch.setattr(gate_mod, "bare_import_quoin_file",
+                            lambda py: str(gate_mod._repo_root / "src" / "quoin" / "__init__.py"))
 
     def test_plan_only_never_invokes_run_arm(self, tmp_path):
         from quoin.benchmarks.scripts.run_three_arm_gate import ThreeArmGateDriver
