@@ -160,20 +160,38 @@ def appear(*specs):
     return [{"op": "appear", "ctx": c, "role": r, "slot": s} for c, r, s in specs]
 
 
-def test_agent_faces_and_empty_slot(tmp_path):
-    agents = [
-        rec("a1", "claude", "quoin-main-session", 3, "/w/quoin", "working"),
-        rec("a2", "codex", "alpha", 1, "", "idle"),
-        rec("a3", "claude", "gamma", 2, "/w/g", "weird"),
-    ]
+AGENT_FACE_CASES = [
+    (rec("a1", "claude", "quoin-main-session", 3, "/w/quoin", "working"),
+     {"lines": ["CLAUDE", "quoin", "n-session · 3", "WORKING"], "color": BLUE}),
+    (rec("a2", "codex", "alpha", 1, "", "idle"),
+     {"lines": ["CODEX", "alpha", "alpha · 1", "IDLE"], "color": GREY}),
+    (rec("a3", "claude", "gamma", 2, "/w/g", "weird"),
+     {"lines": ["CLAUDE", "g", "gamma · 2", "NO SIGNAL"], "color": NOSIG}),
+]
+
+
+def test_collapsed_keys_show_one_face_per_session(tmp_path):
+    agents = [case[0] for case in AGENT_FACE_CASES]
     steps = appear(("c0", "agent", 0), ("c1", "agent", 1), ("c2", "agent", 2), ("c4", "agent", 4)) + [
         {"op": "open"}, {"op": "faces"}]
     out, _ = run_scenario(tmp_path, steps, initial=agents)
     f = out["faces"][0]
-    assert f["c0"] == {"lines": ["CLAUDE", "quoin", "n-session · 3", "WORKING"], "color": BLUE}
-    assert f["c1"] == {"lines": ["CODEX", "alpha", "alpha · 1", "IDLE"], "color": GREY}
-    assert f["c2"] == {"lines": ["CLAUDE", "g", "gamma · 2", "NO SIGNAL"], "color": NOSIG}
-    assert f["c4"] == {"lines": ["—", "Agent 5", "", ""], "color": EMPTY}
+    assert f["c0"] == {"lines": ["alpha · 1", "", "", "IDLE"], "color": GREY}
+    assert f["c1"] == {"lines": ["gamma · 1", "g", "", "NO SIGNAL"], "color": NOSIG}
+    assert f["c2"] == {"lines": ["quoin-ma · 1", "quoin", "", "WORKING"], "color": BLUE}
+    assert f["c4"] == {"lines": ["—", "", "", ""], "color": EMPTY}
+
+
+@pytest.mark.parametrize("record,expected", AGENT_FACE_CASES)
+def test_agent_faces_inside_an_opened_session(tmp_path, record, expected):
+    steps = appear(("c0", "agent", 0), ("c1", "agent", 1), ("c2", "agent", 2)) + [
+        {"op": "open"}, {"op": "down", "ctx": "c0"}, {"op": "up", "ctx": "c0"}, {"op": "faces"}]
+    out, _ = run_scenario(tmp_path, steps, initial=[record])
+    f = out["faces"][0]
+    assert f["c0"] == {"lines": ["← BACK", record["session"][:16], "", ""], "color": NEUTRAL}
+    assert f["c1"] == expected
+    assert f["c2"] == {"lines": ["—", "", "", ""], "color": EMPTY}
+    assert actions(out) == []
 
 
 def test_attention_agent_blinks_with_the_clock(tmp_path):
@@ -219,12 +237,15 @@ def test_no_config_shows_a_notice_on_every_key(tmp_path):
     assert out["calls"] == []
 
 
-def test_agent_key_press_focuses_the_record(tmp_path):
+def test_agent_key_press_in_an_opened_session_focuses_once_and_stays_open(tmp_path):
     agents = [rec("a1", session="one"), rec("a2", session="two", status="working")]
     steps = appear(("c0", "agent", 0), ("c1", "agent", 1)) + [
-        {"op": "open"}, {"op": "down", "ctx": "c1"}, {"op": "up", "ctx": "c1"}]
+        {"op": "open"}, {"op": "down", "ctx": "c1"}, {"op": "up", "ctx": "c1"}, {"op": "faces"},
+        {"op": "down", "ctx": "c1"}, {"op": "up", "ctx": "c1"}, {"op": "faces"}]
     out, _ = run_scenario(tmp_path, steps, initial=agents)
+    assert out["faces"][0]["c0"]["lines"][0] == "← BACK" and out["faces"][0]["c1"]["lines"][0] == "CLAUDE"
     assert actions(out) == [{"action": "focus", "arg": agents[1]}]
+    assert out["faces"][1]["c0"]["lines"] == ["← BACK", "two", "", ""]
 
 
 def test_attention_short_presses_cycle_and_wrap(tmp_path):
@@ -244,9 +265,9 @@ def test_attention_hold_turns_the_page(tmp_path):
         {"op": "faces"}]
     out, _ = run_scenario(tmp_path, steps, initial=agents)
     f = out["faces"][0]
-    assert f["c0"]["lines"] == ["CLAUDE", "proj10", "sess10 · 10", "IDLE"]
-    assert f["c2"]["lines"] == ["CLAUDE", "proj12", "sess12 · 12", "IDLE"]
-    assert f["c3"] == {"lines": ["—", "Agent 13", "", ""], "color": EMPTY}
+    assert f["c0"] == {"lines": ["sess10 · 1", "proj10", "", "IDLE"], "color": GREY}
+    assert f["c2"] == {"lines": ["sess12 · 1", "proj12", "", "IDLE"], "color": GREY}
+    assert f["c3"] == {"lines": ["—", "", "", ""], "color": EMPTY}
     assert f["att"]["lines"] == ["ATTENTION", "0", "Page 2/2", "Hold: next page"]
     assert actions(out) == []
 
@@ -281,15 +302,30 @@ def test_glass_plays_once_per_new_waiting_agent(tmp_path):
     assert out["sounds"] == 2
 
 
-def test_key_swap_keeps_the_target_captured_at_key_down(tmp_path):
-    first, second = rec("a1", session="one"), rec("a2", session="two", status="working")
-    steps = appear(("c0", "agent", 0)) + [
+def test_collapsed_key_swap_opens_the_session_captured_at_key_down(tmp_path):
+    first = rec("a1", session="alpha")
+    second = rec("a2", session="beta", status="working")
+    third = rec("a3", session="aaa")
+    steps = appear(("c0", "agent", 0), ("c1", "agent", 1)) + [
         {"op": "open"}, {"op": "down", "ctx": "c0"},
-        {"op": "snapshot", "list": [second, first]}, {"op": "faces"},
-        {"op": "up", "ctx": "c0"}]
+        {"op": "snapshot", "list": [first, second, third]}, {"op": "faces"},
+        {"op": "up", "ctx": "c0"}, {"op": "faces"}]
     out, _ = run_scenario(tmp_path, steps, initial=[first, second])
-    assert out["faces"][0]["c0"]["lines"][2] == "two · 1"
-    assert actions(out) == [{"action": "focus", "arg": first}]
+    assert out["faces"][0]["c0"]["lines"][0] == "aaa · 1"
+    assert out["faces"][1]["c0"]["lines"] == ["← BACK", "alpha", "", ""]
+    assert actions(out) == []
+
+
+def test_expanded_key_swap_focuses_the_agent_captured_at_key_down(tmp_path):
+    x, y = rec("x", session="same", pane=1), rec("y", session="same", pane=2, status="working")
+    steps = appear(("c0", "agent", 0), ("c1", "agent", 1)) + [
+        {"op": "open"}, {"op": "down", "ctx": "c0"}, {"op": "up", "ctx": "c0"},
+        {"op": "down", "ctx": "c1"},
+        {"op": "snapshot", "list": [y, x]}, {"op": "faces"},
+        {"op": "up", "ctx": "c1"}]
+    out, _ = run_scenario(tmp_path, steps, initial=[x, y])
+    assert out["faces"][0]["c1"]["lines"][2] == "same · 2"
+    assert actions(out) == [{"action": "focus", "arg": x}]
 
 
 def test_harness_refuses_unexpected_spawns(tmp_path):
@@ -503,3 +539,227 @@ def test_back_empty_agent_and_attention_faces(tmp_path):
     assert agent == {"lines": ["CLAUDE", "quoin", "n-session · 3", "WORKING"], "color": BLUE}
     assert att_none == {"lines": ["ATTENTION", "0", "Page 1/1", "Hold: next page"], "color": QUIET}
     assert att_some == {"lines": ["ATTENTION", "2", "Page 2/3", "Hold: next page"], "color": ORANGE}
+
+
+PANEL_HARNESS = r"""
+const fs = require('node:fs');
+const p = require(process.argv[2]);
+const scenario = JSON.parse(fs.readFileSync(process.argv[3], 'utf8'));
+const sent = [], calls = [];
+const clock = {t: 2000};
+let sounds = 0, refreshes = 0, pending = false;
+const panel = p.createPanel({
+  send: (event, context, payload) => sent.push({event, context, payload}),
+  call: (action, arg) => { calls.push({action, arg}); return pending ? new Promise(() => {}) : Promise.resolve(''); },
+  refresh: async () => { refreshes++; },
+  playSound: () => { sounds++; },
+  now: () => clock.t,
+  hasConfig: true,
+});
+function decode(img) {
+  const svg = Buffer.from(img.split(',')[1], 'base64').toString();
+  const un = s => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, '&');
+  return {color: /<rect[^>]*fill="([^"]+)"/.exec(svg)[1], lines: [...svg.matchAll(/<text[^>]*>(.*?)<\/text>/g)].map(m => un(m[1]))};
+}
+const message = m => panel.onMessage(m);
+const contexts = [], out = {faces: [], marks: []};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+(async () => {
+  for (const step of scenario.steps) {
+    const wait = step.nowait ? sleep(20) : null;
+    if (step.op === 'appear') {
+      contexts.push(step.ctx);
+      await message({event: 'willAppear', context: step.ctx, payload: {settings: {role: step.role, slot: step.slot}}});
+    } else if (step.op === 'snapshot') { panel.setAgents(step.list); panel.render(); }
+    else if (step.op === 'tick') panel.render();
+    else if (step.op === 'clock') clock.t = step.t;
+    else if (step.op === 'pending') pending = step.value;
+    else if (step.op === 'down') await message({event: 'keyDown', context: step.ctx, payload: {}});
+    else if (step.op === 'up') { const run = message({event: 'keyUp', context: step.ctx, payload: {}}); if (step.nowait) await sleep(20); else await run; }
+    else if (step.op === 'mark') out.marks.push({sounds, calls: calls.length, refreshes});
+    else if (step.op === 'faces') {
+      const entry = {};
+      for (const ctx of (step.ctxs || contexts)) {
+        const images = sent.filter(e => e.event === 'setImage' && e.context === ctx);
+        entry[ctx] = images.length ? decode(images[images.length - 1].payload.image) : null;
+      }
+      out.faces.push(entry);
+    } else { process.stderr.write('unknown step ' + step.op); process.exit(5); }
+  }
+  out.calls = calls; out.sounds = sounds; out.refreshes = refreshes;
+  console.log(JSON.stringify(out));
+  process.exit(0);
+})();
+"""
+
+
+def run_panel(tmp_path, steps):
+    harness = tmp_path / "panel.js"
+    harness.write_text(PANEL_HARNESS)
+    scenario = tmp_path / "panel.json"
+    scenario.write_text(json.dumps({"steps": steps}))
+    result = subprocess.run([h.NODE, str(harness), str(PLUGIN), str(scenario)], capture_output=True, text=True,
+                            timeout=60, env={"HOME": str(tmp_path), "PATH": "/usr/bin:/bin"})
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def deck(att=True):
+    keys = [("k%d" % n, "agent", n) for n in range(9)]
+    return appear(*keys) + (appear(("att", "attention", 0)) if att else [])
+
+
+def tap(ctx, **extra):
+    return [dict({"op": "down", "ctx": ctx}), dict({"op": "up", "ctx": ctx}, **extra)]
+
+
+def first_lines(face_map, n=9):
+    return [face_map["k%d" % i]["lines"][0] for i in range(n)]
+
+
+EMPTY_LINE = "—"
+
+
+def test_three_sessions_with_counts_and_empty_keys(tmp_path):
+    snapshot = [many("b", 1)[0], many("a", 3)[0], many("c", 2)[0], many("a", 3)[1], many("c", 2)[1], many("a", 3)[2]]
+    out = run_panel(tmp_path, deck() + [{"op": "snapshot", "list": snapshot}, {"op": "faces"}])
+    assert first_lines(out["faces"][0]) == ["a · 3", "b · 1", "c · 2"] + [EMPTY_LINE] * 6
+    assert out["faces"][0]["k5"] == {"lines": ["—", "", "", ""], "color": EMPTY}
+    assert out["faces"][0]["att"]["lines"] == ["ATTENTION", "0", "Page 1/1", "Hold: next page"]
+
+
+def test_session_key_shows_the_highest_priority_status_and_blinks(tmp_path):
+    mixed = [rec("m1", session="m", status="working"), rec("m2", session="m", status="attention"),
+             rec("m3", session="m", status="idle")]
+    steps = deck() + [{"op": "snapshot", "list": mixed}, {"op": "clock", "t": 2000}, {"op": "tick"}, {"op": "faces", "ctxs": ["k0"]},
+                      {"op": "clock", "t": 3000}, {"op": "tick"}, {"op": "faces", "ctxs": ["k0"]}]
+    out = run_panel(tmp_path, steps)
+    assert out["faces"][0]["k0"] == {"lines": ["m · 3", "p", "", "NEEDS YOU"], "color": ORANGE}
+    assert out["faces"][1]["k0"]["color"] == ORANGE_BLINK
+
+
+def test_twelve_sessions_page_with_hold(tmp_path):
+    twelve = [r for n in range(12) for r in many("s%02d" % n, 1)]
+    hold = [{"op": "down", "ctx": "att"}, {"op": "clock", "t": 2700}, {"op": "up", "ctx": "att"}, {"op": "clock", "t": 2000}]
+    out = run_panel(tmp_path, deck() + [{"op": "snapshot", "list": twelve}, {"op": "faces"}] + hold + [
+        {"op": "faces"}] + hold + [{"op": "faces"}])
+    first, second, wrapped = out["faces"]
+    assert first_lines(first) == ["s%02d · 1" % n for n in range(9)] and first["att"]["lines"][2] == "Page 1/2"
+    assert first_lines(second) == ["s09 · 1", "s10 · 1", "s11 · 1"] + [EMPTY_LINE] * 6
+    assert second["att"]["lines"][2] == "Page 2/2"
+    assert first_lines(wrapped)[0] == "s00 · 1" and wrapped["att"]["lines"][2] == "Page 1/2"
+    assert out["calls"] == []
+
+
+def test_opened_session_back_key_agents_and_paging(tmp_path):
+    big = many("big", 10, project="/w/proj")
+    others = many("other", 2)
+    hold = [{"op": "down", "ctx": "att"}, {"op": "clock", "t": 2700}, {"op": "up", "ctx": "att"}, {"op": "clock", "t": 2000}]
+    steps = deck() + [{"op": "snapshot", "list": others + big}] + tap("k0") + [
+        {"op": "faces"}] + hold + [{"op": "faces"}] + tap("k0") + [{"op": "faces"}]
+    out = run_panel(tmp_path, steps)
+    opened, paged, back = out["faces"]
+    assert opened["k0"] == {"lines": ["← BACK", "big", "", ""], "color": NEUTRAL}
+    assert opened["k1"] == {"lines": ["CLAUDE", "proj", "big · 1", "IDLE"], "color": GREY}
+    assert opened["k8"]["lines"][2] == "big · 8"
+    assert opened["att"]["lines"][2] == "Page 1/2"
+    assert paged["k0"]["lines"][0] == "← BACK" and paged["k1"]["lines"][2] == "big · 9"
+    assert paged["k2"]["lines"][2] == "big · 10" and paged["k3"]["lines"][0] == EMPTY_LINE
+    assert paged["att"]["lines"][2] == "Page 2/2"
+    assert first_lines(back)[:2] == ["big · 10", "other · 2"]
+    assert out["calls"] == []
+
+
+def test_single_agent_session_opens_without_focusing(tmp_path):
+    out = run_panel(tmp_path, deck() + [{"op": "snapshot", "list": many("solo", 1)}] + tap("k0") + [{"op": "faces"}])
+    assert out["faces"][0]["k0"]["lines"][0] == "← BACK" and out["faces"][0]["k1"]["lines"][2] == "solo · 1"
+    assert out["calls"] == [] and out["refreshes"] == 0
+
+
+def test_focus_press_keeps_the_session_open_and_sends_the_original_record(tmp_path):
+    agents = many("one", 3)
+    out = run_panel(tmp_path, deck() + [{"op": "snapshot", "list": agents}] + tap("k0") + tap("k2") + [{"op": "faces"}])
+    assert out["calls"] == [{"action": "focus", "arg": agents[1]}]
+    assert set(out["calls"][0]["arg"]) == set(agents[1])
+    assert out["faces"][0]["k0"]["lines"][0] == "← BACK" and out["refreshes"] == 1
+
+
+def test_back_returns_to_the_page_left_and_clamps(tmp_path):
+    twelve = [r for n in range(12) for r in many("s%02d" % n, 1)]
+    hold = [{"op": "down", "ctx": "att"}, {"op": "clock", "t": 2700}, {"op": "up", "ctx": "att"}, {"op": "clock", "t": 2000}]
+    steps = deck() + [{"op": "snapshot", "list": twelve}] + hold + tap("k0") + [{"op": "faces"}] + tap("k0") + [
+        {"op": "faces"}] + tap("k0") + [{"op": "snapshot", "list": twelve[9:]}] + tap("k0") + [{"op": "faces"}]
+    out = run_panel(tmp_path, steps)
+    opened, back, clamped = out["faces"]
+    assert opened["k0"]["lines"] == ["← BACK", "s09", "", ""]
+    assert first_lines(back)[:3] == ["s09 · 1", "s10 · 1", "s11 · 1"]
+    assert first_lines(clamped)[:3] == ["s09 · 1", "s10 · 1", "s11 · 1"] and clamped["att"]["lines"][2] == "Page 1/1"
+
+
+def test_an_opened_session_that_vanishes_falls_back_to_the_list(tmp_path):
+    steps = deck() + [{"op": "snapshot", "list": many("a", 2) + many("b", 1)}] + tap("k0") + [
+        {"op": "snapshot", "list": many("b", 1)}, {"op": "faces"}]
+    out = run_panel(tmp_path, steps)
+    assert first_lines(out["faces"][0])[:2] == ["b · 1", EMPTY_LINE]
+
+
+def test_attention_press_reaches_other_sessions_without_changing_the_view(tmp_path):
+    agents = many("a", 2) + many("b", 2, status="attention") + many("c", 1, status="attention")
+    steps = deck() + [{"op": "snapshot", "list": agents}] + tap("k0") + [{"op": "faces", "ctxs": ["att", "k0"]}] + tap("att") + tap("att") + [
+        {"op": "faces", "ctxs": ["att", "k0", "k1"]}]
+    out = run_panel(tmp_path, steps)
+    assert out["faces"][0]["att"]["lines"][1] == "3"
+    assert [c["arg"]["id"] for c in out["calls"]] == ["b-1", "b-2"]
+    assert out["faces"][1]["k0"]["lines"] == ["← BACK", "a", "", ""]
+
+
+def test_glass_plays_for_a_new_waiting_agent_in_both_views(tmp_path):
+    base = many("a", 2) + many("b", 2)
+
+    def waiting(*ids):
+        return [dict(r, status="attention" if r["id"] in ids else "idle") for r in base]
+
+    steps = deck() + [
+        {"op": "snapshot", "list": waiting()}, {"op": "mark"},
+        {"op": "snapshot", "list": waiting("b-1")}, {"op": "mark"},
+        {"op": "snapshot", "list": waiting("b-1")}, {"op": "mark"}] + tap("k0") + [
+        {"op": "snapshot", "list": waiting("b-1", "b-2")}, {"op": "mark"},
+        {"op": "snapshot", "list": waiting("b-2")}, {"op": "mark"}]
+    out = run_panel(tmp_path, steps)
+    assert [m["sounds"] for m in out["marks"]] == [0, 1, 1, 2, 2]
+
+
+def test_a_session_that_closes_before_key_up_leaves_the_panel_on_the_list(tmp_path):
+    steps = deck() + [{"op": "snapshot", "list": many("x", 1) + many("y", 1)}, {"op": "down", "ctx": "k0"},
+                      {"op": "snapshot", "list": many("y", 1)}, {"op": "up", "ctx": "k0"}, {"op": "faces"}]
+    out = run_panel(tmp_path, steps)
+    assert first_lines(out["faces"][0])[:2] == ["y · 1", EMPTY_LINE]
+    assert out["calls"] == []
+
+
+def test_standalone_record_gets_its_own_key_after_the_sessions(tmp_path):
+    loose = {"id": "loose", "kind": "codex", "status": "working", "pane": 4, "project": "/w/loose"}
+    steps = deck() + [{"op": "snapshot", "list": [loose] + many("a", 1)}, {"op": "faces"}] + tap("k1") + [
+        {"op": "faces", "ctxs": ["k0", "k1"]}]
+    out = run_panel(tmp_path, steps)
+    assert out["faces"][0]["k0"]["lines"][0] == "a · 1"
+    assert out["faces"][0]["k1"] == {"lines": ["CODEX", "loose", " · 4", "WORKING"], "color": BLUE}
+    assert out["calls"] == [{"action": "focus", "arg": loose}]
+    assert out["faces"][1]["k0"]["lines"][0] == "a · 1"
+
+
+def test_back_still_works_while_a_focus_call_is_pending(tmp_path):
+    steps = deck() + [{"op": "snapshot", "list": many("a", 2)}] + tap("k0") + [{"op": "pending", "value": True}] + [
+        {"op": "down", "ctx": "k1"}, {"op": "up", "ctx": "k1", "nowait": True}] + tap("k0") + [{"op": "faces"}]
+    out = run_panel(tmp_path, steps)
+    assert len(out["calls"]) == 1 and out["calls"][0]["action"] == "focus"
+    assert first_lines(out["faces"][0])[0] == "a · 2"
+
+
+def test_flat_agent_list_survives_odd_snapshot_data(tmp_path):
+    steps = deck() + [{"op": "snapshot", "list": None}, {"op": "faces", "ctxs": ["k0", "att"]},
+                      {"op": "snapshot", "list": [None, "x", {"id": "q", "session": "z", "status": "attention"}]},
+                      {"op": "faces", "ctxs": ["k0", "att"]}]
+    out = run_panel(tmp_path, steps)
+    assert out["faces"][0]["k0"]["lines"] == ["—", "", "", ""]
+    assert out["faces"][1]["k0"]["lines"][0] == "z · 1" and out["faces"][1]["att"]["lines"][1] == "1"

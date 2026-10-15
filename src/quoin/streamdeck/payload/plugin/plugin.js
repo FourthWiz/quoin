@@ -158,20 +158,21 @@ function attentionFace(waiting,page,pages){
 
 function createPanel({send, call, refresh = async()=>{}, playSound = ()=>{}, now = Date.now, hasConfig = true}){
 const contexts = new Map();
-let agents=[], page=0, lastAttention=null, pressedAttention=0, actionBusy=false;
+let agents=[], view=initialView(), lastAttention=null, pressedAttention=0, actionBusy=false;
 function setAgents(list){agents=Array.isArray(list)?list:[];}
 function render(){
  if(!hasConfig){renderNoConfig();return;}
- const pages=Math.max(1,Math.ceil(agents.length/9));page=Math.min(page,pages-1);
- const waiting=agents.filter(a=>a.status==='attention');
+ const items=groupAgents(agents);
+ view=reconcile(view,items);
+ const slots=layoutSlots(view,items);
+ const waiting=agents.filter(a=>a && a.status==='attention');
  for(const [context,v] of contexts){
    let lines,color='#213a4e',target=null;
    const role=v.settings.role||'agent';
    if(role==='agent'){
-     const slot=Number(v.settings.slot)||0; target=agents[page*9+slot]||null;
-     if(target){({lines,color}=agentFace(target,now()));
-     }else{lines=['—','Agent '+(page*9+slot+1),'',''];color='#18202a';}
-   }else if(role==='attention'){lines=['ATTENTION',String(waiting.length),`Page ${page+1}/${pages}`,'Hold: next page'];color=waiting.length?'#bd4d10':'#273b43';}
+     const slot=Number(v.settings.slot)||0; target=slots[slot]||null;
+     ({lines,color}=face(target,now()));
+   }else if(role==='attention'){({lines,color}=attentionFace(waiting.length,currentPage(view),pageCount(view,items)));}
    else{lines=({desk:['DESK','2 Codex + Shell','','Hold: menu'],claude:['+ CLAUDE','New pane'],codex:['+ CODEX','New pane'],'prev-tab':['← TAB','Ghostty'],'next-tab':['TAB →','Ghostty']})[role]||['Agent Desk'];}
    v.target=target;
    const img=icon(lines,color);
@@ -189,14 +190,17 @@ async function onMessage(m){
  const v=contexts.get(m.context);if(!v)return;
  if(m.event==='keyDown'){v.down=now();v.pressed=v.target;}
  if(m.event==='keyUp'){
+   const held=now()-(v.down||now())>650,role=v.settings.role||'agent';
+   // Opening a session, going back and turning the page only change the view, so they never wait behind a slow focus call.
+   if(role==='agent'){
+     const t=v.pressed;
+     if(t && (t.type==='session' || t.type==='back')){view=reconcile(press(view,t).view,groupAgents(agents));render();return;}
+   }else if(role==='attention' && held){view=reconcile(nextPage(view,groupAgents(agents)),groupAgents(agents));render();return;}
    if(actionBusy)return;actionBusy=true;
    try{
-   const held=now()-(v.down||now())>650,role=v.settings.role||'agent';
-   if(role==='agent' && v.pressed)await call('focus',v.pressed);
-   else if(role==='attention'){
-     if(held){page=(page+1)%Math.max(1,Math.ceil(agents.length/9));render();}
-     else{const waiting=agents.filter(a=>a.status==='attention');if(waiting.length)await call('focus',waiting[pressedAttention++%waiting.length]);}
-   }else if(role!=='agent')await call(role==='desk'&&held?'menu':role);
+   if(role==='agent'){const r=press(view,v.pressed);if(r.focus)await call('focus',r.focus);}
+   else if(role==='attention'){const waiting=agents.filter(a=>a && a.status==='attention');if(waiting.length)await call('focus',waiting[pressedAttention++%waiting.length]);}
+   else await call(role==='desk'&&held?'menu':role);
    await refresh();
    }finally{actionBusy=false;}
  }
