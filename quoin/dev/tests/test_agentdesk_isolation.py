@@ -102,6 +102,38 @@ def test_guard_rejects_explicit_env_without_or_with_empty_home(fake_real):
         cf._check_child_env({"HOME": "", "PATH": "/usr/bin"}, real, base)
 
 
+def test_guard_rejects_relative_home_and_xdg(fake_real, tmp_path):
+    real, base = fake_real
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    with pytest.raises(AssertionError, match="relative"):
+        cf._check_child_env({"HOME": "home"}, real, base)
+    with pytest.raises(AssertionError, match="relative"):
+        cf._check_child_env(
+            {"HOME": str(other), "XDG_CONFIG_HOME": ".config"}, real, base
+        )
+
+
+def test_guard_rejects_zdotdir_into_real_home_or_relative(fake_real, tmp_path):
+    real, base = fake_real
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    with pytest.raises(AssertionError, match="ZDOTDIR"):
+        cf._check_child_env({"HOME": str(other), "ZDOTDIR": str(real)}, real, base)
+    with pytest.raises(AssertionError, match="ZDOTDIR"):
+        cf._check_child_env({"HOME": str(other), "ZDOTDIR": "rel"}, real, base)
+    cf._check_child_env({"HOME": str(other), "ZDOTDIR": str(other)}, real, base)
+
+
+def test_zdotdir_points_at_temp_home():
+    assert os.environ["ZDOTDIR"] == os.environ["HOME"]
+
+
+def test_spawn_guard_rejects_relative_home():
+    with pytest.raises(AssertionError):
+        subprocess.run(["true"], env={"HOME": "rel", "PATH": "/usr/bin:/bin"})
+
+
 def test_guard_accepts_inherited_env():
     cf._check_child_env(None, "/nonexistent-real-home", "/nonexistent-base")
 

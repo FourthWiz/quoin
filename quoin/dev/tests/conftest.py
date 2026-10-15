@@ -431,7 +431,9 @@ def _check_child_env(env, real_home, allowed_root):
     env=None means the child inherits os.environ (already isolated by the
     fixture), so it is accepted. An explicit mapping is the child's whole
     environment: a missing or empty HOME is a failure because zsh then fills
-    HOME from the passwd database, which is the real home. Paths under
+    HOME from the passwd database, which is the real home. HOME,
+    XDG_CONFIG_HOME and ZDOTDIR must be absolute (zsh reads startup files from
+    ZDOTDIR, so one pointing into the real home is rejected like the others). Paths under
     allowed_root (the pytest base temp dir) are accepted before the real-home
     rule so machines whose temp dir lives under the home directory still work.
     """
@@ -445,10 +447,16 @@ def _check_child_env(env, real_home, allowed_root):
             "agentdesk test hermeticity: explicit env without HOME "
             "(zsh falls back to the passwd home, the real home)"
         )
-    for name in ("HOME", "XDG_CONFIG_HOME"):
+    for name in ("HOME", "XDG_CONFIG_HOME", "ZDOTDIR"):
         value = env.get(name)
         if not value:
             continue
+        if not os.path.isabs(value):
+            raise AssertionError(
+                f"agentdesk test hermeticity: {name}={value!r} is relative and "
+                f"would resolve against the child's working directory; use an "
+                f"absolute temp path"
+            )
         resolved = Path(value).resolve()
         if allowed is not None and _under(resolved, allowed):
             continue
@@ -491,6 +499,8 @@ def _agentdesk_home_isolation(request, tmp_path_factory):
     home = tmp_path_factory.mktemp("agentdesk-home")
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    # zsh startup files come from ZDOTDIR when set; keep them inside the temp home.
+    monkeypatch.setenv("ZDOTDIR", str(home))
     for name in (
         "AGENTDESK_DASHBOARD",
         "AGENTDESK_DASHBOARD_URL_FILE",
