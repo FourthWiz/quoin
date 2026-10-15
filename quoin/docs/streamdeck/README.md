@@ -8,7 +8,7 @@ installs and upgrades it only when you ask.
 The panel shows one key per agent and a few action keys:
 
 - Keys 1-9 are agents. Each shows the runtime (Claude or Codex), the project, the session and pane, and a status
-  colour: orange NEEDS YOU (the agent is waiting for you), blue WORKING (working), green DONE (finished its
+  colour: orange NEEDS YOU (the agent asks a question or a permission), blue WORKING (working), green DONE (finished its
   turn). Other states are grey (IDLE, NO SIGNAL, OFFLINE). Pressing an agent key focuses that agent's
   Zellij pane in Ghostty.
 - Key 10 is the attention queue: it shows how many agents wait for you and the current page. A press focuses the

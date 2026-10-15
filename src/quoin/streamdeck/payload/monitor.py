@@ -111,8 +111,9 @@ def transition(old, event):
         pending[token] = "question" if name == "Elicitation" or tool in (
             "AskUserQuestion", "request_user_input") else "permission"
         state["status"] = "attention"
-    elif name == "Notification" and event.get("notification_type") in (
-            "permission_prompt", "idle_prompt", "elicitation_dialog"):
+    # idle_prompt is only a reminder that a finished turn got no reply (often while a background
+    # job still runs); it asks nothing, so the agent keeps its done/idle status.
+    elif name == "Notification" and event.get("notification_type") in ("permission_prompt", "elicitation_dialog"):
         # PermissionRequest carries the matching tool id; don't add a second unresolvable key.
         if not pending:
             pending["notification"] = "attention"

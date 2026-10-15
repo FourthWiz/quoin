@@ -333,6 +333,23 @@ def test_focus_of_vanished_agent_touches_nothing(w):
     assert log["apple"] == [] and log["run"] == []
 
 
+def test_focus_treats_an_already_focused_pane_as_success(w):
+    focus_spies(w)
+    w.panes[(w.sock, "s")] = (True, [pane(3)])
+    w.de.set_surface(w.env, w.sock, "s", "surface-1")
+
+    def already(args, **kw):
+        raise RuntimeError("Pane Terminal(3) is already focused")
+    w.mp.setattr(w.dash.c, "run", already)
+    w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
+
+    def broken(args, **kw):
+        raise RuntimeError("session gone")
+    w.mp.setattr(w.dash.c, "run", broken)
+    with pytest.raises(RuntimeError, match="session gone"):
+        w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
+
+
 def test_focus_addresses_recorded_session_and_socket(w):
     log = focus_spies(w)
     other = "/other/sock"

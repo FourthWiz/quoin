@@ -333,18 +333,54 @@ def test_install_does_not_reopen_an_imported_profile(lifecycle_home):
     assert any("already imported" in line for line in result.lines)
 
 
-def test_a_renamed_import_counts_and_a_bare_key_does_not():
+def _plugins(tmp):
+    return os.path.join(tmp, "Plugins")
+
+
+def _write_profile(tmp, store, name, top, page):
+    root = os.path.join(tmp, store, name + ".sdProfile")
+    os.makedirs(os.path.join(root, "Profiles", "P"), exist_ok=True)
+    for path, data in ((os.path.join(root, "manifest.json"), top),
+                       (os.path.join(root, "Profiles", "P", "manifest.json"), page)):
+        with open(path, "w") as handle:
+            handle.write(data if isinstance(data, str) else json.dumps(data))
+
+
+def _keys(*roles):
+    return {"Controllers": [{"Actions": {"%d,0" % i: {"UUID": payload_build.ACTION_UUID, "Settings": {"role": r}}
+                                         for i, r in enumerate(roles)}}]}
+
+
+def test_renamed_import_needs_the_attention_and_agent_keys():
     import tempfile
     with tempfile.TemporaryDirectory() as tmp:
-        plugins = os.path.join(tmp, "Plugins")
+        _write_profile(tmp, "ProfilesV3", "A", {"Name": "Default Profile"}, _keys("agent"))
+        assert not payload_build.profile_imported(_plugins(tmp))
+        _write_profile(tmp, "ProfilesV3", "B", {"Name": "My deck"}, _keys("agent", "attention", "desk"))
+        assert payload_build.profile_imported(_plugins(tmp))
 
-        class LH:
-            def resolve(self):
-                return type("P", (), {"plugins_dir": plugins})()
-        _import_profile(LH(), name="Default Profile")
-        assert not payload_build.profile_imported(plugins)
-        _import_profile(LH(), name="My deck", settings={"role": "attention"}, store="ProfilesV2")
-        assert payload_build.profile_imported(plugins)
+
+def test_a_stale_legacy_store_is_ignored_when_the_current_one_exists():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_profile(tmp, "ProfilesV3", "A", {"Name": "Other"}, {})
+        _write_profile(tmp, "ProfilesV2", "B", {"Name": payload_build.PROFILE_NAME}, {})
+        assert not payload_build.profile_imported(_plugins(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_profile(tmp, "ProfilesV2", "B", {"Name": payload_build.PROFILE_NAME}, {})
+        assert payload_build.profile_imported(_plugins(tmp))
+
+
+@pytest.mark.parametrize("page", [
+    "not json", "[]", {"Controllers": "x"}, {"Controllers": [None, "x", {"Actions": []}]},
+    {"Controllers": [{"Actions": {"0,0": "str", "1,0": None, "2,0": {"UUID": payload_build.ACTION_UUID, "Settings": []}}}]},
+    "[" * 100000,
+])
+def test_malformed_profile_files_mean_not_imported_instead_of_an_error(page):
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        _write_profile(tmp, "ProfilesV3", "A", {"Name": "Other"}, page)
+        assert payload_build.profile_imported(_plugins(tmp)) is False
 
 
 def test_upgrade_and_no_open_profile_never_open_it(lifecycle_home):

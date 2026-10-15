@@ -32,7 +32,7 @@ case "$mode" in
     if command -v "$mode" >/dev/null; then
       exec "$mode"
     fi
-    print -u2 "$mode not found in PATH: re-run `quoin streamdeck install` to record its path."
+    print -u2 "$mode not found in PATH: re-run 'quoin streamdeck install' to record its path."
     wait_for_enter
     exit 127
     ;;

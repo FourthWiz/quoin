@@ -132,6 +132,22 @@ def terminal(mode, config, socket=None):
     deckenv.set_surface(e, socket, config['session'], surface)
 
 
+def owner_from_title(e, config, surface, title):
+    """Resolve the session of a tab the deck did not open (zellij titles its terminal "session | pane")."""
+    name = title.split(' | ', 1)[0].strip() if ' | ' in title else ''
+    if not name or not deckenv.valid_session(name):
+        return None
+    for socket in dict.fromkeys([config_socket(config), e.socket_dir]):
+        try:
+            live = dict(sessions(socket)).get(name, False)
+        except Exception:
+            continue
+        if live:
+            deckenv.set_surface(e, socket, name, surface)
+            return socket, name
+    return None
+
+
 def require_live(config):
     name = config.get('session')
     if not name:
@@ -189,8 +205,9 @@ def execute(action, config):
     if action in {'claude', 'codex', 'shell', 'git'}:
         if not config.get('session'):
             raise RuntimeError('Press Desk or the key of the agent you want first.')
-        surface = apple('on run\n tell application "Ghostty"\n return id of focused terminal of selected tab of front window\n end tell\nend run')
-        owner = deckenv.find_surface_owner(e, surface)
+        found = apple('on run\n tell application "Ghostty"\n set t to focused terminal of selected tab of front window\n return (id of t) & linefeed & (name of t)\n end tell\nend run')
+        surface, _, title = found.partition('\n')
+        owner = deckenv.find_surface_owner(e, surface) or owner_from_title(e, config, surface, title)
         if owner is None:
             raise RuntimeError('Press the key of an agent, or Desk, first to pick the tab for the new pane.')
         check_session(owner[1])

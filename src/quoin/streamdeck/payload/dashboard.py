@@ -331,7 +331,12 @@ def _focus(record):
     if not surface:
         config.update(session=session, socket=socket, project=record.get('project') or config['project'])
         c.terminal('attach', config, socket=socket)
-    c.run([e.bins['zellij'], '--session', session, 'action', 'focus-pane-id', 'terminal_' + pane], socket=socket, timeout=3)
+    try:
+        c.run([e.bins['zellij'], '--session', session, 'action', 'focus-pane-id', 'terminal_' + pane], socket=socket, timeout=3)
+    except RuntimeError as exc:
+        # Zellij reports an error when the pane already has focus; that is the state we wanted.
+        if 'already focused' not in str(exc):
+            raise
     config = c.load()
     config.update(session=session, socket=socket, project=record.get('project') or config['project'])
     deckenv.remember_project(config, session, config['project'])

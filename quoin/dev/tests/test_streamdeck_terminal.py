@@ -103,6 +103,21 @@ def test_missing_tool_prints_a_message_and_does_not_wait(tmp_path):
     project = make_project(tmp_path)
     result = run(tmp_path, "codex", "s1", str(project))
     assert result.returncode == 127 and "codex not found in PATH" in result.stderr
+    # The install hint is printed literally and never executed as a command substitution.
+    assert "'quoin streamdeck install'" in result.stderr
+
+
+@needs_zsh
+def test_missing_tool_never_runs_the_install_hint(tmp_path):
+    project = make_project(tmp_path)
+    bindir = tmp_path / "hintbin"
+    bindir.mkdir()
+    marker = tmp_path / "ran"
+    quoin = bindir / "quoin"
+    quoin.write_text("#!/bin/sh\ntouch %s\n" % marker)
+    quoin.chmod(0o755)
+    result = run(tmp_path, "codex", "s1", str(project), env={"PATH": "%s:/usr/bin:/bin" % bindir})
+    assert result.returncode == 127 and not marker.exists()
 
 
 @needs_zsh

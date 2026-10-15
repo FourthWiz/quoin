@@ -235,3 +235,14 @@ def test_symlinked_lock_is_not_followed_and_monitor_exits_zero(staged, tmp_path)
     os.symlink(str(victim), str(state / "monitor.lock"))
     assert run_monitor(staged, "claude", event()) == (0, b"", b"")
     assert victim.read_text() == "keep"
+
+
+def test_idle_reminder_after_a_finished_turn_does_not_ask_for_attention(payload):
+    m = payload("monitor")
+    done = m.transition({"status": "working", "pending": {}}, {"hook_event_name": "Stop"})
+    assert done["status"] == "done"
+    idle = m.transition(done, {"hook_event_name": "Notification", "notification_type": "idle_prompt"})
+    assert idle["status"] == "done" and idle["pending"] == {}
+    for kind in ("permission_prompt", "elicitation_dialog"):
+        asked = m.transition(done, {"hook_event_name": "Notification", "notification_type": kind})
+        assert asked["status"] == "attention"

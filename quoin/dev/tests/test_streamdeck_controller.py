@@ -136,6 +136,30 @@ def test_plus_agent_refuses_unknown_or_ambiguous_surface(payload):
         run.assert_not_called()
 
 
+def test_plus_agent_resolves_a_tab_the_deck_did_not_open_from_its_title(payload):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    cfg = {"session": "other", "project": "/tmp/pr", "projects": {"adopted": "/tmp/adopted"}}
+    found = "surf-new\nadopted | Claude Code"
+    with patch.object(c, "apple", return_value=found), patch.object(c, "sessions", return_value=[("adopted", True)]), \
+            patch.object(c, "run") as run:
+        c.execute("claude", dict(cfg))
+    argv = run.call_args.args[0]
+    assert argv[1:3] == ["--session", "adopted"] and argv[-1] == "/tmp/adopted"
+    assert de.get_surface(env, env.socket_dir, "adopted") == "surf-new"
+
+
+@pytest.mark.parametrize("title,live", [("adopted | Claude Code", False), ("not-a-session", True), ("-x | y", True)])
+def test_plus_agent_title_fallback_refuses_dead_or_unrelated_tabs(payload, title, live):
+    c = payload("controller")
+    with patch.object(c, "apple", return_value="surf-x\n" + title), \
+            patch.object(c, "sessions", return_value=[("adopted", live)]), patch.object(c, "run") as run:
+        with pytest.raises(RuntimeError):
+            c.execute("claude", {"session": "other", "project": "/tmp"})
+    run.assert_not_called()
+
+
 def test_require_live_uses_config_socket(payload):
     c = payload("controller")
     with patch.object(c, "sessions", return_value=[("a", True)]) as sessions, patch.object(c, "run"):
