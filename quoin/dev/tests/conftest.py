@@ -476,11 +476,15 @@ def _agentdesk_real_home_tripwire():
 
 
 @pytest.fixture(autouse=True)
-def _agentdesk_home_isolation(request, tmp_path_factory, monkeypatch):
+def _agentdesk_home_isolation(request, tmp_path_factory):
     path = getattr(request.node, "path", None)
     if path is None or not path.name.startswith(_ISOLATED_PREFIXES):
         yield
         return
+    # Requested lazily: an autouse fixture that names `monkeypatch` up front
+    # would instantiate it before other modules' autouse fixtures and change
+    # their teardown order relative to it.
+    monkeypatch = request.getfixturevalue("monkeypatch")
     request.getfixturevalue("_agentdesk_real_home_tripwire")
     before = _snapshot_real_targets(_REAL_HOME)
 
