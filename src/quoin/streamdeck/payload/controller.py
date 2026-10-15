@@ -133,7 +133,14 @@ def terminal(mode, config, socket=None):
     deckenv.set_surface(e, socket, config['session'], surface)
 
 
-def owner_from_title(e, config, surface, title):
+TITLE_LOOKUP_BUDGET_S = 4
+
+
+def _abs_dir(path):
+    return isinstance(path, str) and os.path.isabs(path) and os.path.isdir(path)
+
+
+def owner_from_title(e, config, title):
     """Resolve the session of a tab the deck did not open (zellij titles its terminal "session | pane")."""
     name = title.split(' | ', 1)[0].strip() if ' | ' in title else ''
     if not name or not deckenv.valid_session(name):
@@ -142,37 +149,40 @@ def owner_from_title(e, config, surface, title):
     candidates += [deckenv.record_socket(r, e) for _, r, _ in deckenv.iter_records(e) if isinstance(r, dict)]
     live = []
     for socket in dict.fromkeys(candidates):
+        if not os.path.isdir(socket):
+            continue
         try:
             if dict(sessions(socket)).get(name, False):
                 live.append(socket)
         except Exception:
             continue
     # The same name live on two servers cannot be told apart from the title.
-    if len(live) != 1:
-        return None
-    deckenv.set_surface(e, live[0], name, surface)
-    return live[0], name
+    return (live[0], name) if len(live) == 1 else None
 
 
-def adopted_project(e, config, socket, name):
-    """Project folder of a session the deck never started: remembered, else its agents', else a pane's cwd."""
+def project_of(e, config, socket, name):
+    """Project folder of a session: remembered, else its agents' records, else a pane's working directory."""
     remembered = config.get('projects', {}).get(name)
-    if isinstance(remembered, str) and os.path.isdir(remembered):
+    if _abs_dir(remembered):
         return remembered
+    # The current project belongs to the current session only; another tab's session never inherits it.
+    if config.get('session') == name and _abs_dir(config.get('project')):
+        return config['project']
     records = [r for _, r, _ in deckenv.iter_records(e)
                if isinstance(r, dict) and r.get('session') == name and deckenv.record_socket(r, e) == socket
-               and isinstance(r.get('project'), str) and os.path.isdir(r['project'])]
+               and _abs_dir(r.get('project'))]
     if records:
         return max(records, key=lambda r: r.get('updated') or 0)['project']
     try:
         panes = json.loads(run([e.bins['zellij'], '--session', name, 'action', 'list-panes', '--json'], socket=socket))
     except Exception:
         return None
+    if not isinstance(panes, list):
+        return None
     panes = [p for p in panes if isinstance(p, dict) and not p.get('is_plugin') and not p.get('exited')]
     for pane in sorted(panes, key=lambda p: not p.get('is_focused')):
-        cwd = pane.get('pane_cwd')
-        if isinstance(cwd, str) and os.path.isdir(cwd):
-            return cwd
+        if _abs_dir(pane.get('pane_cwd')):
+            return pane['pane_cwd']
     return None
 
 
@@ -235,21 +245,25 @@ def execute(action, config):
             raise RuntimeError('Press Desk or the key of the agent you want first.')
         found = apple('on run\n tell application "Ghostty"\n set t to focused terminal of selected tab of front window\n return (id of t) & linefeed & (name of t)\n end tell\nend run')
         surface, _, title = found.partition('\n')
-        owner = deckenv.find_surface_owner(e, surface)
-        adopted = owner is None
+        deckenv.set_deadline(TITLE_LOOKUP_BUDGET_S)
+        try:
+            owner = deckenv.find_surface_owner(e, surface)
+            adopted = owner is None
+            if adopted:
+                owner = owner_from_title(e, config, title)
+            if owner is None:
+                raise RuntimeError('Press the key of an agent, or Desk, first to pick the tab for the new pane.')
+            check_session(owner[1])
+            # No folder means no guess: a stale project would start the agent in the wrong repository.
+            project = project_of(e, config, *owner)
+        finally:
+            deckenv.clear_deadline()
+        if project is None:
+            raise RuntimeError('Could not tell which project ' + owner[1] + ' belongs to. Press the key of one of its agents first.')
         if adopted:
-            owner = owner_from_title(e, config, surface, title)
-        if owner is None:
-            raise RuntimeError('Press the key of an agent, or Desk, first to pick the tab for the new pane.')
-        check_session(owner[1])
-        if adopted:
-            project = adopted_project(e, config, *owner)
-            if project is None:
-                raise RuntimeError('Could not tell which project ' + owner[1] + ' belongs to. Press the key of one of its agents first.')
-            config['project'] = project
+            deckenv.set_surface(e, owner[0], owner[1], surface)
             deckenv.remember_project(config, owner[1], project)
-        else:
-            config['project'] = config.get('projects', {}).get(owner[1], config['project'])
+        config['project'] = project
         config['socket'], config['session'] = owner
         if adopted:
             save(config)

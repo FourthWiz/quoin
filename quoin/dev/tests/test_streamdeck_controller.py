@@ -108,18 +108,20 @@ def test_missing_agentdesk_message_and_no_osascript(payload):
         apple.assert_not_called()
 
 
-def test_plus_agent_run_argv_uses_stable_entry(payload, deck_home):
+def test_plus_agent_run_argv_uses_stable_entry(payload, deck_home, tmp_path):
     c = payload("controller")
     de = payload("deckenv")
     env = de.current()
+    pr = str(tmp_path / "pr")
+    os.makedirs(pr)
     de.set_surface(env, "/sock/x", "wanted", "surf")
-    cfg = {"session": "wanted", "socket": "/sock/x", "project": "/tmp/pr", "projects": {"wanted": "/tmp/pr"}}
+    cfg = {"session": "wanted", "socket": "/sock/x", "project": pr, "projects": {"wanted": pr}}
     for action in ("claude", "codex", "shell", "git"):
         with patch.object(c, "apple", return_value="surf"), patch.object(c, "sessions", return_value=[("wanted", True)]), \
                 patch.object(c, "run") as run:
             c.execute(action, dict(cfg))
         argv = run.call_args.args[0]
-        assert argv[-4:] == [env.terminal_entry, action, "wanted", "/tmp/pr"]
+        assert argv[-4:] == [env.terminal_entry, action, "wanted", pr]
         assert "versions/" not in " ".join(argv) and "current/" not in " ".join(argv)
         assert run.call_args.kwargs["socket"] == "/sock/x"
 
@@ -204,30 +206,107 @@ def test_adopted_tab_falls_back_to_the_pane_cwd_and_never_to_the_stale_project(p
     assert not any("--cwd" in call.args[0] for call in run.call_args_list)
 
 
-def test_title_fallback_refuses_a_name_live_on_two_servers(payload):
+def test_title_fallback_refuses_a_name_live_on_two_servers(payload, tmp_path):
     c = payload("controller")
     de = payload("deckenv")
     env = de.current()
+    other = tmp_path / "other-sock"
+    other.mkdir()
+    for path in (other, env.socket_dir):
+        os.makedirs(str(path), exist_ok=True)
 
     def sessions(socket=None):
         return [("adopted", True)]
-    cfg = {"session": "other", "project": "/tmp", "socket": "/other/sock", "projects": {}}
+    cfg = {"session": "other", "project": "/tmp", "socket": str(other), "projects": {}}
     with patch.object(c, "apple", return_value="surf-n\nadopted | Claude Code"), patch.object(c, "sessions", sessions), \
             patch.object(c, "run") as run:
         with pytest.raises(RuntimeError, match="pick the tab"):
             c.execute("claude", cfg)
     run.assert_not_called()
-    assert de.get_surface(env, "/other/sock", "adopted") is None
+    assert de.get_surface(env, str(other), "adopted") is None
 
 
-@pytest.mark.parametrize("title,live", [("adopted | Claude Code", False), ("not-a-session", True), ("-x | y", True)])
-def test_plus_agent_title_fallback_refuses_dead_or_unrelated_tabs(payload, title, live):
+def test_a_refusal_does_not_turn_the_next_press_into_a_stale_project_launch(payload, tmp_path):
     c = payload("controller")
-    with patch.object(c, "apple", return_value="surf-x\n" + title), \
-            patch.object(c, "sessions", return_value=[("adopted", live)]), patch.object(c, "run") as run:
-        with pytest.raises(RuntimeError):
-            c.execute("claude", {"session": "other", "project": "/tmp"})
-    run.assert_not_called()
+    de = payload("deckenv")
+    env = de.current()
+    stale = str(tmp_path / "stale")
+    os.makedirs(stale)
+
+    def no_panes(argv, **kw):
+        if "list-panes" in argv:
+            raise RuntimeError("no server")
+        return ""
+    for _ in range(2):
+        cfg = {"session": "other", "project": stale, "projects": {}}
+        with patch.object(c, "apple", return_value="surf-r\nretry | Claude Code"), \
+                patch.object(c, "sessions", return_value=[("retry", True)]), patch.object(c, "run", side_effect=no_panes) as run, \
+                patch.object(c, "save"):
+            with pytest.raises(RuntimeError, match="which project retry belongs to"):
+                c.execute("claude", cfg)
+        assert not any("--cwd" in call.args[0] for call in run.call_args_list)
+    assert de.get_surface(env, env.socket_dir, "retry") is None
+
+
+def test_a_known_tab_without_a_remembered_project_resolves_it_or_refuses(payload, tmp_path):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    stale = str(tmp_path / "stale")
+    real = str(tmp_path / "real")
+    os.makedirs(stale)
+    os.makedirs(real)
+    de.set_surface(env, env.socket_dir, "known", "surf-k")
+    panes = json.dumps([{"pane_cwd": real, "is_focused": True}])
+
+    def fake_run(argv, **kw):
+        return panes if "list-panes" in argv else ""
+    cfg = {"session": "elsewhere", "project": stale, "projects": {}}
+    with patch.object(c, "apple", return_value="surf-k\nknown | Claude Code"), patch.object(c, "sessions", return_value=[("known", True)]), \
+            patch.object(c, "run", side_effect=fake_run) as run:
+        c.execute("claude", cfg)
+    argv = run.call_args.args[0]
+    assert argv[argv.index("--cwd") + 1] == real
+
+    def no_panes(argv, **kw):
+        if "list-panes" in argv:
+            raise RuntimeError("no server")
+        return ""
+    cfg = {"session": "elsewhere", "project": stale, "projects": {}}
+    with patch.object(c, "apple", return_value="surf-k\nknown | Claude Code"), patch.object(c, "sessions", return_value=[("known", True)]), \
+            patch.object(c, "run", side_effect=no_panes) as run:
+        with pytest.raises(RuntimeError, match="which project known belongs to"):
+            c.execute("claude", cfg)
+    assert not any("--cwd" in call.args[0] for call in run.call_args_list)
+
+
+@pytest.mark.parametrize("reply", ["null", "7", '{"a": 1}', "not json", json.dumps([{"pane_cwd": "relative/dir"}, "x", None])])
+def test_pane_cwd_must_be_an_absolute_existing_folder_and_the_reply_a_list(payload, reply):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+
+    def fake_run(argv, **kw):
+        return reply
+    with patch.object(c, "run", side_effect=fake_run):
+        assert c.project_of(env, {"projects": {}}, env.socket_dir, "s") is None
+
+
+def test_stale_socket_folders_are_not_asked_for_sessions(payload, tmp_path):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    de.ensure_dir(env.agents_dir)
+    de.write_json_atomic(os.path.join(env.agents_dir, "gone.json"),
+                         {"session": "x", "pane": "0", "socket": str(tmp_path / "does-not-exist"), "updated": 1})
+    asked = []
+
+    def sessions(socket=None):
+        asked.append(socket)
+        return [("adopted", True)]
+    with patch.object(c, "sessions", sessions):
+        owner = c.owner_from_title(env, {"projects": {}}, "adopted | Claude Code")
+    assert owner is not None and str(tmp_path / "does-not-exist") not in asked
 
 
 def test_require_live_uses_config_socket(payload):

@@ -108,6 +108,14 @@ def _running_subagents(state, now):
     return dict(newest)
 
 
+def displayed_status(record, now):
+    """The status to show: a turn that ended while subagents ran is done once none can still be running."""
+    status = record.get("status")
+    if status == "working" and record.get("turn_done") and not _running_subagents(record, now):
+        return "done"
+    return status
+
+
 def _subagent_key(event):
     raw = event.get("agent_id")
     return hashlib.sha256(raw.encode()).hexdigest()[:16] if isinstance(raw, str) and raw else None
@@ -153,8 +161,11 @@ def transition(old, event):
         pending.pop(token, None)
         pending.pop("notification", None)
         state["status"] = "attention" if pending else "working"
+        state["turn_done"] = False
     elif name in ("PreToolUse", "PreCompact", "PostCompact"):
         state["status"] = "attention" if pending else "working"
+        # The main agent is acting again, for example after a background task woke it up.
+        state["turn_done"] = False
     elif name in ("Stop", "StopFailure", "Interrupt"):
         pending = {}
         state["turn_done"] = True
@@ -162,6 +173,9 @@ def transition(old, event):
             state["status"] = "working" if subagents else "done"
         else:
             state["status"] = "attention"
+    elif name == "SessionStart" and event.get("source") == "compact":
+        # Compaction restarts the session in the middle of a turn; nothing about the work has changed.
+        pass
     elif name == "SessionStart":
         pending = {}
         subagents = {}

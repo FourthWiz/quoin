@@ -517,3 +517,16 @@ def test_focus_failure_path_shows_no_dialog(payload, deck_home, tmp_path):
     assert proc.returncode == 1
     log = osa.with_suffix(".log")
     assert not log.exists() or "display dialog" not in log.read_text()
+
+
+def test_snapshot_expires_forgotten_subagents_and_hides_their_bookkeeping(w):
+    now = time.time()
+    w.panes[(w.sock, "s")] = (True, [pane(3), pane(4), pane(5)])
+    w.write("busy", pane="3", status="working", turn_done=True, subagents={"a": now - 30})
+    w.write("lost", pane="4", status="working", turn_done=True, subagents={"a": now - w.mon.SUBAGENT_TTL_S - 5})
+    w.write("turn", pane="5", status="working", turn_done=False, subagents={})
+    out = {r["id"]: r for r in w.snap()}
+    assert out["busy"]["status"] == "working"
+    assert out["lost"]["status"] == "done"
+    assert out["turn"]["status"] == "working"
+    assert all("subagents" not in r and "turn_done" not in r for r in out.values())

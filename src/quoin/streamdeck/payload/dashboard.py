@@ -235,6 +235,11 @@ def _snapshot():
             doomed[side].append((path, seen))
             continue
         entry = {k: rec[k] for k in monitor.RECORD_KEYS if k in rec}
+        # A lost "subagent stopped" event must not keep the key on WORKING: the hook only expires them when
+        # the session next speaks, so the expiry is applied here as well.
+        entry['status'] = monitor.displayed_status(rec, now)
+        entry.pop('subagents', None)
+        entry.pop('turn_done', None)
         entry['pane'] = pane
         entry['socket'] = socket
         if offline:

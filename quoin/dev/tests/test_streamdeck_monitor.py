@@ -328,3 +328,40 @@ def test_only_subagent_start_and_stop_reach_the_record(payload, deck_home, monke
     records = [r for _, r, _ in de.iter_records(de.current()) if isinstance(r, dict)]
     assert len(records) == 1 and records[0]["event"] == "SubagentStart" and len(records[0]["subagents"]) == 1
     assert "x" not in records[0]["subagents"]
+
+
+def test_compaction_restart_keeps_running_subagents_and_the_turn_state(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="a")
+    s = _step(m, s, "SessionStart", source="compact")
+    assert s["status"] == "working" and len(s["subagents"]) == 1
+    s = _step(m, s, "Stop")
+    assert s["status"] == "working"
+    fresh = _step(m, s, "SessionStart", source="startup")
+    assert fresh["status"] == "idle" and fresh["subagents"] == {}
+
+
+def test_main_agent_activity_after_stop_ends_the_done_turn_state(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="bg")
+    s = _step(m, s, "Stop")
+    s = _step(m, s, "PreToolUse", tool_name="Bash", tool_use_id="t")
+    assert s["turn_done"] is False and s["status"] == "working"
+    s = _step(m, s, "SubagentStart", agent_id="fg")
+    s = _step(m, s, "SubagentStop", agent_id="fg")
+    s = _step(m, s, "SubagentStop", agent_id="bg")
+    assert s["status"] == "working"
+
+
+def test_displayed_status_applies_the_subagent_expiry(payload):
+    m = payload("monitor")
+    now = 1_000_000.0
+    live = {"status": "working", "turn_done": True, "subagents": {"a": now - 60}}
+    stale = {"status": "working", "turn_done": True, "subagents": {"a": now - m.SUBAGENT_TTL_S - 1}}
+    running_turn = {"status": "working", "turn_done": False, "subagents": {}}
+    assert m.displayed_status(live, now) == "working"
+    assert m.displayed_status(stale, now) == "done"
+    assert m.displayed_status(running_turn, now) == "working"
+    assert m.displayed_status({"status": "attention", "turn_done": True, "subagents": {}}, now) == "attention"
