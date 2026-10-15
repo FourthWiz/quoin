@@ -656,12 +656,16 @@ _agentdesk_dashboard_resolve() {
 # Create the URL-file path the dashboard pane writes its bound URL to and the
 # launcher's poller reads. Prints the path; returns 1 (with a note on stderr)
 # when the dashboard server is not installed, e.g. project-scope installs.
-_agentdesk_dashboard_url_file() {
+_agentdesk_dashboard_server_present() {
   local server_script="$HOME/.claude/scripts/dashboard_server.py"
   if [ ! -f "$server_script" ]; then
     printf 'agentdesk: dashboard server not found at %s; skipping\n' "$server_script" >&2
     return 1
   fi
+}
+
+_agentdesk_dashboard_url_file() {
+  _agentdesk_dashboard_server_present || return 1
   local url_file
   url_file="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-url-XXXXXX")" || return 1
   printf '%s\n' "$url_file"
@@ -913,7 +917,8 @@ Dashboard:
   --dashboard / --no-dashboard   one-shot override; the remembered answer is
                      not changed and nothing is asked.
   --ask-dashboard    ask again now and remember the new answer. --pick also
-                     asks again.
+                     asks again. With --panes the question is still asked for
+                     that launch, but the answer is not remembered.
   AGENTDESK_DASHBOARD=1|0        override the remembered answer without asking.
   --no-prompt never asks and never adds the dashboard unless --dashboard is
   also given. --panes launches never store an answer. Non-interactive launches
@@ -1233,8 +1238,11 @@ HELP
     "$dash_flag" "$noprompt" "$dash_ask" "$force_pick" "$dash_tty" \
     "$(_agentdesk_dash_key "$layout_key")")"
   dash_answer="$dash_decision"
-  if [ "$dash_decision" = "yes" ]; then
-    dash_url_file="$(_agentdesk_dashboard_url_file)" || dash_decision=no
+  # The URL temp file is created only at injection time, after every early
+  # return, so a failed launch never leaves one behind. Here we only check that
+  # the dashboard server is installed.
+  if [ "$dash_decision" = "yes" ] && ! _agentdesk_dashboard_server_present; then
+    dash_decision=no
   fi
 
   # ── Resolve layout (D-08 branch order) ────────────────────────────────────
@@ -1396,6 +1404,22 @@ HELP
   cat "$project_root/.workflow_artifacts/repos.md"
   echo
 
+  # IVG-135 (T-03, required): pre-flight guard against a would-be socket path
+  # that overflows the AF_UNIX sun_path cap (~104 bytes macOS / ~108 Linux).
+  # Pinning ZELLIJ_SOCKET_DIR (above) fixes the common-case miscomputation but
+  # does not bound session_name itself, so a pathologically long project
+  # basename can still overflow. Best-effort heuristic (margin, not exact) —
+  # the +20 fudges the "/<zellij-version>/" subdir + separators. Must run
+  # AFTER session_name is finalized and BEFORE the create call below.
+  _sock_len=$(( ${#ZELLIJ_SOCKET_DIR} + ${#session_name} + 20 ))
+  if [ "$_sock_len" -gt 100 ]; then
+    echo "agentdesk: session socket path would be too long (~${_sock_len} bytes; limit ~104)." >&2
+    echo "  session: $session_name" >&2
+    echo "  ZELLIJ_SOCKET_DIR: $ZELLIJ_SOCKET_DIR" >&2
+    echo "  Fix: set a shorter ZELLIJ_SOCKET_DIR, or use --name <shorter-name>." >&2
+    return 1
+  fi
+
   # ── T-05: Inject Dashboard tab into chosen layout (D-04/CRIT-2 fix) ────────
   # When the dashboard decision above is yes, inject a Dashboard tab into
   # whichever layout was chosen — preserving ALL existing tabs. This is a new
@@ -1406,6 +1430,9 @@ HELP
   # path — no regeneration via _agentdesk_gen_layout. The saved layout file on
   # disk is never modified.
   if [ "$dash_decision" = "yes" ]; then
+    dash_url_file="$(_agentdesk_dashboard_url_file)" || dash_url_file=""
+  fi
+  if [ -n "$dash_url_file" ]; then
     local dash_tab_tmp
     # BSD mktemp only randomizes *trailing* X's; a suffix after XXXXXX creates a
     # literal path that collides on the second call ("File exists"). Drop the suffix,
@@ -1413,9 +1440,10 @@ HELP
     # file as a layout (same pattern as _agentdesk_gen_layout lines 318-323).
     dash_tab_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-layout-XXXXXX")" || {
       echo "agentdesk: failed to create temp dashboard layout file" >&2
+      rm -f "$dash_url_file"
       return 1
     }
-    mv -f "$dash_tab_tmp" "${dash_tab_tmp}.kdl" || return 1
+    mv -f "$dash_tab_tmp" "${dash_tab_tmp}.kdl" || { rm -f "$dash_tab_tmp" "$dash_url_file"; return 1; }
     dash_tab_tmp="${dash_tab_tmp}.kdl"
     # Strip the final `}` (closing brace of the top-level `layout { ... }` block)
     # and append the Dashboard tab KDL before re-closing.
@@ -1451,22 +1479,6 @@ DASHTAB
         i=$((i + 1))
       done
       rm -f "$_dash_url_file" ) &  # second rm: timeout path (idempotent; rm -f on missing file is no-op)
-  fi
-
-  # IVG-135 (T-03, required): pre-flight guard against a would-be socket path
-  # that overflows the AF_UNIX sun_path cap (~104 bytes macOS / ~108 Linux).
-  # Pinning ZELLIJ_SOCKET_DIR (above) fixes the common-case miscomputation but
-  # does not bound session_name itself, so a pathologically long project
-  # basename can still overflow. Best-effort heuristic (margin, not exact) —
-  # the +20 fudges the "/<zellij-version>/" subdir + separators. Must run
-  # AFTER session_name is finalized and BEFORE the create call below.
-  _sock_len=$(( ${#ZELLIJ_SOCKET_DIR} + ${#session_name} + 20 ))
-  if [ "$_sock_len" -gt 100 ]; then
-    echo "agentdesk: session socket path would be too long (~${_sock_len} bytes; limit ~104)." >&2
-    echo "  session: $session_name" >&2
-    echo "  ZELLIJ_SOCKET_DIR: $ZELLIJ_SOCKET_DIR" >&2
-    echo "  Fix: set a shorter ZELLIJ_SOCKET_DIR, or use --name <shorter-name>." >&2
-    return 1
   fi
 
   # AGENTDESK_DASHBOARD_URL_FILE is set for this launch only (empty when the

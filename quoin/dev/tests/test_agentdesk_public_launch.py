@@ -568,6 +568,49 @@ def test_panes_launch_asks_but_never_stores_answer(tmp_path, rt_dir):
     assert not [l for l in _state_lines(tmp_path) if l.startswith("dash:")]
 
 
+def test_ask_dashboard_with_panes_asks_but_never_stores(tmp_path, rt_dir):
+    _seed(tmp_path, "dash:name:deck-1=no")
+    res = _launch(
+        tmp_path, rt_dir, ["--name", "deck-1", "--panes", "shell", "--ask-dashboard"], "y\n"
+    )
+    assert res.rc == 0, res.text
+    assert DASHBOARD_PROMPT in res.text
+    assert "Dashboard" in _tab_names(res.cap)
+    assert _state_lines(tmp_path) == ["dash:name:deck-1=no"]
+
+
+def test_help_says_panes_answer_not_remembered(tmp_path, rt_dir):
+    res = _run_pipe(["--help"], _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    assert re.search(r"--panes the question is still asked.*\n?.*not remembered", res.text)
+
+
+def _dash_url_files(tmp_path):
+    return list((tmp_path / "tmpdir").glob("agentdesk-dash-url-*"))
+
+
+def test_dashboard_yes_with_failed_launch_leaves_no_url_file(tmp_path, rt_dir):
+    # Over-long session name trips the socket-length guard after the dashboard
+    # answer is yes.
+    res = _launch(tmp_path, rt_dir, ["--name", "x" * 120, "--dashboard"], "\n")
+    assert res.rc != 0, res.text
+    assert "too long" in res.text
+    assert _dash_url_files(tmp_path) == []
+
+
+def test_dashboard_yes_with_cancelled_picker_leaves_no_url_file(tmp_path, rt_dir):
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--pick", "--dashboard"], "6\nbogus\n\n")
+    assert res.rc != 0 and "cancelled" in res.text, res.text
+    assert _dash_url_files(tmp_path) == []
+
+
+def test_dashboard_yes_with_missing_layout_file_leaves_no_url_file(tmp_path, rt_dir):
+    _seed(tmp_path, "name:deck-1=__FIXED__")
+    env = _env(tmp_path, rt_dir, with_server=True)
+    (tmp_path / "home" / ".config" / "zellij" / "layouts" / "agent-desk.kdl").unlink()
+    res = _run_pipe(["--name", "deck-1", "--dashboard"], env, tmp_path, rt_dir)
+    assert _dash_url_files(tmp_path) == []
+
+
 def test_ask_dashboard_asks_again_and_stores(tmp_path, rt_dir):
     _seed(tmp_path, "name:deck-1=__FIXED__", "dash:name:deck-1=no")
     res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--ask-dashboard"], "y\n")
