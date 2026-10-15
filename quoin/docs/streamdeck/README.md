@@ -8,8 +8,8 @@ installs and upgrades it only when you ask.
 The panel shows one key per agent and a few action keys:
 
 - Keys 1-9 are agents. Each shows the runtime (Claude or Codex), the project, the session and pane, and a status
-  colour: orange «НУЖЕН ТЫ» (the agent is waiting for you), blue «РАБОТАЕТ» (working), green «ГОТОВО» (finished its
-  turn). Other states are grey («ОЖИДАЕТ», «НЕТ СИГНАЛА», «НЕДОСТУПЕН»). Pressing an agent key focuses that agent's
+  colour: orange NEEDS YOU (the agent asks a question or a permission), blue WORKING (working), green DONE (finished its
+  turn and no background subagent is still running). Other states are grey (IDLE, NO SIGNAL, OFFLINE). Pressing an agent key focuses that agent's
   Zellij pane in Ghostty.
 - Key 10 is the attention queue: it shows how many agents wait for you and the current page. A press focuses the
   next waiting agent; holding it turns to the next page of nine agents.
@@ -69,7 +69,7 @@ quoin streamdeck uninstall --purge --state-root DIR
 Options, by command:
 
 - `install`, `upgrade`: `--runtime-dir`, `--plugins-dir`, `--state-root`, `--claude-settings`, `--codex-home`,
-  `--agentdesk`, `--runtimes`, `--python`, `--node`, `--prereqs`, `--dry-run`, `--open-profile`,
+  `--agentdesk`, `--runtimes`, `--python`, `--node`, `--prereqs`, `--dry-run`, `--open-profile`, `--no-open-profile`,
   `--allow-downgrade`.
 - `status`: `--runtime-dir`, `--plugins-dir`, `--state-root`, `--claude-settings`, `--codex-home`, `--agentdesk`,
   `--json`.
@@ -89,7 +89,8 @@ What they do:
   runtimes' entries and keeps the component.
 - `--dry-run` takes no lock and writes nothing (prerequisites are treated as `none`), and it reports a pending
   roll back or completion.
-- `--open-profile` runs `open` on the generated profile after the install.
+- `--open-profile` always opens the generated profile after the install; `--no-open-profile` never does. Without
+  either, `install` opens it only when Stream Deck does not have it yet (see Profile).
 - `--python PATH` and `--node auto|bundled|PATH` choose the interpreter and Node instead of discovering them.
 - `--json` makes `status` print its report as JSON: `state`, `problems`, `info` and `exit_code`.
 
@@ -155,8 +156,10 @@ The component adds one managed entry per event, in its own group without a match
 
 (`codex` instead of `claude` for Codex.) The events are:
 
-- Claude Code (14): SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
-  PreCompact, PostCompact, PostToolUseFailure, Notification, StopFailure, Elicitation, ElicitationResult.
+- Claude Code (16): SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
+  PreCompact, PostCompact, PostToolUseFailure, Notification, StopFailure, Elicitation, ElicitationResult,
+  SubagentStart, SubagentStop. The last two only let the deck keep WORKING until the last background subagent
+  stops; a subagent that never reports its stop stops counting after three hours.
 - Codex (10): SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PermissionRequest, PostToolUse, Stop,
   PreCompact, PostCompact, Interrupt.
 
@@ -172,9 +175,15 @@ the events. Claude Code: new sessions pick up the changes; review in `/hooks` if
 
 ## Profile
 
-The generated profile is `profile/Quoin Live Agents.streamDeckProfile` in the runtime folder. Import it by
-double-clicking it, or run `install` with `--open-profile`. Quoin never imports, edits or deletes profiles. The
-plugin and action UUIDs are fixed, so an imported "Quoin — Live Agents" profile keeps working across upgrades.
+The generated profile is `profile/Quoin Live Agents.streamDeckProfile` in the runtime folder. An active `install`
+opens it in Stream Deck, which imports it, unless Stream Deck already holds a "Quoin — Live Agents" profile (or a
+renamed copy of it); then select it on your device. `upgrade` never opens it, so a profile you deleted stays deleted.
+`--open-profile` opens it even when it is already imported, and `--no-open-profile` never opens it; you can also
+double-click the file. Quoin never edits or deletes profiles. The plugin and action UUIDs are fixed, so an
+imported "Quoin — Live Agents" profile keeps working across upgrades.
+
+A Quoin key dragged onto another profile by hand has no role or slot, so it always shows the first agent. Use the
+generated profile, or set each key's settings to match it.
 
 Restart Stream Deck to load a new plugin version. Quoin never quits or restarts it; the output tells you when it
 is running.
@@ -222,6 +231,7 @@ Informational lines (they do not change the exit code):
 | `PLUGIN_NEVER_RAN` | no health file yet: start Stream Deck |
 | `HEALTH_UNREADABLE` | the health file exists but cannot be read |
 | `PLUGIN_SNAPSHOT_ERROR` | the plugin's last snapshot failed; the error type is named |
+| `PROFILE_NOT_IMPORTED` | Stream Deck has no Quoin Live Agents profile; the file to open is named |
 | `SETTINGS_UNREADABLE`, `SETTINGS_MALFORMED` | the same two codes, but only informational when nothing is installed |
 
 For an installed component `SETTINGS_UNREADABLE` and `SETTINGS_MALFORMED` are problems; when nothing is installed
@@ -305,7 +315,7 @@ hold prompts, tool input or output, assistant text, transcript paths or notifica
   recorded, or install them next to a recorded binary. Tools that resolve only inside the Python environment
   Quoin runs from (its virtual environment, or a `site-packages` path) are never recorded, so rebuilding that
   environment cannot change the agents' `PATH`.
-- «Agent Desk не установлен» on a key press: Agent Desk is missing; `quoin streamdeck install` proposes it.
+- "Agent Desk is not installed" on a key press: Agent Desk is missing; `quoin streamdeck install` proposes it.
 - The plugin does not show up: restart Stream Deck, then check `status` for `HEALTH_STALE` or `PLUGIN_NEVER_RAN`.
 - `status` reports `MODE_DORMANT`: a core prerequisite was missing at install time; fix it and re-run
   `quoin streamdeck install`.

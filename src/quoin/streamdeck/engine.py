@@ -72,7 +72,7 @@ class Env:
     runtimes: Optional[tuple] = None
     prereq_mode: str = "ask"
     dry_run: bool = False
-    open_profile: bool = False
+    open_profile: Optional[bool] = None
     purge: bool = False
     allow_downgrade: bool = False
     ctx_factory: Optional[Callable] = None
@@ -1741,11 +1741,17 @@ class _Run:
                      "re-run `quoin streamdeck install`")
         if mode == "active":
             profile = self.paths.profile
-            self.say("profile: %s - import it in Stream Deck (double-click the file)" % profile)
-            if env.open_profile:
-                opener = (self.binaries.get("open") or {}).get("path")
-                if opener:
-                    env.sysops.run([opener, profile])
+            imported = payload_build.profile_imported(self.paths.plugins_dir)
+            # Auto: a fresh install imports the profile once; an upgrade never re-imports one the user removed.
+            want = (self.op == "install" and not imported) if env.open_profile is None else env.open_profile
+            opener = (self.binaries.get("open") or {}).get("path") if want else None
+            if opener:
+                env.sysops.run([opener, profile])
+                self.say("profile: %s - opened in Stream Deck to import it; select it on your device" % profile)
+            elif imported:
+                self.say("profile: already imported in Stream Deck")
+            else:
+                self.say("profile: %s - import it in Stream Deck (double-click the file)" % profile)
             if self.claude_changed:
                 self.say("Claude Code: start new sessions (review in /hooks if asked)")
             if self.codex_changed:

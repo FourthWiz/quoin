@@ -58,7 +58,7 @@ def test_new_without_a_usable_agentdesk_fails_cleanly(tmp_path, variant):
     elif variant == "missing-file":
         env["QUOIN_DECK_AGENTDESK"] = str(tmp_path / "nope.zsh")
     result = run(tmp_path, "new", "s1", str(project), env=env)
-    assert result.returncode == 1 and "Agent Desk не установлен" in result.stderr
+    assert result.returncode == 1 and "Agent Desk is not installed" in result.stderr
     assert not log.exists()
 
 
@@ -102,7 +102,22 @@ def test_claude_found_through_recorded_tool_dir(payload, deck_home, tmp_path):
 def test_missing_tool_prints_a_message_and_does_not_wait(tmp_path):
     project = make_project(tmp_path)
     result = run(tmp_path, "codex", "s1", str(project))
-    assert result.returncode == 127 and "codex не найден в PATH" in result.stderr
+    assert result.returncode == 127 and "codex not found in PATH" in result.stderr
+    # The install hint is printed literally and never executed as a command substitution.
+    assert "'quoin streamdeck install'" in result.stderr
+
+
+@needs_zsh
+def test_missing_tool_never_runs_the_install_hint(tmp_path):
+    project = make_project(tmp_path)
+    bindir = tmp_path / "hintbin"
+    bindir.mkdir()
+    marker = tmp_path / "ran"
+    quoin = bindir / "quoin"
+    quoin.write_text("#!/bin/sh\ntouch %s\n" % marker)
+    quoin.chmod(0o755)
+    result = run(tmp_path, "codex", "s1", str(project), env={"PATH": "%s:/usr/bin:/bin" % bindir})
+    assert result.returncode == 127 and not marker.exists()
 
 
 @needs_zsh

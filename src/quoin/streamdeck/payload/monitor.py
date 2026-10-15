@@ -28,13 +28,16 @@ STDIN_CAP = 1 << 20
 CLAUDE_EVENTS = (
     "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest",
     "PostToolUse", "Stop", "PreCompact", "PostCompact", "PostToolUseFailure",
-    "Notification", "StopFailure", "Elicitation", "ElicitationResult",
+    "Notification", "StopFailure", "Elicitation", "ElicitationResult", "SubagentStart", "SubagentStop",
 )
 KNOWN_EVENTS = frozenset(CLAUDE_EVENTS + ("Interrupt",))
 RECORD_KEYS = (
     "id", "kind", "session", "pane", "socket", "socket_inferred", "project", "status",
-    "pending", "event", "created", "updated", "pid", "process_started", "via",
+    "pending", "event", "created", "updated", "pid", "process_started", "via", "subagents", "turn_done",
 )
+# A subagent that never reports its stop (killed, crashed) stops holding the key on WORKING after this long.
+SUBAGENT_TTL_S = 3 * 3600
+SUBAGENT_CAP = 32
 VIA_VALUES = ("legacy", "managed")
 _TOKEN_BAD = re.compile(r"[^A-Za-z0-9_.:-]")
 
@@ -95,10 +98,35 @@ def _text(value):
     return value if isinstance(value, str) else ""
 
 
+def _running_subagents(state, now):
+    stored = state.get("subagents")
+    if not isinstance(stored, dict):
+        return {}
+    live = {k: t for k, t in stored.items()
+            if isinstance(k, str) and isinstance(t, (int, float)) and not isinstance(t, bool) and now - t < SUBAGENT_TTL_S}
+    newest = sorted(live.items(), key=lambda kv: kv[1], reverse=True)[:SUBAGENT_CAP]
+    return dict(newest)
+
+
+def displayed_status(record, now):
+    """The status to show: a turn that ended while subagents ran is done once none can still be running."""
+    status = record.get("status")
+    if status == "working" and record.get("turn_done") and not _running_subagents(record, now):
+        return "done"
+    return status
+
+
+def _subagent_key(event):
+    raw = event.get("agent_id")
+    return hashlib.sha256(raw.encode()).hexdigest()[:16] if isinstance(raw, str) and raw else None
+
+
 def transition(old, event):
     """Keep unrelated parallel completions from hiding a pending question."""
     state = dict(old)
     pending = dict(state.get("pending", {}))
+    now = time.time()
+    subagents = _running_subagents(state, now)
     name = _text(event.get("hook_event_name", ""))
     tool = _text(event.get("tool_name", ""))
     raw = event.get("tool_use_id") or tool or "approval"
@@ -106,13 +134,25 @@ def transition(old, event):
     if name == "UserPromptSubmit":
         pending = {}
         state["status"] = "working"
+        state["turn_done"] = False
+    elif name == "SubagentStart":
+        key = _subagent_key(event)
+        if key:
+            subagents[key] = now
+            state["status"] = "attention" if pending else "working"
+    elif name == "SubagentStop":
+        subagents.pop(_subagent_key(event), None)
+        # The last background subagent finishing after the main turn ended is what completes the work.
+        if not subagents and state.get("turn_done") and state.get("status") == "working":
+            state["status"] = "done"
     elif name in ("PermissionRequest", "Elicitation") or (
             name == "PreToolUse" and tool in ("AskUserQuestion", "request_user_input")):
         pending[token] = "question" if name == "Elicitation" or tool in (
             "AskUserQuestion", "request_user_input") else "permission"
         state["status"] = "attention"
-    elif name == "Notification" and event.get("notification_type") in (
-            "permission_prompt", "idle_prompt", "elicitation_dialog"):
+    # idle_prompt is only a reminder that a finished turn got no reply (often while a background
+    # job still runs); it asks nothing, so the agent keeps its done/idle status.
+    elif name == "Notification" and event.get("notification_type") in ("permission_prompt", "elicitation_dialog"):
         # PermissionRequest carries the matching tool id; don't add a second unresolvable key.
         if not pending:
             pending["notification"] = "attention"
@@ -121,18 +161,32 @@ def transition(old, event):
         pending.pop(token, None)
         pending.pop("notification", None)
         state["status"] = "attention" if pending else "working"
+        state["turn_done"] = False
     elif name in ("PreToolUse", "PreCompact", "PostCompact"):
         state["status"] = "attention" if pending else "working"
+        # The main agent is acting again, for example after a background task woke it up.
+        state["turn_done"] = False
     elif name in ("Stop", "StopFailure", "Interrupt"):
         pending = {}
-        state["status"] = "done" if name == "Stop" else "attention"
+        state["turn_done"] = True
+        if name == "Stop":
+            state["status"] = "working" if subagents else "done"
+        else:
+            state["status"] = "attention"
+    elif name == "SessionStart" and event.get("source") == "compact":
+        # Compaction restarts the session in the middle of a turn; nothing about the work has changed.
+        pass
     elif name == "SessionStart":
         pending = {}
+        subagents = {}
+        state["turn_done"] = False
         state["status"] = "idle"
     elif name == "SessionEnd":
         pending = {}
+        subagents = {}
         state["status"] = "closed"
     state["pending"] = pending
+    state["subagents"] = _running_subagents({"subagents": subagents}, now)
     state["event"] = name if name in KNOWN_EVENTS else "other"
     state["updated"] = time.time()
     return state
@@ -158,8 +212,11 @@ def record(kind, event, environ=None, identity=None, deadline=None):
     session = env.get("ZELLIJ_SESSION_NAME")
     pane = env.get("ZELLIJ_PANE_ID")
     sid = event.get("session_id")
-    # Desktop threads and background subagents are not separately addressable panes.
-    if not session or not pane or not isinstance(sid, str) or not sid or event.get("agent_id"):
+    # Desktop threads and background subagents are not separately addressable panes; only a subagent's
+    # start and stop matter, because they tell whether the pane's agent is still working.
+    if event.get("agent_id") and event.get("hook_event_name") not in ("SubagentStart", "SubagentStop"):
+        return
+    if not session or not pane or not isinstance(sid, str) or not sid:
         return
     if not deckenv.valid_session(session):
         return

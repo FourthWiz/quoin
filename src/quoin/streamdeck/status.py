@@ -12,7 +12,7 @@ import os
 import re
 import stat
 
-from . import hooks_merge, jsonfile, manifest
+from . import hooks_merge, jsonfile, manifest, payload_build
 
 try:
     import tomllib as _tomllib
@@ -45,7 +45,7 @@ PROBLEM_CODES = (
 INFO_CODES = (
     "PATHS_DIFFER", "UPGRADE_AVAILABLE", "UNMANAGED_LEFTOVER", "CODEX_TRUST", "PREREQ_FEATURE_UNAVAILABLE",
     "OPTIONAL_TOOL_MISSING", "PLUGIN_NEVER_RAN", "HEALTH_UNREADABLE", "PLUGIN_SNAPSHOT_ERROR",
-    "SETTINGS_UNREADABLE", "SETTINGS_MALFORMED",
+    "SETTINGS_UNREADABLE", "SETTINGS_MALFORMED", "PROFILE_NOT_IMPORTED",
 )
 
 
@@ -250,6 +250,9 @@ def _check_valid(rep, paths, data, package_version, package_fingerprint, now, re
                     rep.problem("HEALTH_STALE", "plugin health older than %d s: is Stream Deck running?" % STALE_HEALTH_SECONDS)
             if isinstance(parsed, dict) and parsed.get("error_type"):
                 rep.info("PLUGIN_SNAPSHOT_ERROR", str(parsed["error_type"]))
+        if not payload_build.profile_imported(os.path.dirname(rec["plugin_dir"])):
+            rep.info("PROFILE_NOT_IMPORTED", "Stream Deck has no Quoin Live Agents profile: open %s"
+                     % os.path.join(rec["runtime"], "profile", "Quoin Live Agents.streamDeckProfile"))
     _leftovers(rep, rec["runtime"])
 
 

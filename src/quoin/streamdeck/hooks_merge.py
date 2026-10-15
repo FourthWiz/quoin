@@ -13,7 +13,7 @@ EVENTS = {
     "claude": (
         "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest",
         "PostToolUse", "Stop", "PreCompact", "PostCompact", "PostToolUseFailure",
-        "Notification", "StopFailure", "Elicitation", "ElicitationResult",
+        "Notification", "StopFailure", "Elicitation", "ElicitationResult", "SubagentStart", "SubagentStop",
     ),
     "codex": (
         "SessionStart", "SessionEnd", "UserPromptSubmit", "PreToolUse", "PermissionRequest",

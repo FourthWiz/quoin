@@ -75,10 +75,11 @@ def test_navigation_is_addressed(payload):
         assert argv[1:] == ["--session", "wanted", "action", "focus-next-pane"]
 
 
-def test_project_path_is_one_argument(payload):
+def test_project_path_is_one_argument(payload, tmp_path):
     c = payload("controller")
     deckenv = payload("deckenv")
-    project = "/tmp/project with spaces; $(nope)"
+    project = str(tmp_path / "project with spaces; $(nope)")
+    os.makedirs(project)
     deckenv.set_surface(deckenv.current(), deckenv.current().socket_dir, "wanted", "surface-1")
     with patch.object(c, "apple", return_value="surface-1"), patch.object(c, "sessions", return_value=[("wanted", True)]), \
             patch.object(c, "run") as run:

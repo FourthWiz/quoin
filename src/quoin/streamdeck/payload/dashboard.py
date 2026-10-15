@@ -235,6 +235,11 @@ def _snapshot():
             doomed[side].append((path, seen))
             continue
         entry = {k: rec[k] for k in monitor.RECORD_KEYS if k in rec}
+        # A lost "subagent stopped" event must not keep the key on WORKING: the hook only expires them when
+        # the session next speaks, so the expiry is applied here as well.
+        entry['status'] = monitor.displayed_status(rec, now)
+        entry.pop('subagents', None)
+        entry.pop('turn_done', None)
         entry['pane'] = pane
         entry['socket'] = socket
         if offline:
@@ -294,7 +299,7 @@ def focus(record):
     try:
         _focus(record)
     except subprocess.TimeoutExpired:
-        raise RuntimeError('Не удалось переключиться вовремя.')
+        raise RuntimeError('Could not switch in time.')
     finally:
         deckenv.clear_deadline()
 
@@ -303,16 +308,16 @@ def _focus(record):
     e = deckenv.current()
     session, pane = record.get('session'), record.get('pane')
     if not isinstance(session, str) or not session or pane is None:
-        raise RuntimeError('Эта панель уже закрыта.')
+        raise RuntimeError('This pane is already closed.')
     if not deckenv.valid_session(session):
-        raise RuntimeError('Недопустимое имя сессии.')
+        raise RuntimeError('Invalid session name.')
     pane = str(pane)
     socket = deckenv.record_socket(record, e)
     ok, panes = list_panes(socket, session)
     if not ok:
-        raise RuntimeError('Сессия недоступна: ' + session)
+        raise RuntimeError('Session unavailable: ' + session)
     if not pane_present(panes, pane):
-        raise RuntimeError('Эта панель уже закрыта.')
+        raise RuntimeError('This pane is already closed.')
     config = c.load()
     surface = deckenv.get_surface(e, socket, session)
     if surface:
@@ -331,7 +336,12 @@ def _focus(record):
     if not surface:
         config.update(session=session, socket=socket, project=record.get('project') or config['project'])
         c.terminal('attach', config, socket=socket)
-    c.run([e.bins['zellij'], '--session', session, 'action', 'focus-pane-id', 'terminal_' + pane], socket=socket, timeout=3)
+    try:
+        c.run([e.bins['zellij'], '--session', session, 'action', 'focus-pane-id', 'terminal_' + pane], socket=socket, timeout=3)
+    except RuntimeError as exc:
+        # Zellij reports an error when the pane already has focus; that is the state we wanted.
+        if 'already focused' not in str(exc):
+            raise
     config = c.load()
     config.update(session=session, socket=socket, project=record.get('project') or config['project'])
     deckenv.remember_project(config, session, config['project'])
@@ -348,8 +358,8 @@ def main():
         focus(json.loads(sys.argv[2]))
         return
     if action == 'menu':
-        labels = ['Новый Desk: 2 Codex + Shell', 'Выбрать папку проекта', 'Подключить сессию', 'Добавить Shell', 'Git: локальные изменения']
-        picked = c.choose(labels, 'Дополнительные действия Agent Desk')
+        labels = ['New Desk: 2 Codex + Shell', 'Choose project folder', 'Attach session', 'Add Shell', 'Git: local changes']
+        picked = c.choose(labels, 'More Agent Desk actions')
         if not picked:
             return
         config = c.load()

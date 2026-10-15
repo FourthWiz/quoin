@@ -1,5 +1,6 @@
 """Session-targeted Stream Deck control for Quoin Agent Desk (macOS)."""
 import fcntl
+import json
 import os
 import re
 import shlex
@@ -15,7 +16,7 @@ NAV = {'prev-pane': 'focus-previous-pane', 'next-pane': 'focus-next-pane',
        'next-tab': 'go-to-next-tab', 'floating': 'toggle-floating-panes',
        'save': 'save-session'}
 NO_SESSIONS = 'No active zellij sessions found'
-MISSING_AGENTDESK = 'Agent Desk не установлен — `quoin streamdeck install` предложит установить.'
+MISSING_AGENTDESK = 'Agent Desk is not installed: `quoin streamdeck install` offers to install it.'
 FOCUS_SCRIPT = ('on run argv\n tell application "Ghostty"\n focus (first terminal whose id is (item 1 of argv))\n'
                 ' end tell\nend run')
 
@@ -55,7 +56,7 @@ def choose(items, prompt):
 
 
 def folder():
-    return apple('on run\n try\n return POSIX path of (choose folder with prompt "Проект для Agent Desk")\n on error number -128\n return ""\n end try\nend run',
+    return apple('on run\n try\n return POSIX path of (choose folder with prompt "Project for Agent Desk")\n on error number -128\n return ""\n end try\nend run',
                  timeout=None)
 
 
@@ -86,7 +87,7 @@ def config_socket(config):
 
 def check_session(name):
     if not deckenv.valid_session(name):
-        raise RuntimeError('Недопустимое имя сессии: ' + repr(name)[:80])
+        raise RuntimeError('Invalid session name: ' + repr(name)[:80])
     return name
 
 
@@ -94,9 +95,9 @@ def select(config):
     socket = config_socket(config)
     available = sessions(socket)
     if not available:
-        raise RuntimeError('Нет сохранённых сессий. Нажми «Открыть Desk».')
+        raise RuntimeError('No saved sessions. Press Desk first.')
     labels = [name + (' • active' if live else ' • saved') for name, live in available]
-    picked = choose(labels, 'Выбери сессию. Все кнопки панели будут управлять ею.')
+    picked = choose(labels, 'Pick a session. Every key on the panel will control it.')
     if not picked:
         return False
     name = check_session(available[labels.index(picked)][0])
@@ -132,14 +133,67 @@ def terminal(mode, config, socket=None):
     deckenv.set_surface(e, socket, config['session'], surface)
 
 
+TITLE_LOOKUP_BUDGET_S = 4
+
+
+def _abs_dir(path):
+    return isinstance(path, str) and os.path.isabs(path) and os.path.isdir(path)
+
+
+def owner_from_title(e, config, title):
+    """Resolve the session of a tab the deck did not open (zellij titles its terminal "session | pane")."""
+    name = title.split(' | ', 1)[0].strip() if ' | ' in title else ''
+    if not name or not deckenv.valid_session(name):
+        return None
+    candidates = [config_socket(config), e.socket_dir]
+    candidates += [deckenv.record_socket(r, e) for _, r, _ in deckenv.iter_records(e) if isinstance(r, dict)]
+    live = []
+    for socket in dict.fromkeys(candidates):
+        if not os.path.isdir(socket):
+            continue
+        try:
+            if dict(sessions(socket)).get(name, False):
+                live.append(socket)
+        except Exception:
+            continue
+    # The same name live on two servers cannot be told apart from the title.
+    return (live[0], name) if len(live) == 1 else None
+
+
+def project_of(e, config, socket, name):
+    """Project folder of a session: remembered, else its agents' records, else a pane's working directory."""
+    remembered = config.get('projects', {}).get(name)
+    if _abs_dir(remembered):
+        return remembered
+    # The current project belongs to the current session only; another tab's session never inherits it.
+    if config.get('session') == name and _abs_dir(config.get('project')):
+        return config['project']
+    records = [r for _, r, _ in deckenv.iter_records(e)
+               if isinstance(r, dict) and r.get('session') == name and deckenv.record_socket(r, e) == socket
+               and _abs_dir(r.get('project'))]
+    if records:
+        return max(records, key=lambda r: r.get('updated') or 0)['project']
+    try:
+        panes = json.loads(run([e.bins['zellij'], '--session', name, 'action', 'list-panes', '--json'], socket=socket))
+    except Exception:
+        return None
+    if not isinstance(panes, list):
+        return None
+    panes = [p for p in panes if isinstance(p, dict) and not p.get('is_plugin') and not p.get('exited')]
+    for pane in sorted(panes, key=lambda p: not p.get('is_focused')):
+        if _abs_dir(pane.get('pane_cwd')):
+            return pane['pane_cwd']
+    return None
+
+
 def require_live(config):
     name = config.get('session')
     if not name:
-        raise RuntimeError('Сначала нажми «Открыть Desk» или «Сессии».')
+        raise RuntimeError('Press Desk first, or attach a session from the Desk menu.')
     check_session(name)
     socket = config_socket(config)
     if not dict(sessions(socket)).get(name, False):
-        raise RuntimeError('Сессия не запущена: ' + name + '. Нажми «Открыть Desk», чтобы подключить её.')
+        raise RuntimeError('Session is not running: ' + name + '. Press Desk to attach it.')
     # Verify the server exists before any action; never fall back to a different session.
     run([env().bins['zellij'], '--session', name, 'action', 'list-panes', '--json'], socket=socket)
     return name
@@ -168,7 +222,7 @@ def execute(action, config):
         return
     if action == 'desk':
         if not os.path.isdir(config['project']):
-            raise RuntimeError('Папка проекта недоступна. Выбери её кнопкой «Проект».')
+            raise RuntimeError('The project folder is not available. Choose it from the Desk menu.')
         socket = config_socket(config)
         session = config.get('session')
         if session and dict(sessions(socket)).get(session) and deckenv.get_surface(e, socket, session):
@@ -188,14 +242,31 @@ def execute(action, config):
         return
     if action in {'claude', 'codex', 'shell', 'git'}:
         if not config.get('session'):
-            raise RuntimeError('Сначала нажми Desk или кнопку нужного агента.')
-        surface = apple('on run\n tell application "Ghostty"\n return id of focused terminal of selected tab of front window\n end tell\nend run')
-        owner = deckenv.find_surface_owner(e, surface)
-        if owner is None:
-            raise RuntimeError('Сначала нажми кнопку нужного агента или Desk, чтобы выбрать вкладку для новой панели.')
-        check_session(owner[1])
+            raise RuntimeError('Press Desk or the key of the agent you want first.')
+        found = apple('on run\n tell application "Ghostty"\n set t to focused terminal of selected tab of front window\n return (id of t) & linefeed & (name of t)\n end tell\nend run')
+        surface, _, title = found.partition('\n')
+        deckenv.set_deadline(TITLE_LOOKUP_BUDGET_S)
+        try:
+            owner = deckenv.find_surface_owner(e, surface)
+            adopted = owner is None
+            if adopted:
+                owner = owner_from_title(e, config, title)
+            if owner is None:
+                raise RuntimeError('Press the key of an agent, or Desk, first to pick the tab for the new pane.')
+            check_session(owner[1])
+            # No folder means no guess: a stale project would start the agent in the wrong repository.
+            project = project_of(e, config, *owner)
+        finally:
+            deckenv.clear_deadline()
+        if project is None:
+            raise RuntimeError('Could not tell which project ' + owner[1] + ' belongs to. Press the key of one of its agents first.')
+        if adopted:
+            deckenv.set_surface(e, owner[0], owner[1], surface)
+            deckenv.remember_project(config, owner[1], project)
+        config['project'] = project
         config['socket'], config['session'] = owner
-        config['project'] = config.get('projects', {}).get(owner[1], config['project'])
+        if adopted:
+            save(config)
     name = require_live(config)
     socket = config_socket(config)
     prefix = [e.bins['zellij'], '--session', name]

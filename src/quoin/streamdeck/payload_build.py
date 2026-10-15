@@ -122,3 +122,69 @@ def build_profile(dest_file):
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, data, compresslevel=9)
     os.replace(temp, dest_file)
+
+
+MAX_MANIFEST_BYTES = 1 << 20
+
+
+def _read_json(path):
+    try:
+        if not os.path.isfile(path) or os.path.getsize(path) > MAX_MANIFEST_BYTES:
+            return None
+        with open(path, "rb") as handle:
+            return json.loads(handle.read().decode("utf-8"))
+    except (OSError, ValueError, RecursionError):
+        return None
+
+
+def _profile_dirs(app_dir):
+    # ProfilesV2 is the legacy store that the app leaves behind once ProfilesV3 exists.
+    for store in ("ProfilesV3", "ProfilesV2"):
+        base = os.path.join(app_dir, store)
+        try:
+            names = sorted(n for n in os.listdir(base) if n.endswith(".sdProfile"))
+        except OSError:
+            continue
+        yield [os.path.join(base, n) for n in names]
+        if store == "ProfilesV3":
+            return
+
+
+def _has_configured_quoin_keys(root):
+    try:
+        pages = os.listdir(os.path.join(root, "Profiles"))
+    except OSError:
+        return False
+    roles = set()
+    for page in pages:
+        data = _read_json(os.path.join(root, "Profiles", page, "manifest.json"))
+        controllers = data.get("Controllers") if isinstance(data, dict) else None
+        for controller in controllers if isinstance(controllers, list) else ():
+            actions = controller.get("Actions") if isinstance(controller, dict) else None
+            for action in actions.values() if isinstance(actions, dict) else ():
+                if not isinstance(action, dict) or action.get("UUID") != ACTION_UUID:
+                    continue
+                settings = action.get("Settings")
+                if isinstance(settings, dict) and settings.get("role"):
+                    roles.add(settings["role"] if isinstance(settings["role"], str) else "")
+    # A renamed import still carries the attention key next to agent keys; one hand-set key does not.
+    return "attention" in roles and "agent" in roles
+
+
+def profile_imported(plugins_dir):
+    """Whether the Stream Deck app already holds the Quoin profile.
+
+    The app keeps its profiles next to its plugins folder. A profile counts when it has
+    our name, or when it is a renamed copy that still has our attention and agent keys.
+    Unreadable or malformed files count as "not found", never as an error.
+    """
+    try:
+        groups = list(_profile_dirs(os.path.dirname(plugins_dir)))
+        for roots in groups:
+            for root in roots:
+                top = _read_json(os.path.join(root, "manifest.json"))
+                if isinstance(top, dict) and top.get("Name") == PROFILE_NAME:
+                    return True
+        return any(_has_configured_quoin_keys(root) for roots in groups for root in roots)
+    except Exception:
+        return False

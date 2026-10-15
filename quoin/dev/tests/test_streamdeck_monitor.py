@@ -235,3 +235,133 @@ def test_symlinked_lock_is_not_followed_and_monitor_exits_zero(staged, tmp_path)
     os.symlink(str(victim), str(state / "monitor.lock"))
     assert run_monitor(staged, "claude", event()) == (0, b"", b"")
     assert victim.read_text() == "keep"
+
+
+def test_idle_reminder_after_a_finished_turn_does_not_ask_for_attention(payload):
+    m = payload("monitor")
+    done = m.transition({"status": "working", "pending": {}}, {"hook_event_name": "Stop"})
+    assert done["status"] == "done"
+    idle = m.transition(done, {"hook_event_name": "Notification", "notification_type": "idle_prompt"})
+    assert idle["status"] == "done" and idle["pending"] == {}
+    for kind in ("permission_prompt", "elicitation_dialog"):
+        asked = m.transition(done, {"hook_event_name": "Notification", "notification_type": kind})
+        assert asked["status"] == "attention"
+
+
+def _step(m, state, name, **kw):
+    return m.transition(state, dict({"hook_event_name": name}, **kw))
+
+
+def test_finished_turn_stays_working_while_a_background_subagent_runs(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="sub-1")
+    s = _step(m, s, "Stop")
+    assert s["status"] == "working" and len(s["subagents"]) == 1
+    s = _step(m, s, "SubagentStop", agent_id="sub-1")
+    assert s["status"] == "done" and s["subagents"] == {}
+
+
+def test_every_subagent_must_stop_before_the_key_turns_done(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    for name in ("a", "b"):
+        s = _step(m, s, "SubagentStart", agent_id=name)
+    s = _step(m, s, "Stop")
+    s = _step(m, s, "SubagentStop", agent_id="a")
+    assert s["status"] == "working"
+    s = _step(m, s, "SubagentStop", agent_id="b")
+    assert s["status"] == "done"
+
+
+def test_subagent_stop_during_a_running_turn_changes_nothing(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="a")
+    s = _step(m, s, "SubagentStop", agent_id="a")
+    assert s["status"] == "working"
+
+
+def test_a_question_outranks_running_subagents(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="a")
+    s = _step(m, s, "PermissionRequest", tool_name="Bash", tool_use_id="t1")
+    s = _step(m, s, "Stop")
+    assert s["status"] == "working"  # Stop clears the pending question, subagent keeps it busy
+    s = _step(m, s, "Notification", notification_type="permission_prompt")
+    s = _step(m, s, "SubagentStop", agent_id="a")
+    assert s["status"] == "attention"
+
+
+def test_a_subagent_that_never_stops_expires(payload, monkeypatch):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="lost")
+    s = _step(m, s, "Stop")
+    assert s["status"] == "working"
+    real = m.time.time
+    monkeypatch.setattr(m.time, "time", lambda: real() + m.SUBAGENT_TTL_S + 1)
+    s = _step(m, s, "Stop")
+    assert s["status"] == "done" and s["subagents"] == {}
+
+
+def test_session_start_forgets_subagents_and_the_cap_is_enforced(payload):
+    m = payload("monitor")
+    s = {}
+    for i in range(m.SUBAGENT_CAP + 10):
+        s = _step(m, s, "SubagentStart", agent_id="s%d" % i)
+    assert len(s["subagents"]) == m.SUBAGENT_CAP
+    s = _step(m, s, "SessionStart")
+    assert s["subagents"] == {} and s["status"] == "idle"
+
+
+def test_only_subagent_start_and_stop_reach_the_record(payload, deck_home, monkeypatch):
+    m = payload("monitor")
+    env = {"ZELLIJ_SESSION_NAME": "s", "ZELLIJ_PANE_ID": "1"}
+    ident = (1, "birth")
+    m.record("claude", {"session_id": "sid", "hook_event_name": "UserPromptSubmit", "cwd": "/w"}, environ=env, identity=ident)
+    m.record("claude", {"session_id": "sid", "hook_event_name": "PreToolUse", "tool_name": "Bash", "agent_id": "x"},
+             environ=env, identity=ident)
+    m.record("claude", {"session_id": "sid", "hook_event_name": "SubagentStart", "agent_id": "x"}, environ=env, identity=ident)
+    de = payload("deckenv")
+    records = [r for _, r, _ in de.iter_records(de.current()) if isinstance(r, dict)]
+    assert len(records) == 1 and records[0]["event"] == "SubagentStart" and len(records[0]["subagents"]) == 1
+    assert "x" not in records[0]["subagents"]
+
+
+def test_compaction_restart_keeps_running_subagents_and_the_turn_state(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="a")
+    s = _step(m, s, "SessionStart", source="compact")
+    assert s["status"] == "working" and len(s["subagents"]) == 1
+    s = _step(m, s, "Stop")
+    assert s["status"] == "working"
+    fresh = _step(m, s, "SessionStart", source="startup")
+    assert fresh["status"] == "idle" and fresh["subagents"] == {}
+
+
+def test_main_agent_activity_after_stop_ends_the_done_turn_state(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "SubagentStart", agent_id="bg")
+    s = _step(m, s, "Stop")
+    s = _step(m, s, "PreToolUse", tool_name="Bash", tool_use_id="t")
+    assert s["turn_done"] is False and s["status"] == "working"
+    s = _step(m, s, "SubagentStart", agent_id="fg")
+    s = _step(m, s, "SubagentStop", agent_id="fg")
+    s = _step(m, s, "SubagentStop", agent_id="bg")
+    assert s["status"] == "working"
+
+
+def test_displayed_status_applies_the_subagent_expiry(payload):
+    m = payload("monitor")
+    now = 1_000_000.0
+    live = {"status": "working", "turn_done": True, "subagents": {"a": now - 60}}
+    stale = {"status": "working", "turn_done": True, "subagents": {"a": now - m.SUBAGENT_TTL_S - 1}}
+    running_turn = {"status": "working", "turn_done": False, "subagents": {}}
+    assert m.displayed_status(live, now) == "working"
+    assert m.displayed_status(stale, now) == "done"
+    assert m.displayed_status(running_turn, now) == "working"
+    assert m.displayed_status({"status": "attention", "turn_done": True, "subagents": {}}, now) == "attention"

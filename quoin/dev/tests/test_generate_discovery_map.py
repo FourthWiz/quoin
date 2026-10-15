@@ -373,10 +373,17 @@ def test_deployment_flat_layout_import(tmp_path):
     assert exit_code == 0, f"Flat layout CLI failed with exit code {exit_code}"
 
 
-def test_single_repo_at_root():
+def test_single_repo_at_root(tmp_path):
     """TG-14: generate on single-repo-at-root-project → repos[0].path == '.' and freshness present."""
-    _pin_mtimes(_SINGLE_ROOT)
-    result = generate_map(_SINGLE_ROOT, now_iso=_PINNED_NOW)
+    # git cannot store a nested .git directory, so the fixture's repo marker is built in a copy.
+    project = tmp_path / _SINGLE_ROOT.name
+    shutil.copytree(_SINGLE_ROOT, project)
+    heads = project / ".git" / "refs" / "heads"
+    heads.mkdir(parents=True, exist_ok=True)
+    (project / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    (heads / "main").write_text("0" * 40 + "\n")
+    _pin_mtimes(project)
+    result = generate_map(project, now_iso=_PINNED_NOW)
     errors = validate(result)
     assert errors == [], f"Validation errors: {errors}"
 

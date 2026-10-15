@@ -325,12 +325,29 @@ def focus_spies(w):
 def test_focus_of_vanished_agent_touches_nothing(w):
     log = focus_spies(w)
     w.panes[(w.sock, "s")] = (True, [])
-    with pytest.raises(RuntimeError, match="Эта панель уже закрыта."):
+    with pytest.raises(RuntimeError, match="This pane is already closed."):
         w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
     w.panes[(w.sock, "s")] = (False, None)
-    with pytest.raises(RuntimeError, match="Сессия недоступна: s"):
+    with pytest.raises(RuntimeError, match="Session unavailable: s"):
         w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
     assert log["apple"] == [] and log["run"] == []
+
+
+def test_focus_treats_an_already_focused_pane_as_success(w):
+    focus_spies(w)
+    w.panes[(w.sock, "s")] = (True, [pane(3)])
+    w.de.set_surface(w.env, w.sock, "s", "surface-1")
+
+    def already(args, **kw):
+        raise RuntimeError("Pane Terminal(3) is already focused")
+    w.mp.setattr(w.dash.c, "run", already)
+    w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
+
+    def broken(args, **kw):
+        raise RuntimeError("session gone")
+    w.mp.setattr(w.dash.c, "run", broken)
+    with pytest.raises(RuntimeError, match="session gone"):
+        w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
 
 
 def test_focus_addresses_recorded_session_and_socket(w):
@@ -500,3 +517,16 @@ def test_focus_failure_path_shows_no_dialog(payload, deck_home, tmp_path):
     assert proc.returncode == 1
     log = osa.with_suffix(".log")
     assert not log.exists() or "display dialog" not in log.read_text()
+
+
+def test_snapshot_expires_forgotten_subagents_and_hides_their_bookkeeping(w):
+    now = time.time()
+    w.panes[(w.sock, "s")] = (True, [pane(3), pane(4), pane(5)])
+    w.write("busy", pane="3", status="working", turn_done=True, subagents={"a": now - 30})
+    w.write("lost", pane="4", status="working", turn_done=True, subagents={"a": now - w.mon.SUBAGENT_TTL_S - 5})
+    w.write("turn", pane="5", status="working", turn_done=False, subagents={})
+    out = {r["id"]: r for r in w.snap()}
+    assert out["busy"]["status"] == "working"
+    assert out["lost"]["status"] == "done"
+    assert out["turn"]["status"] == "working"
+    assert all("subagents" not in r and "turn_done" not in r for r in out.values())
