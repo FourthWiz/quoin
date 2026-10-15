@@ -637,12 +637,144 @@ _agentdesk_open_dashboard() {
   # into the layout by T-05. Its lifetime == the zellij session's lifetime.
 }
 
+# Print the named-session keys that survive a state cleanup so test leftovers
+# can be pruned by hand.
+_agentdesk_print_state_names() {
+  printf 'Remaining named-session keys:\n'
+  if [ -n "$1" ]; then
+    printf '%s\n' "$1" | sed 's/^/  /'
+  else
+    printf '  (none)\n'
+  fi
+}
+
+# ============================================================
+# _agentdesk_clean_state [--dry-run]
+#
+# Removes saved-state entries that point at test or scratch locations (pytest
+# temp dirs, macOS per-user temp folders, agent scratchpads). Keys are
+# percent-encoded in the file, so they are decoded before matching. Kept lines
+# are written back byte-identical and in order. The original file is copied to
+# last-layout.bak.<timestamp> before it is replaced; nothing is written when
+# there is nothing to remove or under --dry-run. Never runs automatically, and
+# is not safe against an agentdesk launch that saves while it runs.
+# ============================================================
+_agentdesk_clean_state() {
+  local dry_run=""
+  [ "${1:-}" = "--dry-run" ] && dry_run=1
+
+  local state_file state_dir tmp="" report
+  state_file="$(_agentdesk_state_file)"
+  state_dir="$(dirname "$state_file")"
+
+  if [ ! -f "$state_file" ]; then
+    printf 'agentdesk: no state file at %s; nothing to clean\n' "$state_file"
+    return 0
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'agentdesk: python3 is required for --clean-state; state left unchanged.\n' >&2
+    return 1
+  fi
+
+  if [ -z "$dry_run" ]; then
+    tmp="$(mktemp "$state_dir/.last-layout.clean.XXXXXX" 2>/dev/null)" || {
+      printf 'agentdesk: cannot create a temp file in %s; state left unchanged.\n' "$state_dir" >&2
+      return 1
+    }
+  fi
+
+  report="$(python3 - "$state_file" ${tmp:+"$tmp"} <<'PY'
+import sys
+from urllib.parse import unquote
+
+state = sys.argv[1]
+out = sys.argv[2] if len(sys.argv) > 2 else None
+data = open(state, "rb").read()
+trailing = data.endswith(b"\n")
+lines = data.split(b"\n") if data else []
+if trailing:
+    lines.pop()
+kept, removed, names = [], 0, []
+for line in lines:
+    if b"=" not in line:
+        kept.append(line)
+        continue
+    key = unquote(line.split(b"=", 1)[0].decode("utf-8", "replace"))
+    polluted = (
+        "pytest-of-" in key
+        or "/private/var/folders/" in key
+        or ("/private/tmp/claude-" in key and "/scratchpad" in key)
+    )
+    if polluted:
+        removed += 1
+        continue
+    kept.append(line)
+    if key.startswith("name:"):
+        names.append(key)
+if out is not None:
+    with open(out, "wb") as fh:
+        fh.write(b"\n".join(kept) + (b"\n" if trailing and kept else b""))
+print("removed=%d" % removed)
+print("kept=%d" % len(kept))
+for n in names:
+    print("n:" + n)
+PY
+)" || {
+    [ -n "$tmp" ] && rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: failed to read the state file; state left unchanged.\n' >&2
+    return 1
+  }
+
+  local removed kept
+  removed="$(printf '%s\n' "$report" | sed -n 's/^removed=//p')"
+  kept="$(printf '%s\n' "$report" | sed -n 's/^kept=//p')"
+  local names
+  names="$(printf '%s\n' "$report" | sed -n 's/^n://p')"
+
+  if [ "${removed:-0}" -eq 0 ]; then
+    [ -n "$tmp" ] && rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: already clean (%s entries)\n' "${kept:-0}"
+    _agentdesk_print_state_names "$names"
+    return 0
+  fi
+
+  if [ -n "$dry_run" ]; then
+    printf 'agentdesk: would remove %s of %s entries (dry run; nothing changed)\n' \
+      "$removed" "$(( removed + kept ))"
+    _agentdesk_print_state_names "$names"
+    return 0
+  fi
+
+  local bak stamp n=0
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  bak="$state_dir/last-layout.bak.$stamp"
+  while [ -e "$bak" ]; do
+    n=$(( n + 1 ))
+    bak="$state_dir/last-layout.bak.$stamp-$n"
+  done
+  if ! cp -p "$state_file" "$bak" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: could not write backup %s; state left unchanged.\n' "$bak" >&2
+    return 1
+  fi
+  if ! mv "$tmp" "$state_file" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: could not replace the state file; left unchanged. Backup at %s\n' "$bak" >&2
+    return 1
+  fi
+  printf 'agentdesk: removed %s entries; kept %s; backup: %s\n' "$removed" "$kept" "$bak"
+  _agentdesk_print_state_names "$names"
+  return 0
+}
+
 agentdesk() {
   local mode=""
   local custom_name=""
   local force_pick=""
   local pick_flag=""
   local panes_raw="" panes_given="" noprompt="" if_exists=""
+  local clean_state="" dry_run=""
   local -a tokens=()
   local -a panes_tokens=()
 
@@ -689,6 +821,12 @@ agentdesk() {
       --no-prompt)
         noprompt=1
         ;;
+      --clean-state)
+        clean_state=1
+        ;;
+      --dry-run)
+        dry_run=1
+        ;;
       --if-exists)
         shift
         if [ "$#" -eq 0 ]; then
@@ -728,6 +866,16 @@ Window types (positional):
   status   show workflow pipeline status graph
   ccr      start an open-model CCR (OpenRouter) session in pane
   spend    realtime token-spend monitor
+
+State maintenance:
+  agentdesk --clean-state [--dry-run]
+                     remove saved entries that point at test or scratch
+                     locations (pytest temp dirs, per-user temp folders, agent
+                     scratchpads) from ~/.config/agentdesk/last-layout. The file
+                     is copied to last-layout.bak.<timestamp> first. --dry-run
+                     only reports what would be removed. It never runs
+                     automatically; run it when no agentdesk launch is in
+                     progress. Cannot be combined with launch arguments.
 
 Layout memory:
   agentdesk remembers your layout choice per project (or per session name).
@@ -797,6 +945,31 @@ HELP
     esac
     shift
   done
+
+  # ── State maintenance (BEFORE Zellij guard and any project work) ──────────
+  if [ -n "$dry_run" ] && [ -z "$clean_state" ]; then
+    printf 'Error: --dry-run is only valid with --clean-state.\n' >&2
+    return 1
+  fi
+  if [ -n "$clean_state" ]; then
+    local _cs_conflict=""
+    [ -n "$mode" ] && _cs_conflict="--mode"
+    [ -z "$_cs_conflict" ] && [ "${#tokens[@]}" -gt 0 ] && _cs_conflict="window-type tokens"
+    [ -z "$_cs_conflict" ] && [ -n "$panes_given" ] && _cs_conflict="--panes"
+    [ -z "$_cs_conflict" ] && [ -n "$pick_flag" ] && _cs_conflict="--pick"
+    [ -z "$_cs_conflict" ] && [ -n "$custom_name" ] && _cs_conflict="a session name"
+    [ -z "$_cs_conflict" ] && [ -n "$if_exists" ] && _cs_conflict="--if-exists"
+    if [ -n "$_cs_conflict" ]; then
+      printf 'Error: --clean-state cannot be combined with %s.\n' "$_cs_conflict" >&2
+      return 1
+    fi
+    if [ -n "$dry_run" ]; then
+      _agentdesk_clean_state --dry-run
+    else
+      _agentdesk_clean_state
+    fi
+    return $?
+  fi
 
   # Apply AGENTDESK_PICK env override (force picker via environment variable).
   if [ -n "${AGENTDESK_PICK:-}" ]; then

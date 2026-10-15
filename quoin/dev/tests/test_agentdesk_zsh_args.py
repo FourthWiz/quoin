@@ -2132,3 +2132,155 @@ def test_dash_and_layout_keys_coexist(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     assert result.stdout.splitlines() == ["claude+shell", "yes", "claude+shell", "no"]
     assert sorted(_state_lines(tmp_path)) == ["dash:proj:X=no", "proj:X=claude+shell"]
+
+
+# ── agentdesk --clean-state ──────────────────────────────────────────────────
+
+def _enc(path: str) -> str:
+    from urllib.parse import quote
+    return quote(path, safe="").replace(".", "%2E").replace("~", "%7E")
+
+
+def _clean_state_file(tmp_path: Path) -> Path:
+    return tmp_path / "fake_home" / ".config" / "agentdesk" / "last-layout"
+
+
+def _run_clean(args: str, tmp_path: Path, extra_env: "Optional[dict]" = None):
+    env = _make_state_env(tmp_path)
+    if extra_env:
+        env.update(extra_env)
+    script = f'source "{AGENTDESK_ZSH}"\nagentdesk {args}'
+    return subprocess.run(
+        ["zsh", "-c", script], env=env, input="", capture_output=True, text=True,
+        cwd=str(tmp_path), timeout=SUBPROCESS_TIMEOUT,
+    )
+
+
+_CLEAN_KEPT = [
+    f"proj:{_enc('/Users/u/code/app')}=claude+shell",
+    "name:mysession=__FIXED__",
+    f"proj:{_enc('/Users/u/pytest-notes')}=__FIXED__",
+    f"proj:{_enc('/private/tmp/claude-501/abc/other')}=shell",
+    "garbage-without-equals",
+    f"proj:{_enc('/Users/u/eq')}=a=b=c",
+]
+_CLEAN_REMOVED = [
+    f"proj:{_enc('/private/var/folders/xy/T/pytest-of-u/pytest-3/test_a0')}=__FIXED__",
+    f"proj:{_enc('/private/tmp/claude-501/abc/scratchpad')}=claude",
+    f"dash:proj:{_enc('/private/var/folders/xy/T/pytest-of-u/pytest-3/test_a0')}=yes",
+    "proj:/private/var/folders/zz/x=__FIXED__",
+]
+
+
+def _write_mixed_state(tmp_path: Path, trailing_newline: bool = True) -> bytes:
+    order = [
+        _CLEAN_KEPT[0], _CLEAN_KEPT[1], _CLEAN_REMOVED[0], _CLEAN_KEPT[2],
+        _CLEAN_REMOVED[1], _CLEAN_KEPT[3], _CLEAN_REMOVED[2], _CLEAN_REMOVED[3],
+        _CLEAN_KEPT[4], _CLEAN_KEPT[5],
+    ]
+    data = ("\n".join(order) + ("\n" if trailing_newline else "")).encode()
+    state = _clean_state_file(tmp_path)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_bytes(data)
+    return data
+
+
+def _backups(tmp_path: Path) -> list:
+    return sorted(_clean_state_file(tmp_path).parent.glob("last-layout.bak.*"))
+
+
+def test_clean_state_removes_polluted_entries_and_backs_up(tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    expected = ("\n".join(_CLEAN_KEPT) + "\n").encode()
+    assert _clean_state_file(tmp_path).read_bytes() == expected
+    backups = _backups(tmp_path)
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert "removed 4 entries" in result.stdout
+    assert str(backups[0]) in result.stdout
+    assert "name:mysession" in result.stdout
+    assert not list(_clean_state_file(tmp_path).parent.glob(".last-layout.clean.*"))
+
+
+def test_clean_state_second_run_is_noop(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path)
+    _run_clean("--clean-state", tmp_path)
+    after_first = _clean_state_file(tmp_path).read_bytes()
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "already clean" in result.stdout
+    assert _clean_state_file(tmp_path).read_bytes() == after_first
+    assert len(_backups(tmp_path)) == 1
+
+
+def test_clean_state_dry_run_writes_nothing(tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    state_dir = _clean_state_file(tmp_path).parent
+    listing = sorted(p.name for p in state_dir.iterdir())
+    dir_mtime = state_dir.stat().st_mtime_ns
+    result = _run_clean("--clean-state --dry-run", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "would remove 4 of 10 entries" in result.stdout
+    assert _clean_state_file(tmp_path).read_bytes() == original
+    assert sorted(p.name for p in state_dir.iterdir()) == listing
+    assert state_dir.stat().st_mtime_ns == dir_mtime
+
+
+def test_clean_state_missing_file(tmp_path: Path) -> None:
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "nothing to clean" in result.stdout
+    assert not _clean_state_file(tmp_path).exists()
+    assert not _clean_state_file(tmp_path).parent.exists()
+
+
+def test_clean_state_preserves_missing_trailing_newline(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path, trailing_newline=False)
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert _clean_state_file(tmp_path).read_bytes() == "\n".join(_CLEAN_KEPT).encode()
+
+
+@pytest.mark.parametrize(
+    "args",
+    ["--clean-state claude", "--clean-state --panes shell", "--dry-run",
+     "--clean-state --mode solo", "--clean-state --pick", "--clean-state --name x",
+     "--clean-state --if-exists new"],
+)
+def test_clean_state_rejects_launch_arguments(args: str, tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    result = _run_clean(args, tmp_path)
+    assert result.returncode == 1
+    assert "Error" in result.stderr
+    assert _clean_state_file(tmp_path).read_bytes() == original
+    assert not _backups(tmp_path)
+
+
+def test_clean_state_runs_inside_zellij_session(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path)
+    result = _run_clean("--clean-state", tmp_path, {"ZELLIJ": "1"})
+    assert result.returncode == 0, result.stderr
+    assert "removed 4 entries" in result.stdout
+
+
+def test_clean_state_ignores_exported_pick_variable(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path)
+    result = _run_clean("--clean-state", tmp_path, {"AGENTDESK_PICK": "1"})
+    assert result.returncode == 0, result.stderr
+    assert "removed 4 entries" in result.stdout
+
+
+def test_clean_state_backup_name_never_overwrites(tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    state_dir = _clean_state_file(tmp_path).parent
+    _make_state_env(tmp_path)  # creates mock_bin, which is first on PATH
+    stub_bin = tmp_path / "mock_bin"
+    (stub_bin / "date").write_text("#!/bin/sh\necho 20260101-000000\n")
+    (stub_bin / "date").chmod(0o755)
+    (state_dir / "last-layout.bak.20260101-000000").write_text("older backup\n")
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (state_dir / "last-layout.bak.20260101-000000").read_text() == "older backup\n"
+    assert (state_dir / "last-layout.bak.20260101-000000-1").read_bytes() == original
