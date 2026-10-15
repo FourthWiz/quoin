@@ -58,7 +58,7 @@ def test_the_group_and_every_verb_have_help(capsys):
     group = capsys.readouterr().out
     assert exc.value.code == 0 and all(verb in group for verb in ("install", "upgrade", "status", "uninstall"))
     assert "opt-in" in group and "never installs it" in group
-    expected = {"install": ("--runtimes", "--python", "--node", "--prereqs", "--dry-run", "--open-profile",
+    expected = {"install": ("--runtimes", "--python", "--node", "--prereqs", "--dry-run", "--open-profile", "--no-open-profile",
                             "--allow-downgrade", "--runtime-dir", "--agentdesk"),
                 "upgrade": ("--runtimes", "--allow-downgrade", "--plugins-dir"),
                 "uninstall": ("--runtimes", "--purge", "--dry-run", "--state-root"),

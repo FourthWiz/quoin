@@ -15,7 +15,7 @@ NAV = {'prev-pane': 'focus-previous-pane', 'next-pane': 'focus-next-pane',
        'next-tab': 'go-to-next-tab', 'floating': 'toggle-floating-panes',
        'save': 'save-session'}
 NO_SESSIONS = 'No active zellij sessions found'
-MISSING_AGENTDESK = 'Agent Desk не установлен — `quoin streamdeck install` предложит установить.'
+MISSING_AGENTDESK = 'Agent Desk is not installed: `quoin streamdeck install` offers to install it.'
 FOCUS_SCRIPT = ('on run argv\n tell application "Ghostty"\n focus (first terminal whose id is (item 1 of argv))\n'
                 ' end tell\nend run')
 
@@ -55,7 +55,7 @@ def choose(items, prompt):
 
 
 def folder():
-    return apple('on run\n try\n return POSIX path of (choose folder with prompt "Проект для Agent Desk")\n on error number -128\n return ""\n end try\nend run',
+    return apple('on run\n try\n return POSIX path of (choose folder with prompt "Project for Agent Desk")\n on error number -128\n return ""\n end try\nend run',
                  timeout=None)
 
 
@@ -86,7 +86,7 @@ def config_socket(config):
 
 def check_session(name):
     if not deckenv.valid_session(name):
-        raise RuntimeError('Недопустимое имя сессии: ' + repr(name)[:80])
+        raise RuntimeError('Invalid session name: ' + repr(name)[:80])
     return name
 
 
@@ -94,9 +94,9 @@ def select(config):
     socket = config_socket(config)
     available = sessions(socket)
     if not available:
-        raise RuntimeError('Нет сохранённых сессий. Нажми «Открыть Desk».')
+        raise RuntimeError('No saved sessions. Press Desk first.')
     labels = [name + (' • active' if live else ' • saved') for name, live in available]
-    picked = choose(labels, 'Выбери сессию. Все кнопки панели будут управлять ею.')
+    picked = choose(labels, 'Pick a session. Every key on the panel will control it.')
     if not picked:
         return False
     name = check_session(available[labels.index(picked)][0])
@@ -135,11 +135,11 @@ def terminal(mode, config, socket=None):
 def require_live(config):
     name = config.get('session')
     if not name:
-        raise RuntimeError('Сначала нажми «Открыть Desk» или «Сессии».')
+        raise RuntimeError('Press Desk first, or attach a session from the Desk menu.')
     check_session(name)
     socket = config_socket(config)
     if not dict(sessions(socket)).get(name, False):
-        raise RuntimeError('Сессия не запущена: ' + name + '. Нажми «Открыть Desk», чтобы подключить её.')
+        raise RuntimeError('Session is not running: ' + name + '. Press Desk to attach it.')
     # Verify the server exists before any action; never fall back to a different session.
     run([env().bins['zellij'], '--session', name, 'action', 'list-panes', '--json'], socket=socket)
     return name
@@ -168,7 +168,7 @@ def execute(action, config):
         return
     if action == 'desk':
         if not os.path.isdir(config['project']):
-            raise RuntimeError('Папка проекта недоступна. Выбери её кнопкой «Проект».')
+            raise RuntimeError('The project folder is not available. Choose it from the Desk menu.')
         socket = config_socket(config)
         session = config.get('session')
         if session and dict(sessions(socket)).get(session) and deckenv.get_surface(e, socket, session):
@@ -188,11 +188,11 @@ def execute(action, config):
         return
     if action in {'claude', 'codex', 'shell', 'git'}:
         if not config.get('session'):
-            raise RuntimeError('Сначала нажми Desk или кнопку нужного агента.')
+            raise RuntimeError('Press Desk or the key of the agent you want first.')
         surface = apple('on run\n tell application "Ghostty"\n return id of focused terminal of selected tab of front window\n end tell\nend run')
         owner = deckenv.find_surface_owner(e, surface)
         if owner is None:
-            raise RuntimeError('Сначала нажми кнопку нужного агента или Desk, чтобы выбрать вкладку для новой панели.')
+            raise RuntimeError('Press the key of an agent, or Desk, first to pick the tab for the new pane.')
         check_session(owner[1])
         config['socket'], config['session'] = owner
         config['project'] = config.get('projects', {}).get(owner[1], config['project'])

@@ -69,7 +69,7 @@ const arg = flag => args[args.indexOf(flag)+1];
 const ws = new WebSocket('ws://127.0.0.1:'+arg('-port'));
 const contexts = new Map();
 let agents=[], page=0, lastAttention=null, busy=false, pressedAttention=0, actionBusy=false;
-const labels={working:'РАБОТАЕТ',attention:'НУЖЕН ТЫ',done:'ГОТОВО',idle:'ОЖИДАЕТ',unknown:'НЕТ СИГНАЛА',offline:'НЕДОСТУПЕН'};
+const labels={working:'WORKING',attention:'NEEDS YOU',done:'DONE',idle:'IDLE',unknown:'NO SIGNAL',offline:'OFFLINE'};
 const colors={working:'#175583',attention:'#bd4d10',done:'#227648',idle:'#3c4859',unknown:'#4c4559',offline:'#453b3b'};
 function send(event,context,payload){if(ws.readyState===1)ws.send(JSON.stringify({event,context,payload}));}
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&apos;'}[c]));}
@@ -86,9 +86,9 @@ function render(){
      if(target){let status=target.status; color=colors[status]||colors.unknown;
        if(status==='attention' && Math.floor(Date.now()/1000)%2)color='#e27916';
        lines=[target.kind==='claude'?'CLAUDE':'CODEX',path.basename(target.project||target.session).slice(0,16),`${target.session.slice(-9)} · ${target.pane}`,labels[status]||labels.unknown];
-     }else{lines=['—','Агент '+(page*9+slot+1),'',''];color='#18202a';}
-   }else if(role==='attention'){lines=['ВНИМАНИЕ',String(waiting.length),`Страница ${page+1}/${pages}`,'Удержать: листать'];color=waiting.length?'#bd4d10':'#273b43';}
-   else{lines=({desk:['DESK','2 Codex + Shell','','Удержать: меню'],claude:['+ CLAUDE','Новая панель'],codex:['+ CODEX','Новая панель'],'prev-tab':['← ВКЛАДКА','Ghostty'],'next-tab':['ВКЛАДКА →','Ghostty']})[role]||['Agent Desk'];}
+     }else{lines=['—','Agent '+(page*9+slot+1),'',''];color='#18202a';}
+   }else if(role==='attention'){lines=['ATTENTION',String(waiting.length),`Page ${page+1}/${pages}`,'Hold: next page'];color=waiting.length?'#bd4d10':'#273b43';}
+   else{lines=({desk:['DESK','2 Codex + Shell','','Hold: menu'],claude:['+ CLAUDE','New pane'],codex:['+ CODEX','New pane'],'prev-tab':['← TAB','Ghostty'],'next-tab':['TAB →','Ghostty']})[role]||['Agent Desk'];}
    v.target=target;
    const img=icon(lines,color);
    if(img!==v.image){send('setImage',context,{image:img,target:0});send('setTitle',context,{title:'',target:0});v.image=img;}
@@ -98,7 +98,7 @@ function render(){
  lastAttention=signature;
 }
 async function refresh(){if(busy||!cfg)return;busy=true;try{agents=JSON.parse(await call('snapshot'));writeHealth(cfg,{updated:Date.now(),agents:agents.length});render();}catch(e){try{writeHealth(cfg,{updated:Date.now(),error_type:errorType(e)});}catch(h){}send('logMessage',undefined,{message:'Quoin snapshot: '+errorType(e)});}finally{busy=false;}}
-function renderNoConfig(){for(const [context] of contexts){send('setImage',context,{image:icon(['НЕТ КОНФИГА','plugin-config.json'],'#6b2b2b'),target:0});}}
+function renderNoConfig(){for(const [context] of contexts){send('setImage',context,{image:icon(['NO CONFIG','plugin-config.json'],'#6b2b2b'),target:0});}}
 ws.addEventListener('open',()=>{ws.send(JSON.stringify({event:arg('-registerEvent'),uuid:arg('-pluginUUID')}));refresh();});
 ws.addEventListener('message',async ({data})=>{
  try{const m=JSON.parse(data);

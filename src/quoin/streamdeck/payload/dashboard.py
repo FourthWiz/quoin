@@ -294,7 +294,7 @@ def focus(record):
     try:
         _focus(record)
     except subprocess.TimeoutExpired:
-        raise RuntimeError('Не удалось переключиться вовремя.')
+        raise RuntimeError('Could not switch in time.')
     finally:
         deckenv.clear_deadline()
 
@@ -303,16 +303,16 @@ def _focus(record):
     e = deckenv.current()
     session, pane = record.get('session'), record.get('pane')
     if not isinstance(session, str) or not session or pane is None:
-        raise RuntimeError('Эта панель уже закрыта.')
+        raise RuntimeError('This pane is already closed.')
     if not deckenv.valid_session(session):
-        raise RuntimeError('Недопустимое имя сессии.')
+        raise RuntimeError('Invalid session name.')
     pane = str(pane)
     socket = deckenv.record_socket(record, e)
     ok, panes = list_panes(socket, session)
     if not ok:
-        raise RuntimeError('Сессия недоступна: ' + session)
+        raise RuntimeError('Session unavailable: ' + session)
     if not pane_present(panes, pane):
-        raise RuntimeError('Эта панель уже закрыта.')
+        raise RuntimeError('This pane is already closed.')
     config = c.load()
     surface = deckenv.get_surface(e, socket, session)
     if surface:
@@ -348,8 +348,8 @@ def main():
         focus(json.loads(sys.argv[2]))
         return
     if action == 'menu':
-        labels = ['Новый Desk: 2 Codex + Shell', 'Выбрать папку проекта', 'Подключить сессию', 'Добавить Shell', 'Git: локальные изменения']
-        picked = c.choose(labels, 'Дополнительные действия Agent Desk')
+        labels = ['New Desk: 2 Codex + Shell', 'Choose project folder', 'Attach session', 'Add Shell', 'Git: local changes']
+        picked = c.choose(labels, 'More Agent Desk actions')
         if not picked:
             return
         config = c.load()

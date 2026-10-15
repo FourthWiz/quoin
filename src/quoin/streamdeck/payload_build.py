@@ -122,3 +122,48 @@ def build_profile(dest_file):
             info.compress_type = zipfile.ZIP_DEFLATED
             archive.writestr(info, data, compresslevel=9)
     os.replace(temp, dest_file)
+
+
+PROFILE_STORES = ("ProfilesV3", "ProfilesV2")
+
+
+def _read_json(path):
+    try:
+        with open(path, "rb") as handle:
+            return json.loads(handle.read().decode("utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def profile_imported(plugins_dir):
+    """Whether the Stream Deck app already holds the Quoin profile.
+
+    The app keeps its profiles next to its plugins folder. A profile counts when it has
+    our name, or when it holds one of our keys with a role set (a renamed import); a key
+    dropped onto another profile by hand has no settings and does not count.
+    """
+    app_dir = os.path.dirname(plugins_dir)
+    for store in PROFILE_STORES:
+        try:
+            profiles = sorted(n for n in os.listdir(os.path.join(app_dir, store)) if n.endswith(".sdProfile"))
+        except OSError:
+            continue
+        for name in profiles:
+            root = os.path.join(app_dir, store, name)
+            top = _read_json(os.path.join(root, "manifest.json"))
+            if isinstance(top, dict) and top.get("Name") == PROFILE_NAME:
+                return True
+            try:
+                pages = os.listdir(os.path.join(root, "Profiles"))
+            except OSError:
+                continue
+            for page in pages:
+                data = _read_json(os.path.join(root, "Profiles", page, "manifest.json"))
+                controllers = data.get("Controllers") if isinstance(data, dict) else None
+                for controller in controllers if isinstance(controllers, list) else ():
+                    actions = controller.get("Actions") if isinstance(controller, dict) else None
+                    for action in (actions or {}).values() if isinstance(actions, dict) else ():
+                        settings = action.get("Settings") if isinstance(action, dict) else None
+                        if action.get("UUID") == ACTION_UUID and isinstance(settings, dict) and settings.get("role"):
+                            return True
+    return False

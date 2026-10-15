@@ -3480,7 +3480,12 @@ def main(argv: list[str] | None = None) -> int:
         _p.add_argument("--prereqs", choices=("ask", "all", "none"), default="ask",
                         help="Install missing prerequisites: ask (default), all, or none.")
         _p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
-        _p.add_argument("--open-profile", action="store_true", help="Open the profile in Stream Deck afterwards.")
+        _open = _p.add_mutually_exclusive_group()
+        _open.add_argument("--open-profile", dest="open_profile", action="store_true", default=None,
+                           help="Open the profile in Stream Deck afterwards, even if it is already imported.")
+        _open.add_argument("--no-open-profile", dest="open_profile", action="store_false",
+                           help="Do not open the profile. By default install opens it once, when Stream Deck "
+                                "does not have it yet; upgrade never does.")
         _p.add_argument("--allow-downgrade", action="store_true",
                         help="Replace an installed component that is newer than this package.")
 

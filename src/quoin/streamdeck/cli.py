@@ -48,7 +48,7 @@ def _env(args, flags, paths):
     return engine.Env(
         paths=paths, flags=flags, runtimes=tuple(runtimes) if runtimes is not None else None,
         prereq_mode=getattr(args, "prereqs", "ask"), dry_run=bool(getattr(args, "dry_run", False)),
-        open_profile=bool(getattr(args, "open_profile", False)), purge=bool(getattr(args, "purge", False)),
+        open_profile=getattr(args, "open_profile", None), purge=bool(getattr(args, "purge", False)),
         allow_downgrade=bool(getattr(args, "allow_downgrade", False)), ctx_factory=_ctx_factory,
         sysops=_sysops(), environ=dict(os.environ), now=_now(),
         platform_info=_platform(), package_version=__about__.__version__, out=print)

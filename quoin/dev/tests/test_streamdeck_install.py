@@ -300,6 +300,70 @@ def test_open_profile_runs_open_with_the_profile_path(lifecycle_home):
     assert env.fake_sys.run_calls == [(str(lh.fakebin / "open"), str(lh.runtime / "profile" / "Quoin Live Agents.streamDeckProfile"))]
 
 
+
+PROFILE_FILE = ("profile", "Quoin Live Agents.streamDeckProfile")
+
+
+def _import_profile(lh, name=payload_build.PROFILE_NAME, settings=None, store="ProfilesV3"):
+    """Stand in for the Stream Deck app's profile store, next to its plugins folder."""
+    root = os.path.join(os.path.dirname(lh.resolve().plugins_dir), store, "ABC.sdProfile")
+    page = os.path.join(root, "Profiles", "PAGE")
+    os.makedirs(page, exist_ok=True)
+    with open(os.path.join(root, "manifest.json"), "w") as handle:
+        json.dump({"Name": name}, handle)
+    action = {"UUID": payload_build.ACTION_UUID, "Settings": settings if settings is not None else {}}
+    with open(os.path.join(page, "manifest.json"), "w") as handle:
+        json.dump({"Controllers": [{"Type": "Keypad", "Actions": {"3,0": action}}]}, handle)
+
+
+def test_install_opens_the_profile_when_stream_deck_does_not_have_it(lifecycle_home):
+    lh = lifecycle_home
+    env = ops.make_env(lh, open_profile=None)
+    result = engine.install(env)
+    assert env.fake_sys.run_calls == [(str(lh.fakebin / "open"), str(lh.runtime.joinpath(*PROFILE_FILE)))]
+    assert any("opened in Stream Deck" in line for line in result.lines)
+
+
+def test_install_does_not_reopen_an_imported_profile(lifecycle_home):
+    lh = lifecycle_home
+    _import_profile(lh)
+    env = ops.make_env(lh, open_profile=None)
+    result = engine.install(env)
+    assert env.fake_sys.run_calls == []
+    assert any("already imported" in line for line in result.lines)
+
+
+def test_a_renamed_import_counts_and_a_bare_key_does_not():
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        plugins = os.path.join(tmp, "Plugins")
+
+        class LH:
+            def resolve(self):
+                return type("P", (), {"plugins_dir": plugins})()
+        _import_profile(LH(), name="Default Profile")
+        assert not payload_build.profile_imported(plugins)
+        _import_profile(LH(), name="My deck", settings={"role": "attention"}, store="ProfilesV2")
+        assert payload_build.profile_imported(plugins)
+
+
+def test_upgrade_and_no_open_profile_never_open_it(lifecycle_home):
+    lh = lifecycle_home
+    engine.install(ops.make_env(lh, open_profile=False))
+    env = ops.make_env(lh, open_profile=None, now=ops.LATER)
+    engine.install(env, op="upgrade")
+    assert env.fake_sys.run_calls == []
+
+
+def test_status_notes_a_profile_that_is_not_imported(lifecycle_home):
+    lh = lifecycle_home
+    engine.install(ops.make_env(lh))
+    note = [i for i in collect(lh)["info"] if i["code"] == "PROFILE_NOT_IMPORTED"]
+    assert note and note[0]["detail"].endswith(os.path.join(*PROFILE_FILE))
+    _import_profile(lh)
+    assert not [i for i in collect(lh)["info"] if i["code"] == "PROFILE_NOT_IMPORTED"]
+
+
 # ------------------------------------------------------------------ dry run
 
 def test_dry_run_on_empty_home_and_on_an_install_changes_nothing(lifecycle_home):

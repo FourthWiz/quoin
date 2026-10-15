@@ -101,9 +101,9 @@ def test_missing_agentdesk_message_and_no_osascript(payload):
     c = payload("controller")
     cfg = {"session": "s", "project": "/tmp", "projects": {}}
     with patch.object(c, "apple") as apple:
-        with pytest.raises(RuntimeError, match="Agent Desk не установлен"):
+        with pytest.raises(RuntimeError, match="Agent Desk is not installed"):
             c.terminal("new", cfg)
-        with pytest.raises(RuntimeError, match="Agent Desk не установлен"):
+        with pytest.raises(RuntimeError, match="Agent Desk is not installed"):
             c.execute("desk", {"project": "/tmp", "session": None, "projects": {}})
         apple.assert_not_called()
 
@@ -179,14 +179,14 @@ def test_single_flight_lock(payload):
 def test_invalid_session_names_are_refused(payload, bad):
     c = payload("controller")
     with patch.object(c, "sessions", return_value=[("a", True)]), patch.object(c, "run") as run:
-        with pytest.raises(RuntimeError, match="сесси"):
+        with pytest.raises(RuntimeError, match="(?i)session"):
             c.require_live({"session": bad})
-        with pytest.raises(RuntimeError, match="сесси"):
+        with pytest.raises(RuntimeError, match="(?i)session"):
             c.execute("next-pane", {"session": bad, "project": "/tmp"})
         run.assert_not_called()
     with patch.object(c, "sessions", return_value=[(bad, True)]), patch.object(c, "choose", return_value=bad + " • active"), \
             patch.object(c, "folder", return_value="/tmp"):
-        with pytest.raises(RuntimeError, match="сесси"):
+        with pytest.raises(RuntimeError, match="(?i)session"):
             c.select({"projects": {}})
 
 

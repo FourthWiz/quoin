@@ -8,7 +8,7 @@ project="$3"
 
 wait_for_enter() {
   if [ -t 0 ]; then
-    printf '\nНажми Enter, чтобы закрыть.'
+    printf '\nPress Enter to close.'
     read -r reply
   fi
   return 0
@@ -20,7 +20,7 @@ case "$mode" in
   new)
     ad="${QUOIN_DECK_AGENTDESK:-}"
     if [ -z "$ad" ] || [ ! -r "$ad" ] || ! grep -q '^AGENTDESK_API_VERSION=' "$ad"; then
-      print -u2 'Agent Desk не установлен — запустите `quoin streamdeck install`.'
+      print -u2 'Agent Desk is not installed: run `quoin streamdeck install`.'
       wait_for_enter
       exit 1
     fi
@@ -32,7 +32,7 @@ case "$mode" in
     if command -v "$mode" >/dev/null; then
       exec "$mode"
     fi
-    print -u2 "$mode не найден в PATH — переустановите: quoin streamdeck install запишет путь."
+    print -u2 "$mode not found in PATH: re-run `quoin streamdeck install` to record its path."
     wait_for_enter
     exit 127
     ;;
@@ -43,7 +43,7 @@ case "$mode" in
     else
       git status --short
       git --no-pager diff --stat
-      printf '\nНажми Enter, чтобы закрыть просмотр.'
+      printf '\nPress Enter to close the view.'
       read -r reply
     fi ;;
   *) print -u2 'Unknown action'; exit 2 ;;

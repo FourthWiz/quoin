@@ -325,10 +325,10 @@ def focus_spies(w):
 def test_focus_of_vanished_agent_touches_nothing(w):
     log = focus_spies(w)
     w.panes[(w.sock, "s")] = (True, [])
-    with pytest.raises(RuntimeError, match="Эта панель уже закрыта."):
+    with pytest.raises(RuntimeError, match="This pane is already closed."):
         w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
     w.panes[(w.sock, "s")] = (False, None)
-    with pytest.raises(RuntimeError, match="Сессия недоступна: s"):
+    with pytest.raises(RuntimeError, match="Session unavailable: s"):
         w.dash.focus({"session": "s", "pane": "3", "socket": w.sock})
     assert log["apple"] == [] and log["run"] == []
 
