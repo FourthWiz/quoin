@@ -447,8 +447,23 @@ Token Spend is a floating pane that starts hidden (unless `spend` is the only
 token, when it opens visible). Swap between arrangements
 (even, focus-left, stacked) with Alt [ and Alt ]. `--compact-bar` or
 `AGENTDESK_COMPACT_BAR=1` replaces the tab bar and status bar with a single
-one-line bar (per launch, not remembered; generated layouts only, a saved fixed
-layout keeps its own bars).
+one-line bar (per launch, not remembered; it applies to generated layouts and to
+the generated Standard layout, while a customised `agent-desk.kdl` keeps its own
+bars).
+
+**Standard layout:** with no tokens, agentdesk opens three tabs. `main` has
+`Claude · A` and `Claude · B` on top and a `Shell` strip below, with Token Spend
+as a hidden floating pane. `git` runs lazygit when it is installed and the
+project root is a repo (or holds exactly one repo); otherwise it shows a
+refreshing git status, and any key drops to a shell. `status` runs the workflow
+status graph full width, or prints an install hint when it is missing. To
+customise it, edit `~/.config/zellij/layouts/agent-desk.kdl`: agentdesk then
+keeps your file as it is, and `setup-agentdesk.sh` writes the new Standard
+layout beside it as `agent-desk.kdl.new` instead of replacing yours.
+
+**Picker choices:** 1 Standard, 2-5 agent presets (claude + shell, two Claude,
+Claude + Codex, Claude + CCR, each with Spend), 6 claude + shell + status +
+spend, 7 custom comma-separated tokens. Typing a token list directly also works.
 
 **Window-type tokens** (positional, mutually exclusive with `--mode`):
 

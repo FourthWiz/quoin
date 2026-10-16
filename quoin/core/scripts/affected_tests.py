@@ -1936,6 +1936,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_agentdesk_layout_live.py",
     ),
     (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_standard_layout.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_standard_layout.py",
+    ),
+    (
         "quoin/tools/agentdesk/KEYBIND-VERIFY.md",
         "quoin/dev/tests/test_agentdesk_keybinds_v2.py",
     ),

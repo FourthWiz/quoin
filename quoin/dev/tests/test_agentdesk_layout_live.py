@@ -69,7 +69,7 @@ def _sleep_commands(text: str) -> str:
 
 
 class LiveLayout:
-    def __init__(self, tmp_path, layout_text, auto_layout="false"):
+    def __init__(self, tmp_path, layout_text, auto_layout="false", rewrite=None):
         self.tmp_path = Path(tmp_path)
         self.sock = tempfile.mkdtemp(dir="/tmp", prefix="adz")
         self.name = "adl" + uuid.uuid4().hex[:8]
@@ -77,7 +77,7 @@ class LiveLayout:
         self.env["TMPDIR"] = str(self.tmp_path)
         _write_config(self.env)
         self.layout = self.tmp_path / "live-layout.kdl"
-        self.layout.write_text(_sleep_commands(layout_text), encoding="utf-8")
+        self.layout.write_text((rewrite or _sleep_commands)(layout_text), encoding="utf-8")
         self.auto_layout = auto_layout
         self.pid = 0
         self.fd = -1
@@ -181,9 +181,11 @@ def generate(tmp_path, tokens, bars=None):
 
 
 @contextlib.contextmanager
-def live(tmp_path, layout_text, count, auto_layout="false"):
-    session = LiveLayout(tmp_path, layout_text, auto_layout)
+def live(tmp_path, layout_text, count, auto_layout="false", rewrite=None, prepare=None):
+    session = LiveLayout(tmp_path, layout_text, auto_layout, rewrite)
     try:
+        if prepare:
+            prepare(session)
         session.start()
         session.ready(count)
         yield session
@@ -355,3 +357,49 @@ def test_dashboard_tab_has_bars_and_survives_a_swap(tmp_path):
         before = sorted(p["title"] for p in s.panes())
         s.act("next-swap-layout"); s.settle()
         assert sorted(p["title"] for p in s.panes()) == before
+
+
+def generate_standard(tmp_path):
+    env = {"HOME": str(Path(tmp_path) / "home"), "PATH": "/usr/bin:/bin",
+           "TMPDIR": str(tmp_path)}
+    (Path(tmp_path) / "home").mkdir(exist_ok=True)
+    done = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"; _agentdesk_gen_standard_layout --stdout'],
+        env=env, capture_output=True, text=True, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _sleep_main_tab_only(text: str) -> str:
+    """Swap the main tab's agent, shell and spend commands; keep git and status real."""
+    head, sep, rest = text.partition('    tab name="git"')
+    assert sep, "standard layout has no git tab"
+    swapped = _sleep_commands(head)
+    assert swapped.count('command "sleep"') == 4
+    return swapped + sep + rest
+
+
+@needs_zellij
+def test_standard_layout_git_and_status_tabs_stay_alive(tmp_path):
+    project = Path(tmp_path) / "project"
+    for name in ("repo-a", "repo-b"):
+        (project / name / ".git").mkdir(parents=True)
+
+    def prepare(session):
+        helper_dir = Path(session.env["HOME"]) / ".config" / "agentdesk"
+        helper_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy(AGENTDESK_ZSH, helper_dir / "agentdesk.zsh")
+        session.env["PROJECT_ROOT"] = str(project)
+
+    with live(tmp_path, generate_standard(tmp_path), 6, rewrite=_sleep_main_tab_only,
+              prepare=prepare) as s:
+        s.settle(3.0)
+        panes = s.panes()
+        assert sorted({p["tab_name"] for p in panes}) == ["git", "main", "status"]
+        by_name = {p["title"]: p for p in panes}
+        for title in ("Git", "Status"):
+            assert title in by_name, [p["title"] for p in panes]
+            assert not by_name[title]["exited"], title
+            assert not by_name[title]["is_held"], title
+        assert re.search(r'tab name="main"[^\n]*focus=true', s.dump())

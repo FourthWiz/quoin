@@ -193,7 +193,13 @@ installing; each row says what you should see.
 | `Alt ]` (Russian layout: `Alt ъ`) | Cycles the arrangement: even, focus-left, stacked, then back to the start shape. `Alt [` (Russian layout: `Alt х`) cycles backwards. Focus-left needs at least two tiled panes. |
 | `Alt n` in a fresh desk | Splits the focused pane and does not rearrange the others. |
 | Stream Deck "Desk" key | Creates `Codex · A`, `Codex · B` and `Shell`; its agent buttons find both Codex panes. |
-| `agentdesk --compact-bar` | One bar line at the bottom instead of the tab bar and status bar. |
+| `agentdesk --compact-bar` | One bar line at the bottom instead of the tab bar and status bar. On the Standard layout every tab shows the single bar line. |
+| `agentdesk --pick`, option 1 | Opens three tabs: main, git and status. |
+| Git tab in a single-repo project | lazygit opens on that repo; `q` leaves lazygit and gives a shell. |
+| Git tab in a root with several repos | A refreshing status view with a `===== repo =====` block per repo; any key gives a shell. |
+| Status tab | The pipeline graph, or a message to run quoin install when the script is missing. Ctrl+C stops the watch and leaves a shell. |
+| `agentdesk --pick`, option 6 | Claude on top with a Shell 60 / Status 40 strip below. |
+| Edit `~/.config/zellij/layouts/agent-desk.kdl`, launch again | Your edits are kept; setup writes the new Standard layout beside it as `agent-desk.kdl.new`. |
 | Dashboard tab (when enabled) | The tab has its own tab bar and status bar (or the compact bar with `--compact-bar`). |
 | Floating Codex helper open, then `Alt f` | The floating layer also shows the 80% x 75% Token Spend pane behind the helper. This is accepted; hide it with the same key. |
 
