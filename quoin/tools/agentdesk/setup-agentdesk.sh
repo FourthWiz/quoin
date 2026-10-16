@@ -991,6 +991,146 @@ run_keybind_steps() {
   fi
 }
 
+# The layout older setup scripts wrote when no generator was available. Kept
+# byte-for-byte: standalone runs still use it when the Standard layout is
+# missing, and tests compare against it.
+_agentdesk_legacy_layout() {
+  cat <<'EOF'
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+
+        children
+
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="main" {
+        pane split_direction="vertical" {
+            pane name="Claude Code" size="65%" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Claude Code - project root:' \"$PWD\" && if command -v claude >/dev/null 2>&1; then claude; else echo 'claude command not found. Install Claude Code, then run claude here.'; fi; zsh"
+            }
+
+            pane split_direction="horizontal" {
+                pane name="Tests/logs" size="50%" {
+                    command "zsh"
+                    args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Tests/logs shell'; zsh"
+                }
+
+                pane name="Shell" {
+                    command "zsh"
+                    args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Shell'; zsh"
+                }
+            }
+        }
+    }
+
+    tab name="review" {
+        pane split_direction="vertical" {
+            pane name="Git review / repos" size="50%" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Project root:' && pwd && echo && echo 'Detected repos:' && repos && echo && echo 'Git status across repos:' && grepos && echo && echo 'Run gitreview to open lazygit for a selected repo.' && echo 'Run gitrootreview only if project root itself is a Git repo.' && zsh"
+            }
+
+            pane name="Workflow artifacts" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Project root:' && pwd && echo && echo 'Root folder:' && ls -la && echo && echo 'Workflow artifacts:' && ls -la .workflow_artifacts 2>/dev/null && echo && echo 'Artifact files:' && find .workflow_artifacts -maxdepth 2 -type f -print 2>/dev/null; zsh"
+            }
+        }
+    }
+
+    tab name="repos" {
+        pane split_direction="vertical" {
+            pane name="Repos list" size="50%" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && cat .workflow_artifacts/repos.md 2>/dev/null; zsh"
+            }
+
+            pane name="Repos status" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Git status across repos:' && grepos; zsh"
+            }
+        }
+    }
+
+    tab name="shell" {
+        pane name="Project shell" {
+            command "zsh"
+            args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && zsh"
+        }
+    }
+
+    tab name="Spend" {
+        pane name="Token Spend" {
+            command "zsh"
+            args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/spend_monitor.py\" --compact --watch"
+        }
+    }
+}
+EOF
+}
+
+# write_standard_layout TARGET
+# Writes the generated Standard layout to TARGET. The launcher helper file next
+# to this script renders it and decides what TARGET currently is: a missing,
+# generated or known older shipped file is replaced (with a backup of a changed
+# file); a customised file is left alone and the new layout goes beside it as
+# TARGET.new. Without a generator the old layout is written only when TARGET is
+# missing. Never fails the setup run.
+write_standard_layout() {
+  local target="$1" helper tmp kind
+  helper="$SCRIPT_DIR/agentdesk.zsh"
+  tmp="$(mktemp)"
+
+  if [ ! -f "$helper" ] || ! command -v zsh >/dev/null 2>&1; then
+    if [ -e "$target" ]; then
+      rm -f "$tmp"
+      echo "Warning: $helper or zsh not found; keeping the existing layout: $target"
+      return 0
+    fi
+    _agentdesk_legacy_layout > "$tmp"
+    write_if_changed "$target" "$tmp" "agentdesk-layout"
+    return 0
+  fi
+
+  if ! zsh -f -c 'source "$1" && _agentdesk_gen_standard_layout --stdout' _ "$helper" > "$tmp" || [ ! -s "$tmp" ]; then
+    rm -f "$tmp"
+    echo "Warning: could not generate the Standard layout from $helper"
+    if [ ! -e "$target" ]; then
+      tmp="$(mktemp)"
+      _agentdesk_legacy_layout > "$tmp"
+      write_if_changed "$target" "$tmp" "agentdesk-layout"
+    else
+      echo "Keeping the existing layout: $target"
+    fi
+    return 0
+  fi
+
+  kind="$(zsh -f -c 'source "$1" && _agentdesk_fixed_layout_kind "$2"' _ "$helper" "$target" 2>/dev/null)" || kind="custom"
+  case "$kind" in
+    missing|generated|legacy)
+      write_if_changed "$target" "$tmp" "agentdesk-layout"
+      ;;
+    *)
+      if [ -f "$target.new" ] && cmp -s "$target.new" "$tmp"; then
+        rm -f "$tmp"
+        return 0
+      fi
+      mv "$tmp" "$target.new"
+      echo "Kept your customised layout: $target"
+      echo "New Standard layout written beside it: $target.new"
+      echo "To adopt it: mv $target.new $target"
+      echo "The .new file is rewritten on every setup run; delete it once you no longer need it."
+      ;;
+  esac
+  return 0
+}
+
 # Sourcing the script (for tests or reuse) defines the functions above and stops here.
 if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
   return 0
@@ -1674,88 +1814,7 @@ echo
 echo "Step 3: write/update Zellij layout if changed"
 
 mkdir -p "$ZELLIJ_LAYOUT_DIR"
-layout_tmp="$(mktemp)"
-
-cat > "$layout_tmp" <<'EOF'
-layout {
-    default_tab_template {
-        pane size=1 borderless=true {
-            plugin location="zellij:tab-bar"
-        }
-
-        children
-
-        pane size=2 borderless=true {
-            plugin location="zellij:status-bar"
-        }
-    }
-
-    tab name="main" {
-        pane split_direction="vertical" {
-            pane name="Claude Code" size="65%" {
-                command "zsh"
-                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Claude Code - project root:' \"$PWD\" && if command -v claude >/dev/null 2>&1; then claude; else echo 'claude command not found. Install Claude Code, then run claude here.'; fi; zsh"
-            }
-
-            pane split_direction="horizontal" {
-                pane name="Tests/logs" size="50%" {
-                    command "zsh"
-                    args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Tests/logs shell'; zsh"
-                }
-
-                pane name="Shell" {
-                    command "zsh"
-                    args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Shell'; zsh"
-                }
-            }
-        }
-    }
-
-    tab name="review" {
-        pane split_direction="vertical" {
-            pane name="Git review / repos" size="50%" {
-                command "zsh"
-                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Project root:' && pwd && echo && echo 'Detected repos:' && repos && echo && echo 'Git status across repos:' && grepos && echo && echo 'Run gitreview to open lazygit for a selected repo.' && echo 'Run gitrootreview only if project root itself is a Git repo.' && zsh"
-            }
-
-            pane name="Workflow artifacts" {
-                command "zsh"
-                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Project root:' && pwd && echo && echo 'Root folder:' && ls -la && echo && echo 'Workflow artifacts:' && ls -la .workflow_artifacts 2>/dev/null && echo && echo 'Artifact files:' && find .workflow_artifacts -maxdepth 2 -type f -print 2>/dev/null; zsh"
-            }
-        }
-    }
-
-    tab name="repos" {
-        pane split_direction="vertical" {
-            pane name="Repos list" size="50%" {
-                command "zsh"
-                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && cat .workflow_artifacts/repos.md 2>/dev/null; zsh"
-            }
-
-            pane name="Repos status" {
-                command "zsh"
-                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Git status across repos:' && grepos; zsh"
-            }
-        }
-    }
-
-    tab name="shell" {
-        pane name="Project shell" {
-            command "zsh"
-            args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && zsh"
-        }
-    }
-
-    tab name="Spend" {
-        pane name="Token Spend" {
-            command "zsh"
-            args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/spend_monitor.py\" --compact --watch"
-        }
-    }
-}
-EOF
-
-write_if_changed "$ZELLIJ_LAYOUT" "$layout_tmp" "agentdesk-layout"
+write_standard_layout "$ZELLIJ_LAYOUT"
 
 echo
 echo "Step 3b: configure Zellij copy_command"

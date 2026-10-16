@@ -411,7 +411,11 @@ def _snapshot_real_targets(home):
         names = tuple(sorted(os.listdir(home / ".config" / "agentdesk")))
     except (FileNotFoundError, NotADirectoryError):
         names = ()
-    snap[_LISTING_KEY] = names
+    try:
+        layout_names = tuple(sorted(os.listdir(home / ".config" / "zellij" / "layouts")))
+    except (FileNotFoundError, NotADirectoryError):
+        layout_names = ()
+    snap[_LISTING_KEY] = names + ("|layouts|",) + layout_names
     return snap
 
 

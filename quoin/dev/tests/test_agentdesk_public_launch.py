@@ -614,7 +614,7 @@ def test_dashboard_yes_with_failed_launch_leaves_no_url_file(tmp_path, rt_dir):
 
 
 def test_dashboard_yes_with_cancelled_picker_leaves_no_url_file(tmp_path, rt_dir):
-    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--pick", "--dashboard"], "6\nbogus\n\n")
+    res = _launch(tmp_path, rt_dir, ["--name", "deck-1", "--pick", "--dashboard"], "7\nbogus\n\n")
     assert res.rc != 0 and "cancelled" in res.text, res.text
     assert _dash_url_files(tmp_path) == []
 
@@ -623,7 +623,18 @@ def test_dashboard_yes_with_missing_layout_file_leaves_no_url_file(tmp_path, rt_
     _seed(tmp_path, "name:deck-1=__FIXED__")
     env = _env(tmp_path, rt_dir, with_server=True)
     (tmp_path / "home" / ".config" / "zellij" / "layouts" / "agent-desk.kdl").unlink()
-    res = _run_pipe(["--name", "deck-1", "--dashboard"], env, tmp_path, rt_dir)
+    # A missing file would normally be regenerated, so force only the
+    # generator to fail; TMPDIR stays valid so the URL-file check is real.
+    argv = ["zsh", "-c",
+            'source "$0"; shift; _agentdesk_gen_standard_layout() { return 1; }; agentdesk "$@"',
+            str(AGENTDESK_ZSH), "_", "--name", "deck-1", "--dashboard"]
+    with open(tmp_path / "stdout.txt", "w") as so, open(tmp_path / "stderr.txt", "w") as se:
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=so, stderr=se, env=env,
+                                cwd=str(tmp_path / "proj"))
+        res = _finish(proc, tmp_path, tmp_path / "cap")
+        proc.stdin.close()
+    assert not res.timed_out, res.err
+    assert res.rc != 0 and "Zellij layout not found" in res.text, res.text
     assert _dash_url_files(tmp_path) == []
 
 
@@ -878,3 +889,83 @@ def test_dashboard_tab_on_a_generated_layout_has_bars(tmp_path, rt_dir, flag, ba
             env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
         )
         assert done.returncode == 0, done.stderr + done.stdout
+
+
+# ── Standard layout resolution at launch ───────────────────────────────────────
+
+STANDARD_TABS = ["main", "git", "status"]
+
+
+def _fixed_layout_file(tmp_path):
+    return tmp_path / "home" / ".config" / "zellij" / "layouts" / "agent-desk.kdl"
+
+
+def _generated_standard_text(tmp_path, rt_dir, bars="default"):
+    env = _env(tmp_path, rt_dir)
+    done = subprocess.run(
+        ["zsh", "-c",
+         f'source "{AGENTDESK_ZSH}"; _agentdesk_gen_standard_layout --stdout --bars {bars}'],
+        env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60,
+    )
+    assert done.returncode == 0, done.stderr
+    return done.stdout
+
+
+def _captured_layout_path(res):
+    return Path((res.cap / "layout_path.txt").read_text())
+
+
+def test_missing_layout_file_is_regenerated_and_cleaned_up(tmp_path, rt_dir):
+    env = _env(tmp_path, rt_dir)
+    _fixed_layout_file(tmp_path).unlink()
+    res = _run_pipe(["--name", "deck-1", "--no-prompt"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert _tab_names(res.cap) == STANDARD_TABS
+    used = _captured_layout_path(res)
+    assert used != _fixed_layout_file(tmp_path)
+    assert not used.exists(), "temporary layout was not removed on exit"
+
+
+def test_generated_layout_file_is_replaced_by_a_fresh_render(tmp_path, rt_dir):
+    env = _env(tmp_path, rt_dir)
+    _fixed_layout_file(tmp_path).write_text(_generated_standard_text(tmp_path, rt_dir))
+    res = _run_pipe(["--name", "deck-1", "--no-prompt"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert _captured_layout_path(res) != _fixed_layout_file(tmp_path)
+    assert _tab_names(res.cap) == STANDARD_TABS
+
+
+def test_compact_bar_applies_to_the_generated_standard_layout(tmp_path, rt_dir):
+    env = _env(tmp_path, rt_dir)
+    _fixed_layout_file(tmp_path).write_text(_generated_standard_text(tmp_path, rt_dir))
+    res = _run_pipe(["--name", "deck-1", "--no-prompt", "--compact-bar"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    text = (res.cap / "layout.kdl").read_text()
+    assert "zellij:compact-bar" in text and "zellij:status-bar" not in text
+
+
+def test_stored_fixed_value_reuses_the_generated_standard(tmp_path, rt_dir):
+    env = _env(tmp_path, rt_dir)
+    _fixed_layout_file(tmp_path).unlink()
+    _seed(tmp_path, "name:deck-1=__FIXED__")
+    res = _run_pipe(["--name", "deck-1"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert REUSE_NOTICE in res.text
+    assert _tab_names(res.cap) == STANDARD_TABS
+    assert not _captured_layout_path(res).exists()
+
+
+def test_non_tty_pick_uses_the_generated_standard(tmp_path, rt_dir):
+    env = _env(tmp_path, rt_dir)
+    _fixed_layout_file(tmp_path).unlink()
+    res = _run_pipe(["--name", "deck-1", "--pick"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert _tab_names(res.cap) == STANDARD_TABS
+    assert "name:deck-1=__FIXED__" in _state_lines(tmp_path)
+
+
+def test_customised_layout_file_is_used_untouched(tmp_path, rt_dir):
+    res = _run_pipe(["--name", "deck-1", "--no-prompt"], _env(tmp_path, rt_dir), tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert _captured_layout_path(res) == _fixed_layout_file(tmp_path)
+    assert _fixed_layout_file(tmp_path).read_text() == "layout {\n}\n"

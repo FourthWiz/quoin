@@ -1,0 +1,69 @@
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+
+        children
+
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="main" {
+        pane split_direction="vertical" {
+            pane name="Claude Code" size="65%" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Claude Code - project root:' \"$PWD\" && if command -v claude >/dev/null 2>&1; then claude; else echo 'claude command not found. Install Claude Code, then run claude here.'; fi; zsh"
+            }
+
+            pane split_direction="horizontal" {
+                pane name="Tests/logs" size="50%" {
+                    command "zsh"
+                    args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Tests/logs shell'; zsh"
+                }
+
+                pane name="Shell" {
+                    command "zsh"
+                    args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Shell'; zsh"
+                }
+            }
+        }
+    }
+
+    tab name="review" {
+        pane split_direction="vertical" {
+            pane name="Git review / repos" size="50%" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Project root:' && pwd && echo && echo 'Detected repos:' && repos && echo && echo 'Git status across repos:' && grepos && echo && echo 'Run gitreview to open lazygit for a selected repo.' && echo 'Run gitrootreview only if project root itself is a Git repo.' && zsh"
+            }
+
+            pane name="Workflow artifacts" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Project root:' && pwd && echo && echo 'Root folder:' && ls -la && echo && echo 'Workflow artifacts:' && ls -la .workflow_artifacts 2>/dev/null && echo && echo 'Artifact files:' && find .workflow_artifacts -maxdepth 2 -type f -print 2>/dev/null; zsh"
+            }
+        }
+    }
+
+    tab name="repos" {
+        pane split_direction="vertical" {
+            pane name="Repos list" size="50%" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && cat .workflow_artifacts/repos.md 2>/dev/null; zsh"
+            }
+
+            pane name="Repos status" {
+                command "zsh"
+                args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo 'Git status across repos:' && grepos; zsh"
+            }
+        }
+    }
+
+    tab name="shell" {
+        pane name="Project shell" {
+            command "zsh"
+            args "-lc" "source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && zsh"
+        }
+    }
+}

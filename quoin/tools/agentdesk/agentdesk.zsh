@@ -247,7 +247,9 @@ _agentdesk_dash_key() {
 }
 
 # Restore a saved layout value to a layout_path.
-# __FIXED__ → echoes fixed agent-desk.kdl path, rc=0; caller must NOT rm.
+# __FIXED__ → echoes the Standard layout path, rc=0: the saved file when it is
+# customised, else a generated temp file (temp exactly when the path differs
+# from _agentdesk_fixed_layout_file; the caller removes it).
 # An optional second argument selects the bar mode (default or compact).
 # token+token+... → validates tokens against whitelist, generates temp KDL, echoes path, rc=0.
 # Invalid/empty → rc=1.
@@ -255,7 +257,7 @@ _agentdesk_layout_from_value() {
   local value="$1" bars="${2:-default}"
 
   if [ "$value" = "__FIXED__" ]; then
-    printf '%s\n' "$HOME/.config/zellij/layouts/agent-desk.kdl"
+    _agentdesk_fixed_layout_path "$bars"
     return 0
   fi
 
@@ -305,7 +307,18 @@ _agentdesk_pane_cmd() {
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo '\''Shell'\''; zsh'
       ;;
     status)
-      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/status_graph.py\" --compact --watch'
+      # Ctrl+C stops --watch; the trap keeps the pane shell alive so the
+      # trailing zsh still runs (python resets the handler in its own process).
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && trap : INT; if [ -f \"$HOME/.claude/scripts/status_graph.py\" ]; then python3 \"$HOME/.claude/scripts/status_graph.py\" --compact --watch; else echo '\''status_graph.py not found - run quoin install'\''; fi; zsh'
+      ;;
+    status-full)
+      # Internal token for the Standard layout's full-width status tab.
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && trap : INT; if [ -f \"$HOME/.claude/scripts/status_graph.py\" ]; then python3 \"$HOME/.claude/scripts/status_graph.py\" --watch; else echo '\''status_graph.py not found - run quoin install'\''; fi; zsh'
+      ;;
+    git)
+      # Internal token for the Standard layout's git tab. The lazygit and
+      # fallback choices are made by _agentdesk_git_pane when the pane runs.
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && if typeset -f _agentdesk_git_pane >/dev/null; then _agentdesk_git_pane; else git status -sb 2>/dev/null; echo '\''Run quoin install to get the live git view.'\''; fi; zsh'
       ;;
     spend)
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/spend_monitor.py\" --compact --watch'
@@ -340,6 +353,8 @@ _agentdesk_pane_name() {
     codex)     printf '%s' 'Codex' ;;
     shell)     printf '%s' 'Shell' ;;
     status)    printf '%s' 'Status' ;;
+    status-full) printf '%s' 'Status' ;;
+    git)       printf '%s' 'Git' ;;
     spend)     printf '%s' 'Token Spend' ;;
     ccr)       printf '%s' 'CCR (OpenRouter)' ;;
     dashboard) printf '%s' 'quoin dashboard' ;;  # T-06: internal token
@@ -734,6 +749,179 @@ _agentdesk_gen_layout() {
   printf '%s\n' "$layout_tmp"
 }
 
+# _agentdesk_kdl_git_tab BARS / _agentdesk_kdl_status_tab BARS
+# The Standard layout's second and third tabs: one pane each.
+_agentdesk_kdl_git_tab() {
+  local bars="$1"
+  _agentdesk_kdl_tab_open "$bars" git || return 2
+  _agentdesk_kdl_pane 8 "$(_agentdesk_pane_name git)" git
+  _agentdesk_kdl_tab_close "$bars"
+}
+
+_agentdesk_kdl_status_tab() {
+  local bars="$1"
+  _agentdesk_kdl_tab_open "$bars" status || return 2
+  _agentdesk_kdl_pane 8 "$(_agentdesk_pane_name status-full)" status-full
+  _agentdesk_kdl_tab_close "$bars"
+}
+
+# _agentdesk_sha256
+# Reads stdin, prints its SHA-256 as 64 lowercase hex characters. rc 1 when no
+# hashing tool works.
+_agentdesk_sha256() {
+  local data out tool
+  data="$(cat; printf x)"
+  data="${data%x}"
+  for tool in "shasum -a 256" "sha256sum"; do
+    command -v "${tool%% *}" >/dev/null 2>&1 || continue
+    out="$(printf '%s' "$data" | ${=tool} 2>/dev/null)" || continue
+    out="${out%% *}"
+    if [[ "$out" =~ '^[0-9a-f]{64}$' ]]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  done
+  if command -v python3 >/dev/null 2>&1; then
+    out="$(printf '%s' "$data" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())' 2>/dev/null)" || return 1
+    if [[ "$out" =~ '^[0-9a-f]{64}$' ]]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# ============================================================
+# _agentdesk_gen_standard_layout [--stdout] [--bars default|compact]
+# Generates the Standard layout: an agents tab (Claude, Claude, Shell with the
+# floating Spend monitor), a git tab and a status tab. The first line is a
+# marker carrying the SHA-256 of everything after it, so a later launch can
+# tell an untouched generated file from one the user has edited. With
+# --stdout the marker and body are printed; otherwise they are written to a
+# temp .kdl file whose path is printed (the caller removes it). Any failure
+# leaves nothing on stdout and no file behind.
+# ============================================================
+_agentdesk_gen_standard_layout() {
+  local bars="default" to_stdout="" body_tmp out_tmp hex exit_rc=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --stdout) to_stdout=1; shift ;;
+      --bars)
+        if [ "$#" -lt 2 ]; then
+          echo "agentdesk: --bars requires a value (default or compact)" >&2
+          return 1
+        fi
+        bars="$2"; shift 2 ;;
+      *)
+        printf 'agentdesk: unexpected argument "%s"\n' "$1" >&2
+        return 1 ;;
+    esac
+  done
+  case "$bars" in
+    default|compact) ;;
+    *)
+      printf 'agentdesk: invalid bar mode "%s" (expected default or compact)\n' "$bars" >&2
+      return 1
+      ;;
+  esac
+
+  body_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-standard-XXXXXX")" || {
+    echo "agentdesk: failed to create temp layout file" >&2
+    return 1
+  }
+  {
+    _agentdesk_kdl_header "$bars" || exit_rc=1
+    _agentdesk_kdl_agents_tab "$bars" claude claude shell || exit_rc=1
+    _agentdesk_kdl_git_tab "$bars" || exit_rc=1
+    _agentdesk_kdl_status_tab "$bars" || exit_rc=1
+    _agentdesk_kdl_swap_layouts "$bars" || exit_rc=1
+    _agentdesk_kdl_footer || exit_rc=1
+  } > "$body_tmp"
+  if [ "$exit_rc" -ne 0 ]; then
+    rm -f "$body_tmp"
+    echo "agentdesk: failed to generate the layout" >&2
+    return 1
+  fi
+  hex="$(_agentdesk_sha256 < "$body_tmp")" || {
+    rm -f "$body_tmp"
+    echo "agentdesk: no SHA-256 tool available to mark the generated layout" >&2
+    return 1
+  }
+
+  if [ -n "$to_stdout" ]; then
+    printf '// agentdesk: generated standard v1 sha256=%s\n' "$hex"
+    cat "$body_tmp"
+    rm -f "$body_tmp"
+    return 0
+  fi
+
+  # BSD mktemp only randomises trailing X's, so rename to add the suffix.
+  out_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-standard-XXXXXX")" || {
+    rm -f "$body_tmp"
+    echo "agentdesk: failed to create temp layout file" >&2
+    return 1
+  }
+  {
+    printf '// agentdesk: generated standard v1 sha256=%s\n' "$hex"
+    cat "$body_tmp"
+  } > "$out_tmp"
+  rm -f "$body_tmp"
+  mv -f "$out_tmp" "$out_tmp.kdl" || { rm -f "$out_tmp"; return 1; }
+  printf '%s\n' "$out_tmp.kdl"
+}
+
+# _agentdesk_fixed_layout_file: the saved Standard layout location.
+_agentdesk_fixed_layout_file() {
+  printf '%s\n' "$HOME/.config/zellij/layouts/agent-desk.kdl"
+}
+
+# _agentdesk_fixed_layout_kind FILE
+# Prints one word:
+#   missing    no such file
+#   generated  carries the generator's marker and its body hash still matches
+#   legacy     unmarked, byte-identical to a layout older setup scripts shipped
+#   custom     anything else (edited, marker removed, hand-written, unreadable)
+# A file that cannot be verified counts as custom so it is never replaced.
+_agentdesk_fixed_layout_kind() {
+  local file="$1" first want got
+  local marker_re='^// agentdesk: generated standard v[0-9]+ sha256=([0-9a-f]{64})$'
+  if [ ! -f "$file" ]; then
+    echo missing
+    return 0
+  fi
+  first="$(head -n 1 "$file" 2>/dev/null)"
+  if [[ "$first" =~ $marker_re ]]; then
+    want="${match[1]}"
+    got="$(tail -n +2 "$file" | _agentdesk_sha256)" || { echo custom; return 0; }
+    if [ "$got" = "$want" ]; then echo generated; else echo custom; fi
+    return 0
+  fi
+  got="$(_agentdesk_sha256 < "$file")" || { echo custom; return 0; }
+  case "$got" in
+    9b3169af3a18c510c1425017fed5cbb37046b6fcc3abbfdf9cd83d0688163618|837e54400d5b1b833722c8593a6902e0b429d9a93bd95bf7b7fa84cdfac7096d)
+      echo legacy ;;
+    *)
+      echo custom ;;
+  esac
+}
+
+# _agentdesk_fixed_layout_path [BARS]
+# Resolves the Standard layout for a launch. A customised file always wins and
+# its path is printed. Otherwise a fresh Standard layout is generated and the
+# temp path printed; when generation fails the file path is printed so the
+# existence check reports it. The result is temporary exactly when it differs
+# from _agentdesk_fixed_layout_file; the caller owns the cleanup trap.
+_agentdesk_fixed_layout_path() {
+  local bars="${1:-default}" file kind tmp
+  file="$(_agentdesk_fixed_layout_file)"
+  kind="$(_agentdesk_fixed_layout_kind "$file")"
+  if [ "$kind" != "custom" ] && tmp="$(_agentdesk_gen_standard_layout --bars "$bars")" && [ -n "$tmp" ]; then
+    printf '%s\n' "$tmp"
+    return 0
+  fi
+  printf '%s\n' "$file"
+}
+
 # ============================================================
 # _agentdesk_pick_layout
 # Interactive layout picker. Prints a menu and reads user selection.
@@ -742,12 +930,13 @@ _agentdesk_gen_layout() {
 # ============================================================
 _agentdesk_pick_layout() {
   printf 'Select a layout:\n' >&2
-  printf '  1) Standard (5 tabs: main / review / repos / shell / spend)  [default]\n' >&2
+  printf '  1) Standard (agents / git / status: claude + claude + shell, live git, workflow status)  [default]\n' >&2
   printf '  2) claude + shell + spend\n' >&2
   printf '  3) claude + claude + shell + spend\n' >&2
   printf '  4) claude + codex + shell + spend\n' >&2
   printf '  5) claude + ccr + shell + spend\n' >&2
-  printf '  6) Custom — type comma-separated: e.g. claude, codex, shell, ccr\n' >&2
+  printf '  6) claude + shell + status + spend\n' >&2
+  printf '  7) Custom — type comma-separated: e.g. claude, codex, shell, status, ccr\n' >&2
   printf 'Choice [1]: ' >&2
 
   local choice
@@ -776,7 +965,11 @@ _agentdesk_pick_layout() {
       return 0
       ;;
     6)
-      printf 'Type comma-separated tokens (claude, codex, shell, ccr): ' >&2
+      printf 'claude shell status\n'
+      return 0
+      ;;
+    7)
+      printf 'Type comma-separated tokens (claude, codex, shell, status, ccr): ' >&2
       read -r choice
       ;;
     *)
@@ -1197,7 +1390,8 @@ Layout:
   --compact-bar / AGENTDESK_COMPACT_BAR=1
                      one-line bar at the bottom instead of the tab bar and the
                      status bar with mode key hints. Per launch only, never
-                     remembered. Generated layouts only; a saved fixed layout
+                     remembered. Applies to generated layouts and to the
+                     generated Standard layout; a customised agent-desk.kdl
                      keeps its own bars.
 
 Dashboard:
@@ -1222,6 +1416,20 @@ State maintenance:
                      only reports what would be removed. It never runs
                      automatically; run it when no agentdesk launch is in
                      progress. Cannot be combined with launch arguments.
+
+Standard layout:
+  With no tokens the Standard layout opens three tabs. main has Claude · A and
+  Claude · B on top and a Shell strip below, with Token Spend as a hidden
+  floating pane. git runs lazygit when it is installed and the project root is
+  a repo (or holds exactly one repo); otherwise it shows a refreshing git
+  status, and any key drops to a shell. status runs status_graph.py --watch.
+  Picker choices: 1 Standard, 2-5 agent presets, 6 claude + shell + status +
+  spend, 7 custom (comma-separated tokens). Typing a token list directly also
+  works.
+  To customise it, edit ~/.config/zellij/layouts/agent-desk.kdl: agentdesk
+  keeps your file as it is (the first-line marker no longer matches), and
+  setup-agentdesk.sh writes the new Standard layout beside it as
+  agent-desk.kdl.new.
 
 Layout memory:
   agentdesk remembers your layout choice per project (or per session name).
@@ -1589,7 +1797,7 @@ HELP
         return 1
       fi
       if [ -n "$picked" ]; then
-        # Non-empty pick (options 2-6): split space-separated output into array
+        # Non-empty pick (preset options 2-6, with 7 = custom): split space-separated output into array
         read -rA picked_tokens <<< "$picked"
         layout_tmp="$(_agentdesk_gen_layout --bars "$bar_mode" "${picked_tokens[@]}")"
         layout_path="$layout_tmp"
@@ -1599,12 +1807,22 @@ HELP
         trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
       else
         # Empty pick (option 1 / default): use fixed layout
-        layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+        layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+        if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+          layout_tmp="$layout_path"
+          # shellcheck disable=SC2064
+          trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+        fi
         saved_value="__FIXED__"
       fi
     else
       # Non-TTY + --pick: skip reuse, go directly to fixed layout (D-07)
-      layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+      layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+      if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+        layout_tmp="$layout_path"
+        # shellcheck disable=SC2064
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+      fi
       saved_value="__FIXED__"
     fi
 
@@ -1618,7 +1836,7 @@ HELP
       printf 'Reusing last layout (use --pick to change)\n' >&2
       saved_value="$saved_value_loaded"
       # If the restored path is a generated temp file (not the fixed kdl), register trap
-      if [ "$restored_path" != "$HOME/.config/zellij/layouts/agent-desk.kdl" ]; then
+      if [ "$restored_path" != "$(_agentdesk_fixed_layout_file)" ]; then
         layout_tmp="$restored_path"
         # shellcheck disable=SC2064
         trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
@@ -1641,11 +1859,21 @@ HELP
           # shellcheck disable=SC2064
           trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
         else
-          layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+          layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+          if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+            layout_tmp="$layout_path"
+            # shellcheck disable=SC2064
+            trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+          fi
           saved_value="__FIXED__"
         fi
       else
-        layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+        layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+        if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+          layout_tmp="$layout_path"
+          # shellcheck disable=SC2064
+          trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+        fi
         saved_value="__FIXED__"
       fi
     fi
@@ -1668,19 +1896,32 @@ HELP
       trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
     else
       # Option 1 or empty — use fixed layout
-      layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+      layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+      if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+        layout_tmp="$layout_path"
+        # shellcheck disable=SC2064
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+      fi
       saved_value="__FIXED__"
     fi
 
   else
     # Branch 5: non-TTY + no saved layout — use fixed layout silently
-    layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+    layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+    if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+      layout_tmp="$layout_path"
+      # shellcheck disable=SC2064
+      trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+    fi
     saved_value="__FIXED__"
   fi
 
   if [ ! -f "$layout_path" ]; then
     echo "Zellij layout not found:"
     echo "  $layout_path"
+    if [ "$layout_path" = "$(_agentdesk_fixed_layout_file)" ]; then
+      echo "Run setup-agentdesk.sh or quoin install to restore the Standard layout."
+    fi
     return 1
   fi
 
@@ -1915,6 +2156,54 @@ HELP
   else
     git -C "$repo_path" status
   fi
+}
+
+# _agentdesk_git_pane
+# Body of the Standard layout's git tab; every choice is made when the pane
+# runs. lazygit opens on the project root when it is a repo itself, or on the
+# only repo below it. Otherwise (several repos, no repo, or no lazygit) a
+# refreshing status view is shown until a key is pressed or Ctrl+C is hit.
+# AGENTDESK_GIT_REFRESH sets the refresh interval in seconds (default 5).
+_agentdesk_git_pane() {
+  local interval key has_lazygit="" _ag_stop=0
+  local -a repo_list=()
+  setopt localoptions localtraps
+
+  command -v lazygit >/dev/null 2>&1 && has_lazygit=1
+  if [ -n "$has_lazygit" ] && [ -e "${PROJECT_ROOT:-$PWD}/.git" ]; then
+    lazygit -p "${PROJECT_ROOT:-$PWD}"
+    return $?
+  fi
+  repo_list=(${(f)"$(_detect_repos)"})
+  if [ -n "$has_lazygit" ] && [ "${#repo_list[@]}" -eq 1 ]; then
+    lazygit -p "$(_repo_path "${repo_list[1]}")"
+    return $?
+  fi
+
+  interval="${AGENTDESK_GIT_REFRESH:-5}"
+  case "$interval" in
+    ''|*[!0-9]*) interval=5 ;;
+    *) interval=$((10#$interval)) ;;
+  esac
+  [ "$interval" -gt 0 ] || interval=5
+
+  # A flag, not break: break inside a trap string does not reliably leave the loop.
+  trap '_ag_stop=1' INT
+  while [ "$_ag_stop" -eq 0 ]; do
+    [ -t 1 ] && printf '\033[H\033[2J'
+    printf 'Git status - refreshes every %s s. Press any key for a shell. Run gitreview to open lazygit for one repo.\n' "$interval"
+    [ -n "$has_lazygit" ] || printf 'lazygit not found - install it with: brew install lazygit\n'
+    if [ "${#repo_list[@]}" -eq 0 ]; then
+      printf 'No git repos found under %s\n' "${PROJECT_ROOT:-$PWD}"
+    else
+      grepos
+    fi
+    # Without a terminal there is nothing to wait for: draw once.
+    [ -t 0 ] || break
+    read -s -t "$interval" -k 1 key && break
+    repo_list=(${(f)"$(_detect_repos)"})
+  done
+  return 0
 }
 
 gitrootreview() {

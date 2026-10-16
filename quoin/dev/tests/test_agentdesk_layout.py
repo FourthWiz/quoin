@@ -545,8 +545,18 @@ def test_stored_values_still_restore(tmp_path, value):
 
 def test_stored_fixed_value_and_bad_value(tmp_path):
     env = agentdesk_env(tmp_path)
+    fixed = Path(env["HOME"]) / ".config" / "zellij" / "layouts" / "agent-desk.kdl"
+    # No saved file: the Standard layout is generated into a temp file.
     done = run_fn(tmp_path, "_agentdesk_layout_from_value __FIXED__", env)
-    assert done.stdout.strip() == f"{env['HOME']}/.config/zellij/layouts/agent-desk.kdl"
+    assert done.returncode == 0, done.stderr
+    generated = Path(done.stdout.strip())
+    assert generated != fixed and generated.suffix == ".kdl"
+    assert re.findall(r'tab name="([^"]+)"', generated.read_text()) == ["main", "git", "status"]
+    # A customised saved file wins and is returned as is.
+    fixed.parent.mkdir(parents=True, exist_ok=True)
+    fixed.write_text("layout {\n}\n")
+    done = run_fn(tmp_path, "_agentdesk_layout_from_value __FIXED__", env)
+    assert done.stdout.strip() == str(fixed)
     assert run_fn(tmp_path, "_agentdesk_layout_from_value claude+bogus", env).returncode == 1
 
 
@@ -555,6 +565,7 @@ PICKER_CHOICES = {
     "3": "claude claude shell",
     "4": "claude codex shell",
     "5": "claude ccr shell",
+    "6": "claude shell status",
 }
 
 

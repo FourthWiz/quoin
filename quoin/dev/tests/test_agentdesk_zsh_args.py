@@ -9,6 +9,7 @@ bypasses the picker in agentdesk(); we call _agentdesk_pick_layout() directly).
 """
 import os
 import pty
+import re
 import shutil
 import subprocess
 import textwrap
@@ -325,8 +326,9 @@ def test_socket_dir_length_guard_blocks_long_name(tmp_path: Path) -> None:
 def test_agentdesk_non_tty_skips_picker(tmp_path: Path) -> None:
     """agentdesk with stdin piped (non-TTY) skips picker and uses fixed layout."""
     # Piped stdin means [ -t 0 ] is false → fixed layout path
-    # Fixed layout file won't exist, so it errors with "layout not found" (rc=1).
-    # That's fine — the point is it didn't call _agentdesk_pick_layout (no menu output).
+    # The saved layout file does not exist, so the Standard layout is generated
+    # and the launch goes ahead against the mock zellij. The point is that it
+    # never called _agentdesk_pick_layout (no menu output).
     result = _run_agentdesk("", tmp_path, stdin="1\n")
     # No picker menu should appear in stderr
     assert "Select a layout" not in result.stderr, (
@@ -380,9 +382,9 @@ def test_agentdesk_picker_custom_no_spaces(tmp_path: Path) -> None:
 
 
 def test_agentdesk_picker_unknown_token_in_custom(tmp_path: Path) -> None:
-    """_agentdesk_pick_layout with option 6 + unknown token + empty retry returns rc=1."""
-    # Input: choose option 6 (Custom — was 5 before ccr renumber), then type bad token, then empty retry (cancel)
-    result = _run_pick_layout("6\nemacs, shell\n\n", tmp_path)
+    """_agentdesk_pick_layout with option 7 + unknown token + empty retry returns rc=1."""
+    # Input: choose option 7 (Custom), then type bad token, then empty retry (cancel)
+    result = _run_pick_layout("7\nemacs, shell\n\n", tmp_path)
     assert result.returncode != 0, (
         f"Unknown token in custom input should return non-zero after re-prompt (rc={result.returncode})"
     )
@@ -541,6 +543,7 @@ def test_agentdesk_status_pane_cmd(tmp_path: Path) -> None:
     cmd = result.stdout
     assert "status_graph.py" in cmd, f"pane cmd missing status_graph.py: {cmd!r}"
     assert "--compact" in cmd, f"pane cmd missing --compact: {cmd!r}"
+    assert "status_graph.py not found" in cmd, f"pane cmd missing the not-found message: {cmd!r}"
 
 
 def test_agentdesk_status_pane_name(tmp_path: Path) -> None:
@@ -1539,13 +1542,38 @@ def test_load_missing_file_failopen(tmp_path: Path) -> None:
 
 
 def test_layout_from_value_fixed(tmp_path: Path) -> None:
-    """_agentdesk_layout_from_value __FIXED__ → agent-desk.kdl path, rc=0."""
+    """_agentdesk_layout_from_value __FIXED__ → customised agent-desk.kdl wins, rc=0.
+
+    _make_state_env always seeds a hand-written stub, which counts as a
+    customised file, so its path comes back."""
     result = _run_zsh_fn_state("_agentdesk_layout_from_value '__FIXED__'", tmp_path)
     assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
     path = result.stdout.strip()
     assert path.endswith("/agent-desk.kdl"), (
         f"__FIXED__ must return agent-desk.kdl path, got: {path!r}"
     )
+
+
+def test_layout_from_value_fixed_generates_when_file_missing(tmp_path: Path) -> None:
+    """Without a saved file, __FIXED__ resolves to a generated Standard layout."""
+    env = _make_state_env(tmp_path)
+    (Path(env["HOME"]) / ".config" / "zellij" / "layouts" / "agent-desk.kdl").unlink()
+    tmpdir = tmp_path / "gen_tmp"
+    tmpdir.mkdir()
+    env["TMPDIR"] = str(tmpdir)
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"; _agentdesk_layout_from_value __FIXED__'],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    path = Path(result.stdout.strip())
+    try:
+        assert path.parent == tmpdir and path.suffix == ".kdl"
+        tabs = re.findall(r'tab name="([^"]+)"', path.read_text())
+        assert tabs == ["main", "git", "status"]
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def test_layout_from_value_tokens(tmp_path: Path) -> None:
