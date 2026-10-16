@@ -443,10 +443,12 @@ agentdesk --name deck --panes codex,codex,shell --no-prompt   # scripted launch,
 
 **Layout:** agents (Claude, Codex, CCR) sit on top and shells and status share a
 strip below; repeated agents are named `Claude · A`, `Claude · B` and so on.
-Token Spend is a floating pane that starts hidden. Swap between arrangements
+Token Spend is a floating pane that starts hidden (unless `spend` is the only
+token, when it opens visible). Swap between arrangements
 (even, focus-left, stacked) with Alt [ and Alt ]. `--compact-bar` or
 `AGENTDESK_COMPACT_BAR=1` replaces the tab bar and status bar with a single
-one-line bar (per launch, not remembered).
+one-line bar (per launch, not remembered; generated layouts only, a saved fixed
+layout keeps its own bars).
 
 **Window-type tokens** (positional, mutually exclusive with `--mode`):
 

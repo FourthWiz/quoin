@@ -200,6 +200,11 @@ def shape(session):
     return sorted((p["title"], p["pane_columns"]) for p in session.tiled())
 
 
+def full_shape(session):
+    """Like shape(), with rows too, so a return to base checks both axes."""
+    return sorted((p["title"], p["pane_columns"], p["pane_rows"]) for p in session.tiled())
+
+
 # ── harness unit tests (no Zellij needed) ─────────────────────────────────────
 
 def test_live_env_never_leaks_zellij_variables(tmp_path, monkeypatch):
@@ -253,7 +258,7 @@ def test_two_agents_and_strip_proportions(tmp_path):
     with live(tmp_path, generate(tmp_path, "claude claude shell"), 4) as s:
         assert "hide_floating_panes=true" in s.dump()
         panes = by_title(s.panes())
-        agents = panes["Claude · A"]["pane_rows"] + 0
+        agents = panes["Claude · A"]["pane_rows"]
         shell = panes["Shell"]
         tiled_rows = agents + shell["pane_rows"]
         assert 0.70 <= agents / tiled_rows <= 0.80
@@ -265,6 +270,7 @@ def test_two_agents_and_strip_proportions(tmp_path):
 def test_swap_layouts_cycle_and_return(tmp_path):
     with live(tmp_path, generate(tmp_path, "claude claude shell"), 4) as s:
         base = shape(s)
+        base_full = full_shape(s)
         assert dict(base)["Shell"] == COLS
 
         s.act("next-swap-layout"); s.settle()
@@ -282,6 +288,7 @@ def test_swap_layouts_cycle_and_return(tmp_path):
 
         s.act("next-swap-layout"); s.settle()
         assert shape(s) == base
+        assert full_shape(s) == base_full
 
         s.act("previous-swap-layout"); s.settle()
         assert {p["pane_columns"] for p in s.tiled()} == {COLS}

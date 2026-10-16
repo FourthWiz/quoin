@@ -483,7 +483,8 @@ _agentdesk_kdl_pane() {
 }
 
 # _agentdesk_kdl_spend_floating
-# The token-spend monitor lives in a floating pane that starts hidden.
+# The token-spend monitor lives in a floating pane that starts hidden, unless
+# it is the only token requested.
 _agentdesk_kdl_spend_floating() {
   printf '        floating_panes {\n'
   _agentdesk_kdl_pane 12 "$(_agentdesk_pane_name spend)" spend 'x="10%" y="10%" width="80%" height="75%"'
@@ -558,10 +559,13 @@ _agentdesk_kdl_agents_tab() {
   _agentdesk_kdl_check_bars "$bars" || return 2
   shift
   local tok idx top_size strip_size util_sizes has_status shell_n status_n
+  local spend_only="" tab_props='hide_floating_panes=true'
   local -a toks=() names=() agents=() utils=() util_toks=()
   for tok in "$@"; do
     [ "$tok" = "spend" ] || toks+=("$tok")
   done
+  # Spend as the only token has nothing else to show: open it visible.
+  [ "$#" -gt 0 ] && [ "${#toks[@]}" -eq 0 ] && tab_props=""
   [ "${#toks[@]}" -eq 0 ] && toks=(shell)
   names=("${(@f)$(_agentdesk_pane_names "${toks[@]}")}")
   idx=0
@@ -573,7 +577,7 @@ _agentdesk_kdl_agents_tab() {
     esac
   done
 
-  _agentdesk_kdl_tab_open "$bars" main 'hide_floating_panes=true' || return 2
+  _agentdesk_kdl_tab_open "$bars" main "$tab_props" || return 2
   printf '        pane split_direction="horizontal" {\n'
   if [ "${#agents[@]}" -gt 0 ] && [ "${#utils[@]}" -gt 0 ]; then
     top_size="75%"; strip_size="25%"; has_status=""
@@ -683,7 +687,7 @@ DASHPANE
 # _agentdesk_gen_layout [--bars default|compact] <token> [<token> ...]
 # Generates a single-tab Zellij KDL layout file for the given window tokens.
 # Echoes the path to the temp file. Caller is responsible for cleanup
-# (use trap "rm -f $layout_tmp" EXIT INT TERM in the caller).
+# (use trap "rm -f ${(q)layout_tmp}" EXIT INT TERM in the caller).
 # ============================================================
 _agentdesk_gen_layout() {
   local bars="default" layout_tmp exit_rc=0
@@ -1182,7 +1186,7 @@ Window types (positional):
   shell    plain zsh shell
   status   show workflow pipeline status graph
   ccr      start an open-model CCR (OpenRouter) session in pane
-  spend    realtime token-spend monitor (opens as the hidden floating pane)
+  spend    realtime token-spend monitor (floating pane; hidden unless it is the only token)
 
 Layout:
   Agents (claude, codex, ccr) are laid out on top; shells and status share a
@@ -1193,7 +1197,8 @@ Layout:
   --compact-bar / AGENTDESK_COMPACT_BAR=1
                      one-line bar at the bottom instead of the tab bar and the
                      status bar with mode key hints. Per launch only, never
-                     remembered.
+                     remembered. Generated layouts only; a saved fixed layout
+                     keeps its own bars.
 
 Dashboard:
   The "Open quoin dashboard?" question is asked once per project (or named
@@ -1550,7 +1555,7 @@ HELP
     layout_path="$layout_tmp"
     persist_layout=""
     # shellcheck disable=SC2064
-    trap "rm -f $layout_tmp" EXIT INT TERM
+    trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
 
   elif [ -n "$mode" ] || [ "${#tokens[@]}" -gt 0 ]; then
     # Branch 1: explicit mode or tokens — generate KDL at runtime
@@ -1569,7 +1574,7 @@ HELP
     saved_value="${(j:+:)effective_tokens}"
     # Clean up temp file on exit, return, interrupt, or termination
     # shellcheck disable=SC2064
-    trap "rm -f $layout_tmp" EXIT INT TERM
+    trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
 
   elif [ -n "$force_pick" ]; then
     # Branch 2: --pick or AGENTDESK_PICK=1 — force interactive picker
@@ -1591,7 +1596,7 @@ HELP
         # join OUTSIDE any redirection to avoid typeset-echo leak
         saved_value="${(j:+:)picked_tokens}"
         # shellcheck disable=SC2064
-        trap "rm -f $layout_tmp" EXIT INT TERM
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
       else
         # Empty pick (option 1 / default): use fixed layout
         layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
@@ -1616,7 +1621,7 @@ HELP
       if [ "$restored_path" != "$HOME/.config/zellij/layouts/agent-desk.kdl" ]; then
         layout_tmp="$restored_path"
         # shellcheck disable=SC2064
-        trap "rm -f $layout_tmp" EXIT INT TERM
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
       fi
     else
       # Corrupt saved value — fall through to branch 4/5
@@ -1634,7 +1639,7 @@ HELP
           layout_path="$layout_tmp"
           saved_value="${(j:+:)picked_tokens}"
           # shellcheck disable=SC2064
-          trap "rm -f $layout_tmp" EXIT INT TERM
+          trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
         else
           layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
           saved_value="__FIXED__"
@@ -1660,7 +1665,7 @@ HELP
       layout_path="$layout_tmp"
       saved_value="${(j:+:)picked_tokens}"
       # shellcheck disable=SC2064
-      trap "rm -f $layout_tmp" EXIT INT TERM
+      trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
     else
       # Option 1 or empty — use fixed layout
       layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
@@ -1743,7 +1748,7 @@ HELP
     sed '$d' "$layout_path" > "$dash_tab_tmp"
     _agentdesk_kdl_dashboard_tab "$layout_path" "$dash_url_file" >> "$dash_tab_tmp"
     # shellcheck disable=SC2064
-    trap "rm -f $layout_tmp $dash_tab_tmp" EXIT INT TERM
+    trap "rm -f ${(q)layout_tmp} ${(q)dash_tab_tmp}" EXIT INT TERM
     layout_path="$dash_tab_tmp"
 
     # D-03 bounded browser-open poller: spawned BEFORE zellij blocks the foreground.

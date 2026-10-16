@@ -216,12 +216,9 @@ def test_pane_names(tmp_path, tokens, expected):
 
 
 def test_agent_names_keep_the_substring_stream_deck_matches(tmp_path):
-    for token, needle in (("claude claude", "claude"), ("codex codex", "codex"),
-                          ("claude codex ccr", None)):
+    for token, needle in (("claude claude", "claude"), ("codex codex", "codex")):
         for name in names_for(tmp_path, token):
-            lowered = name.lower()
-            if needle:
-                assert needle in lowered
+            assert needle in name.lower()
     ccr = names_for(tmp_path, "ccr ccr")
     assert all("claude" not in n.lower() and "codex" not in n.lower() for n in ccr)
 
@@ -434,6 +431,23 @@ def test_spend_alone_adds_a_tiled_shell(tmp_path):
     assert floating_names(tab) == ["Token Spend"]
 
 
+def test_spend_alone_opens_visible_and_with_others_stays_hidden(tmp_path):
+    alone = main_tab(layout_node(gen_text(tmp_path, "spend")))
+    assert "hide_floating_panes" not in props(alone)
+    for tokens in ("claude spend", "spend shell", "claude shell"):
+        tab = main_tab(layout_node(gen_text(tmp_path, tokens)))
+        assert props(tab).get("hide_floating_panes") == "true", tokens
+
+
+def test_cleanup_traps_quote_the_temp_paths():
+    text = AGENTDESK_ZSH.read_text()
+    traps = [ln for ln in text.splitlines() if re.search(r'trap "rm -f ', ln)]
+    assert traps
+    for ln in traps:
+        assert not re.search(r'rm -f (\$layout_tmp|\$dash_tab_tmp)', ln), ln
+        assert "${(q)layout_tmp}" in ln, ln
+
+
 def swap_layouts(layout: dict) -> list:
     return child(layout, "swap_tiled_layout")
 
@@ -445,7 +459,6 @@ def test_swap_layouts_default(tmp_path):
     for s in swaps:
         assert [c["name"] for c in s["children"]] == ["agentdesk_bars"]
     even, focus, stacked = (s["children"][0] for s in swaps)
-    assert "min_panes" not in props(focus) or props(focus)["min_panes"] == "4"
     assert props(focus)["min_panes"] == "4"
     assert "min_panes" not in props(even) and "max_panes" not in props(even)
     assert "min_panes" not in props(stacked) and "max_panes" not in props(stacked)
@@ -538,7 +551,7 @@ def test_stored_fixed_value_and_bad_value(tmp_path):
 
 
 PICKER_CHOICES = {
-    "2": "claude shell spend",
+    "2": "claude shell",
     "3": "claude claude shell",
     "4": "claude codex shell",
     "5": "claude ccr shell",
@@ -561,8 +574,7 @@ def test_picker_numbers_still_map_to_token_lists(tmp_path):
             text=True, cwd=str(tmp_path), timeout=60,
         )
         picked = done.stdout.strip().split()
-        assert picked, (number, done.stderr)
-        assert set(picked) <= {"claude", "codex", "ccr", "shell", "status", "spend"}
+        assert picked == expected.split(), (number, done.stderr)
 
 
 def test_api_version_marker_is_unchanged():
