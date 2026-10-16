@@ -169,7 +169,7 @@ def run_in_pty(argv, env, cwd, steps):
             if send:
                 os.write(fd, send)
     finally:
-        seen += read_until(fd, "\x00", timeout=1.0)
+        seen += read_until(fd, "\x00", timeout=0.1)
         try:
             os.close(fd)
         except OSError:
@@ -758,3 +758,31 @@ def test_help_describes_the_standard_layout(tmp_path):
     assert done.returncode == 0, done.stderr
     for text in ("agent-desk.kdl.new", "lazygit", "6 claude + shell + status", "7 custom"):
         assert text in done.stdout, text
+
+
+def test_generated_classification_survives_hostile_shell_options(tmp_path):
+    env = make_env(tmp_path)
+    layout = tmp_path / "agent-desk.kdl"
+    layout.write_text(standard_text(tmp_path))
+    body = (
+        "setopt bash_rematch ksh_arrays; "
+        f'_agentdesk_fixed_layout_kind "{layout}"'
+    )
+    done = run_zsh(tmp_path, body, env)
+    assert done.stdout.strip() == "generated", done.stderr
+
+
+def test_git_pane_polls_without_optional_locks_and_scans_once(tmp_path):
+    env = make_env(tmp_path)
+    root = tmp_path / "proj"
+    git_init_dirs(root, "a", "b")
+    log = tmp_path / "git-env.log"
+    stub = stub_bin(env)
+    stub.mkdir(parents=True, exist_ok=True)
+    g = stub / "git"
+    g.write_text(f'#!/bin/sh\necho "locks=$GIT_OPTIONAL_LOCKS" >> "{log}"\n')
+    g.chmod(0o755)
+    env["PATH"] = f"{stub}:{env['PATH']}"
+    done = git_pane(tmp_path, root, env)
+    assert done.returncode == 0, done.stderr
+    assert log.read_text().split() == ["locks=0", "locks=0"]

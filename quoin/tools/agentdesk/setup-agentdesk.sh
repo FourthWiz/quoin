@@ -1085,7 +1085,10 @@ EOF
 write_standard_layout() {
   local target="$1" helper tmp kind
   helper="$SCRIPT_DIR/agentdesk.zsh"
-  tmp="$(mktemp)"
+  if ! tmp="$(mktemp)"; then
+    echo "Warning: could not create a temporary file; keeping the existing layout: $target"
+    return 0
+  fi
 
   if [ ! -f "$helper" ] || ! command -v zsh >/dev/null 2>&1; then
     if [ -e "$target" ]; then
@@ -1121,10 +1124,14 @@ write_standard_layout() {
         rm -f "$tmp"
         return 0
       fi
-      mv "$tmp" "$target.new"
+      if ! mv "$tmp" "$target.new"; then
+        rm -f "$tmp"
+        echo "Warning: could not write $target.new; keeping your layout: $target"
+        return 0
+      fi
       echo "Kept your customised layout: $target"
       echo "New Standard layout written beside it: $target.new"
-      echo "To adopt it: mv $target.new $target"
+      echo "To adopt it: mv $(printf '%q' "$target.new") $(printf '%q' "$target")"
       echo "The .new file is rewritten on every setup run; delete it once you no longer need it."
       ;;
   esac

@@ -770,6 +770,7 @@ _agentdesk_kdl_status_tab() {
 # hashing tool works.
 _agentdesk_sha256() {
   local data out tool
+  setopt localoptions no_bash_rematch no_ksh_arrays
   data="$(cat; printf x)"
   data="${data%x}"
   for tool in "shasum -a 256" "sha256sum"; do
@@ -884,6 +885,7 @@ _agentdesk_fixed_layout_file() {
 # A file that cannot be verified counts as custom so it is never replaced.
 _agentdesk_fixed_layout_kind() {
   local file="$1" first want got
+  setopt localoptions no_bash_rematch no_ksh_arrays
   local marker_re='^// agentdesk: generated standard v[0-9]+ sha256=([0-9a-f]{64})$'
   if [ ! -f "$file" ]; then
     echo missing
@@ -2165,9 +2167,10 @@ HELP
 # refreshing status view is shown until a key is pressed or Ctrl+C is hit.
 # AGENTDESK_GIT_REFRESH sets the refresh interval in seconds (default 5).
 _agentdesk_git_pane() {
-  local interval key has_lazygit="" _ag_stop=0
+  local interval key repo has_lazygit="" _ag_stop=0 t0
   local -a repo_list=()
-  setopt localoptions localtraps
+  local -x GIT_OPTIONAL_LOCKS=0
+  setopt localoptions localtraps no_ksh_arrays
 
   command -v lazygit >/dev/null 2>&1 && has_lazygit=1
   if [ -n "$has_lazygit" ] && [ -e "${PROJECT_ROOT:-$PWD}/.git" ]; then
@@ -2196,11 +2199,21 @@ _agentdesk_git_pane() {
     if [ "${#repo_list[@]}" -eq 0 ]; then
       printf 'No git repos found under %s\n' "${PROJECT_ROOT:-$PWD}"
     else
-      grepos
+      # One scan per pass: reuse repo_list instead of re-walking the tree.
+      for repo in "${repo_list[@]}"; do
+        [ -z "$repo" ] && continue
+        echo
+        echo "===== $repo ====="
+        git -C "$(_repo_path "$repo")" status --short 2>/dev/null || true
+      done
     fi
     # Without a terminal there is nothing to wait for: draw once.
     [ -t 0 ] || break
+    t0=$SECONDS
     read -s -t "$interval" -k 1 key && break
+    # A read that fails long before the interval (closed terminal, error) must
+    # not turn the loop into a busy spin.
+    [ $((SECONDS - t0)) -lt $((interval - 1)) ] && sleep 1
     repo_list=(${(f)"$(_detect_repos)"})
   done
   return 0
