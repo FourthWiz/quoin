@@ -347,3 +347,191 @@ def _no_ambient_claude_session_id():
         yield
     finally:
         mp.undo()
+
+
+# ── agentdesk home isolation (autouse for agentdesk-related test modules) ───
+# The launcher reads and writes files under $HOME/.config (the saved-layout
+# state file, zellij and ghostty config). A test that lets the launcher resolve
+# the real home would silently rewrite the developer's own state. Four layers
+# keep that from happening: a temp HOME for the affected modules, a spawn-time
+# guard that rejects any child process whose effective HOME/XDG_CONFIG_HOME is
+# (or may fall back to) the real home, a per-test snapshot diff of the real
+# files, and a session-wide snapshot diff as a final tripwire. Snapshots are
+# content-only (exists + sha256, plus the name listing of the agentdesk config
+# dir): a concurrent real launch changes mtime and inode, so a stricter check
+# would false-trip without adding detection power.
+import hashlib
+import inspect
+import pwd
+import subprocess
+
+# Resolved from the passwd database so later $HOME monkeypatching cannot hide it.
+_REAL_HOME = pwd.getpwuid(os.getuid()).pw_dir
+
+_ISOLATED_PREFIXES = (
+    "test_agentdesk_",
+    "test_streamdeck_deckenv",
+    "test_install_questions_cli",
+)
+
+_REAL_TARGETS = (
+    ".config/agentdesk/last-layout",
+    ".config/agentdesk/agentdesk.zsh",
+    ".config/agentdesk/setup-agentdesk.sh",
+    ".config/zellij/config.kdl",
+    ".config/zellij/layouts/agent-desk.kdl",
+    ".zshrc",
+    ".config/ghostty/config",
+    ".config/ghostty/config.ghostty",
+    "Library/Application Support/com.mitchellh.ghostty/config",
+    "Library/Application Support/com.mitchellh.ghostty/config.ghostty",
+)
+
+_LISTING_KEY = "<listing>"
+
+
+def _snapshot_real_targets(home):
+    """Read-only content snapshot of the files a launcher run could touch.
+
+    Maps each target path to (exists, sha256-or-None), plus the sorted name
+    listing of the agentdesk config dir so a stray backup or temp file shows up.
+    """
+    home = Path(home)
+    snap = {}
+    for rel in _REAL_TARGETS:
+        path = home / rel
+        try:
+            with open(path, "rb") as fh:
+                snap[str(path)] = (True, hashlib.sha256(fh.read()).hexdigest())
+        except (FileNotFoundError, NotADirectoryError):
+            snap[str(path)] = (False, None)
+        except OSError:
+            snap[str(path)] = (True, "unreadable")
+    try:
+        names = tuple(sorted(os.listdir(home / ".config" / "agentdesk")))
+    except (FileNotFoundError, NotADirectoryError):
+        names = ()
+    try:
+        layout_names = tuple(sorted(os.listdir(home / ".config" / "zellij" / "layouts")))
+    except (FileNotFoundError, NotADirectoryError):
+        layout_names = ()
+    snap[_LISTING_KEY] = names + ("|layouts|",) + layout_names
+    return snap
+
+
+def _diff_snapshots(before, after):
+    """Return the sorted keys whose snapshot value differs."""
+    keys = set(before) | set(after)
+    return sorted(k for k in keys if before.get(k) != after.get(k))
+
+
+def _under(path, root):
+    return path == root or root in path.parents
+
+
+def _check_child_env(env, real_home, allowed_root):
+    """Raise AssertionError if a child spawned with `env` could touch real_home.
+
+    env=None means the child inherits os.environ (already isolated by the
+    fixture), so it is accepted. An explicit mapping is the child's whole
+    environment: a missing or empty HOME is a failure because zsh then fills
+    HOME from the passwd database, which is the real home. HOME,
+    XDG_CONFIG_HOME and ZDOTDIR must be absolute (zsh reads startup files from
+    ZDOTDIR, so one pointing into the real home is rejected like the others). Paths under
+    allowed_root (the pytest base temp dir) are accepted before the real-home
+    rule so machines whose temp dir lives under the home directory still work.
+    """
+    if env is None:
+        return
+    env = {os.fsdecode(k): os.fsdecode(v) for k, v in dict(env).items()}
+    real = Path(real_home).resolve()
+    allowed = Path(allowed_root).resolve() if allowed_root is not None else None
+    if not env.get("HOME"):
+        raise AssertionError(
+            "agentdesk test hermeticity: explicit env without HOME "
+            "(zsh falls back to the passwd home, the real home)"
+        )
+    for name in ("HOME", "XDG_CONFIG_HOME", "ZDOTDIR"):
+        value = env.get(name)
+        if not value:
+            continue
+        if not os.path.isabs(value):
+            raise AssertionError(
+                f"agentdesk test hermeticity: {name}={value!r} is relative and "
+                f"would resolve against the child's working directory; use an "
+                f"absolute temp path"
+            )
+        resolved = Path(value).resolve()
+        if allowed is not None and _under(resolved, allowed):
+            continue
+        if _under(resolved, real):
+            raise AssertionError(
+                f"agentdesk test hermeticity: child process would use the real "
+                f"home via {name}={value!r}; point it at a temp directory"
+            )
+
+
+@pytest.fixture(scope="session")
+def _agentdesk_real_home_tripwire():
+    """Session-wide snapshot diff of real-home files; requested lazily so
+    sessions that collect no agentdesk test never take a snapshot."""
+    before = _snapshot_real_targets(_REAL_HOME)
+    yield
+    changed = _diff_snapshots(before, _snapshot_real_targets(_REAL_HOME))
+    if changed:
+        pytest.fail(
+            "real home files changed during the test session: "
+            + ", ".join(changed)
+            + " (a real agentdesk launch or setup run in another terminal "
+            "during the run also trips this)"
+        )
+
+
+@pytest.fixture(autouse=True)
+def _agentdesk_home_isolation(request, tmp_path_factory):
+    path = getattr(request.node, "path", None)
+    if path is None or not path.name.startswith(_ISOLATED_PREFIXES):
+        yield
+        return
+    # Requested lazily: an autouse fixture that names `monkeypatch` up front
+    # would instantiate it before other modules' autouse fixtures and change
+    # their teardown order relative to it.
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    request.getfixturevalue("_agentdesk_real_home_tripwire")
+    before = _snapshot_real_targets(_REAL_HOME)
+
+    home = tmp_path_factory.mktemp("agentdesk-home")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    # zsh startup files come from ZDOTDIR when set; keep them inside the temp home.
+    monkeypatch.setenv("ZDOTDIR", str(home))
+    for name in (
+        "AGENTDESK_COMPACT_BAR",
+        "AGENTDESK_DASHBOARD",
+        "AGENTDESK_DASHBOARD_URL_FILE",
+        "AGENTDESK_PICK",
+        "ZELLIJ",
+        "ZELLIJ_SESSION_NAME",
+        "ZELLIJ_SOCKET_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    assert Path(os.environ["HOME"]).resolve() != Path(_REAL_HOME).resolve()
+
+    allowed_root = Path(str(tmp_path_factory.getbasetemp())).resolve()
+    real_init = subprocess.Popen.__init__
+    sig = inspect.signature(real_init)
+
+    def _guarded_init(self, *args, **kwargs):
+        bound = sig.bind(self, *args, **kwargs)
+        _check_child_env(bound.arguments.get("env"), _REAL_HOME, allowed_root)
+        return real_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(subprocess.Popen, "__init__", _guarded_init)
+
+    yield
+
+    changed = _diff_snapshots(before, _snapshot_real_targets(_REAL_HOME))
+    if changed:
+        pytest.fail(
+            f"{request.node.nodeid} changed real home files: " + ", ".join(changed)
+        )

@@ -170,11 +170,12 @@ _agentdesk_layout_key() {
   fi
 }
 
-# Save a layout value for a key to the state file.
+# Set a value for a key in the state file (layout memory and dashboard answers
+# share one file; keys are namespaced: name:, proj:, dash:name:, dash:proj:).
 # Atomic write via temp file in same directory (same filesystem → atomic mv rename).
 # Fail-open: any error → return 0.
 # Keys must be backslash-free (guaranteed by encoder); awk -v interprets C-escapes.
-_agentdesk_save_layout() {
+_agentdesk_state_set() {
   local key="$1"
   local value="$2"
   local state_file
@@ -206,11 +207,14 @@ _agentdesk_save_layout() {
   return 0
 }
 
-# Load a saved layout value for a key from the state file.
+# Save a layout value for a key (wrapper kept for existing callers).
+_agentdesk_save_layout() { _agentdesk_state_set "$@"; }
+
+# Read the value for a key from the state file.
 # Fail-open: file missing or key absent → echo nothing, return 1.
 # key must be backslash-free (guaranteed by encoder); awk -v interprets C-escapes.
 # Values may contain '='; sub() strips only the first '=' so values round-trip correctly.
-_agentdesk_load_layout() {
+_agentdesk_state_get() {
   local key="$1"
   local state_file
   state_file="$(_agentdesk_state_file)"
@@ -232,15 +236,28 @@ _agentdesk_load_layout() {
   return 0
 }
 
+# Load a saved layout value for a key (wrapper kept for existing callers).
+_agentdesk_load_layout() { _agentdesk_state_get "$@"; }
+
+# Key under which the dashboard answer is remembered for a layout key
+# (dash:proj:<enc> / dash:name:<name>). Exact-key readers of the layout keys
+# never match these lines.
+_agentdesk_dash_key() {
+  printf 'dash:%s\n' "$1"
+}
+
 # Restore a saved layout value to a layout_path.
-# __FIXED__ → echoes fixed agent-desk.kdl path, rc=0; caller must NOT rm.
+# __FIXED__ → echoes the Standard layout path, rc=0: the saved file when it is
+# customised, else a generated temp file (temp exactly when the path differs
+# from _agentdesk_fixed_layout_file; the caller removes it).
+# An optional second argument selects the bar mode (default or compact).
 # token+token+... → validates tokens against whitelist, generates temp KDL, echoes path, rc=0.
 # Invalid/empty → rc=1.
 _agentdesk_layout_from_value() {
-  local value="$1"
+  local value="$1" bars="${2:-default}"
 
   if [ "$value" = "__FIXED__" ]; then
-    printf '%s\n' "$HOME/.config/zellij/layouts/agent-desk.kdl"
+    _agentdesk_fixed_layout_path "$bars"
     return 0
   fi
 
@@ -263,7 +280,7 @@ _agentdesk_layout_from_value() {
   done
 
   local gen_path
-  gen_path="$(_agentdesk_gen_layout "${arr[@]}")" || return 1
+  gen_path="$(_agentdesk_gen_layout --bars "$bars" "${arr[@]}")" || return 1
   printf '%s\n' "$gen_path"
   return 0
 }
@@ -290,7 +307,18 @@ _agentdesk_pane_cmd() {
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo '\''Shell'\''; zsh'
       ;;
     status)
-      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/status_graph.py\" --compact --watch'
+      # Ctrl+C stops --watch; the trap keeps the pane shell alive so the
+      # trailing zsh still runs (python resets the handler in its own process).
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && trap : INT; if [ -f \"$HOME/.claude/scripts/status_graph.py\" ]; then python3 \"$HOME/.claude/scripts/status_graph.py\" --compact --watch; else echo '\''status_graph.py not found - run quoin install'\''; fi; zsh'
+      ;;
+    status-full)
+      # Internal token for the Standard layout's full-width status tab.
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && trap : INT; if [ -f \"$HOME/.claude/scripts/status_graph.py\" ]; then python3 \"$HOME/.claude/scripts/status_graph.py\" --watch; else echo '\''status_graph.py not found - run quoin install'\''; fi; zsh'
+      ;;
+    git)
+      # Internal token for the Standard layout's git tab. The lazygit and
+      # fallback choices are made by _agentdesk_git_pane when the pane runs.
+      printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && if typeset -f _agentdesk_git_pane >/dev/null; then _agentdesk_git_pane; else git status -sb 2>/dev/null; echo '\''Run quoin install to get the live git view.'\''; fi; zsh'
       ;;
     spend)
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && python3 \"$HOME/.claude/scripts/spend_monitor.py\" --compact --watch'
@@ -302,11 +330,13 @@ _agentdesk_pane_cmd() {
       printf '%s' 'source \"$HOME/.config/agentdesk/agentdesk.zsh\" 2>/dev/null || true; cd \"$PROJECT_ROOT\" && echo '\''CCR (OpenRouter) - project root:'\'' \"$PWD\" && if command -v ccr >/dev/null 2>&1; then if [ -f \"$HOME/.claude-code-router/config.sqlite\" ]; then ccr default-claude-code; else ccr code; fi; else echo '\''ccr not found'\''; fi; zsh'
       ;;
     dashboard)
-      # T-06: Internal-only token — set by AGENTDESK_DASHBOARD flag, not by user picker.
-      # Primary path: T-05 injects the Dashboard tab directly via KDL heredoc.
-      # This case supports `agentdesk claude shell dashboard` for advanced users.
-      # CO-UPDATE WARNING: if the command string changes (e.g. new flags), also update
-      # the T-05 heredoc in agentdesk() near "tab name=\"Dashboard\"".
+      # Internal-only token, not offered by the layout picker. The launcher
+      # normally injects the Dashboard tab itself (see the injection block in
+      # agentdesk()) and passes the URL-file path to Zellij as a launch-scoped
+      # environment value. This case supports `agentdesk claude shell dashboard`
+      # for advanced users.
+      # CO-UPDATE WARNING: if the command string changes (e.g. new flags), also
+      # update _agentdesk_kdl_dashboard_tab.
       printf '%s' 'exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$AGENTDESK_DASHBOARD_URL_FILE\"'
       ;;
   esac
@@ -323,6 +353,8 @@ _agentdesk_pane_name() {
     codex)     printf '%s' 'Codex' ;;
     shell)     printf '%s' 'Shell' ;;
     status)    printf '%s' 'Status' ;;
+    status-full) printf '%s' 'Status' ;;
+    git)       printf '%s' 'Git' ;;
     spend)     printf '%s' 'Token Spend' ;;
     ccr)       printf '%s' 'CCR (OpenRouter)' ;;
     dashboard) printf '%s' 'quoin dashboard' ;;  # T-06: internal token
@@ -330,13 +362,366 @@ _agentdesk_pane_name() {
 }
 
 # ============================================================
-# _agentdesk_gen_layout <token> [<token> ...]
+# KDL emitters
+#
+# Pure stdout functions that build a generated layout piece by piece. They
+# read no files and no environment, so the same arguments always give the
+# same bytes. BARS is `default` (tab bar on top, status bar at the bottom) or
+# `compact` (a single compact bar at the bottom); anything else is rejected
+# with a message on stderr and status 2. Locals are declared once at the top
+# of each function: zsh echoes `name=value` when a local is re-declared, and
+# that would end up inside a redirected layout file.
+# ============================================================
+_agentdesk_kdl_check_bars() {
+  case "$1" in
+    default|compact) return 0 ;;
+  esac
+  printf 'agentdesk: invalid bar mode "%s" (expected default or compact)\n' "$1" >&2
+  return 2
+}
+
+# _agentdesk_kdl_bar INDENT top|bottom BARS
+_agentdesk_kdl_bar() {
+  local ind="$1" where="$2" bars="$3" plugin
+  if [ "$bars" = "compact" ]; then
+    [ "$where" = "bottom" ] || return 0
+    plugin="zellij:compact-bar"
+    printf '%*spane size=1 borderless=true {\n' "$ind" ''
+  elif [ "$where" = "top" ]; then
+    plugin="zellij:tab-bar"
+    printf '%*spane size=1 borderless=true {\n' "$ind" ''
+  else
+    plugin="zellij:status-bar"
+    printf '%*spane size=2 borderless=true {\n' "$ind" ''
+  fi
+  printf '%*splugin location="%s"\n' "$((ind + 4))" '' "$plugin"
+  printf '%*s}\n' "$ind" ''
+}
+
+# _agentdesk_pane_names TOKEN...
+# One display name per line; spend tokens are skipped. A token that occurs
+# once keeps its base name. Repeated agents get a letter by occurrence order
+# (Claude · A, Claude · B), repeated utilities a number (Shell 1, Shell 2).
+_agentdesk_pane_names() {
+  local tok base n seen
+  local -a toks=()
+  local -a letters=(A B C D E F G H I J K L M N O P Q R S T U V W X Y Z)
+  local -A total=() counter=()
+  for tok in "$@"; do
+    [ "$tok" = "spend" ] && continue
+    toks+=("$tok")
+    total[$tok]=$(( ${total[$tok]:-0} + 1 ))
+  done
+  for tok in "${toks[@]}"; do
+    if [ "${total[$tok]}" -le 1 ]; then
+      _agentdesk_pane_name "$tok"
+      printf '\n'
+      continue
+    fi
+    seen=$(( ${counter[$tok]:-0} + 1 ))
+    counter[$tok]=$seen
+    case "$tok" in
+      claude|codex|ccr)
+        case "$tok" in
+          claude) base="Claude" ;;
+          codex)  base="Codex" ;;
+          ccr)    base="CCR" ;;
+        esac
+        if [ "$seen" -le 26 ]; then
+          n="${letters[$seen]}"
+        else
+          n="$seen"
+        fi
+        printf '%s · %s\n' "$base" "$n"
+        ;;
+      *)
+        printf '%s %s\n' "$(_agentdesk_pane_name "$tok")" "$seen"
+        ;;
+    esac
+  done
+}
+
+# _agentdesk_kdl_header BARS
+# Opens the layout. Zellij drops a tab's hide_floating_panes when a tab uses
+# default_tab_template, so the main tab spells its bars out itself. The
+# new_tab_template keeps bars on tabs opened later, and the named
+# agentdesk_bars template is what the swap layouts use.
+_agentdesk_kdl_header() {
+  local bars="$1"
+  _agentdesk_kdl_check_bars "$bars" || return 2
+  printf 'layout {\n'
+  printf '    new_tab_template {\n'
+  _agentdesk_kdl_bar 8 top "$bars"
+  printf '        pane\n'
+  _agentdesk_kdl_bar 8 bottom "$bars"
+  printf '    }\n'
+  printf '    tab_template name="agentdesk_bars" {\n'
+  _agentdesk_kdl_bar 8 top "$bars"
+  printf '        children\n'
+  _agentdesk_kdl_bar 8 bottom "$bars"
+  printf '    }\n'
+  printf '\n'
+}
+
+# _agentdesk_kdl_tab_open BARS NAME [PROPS]
+_agentdesk_kdl_tab_open() {
+  local bars="$1" tab_name="$2" props="${3:-}"
+  _agentdesk_kdl_check_bars "$bars" || return 2
+  if [ -n "$props" ]; then
+    printf '    tab name="%s" %s {\n' "$tab_name" "$props"
+  else
+    printf '    tab name="%s" {\n' "$tab_name"
+  fi
+  _agentdesk_kdl_bar 8 top "$bars"
+}
+
+# _agentdesk_kdl_tab_close BARS
+_agentdesk_kdl_tab_close() {
+  local bars="$1"
+  _agentdesk_kdl_check_bars "$bars" || return 2
+  _agentdesk_kdl_bar 8 bottom "$bars"
+  printf '    }\n'
+}
+
+# _agentdesk_kdl_pane INDENT NAME TOKEN [PROPS]
+# The name comes first so `pane name="..."` matchers keep working.
+_agentdesk_kdl_pane() {
+  local ind="$1" pane_label="$2" tok="$3" props="${4:-}"
+  if [ -n "$props" ]; then
+    printf '%*spane name="%s" %s {\n' "$ind" '' "$pane_label" "$props"
+  else
+    printf '%*spane name="%s" {\n' "$ind" '' "$pane_label"
+  fi
+  printf '%*scommand "zsh"\n' "$((ind + 4))" ''
+  printf '%*sargs "-lc" "%s"\n' "$((ind + 4))" '' "$(_agentdesk_pane_cmd "$tok")"
+  printf '%*s}\n' "$ind" ''
+}
+
+# _agentdesk_kdl_spend_floating
+# The token-spend monitor lives in a floating pane that starts hidden, unless
+# it is the only token requested.
+_agentdesk_kdl_spend_floating() {
+  printf '        floating_panes {\n'
+  _agentdesk_kdl_pane 12 "$(_agentdesk_pane_name spend)" spend 'x="10%" y="10%" width="80%" height="75%"'
+  printf '        }\n'
+}
+
+# _agentdesk_kdl_row INDENT SIZE FOCUS SIZES ITEM...
+# ITEM is "token|name". One item is a plain pane; several sit side by side
+# in a vertical split. SIZES is an optional comma list of per-pane sizes.
+_agentdesk_kdl_row() {
+  local ind="$1" size="$2" focus="$3" sizes="$4"
+  shift 4
+  local item props idx=0
+  local -a szs=()
+  [ -n "$sizes" ] && szs=("${(@s:,:)sizes}")
+  if [ "$#" -eq 1 ]; then
+    props=""
+    [ -n "$size" ] && props="size=\"$size\""
+    [ -n "$focus" ] && props="${props:+$props }focus=true"
+    _agentdesk_kdl_pane "$ind" "${1#*|}" "${1%%|*}" "$props"
+    return 0
+  fi
+  props='split_direction="vertical"'
+  [ -n "$size" ] && props="size=\"$size\" $props"
+  printf '%*spane %s {\n' "$ind" '' "$props"
+  for item in "$@"; do
+    idx=$((idx + 1))
+    props=""
+    [ -n "${szs[$idx]:-}" ] && props="size=\"${szs[$idx]}\""
+    if [ "$idx" -eq 1 ] && [ -n "$focus" ]; then
+      props="${props:+$props }focus=true"
+    fi
+    _agentdesk_kdl_pane "$((ind + 4))" "${item#*|}" "${item%%|*}" "$props"
+  done
+  printf '%*s}\n' "$ind" ''
+}
+
+# _agentdesk_kdl_agents_block INDENT SIZE FOCUS ITEM...
+# Up to three agents share one row; more are laid out as rows of two.
+_agentdesk_kdl_agents_block() {
+  local ind="$1" size="$2" focus="$3"
+  shift 3
+  local props first=1
+  local -a pair=()
+  if [ "$#" -le 3 ]; then
+    _agentdesk_kdl_row "$ind" "$size" "$focus" "" "$@"
+    return 0
+  fi
+  props='split_direction="horizontal"'
+  [ -n "$size" ] && props="size=\"$size\" $props"
+  printf '%*spane %s {\n' "$ind" '' "$props"
+  while [ "$#" -gt 0 ]; do
+    pair=("$1")
+    [ "$#" -gt 1 ] && pair+=("$2")
+    shift "${#pair[@]}"
+    if [ "$first" -eq 1 ]; then
+      _agentdesk_kdl_row "$((ind + 4))" "" "$focus" "" "${pair[@]}"
+      first=0
+    else
+      _agentdesk_kdl_row "$((ind + 4))" "" "" "" "${pair[@]}"
+    fi
+  done
+  printf '%*s}\n' "$ind" ''
+}
+
+# _agentdesk_kdl_agents_tab BARS TOKEN...
+# The complete "main" tab. Tiled panes sit in one horizontal container so
+# percentage sizes apply to the tiled area only, between the bars: agents on
+# top, shells and status in a strip underneath.
+_agentdesk_kdl_agents_tab() {
+  local bars="$1"
+  _agentdesk_kdl_check_bars "$bars" || return 2
+  shift
+  local tok idx top_size strip_size util_sizes has_status shell_n status_n
+  local spend_only="" tab_props='hide_floating_panes=true'
+  local -a toks=() names=() agents=() utils=() util_toks=()
+  for tok in "$@"; do
+    [ "$tok" = "spend" ] || toks+=("$tok")
+  done
+  # Spend as the only token has nothing else to show: open it visible.
+  [ "$#" -gt 0 ] && [ "${#toks[@]}" -eq 0 ] && tab_props=""
+  [ "${#toks[@]}" -eq 0 ] && toks=(shell)
+  names=("${(@f)$(_agentdesk_pane_names "${toks[@]}")}")
+  idx=0
+  for tok in "${toks[@]}"; do
+    idx=$((idx + 1))
+    case "$tok" in
+      claude|codex|ccr) agents+=("$tok|${names[$idx]}") ;;
+      *)                utils+=("$tok|${names[$idx]}"); util_toks+=("$tok") ;;
+    esac
+  done
+
+  _agentdesk_kdl_tab_open "$bars" main "$tab_props" || return 2
+  printf '        pane split_direction="horizontal" {\n'
+  if [ "${#agents[@]}" -gt 0 ] && [ "${#utils[@]}" -gt 0 ]; then
+    top_size="75%"; strip_size="25%"; has_status=""
+    shell_n=0; status_n=0
+    for tok in "${util_toks[@]}"; do
+      [ "$tok" = "status" ] && { has_status=1; status_n=$((status_n + 1)); }
+      [ "$tok" = "shell" ] && shell_n=$((shell_n + 1))
+    done
+    [ -n "$has_status" ] && { top_size="70%"; strip_size="30%"; }
+    util_sizes=""
+    if [ "${#utils[@]}" -eq 2 ] && [ "$shell_n" -eq 1 ] && [ "$status_n" -eq 1 ]; then
+      if [ "${util_toks[1]}" = "shell" ]; then util_sizes="60%,40%"; else util_sizes="40%,60%"; fi
+    fi
+    _agentdesk_kdl_agents_block 12 "$top_size" 1 "${agents[@]}"
+    _agentdesk_kdl_row 12 "$strip_size" "" "$util_sizes" "${utils[@]}"
+  elif [ "${#agents[@]}" -gt 0 ]; then
+    _agentdesk_kdl_agents_block 12 "" 1 "${agents[@]}"
+  elif [ "${#utils[@]}" -le 3 ]; then
+    _agentdesk_kdl_row 12 "" 1 "" "${utils[@]}"
+  else
+    local first=1 item
+    for item in "${utils[@]}"; do
+      _agentdesk_kdl_row 12 "" "$([ "$first" -eq 1 ] && printf 1)" "" "$item"
+      first=0
+    done
+  fi
+  printf '        }\n'
+  _agentdesk_kdl_spend_floating
+  _agentdesk_kdl_tab_close "$bars"
+}
+
+# _agentdesk_kdl_swap_layouts BARS
+# Three arrangements to cycle through: even, focus-left, stacked.
+# focus-left needs at least two tiled panes besides the bars.
+_agentdesk_kdl_swap_layouts() {
+  local bars="$1" min_panes
+  _agentdesk_kdl_check_bars "$bars" || return 2
+  if [ "$bars" = "compact" ]; then min_panes=3; else min_panes=4; fi
+  local -a swap_lines=(
+    ""
+    "    swap_tiled_layout name=\"even\" {"
+    "        agentdesk_bars {"
+    "            pane split_direction=\"vertical\" {"
+    "                children"
+    "            }"
+    "        }"
+    "    }"
+    "    swap_tiled_layout name=\"focus-left\" {"
+    "        agentdesk_bars min_panes=${min_panes} {"
+    "            pane split_direction=\"vertical\" {"
+    "                pane size=\"70%\""
+    "                pane stacked=true {"
+    "                    children"
+    "                }"
+    "            }"
+    "        }"
+    "    }"
+    "    swap_tiled_layout name=\"stacked\" {"
+    "        agentdesk_bars {"
+    "            pane stacked=true {"
+    "                children"
+    "            }"
+    "        }"
+    "    }"
+  )
+  print -r -- "${(F)swap_lines[@]}"
+}
+
+_agentdesk_kdl_footer() {
+  printf '}\n'
+}
+
+# _agentdesk_kdl_dashboard_tab LAYOUT URLFILE
+# Launcher helper, not an emitter: it reads LAYOUT and expands $HOME. Prints
+# the Dashboard tab followed by the closing brace of the layout. Generated
+# layouts get explicit bars of their own bar mode; layouts that use a
+# default_tab_template (older generated or hand-written ones) get the plain
+# tab, which that template decorates.
+# CO-UPDATE: keep the command in sync with _agentdesk_pane_cmd dashboard.
+_agentdesk_kdl_dashboard_tab() {
+  local layout="$1" url_file="$2" bars="default"
+  if ! grep -q 'tab_template name="agentdesk_bars"' "$layout" 2>/dev/null; then
+    cat <<DASHTAB
+    tab name="Dashboard" {
+        pane name="quoin dashboard" {
+            command "zsh"
+            args "-lc" "exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$url_file\""
+        }
+    }
+}
+DASHTAB
+    return 0
+  fi
+  grep -q 'zellij:compact-bar' "$layout" && bars="compact"
+  _agentdesk_kdl_tab_open "$bars" Dashboard
+  cat <<DASHPANE
+        pane name="quoin dashboard" {
+            command "zsh"
+            args "-lc" "exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$url_file\""
+        }
+DASHPANE
+  _agentdesk_kdl_tab_close "$bars"
+  printf '}\n'
+}
+
+# ============================================================
+# _agentdesk_gen_layout [--bars default|compact] <token> [<token> ...]
 # Generates a single-tab Zellij KDL layout file for the given window tokens.
 # Echoes the path to the temp file. Caller is responsible for cleanup
-# (use trap "rm -f $layout_tmp" EXIT INT TERM in the caller).
+# (use trap "rm -f ${(q)layout_tmp}" EXIT INT TERM in the caller).
 # ============================================================
 _agentdesk_gen_layout() {
-  local layout_tmp
+  local bars="default" layout_tmp exit_rc=0
+  if [ "${1:-}" = "--bars" ]; then
+    if [ "$#" -lt 2 ]; then
+      echo "agentdesk: --bars requires a value (default or compact)" >&2
+      return 1
+    fi
+    bars="$2"
+    shift 2
+  fi
+  case "$bars" in
+    default|compact) ;;
+    *)
+      printf 'agentdesk: invalid bar mode "%s" (expected default or compact)\n' "$bars" >&2
+      return 1
+      ;;
+  esac
+
   # mktemp only randomizes *trailing* X's on macOS (BSD mktemp). A suffix after
   # the X's prevents randomisation, creating the same literal path every time and
   # failing with "File exists" on the second call. Fix: generate without suffix,
@@ -348,101 +733,195 @@ _agentdesk_gen_layout() {
   mv -f "$layout_tmp" "$layout_tmp.kdl" || return 1
   layout_tmp="$layout_tmp.kdl"
 
-  # Declare loop locals ONCE, outside the redirected block. zsh's typeset
-  # echoes `name=value` to stdout when re-declaring an existing local, which
-  # would leak into the KDL file if `local` were used inside the `{ } > file`
-  # block. Hoisting the declarations here avoids that.
-  local t name cmd i main_count has_spend
-  local -a main_tokens=()
-
-  # Spend tab is always included. Filter any explicit spend tokens from main_tokens
-  # (deduplication — passing spend explicitly still works).
-  has_spend=1
-  for t in "$@"; do
-    if [ "$t" != "spend" ]; then
-      main_tokens+=("$t")
-    fi
-  done
-  main_count="${#main_tokens[@]}"
-
-  # Write the KDL with single-quoted heredoc so $PROJECT_ROOT/$HOME are NOT
-  # expanded at write time — they remain shell variable refs for zsh at runtime.
   {
-    cat <<'KDLHEADER'
-layout {
-    default_tab_template {
-        pane size=1 borderless=true {
-            plugin location="zellij:tab-bar"
-        }
-
-        children
-
-        pane size=2 borderless=true {
-            plugin location="zellij:status-bar"
-        }
-    }
-
-KDLHEADER
-
-    if [ "$main_count" -gt 0 ]; then
-      if [ "$main_count" -eq 1 ]; then
-        t="${main_tokens[1]}"
-        name="$(_agentdesk_pane_name "$t")"
-        cmd="$(_agentdesk_pane_cmd "$t")"
-        printf '    tab name="main" {\n'
-        printf '        pane name="%s" {\n' "$name"
-        printf '            command "zsh"\n'
-        printf '            args "-lc" "%s"\n' "$cmd"
-        printf '        }\n'
-        printf '    }\n'
-      elif [ "$main_count" -le 3 ]; then
-        # side-by-side: split_direction="vertical" = vertical divider = side-by-side
-        printf '    tab name="main" {\n'
-        printf '        pane split_direction="vertical" {\n'
-        for (( i=1; i<=main_count; i++ )); do
-          t="${main_tokens[$i]}"
-          name="$(_agentdesk_pane_name "$t")"
-          cmd="$(_agentdesk_pane_cmd "$t")"
-          printf '            pane name="%s" {\n' "$name"
-          printf '                command "zsh"\n'
-          printf '                args "-lc" "%s"\n' "$cmd"
-          printf '            }\n'
-        done
-        printf '        }\n'
-        printf '    }\n'
-      else
-        # >3 panes: stack horizontally
-        printf '    tab name="main" {\n'
-        printf '        pane split_direction="horizontal" {\n'
-        for (( i=1; i<=main_count; i++ )); do
-          t="${main_tokens[$i]}"
-          name="$(_agentdesk_pane_name "$t")"
-          cmd="$(_agentdesk_pane_cmd "$t")"
-          printf '            pane name="%s" {\n' "$name"
-          printf '                command "zsh"\n'
-          printf '                args "-lc" "%s"\n' "$cmd"
-          printf '            }\n'
-        done
-        printf '        }\n'
-        printf '    }\n'
-      fi
-    fi
-
-    if [ "$has_spend" -eq 1 ]; then
-      name="$(_agentdesk_pane_name spend)"
-      cmd="$(_agentdesk_pane_cmd spend)"
-      printf '    tab name="Spend" {\n'
-      printf '        pane name="%s" {\n' "$name"
-      printf '            command "zsh"\n'
-      printf '            args "-lc" "%s"\n' "$cmd"
-      printf '        }\n'
-      printf '    }\n'
-    fi
-
-    printf '}\n'
+    _agentdesk_kdl_header "$bars" || exit_rc=1
+    _agentdesk_kdl_agents_tab "$bars" "$@" || exit_rc=1
+    _agentdesk_kdl_swap_layouts "$bars" || exit_rc=1
+    _agentdesk_kdl_footer || exit_rc=1
   } > "$layout_tmp"
 
+  if [ "$exit_rc" -ne 0 ]; then
+    rm -f "$layout_tmp"
+    echo "agentdesk: failed to generate the layout" >&2
+    return 1
+  fi
+
   printf '%s\n' "$layout_tmp"
+}
+
+# _agentdesk_kdl_git_tab BARS / _agentdesk_kdl_status_tab BARS
+# The Standard layout's second and third tabs: one pane each.
+_agentdesk_kdl_git_tab() {
+  local bars="$1"
+  _agentdesk_kdl_tab_open "$bars" git || return 2
+  _agentdesk_kdl_pane 8 "$(_agentdesk_pane_name git)" git
+  _agentdesk_kdl_tab_close "$bars"
+}
+
+_agentdesk_kdl_status_tab() {
+  local bars="$1"
+  _agentdesk_kdl_tab_open "$bars" status || return 2
+  _agentdesk_kdl_pane 8 "$(_agentdesk_pane_name status-full)" status-full
+  _agentdesk_kdl_tab_close "$bars"
+}
+
+# _agentdesk_sha256
+# Reads stdin, prints its SHA-256 as 64 lowercase hex characters. rc 1 when no
+# hashing tool works.
+_agentdesk_sha256() {
+  local data out tool
+  setopt localoptions no_bash_rematch no_ksh_arrays
+  data="$(cat; printf x)"
+  data="${data%x}"
+  for tool in "shasum -a 256" "sha256sum"; do
+    command -v "${tool%% *}" >/dev/null 2>&1 || continue
+    out="$(printf '%s' "$data" | ${=tool} 2>/dev/null)" || continue
+    out="${out%% *}"
+    if [[ "$out" =~ '^[0-9a-f]{64}$' ]]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  done
+  if command -v python3 >/dev/null 2>&1; then
+    out="$(printf '%s' "$data" | python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest())' 2>/dev/null)" || return 1
+    if [[ "$out" =~ '^[0-9a-f]{64}$' ]]; then
+      printf '%s\n' "$out"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# ============================================================
+# _agentdesk_gen_standard_layout [--stdout] [--bars default|compact]
+# Generates the Standard layout: an agents tab (Claude, Claude, Shell with the
+# floating Spend monitor), a git tab and a status tab. The first line is a
+# marker carrying the SHA-256 of everything after it, so a later launch can
+# tell an untouched generated file from one the user has edited. With
+# --stdout the marker and body are printed; otherwise they are written to a
+# temp .kdl file whose path is printed (the caller removes it). Any failure
+# leaves nothing on stdout and no file behind.
+# ============================================================
+_agentdesk_gen_standard_layout() {
+  local bars="default" to_stdout="" body_tmp out_tmp hex exit_rc=0
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --stdout) to_stdout=1; shift ;;
+      --bars)
+        if [ "$#" -lt 2 ]; then
+          echo "agentdesk: --bars requires a value (default or compact)" >&2
+          return 1
+        fi
+        bars="$2"; shift 2 ;;
+      *)
+        printf 'agentdesk: unexpected argument "%s"\n' "$1" >&2
+        return 1 ;;
+    esac
+  done
+  case "$bars" in
+    default|compact) ;;
+    *)
+      printf 'agentdesk: invalid bar mode "%s" (expected default or compact)\n' "$bars" >&2
+      return 1
+      ;;
+  esac
+
+  body_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-standard-XXXXXX")" || {
+    echo "agentdesk: failed to create temp layout file" >&2
+    return 1
+  }
+  {
+    _agentdesk_kdl_header "$bars" || exit_rc=1
+    _agentdesk_kdl_agents_tab "$bars" claude claude shell || exit_rc=1
+    _agentdesk_kdl_git_tab "$bars" || exit_rc=1
+    _agentdesk_kdl_status_tab "$bars" || exit_rc=1
+    _agentdesk_kdl_swap_layouts "$bars" || exit_rc=1
+    _agentdesk_kdl_footer || exit_rc=1
+  } > "$body_tmp"
+  if [ "$exit_rc" -ne 0 ]; then
+    rm -f "$body_tmp"
+    echo "agentdesk: failed to generate the layout" >&2
+    return 1
+  fi
+  hex="$(_agentdesk_sha256 < "$body_tmp")" || {
+    rm -f "$body_tmp"
+    echo "agentdesk: no SHA-256 tool available to mark the generated layout" >&2
+    return 1
+  }
+
+  if [ -n "$to_stdout" ]; then
+    printf '// agentdesk: generated standard v1 sha256=%s\n' "$hex"
+    cat "$body_tmp"
+    rm -f "$body_tmp"
+    return 0
+  fi
+
+  # BSD mktemp only randomises trailing X's, so rename to add the suffix.
+  out_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-standard-XXXXXX")" || {
+    rm -f "$body_tmp"
+    echo "agentdesk: failed to create temp layout file" >&2
+    return 1
+  }
+  {
+    printf '// agentdesk: generated standard v1 sha256=%s\n' "$hex"
+    cat "$body_tmp"
+  } > "$out_tmp"
+  rm -f "$body_tmp"
+  mv -f "$out_tmp" "$out_tmp.kdl" || { rm -f "$out_tmp"; return 1; }
+  printf '%s\n' "$out_tmp.kdl"
+}
+
+# _agentdesk_fixed_layout_file: the saved Standard layout location.
+_agentdesk_fixed_layout_file() {
+  printf '%s\n' "$HOME/.config/zellij/layouts/agent-desk.kdl"
+}
+
+# _agentdesk_fixed_layout_kind FILE
+# Prints one word:
+#   missing    no such file
+#   generated  carries the generator's marker and its body hash still matches
+#   legacy     unmarked, byte-identical to a layout older setup scripts shipped
+#   custom     anything else (edited, marker removed, hand-written, unreadable)
+# A file that cannot be verified counts as custom so it is never replaced.
+_agentdesk_fixed_layout_kind() {
+  local file="$1" first want got
+  setopt localoptions no_bash_rematch no_ksh_arrays
+  local marker_re='^// agentdesk: generated standard v[0-9]+ sha256=([0-9a-f]{64})$'
+  if [ ! -f "$file" ]; then
+    echo missing
+    return 0
+  fi
+  first="$(head -n 1 "$file" 2>/dev/null)"
+  if [[ "$first" =~ $marker_re ]]; then
+    want="${match[1]}"
+    got="$(tail -n +2 "$file" | _agentdesk_sha256)" || { echo custom; return 0; }
+    if [ "$got" = "$want" ]; then echo generated; else echo custom; fi
+    return 0
+  fi
+  got="$(_agentdesk_sha256 < "$file")" || { echo custom; return 0; }
+  case "$got" in
+    9b3169af3a18c510c1425017fed5cbb37046b6fcc3abbfdf9cd83d0688163618|837e54400d5b1b833722c8593a6902e0b429d9a93bd95bf7b7fa84cdfac7096d)
+      echo legacy ;;
+    *)
+      echo custom ;;
+  esac
+}
+
+# _agentdesk_fixed_layout_path [BARS]
+# Resolves the Standard layout for a launch. A customised file always wins and
+# its path is printed. Otherwise a fresh Standard layout is generated and the
+# temp path printed; when generation fails the file path is printed so the
+# existence check reports it. The result is temporary exactly when it differs
+# from _agentdesk_fixed_layout_file; the caller owns the cleanup trap.
+_agentdesk_fixed_layout_path() {
+  local bars="${1:-default}" file kind tmp
+  file="$(_agentdesk_fixed_layout_file)"
+  kind="$(_agentdesk_fixed_layout_kind "$file")"
+  if [ "$kind" != "custom" ] && tmp="$(_agentdesk_gen_standard_layout --bars "$bars")" && [ -n "$tmp" ]; then
+    printf '%s\n' "$tmp"
+    return 0
+  fi
+  printf '%s\n' "$file"
 }
 
 # ============================================================
@@ -453,12 +932,13 @@ KDLHEADER
 # ============================================================
 _agentdesk_pick_layout() {
   printf 'Select a layout:\n' >&2
-  printf '  1) Standard (5 tabs: main / review / repos / shell / spend)  [default]\n' >&2
+  printf '  1) Standard (agents / git / status: claude + claude + shell, live git, workflow status)  [default]\n' >&2
   printf '  2) claude + shell + spend\n' >&2
   printf '  3) claude + claude + shell + spend\n' >&2
   printf '  4) claude + codex + shell + spend\n' >&2
   printf '  5) claude + ccr + shell + spend\n' >&2
-  printf '  6) Custom — type comma-separated: e.g. claude, codex, shell, ccr\n' >&2
+  printf '  6) claude + shell + status + spend\n' >&2
+  printf '  7) Custom — type comma-separated: e.g. claude, codex, shell, status, ccr\n' >&2
   printf 'Choice [1]: ' >&2
 
   local choice
@@ -487,7 +967,11 @@ _agentdesk_pick_layout() {
       return 0
       ;;
     6)
-      printf 'Type comma-separated tokens (claude, codex, shell, ccr): ' >&2
+      printf 'claude shell status\n'
+      return 0
+      ;;
+    7)
+      printf 'Type comma-separated tokens (claude, codex, shell, status, ccr): ' >&2
       read -r choice
       ;;
     *)
@@ -553,9 +1037,8 @@ _agentdesk_parse_custom_tokens() {
 
 # ============================================================
 # _agentdesk_open_url <url>
-# Reusable browser-open helper (T-03/MAJ-1 fix).
-# Extracted from the original _agentdesk_open_dashboard lines 581-587.
-# Called by the T-05 bounded poller to open the dashboard URL once available.
+# Reusable browser-open helper, called by the bounded poller in agentdesk() to
+# open the dashboard URL once the dashboard pane has written it.
 # ============================================================
 _agentdesk_open_url() {
   local url="$1"
@@ -569,58 +1052,222 @@ _agentdesk_open_url() {
 }
 
 # ============================================================
-# _agentdesk_open_dashboard
-# Opt-in quoin dashboard prompt shown BEFORE layout resolution (T-03/CRIT-1 fix).
+# Dashboard decision helpers
 #
-# This function is now a DECISION + URL-FILE SETUP helper only — it no longer
-# launches the server. The server runs as a managed zellij pane injected by T-05.
-#
-# User-mode only: deployed via deploy_agentdesk (not project mode); the server
-# is reached via the $HOME/.claude deploy path (same convention as the status
-# pane). Non-interactive / scripted desks are silently skipped via [ -t 0 ].
-#
-# Behavior:
-#   - Skips (returns 0) immediately when stdin is not a TTY.
-#   - Prompts "Open quoin dashboard? [y/N]:" — default No.
-#   - On No/empty: returns 0, AGENTDESK_DASHBOARD remains unset.
-#   - On Yes: creates a temp URL-file path, exports AGENTDESK_DASHBOARD=1
-#     and AGENTDESK_DASHBOARD_URL_FILE=<path>. NO server launch here.
-#   - Always returns 0; any internal failure prints a note to stderr.
+# The dashboard question is asked once per project (or named session) and the
+# answer is remembered in the saved-state file. Nothing here exports a variable
+# or starts a server: the decision is printed for the caller, and the server
+# runs inside a Zellij pane injected into the layout, so its lifetime is the
+# session's lifetime.
 # ============================================================
-_agentdesk_open_dashboard() {
-  # Guard: skip entirely when stdin is not a TTY (non-interactive / scripted desks).
-  [ ! -t 0 ] && return 0
 
-  printf 'Open quoin dashboard? [y/N]: ' >&2
+# Ask the dashboard question on the terminal. Prompt goes to stderr so the
+# answer ("yes" or "no") is the only thing on stdout.
+_agentdesk_dashboard_ask() {
   local reply
+  printf 'Open quoin dashboard? [y/N]: ' >&2
   read -r reply
-
-  # Default No: only explicit y/Y/yes/YES proceeds.
   case "$reply" in
-    [Yy]|[Yy][Ee][Ss]) ;;
-    *) return 0 ;;
+    [Yy]|[Yy][Ee][Ss]) printf 'yes\n' ;;
+    *) printf 'no\n' ;;
   esac
+}
 
+# _agentdesk_dashboard_resolve <flag> <noprompt> <ask> <pick> <tty> <dash_key>
+# Prints "<yes|no> <source>" with source one of
+# flag|noprompt|asked|env|stored|default. Precedence:
+#   --dashboard/--no-dashboard > --no-prompt (no) > --ask-dashboard (tty) >
+#   AGENTDESK_DASHBOARD=1|0 (ignored while a URL-file value is also set, which
+#   marks a stale value inherited from an older launcher) > --pick re-ask (tty)
+#   > stored answer (tty) > ask (tty) > no.
+# Stored answers and questions are interactive-only. Never writes state.
+_agentdesk_dashboard_resolve() {
+  local flag="$1" noprompt="$2" ask="$3" pick="$4" tty="$5" dash_key="$6"
+  local ans stored
+
+  if [ "$flag" = "yes" ] || [ "$flag" = "no" ]; then
+    printf '%s flag\n' "$flag"
+    return 0
+  fi
+  if [ -n "$noprompt" ]; then
+    printf 'no noprompt\n'
+    return 0
+  fi
+  if [ -n "$ask" ] && [ -n "$tty" ]; then
+    ans="$(_agentdesk_dashboard_ask)"
+    printf '%s asked\n' "$ans"
+    return 0
+  fi
+  if [ -z "${AGENTDESK_DASHBOARD_URL_FILE:-}" ]; then
+    case "${AGENTDESK_DASHBOARD-}" in
+      1) printf 'yes env\n'; return 0 ;;
+      0) printf 'no env\n'; return 0 ;;
+    esac
+  fi
+  if [ -z "$tty" ]; then
+    printf 'no default\n'
+    return 0
+  fi
+  if [ -n "$pick" ]; then
+    ans="$(_agentdesk_dashboard_ask)"
+    printf '%s asked\n' "$ans"
+    return 0
+  fi
+  stored="$(_agentdesk_state_get "$dash_key")"
+  case "$stored" in
+    yes|no) printf '%s stored\n' "$stored"; return 0 ;;
+  esac
+  ans="$(_agentdesk_dashboard_ask)"
+  printf '%s asked\n' "$ans"
+}
+
+# Create the URL-file path the dashboard pane writes its bound URL to and the
+# launcher's poller reads. Prints the path; returns 1 (with a note on stderr)
+# when the dashboard server is not installed, e.g. project-scope installs.
+_agentdesk_dashboard_server_present() {
   local server_script="$HOME/.claude/scripts/dashboard_server.py"
-
-  # Presence guard: skip gracefully when the server is absent (e.g. project-scope
-  # installs where deploy_agentdesk did not run, or the quoin install is stale).
   if [ ! -f "$server_script" ]; then
     printf 'agentdesk: dashboard server not found at %s; skipping\n' "$server_script" >&2
+    return 1
+  fi
+}
+
+_agentdesk_dashboard_url_file() {
+  _agentdesk_dashboard_server_present || return 1
+  local url_file
+  url_file="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-url-XXXXXX")" || return 1
+  printf '%s\n' "$url_file"
+}
+
+# Print the named-session keys that survive a state cleanup so test leftovers
+# can be pruned by hand.
+_agentdesk_print_state_names() {
+  printf 'Remaining named-session keys:\n'
+  if [ -n "$1" ]; then
+    printf '%s\n' "$1" | sed 's/^/  /'
+  else
+    printf '  (none)\n'
+  fi
+}
+
+# ============================================================
+# _agentdesk_clean_state [--dry-run]
+#
+# Removes saved-state entries that point at test or scratch locations (pytest
+# temp dirs, macOS per-user temp folders, agent scratchpads). Keys are
+# percent-encoded in the file, so they are decoded before matching. Kept lines
+# are written back byte-identical and in order. The original file is copied to
+# last-layout.bak.<timestamp> before it is replaced; nothing is written when
+# there is nothing to remove or under --dry-run. Never runs automatically, and
+# is not safe against an agentdesk launch that saves while it runs.
+# ============================================================
+_agentdesk_clean_state() {
+  local dry_run=""
+  [ "${1:-}" = "--dry-run" ] && dry_run=1
+
+  local state_file state_dir tmp="" report
+  state_file="$(_agentdesk_state_file)"
+  state_dir="$(dirname "$state_file")"
+
+  if [ ! -f "$state_file" ]; then
+    printf 'agentdesk: no state file at %s; nothing to clean\n' "$state_file"
     return 0
   fi
 
-  # Create a deterministic temp path for the URL file.
-  # The dashboard pane (T-05) will write the bound URL here atomically via --url-file.
-  # The foreground poller (T-05) reads this same path.
-  local url_file
-  url_file="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-url-XXXXXX")"
+  if ! command -v python3 >/dev/null 2>&1; then
+    printf 'agentdesk: python3 is required for --clean-state; state left unchanged.\n' >&2
+    return 1
+  fi
 
-  export AGENTDESK_DASHBOARD=1
-  export AGENTDESK_DASHBOARD_URL_FILE="$url_file"
+  if [ -z "$dry_run" ]; then
+    tmp="$(mktemp "$state_dir/.last-layout.clean.XXXXXX" 2>/dev/null)" || {
+      printf 'agentdesk: cannot create a temp file in %s; state left unchanged.\n' "$state_dir" >&2
+      return 1
+    }
+  fi
+
+  report="$(python3 - "$state_file" ${tmp:+"$tmp"} <<'PY'
+import sys
+from urllib.parse import unquote
+
+state = sys.argv[1]
+out = sys.argv[2] if len(sys.argv) > 2 else None
+data = open(state, "rb").read()
+trailing = data.endswith(b"\n")
+lines = data.split(b"\n") if data else []
+if trailing:
+    lines.pop()
+kept, removed, names = [], 0, []
+for line in lines:
+    if b"=" not in line:
+        kept.append(line)
+        continue
+    key = unquote(line.split(b"=", 1)[0].decode("utf-8", "replace"))
+    polluted = (
+        "pytest-of-" in key
+        or "/private/var/folders/" in key
+        or ("/private/tmp/claude-" in key and "/scratchpad" in key)
+    )
+    if polluted:
+        removed += 1
+        continue
+    kept.append(line)
+    if key.startswith("name:"):
+        names.append(key)
+if out is not None:
+    with open(out, "wb") as fh:
+        fh.write(b"\n".join(kept) + (b"\n" if trailing and kept else b""))
+print("removed=%d" % removed)
+print("kept=%d" % len(kept))
+for n in names:
+    print("n:" + n)
+PY
+)" || {
+    [ -n "$tmp" ] && rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: failed to read the state file; state left unchanged.\n' >&2
+    return 1
+  }
+
+  local removed kept
+  removed="$(printf '%s\n' "$report" | sed -n 's/^removed=//p')"
+  kept="$(printf '%s\n' "$report" | sed -n 's/^kept=//p')"
+  local names
+  names="$(printf '%s\n' "$report" | sed -n 's/^n://p')"
+
+  if [ "${removed:-0}" -eq 0 ]; then
+    [ -n "$tmp" ] && rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: already clean (%s entries)\n' "${kept:-0}"
+    _agentdesk_print_state_names "$names"
+    return 0
+  fi
+
+  if [ -n "$dry_run" ]; then
+    printf 'agentdesk: would remove %s of %s entries (dry run; nothing changed)\n' \
+      "$removed" "$(( removed + kept ))"
+    _agentdesk_print_state_names "$names"
+    return 0
+  fi
+
+  local bak stamp n=0
+  stamp="$(date +%Y%m%d-%H%M%S)"
+  bak="$state_dir/last-layout.bak.$stamp"
+  while [ -e "$bak" ]; do
+    n=$(( n + 1 ))
+    bak="$state_dir/last-layout.bak.$stamp-$n"
+  done
+  if ! cp -p "$state_file" "$bak" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: could not write backup %s; state left unchanged.\n' "$bak" >&2
+    return 1
+  fi
+  if ! mv "$tmp" "$state_file" 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    printf 'agentdesk: could not replace the state file; left unchanged. Backup at %s\n' "$bak" >&2
+    return 1
+  fi
+  printf 'agentdesk: removed %s entries; kept %s; backup: %s\n' "$removed" "$kept" "$bak"
+  _agentdesk_print_state_names "$names"
   return 0
-  # NOTE: no `python3 ... &` here. The server runs inside a zellij pane injected
-  # into the layout by T-05. Its lifetime == the zellij session's lifetime.
 }
 
 agentdesk() {
@@ -629,6 +1276,8 @@ agentdesk() {
   local force_pick=""
   local pick_flag=""
   local panes_raw="" panes_given="" noprompt="" if_exists=""
+  local clean_state="" dry_run=""
+  local dash_on="" dash_off="" dash_ask="" compact_bar="" bar_mode="default"
   local -a tokens=()
   local -a panes_tokens=()
 
@@ -675,6 +1324,24 @@ agentdesk() {
       --no-prompt)
         noprompt=1
         ;;
+      --dashboard)
+        dash_on=1
+        ;;
+      --no-dashboard)
+        dash_off=1
+        ;;
+      --ask-dashboard)
+        dash_ask=1
+        ;;
+      --compact-bar)
+        compact_bar=1
+        ;;
+      --clean-state)
+        clean_state=1
+        ;;
+      --dry-run)
+        dry_run=1
+        ;;
       --if-exists)
         shift
         if [ "$#" -eq 0 ]; then
@@ -700,12 +1367,13 @@ Usage:
   agentdesk --mode solo|duo|trio
   agentdesk claude [codex] [shell] [...]
   agentdesk --pick
+  agentdesk --compact-bar [...]
   agentdesk [--name NAME] --panes LIST [--no-prompt] [--if-exists attach|new|fail]
 
 Modes:
   solo   — one Claude pane full-width
-  duo    — Claude + Shell side-by-side
-  trio   — Claude + Codex + Shell side-by-side
+  duo    — Claude on top, a Shell strip below
+  trio   — Claude and Codex side by side on top, a Shell strip below
 
 Window types (positional):
   claude   start Claude Code in pane
@@ -713,7 +1381,57 @@ Window types (positional):
   shell    plain zsh shell
   status   show workflow pipeline status graph
   ccr      start an open-model CCR (OpenRouter) session in pane
-  spend    realtime token-spend monitor
+  spend    realtime token-spend monitor (floating pane; hidden unless it is the only token)
+
+Layout:
+  Agents (claude, codex, ccr) are laid out on top; shells and status share a
+  strip below. Token Spend is always available as a hidden floating pane
+  (toggle: Alt f, or pane mode then w). Swap between arrangements (even,
+  focus-left, stacked) with Alt [ and Alt ]. New panes split the focused pane;
+  Zellij's automatic re-arranging is switched off for launched sessions.
+  --compact-bar / AGENTDESK_COMPACT_BAR=1
+                     one-line bar at the bottom instead of the tab bar and the
+                     status bar with mode key hints. Per launch only, never
+                     remembered. Applies to generated layouts and to the
+                     generated Standard layout; a customised agent-desk.kdl
+                     keeps its own bars.
+
+Dashboard:
+  The "Open quoin dashboard?" question is asked once per project (or named
+  session) and the answer is remembered in the same state file.
+  --dashboard / --no-dashboard   one-shot override; the remembered answer is
+                     not changed and nothing is asked.
+  --ask-dashboard    ask again now and remember the new answer. --pick also
+                     asks again. With --panes the question is still asked for
+                     that launch, but the answer is not remembered.
+  AGENTDESK_DASHBOARD=1|0        override the remembered answer without asking.
+  --no-prompt never asks and never adds the dashboard unless --dashboard is
+  also given. --panes launches never store an answer. Non-interactive launches
+  never ask and use only the flag or environment override.
+
+State maintenance:
+  agentdesk --clean-state [--dry-run]
+                     remove saved entries that point at test or scratch
+                     locations (pytest temp dirs, per-user temp folders, agent
+                     scratchpads) from ~/.config/agentdesk/last-layout. The file
+                     is copied to last-layout.bak.<timestamp> first. --dry-run
+                     only reports what would be removed. It never runs
+                     automatically; run it when no agentdesk launch is in
+                     progress. Cannot be combined with launch arguments.
+
+Standard layout:
+  With no tokens the Standard layout opens three tabs. main has Claude · A and
+  Claude · B on top and a Shell strip below, with Token Spend as a hidden
+  floating pane. git runs lazygit when it is installed and the project root is
+  a repo (or holds exactly one repo); otherwise it shows a refreshing git
+  status, and any key drops to a shell. status runs status_graph.py --watch.
+  Picker choices: 1 Standard, 2-5 agent presets, 6 claude + shell + status +
+  spend, 7 custom (comma-separated tokens). Typing a token list directly also
+  works.
+  To customise it, edit ~/.config/zellij/layouts/agent-desk.kdl: agentdesk
+  keeps your file as it is (the first-line marker no longer matches), and
+  setup-agentdesk.sh writes the new Standard layout beside it as
+  agent-desk.kdl.new.
 
 Layout memory:
   agentdesk remembers your layout choice per project (or per session name).
@@ -737,12 +1455,14 @@ Behavior:
 
 Non-interactive launch (AGENTDESK_API_VERSION=1):
   --panes LIST       explicit pane composition: window types joined by ',' or '+'
-                     (e.g. codex,codex,shell). The Spend tab is still added.
+                     (e.g. codex,codex,shell). Token Spend is still available as the
+                     hidden floating pane (toggle: Alt f, or pane mode then w).
                      Not combinable with --mode, positional tokens or --pick.
                      Never remembered in, nor read from, the layout memory file.
   --no-prompt        never ask anything (no dashboard question, no picker, no
                      attach-or-new question), even in a terminal. Without
-                     --panes/--mode it uses the saved or fixed layout.
+                     --panes/--mode it uses the saved or fixed layout. The
+                     dashboard is not added unless --dashboard is also given.
                      AGENTDESK_PICK is ignored.
   --if-exists attach|new|fail
                      what to do when a same-named session already exists (live or
@@ -783,6 +1503,39 @@ HELP
     esac
     shift
   done
+
+  # ── State maintenance (BEFORE Zellij guard and any project work) ──────────
+  if [ -n "$dry_run" ] && [ -z "$clean_state" ]; then
+    printf 'Error: --dry-run is only valid with --clean-state.\n' >&2
+    return 1
+  fi
+  if [ -n "$clean_state" ]; then
+    local _cs_conflict=""
+    [ -n "$mode" ] && _cs_conflict="--mode"
+    [ -z "$_cs_conflict" ] && [ "${#tokens[@]}" -gt 0 ] && _cs_conflict="window-type tokens"
+    [ -z "$_cs_conflict" ] && [ -n "$panes_given" ] && _cs_conflict="--panes"
+    [ -z "$_cs_conflict" ] && [ -n "$pick_flag" ] && _cs_conflict="--pick"
+    [ -z "$_cs_conflict" ] && [ -n "$custom_name" ] && _cs_conflict="a session name"
+    [ -z "$_cs_conflict" ] && [ -n "$if_exists" ] && _cs_conflict="--if-exists"
+    [ -z "$_cs_conflict" ] && [ -n "$compact_bar" ] && _cs_conflict="--compact-bar"
+    [ -z "$_cs_conflict" ] && { [ -n "$dash_on" ] || [ -n "$dash_off" ] || [ -n "$dash_ask" ]; } \
+      && _cs_conflict="a dashboard flag"
+    if [ -n "$_cs_conflict" ]; then
+      printf 'Error: --clean-state cannot be combined with %s.\n' "$_cs_conflict" >&2
+      return 1
+    fi
+    if [ -n "$dry_run" ]; then
+      _agentdesk_clean_state --dry-run
+    else
+      _agentdesk_clean_state
+    fi
+    return $?
+  fi
+
+  # The compact bar is opt-in per launch and never remembered.
+  if [ -n "$compact_bar" ] || [ "${AGENTDESK_COMPACT_BAR:-}" = "1" ]; then
+    bar_mode="compact"
+  fi
 
   # Apply AGENTDESK_PICK env override (force picker via environment variable).
   if [ -n "${AGENTDESK_PICK:-}" ]; then
@@ -827,6 +1580,21 @@ HELP
     return 1
   fi
 
+  if [ -n "$dash_on" ] && [ -n "$dash_off" ]; then
+    printf 'Error: --dashboard and --no-dashboard are mutually exclusive.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$dash_ask" ] && { [ -n "$dash_on" ] || [ -n "$dash_off" ]; }; then
+    printf 'Error: --ask-dashboard cannot be combined with --dashboard or --no-dashboard.\n' >&2
+    return 1
+  fi
+
+  if [ -n "$dash_ask" ] && [ -n "$noprompt" ]; then
+    printf 'Error: --ask-dashboard is interactive and cannot be combined with --no-prompt.\n' >&2
+    return 1
+  fi
+
   # ── --panes list parsing (BEFORE Zellij guard; strict, no trimming) ───────
   if [ -n "$panes_given" ]; then
     local _pane _non_spend=0
@@ -860,7 +1628,7 @@ HELP
   # ── Zellij guard (AFTER arg parsing) ──────────────────────────────────────
   if [ -n "${ZELLIJ:-}" ]; then
     echo "You are already inside a Zellij session."
-    echo "Detach first with: Ctrl+o, then d"
+    echo "Detach with Alt+s, then d (needs Ghostty macos-option-as-alt), or run: zellij action detach"
     return 1
   fi
 
@@ -938,9 +1706,6 @@ HELP
   # ── Prepare workflow artifacts ─────────────────────────────────────────────
   mkdir -p "$project_root/.workflow_artifacts"
 
-  touch "$project_root/.workflow_artifacts/current-plan.md"
-  touch "$project_root/.workflow_artifacts/review.md"
-  touch "$project_root/.workflow_artifacts/lessons-learned.md"
   touch "$project_root/.workflow_artifacts/repos.md"
 
   {
@@ -965,14 +1730,25 @@ HELP
     return 1
   fi
 
-  # ── Offer dashboard BEFORE layout resolution (T-03/CRIT-1 fix) ───────────
-  # _agentdesk_open_dashboard sets AGENTDESK_DASHBOARD=1 and
-  # AGENTDESK_DASHBOARD_URL_FILE=<path> when the user answers yes.
-  # These env vars are read by the layout injection block (T-05) below.
-  # Must run before the if/elif layout branch so all branches see the flags.
-  # _agentdesk_open_dashboard self-skips on non-TTY and always returns 0.
-  if [ -z "$noprompt" ]; then
-    _agentdesk_open_dashboard
+  # ── Decide on the dashboard BEFORE layout resolution ──────────────────────
+  # The decision is a local: nothing is exported, so it can never leak into the
+  # user's shell or a later launch. Only an answer given to a question is
+  # remembered (stored with the layout below).
+  local dash_decision="" dash_answer="" dash_source="" dash_url_file=""
+  local dash_flag=""
+  [ -n "$dash_on" ] && dash_flag=yes
+  [ -n "$dash_off" ] && dash_flag=no
+  local dash_tty=""
+  [ -t 0 ] && dash_tty=1
+  read -r dash_decision dash_source <<< "$(_agentdesk_dashboard_resolve \
+    "$dash_flag" "$noprompt" "$dash_ask" "$force_pick" "$dash_tty" \
+    "$(_agentdesk_dash_key "$layout_key")")"
+  dash_answer="$dash_decision"
+  # The URL temp file is created only at injection time, after every early
+  # return, so a failed launch never leaves one behind. Here we only check that
+  # the dashboard server is installed.
+  if [ "$dash_decision" = "yes" ] && ! _agentdesk_dashboard_server_present; then
+    dash_decision=no
   fi
 
   # ── Resolve layout (D-08 branch order) ────────────────────────────────────
@@ -985,11 +1761,11 @@ HELP
 
   if [ "${#panes_tokens[@]}" -gt 0 ]; then
     # Branch 0: explicit --panes list — one-shot, never loaded or persisted
-    layout_tmp="$(_agentdesk_gen_layout "${panes_tokens[@]}")"
+    layout_tmp="$(_agentdesk_gen_layout --bars "$bar_mode" "${panes_tokens[@]}")"
     layout_path="$layout_tmp"
     persist_layout=""
     # shellcheck disable=SC2064
-    trap "rm -f $layout_tmp" EXIT INT TERM
+    trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
 
   elif [ -n "$mode" ] || [ "${#tokens[@]}" -gt 0 ]; then
     # Branch 1: explicit mode or tokens — generate KDL at runtime
@@ -1002,13 +1778,13 @@ HELP
     else
       effective_tokens=("${tokens[@]}")
     fi
-    layout_tmp="$(_agentdesk_gen_layout "${effective_tokens[@]}")"
+    layout_tmp="$(_agentdesk_gen_layout --bars "$bar_mode" "${effective_tokens[@]}")"
     layout_path="$layout_tmp"
     # join OUTSIDE any redirection to avoid typeset-echo leak
     saved_value="${(j:+:)effective_tokens}"
     # Clean up temp file on exit, return, interrupt, or termination
     # shellcheck disable=SC2064
-    trap "rm -f $layout_tmp" EXIT INT TERM
+    trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
 
   elif [ -n "$force_pick" ]; then
     # Branch 2: --pick or AGENTDESK_PICK=1 — force interactive picker
@@ -1023,39 +1799,49 @@ HELP
         return 1
       fi
       if [ -n "$picked" ]; then
-        # Non-empty pick (options 2-6): split space-separated output into array
+        # Non-empty pick (preset options 2-6, with 7 = custom): split space-separated output into array
         read -rA picked_tokens <<< "$picked"
-        layout_tmp="$(_agentdesk_gen_layout "${picked_tokens[@]}")"
+        layout_tmp="$(_agentdesk_gen_layout --bars "$bar_mode" "${picked_tokens[@]}")"
         layout_path="$layout_tmp"
         # join OUTSIDE any redirection to avoid typeset-echo leak
         saved_value="${(j:+:)picked_tokens}"
         # shellcheck disable=SC2064
-        trap "rm -f $layout_tmp" EXIT INT TERM
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
       else
         # Empty pick (option 1 / default): use fixed layout
-        layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+        layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+        if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+          layout_tmp="$layout_path"
+          # shellcheck disable=SC2064
+          trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+        fi
         saved_value="__FIXED__"
       fi
     else
       # Non-TTY + --pick: skip reuse, go directly to fixed layout (D-07)
-      layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+      layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+      if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+        layout_tmp="$layout_path"
+        # shellcheck disable=SC2064
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+      fi
       saved_value="__FIXED__"
     fi
 
   elif saved_value_loaded="$(_agentdesk_load_layout "$layout_key" 2>/dev/null)" && [ -n "$saved_value_loaded" ]; then
     # Branch 3: saved layout exists — try to restore it
     local restored_path
-    restored_path="$(_agentdesk_layout_from_value "$saved_value_loaded" 2>/dev/null)"
+    restored_path="$(_agentdesk_layout_from_value "$saved_value_loaded" "$bar_mode" 2>/dev/null)"
     local restore_rc=$?
     if [ $restore_rc -eq 0 ] && [ -n "$restored_path" ]; then
       layout_path="$restored_path"
       printf 'Reusing last layout (use --pick to change)\n' >&2
       saved_value="$saved_value_loaded"
       # If the restored path is a generated temp file (not the fixed kdl), register trap
-      if [ "$restored_path" != "$HOME/.config/zellij/layouts/agent-desk.kdl" ]; then
+      if [ "$restored_path" != "$(_agentdesk_fixed_layout_file)" ]; then
         layout_tmp="$restored_path"
         # shellcheck disable=SC2064
-        trap "rm -f $layout_tmp" EXIT INT TERM
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
       fi
     else
       # Corrupt saved value — fall through to branch 4/5
@@ -1069,17 +1855,27 @@ HELP
         fi
         if [ -n "$picked" ]; then
           read -rA picked_tokens <<< "$picked"
-          layout_tmp="$(_agentdesk_gen_layout "${picked_tokens[@]}")"
+          layout_tmp="$(_agentdesk_gen_layout --bars "$bar_mode" "${picked_tokens[@]}")"
           layout_path="$layout_tmp"
           saved_value="${(j:+:)picked_tokens}"
           # shellcheck disable=SC2064
-          trap "rm -f $layout_tmp" EXIT INT TERM
+          trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
         else
-          layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+          layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+          if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+            layout_tmp="$layout_path"
+            # shellcheck disable=SC2064
+            trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+          fi
           saved_value="__FIXED__"
         fi
       else
-        layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+        layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+        if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+          layout_tmp="$layout_path"
+          # shellcheck disable=SC2064
+          trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+        fi
         saved_value="__FIXED__"
       fi
     fi
@@ -1095,26 +1891,39 @@ HELP
     fi
     if [ -n "$picked" ]; then
       read -rA picked_tokens <<< "$picked"
-      layout_tmp="$(_agentdesk_gen_layout "${picked_tokens[@]}")"
+      layout_tmp="$(_agentdesk_gen_layout --bars "$bar_mode" "${picked_tokens[@]}")"
       layout_path="$layout_tmp"
       saved_value="${(j:+:)picked_tokens}"
       # shellcheck disable=SC2064
-      trap "rm -f $layout_tmp" EXIT INT TERM
+      trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
     else
       # Option 1 or empty — use fixed layout
-      layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+      layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+      if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+        layout_tmp="$layout_path"
+        # shellcheck disable=SC2064
+        trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+      fi
       saved_value="__FIXED__"
     fi
 
   else
     # Branch 5: non-TTY + no saved layout — use fixed layout silently
-    layout_path="$HOME/.config/zellij/layouts/agent-desk.kdl"
+    layout_path="$(_agentdesk_fixed_layout_path "$bar_mode")"
+    if [ "$layout_path" != "$(_agentdesk_fixed_layout_file)" ]; then
+      layout_tmp="$layout_path"
+      # shellcheck disable=SC2064
+      trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
+    fi
     saved_value="__FIXED__"
   fi
 
   if [ ! -f "$layout_path" ]; then
     echo "Zellij layout not found:"
     echo "  $layout_path"
+    if [ "$layout_path" = "$(_agentdesk_fixed_layout_file)" ]; then
+      echo "Run setup-agentdesk.sh or quoin install to restore the Standard layout."
+    fi
     return 1
   fi
 
@@ -1122,6 +1931,9 @@ HELP
   # whose layout file is missing (would fail every subsequent launch).
   if [ -n "$persist_layout" ]; then
     _agentdesk_save_layout "$layout_key" "$saved_value" 2>/dev/null || true
+    if [ "$dash_source" = "asked" ]; then
+      _agentdesk_state_set "$(_agentdesk_dash_key "$layout_key")" "$dash_answer" 2>/dev/null || true
+    fi
   fi
 
   echo "Starting agent desk:"
@@ -1130,64 +1942,6 @@ HELP
   echo "  REPOS:"
   cat "$project_root/.workflow_artifacts/repos.md"
   echo
-
-  # ── T-05: Inject Dashboard tab into chosen layout (D-04/CRIT-2 fix) ────────
-  # When AGENTDESK_DASHBOARD=1 (set by _agentdesk_open_dashboard above), inject
-  # a Dashboard tab into whichever layout was chosen — preserving ALL existing tabs.
-  # This is a new temp file; $layout_path is updated to point to it.
-  # When AGENTDESK_DASHBOARD != 1, $layout_path is used unchanged (byte-identical
-  # to the previous behavior).
-  #
-  # Branch 3 (saved-layout restore) note: if AGENTDESK_DASHBOARD=1, this block
-  # injects a Dashboard tab into the restored layout path — no regeneration via
-  # _agentdesk_gen_layout. The saved layout file on disk is never modified.
-  if [ -z "$noprompt" ] && [ "${AGENTDESK_DASHBOARD:-0}" = "1" ]; then
-    local dash_tab_tmp
-    # BSD mktemp only randomizes *trailing* X's; a suffix after XXXXXX creates a
-    # literal path that collides on the second call ("File exists"). Drop the suffix,
-    # then rename to add .kdl — Zellij requires the .kdl extension to identify the
-    # file as a layout (same pattern as _agentdesk_gen_layout lines 318-323).
-    dash_tab_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-layout-XXXXXX")" || {
-      echo "agentdesk: failed to create temp dashboard layout file" >&2
-      return 1
-    }
-    mv -f "$dash_tab_tmp" "${dash_tab_tmp}.kdl" || return 1
-    dash_tab_tmp="${dash_tab_tmp}.kdl"
-    # Strip the final `}` (closing brace of the top-level `layout { ... }` block)
-    # and append the Dashboard tab KDL before re-closing.
-    # The url-file path is expanded HERE at injection time so the actual path is
-    # baked into the KDL — the poller reads the same path from AGENTDESK_DASHBOARD_URL_FILE.
-    sed '$d' "$layout_path" > "$dash_tab_tmp"
-    cat >> "$dash_tab_tmp" <<DASHTAB
-    tab name="Dashboard" {
-        pane name="quoin dashboard" {
-            command "zsh"
-            args "-lc" "exec python3 \"$HOME/.claude/scripts/dashboard_server.py\" --no-browser --url-file \"$AGENTDESK_DASHBOARD_URL_FILE\""
-        }
-    }
-}
-DASHTAB
-    # shellcheck disable=SC2064
-    trap "rm -f $layout_tmp $dash_tab_tmp" EXIT INT TERM
-    layout_path="$dash_tab_tmp"
-
-    # D-03 bounded browser-open poller: spawned BEFORE zellij blocks the foreground.
-    # Polls the url-file for ≤10s (50 × 0.2s hard cap), opens the browser, then exits.
-    # Cannot orphan — always self-terminates. This is the ONLY `&` in the new flow.
-    local _dash_url_file="$AGENTDESK_DASHBOARD_URL_FILE"
-    ( i=0
-      while [ "$i" -lt 50 ]; do
-        if [ -f "$_dash_url_file" ] && grep -q '^http' "$_dash_url_file" 2>/dev/null; then
-          url="$(grep '^http' "$_dash_url_file" | head -1)"
-          _agentdesk_open_url "$url"
-          rm -f "$_dash_url_file"  # first rm: success path
-          break
-        fi
-        sleep 0.2
-        i=$((i + 1))
-      done
-      rm -f "$_dash_url_file" ) &  # second rm: timeout path (idempotent; rm -f on missing file is no-op)
-  fi
 
   # IVG-135 (T-03, required): pre-flight guard against a would-be socket path
   # that overflows the AF_UNIX sun_path cap (~104 bytes macOS / ~108 Linux).
@@ -1205,7 +1959,62 @@ DASHTAB
     return 1
   fi
 
-  PROJECT_ROOT="$project_root" zellij --new-session-with-layout "$layout_path" --session "$session_name"
+  # ── T-05: Inject Dashboard tab into chosen layout (D-04/CRIT-2 fix) ────────
+  # When the dashboard decision above is yes, inject a Dashboard tab into
+  # whichever layout was chosen — preserving ALL existing tabs. This is a new
+  # temp file; $layout_path is updated to point to it. Otherwise $layout_path is
+  # used unchanged.
+  #
+  # For a restored saved layout the tab is injected into the restored layout
+  # path — no regeneration via _agentdesk_gen_layout. The saved layout file on
+  # disk is never modified.
+  if [ "$dash_decision" = "yes" ]; then
+    dash_url_file="$(_agentdesk_dashboard_url_file)" || dash_url_file=""
+  fi
+  if [ -n "$dash_url_file" ]; then
+    local dash_tab_tmp
+    # BSD mktemp only randomizes *trailing* X's; a suffix after XXXXXX creates a
+    # literal path that collides on the second call ("File exists"). Drop the suffix,
+    # then rename to add .kdl — Zellij requires the .kdl extension to identify the
+    # file as a layout (same pattern as _agentdesk_gen_layout).
+    dash_tab_tmp="$(mktemp "${TMPDIR:-/tmp}/agentdesk-dash-layout-XXXXXX")" || {
+      echo "agentdesk: failed to create temp dashboard layout file" >&2
+      rm -f "$dash_url_file"
+      return 1
+    }
+    mv -f "$dash_tab_tmp" "${dash_tab_tmp}.kdl" || { rm -f "$dash_tab_tmp" "$dash_url_file"; return 1; }
+    dash_tab_tmp="${dash_tab_tmp}.kdl"
+    # Strip the final `}` (closing brace of the top-level `layout { ... }` block)
+    # and append the Dashboard tab KDL before re-closing.
+    # The url-file path is expanded HERE at injection time so the actual path is
+    # baked into the KDL — the poller reads the same path.
+    sed '$d' "$layout_path" > "$dash_tab_tmp"
+    _agentdesk_kdl_dashboard_tab "$layout_path" "$dash_url_file" >> "$dash_tab_tmp"
+    # shellcheck disable=SC2064
+    trap "rm -f ${(q)layout_tmp} ${(q)dash_tab_tmp}" EXIT INT TERM
+    layout_path="$dash_tab_tmp"
+
+    # D-03 bounded browser-open poller: spawned BEFORE zellij blocks the foreground.
+    # Polls the url-file for ≤10s (50 × 0.2s hard cap), opens the browser, then exits.
+    # Cannot orphan — always self-terminates. This is the ONLY `&` in the new flow.
+    local _dash_url_file="$dash_url_file"
+    ( i=0
+      while [ "$i" -lt 50 ]; do
+        if [ -f "$_dash_url_file" ] && grep -q '^http' "$_dash_url_file" 2>/dev/null; then
+          url="$(grep '^http' "$_dash_url_file" | head -1)"
+          _agentdesk_open_url "$url"
+          rm -f "$_dash_url_file"  # first rm: success path
+          break
+        fi
+        sleep 0.2
+        i=$((i + 1))
+      done
+      rm -f "$_dash_url_file" ) &  # second rm: timeout path (idempotent; rm -f on missing file is no-op)
+  fi
+
+  # AGENTDESK_DASHBOARD_URL_FILE is set for this launch only (empty when the
+  # dashboard is off, so a stale exported value never reaches pane commands).
+  AGENTDESK_DASHBOARD_URL_FILE="$dash_url_file" PROJECT_ROOT="$project_root" zellij --new-session-with-layout "$layout_path" --session "$session_name" options --auto-layout false
 }
 
 agentdesk-attach() {
@@ -1349,6 +2158,65 @@ HELP
   else
     git -C "$repo_path" status
   fi
+}
+
+# _agentdesk_git_pane
+# Body of the Standard layout's git tab; every choice is made when the pane
+# runs. lazygit opens on the project root when it is a repo itself, or on the
+# only repo below it. Otherwise (several repos, no repo, or no lazygit) a
+# refreshing status view is shown until a key is pressed or Ctrl+C is hit.
+# AGENTDESK_GIT_REFRESH sets the refresh interval in seconds (default 5).
+_agentdesk_git_pane() {
+  local interval key repo has_lazygit="" _ag_stop=0 t0
+  local -a repo_list=()
+  local -x GIT_OPTIONAL_LOCKS=0
+  setopt localoptions localtraps no_ksh_arrays
+
+  command -v lazygit >/dev/null 2>&1 && has_lazygit=1
+  if [ -n "$has_lazygit" ] && [ -e "${PROJECT_ROOT:-$PWD}/.git" ]; then
+    lazygit -p "${PROJECT_ROOT:-$PWD}"
+    return $?
+  fi
+  repo_list=(${(f)"$(_detect_repos)"})
+  if [ -n "$has_lazygit" ] && [ "${#repo_list[@]}" -eq 1 ]; then
+    lazygit -p "$(_repo_path "${repo_list[1]}")"
+    return $?
+  fi
+
+  interval="${AGENTDESK_GIT_REFRESH:-5}"
+  case "$interval" in
+    ''|*[!0-9]*) interval=5 ;;
+    *) interval=$((10#$interval)) ;;
+  esac
+  [ "$interval" -gt 0 ] || interval=5
+
+  # A flag, not break: break inside a trap string does not reliably leave the loop.
+  trap '_ag_stop=1' INT
+  while [ "$_ag_stop" -eq 0 ]; do
+    [ -t 1 ] && printf '\033[H\033[2J'
+    printf 'Git status - refreshes every %s s. Press any key for a shell. Run gitreview to open lazygit for one repo.\n' "$interval"
+    [ -n "$has_lazygit" ] || printf 'lazygit not found - install it with: brew install lazygit\n'
+    if [ "${#repo_list[@]}" -eq 0 ]; then
+      printf 'No git repos found under %s\n' "${PROJECT_ROOT:-$PWD}"
+    else
+      # One scan per pass: reuse repo_list instead of re-walking the tree.
+      for repo in "${repo_list[@]}"; do
+        [ -z "$repo" ] && continue
+        echo
+        echo "===== $repo ====="
+        git -C "$(_repo_path "$repo")" status --short 2>/dev/null || true
+      done
+    fi
+    # Without a terminal there is nothing to wait for: draw once.
+    [ -t 0 ] || break
+    t0=$SECONDS
+    read -s -t "$interval" -k 1 key && break
+    # A read that fails long before the interval (closed terminal, error) must
+    # not turn the loop into a busy spin.
+    [ $((SECONDS - t0)) -lt $((interval - 1)) ] && sleep 1
+    repo_list=(${(f)"$(_detect_repos)"})
+  done
+  return 0
 }
 
 gitrootreview() {

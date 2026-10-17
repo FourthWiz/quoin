@@ -9,6 +9,7 @@ bypasses the picker in agentdesk(); we call _agentdesk_pick_layout() directly).
 """
 import os
 import pty
+import re
 import shutil
 import subprocess
 import textwrap
@@ -32,6 +33,18 @@ pytestmark = pytest.mark.skipif(
 SUBPROCESS_TIMEOUT = 30
 
 
+def _isolate_home(env: dict, tmp_path: Path) -> dict:
+    """Point HOME at a private dir under tmp_path and drop dashboard/pick
+    variables a developer shell may carry, so no launcher run can read or write
+    the real home. Builders that need their own HOME override it afterwards."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env["HOME"] = str(home)
+    for key in ("AGENTDESK_DASHBOARD", "AGENTDESK_DASHBOARD_URL_FILE", "AGENTDESK_PICK"):
+        env.pop(key, None)
+    return env
+
+
 def _make_mock_env(tmp_path: Path) -> dict:
     """Build an env dict with a mock zellij wrapper in $PATH.
 
@@ -48,6 +61,7 @@ def _make_mock_env(tmp_path: Path) -> dict:
         stub.chmod(0o755)
 
     env = {**os.environ, "PATH": f"{mock_bin}:{os.environ['PATH']}"}
+    _isolate_home(env, tmp_path)
     # Ensure PROJECT_ROOT is set to avoid _agentdesk_realpath issues
     env["PROJECT_ROOT"] = str(tmp_path)
     # Unset ZELLIJ so the "already inside Zellij" guard does not fire
@@ -312,8 +326,9 @@ def test_socket_dir_length_guard_blocks_long_name(tmp_path: Path) -> None:
 def test_agentdesk_non_tty_skips_picker(tmp_path: Path) -> None:
     """agentdesk with stdin piped (non-TTY) skips picker and uses fixed layout."""
     # Piped stdin means [ -t 0 ] is false → fixed layout path
-    # Fixed layout file won't exist, so it errors with "layout not found" (rc=1).
-    # That's fine — the point is it didn't call _agentdesk_pick_layout (no menu output).
+    # The saved layout file does not exist, so the Standard layout is generated
+    # and the launch goes ahead against the mock zellij. The point is that it
+    # never called _agentdesk_pick_layout (no menu output).
     result = _run_agentdesk("", tmp_path, stdin="1\n")
     # No picker menu should appear in stderr
     assert "Select a layout" not in result.stderr, (
@@ -367,9 +382,9 @@ def test_agentdesk_picker_custom_no_spaces(tmp_path: Path) -> None:
 
 
 def test_agentdesk_picker_unknown_token_in_custom(tmp_path: Path) -> None:
-    """_agentdesk_pick_layout with option 6 + unknown token + empty retry returns rc=1."""
-    # Input: choose option 6 (Custom — was 5 before ccr renumber), then type bad token, then empty retry (cancel)
-    result = _run_pick_layout("6\nemacs, shell\n\n", tmp_path)
+    """_agentdesk_pick_layout with option 7 + unknown token + empty retry returns rc=1."""
+    # Input: choose option 7 (Custom), then type bad token, then empty retry (cancel)
+    result = _run_pick_layout("7\nemacs, shell\n\n", tmp_path)
     assert result.returncode != 0, (
         f"Unknown token in custom input should return non-zero after re-prompt (rc={result.returncode})"
     )
@@ -435,16 +450,18 @@ def test_kdl_solo_valid(tmp_path: Path) -> None:
     _assert_kdl_valid(kdl)
     assert 'tab name="main"' in kdl
     assert 'pane name="Claude Code"' in kdl
-    assert 'split_direction' not in kdl, "Solo layout should not have a split"
+    # The horizontal wrapper is always present; a solo layout has no strip and
+    # no size split inside the tiled area.
+    main = kdl.split('tab name="main"', 1)[1].split("floating_panes {", 1)[0]
+    assert "size=\"" not in main, "Solo layout should not have a size split"
 
 
 def test_kdl_duo_valid(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude shell → valid 2-pane side-by-side KDL."""
+    """_agentdesk_gen_layout claude shell → agent on top, Shell strip below."""
     kdl = _gen_layout("claude shell", tmp_path)
     _assert_kdl_valid(kdl)
-    assert 'split_direction="vertical"' in kdl, "Duo should split side-by-side"
-    assert 'pane name="Claude Code"' in kdl
-    assert 'pane name="Shell"' in kdl
+    assert 'pane name="Claude Code" size="75%"' in kdl, "Agent should take the top 75%"
+    assert 'pane name="Shell" size="25%"' in kdl, "Shell strip should take 25%"
 
 
 def test_kdl_trio_valid_no_leaks(tmp_path: Path) -> None:
@@ -457,16 +474,18 @@ def test_kdl_trio_valid_no_leaks(tmp_path: Path) -> None:
     assert 'pane name="Claude Code"' in kdl
     assert 'pane name="Codex"' in kdl
     assert 'pane name="Shell"' in kdl
-    # 3 main panes + 1 Spend tab (always included)
+    # 3 main panes + the floating Spend pane (always included)
     assert kdl.count('command "zsh"') == 4, "Trio must have 3 main panes + 1 Spend pane"
 
 
-def test_kdl_four_panes_stack_horizontal(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout with 4 tokens → horizontal stack, valid KDL."""
+def test_kdl_four_panes_agents_on_top_shell_strip(tmp_path: Path) -> None:
+    """_agentdesk_gen_layout with 4 tokens → three agents on top, Shell strip below."""
     kdl = _gen_layout("claude claude codex shell", tmp_path)
     _assert_kdl_valid(kdl)
-    assert 'split_direction="horizontal"' in kdl, ">3 panes should stack vertically"
-    assert kdl.count('command "zsh"') == 5  # 4 main panes + 1 Spend tab (always included)
+    assert 'split_direction="horizontal"' in kdl
+    assert 'pane name="Shell" size="25%"' in kdl
+    assert 'pane size="75%" split_direction="vertical"' in kdl
+    assert kdl.count('command "zsh"') == 5  # 4 main panes + the floating Spend pane
 
 
 def test_kdl_escaping_matches_fixed_layout(tmp_path: Path) -> None:
@@ -524,6 +543,7 @@ def test_agentdesk_status_pane_cmd(tmp_path: Path) -> None:
     cmd = result.stdout
     assert "status_graph.py" in cmd, f"pane cmd missing status_graph.py: {cmd!r}"
     assert "--compact" in cmd, f"pane cmd missing --compact: {cmd!r}"
+    assert "status_graph.py not found" in cmd, f"pane cmd missing the not-found message: {cmd!r}"
 
 
 def test_agentdesk_status_pane_name(tmp_path: Path) -> None:
@@ -658,6 +678,8 @@ def test_agentdesk_spend_token_valid(tmp_path: Path) -> None:
     assert 'pane name="Token Spend"' in kdl, (
         f"KDL missing pane name 'Token Spend': {kdl[:400]}"
     )
+    # With only spend requested, one tiled Shell is added next to the floating pane.
+    assert 'pane name="Shell"' in kdl
     _assert_kdl_valid(kdl)
 
 
@@ -780,17 +802,17 @@ def _run_dashboard_fn_with_pty(
     input_text: str,
     tmp_path: Path,
     timeout: int = SUBPROCESS_TIMEOUT,
+    fn_call: str = "_agentdesk_dashboard_resolve '' '' '' '' 1 dash:proj:x",
 ) -> subprocess.CompletedProcess:
-    """Run _agentdesk_open_dashboard with a real PTY as stdin.
+    """Run a zsh expression with a real PTY as stdin.
 
     Uses pty.openpty() to provide a file descriptor that satisfies [ -t 0 ],
-    so the TTY guard inside _agentdesk_open_dashboard passes and the real
-    function body executes.  input_text is written to the PTY master side
-    after the subprocess is started; the child reads it via 'read -r reply'.
+    so terminal-only code paths run. input_text is written to the PTY master
+    side after the subprocess is started; the child reads it via 'read -r'.
     stdout and stderr are captured via PIPE (not the PTY) so assertions are
     straightforward.
     """
-    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_open_dashboard'
+    script = f'source "{AGENTDESK_ZSH}"\n{fn_call}'
     master_fd, slave_fd = pty.openpty()
     stdout_b: bytes = b""
     stderr_b: bytes = b""
@@ -831,130 +853,51 @@ def _run_dashboard_fn_with_pty(
     )
 
 
-def test_open_dashboard_non_tty_skips(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with piped stdin (non-TTY) returns 0 with no prompt
-    and does not invoke the server stub.
-
-    stdin piped = [ ! -t 0 ] fires → function returns immediately.
-    """
+def test_dashboard_resolve_non_tty_defaults_to_no(tmp_path: Path) -> None:
+    """With no flag, env or terminal the resolver answers no without asking."""
     env = _make_dashboard_env(tmp_path)
-    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_open_dashboard'
+    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_dashboard_resolve "" "" "" "" "" dash:proj:x'
     result = subprocess.run(
-        ["zsh", "-c", script],
-        env=env,
-        input="",  # piped → non-TTY
-        capture_output=True,
-        text=True,
-        cwd=str(tmp_path),
-        timeout=SUBPROCESS_TIMEOUT,
+        ["zsh", "-c", script], env=env, input="", capture_output=True, text=True,
+        cwd=str(tmp_path), timeout=SUBPROCESS_TIMEOUT,
     )
     assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
-    # No prompt should appear on stderr (function returned before printf)
-    assert "Open quoin dashboard" not in result.stderr, (
-        f"Prompt should not appear on non-TTY: stderr={result.stderr!r}"
-    )
-    # Server marker file must NOT exist (server never launched)
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), "Browser opener should NOT have been called on non-TTY"
+    assert result.stdout.strip() == "no default"
+    assert "Open quoin dashboard" not in result.stderr
+    assert not (tmp_path / "open_called.txt").exists()
 
 
-def test_open_dashboard_declines_default(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with PTY stdin 'n\\n' returns 0 and does not
-    start the server or open a browser.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
+def test_dashboard_resolve_declines_default(tmp_path: Path) -> None:
+    """A terminal answer of 'n' resolves to no, and nothing is opened."""
     env = _make_dashboard_env(tmp_path)
     result = _run_dashboard_fn_with_pty(env, "n\n", tmp_path)
     assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), "Browser opener should NOT have been called on 'n' reply"
+    assert result.stdout.strip() == "no asked"
+    assert "Open quoin dashboard" in result.stderr
+    assert not (tmp_path / "open_called.txt").exists()
 
 
-def test_open_dashboard_accepts_exports_flags(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with PTY stdin 'y\\n' exports AGENTDESK_DASHBOARD=1
-    and AGENTDESK_DASHBOARD_URL_FILE, and returns 0. (T-05/MAJ-2 fix replacement test A)
-
-    This replaces the now-removed test_open_dashboard_accepts_opens_url which checked
-    that the function backgrounded a server — the new architecture moves server launch
-    into a zellij pane injected by T-05; the helper is now a decision + flag-setup only.
-
-    STRUCTURAL GUARD: proves the helper sets the right exports and does NOT spawn a
-    background server process (no dashboard_server.py child alive after the function
-    returns). T-08's manual pgrep after agentdesk-kill is the authoritative orphan check.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
+def test_dashboard_resolve_accepts_and_url_file_helper_creates_path(tmp_path: Path) -> None:
+    """'y' resolves to yes without exporting anything; the URL-file helper then
+    prints a real temp path and the browser opener is not touched."""
     env = _make_dashboard_env(tmp_path, with_server=True)
-    # Print env vars after the function call so we can assert them.
-    script = (
-        f'source "{AGENTDESK_ZSH}"\n'
-        '_agentdesk_open_dashboard\n'
-        'echo "DASH=${AGENTDESK_DASHBOARD}"\n'
-        'echo "URLFILE=${AGENTDESK_DASHBOARD_URL_FILE}"\n'
+    result = _run_dashboard_fn_with_pty(
+        env, "y\n", tmp_path,
+        fn_call=(
+            "_agentdesk_dashboard_resolve '' '' '' '' 1 dash:proj:x\n"
+            "f=\"$(_agentdesk_dashboard_url_file)\"; echo \"URLFILE=$f\"; "
+            "[ -f \"$f\" ] && echo EXISTS\n"
+            "typeset -m 'AGENTDESK_DASHBOARD*'"
+        ),
     )
-    import pty
-    master_fd, slave_fd = pty.openpty()
-    stdout_b: bytes = b""
-    stderr_b: bytes = b""
-    rc: int = -1
-    try:
-        proc = subprocess.Popen(
-            ["zsh", "-c", script],
-            stdin=slave_fd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=str(tmp_path),
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        try:
-            os.write(master_fd, b"y\n")
-        except OSError:
-            pass
-        try:
-            stdout_b, stderr_b = proc.communicate(timeout=SUBPROCESS_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout_b, stderr_b = proc.communicate()
-        rc = proc.returncode
-    finally:
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-
-    out = stdout_b.decode(errors="replace")
-    err = stderr_b.decode(errors="replace")
-    assert rc == 0, f"rc={rc}, stderr={err}"
-    assert "DASH=1" in out, f"Expected AGENTDESK_DASHBOARD=1 in stdout: {out!r}"
-    assert "URLFILE=" in out, f"Expected AGENTDESK_DASHBOARD_URL_FILE line in stdout: {out!r}"
-    # URLFILE must be non-empty (a real mktemp path)
-    url_file_line = [l for l in out.splitlines() if l.startswith("URLFILE=")]
-    assert url_file_line, f"No URLFILE= line in stdout: {out!r}"
-    url_file_val = url_file_line[0][len("URLFILE="):]
-    assert url_file_val, "AGENTDESK_DASHBOARD_URL_FILE should not be empty after 'y'"
-    # Structural guard: verify agentdesk.zsh source does NOT contain `python3 ... &`
-    # inside _agentdesk_open_dashboard. We check the source rather than pgrep (which
-    # would find unrelated running instances in the same test session).
-    zsh_src = AGENTDESK_ZSH.read_text(encoding="utf-8")
-    # The function body should not background any server — find the function and check.
-    fn_start = zsh_src.find("_agentdesk_open_dashboard()")
-    fn_end = zsh_src.find("\n}", fn_start)
-    fn_body = zsh_src[fn_start:fn_end + 2] if fn_start != -1 else ""
-    assert "dashboard_server.py" not in fn_body or "& " not in fn_body or \
-           "python3" not in fn_body.split("dashboard_server.py")[0].split("\n")[-1], (
-        "STRUCTURAL GUARD FAIL: _agentdesk_open_dashboard appears to background "
-        "the server (found 'python3 ... dashboard_server.py ... &' pattern in function body). "
-        "The function must NOT launch a background process — server belongs in T-05 pane."
-    )
-    # Browser opener should NOT have been called (browser-open moved to T-05 poller)
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), (
-        "Browser opener should NOT be called by _agentdesk_open_dashboard "
-        "(browser-open is now in the T-05 bounded poller, not the helper)"
-    )
+    assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
+    lines = result.stdout.splitlines()
+    assert lines[0] == "yes asked"
+    url_line = [l for l in lines if l.startswith("URLFILE=")]
+    assert url_line and url_line[0][len("URLFILE="):]
+    assert "EXISTS" in lines
+    assert not any(l.startswith("AGENTDESK_DASHBOARD") for l in lines)
+    assert not (tmp_path / "open_called.txt").exists()
 
 
 def test_open_dashboard_poller_opens_url(tmp_path: Path) -> None:
@@ -1007,20 +950,18 @@ rm -f "$_dash_url_file"
     )
 
 
-def test_open_dashboard_missing_server_noop(tmp_path: Path) -> None:
-    """_agentdesk_open_dashboard with PTY stdin 'y\\n' but no server script returns 0
-    and prints the 'not found' note to stderr without crashing.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
+def test_dashboard_url_file_helper_missing_server(tmp_path: Path) -> None:
+    """Without the dashboard server script the helper prints the skip note,
+    returns 1 and creates nothing."""
     env = _make_dashboard_env(tmp_path, with_server=False)
-    result = _run_dashboard_fn_with_pty(env, "y\n", tmp_path)
-    assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
-    assert "not found" in result.stderr, (
-        f"Expected 'not found' note in stderr: {result.stderr!r}"
+    script = f'source "{AGENTDESK_ZSH}"\n_agentdesk_dashboard_url_file; echo "RC=$?"'
+    result = subprocess.run(
+        ["zsh", "-c", script], env=env, input="", capture_output=True, text=True,
+        cwd=str(tmp_path), timeout=SUBPROCESS_TIMEOUT,
     )
-    marker = tmp_path / "open_called.txt"
-    assert not marker.exists(), "Browser opener should NOT be called when server is absent"
+    assert "RC=1" in result.stdout
+    assert "not found" in result.stderr
+    assert not (tmp_path / "open_called.txt").exists()
 
 
 # ============================================================
@@ -1071,6 +1012,7 @@ def _make_mock_env_with_sessions(tmp_path: Path, sessions: list) -> dict:
     zellij_stub.chmod(0o755)
 
     env = {**os.environ, "PATH": f"{mock_bin}:{os.environ['PATH']}"}
+    _isolate_home(env, tmp_path)
     env["PROJECT_ROOT"] = str(tmp_path)
     env.pop("ZELLIJ", None)
     env.pop("ZELLIJ_SESSION_NAME", None)
@@ -1133,6 +1075,7 @@ def _make_mock_env_with_sessions_and_attach(tmp_path: Path, sessions: list) -> d
     zellij_stub.chmod(0o755)
 
     env = {**os.environ, "PATH": f"{mock_bin}:{os.environ['PATH']}"}
+    _isolate_home(env, tmp_path)
     env["PROJECT_ROOT"] = str(tmp_path)
     env["AGENTDESK_TEST_ATTACH_MARKER"] = str(tmp_path / "attach_called.txt")
     env.pop("ZELLIJ", None)
@@ -1178,34 +1121,41 @@ def _run_agentdesk_with_sessions_and_attach(
 # Spend tab tests (agentdesk-spend-tab)
 # ============================================================
 
-def test_agentdesk_spend_own_tab_with_main(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude spend → main tab + separate Spend tab."""
+def _floating_section(kdl: str) -> str:
+    """The text of the floating_panes block of the main tab."""
+    assert "floating_panes {" in kdl, f"Expected a floating_panes block: {kdl[:400]}"
+    return kdl.split("floating_panes {", 1)[1].split("swap_tiled_layout", 1)[0]
+
+
+def test_agentdesk_spend_floating_with_main(tmp_path: Path) -> None:
+    """_agentdesk_gen_layout claude spend → one main tab with a floating Token Spend pane."""
     kdl = _gen_layout("claude spend", tmp_path)
     assert 'tab name="main"' in kdl, f"Expected main tab: {kdl[:400]}"
-    assert 'tab name="Spend"' in kdl, f"Expected Spend tab: {kdl[:400]}"
-    assert 'pane name="Token Spend"' in kdl, f"Expected Token Spend pane: {kdl[:400]}"
+    assert 'tab name="Spend"' not in kdl, "Spend is floating, not a tab"
+    assert 'pane name="Token Spend"' in _floating_section(kdl)
     assert "spend_monitor.py" in kdl, f"Expected spend_monitor.py in KDL: {kdl[:400]}"
-    assert kdl.count('tab name=') == 2, (
-        f"Expected exactly 2 tabs (main + Spend), got: {kdl.count('tab name=')}"
+    assert kdl.count('tab name=') == 1, (
+        f"Expected exactly 1 tab, got: {kdl.count('tab name=')}"
     )
     _assert_kdl_valid(kdl)
 
 
-def test_agentdesk_spend_only_token_just_spend_tab(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout spend → only a Spend tab, no main tab."""
+def test_agentdesk_spend_only_token_main_tab_with_shell(tmp_path: Path) -> None:
+    """_agentdesk_gen_layout spend → main tab with a Shell plus the floating Spend pane."""
     kdl = _gen_layout("spend", tmp_path)
-    assert 'tab name="Spend"' in kdl, f"Expected Spend tab: {kdl[:400]}"
-    assert 'tab name="main"' not in kdl, f"main tab must be absent when spend is only token: {kdl[:400]}"
+    assert 'tab name="main"' in kdl, f"Expected main tab: {kdl[:400]}"
+    assert 'tab name="Spend"' not in kdl
+    assert 'pane name="Token Spend"' in _floating_section(kdl)
     _assert_kdl_valid(kdl)
 
 
 def test_agentdesk_spend_separated_from_multi_main(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude codex spend shell → main has vertical split + separate Spend tab."""
+    """_agentdesk_gen_layout claude codex spend shell → Token Spend only inside floating_panes."""
     kdl = _gen_layout("claude codex spend shell", tmp_path)
     assert 'split_direction="vertical"' in kdl, (
-        f"3 main tokens (claude/codex/shell) should produce vertical split: {kdl[:400]}"
+        f"claude/codex on top should produce a vertical split: {kdl[:400]}"
     )
-    assert 'tab name="Spend"' in kdl, f"Expected separate Spend tab: {kdl[:400]}"
+    assert 'tab name="Spend"' not in kdl
     assert 'pane name="Claude Code"' in kdl
     assert 'pane name="Codex"' in kdl
     assert 'pane name="Shell"' in kdl
@@ -1214,21 +1164,19 @@ def test_agentdesk_spend_separated_from_multi_main(tmp_path: Path) -> None:
     assert count == 4, (
         f"Expected 4 command panes (3 main + 1 spend), got {count}"
     )
-    # Token Spend pane must NOT be inside the main tab's split
-    main_tab_end = kdl.find('tab name="Spend"')
-    assert main_tab_end > 0, "Spend tab must follow main tab"
-    main_section = kdl[:main_tab_end]
+    main_section = kdl.split("floating_panes {", 1)[0]
     assert 'pane name="Token Spend"' not in main_section, (
-        "Token Spend pane must not appear inside the main tab"
+        "Token Spend pane must not appear among the tiled panes"
     )
+    assert kdl.count('pane name="Token Spend"') == 1
     _assert_kdl_valid(kdl)
 
 
 def test_agentdesk_spend_always_present(tmp_path: Path) -> None:
-    """_agentdesk_gen_layout claude codex shell → Spend tab always present even without spend token."""
+    """_agentdesk_gen_layout claude codex shell → floating Spend always present, even without a spend token."""
     kdl = _gen_layout("claude codex shell", tmp_path)
-    assert 'tab name="Spend"' in kdl, (
-        f"Spend tab must always be present in generated layouts: {kdl[:400]}"
+    assert 'pane name="Token Spend"' in _floating_section(kdl), (
+        f"Floating Spend must always be present in generated layouts: {kdl[:400]}"
     )
     assert 'tab name="main"' in kdl, f"main tab must be present: {kdl[:400]}"
     _assert_kdl_valid(kdl)
@@ -1594,13 +1542,38 @@ def test_load_missing_file_failopen(tmp_path: Path) -> None:
 
 
 def test_layout_from_value_fixed(tmp_path: Path) -> None:
-    """_agentdesk_layout_from_value __FIXED__ → agent-desk.kdl path, rc=0."""
+    """_agentdesk_layout_from_value __FIXED__ → customised agent-desk.kdl wins, rc=0.
+
+    _make_state_env always seeds a hand-written stub, which counts as a
+    customised file, so its path comes back."""
     result = _run_zsh_fn_state("_agentdesk_layout_from_value '__FIXED__'", tmp_path)
     assert result.returncode == 0, f"rc={result.returncode}, stderr={result.stderr}"
     path = result.stdout.strip()
     assert path.endswith("/agent-desk.kdl"), (
         f"__FIXED__ must return agent-desk.kdl path, got: {path!r}"
     )
+
+
+def test_layout_from_value_fixed_generates_when_file_missing(tmp_path: Path) -> None:
+    """Without a saved file, __FIXED__ resolves to a generated Standard layout."""
+    env = _make_state_env(tmp_path)
+    (Path(env["HOME"]) / ".config" / "zellij" / "layouts" / "agent-desk.kdl").unlink()
+    tmpdir = tmp_path / "gen_tmp"
+    tmpdir.mkdir()
+    env["TMPDIR"] = str(tmpdir)
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"; _agentdesk_layout_from_value __FIXED__'],
+        env=env, capture_output=True, text=True, cwd=str(tmp_path),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    path = Path(result.stdout.strip())
+    try:
+        assert path.parent == tmpdir and path.suffix == ".kdl"
+        tabs = re.findall(r'tab name="([^"]+)"', path.read_text())
+        assert tabs == ["main", "git", "status"]
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def test_layout_from_value_tokens(tmp_path: Path) -> None:
@@ -1992,80 +1965,286 @@ rm -f "$dash_tab_tmp"
     )
 
 
-def test_open_dashboard_no_orphan_structural_guard(tmp_path: Path) -> None:
-    """T-07 Test B (no-orphan structural guard): _agentdesk_open_dashboard with 'y'
-    sets AGENTDESK_DASHBOARD=1 and the function body does NOT background a server.
-
-    NOTE: This is a STRUCTURAL GUARD proving the helper stopped spawning background
-    processes. It verifies the source code and runtime export behavior.
-    It is NOT an authoritative orphan-prevention proof (system-wide pgrep is unreliable
-    in test environments where other tests also run dashboard_server.py).
-    The authoritative check is T-08's manual pgrep after agentdesk-kill.
-
-    Uses pty.openpty() so [ -t 0 ] is true and the real function body runs.
-    """
-    env = _make_dashboard_env(tmp_path, with_server=True)
-
-    # Script: run the function and capture exported env vars.
-    script = (
-        f'source "{AGENTDESK_ZSH}"\n'
-        '_agentdesk_open_dashboard\n'
-        'rc=$?\n'
-        'echo "RC=$rc"\n'
-        'echo "DASH=${AGENTDESK_DASHBOARD}"\n'
-    )
-    master_fd, slave_fd = pty.openpty()
-    stdout_b: bytes = b""
-    stderr_b: bytes = b""
-    rc: int = -1
-    try:
-        proc = subprocess.Popen(
-            ["zsh", "-c", script],
-            stdin=slave_fd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-            cwd=str(tmp_path),
-            close_fds=True,
-        )
-        os.close(slave_fd)
-        try:
-            os.write(master_fd, b"y\n")
-        except OSError:
-            pass
-        try:
-            stdout_b, stderr_b = proc.communicate(timeout=SUBPROCESS_TIMEOUT)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            stdout_b, stderr_b = proc.communicate()
-        rc = proc.returncode
-    finally:
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-
-    out = stdout_b.decode(errors="replace")
-    err = stderr_b.decode(errors="replace")
-    assert rc == 0, f"Function must return 0; rc={rc}, stderr={err}"
-    assert "DASH=1" in out, f"AGENTDESK_DASHBOARD=1 not set after 'y'; stdout={out!r}"
-
-    # SOURCE STRUCTURAL GUARD: verify the function body does NOT contain a background
-    # `python3 ... dashboard_server.py ...` launch. We check the source because
-    # system-wide pgrep is unreliable in CI (other tests launch the server too).
-    # Ack: this test fails on `git stash` of T-03 changes (the old function backgrounds
-    # the server → `python3 "$server_script" --no-browser > ... &` present in body).
-    zsh_src = AGENTDESK_ZSH.read_text(encoding="utf-8")
-    fn_start = zsh_src.find("_agentdesk_open_dashboard()")
-    assert fn_start != -1, "_agentdesk_open_dashboard() not found in agentdesk.zsh"
-    # Find the closing `}` of the function (next `\n}` after function start)
-    fn_end = zsh_src.find("\n}", fn_start)
-    fn_body = zsh_src[fn_start:fn_end + 2] if fn_end != -1 else zsh_src[fn_start:]
-    # The function body must NOT contain `python3 ... &` backgrounding the server
+def test_dashboard_helpers_do_not_background_a_server() -> None:
+    """Structural guard: the decision and URL-file helpers never start the
+    dashboard server (it belongs in an injected pane) and never export or unset
+    a dashboard variable."""
     import re
-    bg_launch = re.search(r'python3[^\n]+dashboard_server\.py[^\n]+&', fn_body)
-    assert bg_launch is None, (
-        "STRUCTURAL GUARD FAIL: _agentdesk_open_dashboard body contains a background "
-        f"server launch (found: {bg_launch.group()!r}). "
-        "The function must NOT launch a background process — server belongs in T-05 pane."
+    src = AGENTDESK_ZSH.read_text(encoding="utf-8")
+    start = src.index("_agentdesk_dashboard_ask() {")
+    end = src.index("\n}\n", src.index("_agentdesk_dashboard_url_file() {")) + 3
+    body = src[start:end]
+    assert "dashboard_server.py" in body  # the presence check lives here
+    assert re.search(r"python3[^\n]+dashboard_server\.py[^\n]+&", body) is None
+    assert "export AGENTDESK_DASHBOARD" not in src
+    assert "unset AGENTDESK_DASHBOARD" not in src
+
+
+# ── generic state set/get and dashboard keys ─────────────────────────────────
+
+def _state_lines(tmp_path: Path) -> list:
+    state = tmp_path / "fake_home" / ".config" / "agentdesk" / "last-layout"
+    return state.read_text().splitlines() if state.exists() else []
+
+
+def test_state_set_get_round_trip(tmp_path: Path) -> None:
+    result = _run_zsh_fn_state(
+        "_agentdesk_state_set k1 'a=b=c'; _agentdesk_state_set k2 v2; "
+        "_agentdesk_state_get k1; _agentdesk_state_get k2",
+        tmp_path,
     )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["a=b=c", "v2"]
+
+
+def test_state_wrappers_delegate(tmp_path: Path) -> None:
+    result = _run_zsh_fn_state(
+        "_agentdesk_save_layout via-wrapper w1; _agentdesk_state_get via-wrapper; "
+        "_agentdesk_state_set via-set s1; _agentdesk_load_layout via-set",
+        tmp_path,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["w1", "s1"]
+
+
+def test_dash_key_namespacing(tmp_path: Path) -> None:
+    result = _run_zsh_fn_state("_agentdesk_dash_key proj:abc", tmp_path)
+    assert result.stdout.strip() == "dash:proj:abc"
+
+
+def test_dash_and_layout_keys_coexist(tmp_path: Path) -> None:
+    script = (
+        "_agentdesk_save_layout proj:X claude+shell; "
+        "_agentdesk_state_set \"$(_agentdesk_dash_key proj:X)\" yes; "
+        "_agentdesk_load_layout proj:X; "
+        "_agentdesk_state_get dash:proj:X; "
+        "_agentdesk_state_set dash:proj:X no; "
+        "_agentdesk_load_layout proj:X; "
+        "_agentdesk_state_get dash:proj:X"
+    )
+    result = _run_zsh_fn_state(script, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == ["claude+shell", "yes", "claude+shell", "no"]
+    assert sorted(_state_lines(tmp_path)) == ["dash:proj:X=no", "proj:X=claude+shell"]
+
+
+# ── agentdesk --clean-state ──────────────────────────────────────────────────
+
+def _enc(path: str) -> str:
+    from urllib.parse import quote
+    return quote(path, safe="").replace(".", "%2E").replace("~", "%7E")
+
+
+def _clean_state_file(tmp_path: Path) -> Path:
+    return tmp_path / "fake_home" / ".config" / "agentdesk" / "last-layout"
+
+
+def _run_clean(args: str, tmp_path: Path, extra_env: "Optional[dict]" = None):
+    env = _make_state_env(tmp_path)
+    if extra_env:
+        env.update(extra_env)
+    script = f'source "{AGENTDESK_ZSH}"\nagentdesk {args}'
+    return subprocess.run(
+        ["zsh", "-c", script], env=env, input="", capture_output=True, text=True,
+        cwd=str(tmp_path), timeout=SUBPROCESS_TIMEOUT,
+    )
+
+
+_CLEAN_KEPT = [
+    f"proj:{_enc('/Users/u/code/app')}=claude+shell",
+    "name:mysession=__FIXED__",
+    f"proj:{_enc('/Users/u/pytest-notes')}=__FIXED__",
+    f"proj:{_enc('/private/tmp/claude-501/abc/other')}=shell",
+    "garbage-without-equals",
+    f"proj:{_enc('/Users/u/eq')}=a=b=c",
+]
+_CLEAN_REMOVED = [
+    f"proj:{_enc('/private/var/folders/xy/T/pytest-of-u/pytest-3/test_a0')}=__FIXED__",
+    f"proj:{_enc('/private/tmp/claude-501/abc/scratchpad')}=claude",
+    f"dash:proj:{_enc('/private/var/folders/xy/T/pytest-of-u/pytest-3/test_a0')}=yes",
+    "proj:/private/var/folders/zz/x=__FIXED__",
+]
+
+
+def _write_mixed_state(tmp_path: Path, trailing_newline: bool = True) -> bytes:
+    order = [
+        _CLEAN_KEPT[0], _CLEAN_KEPT[1], _CLEAN_REMOVED[0], _CLEAN_KEPT[2],
+        _CLEAN_REMOVED[1], _CLEAN_KEPT[3], _CLEAN_REMOVED[2], _CLEAN_REMOVED[3],
+        _CLEAN_KEPT[4], _CLEAN_KEPT[5],
+    ]
+    data = ("\n".join(order) + ("\n" if trailing_newline else "")).encode()
+    state = _clean_state_file(tmp_path)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_bytes(data)
+    return data
+
+
+def _backups(tmp_path: Path) -> list:
+    return sorted(_clean_state_file(tmp_path).parent.glob("last-layout.bak.*"))
+
+
+def test_clean_state_removes_polluted_entries_and_backs_up(tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    expected = ("\n".join(_CLEAN_KEPT) + "\n").encode()
+    assert _clean_state_file(tmp_path).read_bytes() == expected
+    backups = _backups(tmp_path)
+    assert len(backups) == 1
+    assert backups[0].read_bytes() == original
+    assert "removed 4 entries" in result.stdout
+    assert str(backups[0]) in result.stdout
+    assert "name:mysession" in result.stdout
+    assert not list(_clean_state_file(tmp_path).parent.glob(".last-layout.clean.*"))
+
+
+def test_clean_state_second_run_is_noop(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path)
+    _run_clean("--clean-state", tmp_path)
+    after_first = _clean_state_file(tmp_path).read_bytes()
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "already clean" in result.stdout
+    assert _clean_state_file(tmp_path).read_bytes() == after_first
+    assert len(_backups(tmp_path)) == 1
+
+
+def test_clean_state_dry_run_writes_nothing(tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    state_dir = _clean_state_file(tmp_path).parent
+    listing = sorted(p.name for p in state_dir.iterdir())
+    dir_mtime = state_dir.stat().st_mtime_ns
+    result = _run_clean("--clean-state --dry-run", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "would remove 4 of 10 entries" in result.stdout
+    assert _clean_state_file(tmp_path).read_bytes() == original
+    assert sorted(p.name for p in state_dir.iterdir()) == listing
+    assert state_dir.stat().st_mtime_ns == dir_mtime
+
+
+def test_clean_state_missing_file(tmp_path: Path) -> None:
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "nothing to clean" in result.stdout
+    assert not _clean_state_file(tmp_path).exists()
+    assert not _clean_state_file(tmp_path).parent.exists()
+
+
+def test_clean_state_preserves_missing_trailing_newline(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path, trailing_newline=False)
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert _clean_state_file(tmp_path).read_bytes() == "\n".join(_CLEAN_KEPT).encode()
+
+
+@pytest.mark.parametrize(
+    "args",
+    ["--clean-state claude", "--clean-state --panes shell", "--dry-run",
+     "--clean-state --mode solo", "--clean-state --pick", "--clean-state --name x",
+     "--clean-state --if-exists new"],
+)
+def test_clean_state_rejects_launch_arguments(args: str, tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    result = _run_clean(args, tmp_path)
+    assert result.returncode == 1
+    assert "Error" in result.stderr
+    assert _clean_state_file(tmp_path).read_bytes() == original
+    assert not _backups(tmp_path)
+
+
+def test_clean_state_runs_inside_zellij_session(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path)
+    result = _run_clean("--clean-state", tmp_path, {"ZELLIJ": "1"})
+    assert result.returncode == 0, result.stderr
+    assert "removed 4 entries" in result.stdout
+
+
+def test_clean_state_ignores_exported_pick_variable(tmp_path: Path) -> None:
+    _write_mixed_state(tmp_path)
+    result = _run_clean("--clean-state", tmp_path, {"AGENTDESK_PICK": "1"})
+    assert result.returncode == 0, result.stderr
+    assert "removed 4 entries" in result.stdout
+
+
+def test_clean_state_backup_name_never_overwrites(tmp_path: Path) -> None:
+    original = _write_mixed_state(tmp_path)
+    state_dir = _clean_state_file(tmp_path).parent
+    _make_state_env(tmp_path)  # creates mock_bin, which is first on PATH
+    stub_bin = tmp_path / "mock_bin"
+    (stub_bin / "date").write_text("#!/bin/sh\necho 20260101-000000\n")
+    (stub_bin / "date").chmod(0o755)
+    (state_dir / "last-layout.bak.20260101-000000").write_text("older backup\n")
+    result = _run_clean("--clean-state", tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert (state_dir / "last-layout.bak.20260101-000000").read_text() == "older backup\n"
+    assert (state_dir / "last-layout.bak.20260101-000000-1").read_bytes() == original
+
+
+# ── detach hint and workflow-artifact placeholders ───────────────────────────
+
+_AGENTDESK_TOOLS_DIR = AGENTDESK_ZSH.parent
+_LEGACY_SETUP = _AGENTDESK_TOOLS_DIR / "setup-agentdesk.sh"
+_PLACEHOLDERS = ("current-plan.md", "review.md", "lessons-learned.md")
+
+
+def test_no_stale_detach_hint_in_launcher_files() -> None:
+    for path in _AGENTDESK_TOOLS_DIR.rglob("*"):
+        if path.is_file():
+            assert "Ctrl+o, then d" not in path.read_text(encoding="utf-8"), path
+
+
+def test_inside_zellij_prints_working_detach_hint(tmp_path: Path) -> None:
+    env = _make_state_env(tmp_path)
+    env["ZELLIJ"] = "1"
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"\nagentdesk claude'],
+        env=env, input="", capture_output=True, text=True, cwd=str(tmp_path),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 1
+    assert "Alt+s, then d" in result.stdout
+    assert "zellij action detach" in result.stdout
+
+
+def test_legacy_inline_launcher_has_new_hint_and_no_placeholders() -> None:
+    text = _LEGACY_SETUP.read_text(encoding="utf-8")
+    start_marker = 'cat > "$helpers_tmp" <<\'EOF\'\n'
+    start = text.index(start_marker) + len(start_marker)
+    end = text.index("\nEOF\n", start)
+    body = text[start:end]
+    assert "agentdesk() {" in body
+    assert "Alt+s, then d" in body and "zellij action detach" in body
+    for name in _PLACEHOLDERS:
+        assert f'touch "$project_root/.workflow_artifacts/{name}"' not in body
+    assert 'touch "$project_root/.workflow_artifacts/repos.md"' in body
+
+
+def test_launch_creates_no_placeholder_files(tmp_path: Path) -> None:
+    project = tmp_path / "freshproj"
+    project.mkdir()
+    env = _make_state_env(tmp_path)
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"\nagentdesk claude shell'],
+        env=env, input="", capture_output=True, text=True, cwd=str(project),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    names = sorted(p.name for p in (project / ".workflow_artifacts").iterdir())
+    assert "repos.md" in names
+    for name in _PLACEHOLDERS:
+        assert name not in names
+
+
+def test_launch_leaves_existing_plan_file_untouched(tmp_path: Path) -> None:
+    project = tmp_path / "existingproj"
+    (project / ".workflow_artifacts").mkdir(parents=True)
+    plan = project / ".workflow_artifacts" / "current-plan.md"
+    plan.write_text("keep me\n")
+    env = _make_state_env(tmp_path)
+    result = subprocess.run(
+        ["zsh", "-c", f'source "{AGENTDESK_ZSH}"\nagentdesk claude shell'],
+        env=env, input="", capture_output=True, text=True, cwd=str(project),
+        timeout=SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    assert plan.read_text() == "keep me\n"
