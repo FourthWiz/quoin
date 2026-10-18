@@ -184,8 +184,8 @@ tail -5 "<cwd>/.workflow_artifacts/memory/recent-sessions.md" 2>/dev/null
 ```
 
 **Case C — File absent or < 2 records:**
-  Report: "No session history found yet. recent-sessions.md will be populated
-  as you work. Nothing to revive."
+  Report: "No session history found yet. recent-sessions.md gets a line each time a
+  session starts, resumes, ends or compacts. Nothing to revive."
   STOP.
 
 **Case A — All 5 session_ids identical:**

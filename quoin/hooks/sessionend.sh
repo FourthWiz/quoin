@@ -43,6 +43,20 @@ STDIN=$(cat)
   rm -f "$_ar_mem/run-continue-arm-$_ar_sid.txt"
 ) </dev/null >/dev/null 2>&1 || true
 
+# Session history for /continue_work: one line when the session ends. jq-free,
+# and the memory directory is never created here.
+(
+  _rs_sid=$(printf '%s' "$STDIN" | sed -n 's/.*"session_id"[[:space:]]*:[[:space:]]*"\([A-Za-z0-9-]*\)".*/\1/p' | head -1)
+  [ -n "$_rs_sid" ] || exit 0
+  _rs_cwd=$(printf '%s' "$STDIN" | sed -n 's/.*"cwd"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+  [ -n "$_rs_cwd" ] || _rs_cwd="$PWD"
+  _rs_root=$(resolve_project_root "$_rs_cwd")
+  _rs_mem="$_rs_root/.workflow_artifacts/memory"
+  [ -n "$_rs_root" ] && [ -d "$_rs_mem" ] || exit 0
+  _rs_now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || _rs_now=$(date +%Y-%m-%dT%H:%M:%SZ)
+  printf '%s | %s\n' "$_rs_now" "$_rs_sid" >> "$_rs_mem/recent-sessions.md"
+) </dev/null >/dev/null 2>&1 || true
+
 # STEP 1: Parse cwd from stdin
 cwd=$(printf '%s' "$STDIN" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
 [ -z "$cwd" ] && cwd="$PWD"
