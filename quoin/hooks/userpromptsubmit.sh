@@ -22,18 +22,32 @@
 STDIN=$(cat) || exit 0
 exec >/dev/null 2>&1
 
-# field KEY: _ok=1 and _v=<first string value of "KEY"> (up to the next
-# quote), _r=<text after the opening quote>. Missing keys and non-string
-# values (null, numbers, objects) leave _ok empty.
+# Byte semantics from here on. In a multibyte locale every prefix or suffix
+# removal over the payload costs time proportional to its length, which made a
+# large pasted prompt slow enough to hit the hook timeout before the arm file
+# was removed. The session-id character class below is also ASCII-only this way.
+LC_ALL=C
+export LC_ALL
+
+# field KEY [novalue]: _ok=1 and _r=<text after the opening quote of the first
+# string value of "KEY">; unless a second argument is given, _v=<that value up
+# to the next quote>. An occurrence of the key name that is not followed by a
+# colon and a string (a value that happens to equal the key, a null, a number)
+# is skipped in favour of the next occurrence. A missing key leaves _ok empty.
 field() {
   _ok=""; _v=""; _r=""
-  case "$STDIN" in *"\"$1\""*) ;; *) return 0 ;; esac
-  _r=${STDIN#*"\"$1\""}
-  while :; do case "$_r" in [[:space:]]*) _r=${_r#?} ;; *) break ;; esac; done
-  case "$_r" in :*) _r=${_r#:} ;; *) return 0 ;; esac
-  while :; do case "$_r" in [[:space:]]*) _r=${_r#?} ;; *) break ;; esac; done
-  case "$_r" in \"*) _r=${_r#\"} ;; *) return 0 ;; esac
-  _v=${_r%%\"*}
+  _s=$STDIN
+  while :; do
+    case "$_s" in *"\"$1\""*) ;; *) return 0 ;; esac
+    _s=${_s#*"\"$1\""}
+    _r=$_s
+    while :; do case "$_r" in [[:space:]]*) _r=${_r#?} ;; *) break ;; esac; done
+    case "$_r" in :*) _r=${_r#:} ;; *) continue ;; esac
+    while :; do case "$_r" in [[:space:]]*) _r=${_r#?} ;; *) break ;; esac; done
+    case "$_r" in \"*) _r=${_r#\"} ;; *) continue ;; esac
+    break
+  done
+  [ -n "$2" ] || _v=${_r%%\"*}
   _ok=1
 }
 
@@ -57,10 +71,29 @@ case "$sid" in ''|*[!A-Za-z0-9-]*) exit 0 ;; esac
 field transcript_path
 case "$_v" in */subagents/*) exit 0 ;; esac
 
-field prompt
-ptxt=$_r
-while :; do case "$ptxt" in [[:blank:]]*) ptxt=${ptxt#?} ;; *) break ;; esac; done
-[ -n "$_ok" ] || ptxt=""
+field prompt novalue
+ptxt=""
+if [ -n "$_ok" ]; then
+  # Leading blanks are dropped with a bounded number of steps (64 blocks of 64,
+  # then up to 64 singles), so a prompt that is mostly whitespace cannot make
+  # the hook slow. A prompt led by more than about 4000 blanks keeps the rest
+  # and is then handled as a plain prompt, which still disarms. The prompt
+  # text is only ever matched by case patterns and never copied piecemeal.
+  ptxt=$_r
+  _n=0
+  while [ "$_n" -lt 64 ]; do
+    case "$ptxt" in
+      [[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]][[:blank:]]*) ptxt=${ptxt#????????????????????????????????????????????????????????????????} ;;
+      *) break ;;
+    esac
+    _n=$((_n + 1))
+  done
+  _n=0
+  while [ "$_n" -lt 64 ]; do
+    case "$ptxt" in [[:blank:]]*) ptxt=${ptxt#?} ;; *) break ;; esac
+    _n=$((_n + 1))
+  done
+fi
 case "$ptxt" in
   '<task-notification>'*) exit 0 ;;
 esac

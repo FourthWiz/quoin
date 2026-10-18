@@ -352,3 +352,75 @@ def test_relative_cwd_without_slash(tmp_path):
     r = _run(HOOK, {"session_id": SID, "cwd": ".", "prompt": "x"}, home, root)
     assert r.returncode == 0
     assert not (m / ("run-continue-arm-%s.txt" % SID)).exists()
+
+
+# ---------------------------------------------------------------------------
+# large prompts, locale, key-named values
+# ---------------------------------------------------------------------------
+
+def _utf8_env(home):
+    env = _env(home)
+    env["LANG"] = "en_US.UTF-8"
+    env.pop("LC_ALL", None)
+    return env
+
+
+@pytest.mark.parametrize("filler", ["a", "caf\u00e9 \"q\"\n"])
+def test_large_prompt_is_fast_and_still_decides(tmp_path, filler):
+    import time
+    big = "/run demo " + filler * (1_000_000 // len(filler))
+    p = Proj(tmp_path, record=True)
+    payload = json.dumps(p.payload(big))
+    assert len(payload) > 900_000
+    start = time.monotonic()
+    r = subprocess.run(["sh", str(HOOK)], input=payload, capture_output=True, text=True,
+                       env=_utf8_env(p.home), cwd=str(p.root), timeout=30)
+    elapsed = time.monotonic() - start
+    assert r.returncode == 0 and r.stdout == ""
+    assert p.state() == (False, True)
+    assert elapsed < 2.5, elapsed
+
+
+def test_large_exempt_prompt_keeps_arm(tmp_path):
+    p = Proj(tmp_path)
+    payload = json.dumps(p.payload("<task-notification>" + "x" * 1_000_000))
+    r = subprocess.run(["sh", str(HOOK)], input=payload, capture_output=True, text=True,
+                       env=_utf8_env(p.home), cwd=str(p.root), timeout=30)
+    assert r.returncode == 0 and p.state() == (True, False)
+
+
+def test_prompt_after_large_leading_blanks(tmp_path):
+    p = Proj(tmp_path, record=True)
+    r = _run(HOOK, p.payload(" " * 150 + "/run demo"), p.home, p.root)
+    assert r.returncode == 0 and p.state() == (False, True)
+    q = Proj(tmp_path, "blanks", record=True)
+    _run(HOOK, q.payload(" " * 200000 + "/run demo"), q.home, q.root)
+    assert q.state()[0] is False  # still disarms, however the prompt is read
+
+
+@needs_sed_grep
+def test_parity_value_equal_to_key_name(tmp_path):
+    def evil(p, d):
+        return {"x": "session_id", "y": "cwd", "z": "prompt", "transcript_path": "t",
+                **{k: v for k, v in d.items()}}
+
+    res, ref = _both(tmp_path, CORPUS["plain"], evil)
+    assert res == ref == (False, False)
+    res, ref = _both(tmp_path, CORPUS["run"], evil)
+    assert res == ref == (False, True)
+
+
+def test_key_named_value_before_key_still_disarms(tmp_path):
+    p = Proj(tmp_path)
+    payload = '{"note":"session_id","session_id":"%s","cwd":"%s","prompt":"hi"}' % (SID, p.root)
+    r = _run(HOOK, payload, p.home, p.root)
+    assert r.returncode == 0 and p.state() == (False, False)
+
+
+def test_non_ascii_session_id_is_ignored(tmp_path):
+    p = Proj(tmp_path)
+    (p.mem / "run-continue-arm-a\u00e9.txt").write_text("x")
+    r = subprocess.run(["sh", str(HOOK)], input=json.dumps(p.payload(session_id="a\u00e9"), ensure_ascii=False),
+                       capture_output=True, text=True, env=_utf8_env(p.home), cwd=str(p.root), timeout=30)
+    assert r.returncode == 0
+    assert (p.mem / "run-continue-arm-a\u00e9.txt").exists()
