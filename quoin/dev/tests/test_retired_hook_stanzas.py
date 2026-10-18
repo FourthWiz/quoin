@@ -90,3 +90,29 @@ def test_event_key_dropped_only_when_removal_emptied_it(tmp_path, monkeypatch):
     result = json.loads((dest / "settings.json").read_text(encoding="utf-8"))
     assert "PreToolUse" not in result["hooks"]
     assert result["hooks"]["Notification"] == []
+
+
+def test_relative_command_and_null_hooks_are_safe(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    dest = home / ".claude"
+    dest.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(installer, "_RETIRED_HOOK_STANZAS", ENTRY)
+    hooks_dir = dest.resolve() / "hooks"
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    # the relative command would resolve into the hooks dir if cwd were dest.
+    monkeypatch.chdir(dest)
+    settings = {"hooks": {"PreToolUse": [
+        _stanza("hooks/retired_demo.sh"),
+        {"matcher": "*", "hooks": None},
+        {"matcher": "*"},
+        _stanza(str(hooks_dir / "retired_demo.sh")),
+    ]}}
+    (dest / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    deploy_hooks(QUOIN_SRC, dest)
+    result = json.loads((dest / "settings.json").read_text(encoding="utf-8"))
+    stanzas = result["hooks"]["PreToolUse"]
+    assert len(stanzas) == 3
+    assert stanzas[0]["hooks"][0]["command"] == "hooks/retired_demo.sh"
+    assert stanzas[1]["hooks"] is None
+    assert "hooks" not in stanzas[2]

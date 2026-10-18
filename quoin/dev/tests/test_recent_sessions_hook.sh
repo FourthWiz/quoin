@@ -128,5 +128,14 @@ else
   fail "Test 9: precompact did not append"
 fi
 
+# Test 10: a session id with characters outside [A-Za-z0-9-] is not recorded
+P=$(new_project 10)
+start "$P" startup 'bad|id' >/dev/null
+if [ -e "$P/.workflow_artifacts/memory/recent-sessions.md" ]; then
+  fail "Test 10: unsafe session id was appended"
+else
+  pass "Test 10: unsafe session id is not appended"
+fi
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

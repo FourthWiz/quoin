@@ -29,7 +29,7 @@ sentinel_globs() {
         'checkpoint-defer-*.txt' \
         'postcompact-reset-*.txt' \
         'checkpoint-pending-compact-*.txt' \
-        'idle-advisory-pending-*.txt'  # orphans on idle-then-abandoned sessions (written userpromptsubmit.sh:99, deleted only on the next prompt of the SAME session at :144); included here so it is reclaimable — see plan D-06
+        'idle-advisory-pending-*.txt'  # no hook writes this family any more; leftovers from older installs stay reclaimable
 }
 
 # read_constants — sources env-var defaults for tunable constants.

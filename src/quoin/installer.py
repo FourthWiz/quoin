@@ -314,14 +314,18 @@ def _remove_retired_stanzas(hooks: dict, hooks_dir: pathlib.Path) -> None:
         def _owned(stanza) -> bool:
             if not isinstance(stanza, dict) or stanza.get("matcher") != matcher:
                 return False
-            cmds = [h.get("command", "") for h in stanza.get("hooks", []) if isinstance(h, dict)]
+            entries = stanza.get("hooks")
+            if not isinstance(entries, list):
+                return False
+            cmds = [h.get("command", "") for h in entries if isinstance(h, dict)]
             if not cmds:
                 return False
             for cmd in cmds:
                 if not isinstance(cmd, str) or not cmd.endswith("/" + basename):
                     return False
                 try:
-                    if pathlib.Path(cmd).expanduser().resolve().parent != hooks_dir:
+                    path = pathlib.Path(cmd).expanduser()
+                    if not path.is_absolute() or path.resolve().parent != hooks_dir:
                         return False
                 except (OSError, RuntimeError):
                     return False
