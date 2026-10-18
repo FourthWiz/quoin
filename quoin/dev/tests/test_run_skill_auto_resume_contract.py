@@ -81,8 +81,8 @@ def _error_handling_region(text: str) -> str:
 def _hook_coop_bullet1_region(text: str) -> str:
     return _slice(
         text,
-        "- **Self-checkpoint before the advisory band.**",
-        "- **There is no block to catch",
+        "- **Self-checkpoint at very high fill.**",
+        "- **No prompt hook reports context.**",
     )
 
 
