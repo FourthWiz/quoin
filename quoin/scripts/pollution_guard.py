@@ -28,7 +28,7 @@ Stdout: exactly one line.
   OK|<score>|<path>     score is below the threshold
   OK|0|                 anything went wrong (no transcript, unreadable, bad args)
 
-Exit code is 0 on every path; the verdict is carried only on stdout so a
+Exit code is 0 on every path; the result is carried only on stdout so a
 crash can never be mistaken for an over-threshold reading. Diagnostics go to
 stderr.
 """

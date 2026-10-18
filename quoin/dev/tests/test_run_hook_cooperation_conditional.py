@@ -68,7 +68,7 @@ def test_no_line_co_occurs_autonomous_and_hooks_dir(slice_text: str) -> None:
 # (c) the self-checkpoint bullet states the save fires when an active
 # run-state record exists, names the trigger it depends on, carries no
 # checkpoint-defer marker (that marker lost its only reader), and does NOT
-# contain `at_stage_boundary` (CRIT-1 round-1 regression guard).
+# contain `at_stage_boundary`.
 def test_self_checkpoint_bullet_states_condition(slice_text: str) -> None:
     bullet = _self_checkpoint_bullet(slice_text)
     assert "SELF_CHECKPOINT_DUE" in bullet
@@ -77,8 +77,7 @@ def test_self_checkpoint_bullet_states_condition(slice_text: str) -> None:
         "not describe writing or skipping it"
     )
     assert "at_stage_boundary" not in bullet, (
-        "self-checkpoint bullet must not reintroduce the round-1 "
-        "at_stage_boundary gate (CRIT-1 round-1 regression)"
+        "self-checkpoint bullet must not gate on at_stage_boundary"
     )
 
 

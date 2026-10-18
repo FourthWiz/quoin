@@ -13,8 +13,9 @@
 # an rm when the arm file exists and a touch on the consent path.
 #
 # The project root walk is an inline copy of resolve_project_root in _lib.sh
-# (outermost .workflow_artifacts strictly below $HOME, else nearest .git, else
-# the start dir). Sourcing the library would cost parse time on every prompt.
+# (outermost project artifacts directory strictly below $HOME, else nearest
+# .git, else the start dir). Sourcing the library would cost parse time on
+# every prompt.
 #
 # Shebang assertion: head -1 ... | grep -qE '^#!/bin/sh( |$)'
 

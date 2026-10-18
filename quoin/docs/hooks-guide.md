@@ -8,11 +8,15 @@ The SessionStart hook writes a sentinel file at `$TMPDIR/quoin-s4-eod-banner-<YY
 
 ## Fail-OPEN / non-aborting deploy contract
 
-Every hook exits 0 on any error (no abort). If jq is absent, hooks fail-OPEN silently (zero protection — see jq soft-required dependency below). The `userpromptsubmit.sh` high-context advisory is only emitted AFTER the pending-prompt file is successfully written; if the write fails, the hook exits 0 (passthrough).
+Every hook exits 0 on any error (no abort). If jq is absent, hooks fail-OPEN silently (zero protection — see jq soft-required dependency below). `userpromptsubmit.sh` prints nothing on any path, so there is no output to hold back on a failed write.
 
-## Exact-token exempt-list for `userpromptsubmit.sh`
+## What `userpromptsubmit.sh` does
 
-The hook splits the prompt on whitespace (after stripping ALL leading whitespace including newlines and carriage returns) and matches the FIRST token verbatim. Exempt commands (the hook exits 0 immediately without threshold check): `/checkpoint`, `/compact`, `/clear`, `/help`. These are exact string matches — not regex. `/checkpointfoo` and `/checkpoint--restore` are NOT exempt (different tokens). **Destructive-subcommand exception:** `/checkpoint --purge` is the ONE documented carve-out from the exempt-list — it is treated as NON-exempt despite the `/checkpoint` first-token match, and the hook falls through to threshold logic. Since `IVG-258 D-06` the fall-through ends in the high-context advisory rather than a refusal: the advisory adds a clause naming `--purge` as destructive, and the command still runs. The carve-out is kept so that clause is reached at all. All other `/checkpoint` subcommands (`--restore`, no-arg) remain exempt.
+The hook maintains run-continuation sentinels and nothing else. It never opens the transcript, prints no stdout on any path, needs no `jq` or `python3`, and costs one `cat` plus, when a file exists to remove or create, one `rm` or `touch`. On a typed prompt it removes the session's `run-continue-arm-<sid>.txt`, so a person taking over stops the Stop-hook continuation. When the prompt starts with `/run` (after optional blanks, followed by whitespace) and a `run-state-*.json` record exists, it also creates `run-continue-consent-<sid>.txt`. Prompts that start with `<task-notification>` and prompts from subagent transcripts leave the arm in place. The project root is found with an inline copy of `resolve_project_root`, and the hook exits at once when the root has no `.workflow_artifacts/memory` directory.
+
+Context fullness is no longer reported per prompt: use native `/context`, and rely on automatic compaction, `SessionStart(compact)` re-entry and the Stop-hook continuation. `/run` reads the context guard itself at heavy-phase boundaries. Pollution detection for self-dispatching skills runs on demand through `scripts/pollution_guard.py`. Session history for `/continue_work` is appended to `recent-sessions.md` by `sessionstart.sh` (startup and resume), `sessionend.sh` and `precompact.sh`; a session begun by `/clear` and still open is not listed until it ends, and no hook creates the memory directory for this purpose.
+
+A running Claude Code session picks up a changed hook through its settings watcher or after a restart.
 
 ## STDIN capture pattern
 
@@ -85,10 +89,10 @@ Hook scripts read these values at runtime via `${QUOIN_*:-default}` parameter ex
 | `BPT` | `8.0` | `QUOIN_BYTES_PER_TOKEN` | Bytes per token for the byte-estimate fallback (V-03 calibrated) |
 | `LIMIT` | `150000` | `QUOIN_EFFECTIVE_CONTEXT_LIMIT` | Unset: the window is detected per model (200k / 1M). Set: an explicit window override on the real path, and the estimate denominator (150000 when unset) |
 | `CONTEXT_TAIL_BYTES` | `2097152` (cap `67108864`) | `QUOIN_CONTEXT_TAIL_BYTES` | Bytes of transcript tail scanned for the newest usage record; read inline, not exported |
-| `STOP_BPS` | `7000` | `QUOIN_STOP_BPS` | Advisory threshold in basis-points (7000 = 70.00%) |
-| `BLOCK_BPS` | `9500` | `QUOIN_BLOCK_BPS` | High-context advisory threshold in basis-points (9500 = 95.00%) |
-| `STALE_DAYS` | `7` | `QUOIN_STALE_SENTINEL_DAYS` | Days after which pending-prompt-*.txt / pending-restore-*.txt are swept; long-lived sessions may extend to 14+ |
-| `POLLUTION_THRESHOLD` | `5000` | `QUOIN_POLLUTION_THRESHOLD` | Score threshold for pollution dispatch (score = transcript_kB + weighted tool-use count); 5000 ≈ 5MB transcript or ~1MB + heavy tool use |
+| `STOP_BPS` | `7000` | `QUOIN_STOP_BPS` | Former advisory tier in basis-points (7000 = 70.00%); still exported by `read_constants`, no prompt hook reads it any more |
+| `BLOCK_BPS` | `9500` | `QUOIN_BLOCK_BPS` | Former high-context tier in basis-points (9500 = 95.00%); still exported by `read_constants`, no prompt hook reads it any more |
+| `STALE_DAYS` | `7` | `QUOIN_STALE_SENTINEL_DAYS` | Days after which pending-prompt-*.txt (left by older installs) and pending-restore-*.txt are swept; long-lived sessions may extend to 14+ |
+| `POLLUTION_THRESHOLD` | `5000` | `QUOIN_POLLUTION_THRESHOLD` | Score threshold for pollution dispatch, read by `scripts/pollution_guard.py` (score = transcript_kB + weighted tool-use count); 5000 ≈ 5MB transcript or ~1MB + heavy tool use |
 | `SUBPROCESS_TIMEOUT` | `30` | `QUOIN_SUBPROCESS_TIMEOUT` | Seconds bounding `git worktree add` in `worktreecreate.sh` (and short git subprocesses in the core scripts); ~2× the observed Drive baseline. Fail-OPEN if the `timeout` binary is absent |
 | `WORKTREE_SELFGEN` | `1` (on) | `QUOIN_WORKTREE_SELFGEN` | `0` disables hook self-generation of branch/worktree path (restores the old skip-when-harness-omits behaviour) |
 | `RUN_STATE_STALE_DAYS` | `1` (`14` in `run_state_probe`) | `QUOIN_RUN_STATE_STALE_DAYS` | Run-state record freshness window in days. Two defaults by design — see `hooks-table.md:25-28` for the full two-window explanation |
@@ -101,24 +105,24 @@ Hook scripts read these values at runtime via `${QUOIN_*:-default}` parameter ex
 
 ## Context reading
 
-The context-utilization advisory is measured from real token usage, not from transcript size.
+The context reading used by `/checkpoint`, the phase-boundary guard and the compaction telemetry is measured from real token usage, not from transcript size.
 
 - **What is read.** The newest main-chain assistant record's usage: `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`. Sidechain (subagent) records and synthetic error records never count. A compact-boundary record carrying `postTokens` replaces the reading when it is newer than the last usage record.
 - **Window.** Resolved in this order: an explicit `QUOIN_EFFECTIVE_CONTEXT_LIMIT` override; `CLAUDE_CODE_DISABLE_1M_CONTEXT` (200k); a recorded "Usage credits required for 1M context" clamp (200k); a `[1m]` suffix on the record's model, on `ANTHROPIC_MODEL`, or on the `model` in project `settings.local.json`, project `settings.json` or user `settings.json` (1M); the model table (models that are natively 1M, or 200k); an observed peak above 200k (1M); otherwise 200k.
-- **Fallback.** When no usage record can be read (no `jq`, an empty or unparseable tail, a transcript with no usage), the hook falls back to a byte estimate: transcript bytes divided by `QUOIN_BYTES_PER_TOKEN`, then by `QUOIN_EFFECTIVE_CONTEXT_LIMIT` (150000 when unset).
-- **Labels.** Every advisory names its source: `context at 17.08% (real) — …` for a measured value and `context at ~40.12% (estimated) — …` for the fallback. The `/checkpoint` high-utilization notice uses the same labels.
-- **Scan window.** Only the last `QUOIN_CONTEXT_TAIL_BYTES` of the transcript are scanned (default 2097152, capped at 67108864; read inline, not exported). The scan costs about 70 ms per prompt on macOS at the default (mostly BSD `tail -c`, flat with file size) and about 2 s per prompt at the cap.
+- **Fallback.** When no usage record can be read (no `jq`, an empty or unparseable tail, a transcript with no usage), the shell reader falls back to a byte estimate: transcript bytes divided by `QUOIN_BYTES_PER_TOKEN`, then by `QUOIN_EFFECTIVE_CONTEXT_LIMIT` (150000 when unset).
+- **Labels.** Every notice names its source: `context at 17.08% (real) — …` for a measured value and `context at ~40.12% (estimated) — …` for the fallback. The `/checkpoint` high-utilization notice uses the same labels.
+- **Scan window.** Only the last `QUOIN_CONTEXT_TAIL_BYTES` of the transcript are scanned (default 2097152, capped at 67108864; read inline, not exported). The scan is paid only by the callers that ask for a reading (`/checkpoint`, the guard, the compaction hooks); no prompt hook scans the transcript.
 
 **Migration.** `QUOIN_EFFECTIVE_CONTEXT_LIMIT` used to be the 100% denominator for every reading. It now pins the window on the real path, so a value exported under the old meaning (for example 150000) makes a 1M-window session over-warn. Unset it unless you want to force a window.
 
 **Known divergences between the shell and Python readers.**
-- Without `jq` the hook can only estimate, while the phase-boundary guard (`context_budget_guard.py`) still reads real usage.
+- Without `jq` the shell reader can only estimate, while the phase-boundary guard (`context_budget_guard.py`) still reads real usage.
 - An invalid `QUOIN_EFFECTIVE_CONTEXT_LIMIT` on the estimate path: the awk estimate has no validation, the Python estimate falls back to 150000.
 - Lines nested deeper than 256 levels: `jq` skips the line, Python parses it until its own recursion limit (from about a thousand to over a hundred thousand levels, depending on the interpreter; the 256 figure is the `jq` 1.7 limit). A usage record is never nested that deeply in practice.
 - A 1M-credits clamp is forgotten once its record scrolls out of the scanned tail.
 - Settings files holding several concatenated JSON values are read by `jq` value by value: a `[1m]` in any of them counts, while Python skips the whole file ("Extra data").
 
-**Telemetry fields.** Compaction telemetry rows gain `real_tokens_before` (pre rows), `real_tokens_after` (post rows), `real_window` and `reading_source`. All are `null` when no real value exists. `reading_source` names the source of the `real_tokens_*` value: `real` when filled, `estimated` when only the byte estimate exists, `null` when neither does. In measurements of six compactions, the compact-boundary record was written after the PostCompact hook returned (the hook's measured transcript size equalled the boundary line's start offset every time), so `real_tokens_after` is normally `null` today; the first advisory after the compaction reads the post-compaction tokens instead. If Claude Code starts writing the boundary first, the field fills with no change here.
+**Telemetry fields.** Compaction telemetry rows gain `real_tokens_before` (pre rows), `real_tokens_after` (post rows), `real_window` and `reading_source`. All are `null` when no real value exists. `reading_source` names the source of the `real_tokens_*` value: `real` when filled, `estimated` when only the byte estimate exists, `null` when neither does. In measurements of six compactions, the compact-boundary record was written after the PostCompact hook returned (the hook's measured transcript size equalled the boundary line's start offset every time), so `real_tokens_after` is normally `null` today; the next reading after the compaction reads the post-compaction tokens instead. If Claude Code starts writing the boundary first, the field fills with no change here.
 
 ### 200k-window tier reachability
 
@@ -137,7 +141,7 @@ Claude Code auto-compacts at `window − min(max output, 20000) − 13000` token
 
 Three shipped mechanisms keep a `/run` task resumable across a compaction:
 
-- **The task-keyed run-state record** (`run-state-<task>.json` + `run-notes-<task>.md`) is written by `run_state_select`/`run_state_probe` in `_lib.sh` and is the source of truth `userpromptsubmit.sh` reads to detect an active `/run` task.
+- **The task-keyed run-state record** (`run-state-<task>.json` + `run-notes-<task>.md`) is written by `run_state_select`/`run_state_probe` in `_lib.sh` and is the source of truth the consent rule in `userpromptsubmit.sh` and the other hooks read to detect an active `/run` task.
 - **`precompact.sh`'s three-row always-allow table** — the hook always emits `{"decision": "allow"}` (it never blocks compaction); which of its three rows fires determines whether a checkpoint is written and which sentinel is left behind. See `hooks-table.md` for the full truth table.
 - **The `SessionStart`/`compact` re-entry branch** in `sessionstart.sh` reads the sentinel `precompact.sh` left and re-hydrates the resuming session (banner, pending-restore prompt, or silent pass-through, depending on which row fired).
 
