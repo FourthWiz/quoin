@@ -305,10 +305,10 @@ def test_autonomous_mode_section_no_autonomous_hooks_pairing():
 
 def test_only_recorded_non_human_prefix_is_task_notification():
     text = _load(USERPROMPTSUBMIT_SH)
-    prefixes = re.findall(r"\(<([a-zA-Z0-9_-]+)>\)", text)
+    prefixes = re.findall(r"'<([a-zA-Z0-9_-]+)>'\*\)", text)
     assert prefixes == ["task-notification"], (
-        f"userpromptsubmit.sh's non-human prefix exemption list is {prefixes}; "
-        "expected exactly the D-26 seed ['task-notification']. If probe (a2) "
-        "was re-run and found additional stable prefixes, update this pin "
-        "alongside the exemption regex."
+        f"userpromptsubmit.sh's non-human prefix exemption case arms are {prefixes}; "
+        "expected exactly the D-26 seed ['task-notification'] (one quoted "
+        "'<name>'*) arm). If probe (a2) was re-run and found additional stable "
+        "prefixes, update this pin alongside the exemption case arm."
     )
