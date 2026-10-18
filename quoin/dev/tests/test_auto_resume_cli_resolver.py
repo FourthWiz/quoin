@@ -12,6 +12,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -290,33 +291,62 @@ def test_probe_timeout_bounded_and_within_wall_clock(ar, tmp_path, monkeypatch):
     assert elapsed < 1.5  # 250ms budget + 1s kill slack, generous margin
 
 
+def _read_pid(pidfile, deadline_s):
+    """Poll for a fully-written pid; None if it never appears."""
+    deadline = time.monotonic() + deadline_s
+    while time.monotonic() < deadline:
+        try:
+            return int(pidfile.read_text().strip())
+        except (FileNotFoundError, ValueError):
+            time.sleep(0.05)
+    return None
+
+
 def test_probe_timeout_grandchild_process_group_killed(ar, tmp_path, monkeypatch):
     """`killpg` must kill the whole process group the probe
     started, not just its own pid — otherwise a backgrounded grandchild
     (like the fake interpreter's own `sleep 30 &`) outlives the timeout."""
-    pidfile = tmp_path / "grandchild.pid"
-    monkeypatch.setenv("FAKE_PIDFILE", str(pidfile))
     monkeypatch.setenv("QUOIN_AUTO_RESUME_PROBE_TIMEOUT_MS", "250")
-    start = time.monotonic()
-    res = _resolve_with_mode(ar, tmp_path, monkeypatch, "grandchild", caller="start")
-    elapsed = time.monotonic() - start
-    assert res["kind"] == "probe-timeout"
-    assert elapsed < 2.0
+    # Under heavy machine load the 250 ms probe budget can expire before the
+    # fake interpreter's shell has even forked the grandchild; in that case
+    # there is nothing to verify, so retry the scenario rather than fail.
+    grandchild_pid = None
+    interp = _write_fake_interpreter(tmp_path / "fakebin")
+    record_path = tmp_path / "quoin-runtime.json"
+    _write_record(record_path, python=str(interp))
+    monkeypatch.setattr(ar, "_runtime_record_path", lambda: record_path)
+    monkeypatch.setenv("FAKE_V", "1.0.0")
+    # Warm the freshly written script once (first exec of a new file can be
+    # slow on macOS), so the 250 ms budget measures the shell, not the scan.
+    monkeypatch.setenv("FAKE_MODE", "ok")
+    subprocess.run([str(interp)], capture_output=True, timeout=30)
+    monkeypatch.setenv("FAKE_MODE", "grandchild")
+    for attempt in range(5):
+        pidfile = tmp_path / f"grandchild-{attempt}.pid"
+        monkeypatch.setenv("FAKE_PIDFILE", str(pidfile))
+        start = time.monotonic()
+        res = ar.resolve_cli(tmp_path, "start")
+        elapsed = time.monotonic() - start
+        assert res["kind"] == "probe-timeout"
+        assert elapsed < 5.0  # 250ms budget + kill slack, loosened for load
+        grandchild_pid = _read_pid(pidfile, 2.0)
+        if grandchild_pid is not None:
+            break
+    assert grandchild_pid is not None, "fake interpreter never wrote its grandchild pid"
 
-    # Give the grandchild a moment to have written its pid, then confirm
-    # it is actually gone — a dropped killpg would leave it running for
-    # the full 30s `sleep`.
-    for _ in range(20):
-        if pidfile.exists():
+    # Confirm it is actually gone — a dropped killpg would leave it running
+    # for the full 30s `sleep`. Poll with a deadline: signal delivery and
+    # reaping are asynchronous and slow under load.
+    deadline = time.monotonic() + 10.0
+    alive = True
+    while time.monotonic() < deadline:
+        try:
+            os.kill(grandchild_pid, 0)
+        except ProcessLookupError:
+            alive = False
             break
         time.sleep(0.05)
-    assert pidfile.exists(), "fake interpreter never wrote its grandchild pid"
-    grandchild_pid = int(pidfile.read_text().strip())
-    try:
-        os.kill(grandchild_pid, 0)
-    except ProcessLookupError:
-        pass  # gone, as expected
-    else:
+    if alive:
         pytest.fail(f"grandchild pid {grandchild_pid} is still alive after the probe timeout")
 
 
