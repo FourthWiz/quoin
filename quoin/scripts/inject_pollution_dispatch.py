@@ -723,13 +723,13 @@ This skill runs in the user's current session. If the session is polluted (high 
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
 {skill_dispatch_contract}
@@ -773,7 +773,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 """
@@ -1222,7 +1222,8 @@ def run_check() -> int:
         "[no-redispatch]",
         "[quoin-S-1: cannot extract per-skill dispatch contract; running in main]",
         "[quoin-S-1: pollution dispatch unavailable; proceeding in current session]",
-        "pollution_score",
+        "pollution_guard.py",
+        "OVER|",
         "POLLUTION_THRESHOLD",
         'model: "opus"',
         "Usage credits required for 1M context",
@@ -1231,9 +1232,9 @@ def run_check() -> int:
     ]
     # Required file-wide strings (test_pollution_score_extraction.py)
     score_extraction_strings = [
-        "pollution_score",
-        "pollution-score-latest.txt",
-        "sessions/",
+        "pollution_guard.py",
+        "OVER|",
+        "OK|0|",
     ]
     # MIN-A: literal default threshold value must be in block
     threshold_token = "5000"

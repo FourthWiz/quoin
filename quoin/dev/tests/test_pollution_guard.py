@@ -15,6 +15,8 @@ TESTS_DIR = Path(__file__).resolve().parent
 SCRIPTS = TESTS_DIR.parents[1] / "scripts"
 GUARD = SCRIPTS / "pollution_guard.py"
 OLD_LIB_REF = "906e072f"
+# The shell scorer was removed from _lib.sh; the frozen copy at OLD_LIB_REF is the oracle.
+OLD_SCORER = "compute_pollution" + "_score"
 UUID = "11111111-2222-3333-4444-555555555555"
 
 
@@ -251,7 +253,7 @@ def _old_lib(tmp_path):
 def _old_score(lib, transcript, tmp_path):
     env = dict(os.environ, TMPDIR=str(tmp_path / "oldtmp"))
     (tmp_path / "oldtmp").mkdir(exist_ok=True)
-    out = subprocess.run(["sh", "-c", f'. "{lib}" && compute_pollution_score "{transcript}"'],
+    out = subprocess.run(["sh", "-c", f'. "{lib}" && {OLD_SCORER} "{transcript}"'],
                          capture_output=True, text=True, env=env)
     return int(out.stdout.strip())
 
