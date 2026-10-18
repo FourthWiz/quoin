@@ -40,6 +40,7 @@ SCANNED_FILES = [
 IMPORT_BLACKLIST = [
     "cost_from_jsonl",
     "session_age_guard",
+    "pollution_guard",
     # IVG-111 stage 6 (T-07): the nested-transcript resolver/pricer and the
     # historical backfill script are Claude-adapter-owned (D-04/R-05) — core
     # must never import either.

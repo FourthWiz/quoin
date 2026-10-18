@@ -103,6 +103,7 @@ DEPLOYED_SCRIPTS = (
     "classify_critic_issues.py",
     "build_preambles.py",
     "session_age_guard.py",
+    "pollution_guard.py",  # Claude-adapter-owned §0' on-demand pollution score (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors session_age_guard.py)
     "pidfile_helpers.sh",
     "sleep_score.py",
     "analyze_cost_ledger.py",
