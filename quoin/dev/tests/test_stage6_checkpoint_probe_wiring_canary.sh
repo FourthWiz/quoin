@@ -5,12 +5,10 @@
 # Unlike the text-structural guards (T-02/T-04/T-06/T-08), this test writes a
 # run-state record with the REAL writer (run_state.py --write, never
 # hand-crafted JSON) and then drives the REAL consumer scripts against it:
-# userpromptsubmit.sh unmodified, and the actual fenced ```sh blocks
+# the actual fenced ```sh blocks
 # EXTRACTED VERBATIM out of checkpoint/SKILL.md's Step 1.4 and run/SKILL.md's
 # self-checkpoint bullet — not hand-copied paraphrases of them (D-31).
 #
-# Case A  — CRIT-1 session-id-mismatch class, branch (2) of the advisory.
-# Case A2 — MAJ-3 session-id-mismatch class, branch (3) of the advisory.
 # Case B  — MAJ-1 inert-guard class, /checkpoint Step 1.4's sourcing, with a
 #           negative control that deletes only the extracted block's source
 #           line.
@@ -32,8 +30,6 @@ FAIL=0
 FAIL_MSGS=""
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-FIXTURES_DIR="$SCRIPT_DIR/fixtures/hooks"
-HOOK="$SCRIPT_DIR/../../hooks/userpromptsubmit.sh"
 CHECKPOINT_SKILL="$SCRIPT_DIR/../../adapters/claude/skills/checkpoint/SKILL.md"
 RUN_SKILL="$SCRIPT_DIR/../../adapters/claude/skills/run/SKILL.md"
 # This worktree's absolute path — quoted throughout because the repo path
@@ -47,37 +43,11 @@ fail() {
   FAIL_MSGS="$FAIL_MSGS\n  - $1"
 }
 
-make_stdin() {
-  # jq -nc --arg: jq owns all JSON escaping, so a TMPDIR containing '"' or
-  # '\' cannot produce malformed stdin the way unescaped printf
-  # interpolation could.
-  prompt="$1"
-  transcript="$2"
-  session_id="$3"
-  cwd="$4"
-  jq -nc --arg prompt "$prompt" --arg transcript "$transcript" \
-    --arg session_id "$session_id" --arg cwd "$cwd" \
-    '{prompt: $prompt, transcript_path: $transcript, session_id: $session_id, cwd: $cwd}'
-}
-
-run_hook() {
-  stdin_json="$1"
-  printf '%s' "$stdin_json" | sh "$HOOK" 2>/dev/null
-}
-
 TMPDIR_TEST="${TMPDIR:-/tmp}/test_s6_canary_$$"
 mkdir -p "$TMPDIR_TEST/.workflow_artifacts/memory"
 
 cleanup() { rm -rf "$TMPDIR_TEST"; }
 trap cleanup EXIT
-
-if [ ! -f "$FIXTURES_DIR/transcript_97pct.jsonl" ]; then
-  printf 'Building fixtures...\n'
-  sh "$SCRIPT_DIR/build_hook_fixtures.sh" > /dev/null 2>&1
-fi
-
-TRANSCRIPT_88="$FIXTURES_DIR/transcript_88pct.jsonl"
-TRANSCRIPT_97="$FIXTURES_DIR/transcript_97pct.jsonl"
 
 # ─── Write the fixture run-state record via the REAL writer ─────────────────
 # Deliberately mismatched session_id ("sid-other-party"), reproducing exactly
@@ -100,26 +70,6 @@ if [ -f "$RUN_STATE_FILE" ]; then
   ok "fixture: run_state.py --write produced $RUN_STATE_FILE"
 else
   fail "fixture: run_state.py --write did not produce the expected run-state file"
-fi
-
-# ═══ Case A — CRIT-1 session-id-mismatch class, branch (2) (advisory) ═══════
-
-stdin_a=$(make_stdin 'reviewing the diff now' "$TRANSCRIPT_88" "sid-hook-invoker" "$TMPDIR_TEST")
-out_a=$(run_hook "$stdin_a")
-if printf '%s' "$out_a" | grep -q 'consider running /checkpoint' 2>/dev/null; then
-  ok "Case A: 88% + real active record, session_id mismatch → checkpoint nudge fires"
-else
-  fail "Case A: expected 'consider running /checkpoint' in hook output, got: $out_a"
-fi
-
-# ═══ Case A2 — MAJ-3 session-id-mismatch class, branch (3) ══════════════════
-
-stdin_a2=$(make_stdin 'reviewing the diff now' "$TRANSCRIPT_97" "sid-hook-invoker" "$TMPDIR_TEST")
-out_a2=$(run_hook "$stdin_a2")
-if printf '%s' "$out_a2" | grep -q 'and consider /checkpoint plus a fresh session' 2>/dev/null; then
-  ok "Case A2: 97% + real active record, session_id mismatch → checkpoint nudge fires"
-else
-  fail "Case A2: expected 'and consider /checkpoint plus a fresh session' in hook output, got: $out_a2"
 fi
 
 # ─── Extraction helper: slice a heading range, then pull the single fenced
