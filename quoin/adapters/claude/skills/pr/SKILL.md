@@ -406,7 +406,4 @@ with phase `pr` (see cost tracking rules in CLAUDE.md).
 ## Session state
 
 Write to `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` after the PR
-is created and after post-merge cleanup, to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`
-(Current stage `pr`; Next command none after merge). A same-day file that
-`/end_of_task` already flipped keeps its `finalized_by_end_of_task` line and gets
-`end_of_day_due: yes` again.
+is created and after post-merge cleanup, per `__QUOIN_HOME__/memory/session-schema.md` (stage `pr`, no next command after merge).

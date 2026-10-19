@@ -35,7 +35,7 @@ import verify_claims  # noqa: E402
 DOC_TEXT = DOC.read_text(encoding="utf-8")
 DEMO_DAY = date(2026, 1, 2)
 
-SESSION_WRITERS = (
+_writer_skills = (
     "architect", "critic", "enrich", "plan", "implement",
     "revise", "revise-fast", "review", "security_review", "specify",
 )
@@ -253,7 +253,7 @@ def test_orchestrator_variant_headings_documented(tmp_path):
 
 # -------------------------------------------------------------- writer pins
 
-@pytest.mark.parametrize("name", SESSION_WRITERS)
+@pytest.mark.parametrize("name", _writer_skills)
 def test_save_session_state_slice_points_at_schema(name):
     sl = _slice(_skill(name), "\n## Save session state\n", r"^## ")
     assert SCHEMA_CITE in sl, name
@@ -262,7 +262,7 @@ def test_save_session_state_slice_points_at_schema(name):
     assert "YAML" not in sl, name
 
 
-NAMED_STEPS = {
+_named_steps = {
     "end_of_day": ("### Step 1: Save current session state", r"^### Step "),
     "end_of_task": ("3. Update", r"^\s+3a\. "),
     "rollback": ("### Step 5: Update session state", r"^### "),
@@ -270,9 +270,9 @@ NAMED_STEPS = {
 }
 
 
-@pytest.mark.parametrize("name", sorted(NAMED_STEPS))
+@pytest.mark.parametrize("name", sorted(_named_steps))
 def test_named_session_step_points_at_schema(name):
-    start, end = NAMED_STEPS[name]
+    start, end = _named_steps[name]
     text = _skill(name)
     if name == "end_of_task":
         start = "3. Update `.workflow_artifacts/memory/sessions/<date>-<task_name>.md`"
