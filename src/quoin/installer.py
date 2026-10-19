@@ -163,6 +163,17 @@ DEPLOYED_SCRIPTS = (
 
 # T-05: obsolete artifacts to remove from prior installs
 OBSOLETE_SCRIPTS = ("summarize_for_human.py", "with_env.sh", "audit_corpus_coverage.py")
+
+# Skills quoin used to ship; an upgrade removes the deployed directory when it
+# is quoin's own copy (see cleanup_obsolete_skills).
+OBSOLETE_SKILLS = ("checkpoint",)
+
+# Memory files quoin used to ship; removed from dest_root/memory/ on upgrade.
+OBSOLETE_MEMORY_FILES: tuple[str, ...] = ()
+
+# skillOverrides keys quoin used to write. A key is removed only while it still
+# holds the value quoin wrote; any other value is the user's own choice.
+RETIRED_SKILL_OVERRIDES = {"checkpoint": "on"}
 OBSOLETE_TESTS = ("test_summarize_for_human.py", "test_with_env_sh.py")
 
 # Canonical skillOverrides tier list written to settings.json on install.
@@ -1052,8 +1063,14 @@ def _merge_skill_overrides(settings: dict) -> int:
 
     Returns count of keys added or changed.
     """
+    if "skillOverrides" in settings and not isinstance(settings["skillOverrides"], dict):
+        return 0
     overrides = settings.setdefault("skillOverrides", {})
     changed = 0
+    for skill, tier in RETIRED_SKILL_OVERRIDES.items():
+        if skill not in SKILL_OVERRIDES and overrides.get(skill) == tier:
+            del overrides[skill]
+            changed += 1
     for skill, tier in SKILL_OVERRIDES.items():
         if overrides.get(skill) != tier:
             overrides[skill] = tier
@@ -1294,6 +1311,50 @@ def cleanup_obsolete_scripts(dest_root: pathlib.Path) -> None:
         if target.exists():
             target.unlink()
             print(f"Removed obsolete {fname} from {dest_root}/scripts/tests/ (Stage 5 cleanup)")
+
+
+def _is_quoin_skill_dir(skill_dir: pathlib.Path, name: str) -> bool:
+    """True when skill_dir holds a quoin-installed SKILL.md for `name`."""
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return False
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    front = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
+    if front is None:
+        return False
+    declared = re.search(r"^name:\s*(\S+)\s*$", front.group(1), re.MULTILINE)
+    if declared is None or declared.group(1).strip("'\"") != name:
+        return False
+    return "quoin" in text.lower()
+
+
+def cleanup_obsolete_skills(dest_root: pathlib.Path) -> None:
+    """Remove skill directories quoin no longer ships from dest_root/skills/.
+
+    A directory is removed only when its SKILL.md is quoin's own copy; a
+    same-named skill the user installed from elsewhere is left in place.
+    """
+    for name in OBSOLETE_SKILLS:
+        skill_dir = dest_root / "skills" / name
+        if not skill_dir.is_dir():
+            continue
+        if _is_quoin_skill_dir(skill_dir, name):
+            shutil.rmtree(skill_dir)
+            print(f"Removed obsolete skill {name} from {dest_root}/skills/")
+        elif (skill_dir / "SKILL.md").is_file():
+            print(f"quoin: leaving {skill_dir} (not a quoin-installed skill)")
+
+
+def cleanup_obsolete_memory(dest_root: pathlib.Path) -> None:
+    """Remove memory files quoin no longer ships from dest_root/memory/."""
+    for fname in OBSOLETE_MEMORY_FILES:
+        target = dest_root / "memory" / fname
+        if target.exists():
+            target.unlink()
+            print(f"Removed obsolete {fname} from {dest_root}/memory/")
 
 
 # ── T-06 ──────────────────────────────────────────────────────────────────────

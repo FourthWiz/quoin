@@ -524,6 +524,8 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     installer.deploy_core_workflow(source_dir, dest_root)  # IVG-248: portable workflow docs (D-10)
     installer.deploy_dashboard_assets(source_dir, dest_root)  # T-12: SPA assets (D-11)
     installer.cleanup_obsolete_scripts(dest_root)
+    installer.cleanup_obsolete_skills(dest_root)
+    installer.cleanup_obsolete_memory(dest_root)
 
     # Hooks
     try:
