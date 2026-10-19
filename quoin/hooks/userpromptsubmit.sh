@@ -9,8 +9,9 @@
 #
 # Contract: reads session_id, transcript_path, cwd and prompt from the stdin
 # JSON. Never opens the transcript. No stdout on any path. Fail-OPEN: every
-# error ends in exit 0. The script is fork-free apart from one cat for stdin,
-# an rm when the arm file exists and a touch on the consent path.
+# error ends in exit 0. For payloads up to 8 KB the script is fork-free apart
+# from one cat for stdin, an rm when the arm file exists and a touch on the
+# consent path; a larger payload adds one awk pass that extracts the fields.
 #
 # The project root walk is an inline copy of resolve_project_root in _lib.sh
 # (outermost project artifacts directory strictly below $HOME, else nearest
@@ -65,20 +66,52 @@ parent() {
   esac
 }
 
-field session_id; sid=$_v
+if [ "${#STDIN}" -gt 8192 ]; then
+  # Large payload: the builtin prefix and suffix removals above cost time
+  # quadratic in the payload length or in how far a key sits from the start
+  # (tens of seconds for 100 KB on macOS /bin/sh and on dash, whichever order
+  # the keys come in), so one awk pass extracts the same fields instead. It keeps
+  # the first usable occurrence of each key and the same 4160-blank bound.
+  _x=$(printf '%s' "$STDIN" | awk 'BEGIN { RS = "\001" }
+    function val(k,   r) {
+      if (!match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"")) return ""
+      r = substr($0, RSTART + RLENGTH); sub(/".*/, "", r); return "1" r
+    }
+    { s = val("session_id"); t = val("transcript_path"); c = val("cwd"); p = ""
+      if (match($0, "\"prompt\"[[:space:]]*:[[:space:]]*\"")) {
+        p = substr($0, RSTART + RLENGTH, 4224); b = p; sub(/^[ \t]*/, "", b)
+        n = length(p) - length(b); if (n > 4160) n = 4160
+        p = "1" substr(p, n + 1, 32); gsub(/\n/, " ", p)
+      }
+      printf "%s\n%s\n%s\n%s\n", s, t, c, p }')
+  { IFS= read -r sid; IFS= read -r tp; IFS= read -r cwd; IFS= read -r ptxt; } <<EOT
+$_x
+EOT
+  sid=${sid#1}; tp=${tp#1}; cwd=${cwd#1}
+  _big=1
+else
+  _big=""
+  field session_id; sid=$_v
+  field transcript_path; tp=$_v
+fi
 case "$sid" in ''|*[!A-Za-z0-9-]*) exit 0 ;; esac
+case "$tp" in */subagents/*) exit 0 ;; esac
 
-field transcript_path
-case "$_v" in */subagents/*) exit 0 ;; esac
-
-field prompt novalue
-ptxt=""
-if [ -n "$_ok" ]; then
+if [ -n "$_big" ]; then
+  _ok=""; [ -n "$ptxt" ] && _ok=big
+  ptxt=${ptxt#1}
+else
+  field prompt novalue
+  ptxt=""
+fi
+if [ "$_ok" = 1 ]; then
   # Leading blanks are dropped with a bounded number of steps (64 blocks of 64,
   # then up to 64 singles), so a prompt that is mostly whitespace cannot make
-  # the hook slow. A prompt led by more than about 4000 blanks keeps the rest
-  # and is then handled as a plain prompt, which still disarms. The prompt
-  # text is only ever matched by case patterns and never copied piecemeal.
+  # the hook slow. A prompt led by more than 4160 blanks (64 * 64 + 64) keeps
+  # the rest and is then handled as a plain prompt: it still disarms, but neither
+  # the /run consent nor the task-notification exemption applies (both fail
+  # safe). The prompt text is only ever matched by case patterns and never
+  # copied piecemeal.
   ptxt=$_r
   _n=0
   while [ "$_n" -lt 64 ]; do
@@ -98,8 +131,7 @@ case "$ptxt" in
   '<task-notification>'*) exit 0 ;;
 esac
 
-field cwd
-cwd=$_v
+[ -n "$_big" ] || { field cwd; cwd=$_v; }
 [ -n "$cwd" ] || cwd=$PWD
 
 ceil=${HOME:-/}

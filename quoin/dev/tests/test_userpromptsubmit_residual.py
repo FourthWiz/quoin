@@ -72,8 +72,11 @@ def test_shebang_and_static_text():
     assert re.match(r"#!/bin/sh( |\n)", text)
     code = "\n".join(l for l in text.splitlines() if not l.lstrip().startswith("#"))
     for token in (r"\bjq\b", r"\bpython3\b", r"\btail\b", r"\bwc\b", r"_lib\.sh",
-                  r"\bsed\b", r"\bgrep\b", r"\bawk\b", r"\bdirname\b"):
+                  r"\bsed\b", r"\bgrep\b", r"\bdirname\b"):
         assert not re.search(token, code), token
+    # awk is allowed only for the extraction of a payload over 8 KB
+    assert len(re.findall(r"\bawk\b", code)) == 1
+    assert code.index("-gt 8192") < code.index("awk")
 
 
 def test_exemption_is_a_single_case_arm():
@@ -370,15 +373,47 @@ def test_large_prompt_is_fast_and_still_decides(tmp_path, filler):
     import time
     big = "/run demo " + filler * (1_000_000 // len(filler))
     p = Proj(tmp_path, record=True)
-    payload = json.dumps(p.payload(big))
+    # real multibyte bytes on the wire, not \\u escapes
+    payload = json.dumps(p.payload(big), ensure_ascii=False)
     assert len(payload) > 900_000
+    if filler != "a":
+        assert len(payload.encode("utf-8")) > len(payload)
     start = time.monotonic()
-    r = subprocess.run(["sh", str(HOOK)], input=payload, capture_output=True, text=True,
+    r = subprocess.run(["sh", str(HOOK)], input=payload.encode("utf-8"), capture_output=True,
                        env=_utf8_env(p.home), cwd=str(p.root), timeout=30)
     elapsed = time.monotonic() - start
-    assert r.returncode == 0 and r.stdout == ""
+    assert r.returncode == 0 and r.stdout == b""
     assert p.state() == (False, True)
-    assert elapsed < 2.5, elapsed
+    assert elapsed < 1.5, elapsed
+
+
+def _shells():
+    out = ["sh"]
+    d = shutil.which("dash")
+    if d:
+        out.append(d)
+    return out
+
+
+@pytest.mark.parametrize("shell", _shells())
+@pytest.mark.parametrize("size", [40_000, 1_000_000])
+@pytest.mark.parametrize("kind", ["run", "plain", "exempt"])
+def test_prompt_first_payload_is_fast_in_any_key_order(tmp_path, shell, size, kind):
+    """The prompt precedes session_id, transcript_path and cwd, so every other
+    key sits far from the start of the payload."""
+    import time
+    head = {"run": "/run demo ", "plain": "hello ", "exempt": "<task-notification>"}[kind]
+    p = Proj(tmp_path, record=True)
+    payload = json.dumps({"prompt": head + "x" * size, "session_id": SID,
+                          "transcript_path": "/nonexistent/t.jsonl", "cwd": str(p.root)})
+    start = time.monotonic()
+    r = subprocess.run([shell, str(HOOK)], input=payload, capture_output=True, text=True,
+                       env=_env(p.home), cwd=str(p.root), timeout=30)
+    elapsed = time.monotonic() - start
+    assert r.returncode == 0 and r.stdout == ""
+    expected = {"run": (False, True), "plain": (False, False), "exempt": (True, False)}[kind]
+    assert p.state() == expected
+    assert elapsed < 2.0, elapsed
 
 
 def test_large_exempt_prompt_keeps_arm(tmp_path):
