@@ -33,7 +33,7 @@ Before profile-tag parsing, scan the task description for the `--autonomous` tok
 - If present: strip the `--autonomous` token from the task description **before profile classification** — the same treatment as the existing `[no-session-age-guard]` sentinel and the `strict:`/`max_rounds:` tokens below, none of which are allowed to pollute triage or the derived task name. Set an internal state flag `AUTONOMOUS=true` for the remainder of this session.
 - If absent: `AUTONOMOUS=false`. Every autonomous branch documented in this file is inert when `AUTONOMOUS=false`; plain `/run` stays byte-behavior-unchanged.
 
-Record `autonomous: true` in the session-state file (`.workflow_artifacts/memory/sessions/<date>-<task-name>.md`) once created, and append `[autonomous]` to the NOTE field of the orchestrator's own cost-ledger row (see "Initialize cost ledger" below) so the ledger reflects the run mode.
+Append `[autonomous]` to the NOTE field of the orchestrator's own cost-ledger row (see "Initialize cost ledger" below) so the ledger reflects the run mode.
 
 ### Write the autonomous-span marker (T-10 — only under `AUTONOMOUS`)
 
@@ -1452,7 +1452,7 @@ directory) for `<task-name>`:
   treat this tier as if it had returned nothing and fall through. Only when this read ALSO returns
   nothing, or returns a `next_action` that fails to parse against the known-phase roster, does the
   plan fall back to the pre-T-09 behavior:
-  1. Read `.workflow_artifacts/memory/sessions/<latest>-<task-name>.md` to find the last completed phase.
+  1. Read `.workflow_artifacts/memory/sessions/<latest>-<task-name>.md`: `## Current stage` names the last phase written and `## Next command` the command to run next.
   2. Identify the next phase.
 
 **Step 1b (`D-53`) — within-sub-phase re-entry.** Read the run-state record once:
@@ -1541,10 +1541,7 @@ Note: `--resume` is a convention the skill checks for in the input, not a CLI fl
 
 ## Session state tracking
 
-Update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` after each phase completes. Track:
-- Current phase and status
-- Completed phases and their outcomes (gate results, review verdicts, rounds taken)
-- Any stopped-at checkpoint (so the user can resume manually)
+Write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` after each phase completes (each phase end is a stage boundary), to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`. Current stage `run: <phase>`; Next command `/run --resume <task>`. Phase outcomes (gate results, review verdicts, rounds taken) go in Completed in this session; a stopped-at checkpoint goes in Unfinished work.
 
 ## Subagent session management
 

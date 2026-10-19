@@ -233,7 +233,7 @@ On start:
 1. Append your session to the cost ledger: `.workflow_artifacts/<task-name>/cost-ledger.md` — phase: `workspace` — format/rules: `__QUOIN_HOME__/memory/cost-ledger-format.md`. If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-write — the spawning orchestrator records this row on your behalf (D-1). Strip `[quoin-onbehalf]` at bootstrap step 0 (per-spawn, non-inherited — do not propagate to children).
 
 <!-- quoin:ledger-self-write -->
-2. Write session state to `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+2. Write session state to `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` per `__QUOIN_HOME__/memory/session-schema.md`
 
 ## Process
 
@@ -294,4 +294,5 @@ with phase `workspace` (see cost tracking rules in CLAUDE.md).
 ## Session state
 
 Write to `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` after
-each subcommand invocation completes.
+each subcommand invocation completes, to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`
+(Current stage `workspace <op>`; Next command unchanged).

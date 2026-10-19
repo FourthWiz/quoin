@@ -632,7 +632,8 @@ Spawn an Agent subagent:
        **Applies to:** <relevant skills>
        ```
     3. Update `.workflow_artifacts/memory/sessions/<date>-<task_name>.md`:
-       set status to `completed`, record branch name and commit hash from eot-preflights.json.
+       write it to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`: Status `completed`, Current stage `end_of_task`,
+       branch name and commit hash from eot-preflights.json in one Completed item, Next command `/pr`.
     3a. **Flip finalized-task session flags (single invocation; primary survival mechanism for
         IVG-137; opt-out via `QUOIN_DISABLE_EOT_FLAG_FLIP=1`).** Runs AFTER Step 3 (session-state
         marked completed) and AFTER Sub-phase A's commit/push already succeeded (mirrors

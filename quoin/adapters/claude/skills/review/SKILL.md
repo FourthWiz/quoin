@@ -542,15 +542,14 @@ If the verdict is APPROVED:
 
 Write session-state files in v3 format per the §5.4 Class A writer mechanism (mirrors the implement/SKILL.md pattern; reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; validate via validate_artifact.py with auto-detection → session type; retry-once-then-English-fallback on V-failure; atomic rename with graceful .body.tmp cleanup). `review-{round}.md` remains **Class B** per artifact-format-architecture v3 §4.1 — the parent Stage 3 work wired its Class B writer mechanism in the Output-format section above; this Save-session-state section governs ONLY the Class A session file at `.workflow_artifacts/memory/sessions/{date}-{task}.md`.
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with these required sections:
-- **## Status:** `in_progress` (REVISE) or `completed` (APPROVED)
-- **## Current stage:** `review`
-- **## Completed in this session:** verdict and summary of what was verified, with status glyphs ✓/✗
-- **## Unfinished work:** if REVISE — list of issues that must be fixed before re-review
-- **## Cost:** YAML block with Session UUID, Phase, Recorded in cost ledger
-- **## Decisions made:** any significant risk assessments or integration concerns raised (optional)
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress` (REVISE) or `completed` (APPROVED)
+- Current stage: `review round N`
+- Next command: `/end_of_task` on APPROVED, `/implement` on changes requested
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Important behaviors
 

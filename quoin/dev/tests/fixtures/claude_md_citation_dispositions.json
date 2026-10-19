@@ -70,14 +70,6 @@
     },
     {
       "file": "quoin/adapters/claude/skills/end_of_day/SKILL.md",
-      "line_hash": "36b4c7ca29277f5daa007d33ab1e9fb8cd276aef92bf835872c79c2d0eb74984",
-      "heading_disposition": "known-exception",
-      "path_form": "repo_source",
-      "note": "quotes 'Session state tracking' (drop row).",
-      "owner": "follow-up"
-    },
-    {
-      "file": "quoin/adapters/claude/skills/end_of_day/SKILL.md",
       "line_hash": "acbaf4b94c64769fbed053e100ade087505a18d96853c182c5ccbbb11a451d5f",
       "heading_disposition": "non-citation",
       "path_form": "none",

@@ -383,8 +383,8 @@ git revert HEAD --no-edit
 ### Step 5: Update session state
 
 After rollback:
-- Update the session file (`.workflow_artifacts/memory/sessions/<date>-<task-name>.md`): mark rolled-back tasks as `pending` again
-- Note the rollback in the session's decision log
+- Update the session file (`.workflow_artifacts/memory/sessions/<date>-<task-name>.md`) to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`: Current stage `rollback`, Next command `/implement`, rolled-back tasks back in Unfinished work
+- Note the rollback as a Decisions made item
 - Update `.workflow_artifacts/memory/git-log.md` with the revert commits
 
 ### Step 6: Report

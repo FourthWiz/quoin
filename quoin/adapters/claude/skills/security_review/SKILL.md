@@ -262,13 +262,16 @@ This skill never auto-invokes `/gate`, `/implement`, or any other workflow phase
 
 Write session-state files in v3 format per the §5.4 Class A writer mechanism (mirrors `/review`'s pattern; reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; validate via validate_artifact.py with auto-detection → session type; retry-once-then-English-fallback on V-failure; atomic rename with graceful .body.tmp cleanup). `security-review-{round}.md` remains **Class B** per artifact-format-architecture v3 §4.1 — the Output format section above wires its Class B writer mechanism; this Save-session-state section governs ONLY the Class A session file at `.workflow_artifacts/memory/sessions/{date}-{task}.md` (or the standalone equivalent when no task is resolvable).
 
-If a task dir resolved, before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with these required sections:
-- **## Status:** `completed`
-- **## Current stage:** `security_review`
-- **## Completed in this session:** verdict and summary of what was checked, with status glyphs check-mark/x-mark
-- **## Unfinished work:** if CHANGES_REQUESTED or BLOCKED — list of findings that must be fixed
-- **## Cost:** YAML block with Session UUID, Phase, Recorded in cost ledger
-- **## Decisions made:** any significant risk assessments raised (optional)
+If a task dir resolved, at this skill's exit:
+
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `completed`
+- Current stage: `security_review`
+- Next command: the caller's next step
+
+This is what `/end_of_day` and `/start_of_day` read.
 
 If no task dir resolved, this step is a no-op — the standalone cost-ledger row from Session bootstrap step 4 is the only required bookkeeping.
 

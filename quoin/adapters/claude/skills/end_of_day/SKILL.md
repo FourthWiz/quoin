@@ -293,14 +293,8 @@ Write session-state files in v3 format per the §5.4 Class A writer mechanism (r
 
 **If there is active work in this session**, create or update a session file at `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`.
 
-The session file MUST include these required sections (per format-kit.sections.json session.required_sections):
-- **## Status:** `in_progress` | `completed` | `blocked`
-- **## Current stage:** which workflow step (architect / plan / critic / revise / implement / review)
-- **## Completed in this session:** terse numbered list with status glyphs ✓/⏳/🚫 + commit hashes
-- **## Unfinished work:** remaining tasks; where exactly to pick up (file paths, task numbers, branch names)
-- **## Cost:** YAML block — Session UUID, Phase, Recorded in cost ledger (see CLAUDE.md "Session state tracking")
-
-Optional sections: `## Decisions made` (important decisions and rationale), `## Open questions` (blockers, unclear requirements).
+The session file follows the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule); rewrite the whole file and keep the fields and accumulated lists the schema says to preserve.
+- Status: the active task's status. Current stage: that task's stage token. Next command: unchanged.
 
 ### Step 2: Update git-log.md
 
