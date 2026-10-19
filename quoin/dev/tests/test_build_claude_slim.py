@@ -127,8 +127,8 @@ def test_classification_table_matches_plan_table():
     sections = dict(_local_sections(source_text))
     keep_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_KEEP_HEADINGS)
     drop_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_DROP_HEADINGS)
-    assert keep_bytes == 7311, keep_bytes  # finalization-rule bullet shortened
-    assert drop_bytes == 32075, drop_bytes  # hooks and pollution paragraphs now describe the sentinel-only prompt hook and the guard script
+    assert keep_bytes == 7298, keep_bytes  # finalization-rule bullet shortened
+    assert drop_bytes == 31718, drop_bytes  # hooks and pollution paragraphs now describe the sentinel-only prompt hook and the guard script
 
 
 def test_classification_table_is_bijective_with_source_headings():

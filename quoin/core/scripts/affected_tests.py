@@ -216,10 +216,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
     (
-        "quoin/memory/checkpoint-spec.md",
-        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
-    ),
-    (
         "quoin/adapters/claude/skills/plan/SKILL.md",
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
@@ -826,15 +822,11 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_run_state_wiring.py",
     ),
     # Task-bookkeeping pass prose spans cleanup/SKILL.md,
-    # checkpoint/SKILL.md, the runtime-neutral core doc, the reference doc,
+    # the runtime-neutral core doc, the reference doc,
     # and README.md's Utilities row -- none of their existing rows reach the
     # bookkeeping-pass slicer assertions.
     (
         "quoin/adapters/claude/skills/cleanup/SKILL.md",
-        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/checkpoint/SKILL.md",
         "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
     ),
     (
@@ -2006,8 +1998,12 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_context_reading_docs.py",
     ),
     (
-        "quoin/memory/checkpoint-spec.md",
-        "quoin/dev/tests/test_context_reading_docs.py",
+        "quoin/adapters/claude/skills/end_of_day/SKILL.md",
+        "quoin/dev/tests/test_end_of_day_cleanup_autofire.py",
+    ),
+    (
+        "src/quoin/installer.py",
+        "quoin/dev/tests/test_install_retired_skill.py",
     ),
 )
 

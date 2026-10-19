@@ -22,13 +22,6 @@ export interface SkillGroup {
  * Curated entries are shown in the panel regardless of whether the
  * corresponding skill directory exists on disk (R-02: panel is a fixed
  * curated menu; missing skill → Claude shows "unknown command", non-fatal).
- *
- * The synthetic 'checkpoint --restore' entry (D-03) uses the full command
- * string as its `command` field. Its `data-skill` attribute carries the
- * space-containing value, which is safe because applyHighlight only ever
- * targets the 6 bare pipeline-node ids (see workflowMapping.ts NEXT_SKILL).
- * If highlight scope ever expands to include synthetic entries, switch
- * applyHighlight to CSS.escape or use a separate `data-highlight` attribute.
  */
 const CURATED: CatalogEntry[] = [
   // Planning
@@ -43,8 +36,6 @@ const CURATED: CatalogEntry[] = [
 
   // Lifecycle
   { command: 'init_workflow',       label: 'Init Workflow',    group: 'Lifecycle' },
-  { command: 'checkpoint',          label: 'Checkpoint',       group: 'Lifecycle' },
-  { command: 'checkpoint --restore', label: 'Checkpoint Restore', group: 'Lifecycle' },
   { command: 'end_of_day',          label: 'End of Day',       group: 'Lifecycle' },
   { command: 'start_of_day',        label: 'Start of Day',     group: 'Lifecycle' },
   { command: 'weekly_review',       label: 'Weekly Review',    group: 'Lifecycle' },
@@ -93,7 +84,7 @@ export function enumerateSkills(
  * curated menu, not a mirror of the skills directory.
  *
  * The 'Other' bucket is built from enumerated names NOT found in the curated
- * command set (bare ids only; the synthetic 'checkpoint --restore' is excluded
+ * command set (bare ids only
  * from curatedCommands since it contains a space). This satisfies D-02
  * no-silent-drops: every enumerated name appears either as a curated command
  * or in the Other bucket.
@@ -104,7 +95,7 @@ export function enumerateSkills(
  * @param skillNames - Skill names to group (typically from enumerateSkills())
  */
 export function groupSkills(skillNames: string[]): SkillGroup[] {
-  // Build set of bare curated command ids (excludes synthetic 'checkpoint --restore')
+  // Build set of bare curated command ids
   const curatedCommands = new Set(
     CURATED.map(e => e.command).filter(c => !c.includes(' '))
   );

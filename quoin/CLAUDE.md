@@ -59,7 +59,7 @@ Task names are descriptive, kebab-case, derived from the task description (e.g.,
 
 When running parallel tasks, each gets its own subfolder. Never mix artifacts from different tasks in the same folder.
 
-**Single-root invariant (IVG-119):** exactly one `.workflow_artifacts/` root per project, at the project root. Subproject dirs must not create their own — a second nested root breaks `/checkpoint --restore` and artifact discovery. Enforced by `nested_root_check.py` at `/gate` and `/discover` (non-blocking WARN, fail-OPEN; opt-out `QUOIN_DISABLE_NESTED_ROOT_CHECK=1`, bless one root with a `.quoin-nested-ok` marker or `QUOIN_NESTED_ROOT_EXCLUDE`).
+**Single-root invariant (IVG-119):** exactly one `.workflow_artifacts/` root per project, at the project root. Subproject dirs must not create their own — a second nested root breaks run resume and artifact discovery. Enforced by `nested_root_check.py` at `/gate` and `/discover` (non-blocking WARN, fail-OPEN; opt-out `QUOIN_DISABLE_NESTED_ROOT_CHECK=1`, bless one root with a `.quoin-nested-ok` marker or `QUOIN_NESTED_ROOT_EXCLUDE`).
 
 ### Multi-stage tasks
 
@@ -392,7 +392,7 @@ The 10 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block
 
 ### §V Ground-truth verification
 
-`end_of_day`/`start_of_day`/`weekly_review` carry `## §V Ground-truth verification`: `verify_claims.py` reconciles claimed task/PR state vs re-derived truth (`end_of_day`'s early `## Claims` manifest is backstopped by a SessionEnd hook). `status`/`triage`/`cost_snapshot` carry a lighter block; `checkpoint`/`pr`/`end_of_task`/`continue_work` deferred. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
+`end_of_day`/`start_of_day`/`weekly_review` carry `## §V Ground-truth verification`: `verify_claims.py` reconciles claimed task/PR state vs re-derived truth (`end_of_day`'s early `## Claims` manifest is backstopped by a SessionEnd hook). `status`/`triage`/`cost_snapshot` carry a lighter block; `pr`/`end_of_task`/`continue_work` deferred. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
 
 ### Hooks deployed by quoin
 
@@ -400,19 +400,18 @@ The 10 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block
 
 The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink (compaction continuity): `__QUOIN_HOME__/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope) is quoin's only non-`QUOIN_*` var write: `quoin/docs/hooks-guide.md`.
 
-All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, etc.) use integer basis-points arithmetic. Context % comes from real transcript usage (`QUOIN_EFFECTIVE_CONTEXT_LIMIT` overrides the window), with a byte-estimate fallback. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
+All hooks fail-OPEN (exit 0 on error); jq is soft-required. Constants (`QUOIN_BYTES_PER_TOKEN`, `QUOIN_EFFECTIVE_CONTEXT_LIMIT`, etc.) use integer basis-points arithmetic. Context % comes from real transcript usage (`QUOIN_EFFECTIVE_CONTEXT_LIMIT` overrides the window), with a byte-estimate fallback. Details: `__QUOIN_HOME__/memory/hooks-table.md`, `quoin/docs/hooks-guide.md`.
 
 Opt-in mods (asked in a TTY): `install.sh --with-context-tracker`, `--with-workflow-tasks` (undo `--remove-*`); hooks-guide.md.
 
-### Lifecycle skills (checkpoint / end_of_day / sleep / cleanup)
+### Lifecycle skills (end_of_day / sleep / cleanup)
 
-Four skills handle session lifecycle at different granularities (v3 lifecycle separation):
-- `/checkpoint` — general-purpose state-save. Three save modes: `--mode restore` (default), `--mode load-as-reference`, `--mode mid-agent`. `/checkpoint --restore` re-hydrates in a fresh session.
+Three skills handle session lifecycle at different granularities (v3 lifecycle separation):
 - `/end_of_day` — rolls up daily session state into `.workflow_artifacts/memory/daily/<date>.md`; touches `lessons-learned.md` if insights promoted; auto-invokes `/sleep`.
 - `/sleep` — Scans daily insights + session files (30-day window); three-bucket decisions (Promote/Soft-Forget/deferred). Writes ONLY to `lessons-learned.md` + `forgotten/`.
-- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`; standalone runs also offer confirmed task-folder archive. Auto-fires as the first sub-block of `/checkpoint` Step 1.5.
+- `/cleanup` — Trash-moves stale sentinels/checkpoints into recoverable `trash/<date>/`; standalone runs also offer confirmed task-folder archive. Auto-fires from `/end_of_day` (Step 5b).
 
-Full subcommand contracts, mode auto-detection rules, restore-picker logic, and env knobs: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
+Full subcommand contracts and env knobs: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
 
 ### /sleep importance signals
 

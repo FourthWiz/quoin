@@ -89,29 +89,26 @@ Hook scripts read these values at runtime via `${QUOIN_*:-default}` parameter ex
 | `BPT` | `8.0` | `QUOIN_BYTES_PER_TOKEN` | Bytes per token for the byte-estimate fallback (V-03 calibrated) |
 | `LIMIT` | `150000` | `QUOIN_EFFECTIVE_CONTEXT_LIMIT` | Unset: the window is detected per model (200k / 1M). Set: an explicit window override on the real path, and the estimate denominator (150000 when unset) |
 | `CONTEXT_TAIL_BYTES` | `2097152` (cap `67108864`) | `QUOIN_CONTEXT_TAIL_BYTES` | Bytes of transcript tail scanned for the newest usage record; read inline, not exported |
-| `STOP_BPS` | `7000` | `QUOIN_STOP_BPS` | Former advisory tier in basis-points (7000 = 70.00%); still exported by `read_constants`, no prompt hook reads it any more |
-| `BLOCK_BPS` | `9500` | `QUOIN_BLOCK_BPS` | Former high-context tier in basis-points (9500 = 95.00%); still exported by `read_constants`, no prompt hook reads it any more |
 | `STALE_DAYS` | `7` | `QUOIN_STALE_SENTINEL_DAYS` | Days after which pending-prompt-*.txt (left by older installs) and pending-restore-*.txt are swept; long-lived sessions may extend to 14+ |
 | `POLLUTION_THRESHOLD` | `5000` | `QUOIN_POLLUTION_THRESHOLD` | Score threshold for pollution dispatch, read by `scripts/pollution_guard.py` (score = transcript_kB + weighted tool-use count); 5000 ≈ 5MB transcript or ~1MB + heavy tool use |
 | `SUBPROCESS_TIMEOUT` | `30` | `QUOIN_SUBPROCESS_TIMEOUT` | Seconds bounding `git worktree add` in `worktreecreate.sh` (and short git subprocesses in the core scripts); ~2× the observed Drive baseline. Fail-OPEN if the `timeout` binary is absent |
 | `WORKTREE_SELFGEN` | `1` (on) | `QUOIN_WORKTREE_SELFGEN` | `0` disables hook self-generation of branch/worktree path (restores the old skip-when-harness-omits behaviour) |
-| `RUN_STATE_STALE_DAYS` | `1` (`14` in `run_state_probe`) | `QUOIN_RUN_STATE_STALE_DAYS` | Run-state record freshness window in days. Two defaults by design — see `hooks-table.md:25-28` for the full two-window explanation |
-| `PRECOMPACT_NORUN_CHECKPOINT` | `0` | `QUOIN_PRECOMPACT_NORUN_CHECKPOINT` | Opt-in no-run checkpoint+sentinel row; see `hooks-table.md:25-28` |
+| `RUN_STATE_STALE_DAYS` | `1` | `QUOIN_RUN_STATE_STALE_DAYS` | Run-state record freshness window in days; see `hooks-table.md` |
 | `TELEMETRY_MAX_BYTES` | `1048576` | `QUOIN_TELEMETRY_MAX_BYTES` | Compaction-telemetry sink rotation size in bytes; see `hooks-table.md:25-28` |
 
-`read_constants()` exports 13 names; the table above now covers 8 of them (`POLLUTION_THRESHOLD`, `SUBPROCESS_TIMEOUT` and `WORKTREE_SELFGEN` are read inline elsewhere and are not among the 13). `hooks-table.md` is the complete list, including the 5 exported names still missing here (`SESSIONSTART_SWEEP_DAYS`, `COMPACT_FIRST_BPS`, `PANIC_BPS`, `DISCOVERY_STALE_DAYS`, `SERENA_STALE_DAYS` — pre-existing omissions, backlogged) plus every skill-side and script-side knob.
+`read_constants()` exports 8 names; the table above covers 5 of them (`POLLUTION_THRESHOLD`, `SUBPROCESS_TIMEOUT` and `WORKTREE_SELFGEN` are read inline elsewhere). `hooks-table.md` is the complete list, including the exported names missing here (`SESSIONSTART_SWEEP_DAYS`, `DISCOVERY_STALE_DAYS`, `SERENA_STALE_DAYS`) plus every skill-side and script-side knob. `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, `QUOIN_PANIC_BPS` and `QUOIN_PRECOMPACT_NORUN_CHECKPOINT` are no longer read; exporting one has no effect.
 
 **Basis-points convention:** Utilization values and threshold comparisons use INTEGER basis-points (0..10000) throughout. POSIX `[ ]` does integer comparison only; basis-points eliminate all floating-point comparison hazards. `compute_utilization()` in `_lib.sh` returns a basis-point integer (e.g., `8540` = 85.40% utilization).
 
 ## Context reading
 
-The context reading used by `/checkpoint`, the phase-boundary guard and the compaction telemetry is measured from real token usage, not from transcript size.
+The context reading used by the phase-boundary guard and the compaction telemetry is measured from real token usage, not from transcript size.
 
 - **What is read.** The newest main-chain assistant record's usage: `input_tokens` + `cache_read_input_tokens` + `cache_creation_input_tokens`. Sidechain (subagent) records and synthetic error records never count. A compact-boundary record carrying `postTokens` replaces the reading when it is newer than the last usage record.
 - **Window.** Resolved in this order: an explicit `QUOIN_EFFECTIVE_CONTEXT_LIMIT` override; `CLAUDE_CODE_DISABLE_1M_CONTEXT` (200k); a recorded "Usage credits required for 1M context" clamp (200k); a `[1m]` suffix on the record's model, on `ANTHROPIC_MODEL`, or on the `model` in project `settings.local.json`, project `settings.json` or user `settings.json` (1M); the model table (models that are natively 1M, or 200k); an observed peak above 200k (1M); otherwise 200k.
 - **Fallback.** When no usage record can be read (no `jq`, an empty or unparseable tail, a transcript with no usage), the shell reader falls back to a byte estimate: transcript bytes divided by `QUOIN_BYTES_PER_TOKEN`, then by `QUOIN_EFFECTIVE_CONTEXT_LIMIT` (150000 when unset).
-- **Labels.** Every notice names its source: `context at 17.08% (real) — …` for a measured value and `context at ~40.12% (estimated) — …` for the fallback. The `/checkpoint` high-utilization notice uses the same labels.
-- **Scan window.** Only the last `QUOIN_CONTEXT_TAIL_BYTES` of the transcript are scanned (default 2097152, capped at 67108864; read inline, not exported). The scan is paid only by the callers that ask for a reading (`/checkpoint`, the guard, the compaction hooks); no prompt hook scans the transcript.
+- **Labels.** Every notice names its source: `context at 17.08% (real) — …` for a measured value and `context at ~40.12% (estimated) — …` for the fallback.
+- **Scan window.** Only the last `QUOIN_CONTEXT_TAIL_BYTES` of the transcript are scanned (default 2097152, capped at 67108864; read inline, not exported). The scan is paid only by the callers that ask for a reading (the guard, the compaction hooks); no prompt hook scans the transcript.
 
 **Migration.** `QUOIN_EFFECTIVE_CONTEXT_LIMIT` used to be the 100% denominator for every reading. It now pins the window on the real path, so a value exported under the old meaning (for example 150000) makes a 1M-window session over-warn. Unset it unless you want to force a window.
 
@@ -126,24 +123,15 @@ The context reading used by `/checkpoint`, the phase-boundary guard and the comp
 
 ### 200k-window tier reachability
 
-Claude Code auto-compacts at `window − min(max output, 20000) − 13000` tokens: 167,000 tokens (83.50%) on a 200k window and about 967,000 tokens (96.70%) on a 1M window. Thresholds stay measured against the true window, so on a 200k window some tiers sit beyond the point where the platform has already compacted.
-
-| Tier (default) | 200k window | 1M window |
-|---|---|---|
-| `STOP_BPS` 7000 | 140,000 — reachable | 700,000 — reachable |
-| `COMPACT_FIRST_BPS` 9000 | 180,000 — unreachable | 900,000 — reachable |
-| `BLOCK_BPS` 9500 | 190,000 — unreachable | 950,000 — reachable |
-| `PANIC_BPS` 10000 | 200,000 — unreachable | 1,000,000 — unreachable |
-
-"Unreachable" means auto-compaction normally fires first; the tier still triggers if auto-compact is disabled or one turn overshoots. For 200k-window sessions, `QUOIN_COMPACT_FIRST_BPS=7800`, `QUOIN_BLOCK_BPS=8000` and `QUOIN_PANIC_BPS=8300` (156,000 / 160,000 / 166,000 tokens) keep every tier below the compaction point. These knobs are global: in a 1M session they fire at 780,000 / 800,000 / 830,000 tokens. `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and the auto-compact window setting move Claude Code's own point.
+Claude Code auto-compacts at `window − min(max output, 20000) − 13000` tokens: 167,000 tokens (83.50%) on a 200k window and about 967,000 tokens (96.70%) on a 1M window. The context-threshold tiers that used to sit around that point are retired, so nothing in quoin keys on a fill level any more except the over-budget phase-boundary guard (`QUOIN_PHASE_BOUNDARY_BPS`). `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE` and the auto-compact window setting move Claude Code's own point.
 
 ## Compaction continuity (IVG-258)
 
 Three shipped mechanisms keep a `/run` task resumable across a compaction:
 
-- **The task-keyed run-state record** (`run-state-<task>.json` + `run-notes-<task>.md`) is written by `run_state_select`/`run_state_probe` in `_lib.sh` and is the source of truth the consent rule in `userpromptsubmit.sh` and the other hooks read to detect an active `/run` task.
-- **`precompact.sh`'s three-row always-allow table** — the hook always emits `{"decision": "allow"}` (it never blocks compaction); which of its three rows fires determines whether a checkpoint is written and which sentinel is left behind. See `hooks-table.md` for the full truth table.
-- **The `SessionStart`/`compact` re-entry branch** in `sessionstart.sh` reads the sentinel `precompact.sh` left and re-hydrates the resuming session (banner, pending-restore prompt, or silent pass-through, depending on which row fired).
+- **The task-keyed run-state record** (`run-state-<task>.json` + `run-notes-<task>.md`) is read through `run_state_select` in `_lib.sh` and is the source of truth the consent rule in `userpromptsubmit.sh` and the other hooks read to detect an active `/run` task.
+- **`precompact.sh`'s always-allow path** — the hook always emits `{"decision": "allow"}` (it never blocks compaction) and writes no checkpoint or sentinel; it appends the session record, a run-notes block while a run is mid-stage, and the telemetry pre-event. See `hooks-table.md`.
+- **The `SessionStart`/`compact` re-entry branch** in `sessionstart.sh` reads the session's run-state record and re-hydrates the resuming session (an advisory plus the resume command, or silence when no run is active).
 
 The **compaction-telemetry sink** (`_tel_sink`, capped by `TELEMETRY_MAX_BYTES` above) records a "pre" event before compaction and a matching "post" event after, so real firing frequency can be measured before any threshold tuning.
 

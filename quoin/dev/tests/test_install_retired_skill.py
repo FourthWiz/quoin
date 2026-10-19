@@ -73,8 +73,7 @@ def test_list_typed_override_does_not_crash_and_is_unchanged():
     assert settings == {"skillOverrides": ["checkpoint"]}
 
 
-def test_stale_script_and_memory_file_are_removed(tmp_path, monkeypatch):
-    monkeypatch.setattr(installer, "OBSOLETE_MEMORY_FILES", ("checkpoint-spec.md",))
+def test_stale_script_and_memory_file_are_removed(tmp_path):
     (tmp_path / "scripts").mkdir()
     (tmp_path / "memory").mkdir()
     (tmp_path / "scripts" / "pidfile_helpers.sh").write_text("#!/bin/sh\n", encoding="utf-8")
@@ -87,8 +86,7 @@ def test_stale_script_and_memory_file_are_removed(tmp_path, monkeypatch):
     assert (tmp_path / "memory" / "lifecycle-guide.md").read_text(encoding="utf-8") == "keep\n"
 
 
-def test_second_pass_is_a_no_op(tmp_path, monkeypatch):
-    monkeypatch.setattr(installer, "OBSOLETE_MEMORY_FILES", ("checkpoint-spec.md",))
+def test_second_pass_is_a_no_op(tmp_path):
     skill = tmp_path / "skills" / "checkpoint"
     skill.mkdir(parents=True)
     (skill / "SKILL.md").write_text(QUOIN_SKILL_MD, encoding="utf-8")

@@ -102,7 +102,7 @@ clone of `inject_pollution_dispatch.py`). `--dry-run` prints blocks; re-running 
 - **`status` / `triage` / `cost_snapshot` (light — reconcile-only, no side-effect check).**
   Read-only Haiku reporters; run `--reconcile-tasks`, derive displayed status from the table. A
   fixture contradiction is surfaced, not silently reported.
-- **`checkpoint` (T-07, deliberately narrow — see Descope below).**
+- **`checkpoint` (T-07, deliberately narrow — see Descope below; historical, the Claude skill is no longer shipped and the predicate stays in `verify_claims.py` for other runtimes).**
 
 ### `checkpoint` T-07 — descoped, on-disk-only
 

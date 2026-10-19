@@ -1,8 +1,4 @@
-"""Prose-contract tests for IVG-105: same-session documentation in lifecycle-guide.md.
-
-These tests verify that lifecycle-guide.md contains the two documentation sentences
-added by T-03. Ensures future edits cannot silently remove these cross-reference entries.
-"""
+"""Prose-contract test: lifecycle-guide.md documents the /thorough_plan same-session guard."""
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -16,14 +12,6 @@ def _text() -> str:
 
 class TestLifecycleGuideSameSessionDocs:
     """IVG-105: same-session documentation in lifecycle-guide.md (T-03)."""
-
-    def test_same_session_detection_documented(self):
-        """lifecycle-guide.md must contain 'Same-session detection' for /checkpoint --restore."""
-        text = _text()
-        assert "Same-session detection" in text, (
-            "lifecycle-guide.md must document 'Same-session detection' under "
-            "the /checkpoint --restore subcommand section (IVG-105 T-03)."
-        )
 
     def test_same_session_guard_documented(self):
         """lifecycle-guide.md must contain 'Same-session guard' for /thorough_plan §1b."""

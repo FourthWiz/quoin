@@ -268,7 +268,6 @@ workflow intent through natural-language phase requests and repo-local docs.
 | `/start_of_day` | Haiku | Morning briefing from daily/session memory |
 | `/end_of_day` | Sonnet | Saves session state, dedupes and promotes insights; auto-invokes /sleep |
 | `/end_of_task` | Sonnet | Pushes branch, captures lessons, and finalizes task state |
-| `/checkpoint` | Sonnet | Save/restore session context mid-session; writes pending-restore sentinel |
 | `/continue_work` | Sonnet | Resume context from a prior session using the recent-sessions index |
 | `/sleep` | Sonnet | Memory consolidation: promotes insights to lessons-learned, archives stale entries |
 

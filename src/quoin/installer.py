@@ -41,8 +41,6 @@ TIER1_MEMORY_FILES = (
     "discovery-refresh-routine.md",
     # Added IVG-115: §V ground-truth verification verbose reference (Tier-1 memory file)
     "verification-guide.md",
-    # Added checkpoint-spec-harness: /checkpoint subsystem behavior spec (Tier-1 memory file)
-    "checkpoint-spec.md",
     # Added IVG-137: opt-in /schedule EOD cron recipe (Tier-1 memory file)
     "eod-refresh-routine.md",
     # Added IVG-153: opt-in --autonomous span reference (Tier-1 memory file)
@@ -173,7 +171,7 @@ OBSOLETE_SCRIPTS = (
 OBSOLETE_SKILLS = ("checkpoint",)
 
 # Memory files quoin used to ship; removed from dest_root/memory/ on upgrade.
-OBSOLETE_MEMORY_FILES: tuple[str, ...] = ()
+OBSOLETE_MEMORY_FILES = ("checkpoint-spec.md",)
 
 # skillOverrides keys quoin used to write. A key is removed only while it still
 # holds the value quoin wrote; any other value is the user's own choice.

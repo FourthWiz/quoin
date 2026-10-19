@@ -34,8 +34,8 @@ window.__GRAPH__ = {
       "label": "Session Lifecycle",
       "type": "group",
       "layer": "portable-core",
-      "summary": "/start_of_day · /end_of_day · /checkpoint · /sleep — Save and restore session state across work sessions.",
-      "details_md": "## Session Lifecycle Skills\n\nManages state between sessions so work can be resumed:\n\n- **/start_of_day** — restores context from daily cache, checks git state\n- **/end_of_day** — consolidates all sessions into daily cache, invokes /sleep\n- **/checkpoint** — general-purpose state save (mid-session, between sessions, before heavy work); writes pending-restore sentinel\n- **/sleep** — scans daily insights, promotes to `lessons-learned.md` or soft-forgets\n\n**Artifacts:** `sessions/`, `daily/`, `checkpoints/`, `lessons-learned.md`"
+      "summary": "/start_of_day · /end_of_day · /sleep · /cleanup — Roll up and consolidate session state across work sessions.",
+      "details_md": "## Session Lifecycle Skills\n\nManages state between sessions so work can be resumed:\n\n- **/start_of_day** — restores context from daily cache, checks git state\n- **/end_of_day** — consolidates all sessions into daily cache, invokes /sleep\n- **/sleep** — scans daily insights, promotes to `lessons-learned.md` or soft-forgets\n- **/cleanup** — trash-moves stale sentinels; runs after `/end_of_day`\n\n**Artifacts:** `sessions/`, `daily/`, `checkpoints/`, `lessons-learned.md`"
     },
     {
       "id": "g-utilities",
@@ -51,7 +51,7 @@ window.__GRAPH__ = {
       "type": "hook",
       "layer": "claude-adapter",
       "summary": "UserPromptSubmit · SessionStart · SessionEnd · PreCompact · PostCompact · worktreecreate.sh · _lib.sh — Event-driven automation deployed to ~/.claude/hooks/.",
-      "details_md": "## Hook System\n\nBash scripts that fire on Claude Code lifecycle events:\n\n- **userpromptsubmit.sh** — run-continuation sentinels only (clears the arm, stamps /run consent); never reads the transcript\n- **sessionstart.sh** — surfaces pending-restore banner; checks end_of_day_due flag; dedicated `compact`-matcher branch emits a post-compaction re-entry advisory when an active run matches the session\n- **sessionend.sh** — signals end-of-day reminder (non-blocking banner)\n- **precompact.sh** — intercepts auto-compact; always allows; writes a checkpoint when a run is active or skills are running, otherwise writes nothing (opt back in with QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1)\n- **postcompact.sh** — writes compact-happened sentinel\n- **worktreecreate.sh** — resolves a nested git root and self-generates an isolated worktree for source-mutating skill dispatches\n- **_lib.sh** — shared helpers: read_constants, compute_utilization, trash_move, pidfile ops\n\nAll hooks **fail-OPEN** (exit 0 on any error). Tunable via `QUOIN_*` env vars."
+      "details_md": "## Hook System\n\nBash scripts that fire on Claude Code lifecycle events:\n\n- **userpromptsubmit.sh** — run-continuation sentinels only (clears the arm, stamps /run consent); never reads the transcript\n- **sessionstart.sh** — sweeps stale sentinels and pidfile locks; checks end_of_day_due flag; dedicated `compact`-matcher branch emits a post-compaction re-entry advisory when an active run matches the session\n- **sessionend.sh** — signals end-of-day reminder (non-blocking banner)\n- **precompact.sh** — fires on auto-compact; always allows; appends the session record, run notes and telemetry, writes no checkpoint\n- **postcompact.sh** — writes compact-happened sentinel\n- **worktreecreate.sh** — resolves a nested git root and self-generates an isolated worktree for source-mutating skill dispatches\n- **_lib.sh** — shared helpers: read_constants, compute_utilization, trash_move\n\nAll hooks **fail-OPEN** (exit 0 on any error). Tunable via `QUOIN_*` env vars."
     },
     {
       "id": "g-dispatch",
