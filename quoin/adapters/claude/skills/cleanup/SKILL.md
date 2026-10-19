@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run] [--no-tasks]; auto-fires from /checkpoint unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
+description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run] [--no-tasks]; auto-fires from /end_of_day unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
 model: sonnet
 ---
 
@@ -8,7 +8,7 @@ model: sonnet
 
 *Portable intent doc: `quoin/core/skills/cleanup.md`*
 
-You are the `/cleanup` skill. You trash-move stale workflow sentinels (all sessions except the freshest/current) and old checkpoint files into a recoverable `trash/<date>/` archive. You auto-fire as the first sub-block of `/checkpoint` Step 1.5 in save mode.
+You are the `/cleanup` skill. You trash-move stale workflow sentinels (all sessions except the freshest/current) and old checkpoint files into a recoverable `trash/<date>/` archive. You auto-fire from `/end_of_day` after its report.
 
 ## §0 Model dispatch (FIRST STEP — execute before anything else)
 
@@ -196,10 +196,9 @@ Otherwise: proceed to §1 (skill body).
 
 ## When to use
 
-Run `/cleanup` standalone to trash-move stale sentinels and old checkpoints in the current project's `.workflow_artifacts/memory/` directory. It also auto-fires as the first sub-block of `/checkpoint` Step 1.5 on every non-mid-agent, non-panicked save path (default-on).
+Run `/cleanup` standalone to trash-move stale sentinels and old checkpoints in the current project's `.workflow_artifacts/memory/` directory. It also auto-fires from `/end_of_day` after its report (default-on, with `--no-tasks`; opt out with `--no-cleanup`).
 
 Use cases:
-- When `/checkpoint --restore` is resurrecting the wrong (stale) session — cleanup removes the stale sentinels that feed those stale restore paths.
 - After heavy multi-session work, to clear accumulated stale sentinels from prior sessions.
 - Manual maintenance when sentinel or checkpoint count grows large.
 
@@ -207,13 +206,13 @@ Use `--dry-run` first to preview what would be trashed without making any moves.
 
 ## Core procedure
 
-(Standalone run — always executes for standalone invocations. When auto-fired from `/checkpoint` Step 1.47, checkpoint runs its own inline copy (steps 1–6 equivalent) with high-util/panic/mid-agent skip guards applied first.)
+(The same steps run standalone and when `/end_of_day` auto-fires this skill.)
 
 **Step 1. Resolve MEMORY_DIR:** `<cwd>/.workflow_artifacts/memory`. If the directory does not exist, emit `[cleanup] no memory dir; nothing to do` and skip to `## Task bookkeeping pass`.
 
 **Step 2. Source helpers:** `. __QUOIN_HOME__/hooks/_lib.sh` (provides `trash_move`). If the file is missing or sourcing fails: emit one-line warning `[cleanup] _lib.sh unavailable; cannot trash-move — skipping sentinel sweeps` and skip to `## Task bookkeeping pass` (fail-OPEN).
 
-**Step 3. Acquire current/freshest session UUID** (same procedure as checkpoint Step 1.1):
+**Step 3. Acquire current/freshest session UUID:**
 - Priority 1: harness-provided system-context UUID.
 - Priority 2: stem of the most-recently-modified `__QUOIN_HOME__/projects/<project-hash>/<uuid>.jsonl` file. `<project-hash>` = project absolute path with `/` replaced by `-`.
 - If UUID cannot be obtained: emit `[cleanup] current-session UUID unavailable; skipping sentinel sweep (fail-safe)` and **skip step 4 entirely**. Proceed directly to step 5 (checkpoint sweep). The age-only 30d checkpoint sweep is safe without UUID. NEVER fall back to age-only with any shorter floor for sentinels — if the current session cannot be identified, trash nothing from sentinel families.
@@ -271,7 +270,7 @@ If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-
 
 ## Task bookkeeping pass (standalone only)
 
-Runs after Core procedure Step 8 on a standalone `/cleanup`. Core procedure only ever runs standalone; `/checkpoint` Step 1.47 never reaches this pass — it carries its own separate inline restatement of Core procedure steps 1–7 instead (see checkpoint SKILL.md Step 1.47). `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
+Runs after Core procedure Step 8 on a standalone `/cleanup`. The `/end_of_day` auto-fire passes `--no-tasks`, so no folder is ever moved from an automatic hook point. `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
 
 1. `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format table`; print verbatim. Missing script: `[cleanup] task_bookkeeping.py unavailable; skipping task pass`. Non-zero exit: print its stderr line, go to step 4.
 2. `--dry-run`, `[no-interactive]`, `[autonomous]`, or no `AskUserQuestion`: print `[cleanup] task bookkeeping: report-only (<reason>); no folders moved`; when `<reason>` is the no-`AskUserQuestion` case (dispatched subagent), also print `to act on these rows, run: [no-redispatch] /cleanup`. Go to step 4.
@@ -288,7 +287,7 @@ When `/cleanup --dry-run` is invoked:
 4. **Makes NO writes** — no trash-moves, no cost-ledger row.
 5. Task bookkeeping pass: table only, no prompts, no moves; release still happens.
 
-To preview what `/checkpoint` auto-fire would trash without running a full save: use `--no-cleanup` to suppress auto-fire, then run `/cleanup --dry-run` standalone.
+To preview what the `/end_of_day` auto-fire would trash, run `/cleanup --dry-run` standalone; pass `--no-cleanup` to `/end_of_day` to suppress the auto-fire.
 
 ## Hardcoded sentinel allow-list (2 families)
 
@@ -311,7 +310,7 @@ The task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13) is `/cl
 it is not a sentinel family, does not appear in `sentinel_globs()`, and `/sleep --purge
 --sentinels` never reclaims it.
 
-Use `/cleanup` for routine session hygiene (auto-fires from `/checkpoint`, recoverable).
+Use `/cleanup` for routine session hygiene (auto-fires from `/end_of_day`, recoverable).
 Use `/sleep --purge --sentinels --older-than Nd` for explicit permanent purge of files you are sure you no longer need.
 
 ## Write-target / delete-target restriction
