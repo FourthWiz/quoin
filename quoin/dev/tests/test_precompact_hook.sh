@@ -291,41 +291,12 @@ fi
 rm -f "$pending_restore_h"
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
 
-# ─── (h2) precompact A3 guard is NOT armed by a continued session (IVG-258) ───
-# The high-context prompt hook no longer seeds pending-restore-*.txt, so a
-# session that only ever hit the (now-advisory) high-context band must NOT
-# have the A3 early-skip fire on its next precompact.
+# ─── (h2) precompact A3 guard is NOT armed without a pending-restore sentinel ───
+# With no pending-restore-*.txt for the session, the A3 early-skip must not
+# fire on the next precompact.
 
-UPS_HOOK="$SCRIPT_DIR/../../hooks/userpromptsubmit.sh"
-TRANSCRIPT_97="$FIXTURES_DIR/transcript_97pct.jsonl"
-if [ ! -f "$TRANSCRIPT_97" ]; then
-  sh "$SCRIPT_DIR/build_hook_fixtures.sh" >/dev/null 2>&1 || true
-fi
-[ -f "$TRANSCRIPT_97" ] || { printf 'SKIP: transcript_97pct.jsonl unavailable\n' >&2; }
-
-make_ups_stdin() {
-  local prompt="$1"
-  local transcript="$2"
-  local session_id="$3"
-  local cwd="${4:-$TMPDIR_TEST}"
-  printf '{"prompt":"%s","transcript_path":"%s","session_id":"%s","cwd":"%s"}' \
-    "$prompt" "$transcript" "$session_id" "$cwd"
-}
-
-# (h2-neg) — the S-2 case: three high-context UPS fires seed no sentinel, so
-# the A3 early-skip does not fire on the following precompact.
+# (h2-neg) — no sentinel: the A3 early-skip does not fire.
 touch "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/implement-24680.pidfile.lock"
-stdin=$(make_ups_stdin 'do some work' "$TRANSCRIPT_97" 'sess-cont' "$TMPDIR_TEST")
-i=0; while [ "$i" -lt 3 ]; do
-  printf '%s' "$stdin" | sh "$UPS_HOOK" >/dev/null 2>&1 || true
-  i=$((i + 1))
-done
-if [ ! -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-cont.txt" ]; then
-  ok "(h2-neg) three high-context UPS fires → no pending-restore-sess-cont.txt sentinel"
-else
-  fail "(h2-neg) three high-context UPS fires → unexpected pending-restore-sess-cont.txt sentinel"
-fi
-
 stdin_h2neg=$(make_stdin "auto" "sess-cont")
 out_h2neg=$(printf '%s' "$stdin_h2neg" | sh "$HOOK" 2>/dev/null)
 if printf '%s' "$out_h2neg" | grep -q '"allow"' 2>/dev/null; then

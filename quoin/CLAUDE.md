@@ -384,7 +384,7 @@ Fail-OPEN on Agent unavailable (best-effort cost guardrail, architecture I-01). 
 
 ### §0' Pollution dispatch
 
-The 10 Opus-tier non-orchestrator skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich) carry a `## §0' Pollution dispatch` block. Fires when `pollution_score >= QUOIN_POLLUTION_THRESHOLD` (default 5000, score formula in `quoin/hooks/_lib.sh`) AND no `[no-redispatch]` AND no prior §0 dispatch; §0 fires first, §0' only if no §0 dispatch. Excluded: `/run`, `/thorough_plan`. Fail-OPEN on Agent unavailable. Drift: `quoin/dev/tests/test_quoin_pollution_preamble.py`. Per-skill dispatch contract, 1M-credit recovery (IVG-89), and full detection rules: `__QUOIN_HOME__/memory/dispatch-guide.md`.
+The 10 Opus-tier non-orchestrator skills (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich) carry a `## §0' Pollution dispatch` block. Fires when `pollution_guard.py` prints `OVER` (score ≥ `QUOIN_POLLUTION_THRESHOLD`, default 5000) AND no `[no-redispatch]` AND no prior §0 dispatch; §0 fires first, §0' only if no §0 dispatch. Excluded: `/run`, `/thorough_plan`. Fail-OPEN on Agent unavailable. Drift: `quoin/dev/tests/test_quoin_pollution_preamble.py`. Per-skill dispatch contract, 1M-credit recovery (IVG-89), and full detection rules: `__QUOIN_HOME__/memory/dispatch-guide.md`.
 
 ### §0″ Minimum-tier guard
 
@@ -396,7 +396,7 @@ The 10 Opus-leaf skills named above carry a `## §0″ Minimum-tier guard` block
 
 ### Hooks deployed by quoin
 
-`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers 9 (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`, Stop/`*`. `userpromptsubmit.sh` enforces context-utilization advisory-only and idle-session detection; `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing `<cwd>/.workflow_artifacts/memory/recent-sessions.md` (read by `/continue_work`).
+`bash install.sh` deploys hook scripts to `__QUOIN_HOME__/hooks/` and registers 9 (event, matcher) stanzas in `__QUOIN_HOME__/settings.json`: UserPromptSubmit/`*`, PreCompact/`auto`, PostCompact/`auto`, SessionStart/`startup`, SessionStart/`resume`, SessionStart/`compact`, SessionEnd/`*`, WorktreeCreate/`*`, Stop/`*`. `userpromptsubmit.sh` only clears or stamps run-continuation sentinels (no transcript read); `precompact.sh`/`postcompact.sh`/`sessionstart.sh`/`sessionend.sh` manage compaction sentinels and S-4 banners, writing `<cwd>/.workflow_artifacts/memory/recent-sessions.md` (read by `/continue_work`).
 
 The task-keyed run-state record, PreCompact's always-allow table, the compact re-entry branch, and the telemetry sink (compaction continuity): `__QUOIN_HOME__/memory/hooks-table.md`. The opt-in `env` block (off by default, user scope) is quoin's only non-`QUOIN_*` var write: `quoin/docs/hooks-guide.md`.
 

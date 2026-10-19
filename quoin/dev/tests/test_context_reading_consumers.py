@@ -1,5 +1,5 @@
-"""Consumers of the real context reading: the prompt hook, the checkpoint call
-shape and the phase-boundary guard all see the corrected number.
+"""Consumers of the real context reading: the checkpoint call shape, the
+project-settings lookup and the phase-boundary guard all see the corrected number.
 
 Import-free / bare-checkout runnable: subprocess calls on file paths only.
 """
@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-HOOK = REPO_ROOT / "quoin" / "hooks" / "userpromptsubmit.sh"
 LIB_SH = REPO_ROOT / "quoin" / "hooks" / "_lib.sh"
 CORE_GUARD = REPO_ROOT / "quoin" / "core" / "scripts" / "context_budget_guard.py"
 WRAPPER = REPO_ROOT / "quoin" / "scripts" / "context_budget_guard.py"
@@ -41,38 +40,6 @@ def _record(model: str, total: int) -> str:
         "model": model,
         "usage": {"input_tokens": 10, "cache_read_input_tokens": total - 510,
                   "cache_creation_input_tokens": 500, "output_tokens": 5}}}) + "\n"
-
-
-def _run_hook(tmp_path: Path, transcript: Path, process_cwd: Path = None, session="sess-consumers"):
-    """Run the prompt hook. process_cwd, when given, differs from the stdin cwd so
-    only the cwd the hook is told about can locate project settings."""
-    project = _project(tmp_path)
-    stdin = json.dumps({"session_id": session, "transcript_path": str(transcript),
-                        "cwd": str(project), "prompt": "continue"})
-    return subprocess.run(
-        ["sh", str(HOOK)], input=stdin, capture_output=True, text=True,
-        env=_env(tmp_path), cwd=str(process_cwd or project), timeout=60,
-    )
-
-
-def test_prompt_hook_advises_at_real_utilization(tmp_path):
-    transcript = tmp_path / "t.jsonl"
-    transcript.write_text(_record("claude-opus-4-6", 150000), encoding="utf-8")
-    proc = _run_hook(tmp_path, transcript)
-    assert proc.returncode == 0
-    assert "context at 75.00% (real)" in proc.stdout
-
-
-def test_prompt_hook_stays_quiet_when_a_big_tool_result_inflated_the_file(tmp_path):
-    """A 1.3 MB earlier line made the byte estimate say BLOCK; the real reading is 17%."""
-    transcript = tmp_path / "t.jsonl"
-    padding = json.dumps({"type": "user", "isSidechain": False,
-                          "message": {"role": "user", "content": "q" * 1_300_000}})
-    transcript.write_text(padding + "\n" + _record("claude-opus-5-5", 170852), encoding="utf-8")
-    proc = _run_hook(tmp_path, transcript)
-    assert proc.returncode == 0
-    assert "context at" not in proc.stdout
-    assert not list((tmp_path / "project" / ".workflow_artifacts" / "memory").glob("pending-prompt-*"))
 
 
 @pytest.mark.parametrize("shell", [s for s in ("zsh", "sh") if shutil.which(s)])
@@ -137,10 +104,7 @@ def test_guard_runs_under_python_38(tmp_path):
     assert "source=estimated" in proc.stderr
 
 
-# ---- advisory labels ---------------------------------------------------------
-
-_LABEL = re.compile(r"context at (~[0-9]+\.[0-9]{2}% \(estimated\)|[0-9]+\.[0-9]{2}% \(real\))")
-
+# ---- project settings lookup ---------------------------------------------------
 
 def _real_transcript(tmp_path: Path, total: int) -> Path:
     path = tmp_path / "real.jsonl"
@@ -148,71 +112,29 @@ def _real_transcript(tmp_path: Path, total: int) -> Path:
     return path
 
 
-def _byte_transcript(tmp_path: Path, size: int) -> Path:
-    path = tmp_path / "bytes.jsonl"
-    path.write_bytes(b"x" * size)
-    return path
-
-
-def _active_run_state(tmp_path: Path) -> None:
-    memory = _project(tmp_path) / ".workflow_artifacts" / "memory"
-    (memory / "run-state-labels.json").write_text(
-        json.dumps({"task": "labels", "active": True, "schema": 1, "at_stage_boundary": False}, indent=2),
-        encoding="utf-8")
-
-
-# (source, branch, run-state) -> a transcript landing in that hook branch.
-_MATRIX = [
-    ("real", "advisory-run", 150000),
-    ("real", "advisory-norun", 150000),
-    ("real", "high", 190000),
-    ("estimated", "advisory-run", 960000),
-    ("estimated", "advisory-norun", 960000),
-    ("estimated", "high", 1152000),
-]
-
-
-@pytest.mark.parametrize("source,branch,size", _MATRIX, ids=[f"{s}-{b}" for s, b, _ in _MATRIX])
-def test_every_advisory_carries_its_source_label(source, branch, size, tmp_path):
-    transcript = _real_transcript(tmp_path, size) if source == "real" else _byte_transcript(tmp_path, size)
-    if branch == "advisory-run":
-        _active_run_state(tmp_path)
-    proc = _run_hook(tmp_path, transcript)
-    assert proc.returncode == 0
-    match = _LABEL.search(proc.stdout)
-    assert match, proc.stdout
-    assert ("(real)" in match.group(1)) == (source == "real")
-    if branch == "high":
-        payload = json.loads(proc.stdout)
-        assert _LABEL.search(payload["systemMessage"]).group(0) == match.group(0)
-        assert (tmp_path / "project" / ".workflow_artifacts" / "memory" / "pending-prompt-sess-consumers.txt").exists()
-    elif branch == "advisory-run":
-        assert "consider running /checkpoint" in proc.stdout
-    else:
-        assert "No checkpoint is needed" in proc.stdout
+def _reading(tmp_path: Path, transcript: Path, project: Path, process_cwd: Path) -> str:
+    proc = subprocess.run(
+        ["sh", "-c", '. "$1" && read_constants && compute_context_reading "$2" "$3"',
+         "x", str(LIB_SH), str(transcript), str(project)],
+        capture_output=True, text=True, env=_env(tmp_path), cwd=str(process_cwd), timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
 
 
 def test_stdin_cwd_locates_project_settings(tmp_path):
-    """150,000 tokens on a 200k window advises; the [1m] project setting widens the
-    window and silences it. The hook process runs from elsewhere, so only the cwd in
-    the hook input can find the settings file."""
+    """150,000 tokens on a 200k window reads 7500 bps; the [1m] project setting widens
+    the window. The process runs from elsewhere, so only the project argument can find
+    the settings file."""
     transcript = _real_transcript(tmp_path, 150000)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     project = _project(tmp_path)
-    plain = _run_hook(tmp_path, transcript, process_cwd=elsewhere)
-    assert "context at 75.00% (real)" in plain.stdout
+    plain = _reading(tmp_path, transcript, project, elsewhere).split()
+    assert plain[:2] == ["7500", "real"]
     (project / ".claude").mkdir()
     (project / ".claude" / "settings.json").write_text(
         json.dumps({"model": "claude-opus-4-6[1m]"}), encoding="utf-8")
-    widened = _run_hook(tmp_path, transcript, process_cwd=elsewhere)
-    assert widened.returncode == 0
-    assert "context at" not in widened.stdout
-
-
-def test_advisory_format_strings_are_all_labeled():
-    lines = [ln for ln in HOOK.read_text(encoding="utf-8").splitlines() if "context at " in ln]
-    printfs = [ln for ln in lines if "printf" in ln]
-    assert len(printfs) == 3, printfs
-    assert any("consider running /checkpoint" in ln for ln in printfs)
-    assert all("context at %s%d.%s%%%s" in ln for ln in printfs), printfs
+    widened = _reading(tmp_path, transcript, project, elsewhere).split()
+    assert widened[1] == "real"
+    assert int(widened[0]) < 7500

@@ -103,6 +103,7 @@ DEPLOYED_SCRIPTS = (
     "classify_critic_issues.py",
     "build_preambles.py",
     "session_age_guard.py",
+    "pollution_guard.py",  # Claude-adapter-owned §0' on-demand pollution score (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors session_age_guard.py)
     "pidfile_helpers.sh",
     "sleep_score.py",
     "analyze_cost_ledger.py",
@@ -290,6 +291,53 @@ _QUOIN_HOOK_BASENAMES = frozenset({
     "sessionend.sh",
     "stop.sh",
 })
+
+
+# Hook stanzas quoin no longer registers: (event, matcher, script basename).
+# Empty today; a later release adds a row when a hook script is retired.
+_RETIRED_HOOK_STANZAS: tuple[tuple[str, str, str], ...] = ()
+
+
+def _remove_retired_stanzas(hooks: dict, hooks_dir: pathlib.Path) -> None:
+    """Drop stanzas listed in _RETIRED_HOOK_STANZAS from `hooks` in place.
+
+    A stanza goes only when its matcher equals the entry's, it has at least one
+    command, and every command resolves to the entry's script inside hooks_dir.
+    Mixed or foreign stanzas keep their content and order. An event key whose
+    list this removal emptied is dropped; an event that was already empty stays.
+    """
+    for event, matcher, basename in _RETIRED_HOOK_STANZAS:
+        stanzas = hooks.get(event)
+        if not isinstance(stanzas, list):
+            continue
+
+        def _owned(stanza) -> bool:
+            if not isinstance(stanza, dict) or stanza.get("matcher") != matcher:
+                return False
+            entries = stanza.get("hooks")
+            if not isinstance(entries, list):
+                return False
+            cmds = [h.get("command", "") for h in entries if isinstance(h, dict)]
+            if not cmds:
+                return False
+            for cmd in cmds:
+                if not isinstance(cmd, str) or not cmd.endswith("/" + basename):
+                    return False
+                try:
+                    path = pathlib.Path(cmd).expanduser()
+                    if not path.is_absolute() or path.resolve().parent != hooks_dir:
+                        return False
+                except (OSError, RuntimeError):
+                    return False
+            return True
+
+        kept = [s for s in stanzas if not _owned(s)]
+        if len(kept) == len(stanzas):
+            continue
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
 
 
 def detect_home_hook_conflict() -> bool:
@@ -1089,13 +1137,12 @@ def deploy_hooks(
     In project mode, hooks are scoped to <project>/.claude/settings.json only.
     Home ~/.claude/settings.json is NOT modified.
     """
-    # _lib.sh copies FIRST: userpromptsubmit.sh calls
-    # run_state_probe unguarded (no `command -v` check, unlike the SKILL.md
-    # arms), so during an install window — or after an install aborted
-    # mid-copy — a userpromptsubmit.sh that already has the new call but
-    # sources a not-yet-updated _lib.sh would emit "command not found" on
-    # stderr and report no active run while one is live. Copying _lib.sh
-    # first closes that window; it never depends on the other hook scripts.
+    # _lib.sh copies FIRST: sessionstart.sh, sessionend.sh, precompact.sh,
+    # postcompact.sh and stop.sh source it, and a hook that already has a new
+    # call but sources a not-yet-updated _lib.sh during an install window (or
+    # after an install aborted mid-copy) would report "command not found".
+    # userpromptsubmit.sh no longer sources it. Copying _lib.sh first closes
+    # that window; it never depends on the other hook scripts.
     hook_scripts = ("_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "worktreecreate.sh", "stop.sh")
     src_hooks = source_dir / "hooks"
     dst_hooks = dest_root / "hooks"
@@ -1154,10 +1201,13 @@ def deploy_hooks(
         event_list[:] = [
             s for s in event_list
             if not (
-                s.get("matcher") == matcher
+                isinstance(s, dict)
+                and s.get("matcher") == matcher
+                and isinstance(s.get("hooks"), list)
                 and any(
-                    h.get("command", "").endswith(script_name)
-                    for h in s.get("hooks", [])
+                    isinstance(h, dict)
+                    and str(h.get("command", "")).endswith(script_name)
+                    for h in s["hooks"]
                 )
             )
         ]
@@ -1165,6 +1215,7 @@ def deploy_hooks(
         _stanza_count[0] += 1
 
     hooks_dir = str(dest_root.resolve() / "hooks")
+    _remove_retired_stanzas(hooks, pathlib.Path(hooks_dir))
     _append_stanza("UserPromptSubmit", "*",       f"{hooks_dir}/userpromptsubmit.sh", 5)
     _append_stanza("PreCompact",       "auto",    f"{hooks_dir}/precompact.sh",       10)
     _append_stanza("PostCompact",      "auto",    f"{hooks_dir}/postcompact.sh",      5)

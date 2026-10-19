@@ -1662,9 +1662,38 @@ their thresholds. This section documents the cooperation mechanism only;
 the threshold values themselves live in `hooks/_lib.sh`'s
 `read_constants()` and are read here, never redefined.
 
-- **Self-checkpoint before the advisory band.** At `COMPACT_FIRST_BPS`
-  (90% utilization) — BEFORE the 70–95% advisory band and well before the
-  95% high-context band — the orchestrator self-invokes a checkpoint save
+- **Self-checkpoint trigger.** Run this at each heavy-phase boundary
+  (architect, thorough_plan, implement, review), right after the
+  `## Pre-phase context budget` guard. Every Bash tool call starts a fresh
+  shell, so a value computed in an earlier call is gone; this block runs the
+  guard itself and keeps its result in block-local variables. It prints
+  `SELF_CHECKPOINT_DUE` when the reported utilization is an integer at or
+  above `COMPACT_FIRST_BPS` (basis points, 9000 by default, read from the
+  library's `read_constants`), and `SELF_CHECKPOINT_SKIP` otherwise. The
+  project root is `${PROJECT_ROOT:-$PWD}` for the same fresh-shell reason.
+  ```sh
+  _sc_line="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "${PROJECT_ROOT:-$PWD}" 2>/dev/null)"
+  [ -r "__QUOIN_HOME__/hooks/_lib.sh" ] && . "__QUOIN_HOME__/hooks/_lib.sh" && read_constants 2>/dev/null
+  _sc_util=""
+  case "$_sc_line" in
+    OK\|*|OVER\|*) _sc_util=${_sc_line#*|}; _sc_util=${_sc_util%%|*} ;;
+  esac
+  case "$_sc_util" in
+    ''|*[!0-9]*) echo SELF_CHECKPOINT_SKIP ;;
+    *) if [ "$_sc_util" -ge "${COMPACT_FIRST_BPS:-9000}" ]; then echo SELF_CHECKPOINT_DUE; else echo SELF_CHECKPOINT_SKIP; fi ;;
+  esac
+  ```
+  Under `[no-phase-budget]` the Pre-phase guard is skipped entirely and so is
+  this block (treat as skip). Under `QUOIN_DISABLE_PHASE_BUDGET=1` the guard
+  is skipped too; if the block is run anyway the guard prints `OK|disabled|`
+  and the block answers skip. The fail-OPEN `OK|0|` line, an empty line and
+  crash output all answer skip. An `OVER|` line parses the same as an `OK|`
+  line, and the guard's exit 1 on `OVER` is ignored by the block. This save is
+  in addition to the over-budget `boundary_checkpoint.py` call in the
+  Pre-phase section. Cost: one extra guard run (a transcript tail read) per
+  heavy boundary, four at most per `/run`.
+- **Self-checkpoint at very high fill.** When the trigger above prints
+  `SELF_CHECKPOINT_DUE`, the orchestrator self-invokes a checkpoint save
   UNLESS `run_state_probe` (`hooks/_lib.sh`) confirms no active run-state
   record exists project-wide. The check:
   ```sh
@@ -1690,44 +1719,40 @@ the threshold values themselves live in `hooks/_lib.sh`'s
   `PROBE_ACTIVE` both mean
   the self-checkpoint fires exactly as it does today. This is the
   deliberate fail-safe direction (`D-28`): an undefined, unreachable, or
-  unresolvable probe must never silently kill the 90% self-checkpoint,
+  unresolvable probe must never silently kill the self-checkpoint,
   because in autonomous mode that save is what carries state across a
   context window — the opposite failure direction from `/checkpoint` Step
   1.4, where "no information" safely means "fall back to a real save"
-  rather than "skip." When the save runs it writes a
-  `checkpoint-defer-{sid}` marker as before, so the mid-phase advisory in
-  the 70–95% band does not re-prompt for a checkpoint the orchestrator
-  already took; when the save is skipped, no `checkpoint-defer-{sid}`
-  marker is written — writing one after a skip would wrongly suppress the
-  70–95% advisory. This bullet does not distinguish a boundary-parked run
+  rather than "skip." This bullet does not distinguish a boundary-parked run
   from an in-flight one (`D-26`): `/run` writes the record only at phase
   boundaries and never mid-phase, so the probe will almost always answer
   `PROBE_ACTIVE` and the self-checkpoint fires as it does today. There are
   two realistic skip windows, not one: the narrow one where `--clear` has
-  already run but the session continues past 90%, and a second one where
-  the record is genuinely still active but has aged past `run_state_probe`'s
-  own staleness window — a phase that runs long, or a session paused and
-  resumed after that window elapses, reads as `PROBE_INACTIVE` even though
-  the run is live. The probe's default window is deliberately wider than
-  `run_state_select`'s (14 days vs. 1) specifically to keep this second
-  window rare in practice; `QUOIN_RUN_STATE_STALE_DAYS` raises it further
-  for an expected multi-week autonomous run. This bullet lives inside `## Hook
-  cooperation (autonomous)`, so the conditioning above does not reach an
-  interactive (non-autonomous) `/run` session — a scope narrowing worth
-  flagging for the `S-7` sweep, not an oversight. `boundary_checkpoint.py`
-  (deterministic, no model call) still always runs on the over-budget path.
-- **There is no block to catch — the band is a pure advisory.** At and
-  above `BLOCK_BPS` (95%) the prompt hook returns `additionalContext`
-  plus a `systemMessage` and the prompt continues in the same turn; it
-  never returns a `"decision": "block"` response on any path. The prompt
-  is still appended to `pending-prompt-{sid}.txt`, so the on-disk audit trail is
-  unchanged; `/checkpoint --restore` CASE B's *presentation* of that trail was
-  corrected (review-1.md issue 2) to say the entries already ran rather than
-  calling them blocked. The orchestrator therefore
-  has no stop signal to key on here: it reads the advisory as context,
-  finishes the stage it is in, and lets platform compaction be the
-  backstop. Any block-catch logic keyed on the `"decision"` / `"block"`
-  tokens is dead and must not be reintroduced.
+  already run but the session continues past the trigger level, and a second
+  one where the record is genuinely still active but has aged past
+  `run_state_probe`'s own staleness window — a phase that runs long, or a
+  session paused and resumed after that window elapses, reads as
+  `PROBE_INACTIVE` even though the run is live. The probe's default window is
+  deliberately wider than `run_state_select`'s (14 days vs. 1) specifically
+  to keep this second window rare in practice; `QUOIN_RUN_STATE_STALE_DAYS`
+  raises it further for an expected multi-week autonomous run. This bullet
+  lives inside `## Hook cooperation (autonomous)`, so the conditioning above
+  does not reach an interactive (non-autonomous) `/run` session — a scope
+  narrowing flagged for the follow-up sweep, not an oversight.
+  `boundary_checkpoint.py` (deterministic, no model call) still always runs
+  on the over-budget path.
+  Coverage the trigger gives up: mid-phase readings inside inline gates, the
+  post-review gate into Phase 6 and Stop-hook continuation turns have no
+  reading at all. The backstop there is native auto-compaction (Claude Code
+  setting `autoCompactEnabled`, on by default) plus the `SessionStart`
+  compact re-entry and the Stop-hook continuation.
+- **No prompt hook reports context.** No quoin prompt hook reads the
+  transcript or reports context fullness; native `/context` and
+  auto-compaction are the source of truth for how full the session is. The
+  orchestrator therefore has no stop signal to key on here: it finishes the
+  stage it is in and lets platform compaction be the backstop. Any
+  block-catch logic keyed on the `"decision"` / `"block"` tokens is dead and
+  must not be reintroduced.
 - **Hooks fail open; the orchestrator never assumes otherwise.** The
   compaction hook never blocks by design — it only ever allows, and no
   hook in the set emits a stop signal on any path. The orchestrator
@@ -1736,7 +1761,8 @@ the threshold values themselves live in `hooks/_lib.sh`'s
   `memory/autonomous-mode.md`, both bounded by `auto-resume-<task>.json`
   and standing down behind every hard-stop sentinel. The Stop hook's block
   response is a continue instruction to the model, never a stop signal, so
-  the "no block to catch" rule above still holds.
+  the rule in the "No prompt hook reports context" bullet above (there is
+  no block to catch) still holds.
 - **No yield with pending work.** Under `AUTONOMOUS` follow the no-yield rule in `memory/autonomous-mode.md` `### Headless children never yield with pending work`, including the headless full-suite recipe — a headless child that ends its turn with a long command still running loses that command's result.
 - **Hard constraint.** Autonomous mode NEVER writes to any file under
   `hooks/`, and NEVER modifies or lowers a `QUOIN_*_BPS` constant or any

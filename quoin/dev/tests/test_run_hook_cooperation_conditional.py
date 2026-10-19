@@ -34,9 +34,9 @@ def slice_text() -> str:
 def _self_checkpoint_bullet(slice_text: str) -> str:
     """Isolate just the first bullet (the self-checkpoint one), not the
     whole section, for the clauses that must co-occur WITHIN one bullet."""
-    bullet_start = slice_text.index("- **Self-checkpoint before the advisory band.**")
+    bullet_start = slice_text.index("- **Self-checkpoint at very high fill.**")
     next_bullet = slice_text.index(
-        "- **There is no block to catch", bullet_start
+        "- **No prompt hook reports context.**", bullet_start
     )
     return slice_text[bullet_start:next_bullet]
 
@@ -66,21 +66,18 @@ def test_no_line_co_occurs_autonomous_and_hooks_dir(slice_text: str) -> None:
 
 
 # (c) the self-checkpoint bullet states the save fires when an active
-# run-state record exists and is skipped (no checkpoint-defer marker) when
-# none exists, and does NOT contain `at_stage_boundary` (CRIT-1 round-1
-# regression guard).
+# run-state record exists, names the trigger it depends on, carries no
+# checkpoint-defer marker (that marker lost its only reader), and does NOT
+# contain `at_stage_boundary`.
 def test_self_checkpoint_bullet_states_condition(slice_text: str) -> None:
     bullet = _self_checkpoint_bullet(slice_text)
-    normalized = re.sub(r"\s+", " ", bullet)
-    assert "checkpoint-defer-{sid}" in bullet
-    assert "no `checkpoint-defer-{sid}` marker is written" in normalized, (
-        "bullet must state that a genuinely-skipped save writes no "
-        "checkpoint-defer marker (writing one would wrongly suppress the "
-        "70-95% advisory)"
+    assert "SELF_CHECKPOINT_DUE" in bullet
+    assert "checkpoint-defer" not in bullet, (
+        "the checkpoint-defer marker has no reader any more; the bullet must "
+        "not describe writing or skipping it"
     )
     assert "at_stage_boundary" not in bullet, (
-        "self-checkpoint bullet must not reintroduce the round-1 "
-        "at_stage_boundary gate (CRIT-1 round-1 regression)"
+        "self-checkpoint bullet must not gate on at_stage_boundary"
     )
 
 

@@ -57,6 +57,7 @@ def test_runtime_boundary_classifies_portable_and_claude_files():
     for claude_specific in [
         "cost_from_jsonl.py",
         "session_age_guard.py",
+        "pollution_guard.py",
         "build_preambles.py",
     ]:
         assert f"`{claude_specific}` is Claude-specific" in text

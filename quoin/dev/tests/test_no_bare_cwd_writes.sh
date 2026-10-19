@@ -24,19 +24,6 @@ fail() {
 HOOKS_DIR="$(cd "$(dirname "$0")" && pwd)/../../hooks"
 SKILL_MD="$(cd "$(dirname "$0")" && pwd)/../../skills/checkpoint/SKILL.md"
 
-# ─── 1. userpromptsubmit.sh: ≥5 resolve_project_root calls (5 cwd vars) ──────
-_ups="$HOOKS_DIR/userpromptsubmit.sh"
-if [ -r "$_ups" ]; then
-  _count=$(grep -c 'resolve_project_root' "$_ups" 2>/dev/null || echo 0)
-  if [ "$_count" -ge 5 ]; then
-    ok "userpromptsubmit.sh: resolve_project_root count >= 5 (found $_count)"
-  else
-    fail "userpromptsubmit.sh: resolve_project_root count < 5 (found $_count; expect >=5 for 5 cwd vars)"
-  fi
-else
-  fail "userpromptsubmit.sh: not readable at $_ups"
-fi
-
 # ─── 2. precompact.sh: ≥1 resolve_project_root call ─────────────────────────
 _pc="$HOOKS_DIR/precompact.sh"
 if [ -r "$_pc" ]; then

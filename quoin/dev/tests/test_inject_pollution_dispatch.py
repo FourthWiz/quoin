@@ -70,16 +70,17 @@ REQUIRED_TOKENS = [
     "[no-redispatch]",
     "[quoin-S-1: cannot extract per-skill dispatch contract; running in main]",
     "[quoin-S-1: pollution dispatch unavailable; proceeding in current session]",
-    "pollution_score",
+    "pollution_guard.py",
+    "OVER|",
     "POLLUTION_THRESHOLD",
     'model: "opus"',
 ]
 
-# Required score-extraction strings (from test_pollution_score_extraction.py)
+# Required guard-detection strings (from test_pollution_score_extraction.py)
 SCORE_EXTRACTION_STRINGS = [
-    "pollution_score",
-    "pollution-score-latest.txt",
-    "sessions/",
+    "pollution_guard.py",
+    "OVER|",
+    "OK|0|",
 ]
 
 # Per-skill distinctive tokens (from test_quoin_pollution_preamble.py)
@@ -176,7 +177,7 @@ def test_rendered_block_has_required_token(skill, token):
 @pytest.mark.parametrize("skill", TARGET_SKILLS)
 @pytest.mark.parametrize("string", SCORE_EXTRACTION_STRINGS)
 def test_rendered_block_has_score_extraction_string(skill, string):
-    """The 3 score-extraction strings must appear inside the extracted §0' block."""
+    """The 3 guard-detection strings must appear inside the extracted §0' block."""
     text = _read_adapter(skill)
     block = _extract_pollution_block(text)
     assert block, f"{skill}: §0' block is empty"

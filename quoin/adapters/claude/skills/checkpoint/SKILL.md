@@ -262,8 +262,8 @@ If AFTER_COMPACT_FLAG_PRESENT is true:
 If AFTER_COMPACT_FLAG_PRESENT is false (flag absent):
   - Proceed to Step 1.4.
 
-Note: /checkpoint is exempt from the high-context advisory at userpromptsubmit.sh:117-134; the band no longer
-blocks, and --purge reaches the advisory, not a refusal. The --after-compact flag is retained for backward-compat
+Note: no prompt hook reports context any more, so /checkpoint needs no exemption and --purge reaches no
+refusal. The --after-compact flag is retained for backward-compat
 only; compact-already-ran detection is now automatic via the two-arm check in Step 1.4 (dual-sentinel, or a
 project-scoped no-active-run probe when the sentinel pair is incomplete).
 
@@ -762,15 +762,14 @@ ALL subsequent path derivations in defer mode MUST use `${_PROJECT_ROOT}`.
 `${_PROJECT_ROOT}/.workflow_artifacts/memory/checkpoint-defer-${session_id}.txt`
 containing a single line — the ISO-8601 UTC timestamp of when defer was set.
 
-This marker is consumed by `userpromptsubmit.sh` STEP 3 advisory branch: when the marker is present for the current session_id, the advisory is suppressed (no "context at X%" advisory emitted).
+No-op since the prompt hook no longer reads this marker; removed with this skill in a later stage.
 
 The marker is automatically expired on:
-- Post-compact (via `userpromptsubmit.sh` STEP 0.5 trash-move alongside the postcompact-reset sentinel)
 - Successful voluntary `/checkpoint` save (via Save mode Step 6 above)
 
 **Exit code:** 0.
 
-**Print:** `[checkpoint] defer marker written; userpromptsubmit advisory suppressed until next compact or voluntary save.`
+**Print:** `[checkpoint] defer marker written.`
 
 ## Restore mode (`--restore` argument present)
 
@@ -1106,7 +1105,7 @@ This is the common path: user saved proactively, started fresh session, runs --r
 Skip step 4 entirely. Surface ONLY the task-state restore from step 2/3.
 Proceed directly to step 5 (sentinel cleanup — pending-restore only).
 
-**CASE B — `pending-prompt-${session_id}.txt` exists for the current session (high-context capture flow):**
+**CASE B — `pending-prompt-${session_id}.txt` exists for the current session (the prompt hook no longer writes this file; the case only handles files left by older installs):**
 
 Read the file. Detect format by checking for `=== BLOCKED PROMPT [...]` headers:
 

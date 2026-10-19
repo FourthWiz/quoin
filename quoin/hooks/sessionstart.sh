@@ -124,6 +124,17 @@ fi
 _ar_task=""
 case "$src" in
   startup|resume)
+    # Session history for /continue_work: one line per start or resume. The
+    # memory directory is never created here; a project without one keeps no
+    # history until the workflow is initialised.
+    if [ -n "$session_id" ] && [ -d "$MEMORY_DIR" ]; then
+      # The id check runs in the C locale so the character ranges mean ASCII
+      # whatever locale the session has.
+      if (LC_ALL=C; case "$session_id" in *[!A-Za-z0-9-]*) exit 1 ;; esac); then
+        _rs_now=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || _rs_now=$(date +%Y-%m-%dT%H:%M:%SZ)
+        printf '%s | %s\n' "$_rs_now" "$session_id" >> "$MEMORY_DIR/recent-sessions.md" 2>/dev/null || true
+      fi
+    fi
     if [ -n "$session_id" ] && [ -d "$MEMORY_DIR" ] \
        && ls "$MEMORY_DIR"/run-state-*.json >/dev/null 2>&1 \
        && command -v python3 >/dev/null 2>&1; then

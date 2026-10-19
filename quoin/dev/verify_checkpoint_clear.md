@@ -17,7 +17,7 @@ Inspected Claude Code behavior documentation and the harness's session-persisten
 Rationale:
 - `/clear` clears the in-memory transcript/conversation history within the CURRENT session. It does NOT terminate or restart the session process.
 - The session_id is assigned when the Claude Code process starts (each `claude` invocation). `/clear` is a mid-session command that does not restart the process.
-- Evidence: `userpromptsubmit.sh` exempts `/clear` from BLOCK_BPS checking (visible in the code). This exemption is only meaningful if `/clear` runs in the same session as the blocked prompt — confirming it's an in-session operation.
+- Evidence: Claude Code runs `/clear` inside the same session, so the session id is unchanged afterwards (the earlier prompt-hook exemption for `/clear` assumed the same).
 - The JSONL transcript file keyed on the session_id is the persisted record. A `/clear` would reset the in-memory view but the session_id (the JSONL file stem) would remain.
 
 ### Impact on T-04 Step 4c wording

@@ -53,9 +53,9 @@ Mechanical drift detection lives in `quoin/dev/tests/test_quoin_stage1_preamble.
 
 ## §0' Pollution dispatch (verbose reference)
 
-The 10 Opus-tier skills that are NOT orchestrators (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich) carry a `## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)` block. When `pollution_score` exceeds `POLLUTION_THRESHOLD`, the skill self-dispatches as a fresh Agent subagent carrying per-skill paths (not content).
+The 10 Opus-tier skills that are NOT orchestrators (architect, plan, critic, revise, review, init_workflow, discover, specify, security_review, enrich) carry a `## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)` block. When `pollution_guard.py` reports `OVER`, the skill self-dispatches as a fresh Agent subagent carrying per-skill paths (not content).
 
-**Detection:** reads `pollution_score: N` from session-state file or `pollution-score-latest.txt`. Fires if N >= threshold AND no `[no-redispatch]` AND no prior §0 dispatch. Score formula: `transcript_kb + (agent_returns × 5) + (read_calls × 1) + (bash_calls × 1)` — implemented in `quoin/hooks/_lib.sh`. Written by `userpromptsubmit.sh` STEP 0.5 on every prompt submit.
+**Detection:** after the sentinel and prior-§0 checks, the skill runs `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once; a line starting `OVER|` means the session is polluted, anything else (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error) proceeds to the skill body. The guard always exits 0. Score formula: `transcript_kb + (agent_returns × 5) + (read_calls × 1) + (bash_calls × 1)`, threshold `QUOIN_POLLUTION_THRESHOLD` (default 5000). Inside a subagent the guard measures the parent session's transcript; subagents spawned with `[no-redispatch]` never run it.
 
 **Per-skill dispatch contract:**
 

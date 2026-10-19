@@ -1,142 +1,141 @@
 #!/bin/sh
-# test_recent_sessions_hook.sh — Shell tests for STEP 0.7/0.9 in userpromptsubmit.sh
-# and STEP 1b in precompact.sh.
+# test_recent_sessions_hook.sh - Shell tests for the recent-sessions.md appends
+# done by sessionstart.sh (startup, resume), sessionend.sh and precompact.sh.
 #
 # Usage: sh quoin/dev/tests/test_recent_sessions_hook.sh
 # Returns 0 on success, non-zero on failure.
 #
-# Requires: jq, python3, sh
-# Note: these tests exercise the deployed hook at ~/.claude/hooks/userpromptsubmit.sh
-# and ~/.claude/hooks/precompact.sh. Run after 'bash install.sh' to ensure latest
-# versions are deployed.
+# Runs the repo hooks (not the deployed copies) with HOME pinned to a temp dir.
 
 PASS=0
 FAIL=0
-HOOK_UPS="$HOME/.claude/hooks/userpromptsubmit.sh"
-HOOK_PRE="$HOME/.claude/hooks/precompact.sh"
-
-# ── Helper ────────────────────────────────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+HOOKS="$SCRIPT_DIR/../../hooks"
+HOOK_START="$HOOKS/sessionstart.sh"
+HOOK_END="$HOOKS/sessionend.sh"
+HOOK_PRE="$HOOKS/precompact.sh"
 
 pass() { printf 'PASS: %s\n' "$1"; PASS=$((PASS + 1)); }
 fail() { printf 'FAIL: %s\n' "$1"; FAIL=$((FAIL + 1)); }
 
-require_hook() {
-    if [ ! -f "$1" ]; then
-        printf 'SKIP: hook not found at %s (run bash install.sh first)\n' "$1"
-        exit 0
-    fi
+ROOT="$(mktemp -d)"
+trap 'rm -rf "$ROOT"' EXIT
+export HOME="$ROOT/home"
+mkdir -p "$HOME"
+
+new_project() {
+  d="$ROOT/proj-$1"
+  mkdir -p "$d/.workflow_artifacts/memory"
+  printf '%s' "$d"
 }
 
-# ── Setup: verify hooks exist ─────────────────────────────────────────────────
+LINE_RE='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z \| '
 
-require_hook "$HOOK_UPS"
-require_hook "$HOOK_PRE"
+start() { # $1 project  $2 source  $3 session id
+  printf '{"source":"%s","session_id":"%s","cwd":"%s"}' "$2" "$3" "$1" | sh "$HOOK_START" 2>/dev/null
+}
 
-# ── Test 1: Single prompt → recent-sessions.md created with one line ──────────
-
-TMP1=$(mktemp -d)
-trap 'rm -rf "$TMP1"' EXIT
-
-printf '{"session_id":"test-uuid-t1","cwd":"%s","transcript_path":"/dev/null","prompt":"hello"}' \
-    "$TMP1" | sh "$HOOK_UPS" 2>/dev/null
-
-RS1="${TMP1}/.workflow_artifacts/memory/recent-sessions.md"
-if [ -f "$RS1" ]; then
-    line_count=$(wc -l < "$RS1" | tr -d ' ')
-    if [ "$line_count" -ge 1 ]; then
-        if grep -q "test-uuid-t1" "$RS1" 2>/dev/null; then
-            pass "Test 1: recent-sessions.md created with correct session_id"
-        else
-            fail "Test 1: session_id not in recent-sessions.md"
-        fi
-    else
-        fail "Test 1: recent-sessions.md is empty"
-    fi
+# Test 1: startup appends one line in the expected format
+P=$(new_project 1)
+start "$P" startup sid-t1 >/dev/null
+RS="$P/.workflow_artifacts/memory/recent-sessions.md"
+if [ -f "$RS" ] && [ "$(wc -l < "$RS" | tr -d ' ')" = "1" ] && grep -qE "${LINE_RE}sid-t1\$" "$RS"; then
+  pass "Test 1: startup appends one correctly formatted line"
 else
-    fail "Test 1: recent-sessions.md not created"
+  fail "Test 1: startup did not append one formatted line ($(cat "$RS" 2>/dev/null))"
 fi
 
-# ── Test 2: Second prompt same session, timestamps close → no advisory file ───
-
-TMP2=$(mktemp -d)
-mkdir -p "${TMP2}/.workflow_artifacts/memory"
-NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || NOW=$(date +%Y-%m-%dT%H:%M:%SZ)
-printf '%s | test-uuid-t2\n' "$NOW" > "${TMP2}/.workflow_artifacts/memory/recent-sessions.md"
-
-printf '{"session_id":"test-uuid-t2","cwd":"%s","transcript_path":"/dev/null","prompt":"hello again"}' \
-    "$TMP2" | sh "$HOOK_UPS" 2>/dev/null
-
-if [ -f "${TMP2}/.workflow_artifacts/memory/idle-advisory-pending-test-uuid-t2.txt" ]; then
-    fail "Test 2: idle advisory flag created for non-idle session"
+# Test 2: resume appends
+P=$(new_project 2)
+start "$P" resume sid-t2 >/dev/null
+if grep -qE "${LINE_RE}sid-t2\$" "$P/.workflow_artifacts/memory/recent-sessions.md" 2>/dev/null; then
+  pass "Test 2: resume appends a line"
 else
-    pass "Test 2: no idle advisory for session with recent activity"
+  fail "Test 2: resume did not append"
 fi
 
-# ── Test 3: Prompt with old entry for same session (>1h ago) → advisory emitted
-# Note: STEP 0.7 writes the idle flag and STEP 0.9 immediately consumes+deletes it
-# in the same hook invocation, so we check stdout for the advisory JSON instead.
-
-TMP3=$(mktemp -d)
-mkdir -p "${TMP3}/.workflow_artifacts/memory"
-# Write an entry with a timestamp far in the past (guaranteed >1h ago)
-OLD_TS="2000-01-01T00:00:00Z"
-printf '%s | test-uuid-t3\n' "$OLD_TS" > "${TMP3}/.workflow_artifacts/memory/recent-sessions.md"
-
-OUT3=$(printf '{"session_id":"test-uuid-t3","cwd":"%s","transcript_path":"/dev/null","prompt":"hello"}' \
-    "$TMP3" | sh "$HOOK_UPS" 2>/dev/null)
-if printf '%s' "$OUT3" | grep -q "quoin-idle"; then
-    pass "Test 3: idle advisory emitted for session idle >1h"
+# Test 3: compact appends nothing
+P=$(new_project 3)
+start "$P" compact sid-t3 >/dev/null
+if [ -e "$P/.workflow_artifacts/memory/recent-sessions.md" ]; then
+  fail "Test 3: compact start wrote recent-sessions.md"
 else
-    fail "Test 3: idle advisory NOT emitted for session idle >1h"
+  pass "Test 3: compact start appends nothing"
 fi
 
-# ── Test 4: Missing session_id → no file written, no advisory (fail-open) ─────
-
-TMP4=$(mktemp -d)
-printf '{"cwd":"%s","transcript_path":"/dev/null","prompt":"hello"}' \
-    "$TMP4" | sh "$HOOK_UPS" 2>/dev/null
-
-RS4="${TMP4}/.workflow_artifacts/memory/recent-sessions.md"
-if [ -f "$RS4" ]; then
-    fail "Test 4: recent-sessions.md created when session_id missing"
+# Test 4: sessionend appends
+P=$(new_project 4)
+printf '{"session_id":"sid-t4","cwd":"%s"}' "$P" | sh "$HOOK_END" >/dev/null 2>&1
+if grep -qE "${LINE_RE}sid-t4\$" "$P/.workflow_artifacts/memory/recent-sessions.md" 2>/dev/null; then
+  pass "Test 4: sessionend appends a line"
 else
-    pass "Test 4: no file created when session_id absent (fail-open)"
+  fail "Test 4: sessionend did not append"
 fi
 
-# ── Test 5: Precompact hook → one line appended to recent-sessions.md ─────────
-
-TMP5=$(mktemp -d)
-printf '{"trigger":"auto","session_id":"pre-uuid-t5","cwd":"%s","transcript_path":"/dev/null"}' \
-    "$TMP5" | sh "$HOOK_PRE" 2>/dev/null
-
-RS5="${TMP5}/.workflow_artifacts/memory/recent-sessions.md"
-if [ -f "$RS5" ]; then
-    if grep -q "pre-uuid-t5" "$RS5" 2>/dev/null; then
-        pass "Test 5: precompact hook appended session_id to recent-sessions.md"
-    else
-        fail "Test 5: session_id not found in recent-sessions.md after precompact"
-    fi
+# Test 5: no memory dir -> no file and no directory created
+P="$ROOT/proj-5"
+mkdir -p "$P"
+start "$P" startup sid-t5 >/dev/null
+printf '{"session_id":"sid-t5","cwd":"%s"}' "$P" | sh "$HOOK_END" >/dev/null 2>&1
+if [ -e "$P/.workflow_artifacts" ]; then
+  fail "Test 5: a hook created .workflow_artifacts in a bare project"
 else
-    fail "Test 5: recent-sessions.md not created by precompact hook"
+  pass "Test 5: no memory dir -> nothing created"
 fi
 
-# ── Test 6: Different session_id already in file → new entry appended correctly
-
-TMP6=$(mktemp -d)
-mkdir -p "${TMP6}/.workflow_artifacts/memory"
-printf '2026-01-01T00:00:00Z | other-uuid-existing\n' > "${TMP6}/.workflow_artifacts/memory/recent-sessions.md"
-
-printf '{"session_id":"new-uuid-t6","cwd":"%s","transcript_path":"/dev/null","prompt":"hi"}' \
-    "$TMP6" | sh "$HOOK_UPS" 2>/dev/null
-
-RS6="${TMP6}/.workflow_artifacts/memory/recent-sessions.md"
-if grep -q "other-uuid-existing" "$RS6" 2>/dev/null && grep -q "new-uuid-t6" "$RS6" 2>/dev/null; then
-    pass "Test 6: both existing and new session_id present in recent-sessions.md"
+# Test 6: empty session id -> no append
+P=$(new_project 6)
+printf '{"source":"startup","cwd":"%s"}' "$P" | sh "$HOOK_START" >/dev/null 2>&1
+printf '{"cwd":"%s"}' "$P" | sh "$HOOK_END" >/dev/null 2>&1
+if [ -e "$P/.workflow_artifacts/memory/recent-sessions.md" ]; then
+  fail "Test 6: a line was appended without a session id"
 else
-    fail "Test 6: recent-sessions.md does not contain both entries"
+  pass "Test 6: missing session id appends nothing"
 fi
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# Test 7: the append does not change sessionstart stdout
+P=$(new_project 7)
+OUT_A=$(start "$P" startup sid-t7)
+RS="$P/.workflow_artifacts/memory/recent-sessions.md"
+rm -f "$RS"
+OUT_B=$(start "$P" startup sid-t7)
+printf '2026-01-01T00:00:00Z | older\n' > "$RS"
+OUT_C=$(start "$P" startup sid-t7)
+if [ "$OUT_A" = "$OUT_B" ] && [ "$OUT_B" = "$OUT_C" ]; then
+  pass "Test 7: sessionstart stdout is the same with and without a history file"
+else
+  fail "Test 7: sessionstart stdout changed with the history file"
+fi
+
+# Test 8: existing entries are kept
+P=$(new_project 8)
+printf '2026-01-01T00:00:00Z | other-uuid-existing\n' > "$P/.workflow_artifacts/memory/recent-sessions.md"
+start "$P" startup sid-t8 >/dev/null
+RS="$P/.workflow_artifacts/memory/recent-sessions.md"
+if grep -q other-uuid-existing "$RS" && grep -q sid-t8 "$RS"; then
+  pass "Test 8: existing and new entries both present"
+else
+  fail "Test 8: history file lost an entry"
+fi
+
+# Test 9: precompact still appends (and creates the memory dir)
+P="$ROOT/proj-9"
+mkdir -p "$P"
+printf '{"trigger":"auto","session_id":"pre-uuid-t9","cwd":"%s","transcript_path":"/dev/null"}' "$P" | sh "$HOOK_PRE" >/dev/null 2>&1
+if grep -q pre-uuid-t9 "$P/.workflow_artifacts/memory/recent-sessions.md" 2>/dev/null; then
+  pass "Test 9: precompact appended the session id"
+else
+  fail "Test 9: precompact did not append"
+fi
+
+# Test 10: a session id with characters outside [A-Za-z0-9-] is not recorded
+P=$(new_project 10)
+start "$P" startup 'bad|id' >/dev/null
+if [ -e "$P/.workflow_artifacts/memory/recent-sessions.md" ]; then
+  fail "Test 10: unsafe session id was appended"
+else
+  pass "Test 10: unsafe session id is not appended"
+fi
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

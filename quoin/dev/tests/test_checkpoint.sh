@@ -536,21 +536,6 @@ else
   fail "(T-06c-4) Step 0.5 not found before Step 1 (step_05=$step_05_line, step_1=$step_1_line)"
 fi
 
-# (T-06c-5) userpromptsubmit.sh --after-compact falls through to exempt *) arm (not --purge arm)
-# Verify by reading the exempt list lines that --after-compact is covered by *) default
-UPS_HOOK="$SCRIPT_DIR/../../hooks/userpromptsubmit.sh"
-if grep -q '\-\-purge' "$UPS_HOOK" 2>/dev/null; then
-  # The --purge carve-out exists; ensure --after-compact is NOT listed alongside it
-  # The exemption logic uses case matching on the second token of the prompt
-  if grep -A5 '\-\-purge' "$UPS_HOOK" 2>/dev/null | grep -q 'after.compact' 2>/dev/null; then
-    fail "(T-06c-5) --after-compact appears in --purge carve-out section (should fall through to *)"
-  else
-    ok "(T-06c-5) --after-compact NOT in --purge carve-out (correctly falls through to exempt *)"
-  fi
-else
-  ok "(T-06c-5) No --purge carve-out found; --after-compact is exempt by default"
-fi
-
 # ─── T-06e: Picker reads disk-only checkpoints (no sentinel) ─────────────────
 # Fixture: zero sentinels; 3 checkpoint files: one legacy (no ## Session ID),
 #          one 0-byte .tmp sibling, one < 100 bytes.
