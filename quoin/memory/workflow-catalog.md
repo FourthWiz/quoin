@@ -228,24 +228,11 @@ Keep entries concise — 2-4 lines each. This file grows over time and becomes t
 
 ### Session state tracking
 
-Every skill that does meaningful work (architect, plan, critic, revise, implement, review, run) writes/updates `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` at natural checkpoints. Update `Current stage`, `Completed in this session`, `Unfinished work` so `/end_of_day` and `/start_of_day` see accurate state.
+Every skill that does meaningful work (architect, plan, critic, revise, implement, review, run) writes `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` once per run, at the stage boundary, to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (sections, `## Cost` lines, same-day merge rule). `/end_of_day` and `/start_of_day` read it.
 
-The session-state template includes a `## Cost` section:
+`end_of_day_due: yes` is set at every write; `/end_of_day` Step 3d flips it to `no` per processed session (hybrid date-window + flag rule); `sessionstart.sh`/`/start_of_day` use it as the second missing-EOD-banner signal (36 h window). `fallback_fires` counts Class B English-fallback + Haiku-dispatch retries (incremented in place, preserved across rewrites, never decremented). Full semantics: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
 
-```markdown
-## Cost
-- Session UUID: <UUID — see Cost tracking rules>
-- Phase: <phase>
-- Recorded in cost ledger: yes/no
-- end_of_day_due: yes
-- fallback_fires: 0
-- verification_ran: no
-- verification_mismatches: 0
-```
-
-`end_of_day_due: yes` defaults at every write; `/end_of_day` Step 3d flips to `no` per processed session (hybrid date-window + flag rule, not only today's); `sessionstart.sh`/`/start_of_day` use it as the second missing-EOD-banner signal (36 h window). `fallback_fires` counts Class B English-fallback + Haiku-dispatch retries (atomic-rename increment, never decremented; under-counts under parallel subagents, acceptable per D-03-rev2). Full semantics: `__QUOIN_HOME__/memory/lifecycle-guide.md`.
-
-`verification_ran`/`verification_mismatches` (§V, IVG-115) default to `no`/`0` at every write — omission or `no` reads as a failure signal, never a silent pass. Full reconcile-timing, MISMATCH-increment, and per-window rollup semantics: `__QUOIN_HOME__/memory/verification-guide.md`.
+`verification_ran`/`verification_mismatches` (§V, IVG-115) reset to `no`/`0` at every write — omission or `no` reads as a failure signal, never a silent pass. Details: `__QUOIN_HOME__/memory/verification-guide.md`.
 
 The cost ledger (`.workflow_artifacts/<task-name>/cost-ledger.md`) is the source of truth for per-session costs.
 
