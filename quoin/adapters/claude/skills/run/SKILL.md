@@ -1659,93 +1659,13 @@ that tradeoff.
 Under `AUTONOMOUS`, the orchestrator COOPERATES with the existing
 context-utilization hooks — it never disables, edits, or lowers any of
 their thresholds. This section documents the cooperation mechanism only;
-the threshold values themselves live in `hooks/_lib.sh`'s
-`read_constants()` and are read here, never redefined.
+no threshold is read from `hooks/_lib.sh` here and none is redefined.
 
-- **Self-checkpoint trigger.** Run this at each heavy-phase boundary
-  (architect, thorough_plan, implement, review), right after the
-  `## Pre-phase context budget` guard. Every Bash tool call starts a fresh
-  shell, so a value computed in an earlier call is gone; this block runs the
-  guard itself and keeps its result in block-local variables. It prints
-  `SELF_CHECKPOINT_DUE` when the reported utilization is an integer at or
-  above `COMPACT_FIRST_BPS` (basis points, 9000 by default, read from the
-  library's `read_constants`), and `SELF_CHECKPOINT_SKIP` otherwise. The
-  project root is `${PROJECT_ROOT:-$PWD}` for the same fresh-shell reason.
-  ```sh
-  _sc_line="$(python3 __QUOIN_HOME__/scripts/context_budget_guard.py --project-root "${PROJECT_ROOT:-$PWD}" 2>/dev/null)"
-  [ -r "__QUOIN_HOME__/hooks/_lib.sh" ] && . "__QUOIN_HOME__/hooks/_lib.sh" && read_constants 2>/dev/null
-  _sc_util=""
-  case "$_sc_line" in
-    OK\|*|OVER\|*) _sc_util=${_sc_line#*|}; _sc_util=${_sc_util%%|*} ;;
-  esac
-  case "$_sc_util" in
-    ''|*[!0-9]*) echo SELF_CHECKPOINT_SKIP ;;
-    *) if [ "$_sc_util" -ge "${COMPACT_FIRST_BPS:-9000}" ]; then echo SELF_CHECKPOINT_DUE; else echo SELF_CHECKPOINT_SKIP; fi ;;
-  esac
-  ```
-  Under `[no-phase-budget]` the Pre-phase guard is skipped entirely and so is
-  this block (treat as skip). Under `QUOIN_DISABLE_PHASE_BUDGET=1` the guard
-  is skipped too; if the block is run anyway the guard prints `OK|disabled|`
-  and the block answers skip. The fail-OPEN `OK|0|` line, an empty line and
-  crash output all answer skip. An `OVER|` line parses the same as an `OK|`
-  line, and the guard's exit 1 on `OVER` is ignored by the block. This save is
-  in addition to the over-budget `boundary_checkpoint.py` call in the
-  Pre-phase section. Cost: one extra guard run (a transcript tail read) per
-  heavy boundary, four at most per `/run`.
-- **Self-checkpoint at very high fill.** When the trigger above prints
-  `SELF_CHECKPOINT_DUE`, the orchestrator self-invokes a checkpoint save
-  UNLESS `run_state_probe` (`hooks/_lib.sh`) confirms no active run-state
-  record exists project-wide. The check:
-  ```sh
-  . "__QUOIN_HOME__/hooks/_lib.sh" 2>/dev/null || true
-  if ! command -v run_state_probe >/dev/null 2>&1; then
-    echo GUARD_UNAVAILABLE
-  else
-    _rs_root=$(resolve_project_root "$(pwd)")
-    if [ -z "$_rs_root" ] || [ ! -d "$_rs_root/.workflow_artifacts/memory" ] || [ ! -r "$_rs_root/.workflow_artifacts/memory" ]; then
-      echo GUARD_UNAVAILABLE
-    elif run_state_probe "$_rs_root/.workflow_artifacts/memory"; then
-      echo PROBE_ACTIVE
-    else
-      echo PROBE_INACTIVE
-    fi
-  fi
-  ```
-  Called project-scoped (no `SESSION_ID` argument, matching `D-27`'s
-  project-wide question for every consumer). `PROBE_INACTIVE` is the ONLY
-  outcome that skips the save. `GUARD_UNAVAILABLE` — the guard is absent
-  (the helper did not source, or the resolved root is empty, or its
-  `.workflow_artifacts/memory` directory is missing or unreadable) — and
-  `PROBE_ACTIVE` both mean
-  the self-checkpoint fires exactly as it does today. This is the
-  deliberate fail-safe direction (`D-28`): an undefined, unreachable, or
-  unresolvable probe must never silently kill the self-checkpoint,
-  because in autonomous mode that save is what carries state across a
-  context window — the opposite failure direction from `/checkpoint` Step
-  1.4, where "no information" safely means "fall back to a real save"
-  rather than "skip." This bullet does not distinguish a boundary-parked run
-  from an in-flight one (`D-26`): `/run` writes the record only at phase
-  boundaries and never mid-phase, so the probe will almost always answer
-  `PROBE_ACTIVE` and the self-checkpoint fires as it does today. There are
-  two realistic skip windows, not one: the narrow one where `--clear` has
-  already run but the session continues past the trigger level, and a second
-  one where the record is genuinely still active but has aged past
-  `run_state_probe`'s own staleness window — a phase that runs long, or a
-  session paused and resumed after that window elapses, reads as
-  `PROBE_INACTIVE` even though the run is live. The probe's default window is
-  deliberately wider than `run_state_select`'s (14 days vs. 1) specifically
-  to keep this second window rare in practice; `QUOIN_RUN_STATE_STALE_DAYS`
-  raises it further for an expected multi-week autonomous run. This bullet
-  lives inside `## Hook cooperation (autonomous)`, so the conditioning above
-  does not reach an interactive (non-autonomous) `/run` session — a scope
-  narrowing flagged for the follow-up sweep, not an oversight.
-  `boundary_checkpoint.py` (deterministic, no model call) still always runs
-  on the over-budget path.
-  Coverage the trigger gives up: mid-phase readings inside inline gates, the
-  post-review gate into Phase 6 and Stop-hook continuation turns have no
-  reading at all. The backstop there is native auto-compaction (Claude Code
-  setting `autoCompactEnabled`, on by default) plus the `SessionStart`
-  compact re-entry and the Stop-hook continuation.
+- **Context saves at phase boundaries only.** Context saves come from the
+  Pre-phase over-budget `boundary_checkpoint.py` call only. Between boundaries
+  the backstop is native auto-compaction (Claude Code setting
+  `autoCompactEnabled`, on by default) plus the `SessionStart` compact
+  re-entry and the Stop-hook continuation.
 - **No prompt hook reports context.** No quoin prompt hook reads the
   transcript or reports context fullness; native `/context` and
   auto-compaction are the source of truth for how full the session is. The

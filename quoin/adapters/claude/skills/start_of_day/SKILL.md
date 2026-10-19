@@ -200,15 +200,14 @@ Cost tracking (conditional): `/start_of_day` is a lightweight daily-orientation 
   > "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending. Recommend running `/end_of_day` before continuing."
   > "Want to run `/end_of_day` now or skip?"
 - **Signal B alone (M > 0, N = 0), `all_today = true`** (every flagged session dated today — same-day case):
-  > "⚠ M session(s) unflushed today. Recommend running `/checkpoint` to save your place."
-  > "Want to run `/checkpoint` now or skip?"
+  > "ℹ M session(s) unflushed today. Run `/end_of_day` when you wrap up (task state resumes with `/run --resume TASK`)."
 - **Signal B alone (M > 0, N = 0), `all_today = false`** (a flagged session predates today — cross-day case, a prior day was never wrapped up):
   > "⚠ M session(s) unflushed — a prior day was never wrapped up. Recommend running `/end_of_day` before continuing."
   > "Want to run `/end_of_day` now or skip?"
 - **Both signals positive (N > 0 AND M > 0):** the banner follows signal B's branch (a flagged session's date is available to branch on) and separately still mentions the pending insights:
-  > "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending and M session(s) unflushed [today | since a prior day]. Recommend running `/checkpoint` [or `/end_of_day` before continuing, if `all_today = false`]."
-  > "Want to run it now or skip?"
-- If they want to run the recommended command: invoke it inline before continuing (the promotion flow from `/end_of_day` Step 3b applies whenever `/end_of_day` is the recommendation, including the `/checkpoint`-recommended paths where the user chooses to run `/end_of_day` instead)
+  - `all_today = true`: recommend nothing and print one informational line — "ℹ N insight(s) pending and M session(s) unflushed today. Run `/end_of_day` when you wrap up (task state resumes with `/run --resume TASK`)."
+  - `all_today = false`: "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending and M session(s) unflushed since a prior day. Recommend running `/end_of_day` before continuing." then "Want to run it now or skip?" (asked only in this case).
+- If they want to run the recommended command: invoke it inline before continuing (the promotion flow from `/end_of_day` Step 3b applies)
 - If they skip: proceed normally
 
 If neither signal is positive (N = 0 AND M = 0), skip this step silently.

@@ -81,7 +81,7 @@ def _error_handling_region(text: str) -> str:
 def _hook_coop_bullet1_region(text: str) -> str:
     return _slice(
         text,
-        "- **Self-checkpoint at very high fill.**",
+        "- **Context saves at phase boundaries only.**",
         "- **No prompt hook reports context.**",
     )
 

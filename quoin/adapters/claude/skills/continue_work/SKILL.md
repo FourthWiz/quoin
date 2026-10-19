@@ -301,7 +301,8 @@ Last checkpoint context:
 Recent conversation tail:
 <last ~10 message pairs>
 
-To resume working in this context, type /checkpoint --restore in a fresh session
+To resume working in this context, run /run --resume TASK for task state,
+or `claude --resume SESSION_ID` to reopen this conversation,
 OR continue here with this context pre-loaded.
 ```
 

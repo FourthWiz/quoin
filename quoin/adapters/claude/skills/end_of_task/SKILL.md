@@ -249,12 +249,12 @@ The guard's exit-code contract is UNCHANGED (still exit 1 only on `OVER`, exit
    exactly as it does today — this task does not newly STOP nor newly bypass an autonomous run.
 3. **`[no-interactive]` / non-interactive (and NOT `_AUTONOMOUS`)** → FAIL CLOSED: a human
    cannot pick a session-age option in a background context, so run
-   `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site session-age --reason "session over the age cap; proceed/checkpoint/abort decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or prefix [no-session-age-guard]"`,
+   `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site session-age --reason "session over the age cap; proceed/fresh-session/abort decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or prefix [no-session-age-guard]"`,
    echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP — it emits no envelope here even under `return: envelope`.
 4. **else (interactive)** → present an `AskUserQuestion` 3-option list (IVG-146 UX):
    - **Proceed in this session** — continue `/end_of_task` now despite the age (override).
-   - **Checkpoint and finish in a fresh session (recommended)** — run `/checkpoint`, then STOP
-     so the user re-runs `/end_of_task` in a fresh chat.
+   - **Finish in a fresh session (recommended)** — STOP and re-run `/end_of_task` in a fresh
+     session (task state is in the artifacts).
    - **Abort** — stop with no changes.
 
 Verbatim STOP message (rule step 2, and the informational text for the option list):

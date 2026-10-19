@@ -587,7 +587,7 @@ SHARE_CEILINGS: dict[str, float] = {
                        # generator-owned share
 
     "specify": 44.8625,
-    "start_of_day": 32.5184,  # span-based (27.5184%) + 5.00pp — NEVER the
+    "start_of_day": 32.5862,  # span-based (27.5862%) + 5.00pp — NEVER the
                               # heading-based 42.09% figure an earlier
                               # census over-captured
     "status": 73.6275,
@@ -657,15 +657,15 @@ def test_file_within_share_ceiling(skill):
 def test_start_of_day_ceiling_is_span_based_not_heading_based():
     """Pins the over-capture regression this guard exists to prevent: an
     earlier (withdrawn) heading-based measurement put start_of_day's share
-    at 42.09%; the correct span-based measurement is 27.5184%."""
+    at 42.09%; the correct span-based measurement is 27.5862%."""
     measured = _measured_share("start_of_day")
-    assert abs(measured - 27.5184) < 0.001, (
+    assert abs(measured - 27.5862) < 0.001, (
         f"start_of_day measured share {measured} drifted from the expected "
-        "span-based 27.5184% — if this is legitimate, confirm it was NOT "
+        "span-based 27.5862% — if this is legitimate, confirm it was NOT "
         "caused by reverting to heading-based measurement before updating "
         "this test."
     )
-    assert abs(SHARE_CEILINGS["start_of_day"] - 32.5184) < 0.001
+    assert abs(SHARE_CEILINGS["start_of_day"] - 32.5862) < 0.001
 
 
 # ═══════════ In-domain caps-density metric and per-file ceilings ═══════════

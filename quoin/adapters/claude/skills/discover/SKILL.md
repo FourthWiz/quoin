@@ -181,7 +181,7 @@ Starting from the project root folder, examine every top-level directory. For ea
 
 ### Nested-root sanity scan (IVG-119)
 
-Before the per-repo inventory, run one project-wide check for accidental nested/duplicate `.workflow_artifacts/` roots (subproject dirs that create their own root break `/checkpoint --restore` and artifact discovery):
+Before the per-repo inventory, run one project-wide check for accidental nested/duplicate `.workflow_artifacts/` roots (subproject dirs that create their own root break run resume and artifact discovery):
 
 ```
 PROJECT_ROOT="$(pwd)"

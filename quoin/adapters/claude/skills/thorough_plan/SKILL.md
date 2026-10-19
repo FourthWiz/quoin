@@ -69,8 +69,8 @@ Do NOT abort the orchestration on exit-code-2.
 
 After resolving `{task_dir}` and `mkdir -p`, scan for a phase-boundary progress checkpoint
 that matches THIS task before dispatching any planning work. This is the PRIMARY recovery
-path after an external kill — it reads `checkpoints/` DIRECTLY and is fully immune to the
-restore picker's B3 Clause-B gate (see `## Phase-boundary checkpoints` for rationale).
+path after an external kill — it reads `checkpoints/` DIRECTLY (see `## Phase-boundary
+checkpoints` for rationale).
 
 **Scan procedure:**
 
@@ -494,9 +494,8 @@ summary: <clamped, one line, <=600 B>
 
 `/thorough_plan` writes a durable progress checkpoint at every phase boundary so an externally
 killed session can be resumed by re-invoking `/thorough_plan {task}` in a fresh session (T-04 startup
-scan, PRIMARY path — see Setup §1b). `/checkpoint --restore` is a SECONDARY convenience path and
-may degrade to task-level restore in the kill-during-subagent window (B3 Clause-B fires when a
-subagent's `{date}-{task}.md` is newer than the checkpoint; T-04 direct scan is immune).
+scan, PRIMARY path — see Setup §1b). The sentinel is still written by the shared core helper;
+on Claude Code nothing reads it, and the direct checkpoint scan is the only resume path.
 
 Verified: `## Current stage` is free-text for all readers (`/start_of_day`, `/end_of_day`,
 `/status`, `/continue_work`, B3 awk); the colon-delimited token `thorough-plan:round-N-{phase}`
@@ -604,11 +603,9 @@ Run the checkpoint procedure at each of these points:
 - **Orchestrator writes:** `{date}-{task}-orchestrator.md` (fully owned; updated at each boundary via helper)
 - **Subagents write:** `{date}-{task}.md` (per-phase tracking only; orchestrator never reads this for resume)
 - **PRIMARY resume anchor:** `thorough-plan-progress-{sid}.md` checkpoint file (T-04 direct scan)
-- **SECONDARY convenience:** `/checkpoint --restore` — best-effort; B3 Clause-B limitation documented above
 
-The sentinel `pending-restore-{sid}.txt` is still written at each boundary and enables Tier-3
-picker enumeration. However, it CANNOT override B3 Clause-B when a subagent file is newer. In that
-window, T-04 direct scan (not the picker) is the reliable resume path.
+The sentinel `pending-restore-{sid}.txt` is still written at each boundary by the shared core
+helper; on Claude Code nothing reads it, and the T-04 direct scan is the only resume path.
 
 The checkpoint file includes `## Last user intent` with the next-phase re-entry string (e.g.,
 `"thorough_plan {task}: last completed boundary thorough-plan:round-1-plan; next phase to run: critic.
