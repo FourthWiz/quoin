@@ -459,3 +459,37 @@ def test_non_ascii_session_id_is_ignored(tmp_path):
                        capture_output=True, text=True, env=_utf8_env(p.home), cwd=str(p.root), timeout=30)
     assert r.returncode == 0
     assert (p.mem / "run-continue-arm-a\u00e9.txt").exists()
+
+
+def _awk_program():
+    text = HOOK.read_text(encoding="utf-8")
+    start = text.index("awk 'BEGIN")
+    return text[start:text.index("}')", start)]
+
+
+def test_awk_program_has_no_posix_bracket_classes():
+    # mawk 1.3.3 (Debian 10, Ubuntu 18.04) does not support [[:space:]].
+    assert "[[:" not in _awk_program()
+
+
+def _awks():
+    out = ["awk"]
+    for name in ("gawk", "mawk", "busybox"):
+        if shutil.which(name):
+            out.append(name)
+    return [a for a in out if shutil.which(a)]
+
+
+@pytest.mark.parametrize("sep", ["\t", "\r\n", " \t\r\n "])
+@pytest.mark.parametrize("prompt_first", [True, False])
+def test_large_payload_with_tab_crlf_whitespace(tmp_path, sep, prompt_first):
+    p = Proj(tmp_path, "ws%d%d" % (len(sep), prompt_first), record=True)
+    items = [("prompt", "/run demo " + "x" * 20000), ("session_id", SID),
+             ("transcript_path", "/nonexistent/t.jsonl"), ("cwd", str(p.root))]
+    if not prompt_first:
+        items.reverse()
+    body = ("," + sep).join('"%s"%s:%s%s' % (k, sep, sep, json.dumps(v)) for k, v in items)
+    payload = "{" + sep + body + sep + "}"
+    r = _run(HOOK, payload, p.home, p.root)
+    assert r.returncode == 0 and r.stdout == ""
+    assert p.state() == (False, True)

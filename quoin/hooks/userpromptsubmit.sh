@@ -72,13 +72,17 @@ if [ "${#STDIN}" -gt 8192 ]; then
   # (tens of seconds for 100 KB on macOS /bin/sh and on dash, whichever order
   # the keys come in), so one awk pass extracts the same fields instead. It keeps
   # the first usable occurrence of each key and the same 4160-blank bound.
+  # JSON whitespace is spelled out as [ \t\r\n] because mawk 1.3.3 has no
+  # POSIX bracket classes. Fail direction: if awk is missing or fails on a
+  # payload over 8 KB, the fields come back empty, the session id check exits,
+  # and the arm file is kept (awk is POSIX-required, so this is not expected).
   _x=$(printf '%s' "$STDIN" | awk 'BEGIN { RS = "\001" }
     function val(k,   r) {
-      if (!match($0, "\"" k "\"[[:space:]]*:[[:space:]]*\"")) return ""
+      if (!match($0, "\"" k "\"[ \t\r\n]*:[ \t\r\n]*\"")) return ""
       r = substr($0, RSTART + RLENGTH); sub(/".*/, "", r); return "1" r
     }
     { s = val("session_id"); t = val("transcript_path"); c = val("cwd"); p = ""
-      if (match($0, "\"prompt\"[[:space:]]*:[[:space:]]*\"")) {
+      if (match($0, "\"prompt\"[ \t\r\n]*:[ \t\r\n]*\"")) {
         p = substr($0, RSTART + RLENGTH, 4224); b = p; sub(/^[ \t]*/, "", b)
         n = length(p) - length(b); if (n > 4160) n = 4160
         p = "1" substr(p, n + 1, 32); gsub(/\n/, " ", p)
