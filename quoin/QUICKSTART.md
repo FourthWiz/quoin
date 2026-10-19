@@ -22,11 +22,10 @@
 | `/end_of_day` | Saves session state, promotes captured insights |
 | `/weekly_review` | Aggregates the week's progress into a structured review |
 | `/capture_insight` | Logs a pattern or gotcha to the daily scratchpad |
-| `/checkpoint` | Save/restore session context mid-session; auto-runs /cleanup on save |
 | `/continue_work` | Resume context from a prior session using recent-sessions index |
 | `/pr` | Full pull-request lifecycle after /end_of_task: version bump, push, create, wait, switch |
 | `/sleep` | Memory consolidation; promotes insights to lessons-learned, archives stale entries |
-| `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs in /checkpoint |
+| `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs after /end_of_day (`--no-cleanup` to skip) |
 | `/next-steps` | Append-only queue for future work items (`add` / `list` / `done N`) |
 | `/run` | End-to-end pipeline: discover → architect → plan → implement → review → end_of_task |
 | `quoin run --takeover <task>` | Shell command: stops an autonomous run's supervisor and headless child, then prints the `claude --resume` command to continue that session yourself |

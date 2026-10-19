@@ -199,7 +199,6 @@ _ALL_NAMED_ROSTERS = [
     ("build_preambles.py", "SPAWN_TARGETS"),
     ("inject_pollution_dispatch.py", "POLLUTION_TARGET_SKILLS"),
     ("inject_pollution_dispatch.py", "MINTIER_TARGET_SKILLS"),
-    ("inject_pollution_dispatch.py", "ZC_SKILLS"),
     ("inject_pollution_dispatch.py", "MINTIER_SONNET_TARGET_SKILLS"),
 ]
 

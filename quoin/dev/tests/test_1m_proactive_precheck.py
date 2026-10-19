@@ -57,10 +57,9 @@ SECTION0_TARGETS = [
     ("triage",         "haiku",  "§1"),
     ("pr",             "sonnet", "§1"),
     ("status",         "haiku",  "§1"),
-    ("cleanup",        "sonnet", "§0c"),
-    ("sleep",          "sonnet", "§0c"),
+    ("cleanup",        "sonnet", "§1"),
+    ("sleep",          "sonnet", "§1"),
     ("next_steps",     "haiku",  "§1"),
-    ("checkpoint",     "sonnet", "§0c"),
     ("continue_work",  "sonnet", "§1"),
     ("workspace",      "sonnet", "§1"),
 ]

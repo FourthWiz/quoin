@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run] [--no-tasks]; auto-fires from /checkpoint unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
+description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run] [--no-tasks]; auto-fires from /end_of_day unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
 model: sonnet
 ---
 
@@ -8,7 +8,7 @@ model: sonnet
 
 *Portable intent doc: `quoin/core/skills/cleanup.md`*
 
-You are the `/cleanup` skill. You trash-move stale workflow sentinels (all sessions except the freshest/current) and old checkpoint files into a recoverable `trash/<date>/` archive. You auto-fire as the first sub-block of `/checkpoint` Step 1.5 in save mode.
+You are the `/cleanup` skill. You trash-move stale workflow sentinels (all sessions except the freshest/current) and old checkpoint files into a recoverable `trash/<date>/` archive. You auto-fire from `/end_of_day` after its report.
 
 ## §0 Model dispatch (FIRST STEP — execute before anything else)
 
@@ -20,7 +20,7 @@ Detection:
   - Read your current model from the system context ("powered by the model named X").
   - Tier order: haiku < sonnet < opus.
   - Sentinel parsing: the user's prompt is checked for the `[no-redispatch]` family.
-      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §0c at the current tier.
+      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §1 at the current tier.
       * Counter form `[no-redispatch:N]` where N is a positive integer ≥ 2: ABORT (see "Abort rule" below).
       * Counter form `[no-redispatch:1]` is reserved and treated as bare `[no-redispatch]` for forward-compatibility; do not emit it.
   - If current_tier > declared_tier AND prompt does NOT start with any `[no-redispatch]` form:
@@ -55,7 +55,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
 Abort rule (recursion guard):
   - If the prompt starts with `[no-redispatch:N]` AND N ≥ 2: ABORT before any tool calls.
   - Print the one-line error: `Quoin self-dispatch hard-cap reached at N=<N> in cleanup. This indicates a recursion bug; aborting before any tool calls. Re-invoke with [no-redispatch] (bare) to override.`
-  - Then stop. Do NOT proceed to §0c.
+  - Then stop. Do NOT proceed to §1.
 
 Manual kill switch:
   - The user can prefix any user-typed slash invocation with bare `[no-redispatch]` to skip dispatch entirely (e.g., `[no-redispatch] /cleanup`).
@@ -113,7 +113,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin-stage-1: error-class=worktree; user-choice=c; proceeding at current tier]`
       Then proceed to §1 at the current tier (fail-OPEN per I-01).
 <!-- §0-worktree-fallback-end -->
-Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §0c.
+Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §1 (skill body).
 <!-- §0-end -->
 
 ## §0‴ Minimum-tier guard (execute after §0 — before any §0-sidecar block and the skill body)
@@ -170,36 +170,11 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
       On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
 <!-- §0tripleprime-end -->
 
-## §0c Pidfile lifecycle (FIRST STEP after §0 dispatch)
-
-At entry — immediately after §0 dispatch resolves:
-
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire cleanup
-```
-
-If the script is missing or fails (e.g., fresh install): emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue without abort (fail-OPEN).
-
-At exit — call from every completion path AND every error/abort path:
-```
-pidfile_release cleanup
-```
-
-Use a trap when the skill body involves bash-driven subagents:
-```
-trap 'pidfile_release cleanup' EXIT
-```
-
-Purpose: lets `precompact.sh` hook know a `/cleanup` session is active.
-
-Otherwise: proceed to §1 (skill body).
-
 ## When to use
 
-Run `/cleanup` standalone to trash-move stale sentinels and old checkpoints in the current project's `.workflow_artifacts/memory/` directory. It also auto-fires as the first sub-block of `/checkpoint` Step 1.5 on every non-mid-agent, non-panicked save path (default-on).
+Run `/cleanup` standalone to trash-move stale sentinels and old checkpoints in the current project's `.workflow_artifacts/memory/` directory. It also auto-fires from `/end_of_day` after its report (default-on, with `--no-tasks`; opt out with `--no-cleanup`).
 
 Use cases:
-- When `/checkpoint --restore` is resurrecting the wrong (stale) session — cleanup removes the stale sentinels that feed those stale restore paths.
 - After heavy multi-session work, to clear accumulated stale sentinels from prior sessions.
 - Manual maintenance when sentinel or checkpoint count grows large.
 
@@ -207,18 +182,18 @@ Use `--dry-run` first to preview what would be trashed without making any moves.
 
 ## Core procedure
 
-(Standalone run — always executes for standalone invocations. When auto-fired from `/checkpoint` Step 1.47, checkpoint runs its own inline copy (steps 1–6 equivalent) with high-util/panic/mid-agent skip guards applied first.)
+(The same steps run standalone and when `/end_of_day` auto-fires this skill.)
 
 **Step 1. Resolve MEMORY_DIR:** `<cwd>/.workflow_artifacts/memory`. If the directory does not exist, emit `[cleanup] no memory dir; nothing to do` and skip to `## Task bookkeeping pass`.
 
 **Step 2. Source helpers:** `. __QUOIN_HOME__/hooks/_lib.sh` (provides `trash_move`). If the file is missing or sourcing fails: emit one-line warning `[cleanup] _lib.sh unavailable; cannot trash-move — skipping sentinel sweeps` and skip to `## Task bookkeeping pass` (fail-OPEN).
 
-**Step 3. Acquire current/freshest session UUID** (same procedure as checkpoint Step 1.1):
+**Step 3. Acquire current/freshest session UUID:**
 - Priority 1: harness-provided system-context UUID.
 - Priority 2: stem of the most-recently-modified `__QUOIN_HOME__/projects/<project-hash>/<uuid>.jsonl` file. `<project-hash>` = project absolute path with `/` replaced by `-`.
 - If UUID cannot be obtained: emit `[cleanup] current-session UUID unavailable; skipping sentinel sweep (fail-safe)` and **skip step 4 entirely**. Proceed directly to step 5 (checkpoint sweep). The age-only 30d checkpoint sweep is safe without UUID. NEVER fall back to age-only with any shorter floor for sentinels — if the current session cannot be identified, trash nothing from sentinel families.
 
-**Step 4. Sentinel sweep:** For each of the 9 hardcoded families listed in `## Hardcoded sentinel allow-list`, find candidates under `MEMORY_DIR` at depth 1:
+**Step 4. Sentinel sweep:** For each of the 2 hardcoded families listed in `## Hardcoded sentinel allow-list`, find candidates under `MEMORY_DIR` at depth 1:
 ```sh
 find "$MEMORY_DIR" -maxdepth 1 -name '<family-glob>' \
   -mtime "+${QUOIN_CLEANUP_SENTINEL_WINDOW:-1}" -print0
@@ -267,16 +242,14 @@ If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-
 
 <!-- quoin:ledger-self-write -->
 
-**Step 8.** Released at the end of `## Task bookkeeping pass`'s final step, always (`--dry-run` included).
-
 ## Task bookkeeping pass (standalone only)
 
-Runs after Core procedure Step 8 on a standalone `/cleanup`. Core procedure only ever runs standalone; `/checkpoint` Step 1.47 never reaches this pass — it carries its own separate inline restatement of Core procedure steps 1–7 instead (see checkpoint SKILL.md Step 1.47). `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
+Runs after Core procedure Step 7 on a standalone `/cleanup`. The `/end_of_day` auto-fire passes `--no-tasks`, so no folder is ever moved from an automatic hook point. `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
 
 1. `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format table`; print verbatim. Missing script: `[cleanup] task_bookkeeping.py unavailable; skipping task pass`. Non-zero exit: print its stderr line, go to step 4.
 2. `--dry-run`, `[no-interactive]`, `[autonomous]`, or no `AskUserQuestion`: print `[cleanup] task bookkeeping: report-only (<reason>); no folders moved`; when `<reason>` is the no-`AskUserQuestion` case (dispatched subagent), also print `to act on these rows, run: [no-redispatch] /cleanup`. Go to step 4.
 3. Else follow `__QUOIN_HOME__/memory/cleanup-task-bookkeeping.md` (report-only if missing): per-task confirmation, moves only via its `apply` command, print `/pr` or `/end_of_task …` for the user — never invoke them.
-4. Step 7 (not under `--dry-run`; skip any folder moved above), then `pidfile_release cleanup` (always — `--dry-run` included).
+4. Step 7 (not under `--dry-run`; skip any folder moved above).
 
 ## --dry-run
 
@@ -286,44 +259,37 @@ When `/cleanup --dry-run` is invoked:
 2. Run the sentinel, session temp-file, checkpoint, and run-state enumeration (steps 4–5c `find` commands) but make NO trash-moves.
 3. Print the would-trash list (`[cleanup --dry-run] would trash:` then per-bucket headers SENTINELS / SESSION TEMP FILES / CHECKPOINTS / RUN STATE, each followed by its candidate paths; full example: memory/lifecycle-guide.md). If zero candidates: `[cleanup --dry-run] nothing stale to clean (no moves would be made)`.
 4. **Makes NO writes** — no trash-moves, no cost-ledger row.
-5. Task bookkeeping pass: table only, no prompts, no moves; release still happens.
+5. Task bookkeeping pass: table only, no prompts, no moves.
 
-To preview what `/checkpoint` auto-fire would trash without running a full save: use `--no-cleanup` to suppress auto-fire, then run `/cleanup --dry-run` standalone.
+To preview what the `/end_of_day` auto-fire would trash, run `/cleanup --dry-run` standalone; pass `--no-cleanup` to `/end_of_day` to suppress the auto-fire.
 
-## Hardcoded sentinel allow-list (9 families)
+## Hardcoded sentinel allow-list (2 families)
 
-The sentinel sweep targets ONLY these 9 hardcoded families. This is a hardcoded allow-list — no user-supplied pattern argument, no catch-all globs:
+The sentinel sweep targets ONLY these 2 hardcoded families. This is a hardcoded allow-list — no user-supplied pattern argument, no catch-all globs:
 
 1. `pending-restore-*.txt`
-2. `pending-prompt-*.txt`
-3. `compact-happened-*.txt`
-4. `mid-agent-handoff-*.txt`
-5. `pending-resume-ref-*.txt`
-6. `checkpoint-defer-*.txt`
-7. `postcompact-reset-*.txt`
-8. `checkpoint-pending-compact-*.txt`
-9. `idle-advisory-pending-*.txt`
+2. `compact-happened-*.txt`
 
-These families are enumerated literally in the sentinel sweep. No user-supplied pattern is accepted. No catch-all glob (`*.txt`, `pending-*.txt`) is used as the sweep target.
+These families are enumerated literally in the sentinel sweep. No user-supplied pattern is accepted. No catch-all glob (`*.txt`, `pending-*.txt`) is used as the sweep target. Retired families that no writer produces any more are reclaimed by the SessionStart sweep, not listed here.
 
-Canonical machine-readable source: `hooks/_lib.sh:sentinel_globs()` — sessionstart.sh consumes that; this list and sleep/SKILL.md's list MUST stay byte-identical (drift-guarded by test_sentinel_family_parity.py).
+Canonical machine-readable source: `hooks/_lib.sh:sentinel_globs()` — this list and sleep/SKILL.md's list MUST stay byte-identical (drift-guarded by test_sentinel_family_parity.py).
 
-`/cleanup` NEVER targets `lessons-learned.md`, `forgotten/`, or any source file — only the 9 sentinel families above, `checkpoints/*.md`, and the task-keyed `run-state-*.json` / `run-notes-*.md` pair, under `.workflow_artifacts/memory/`.
+`/cleanup` NEVER targets `lessons-learned.md`, `forgotten/`, or any source file — only the 2 sentinel families above, `checkpoints/*.md`, and the task-keyed `run-state-*.json` / `run-notes-*.md` pair, under `.workflow_artifacts/memory/`.
 
 ## Relationship to /sleep --purge --sentinels
 
-`/cleanup` and `/sleep --purge --sentinels` both target the same 9 sentinel families (byte-identical literal lists) but are NOT the same operation (comparison table: memory/lifecycle-guide.md).
+`/cleanup` and `/sleep --purge --sentinels` both target the same 2 sentinel families (byte-identical literal lists) but are NOT the same operation (comparison table: memory/lifecycle-guide.md).
 
 The task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13) is `/cleanup`-only:
 it is not a sentinel family, does not appear in `sentinel_globs()`, and `/sleep --purge
 --sentinels` never reclaims it.
 
-Use `/cleanup` for routine session hygiene (auto-fires from `/checkpoint`, recoverable).
+Use `/cleanup` for routine session hygiene (auto-fires from `/end_of_day`, recoverable).
 Use `/sleep --purge --sentinels --older-than Nd` for explicit permanent purge of files you are sure you no longer need.
 
 ## Write-target / delete-target restriction
 
-**/cleanup ONLY trash-moves files under `.workflow_artifacts/memory/` matching the 9 sentinel families listed above, `sessions/*.body.tmp` / `sessions/*.tmp` (IVG-137 T-06), `checkpoints/*.md`, or the task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13); it never touches `lessons-learned.md`, `forgotten/`, or any real `*.md` session file.**
+**/cleanup ONLY trash-moves files under `.workflow_artifacts/memory/` matching the 2 sentinel families listed above, `sessions/*.body.tmp` / `sessions/*.tmp` (IVG-137 T-06), `checkpoints/*.md`, or the task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13); it never touches `lessons-learned.md`, `forgotten/`, or any real `*.md` session file.**
 
 Exception: the standalone task bookkeeping pass moves whole task folders, only through `task_bookkeeping.py apply` and only after per-task confirmation, into `.workflow_artifacts/finalized/` or `.workflow_artifacts/trash/<date>/`.
 

@@ -1,23 +1,10 @@
 # Lifecycle skills — full reference
 
-## Consumer audit (extracted 2026-05-15)
+## Overview
 
-Pre-edit audit finding: `checkpoint/SKILL.md` contains a full self-contained specification of mode auto-detection logic (Step 1.5, pidfile checks, COMPACT_FIRST_BPS). It does NOT rely on CLAUDE.md as the authoritative source for that logic. The condensed CLAUDE.md text acts as a human-readable summary only; skills bootstrap from their own SKILL.md. No SKILL.md update needed.
+Three skills handle session lifecycle at different granularities: `/end_of_day`, `/sleep` and `/cleanup`.
 
-## /checkpoint — full reference
-
-Three skills handle session lifecycle at different granularities (v3 lifecycle separation per architecture):
-
-**`/checkpoint`** — general-purpose state-save (mid-session, between tasks, between sessions). Supports three save modes via `--mode <name>` (auto-detected if omitted):
-- `--mode restore` (default): writes the full checkpoint file and `pending-restore-${session_id}.txt` sentinel; use for standard resume-in-new-session flow.
-- `--mode load-as-reference`: writes the full checkpoint AND `pending-resume-ref-${session_id}.txt`; instruct user to start a new session with `claude --resume SESSION_ID --fork-session`. The forked session sees the prior transcript as background context; sessionstart.sh emits a banner.
-- `--mode mid-agent`: writes a minimal `mid-agent-handoff-${session_id}.txt` only (skips full checkpoint write); for use when another skill is actively running. User can type `/clear` then `/checkpoint --restore` in the same session, or `claude --resume SESSION_ID` in a new terminal.
-
-Does NOT roll up dailies, does NOT touch `lessons-learned.md`, does NOT touch `forgotten/`. Use it mid-session before context exhaustion (when the context-utilization advisory fires; the advisory is measured from real token usage and labeled `(real)` or `(estimated)`), between tasks, between sessions, or proactively before starting new heavy work. **Paths-not-content rule (D-04):** checkpoint files record only PATHS to in-flight artifacts — never file contents. Restore re-fires Read tool on disk artifacts in the new session.
-
-Auto-detection at invocation time: (1) if `compact-happened-${session_id}.txt` exists for this session AND EITHER `pending-restore-${session_id}.txt` also exists OR the run-state probe is available and reports no active run-state record anywhere in the project (when the probe is unavailable, that arm is inert and the check falls back to the dual-sentinel conjunction alone), skip save with a one-line INFO — the INFO names the auto-written checkpoint when `pending-restore-*` is the reason for the skip, or names no path when the no-active-run-state reason applies (nothing was written, and nothing needs resuming). The no-active-run-state check is project-scoped, not session-scoped: it asks "is anything active anywhere in this project," the same project-wide question `/run`'s self-checkpoint probe asks — both consumers share one definition of "active run," not two contrasting scoping choices; (2) else if util >= `COMPACT_FIRST_BPS` (default 90.00%), save immediately and surface a two-option notice (fresh session vs /compact in this session); (3) if other skills are detected via pidfiles, default to mid-agent mode; (4) otherwise, ask user to choose restore vs load-as-reference.
-
-**`--restore` subcommand:** Run `/checkpoint --restore` in a fresh session to re-hydrate state. Locates the most recent checkpoint (or follows the `pending-restore-${session_id}.txt` sentinel from the pre-compaction save flow), surfaces task state, and optionally re-fires the saved pending prompt. Sentinel cleanup happens on restore. Voluntary `/checkpoint` now records `## Session ID` (UUID-anchored; two-line form) to disambiguate session-state lookup; restore picker now covers both pending-restore sentinels and recent (<= 30 day) checkpoint files (with fast-path bypass when current-session sentinel exists); `--defer` writes a marker that no hook reads any more (kept for command-history compatibility); `--after-compact` is deprecated as of this release; retained only for command-history backward-compat; emits an INFO line and proceeds to the normal save flow. Cleanup of any legacy `checkpoint-pending-compact-*` markers (from old flow) is automatic on `--after-compact` invocation, via `sessionstart.sh` sweep, and via `/sleep --purge --sentinels --older-than Nd`. The `checkpoint-pending-compact-*` marker is no longer written by any new code path. Same-session detection: if the located checkpoint's `## Session ID` matches the current session UUID (and neither is `unknown`), `/checkpoint --restore` presents an `AskUserQuestion` warning the user they are restoring in the same session that saved; Option B exits with fresh-session instructions and does NOT proceed with restore.
+The Claude Code `/checkpoint` skill was removed. A run resumes with `/run --resume TASK` (from its run-state record), a planning loop resumes from `/thorough_plan`'s own checkpoint scan, a conversation reopens with `claude --resume SESSION_ID`, and `/continue_work` lists recent sessions. The portable `/checkpoint` intent doc stays for other runtimes. `boundary_checkpoint.py` and `thorough_plan_checkpoint.py` still write `checkpoints/` files and a `pending-restore-${session_id}.txt` sentinel; on Claude Code nothing reads that sentinel, and the SessionStart sweep reclaims it.
 
 ## /end_of_day and /sleep — full reference
 
@@ -35,15 +22,14 @@ First 30 days of production: `/sleep --dry-run` mode only (no writes); inspect p
 Subcommands:
 - `/sleep --restore <pattern>`: moves entries back from `forgotten/` to their source (or today's insights if source gone)
 - `/sleep --purge --older-than Nd`: true-deletes `forgotten/<date>.md` archive files; per-file confirmation; never auto-run (backward-compat default scope)
-- `/sleep --purge --sentinels --older-than Nd`: true-deletes stale sentinel files from the 8 live families under `.workflow_artifacts/memory/`; per-file confirmation; never auto-run
+- `/sleep --purge --sentinels --older-than Nd`: true-deletes stale sentinel files from the 2 live families under `.workflow_artifacts/memory/`; per-file confirmation; never auto-run
 - `/sleep --purge --all --older-than Nd`: convenience — runs `forgotten/` purge then sentinel purge (scope flags are mutually exclusive; `--all` opts into both)
 - `/sleep --escalate`: re-examines middle-band candidates on Opus for deeper reasoning
 
-**Boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. Does NOT touch `~/.claude/projects/<hash>/memory/` (auto-memory). Distinct from `/checkpoint` (general-purpose state-save) and `/end_of_day` (end-of-workday rollup).
+**Boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. Does NOT touch `~/.claude/projects/<hash>/memory/` (auto-memory). Distinct from `/end_of_day` (end-of-workday rollup).
 
 **Boundary summary:**
-- `/checkpoint` → general-purpose state-save (`checkpoints/`, `sessions/`, `pending-*` sentinels — mid-session, between tasks, between sessions)
-- `/end_of_day` → end-of-workday only — daily rollup (`daily/`, `lessons-learned.md`) + auto-invokes `/sleep`
+- `/end_of_day` → end-of-workday only — daily rollup (`daily/`, `lessons-learned.md`) + auto-invokes `/sleep` and then `/cleanup --no-tasks` (Step 5b; opt out with `--no-cleanup`)
 - `/sleep` → long-term memory promote/forget (S-3 scope)
 
 ## /thorough_plan phase-boundary checkpoints (IVG-98)
@@ -53,10 +39,9 @@ Subcommands:
 
 **Files written at each boundary:**
 - `checkpoints/thorough-plan-progress-{sid}.md` — AUTHORITATIVE resume anchor. Fixed filename per
-  session (D-03 idempotent overwrite). NOT a timestamped name, so the picker's "Saved" column may
-  render a garbage date — cosmetic only; mtime-ordering and task-name display work correctly.
-- `pending-restore-{sid}.txt` — sentinel for picker Tier-3 enumeration (written once at first boundary;
-  omitted if SID is empty/`unknown`).
+  session (D-03 idempotent overwrite). NOT a timestamped name.
+- `pending-restore-{sid}.txt` — sentinel written once at first boundary (omitted if SID is empty/`unknown`);
+  write-only on Claude Code, nothing reads it.
 - `sessions/{date}-{task}-orchestrator.md` — ORCHESTRATOR-DEDICATED session-state (M-02). Updated at
   each boundary. Subagents write only to the standard `{date}-{task}.md` — these files are fully
   disjoint and serve different consumers.
@@ -66,25 +51,15 @@ Subcommands:
 `/start_of_day`, `/end_of_day`, `/status`, `/continue_work`, and B3 awk (free-text readers — the
 colon-delimited form is safe).
 
-**PRIMARY resume path (B3-immune):** Re-invoke `/thorough_plan {task}` in a fresh session.
+**Resume path:** Re-invoke `/thorough_plan {task}` in a fresh session.
 Setup §1b scans `checkpoints/thorough-plan-progress-*.md` directly, matches by `## Active task`,
-applies a 7-day age bound, and offers Resume/Start-fresh via `AskUserQuestion`. This scan does NOT
-go through the restore picker's B3 Clause-B gate and is therefore immune to it. Same-session guard: if the checkpoint SID (extracted from the filename `thorough-plan-progress-{SID}.md`) matches the current session UUID, §1b adds a third AskUserQuestion option (`(c) Resume in a new session`) and warns that continuing here dispatches subagents into an already-used context window.
-
-**SECONDARY convenience path (B3-limited):** `/checkpoint --restore`. Works when no subagent
-wrote `{date}-{task}.md` AFTER the last phase-boundary helper call. In the common
-kill-during-subagent window (subagent writes its session file AFTER the last checkpoint), B3
-Clause-B fires (`max(candidate mtime) < max(sessions/*.md mtime within 7d)`) and the picker
-discards the checkpoint, synthesising a degraded task-level restore from the subagent file.
-The sentinel/checkpoint pair is still written but cannot override B3 in that window. Use the
-PRIMARY path for phase-precise recovery.
+applies a 7-day age bound, and offers Resume/Start-fresh via `AskUserQuestion`. Same-session guard: if the checkpoint SID (extracted from the filename `thorough-plan-progress-{SID}.md`) matches the current session UUID, §1b adds a third AskUserQuestion option (`(c) Resume in a new session`) and warns that continuing here dispatches subagents into an already-used context window.
 
 **`/run` transitive coverage:** When `/run` dispatches `/thorough_plan` as a subagent, the
 phase-boundary checkpoints fire inside that subagent (SKILL.md edit runs). The planning kill-gap is
 covered transitively. The deferred `/run` follow-up (IVG-98 D-06) concerns only the
-implement→review inter-phase gap, not planning. Note: under `/run`, the checkpoint sentinel carries
-the `/thorough_plan` subagent's SID, so restore re-enters `/thorough_plan` mid-loop rather than
-`/run` — acceptable and documented.
+implement→review inter-phase gap, not planning. Under `/run`, the checkpoint carries the `/thorough_plan` subagent's SID, so a
+re-invocation of `/thorough_plan` re-enters the loop mid-way.
 
 ## Memory layout
 
@@ -95,7 +70,7 @@ Directory tree and `forgotten/<date>.md` entry format:
 ├── sessions/          ← per-session state files
 ├── daily/             ← rendered briefings + insights scratchpads
 ├── weekly/            ← weekly review summaries
-├── checkpoints/       ← /checkpoint restore sentinels
+├── checkpoints/       ← phase-boundary and boundary-budget checkpoint files
 ├── forgotten/         ← soft-forget archive (NEW — S-3)
 │   └── <date>.md      ← one file per day /sleep ran with forgets
 ├── trash/             ← recoverable delete archive (sentinel trash-moves land here)
@@ -111,8 +86,7 @@ Directory tree and `forgotten/<date>.md` entry format:
 Step 5c on a 30-day age window (`QUOIN_CLEANUP_RUNSTATE_WINDOW`), same as checkpoints —
 no UUID protection, independent of `active`. `run-notes-<task>.md` also has a
 second appender: `precompact.sh` adds one block per auto-compaction while a fresh active
-record for the compacting session says `at_stage_boundary: false` — including on the
-early-skip path where a voluntary checkpoint sentinel already exists. The hook never
+record for the compacting session says `at_stage_boundary: false` — The hook never
 rewrites the JSON record and never rotates the notes file (rotation stays with the
 record's Python writer).
 
@@ -158,7 +132,7 @@ Detail relocated from `cleanup/SKILL.md` to keep it under its byte ceiling (IVG-
 | Delete mechanism | `trash_move` (recoverable, to `trash/<date>/`) | permanent delete (`fsops.py rm`) |
 | Selection logic | keep-freshest (UUID skip) + age (`QUOIN_CLEANUP_SENTINEL_WINDOW`, default 1d) | age-only (`--older-than Nd`, explicit argument required) |
 | Current session | always preserved (UUID-suffix skip BEFORE age check) | no special protection |
-| Auto-fire | yes (from `/checkpoint` Step 1.47, default-on) | no (requires explicit invocation) |
+| Auto-fire | yes (from `/end_of_day` Step 5b, default-on, with `--no-tasks`) | no (requires explicit invocation) |
 | Recovery | `mv .workflow_artifacts/memory/trash/<date>/<file> .workflow_artifacts/memory/` | not recoverable |
 
 ### Step 5b rationale (session temp-file sweep)

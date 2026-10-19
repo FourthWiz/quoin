@@ -98,7 +98,7 @@ See also `quoin/core/workflow/cost-ledger.md` for the runtime-neutral specificat
 
 ## Checkpoint cost attribution (IVG-157)
 
-Inline `/checkpoint` runs in the parent session and writes the PARENT session
+Historical rows only: the Claude `/checkpoint` skill was removed, and the `checkpoint` phase value stays valid for existing ledgers. Inline `/checkpoint` ran in the parent session and writes the PARENT session
 UUID; its cost is attributed via session-cohort attribution (labeled
 `shared-session (multi-phase)` bucket), NOT the parent-session total.
 Checkpoint behavior is unchanged. Concretely: `analyze_cost_ledger.py`,

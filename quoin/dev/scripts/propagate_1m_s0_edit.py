@@ -48,7 +48,6 @@ MIGRATED_TO_ADAPTER: frozenset[str] = frozenset({
 })
 
 LEGACY_TARGETS: list[str] = [
-    "checkpoint",
     "cleanup",
     "continue_work",
     "next_steps",

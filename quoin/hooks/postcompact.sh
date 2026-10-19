@@ -2,8 +2,9 @@
 # postcompact.sh — PostCompact hook for quoin workflow
 # Deployed to ~/.claude/hooks/ by bash install.sh
 # Fires after auto compaction completes. No decision control — side effects only.
-# Writes a compact-happened-${session_id}.txt marker (read by /checkpoint) and
-# appends the post half of the compaction telemetry event.
+# Writes a compact-happened-${session_id}.txt marker (read by auto_resume.py
+# to label a continuation as a compaction) and appends the post half of the
+# compaction telemetry event.
 # Fail-OPEN: any error → exit 0. No stdout output.
 #
 # Shebang assertion: head -1 ... | grep -qE '^#!/bin/sh( |$)'

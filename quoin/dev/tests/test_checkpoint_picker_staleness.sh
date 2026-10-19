@@ -25,7 +25,6 @@ FAIL=0
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 FIXTURE_DIR="$SCRIPT_DIR/fixtures/checkpoint_picker"
-CHECKPOINT_SKILL="$SCRIPT_DIR/../../skills/checkpoint/SKILL.md"
 SLEEP_SKILL="$SCRIPT_DIR/../../skills/sleep/SKILL.md"
 
 ok() { PASS=$((PASS + 1)); printf 'ok  %s\n' "$1"; }
@@ -92,27 +91,6 @@ if [ -n "$EIGHT_DAYS_AGO" ]; then
   fi
 else
   ok "sub-1 (B1): (skipped — date -v/-d not supported on this platform)"
-fi
-
-# Verify SKILL.md documents the mtime filter with the expected default window
-if grep -q 'QUOIN_RESTORE_SENTINEL_WINDOW' "$CHECKPOINT_SKILL" 2>/dev/null; then
-  ok "sub-1 (B1): QUOIN_RESTORE_SENTINEL_WINDOW documented in checkpoint/SKILL.md"
-else
-  fail "sub-1 (B1): QUOIN_RESTORE_SENTINEL_WINDOW NOT found in checkpoint/SKILL.md"
-fi
-
-# Verify the default is 7 (not 30)
-if grep -q 'QUOIN_RESTORE_SENTINEL_WINDOW:-7' "$CHECKPOINT_SKILL" 2>/dev/null; then
-  ok "sub-1 (B1): default window is 7d (QUOIN_RESTORE_SENTINEL_WINDOW:-7)"
-else
-  fail "sub-1 (B1): default window ':-7' NOT found in checkpoint/SKILL.md"
-fi
-
-# Verify advisory emission for skipped stale sentinels
-if grep -q 'stale.*skipped\|skipped.*stale' "$CHECKPOINT_SKILL" 2>/dev/null; then
-  ok "sub-1 (B1): stale-sentinel skip advisory documented in checkpoint/SKILL.md"
-else
-  fail "sub-1 (B1): stale-sentinel advisory NOT found in checkpoint/SKILL.md"
 fi
 
 rm -f "$MEMORY_DIR/pending-restore-STALE.txt" "$MEMORY_DIR/pending-restore-FRESH.txt"
@@ -187,13 +165,6 @@ fi
 
 rm -f "$MEMORY_DIR/pending-restore-${OLD_SESSION}-diskonly.txt"
 
-# Verify SKILL.md documents the consumed_sentinel_path variable and two-call cleanup
-if grep -q 'consumed_sentinel_path' "$CHECKPOINT_SKILL" 2>/dev/null; then
-  ok "sub-2 (B2): consumed_sentinel_path variable documented in checkpoint/SKILL.md"
-else
-  fail "sub-2 (B2): consumed_sentinel_path NOT found in checkpoint/SKILL.md"
-fi
-
 # ─── sub-3 (B3): session-state fallback ──────────────────────────────────────
 #
 # When no checkpoint sentinels exist but a recent session-state file is present,
@@ -258,19 +229,6 @@ if [ -n "$INTENT" ]; then
   ok "sub-3 (B3): INTENT extracted from ## Unfinished work: '$INTENT'"
 else
   fail "sub-3 (B3): INTENT extraction returned empty string"
-fi
-
-# Verify SKILL.md documents the B3 two-clause trigger and session-state fallback
-if grep -q 'session-state fallback\|session.state fallback' "$CHECKPOINT_SKILL" 2>/dev/null; then
-  ok "sub-3 (B3): session-state fallback documented in checkpoint/SKILL.md"
-else
-  fail "sub-3 (B3): session-state fallback NOT found in checkpoint/SKILL.md"
-fi
-
-if grep -q 'QUOIN_SESSION_FALLBACK_WINDOW' "$CHECKPOINT_SKILL" 2>/dev/null; then
-  ok "sub-3 (B3): QUOIN_SESSION_FALLBACK_WINDOW documented in checkpoint/SKILL.md"
-else
-  fail "sub-3 (B3): QUOIN_SESSION_FALLBACK_WINDOW NOT found in checkpoint/SKILL.md"
 fi
 
 # No pending-restore-* files should have been created or removed in this sub-test

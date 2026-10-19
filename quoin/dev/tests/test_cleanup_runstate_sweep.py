@@ -1,4 +1,4 @@
-"""IVG-258 T-14: `/cleanup` Step 5c run-state sweep, the nine-family
+"""IVG-258 T-14: `/cleanup` Step 5c run-state sweep, the two-family
 regression, and the `_DOCS_TO_TESTS` routing rows this stage adds.
 
 `cleanup/SKILL.md` carried zero `_DOCS_TO_TESTS` rows before this stage --
@@ -87,38 +87,28 @@ def test_sleep_comparison_table_carries_the_cleanup_only_qualifier():
 # ---------------------------------------------------------------------------
 
 
-def test_allow_list_still_has_exactly_nine_numbered_entries():
+def test_allow_list_has_exactly_two_numbered_entries():
     text = _text(CLEANUP_SKILL)
     match = re.search(
-        r"## Hardcoded sentinel allow-list \(9 families\)\n\n(.*?)\n\nThese families",
+        r"## Hardcoded sentinel allow-list \(2 families\)\n\n(.*?)\n\nThese families",
         text,
         re.S,
     )
     assert match, "allow-list section not found in the expected shape"
     entries = re.findall(r"^\d+\.\s+`[^`]+`", match.group(1), re.M)
-    assert len(entries) == 9
+    assert len(entries) == 2
 
 
 def test_no_run_state_entry_added_to_allow_list():
     text = _text(CLEANUP_SKILL)
     match = re.search(
-        r"## Hardcoded sentinel allow-list \(9 families\)\n\n(.*?)\n\nThese families",
+        r"## Hardcoded sentinel allow-list \(2 families\)\n\n(.*?)\n\nThese families",
         text,
         re.S,
     )
     assert match
     assert "run-state" not in match.group(1)
     assert "run-notes" not in match.group(1)
-
-
-def test_sleep_skill_md_unmodified_by_this_stage():
-    import subprocess
-
-    result = subprocess.run(
-        ["git", "-C", str(REPO_ROOT), "diff", "--quiet", "--", "quoin/adapters/claude/skills/sleep/SKILL.md"],
-        capture_output=True,
-    )
-    assert result.returncode == 0, "sleep/SKILL.md has an uncommitted diff"
 
 
 # ---------------------------------------------------------------------------

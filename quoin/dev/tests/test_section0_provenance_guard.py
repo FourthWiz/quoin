@@ -1,8 +1,8 @@
 """§0-family provenance partition guard, plus per-file share ceilings.
 
-Every §0/§0'/§0″/§0‴/§0c block in the adapter corpus is either generator-owned
-(reproducible byte-for-byte from `inject_pollution_dispatch.py`) or one of six
-named hand-written blocks. This module pins that partition and the five
+Every §0/§0'/§0″/§0‴ block in the adapter corpus is either generator-owned
+(reproducible byte-for-byte from `inject_pollution_dispatch.py`) or one of three
+named hand-written blocks. This module pins that partition and the four
 roster-vs-corpus equalities that back it, so a roster edit that is not
 reflected in the corpus (or vice versa) reds here rather than surfacing later
 as silent drift.
@@ -13,32 +13,30 @@ never from a renderer call keyed by roster membership. That is what makes a
 roster-only edit and a corpus-only edit both observable: each moves only one
 side of the corresponding equality.
 
-Per-family, not union: the five rosters encode 55 (skill, roster)
+Per-family, not union: the four rosters encode 51 (skill, roster)
 membership facts, but only 7 of them (capture_insight, cost_snapshot,
 next_steps, start_of_day, status, triage, weekly_review — all in SECTION0
 and no other roster) are unique to any one roster. A union-based assertion
-can therefore observe at most 7 of 55 facts; asserting each family against
-its own roster observes all 55.
+can therefore observe at most 7 of 51 facts; asserting each family against
+its own roster observes all 51.
 
 Load-bearing assertions (a future maintainer should not "simplify" these):
-  - the five per-family carrier equalities (oracle vs SECTION0/POLLUTION/
-    MINTIER/MINTIER_SONNET/ZC)
-  - the §0c two-separator agreement (exact-heading set == ZC_BLOCKS-value
-    content set) — the only assertion that catches a COORDINATED edit
-    dropping a member from both `ZC_SKILLS` and `ZC_BLOCKS` at once
-  - the declared six-block hand-written set, located by heading, each with
+  - the four per-family carrier equalities (oracle vs SECTION0/POLLUTION/
+    MINTIER/MINTIER_SONNET)
+  - the no-§0c absence pin (no adapter skill carries a §0c heading)
+  - the declared three-block hand-written set, located by heading, each with
     its own line-count assertion
-  - the declared-variant-set assertion (exactly 7 glyph tokens)
-  - the blankness assertion on the 19 non-`start_of_day` overhangs
+  - the declared-variant-set assertion (exactly 6 glyph tokens)
+  - the blankness assertion on the 18 non-`start_of_day` overhangs
 
 Everything else (partition disjointness/coverage/sum, the informational
 snapshot) is a cheap extra check, not the mechanism that discriminates.
 
 Snapshot (informational; a maintainer updating the generator template updates
 this alongside, without touching the partition assertions above):
-  corpus_lines=15475, census_lines=4652, generated=4323, handwritten=249,
-  overhang=61 (start_of_day) + 19 (blank, one per other §0 carrier) = 80,
-  carriers=30, variants=7, declared hand-written blocks=6.
+  corpus_lines=15475, census_lines=4372, generated=4119, handwritten=178,
+  overhang=57 (start_of_day) + 18 (blank, one per other §0 carrier) = 75,
+  carriers=29, variants=6, declared hand-written blocks=3.
 """
 from __future__ import annotations
 
@@ -65,14 +63,12 @@ SECTION0_TARGET_SKILLS = set(generator.SECTION0_TARGET_SKILLS)
 POLLUTION_TARGET_SKILLS = set(generator.POLLUTION_TARGET_SKILLS)
 MINTIER_TARGET_SKILLS = set(generator.MINTIER_TARGET_SKILLS)
 MINTIER_SONNET_TARGET_SKILLS = set(generator.MINTIER_SONNET_TARGET_SKILLS)
-ZC_SKILLS = set(generator.ZC_SKILLS)
 
 ROSTERS = {
     "§0": SECTION0_TARGET_SKILLS,
     "§0″": MINTIER_TARGET_SKILLS,
     "§0‴": MINTIER_SONNET_TARGET_SKILLS,
     "§0'": POLLUTION_TARGET_SKILLS,
-    "§0c": ZC_SKILLS,
 }
 
 # ─── Heading constants and markers (imported, never retyped) ────────────────
@@ -85,45 +81,41 @@ SECTION0_END_MARKER = generator.SECTION0_END_MARKER
 MINTIER_BEGIN_MARKER = "<!-- §0doubleprime-begin -->"
 MINTIER_SONNET_BEGIN_MARKER = "<!-- §0tripleprime-begin -->"
 
-DECLARED_VARIANT_SET = {"§0", "§0'", "§0a", "§0b", "§0c", "§0″", "§0‴"}
+DECLARED_VARIANT_SET = {"§0", "§0'", "§0a", "§0b", "§0″", "§0‴"}
 
-# The six hand-written blocks, discovered by heading (§0a/§0b have no
-# renderer at all; §0c is hand-written iff it fails the ZC_BLOCKS content
-# match). Declared here with their line counts so a deletion or a silent
+# The three hand-written blocks, discovered by heading (§0a/§0b have no
+# renderer at all). Declared here with their line counts so a deletion or a silent
 # prose expansion reds by name. A legitimate prose tightening inside one of
-# these six blocks may re-seed its line count in the same commit as the
+# these three blocks may re-seed its line count in the same commit as the
 # edit — the same allowance the share ceilings below get.
 DECLARED_HANDWRITTEN_BLOCKS = {
     ("implement", "§0a"): 73,
     ("implement", "§0b"): 53,
     ("end_of_task", "§0b"): 52,
-    ("checkpoint", "§0c"): 23,
-    ("cleanup", "§0c"): 24,
-    ("sleep", "§0c"): 24,
 }
-DECLARED_HANDWRITTEN_TOTAL_LINES = 249
+DECLARED_HANDWRITTEN_TOTAL_LINES = 178
 
-START_OF_DAY_TAIL_LINES = 61
+START_OF_DAY_TAIL_LINES = 57
 START_OF_DAY_FIRST_NONBLANK = "### Step 1a: Resume from cookie"
 START_OF_DAY_FIRST_NONBLANK_LINE_1BASED = 126
 
 # Informational snapshot (see module docstring) — not the totality contract.
 SNAPSHOT_CORPUS_LINES = 15475
-SNAPSHOT_CENSUS_LINES = 4652
-SNAPSHOT_GENERATED_LINES = 4323
-SNAPSHOT_OVERHANG_LINES = 80  # 61 (start_of_day tail) + 19 (one blank line each)
-SNAPSHOT_CARRIERS = 30
+SNAPSHOT_CENSUS_LINES = 4372
+SNAPSHOT_GENERATED_LINES = 4119
+SNAPSHOT_OVERHANG_LINES = 75  # 57 (start_of_day tail) + 18 (one blank line each)
+SNAPSHOT_CARRIERS = 29
 
 
 def _variant_of(line: str) -> str | None:
     """Glyph token of a `^## §0...` heading line.
 
-    Deliberately NOT filtered against the seven known tokens: the token is
+    Deliberately NOT filtered against the six known tokens: the token is
     whatever whitespace-delimited word follows `## ` and
-    starts with `§0`, discovered generically, so an eighth variant this
+    starts with `§0`, discovered generically, so a seventh variant this
     module has never seen is captured as its own distinct token rather than
     silently returning None and vanishing from DISCOVERED_VARIANTS. A fixed
-    allow-list here would make test_declared_variant_set_is_exactly_seven
+    allow-list here would make test_declared_variant_set_is_exactly_six
     blind to exactly the case it exists to catch.
     """
     if not line.startswith("## §0"):
@@ -174,17 +166,10 @@ for _, v, _, _ in _CENSUS_BLOCKS:
 
 # ─── Independent oracle: per-family carrier sets from corpus text alone ─────
 # §0, §0″, §0‴ — marker-anchored (pure text signal, no roster, no renderer).
-# §0', §0c — exact whole-line heading match; §0c additionally requires the
-# ZC_BLOCKS-VALUE content match (not keyed by skill name) to agree, since a
-# hand-written §0c block ("... FIRST STEP after §0 dispatch") also carries a
-# `## §0c` heading but is not a generated carrier.
+# §0' — exact whole-line heading match.
 POLLUTION_HEAD_EXACT = POLLUTION_HEADING.strip()
-ZC_HEAD_EXACT = ZC_HEADING.strip()
-ZC_BLOCK_VALUES = [v.strip() for v in generator.ZC_BLOCKS.values()]
 
 ORACLE_FAMILY: dict[str, set[str]] = {k: set() for k in ROSTERS}
-ZC_BY_HEADING: set[str] = set()
-ZC_BY_CONTENT: set[str] = set()
 GEN_CARRIERS: set[str] = set()
 
 for _p in ADAPTER_FILES:
@@ -202,27 +187,18 @@ for _p in ADAPTER_FILES:
     if any(_l.strip() == POLLUTION_HEAD_EXACT for _l in _lines):
         ORACLE_FAMILY["§0'"].add(_skill)
         GEN_CARRIERS.add(_skill)
-    _has_heading = any(_l.strip() == ZC_HEAD_EXACT for _l in _lines)
-    _has_content = any(_v in _txt for _v in ZC_BLOCK_VALUES)
-    if _has_heading:
-        ZC_BY_HEADING.add(_skill)
-    if _has_content:
-        ZC_BY_CONTENT.add(_skill)
-    if _has_heading and _has_content:
-        ORACLE_FAMILY["§0c"].add(_skill)
-        GEN_CARRIERS.add(_skill)
 
 ROSTER_UNION = set().union(*ROSTERS.values())
 
 
 # ═══════════════════════════ Declared-variant-set ═══════════════════════════
 
-def test_declared_variant_set_is_exactly_seven():
+def test_declared_variant_set_is_exactly_six():
     assert DISCOVERED_VARIANTS == DECLARED_VARIANT_SET, (
         f"discovered §0-family glyph variants {sorted(DISCOVERED_VARIANTS)} "
         f"!= declared set {sorted(DECLARED_VARIANT_SET)} "
         f"(sym-diff {sorted(DISCOVERED_VARIANTS ^ DECLARED_VARIANT_SET)}). "
-        "An eighth variant (or the disappearance of one of the seven) means "
+        "A seventh variant (or the disappearance of one of the six) means "
         "the generator introduced a new §0-family shape that this guard has "
         "not been taught about yet."
     )
@@ -230,8 +206,8 @@ def test_declared_variant_set_is_exactly_seven():
 
 # ═══════════════════ Per-family carrier assertions (load-bearing) ═══════════
 # Each asserted SEPARATELY with its own message — a single union
-# assertion does not satisfy this. Every one of the 55 (skill, roster)
-# membership facts moves exactly one side of exactly one of these five.
+# assertion does not satisfy this. Every one of the 51 (skill, roster)
+# membership facts moves exactly one side of exactly one of these four.
 
 def test_oracle_section0_matches_roster():
     assert ORACLE_FAMILY["§0"] == SECTION0_TARGET_SKILLS, (
@@ -262,34 +238,22 @@ def test_oracle_pollution_matches_roster():
     )
 
 
-def test_oracle_zc_matches_roster():
-    assert ORACLE_FAMILY["§0c"] == ZC_SKILLS, (
-        "§0c corpus-text carriers != ZC_SKILLS "
-        f"(sym-diff {sorted(ORACLE_FAMILY['§0c'] ^ ZC_SKILLS)})"
-    )
-
-
-def test_zc_two_separators_agree():
-    """The ONLY assertion that catches a coordinated edit dropping a member
-    from ZC_SKILLS *and* ZC_BLOCKS at once without regenerating. Under such
-    an edit both sides of the per-family §0c equality above fall together and
-    that assertion alone passes; the two separators below disagree instead.
-    """
-    assert ZC_BY_HEADING == ZC_BY_CONTENT, (
-        f"§0c exact-heading carrier set {sorted(ZC_BY_HEADING)} != "
-        f"ZC_BLOCKS-value content carrier set {sorted(ZC_BY_CONTENT)} "
-        f"(sym-diff {sorted(ZC_BY_HEADING ^ ZC_BY_CONTENT)}) — a coordinated "
-        "roster+content edit is the only edit shape this assertion detects."
-    )
+def test_no_adapter_skill_carries_zc_heading():
+    """The pidfile-lifecycle §0c block is retired: no adapter SKILL.md may
+    carry its heading, and the corpus scan must not discover a §0c variant."""
+    for path in ADAPTER_FILES:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            assert line.strip() != ZC_HEADING.strip(), f"{path.parent.name} still carries a §0c block"
+    assert "§0c" not in DISCOVERED_VARIANTS
 
 
 def test_union_equality_cheap_extra_check():
     """NOT the load-bearing assertion — kept only as a cheap extra check.
 
-    A union-based comparison observes at most 7 of the 55 (skill, roster)
+    A union-based comparison observes at most 7 of the 51 (skill, roster)
     membership facts (all 7 unique to SECTION0; POLLUTION/MINTIER/
-    MINTIER_SONNET/ZC contribute zero unique members each), so it cannot by
-    itself detect most single-member roster drops. The five per-family
+    MINTIER_SONNET contribute zero unique members each), so it cannot by
+    itself detect most single-member roster drops. The four per-family
     assertions above are what carries the claim.
     """
     assert GEN_CARRIERS == ROSTER_UNION, (
@@ -305,14 +269,12 @@ def test_declared_handwritten_blocks_present_with_line_counts():
     for skill, variant, start, end in _CENSUS_BLOCKS:
         if variant in ("§0a", "§0b"):
             discovered[(skill, variant)] = end - start
-        elif variant == "§0c" and skill not in ORACLE_FAMILY["§0c"]:
-            discovered[(skill, variant)] = end - start
 
     assert set(discovered) == set(DECLARED_HANDWRITTEN_BLOCKS), (
         f"discovered hand-written (skill, variant) set {sorted(discovered)} != "
         f"declared set {sorted(DECLARED_HANDWRITTEN_BLOCKS)} "
         f"(sym-diff {sorted(set(discovered) ^ set(DECLARED_HANDWRITTEN_BLOCKS))}). "
-        "Deleting one of the six declared blocks reds this by name."
+        "Deleting one of the three declared blocks reds this by name."
     )
     for pair, expected_lines in DECLARED_HANDWRITTEN_BLOCKS.items():
         assert discovered[pair] == expected_lines, (
@@ -429,7 +391,7 @@ def _compute_partition():
             gen_end = (marker_i + 1) if marker_i is not None else end
             span = range(start, gen_end)
         else:
-            span = range(start, end)  # §0'/§0″/§0‴ in full; §0a/§0b/§0c likewise
+            span = range(start, end)  # §0'/§0″/§0‴ in full; §0a/§0b likewise
 
         is_handwritten = (skill, variant) in DECLARED_HANDWRITTEN_BLOCKS
         for i in span:
@@ -492,7 +454,7 @@ def test_census_snapshot_reproduces_state():
         f"{SNAPSHOT_CARRIERS} — re-seed SNAPSHOT_CARRIERS per the re-seed procedure above."
     )
     assert VARIANT_COUNTS == {
-        "§0": 20, "§0'": 10, "§0a": 1, "§0b": 2, "§0c": 5, "§0″": 10, "§0‴": 13,
+        "§0": 19, "§0'": 10, "§0a": 1, "§0b": 2, "§0″": 10, "§0‴": 12,
     }, (
         f"VARIANT_COUNTS={VARIANT_COUNTS} no longer matches the recorded per-variant "
         "block counts — re-seed the literal dict above per the re-seed procedure above."
@@ -503,15 +465,12 @@ def test_census_snapshot_reproduces_state():
 # An earlier version of this oracle caught bare Exception and returned None
 # on any renderer failure, which made "renderer raised" indistinguishable
 # from "skill is not a carrier". This module makes no renderer calls for
-# carrier discovery at all — the §0c content check above compares against
-# generator.ZC_BLOCKS values pasted directly, not a renderer call — so there
-# is nothing here that swallows an exception. This test instead pins that
-# the two roster-gated renderers actually raise on a non-member, rather than
-# silently returning an empty/falsy value that a broad except could hide.
+# carrier discovery at all, so there is nothing here that swallows an
+# exception. This test instead pins that the roster-gated renderer actually
+# raises on a non-member, rather than silently returning an empty/falsy value
+# that a broad except could hide.
 
-@pytest.mark.parametrize(
-    "render_fn_name", ["render_pollution_block", "render_zc_block"]
-)
+@pytest.mark.parametrize("render_fn_name", ["render_pollution_block"])
 def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
     fn = getattr(generator, render_fn_name)
     with pytest.raises(Exception):
@@ -530,9 +489,8 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 #
 # Growth side (the same headroom is a blind spot upward): the
 # same 5.00 pp lets a carrier's GENERATED span grow before this guard fires
-# — 25 lines at `next_steps` (binding), 74 at `checkpoint` (loosest);
-# re-derived after IVG-263 moved cleanup/sleep to Sonnet (cleanup was
-# previously binding at 25, now 35 after its own share re-seed). Generated-
+# — 18 lines at `cleanup` (binding), 60 at `end_of_task` (loosest);
+# re-derived after the `checkpoint` skill left the corpus. Generated-
 # span growth is caught by test_generator_fidelity.py's byte-compare and by
 # the byte ceilings in test_footprint_ceilings.py, NOT by this share guard.
 # That asymmetry is a recorded decision, not an oversight.
@@ -540,8 +498,8 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 # Zero carve-out: `run` and `thorough_plan` measure exactly 0.0000% (zero
 # §0-family lines at all) and get an exact 0.0 ceiling with NO headroom
 # added — their zero is asserted, not merely unobserved. Note: the roster
-# union is 30 of 32 adapter skills, so this zero carve-out and the "carriers
-# equal the oracle set, size 30" assertion above are the SAME FACT from two
+# union is 29 of 31 adapter skills, so this zero carve-out and the "carriers
+# equal the oracle set, size 29" assertion above are the SAME FACT from two
 # directions, not two independent confirmations.
 #
 # Waiver / re-ratchet procedure: the numerator (generated span) is
@@ -555,15 +513,12 @@ SHARE_HEADROOM_PP = 5.00
 
 # measured_share = 100 * generated_span_lines / file_lines, generated_span
 # defined identically to the partition assertion above (§0 up to and
-# including SECTION0_END_MARKER; §0'/§0″/§0‴ in full; §0c only when it is a
-# generated carrier, i.e. in ORACLE_FAMILY["§0c"]).
+# including SECTION0_END_MARKER; §0'/§0″/§0‴ in full).
 SHARE_CEILINGS: dict[str, float] = {
     "architect": 25.0608,
     "capture_insight": 63.0311,
-    "checkpoint": 18.8218,
-    "cleanup": 50.8213,  # re-seeded (IVG-263): tier move to Sonnet adds the
-                         # §0‴ Minimum-tier guard block, raising the
-                         # generator-owned share
+    "cleanup": 58.7162,  # re-seeded: the hand-written pidfile block left the
+                         # file, so the generator-owned share rose
 
     "continue_work": 56.2903,
     "cost_snapshot": 43.0952,
@@ -590,7 +545,7 @@ SHARE_CEILINGS: dict[str, float] = {
                        # generator-owned share
 
     "specify": 44.8625,
-    "start_of_day": 32.2506,  # span-based (27.2506%) + 5.00pp — NEVER the
+    "start_of_day": 32.5862,  # span-based (27.5862%) + 5.00pp — NEVER the
                               # heading-based 42.09% figure an earlier
                               # census over-captured
     "status": 73.6275,
@@ -613,8 +568,6 @@ def _measured_share(skill: str) -> float:
             gen += (marker_i - start + 1) if marker_i is not None else 0
         elif variant in ("§0'", "§0″", "§0‴"):
             gen += end - start
-        elif variant == "§0c" and skill in ORACLE_FAMILY["§0c"]:
-            gen += end - start
     return 100.0 * gen / len(lines) if lines else 0.0
 
 
@@ -629,7 +582,7 @@ def test_share_ceilings_key_set_matches_adapter_skills():
         f"skills {sorted(discovered)} "
         f"(sym-diff {sorted(set(SHARE_CEILINGS) ^ discovered)})"
     )
-    assert len(SHARE_CEILINGS) == 32
+    assert len(SHARE_CEILINGS) == 31
 
 
 def test_zero_share_carve_out_is_exact():
@@ -660,15 +613,15 @@ def test_file_within_share_ceiling(skill):
 def test_start_of_day_ceiling_is_span_based_not_heading_based():
     """Pins the over-capture regression this guard exists to prevent: an
     earlier (withdrawn) heading-based measurement put start_of_day's share
-    at 42.09%; the correct span-based measurement is 27.2506%."""
+    at 42.09%; the correct span-based measurement is 27.5862%."""
     measured = _measured_share("start_of_day")
-    assert abs(measured - 27.2506) < 0.001, (
+    assert abs(measured - 27.5862) < 0.001, (
         f"start_of_day measured share {measured} drifted from the expected "
-        "span-based 27.2506% — if this is legitimate, confirm it was NOT "
+        "span-based 27.5862% — if this is legitimate, confirm it was NOT "
         "caused by reverting to heading-based measurement before updating "
         "this test."
     )
-    assert abs(SHARE_CEILINGS["start_of_day"] - 32.2506) < 0.001
+    assert abs(SHARE_CEILINGS["start_of_day"] - 32.5862) < 0.001
 
 
 # ═══════════ In-domain caps-density metric and per-file ceilings ═══════════
@@ -680,7 +633,7 @@ def test_start_of_day_ceiling_is_span_based_not_heading_based():
 # constraint blows through.
 #
 # Corpus-level result: "domination" means the top two files hold >=50% of
-# in-domain caps tokens. Measured on all four report surfaces (manifest-33
+# in-domain caps tokens. Measured on all four report surfaces (adapter-skill
 # corpus slice, the 57-file primary domain, the 39-file secondary domain,
 # and their union) — 28.34%, 29.62%, 16.31%, 13.03% — every one well under
 # 50%. Not dominated; the per-file half ships.
@@ -695,7 +648,7 @@ DENSITY_MATERIALITY_FLOOR = 5  # caps tokens; below this, ratcheting is brittle
 
 CLAUDE_MD = ADAPTER_DIR.parent.parent.parent / "CLAUDE.md"
 
-# 15 files at or above the materiality floor (measured, manifest-33 domain).
+# 14 files at or above the materiality floor (measured, adapter-skill domain).
 # Ratchet-down-only from this first-measured baseline (mirrors the byte
 # ceilings' own "provisional = current size" starting convention).
 DENSITY_CEILINGS: dict[str, int] = {
@@ -704,7 +657,6 @@ DENSITY_CEILINGS: dict[str, int] = {
     "run": 18,
     "critic": 14,
     "thorough_plan": 10,
-    "checkpoint": 9,
     "architect": 8,
     "security_review": 8,
     "end_of_task": 7,
@@ -727,12 +679,12 @@ DENSITY_EXCLUDED_BELOW_FLOOR = {
 
 
 def _in_domain_text(skill: str | None) -> str:
-    """Text of a manifest-33 member with its OWN generator-backed §0-family
+    """Text of a manifest member with its OWN generator-backed §0-family
     spans excised, mirroring derive/density_domains.py's gen_spans() —
     which drops a span only when the skill carries it on a generator
     roster. A block declared in DECLARED_HANDWRITTEN_BLOCKS shares a
     heading token with a generated family (§0a/§0b have no generator at
-    all; a hand-written §0c fails the ZC_BLOCKS content match) but is not
+    all) but is not
     itself generator output, so it must stay in the domain and get
     measured like any other hand-written prose."""
     path = CLAUDE_MD if skill is None else ADAPTER_DIR / skill / "SKILL.md"
@@ -760,18 +712,18 @@ def _in_domain_caps_count(skill: str | None) -> int:
     return sum(len(re.findall(pattern, text)) for _, pattern in CAPS_PATTERNS)
 
 
-MANIFEST_33 = sorted(p.parent.name for p in ADAPTER_FILES) + ["claude_md"]
+MANIFEST = sorted(p.parent.name for p in ADAPTER_FILES) + ["claude_md"]
 
 
-def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
+def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
     covered = set(DENSITY_CEILINGS) | DENSITY_EXCLUDED_BELOW_FLOOR
-    assert covered == set(MANIFEST_33), (
-        f"DENSITY_CEILINGS + DENSITY_EXCLUDED_BELOW_FLOOR != the 33-file manifest "
-        f"(sym-diff {sorted(covered ^ set(MANIFEST_33))}) — every manifest-33 file "
+    assert covered == set(MANIFEST), (
+        f"DENSITY_CEILINGS + DENSITY_EXCLUDED_BELOW_FLOOR != every adapter skill plus CLAUDE.md "
+        f"(sym-diff {sorted(covered ^ set(MANIFEST))}) — every adapter skill and CLAUDE.md "
         "must be named in exactly one of the two sets, never silently absent."
     )
-    assert len(DENSITY_CEILINGS) == 15, (
-        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 15. If a "
+    assert len(DENSITY_CEILINGS) == 14, (
+        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 14. If a "
         "skill's in-domain caps count crossed DENSITY_MATERIALITY_FLOOR, move it "
         "between DENSITY_CEILINGS and DENSITY_EXCLUDED_BELOW_FLOOR and update both "
         "this count and the one below to match."
@@ -782,9 +734,9 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
         "this count and the one above to match."
     )
-    assert sum(DENSITY_CEILINGS.values()) == 164, (
+    assert sum(DENSITY_CEILINGS.values()) == 155, (
         f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
-        "164. A per-file ceiling was re-seeded without updating this checksum — "
+        "155. A per-file ceiling was re-seeded without updating this checksum — "
         "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
         "hunk as the ceiling change."
     )

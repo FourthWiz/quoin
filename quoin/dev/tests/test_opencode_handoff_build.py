@@ -350,7 +350,7 @@ def test_record_lives_below_every_cleanup_sweep(fx):
     block = text.split("\n## Hardcoded sentinel allow-list", 1)[1].split("\n## ", 1)[0]
     families = re.findall(r"^\d+\.\s+`([^`]+)`", block, re.MULTILINE)
     families += ["run-state-*.json", "run-notes-*.md", "run-notes-*.md.1", "run-state-*.json.*.tmp"]
-    assert len(families) >= 9
+    assert len(families) >= 6
     path = handoff.write(fx.root, fx.task, fx.build(), source_dir=fx.source)
     handoff.write(fx.root, fx.task, fx.build(), source_dir=fx.source)
     memory = fx.root / ".workflow_artifacts" / "memory"

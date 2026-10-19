@@ -88,10 +88,9 @@ SECTION0_TARGETS = [
     ("triage",         "haiku",  "§1"),
     ("pr",             "sonnet", "§1"),
     ("status",         "haiku",  "§1"),
-    ("cleanup",        "sonnet", "§0c"),
-    ("sleep",          "sonnet", "§0c"),
+    ("cleanup",        "sonnet", "§1"),
+    ("sleep",          "sonnet", "§1"),
     ("next_steps",     "haiku",  "§1"),
-    ("checkpoint",     "sonnet", "§0c"),
     ("continue_work",  "sonnet", "§1"),
     ("workspace",      "sonnet", "§1"),
 ]
@@ -123,7 +122,7 @@ SECTION0PRIME_TARGETS = [
 S0_1M_CORE_SUBSTRING = "Usage credits required for 1M context"
 S0_1M_ADVISORY_TOKEN = "1M-context credit mismatch"
 S0_1M_MODEL_HINT     = "run /model to switch this session to standard context"
-S0_1M_PROCEED_TOKEN  = "proceed to §1 at the current tier"  # or §0c for §0c-class skills
+S0_1M_PROCEED_TOKEN  = "proceed to §1 at the current tier"
 
 # §0 markers (D-03 Option A: §0-1m-context-precheck markers DELETED)
 S0_DEAD_BEGIN_MARKER = "<!-- §0-1m-context-precheck-begin -->"

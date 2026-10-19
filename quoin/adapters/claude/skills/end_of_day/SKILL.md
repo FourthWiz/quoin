@@ -641,6 +641,15 @@ Tell the user:
 - What the daily cache recommends for tomorrow
 - Remind them to run `/start_of_day` when they resume
 
+### Step 5b: Invoke /cleanup (sentinel hygiene)
+
+After the Step 5 report, unless `--no-cleanup` was passed, spawn a Sonnet Agent subagent:
+    model: "sonnet"
+    description: "cleanup — stale sentinels after end_of_day"
+    prompt: "[no-redispatch]\n/cleanup --no-tasks"
+  Wait for the subagent and print its output inline. `--no-tasks` keeps the interactive task-folder pass out of this automatic call.
+  If the subagent fails (tool error, dispatch unavailable): print "[quoin-S-3: /cleanup invocation failed; run /cleanup standalone to retry]" and continue to Step 6.
+
 ### Step 6: Invoke /sleep (memory consolidation)
 
 After Step 5 completes and the user has been shown the report, check for `--skip-sleep` flag:
@@ -659,3 +668,4 @@ After Step 5 completes and the user has been shown the report, check for `--skip
 - **Don't overwrite previous sessions.** If there's already a session file for this task today (from an earlier session), update it rather than replacing it — preserve the history of what was done earlier.
 - **Git log captures logic, not just files.** "Modified 3 files" tells you nothing. "Added exponential backoff to payment retries because Stripe recommends it for idempotent requests" tells you everything.
 - **--skip-sleep flag.** Pass `--skip-sleep` to `/end_of_day` to suppress the automatic Step 6 `/sleep` invocation. Use this when memory consolidation is not needed (e.g., brief sessions, first-run calibration, or when running `/sleep` standalone later).
+- **--no-cleanup flag.** Pass `--no-cleanup` to `/end_of_day` to suppress the automatic Step 5b `/cleanup` invocation.

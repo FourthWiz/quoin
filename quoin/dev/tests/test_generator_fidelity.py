@@ -1,6 +1,6 @@
 """Byte-compare every live §0-family block against its renderer.
 
-Parametrized over all 55 (skill, family) pairs recorded in the five roster
+Parametrized over all 51 (skill, family) pairs recorded in the five roster
 constants. For each, slices the live block from the adapter SKILL.md with the
 SAME span rule `inject_pollution_dispatch.py` itself uses to replace that
 block, and compares it byte-for-byte against the matching renderer's output.
@@ -43,15 +43,13 @@ SECTION0_TARGET_SKILLS = sorted(generator.SECTION0_TARGET_SKILLS)
 POLLUTION_TARGET_SKILLS = sorted(generator.POLLUTION_TARGET_SKILLS)
 MINTIER_TARGET_SKILLS = sorted(generator.MINTIER_TARGET_SKILLS)
 MINTIER_SONNET_TARGET_SKILLS = sorted(generator.MINTIER_SONNET_TARGET_SKILLS)
-ZC_SKILLS = sorted(generator.ZC_SKILLS)
 
-# Every (family, skill) pair this test guards — 20 + 10 + 13 + 10 + 2 = 55.
+# Every (family, skill) pair this test guards — 19 + 10 + 12 + 10 = 51.
 ALL_PAIRS = (
     [("§0", s) for s in SECTION0_TARGET_SKILLS]
     + [("§0'", s) for s in POLLUTION_TARGET_SKILLS]
     + [("§0″", s) for s in MINTIER_TARGET_SKILLS]
     + [("§0‴", s) for s in MINTIER_SONNET_TARGET_SKILLS]
-    + [("§0c", s) for s in ZC_SKILLS]
 )
 
 
@@ -59,7 +57,7 @@ def _extract_replace_existing_block_span(text: str, heading: str) -> str | None:
     """Mirror inject_pollution_dispatch.py's own `_replace_existing_block`
     match exactly: from the heading line through (but not including) the
     next `^## ` line. Used for the four families replaced that way
-    (§0', §0″, §0‴, §0c)."""
+    (§0', §0″, §0‴)."""
     pattern = re.compile(
         r"^" + re.escape(heading) + r".+?(?=^## )",
         flags=re.DOTALL | re.MULTILINE,
@@ -88,13 +86,11 @@ _RENDERERS = {
     "§0'": generator.render_pollution_block,
     "§0″": generator.render_mintier_block,
     "§0‴": generator.render_mintier_sonnet_block,
-    "§0c": generator.render_zc_block,
 }
 _HEADINGS = {
     "§0'": generator.POLLUTION_HEADING,
     "§0″": generator.MINTIER_HEADING,
     "§0‴": generator.MINTIER_SONNET_HEADING,
-    "§0c": generator.ZC_HEADING,
 }
 
 
@@ -127,6 +123,6 @@ def test_live_block_byte_matches_renderer(family, skill):
     )
 
 
-def test_all_55_pairs_covered():
-    assert len(ALL_PAIRS) == 55
-    assert len(set(ALL_PAIRS)) == 55, "duplicate (family, skill) pair in ALL_PAIRS"
+def test_all_pairs_covered():
+    assert len(ALL_PAIRS) == 51
+    assert len(set(ALL_PAIRS)) == 51, "duplicate (family, skill) pair in ALL_PAIRS"

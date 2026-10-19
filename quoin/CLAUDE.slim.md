@@ -27,7 +27,7 @@ Task names are descriptive, kebab-case, derived from the task description (e.g.,
 
 When running parallel tasks, each gets its own subfolder. Never mix artifacts from different tasks in the same folder.
 
-**Single-root invariant (IVG-119):** exactly one `.workflow_artifacts/` root per project, at the project root. Subproject dirs must not create their own — a second nested root breaks `/checkpoint --restore` and artifact discovery. Enforced by `nested_root_check.py` at `/gate` and `/discover` (non-blocking WARN, fail-OPEN; opt-out `QUOIN_DISABLE_NESTED_ROOT_CHECK=1`, bless one root with a `.quoin-nested-ok` marker or `QUOIN_NESTED_ROOT_EXCLUDE`).
+**Single-root invariant (IVG-119):** exactly one `.workflow_artifacts/` root per project, at the project root. Subproject dirs must not create their own — a second nested root breaks run resume and artifact discovery. Enforced by `nested_root_check.py` at `/gate` and `/discover` (non-blocking WARN, fail-OPEN; opt-out `QUOIN_DISABLE_NESTED_ROOT_CHECK=1`, bless one root with a `.quoin-nested-ok` marker or `QUOIN_NESTED_ROOT_EXCLUDE`).
 
 ### Archiving completed work
 
@@ -88,6 +88,6 @@ Dropped sections live in full under __QUOIN_HOME__/memory/ — the catalog is wo
 - ### §0″ Minimum-tier guard -> dispatch-guide.md
 - ### §V Ground-truth verification -> verification-guide.md
 - ### Hooks deployed by quoin -> hooks-table.md
-- ### Lifecycle skills (checkpoint / end_of_day / sleep / cleanup) -> lifecycle-guide.md
+- ### Lifecycle skills (end_of_day / sleep / cleanup) -> lifecycle-guide.md
 - ### /sleep importance signals -> workflow-catalog.md
 - ### Workflow memory layers -> workflow-catalog.md

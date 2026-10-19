@@ -13,57 +13,56 @@
 # set -e would propagate errors past fail-OPEN catch points in callers.
 # If defensive scripting is desired, prefer per-statement `|| true` over set -e.
 
-# SINGLE SOURCE OF TRUTH for the 9 sentinel families.
+# SINGLE SOURCE OF TRUTH for the live sentinel families.
 # Consumed by sessionstart.sh STEP 2. cleanup/SKILL.md and sleep/SKILL.md document
 # the same list and MUST stay byte-identical (drift test: test_sentinel_family_parity.py).
 #
-# sentinel_globs — echo the 9 canonical family globs, one per line (no quoting).
-# Order matches the cleanup allow-list order.
+# sentinel_globs — echo the live family globs, one per line (no quoting).
+# Order matches the cleanup allow-list order. pending-restore is still written by the
+# shared checkpoint helpers; compact-happened is written by postcompact.sh and read by
+# the run-continuation helper.
 sentinel_globs() {
     printf '%s\n' \
         'pending-restore-*.txt' \
+        'compact-happened-*.txt'
+}
+
+# legacy_sentinel_globs — echo the retired family globs, one per line (no quoting).
+# No writer produces these any more. sessionstart.sh sweeps them with the same age
+# window and current-session protection as the live families so leftovers from older
+# installs are reclaimed. Skill lists name only the live families. This list goes once
+# installs have cycled through the sweep.
+legacy_sentinel_globs() {
+    printf '%s\n' \
         'pending-prompt-*.txt' \
-        'compact-happened-*.txt' \
         'mid-agent-handoff-*.txt' \
         'pending-resume-ref-*.txt' \
         'checkpoint-defer-*.txt' \
         'postcompact-reset-*.txt' \
         'checkpoint-pending-compact-*.txt' \
-        'idle-advisory-pending-*.txt'  # no hook writes this family any more; leftovers from older installs stay reclaimable
+        'idle-advisory-pending-*.txt'
 }
 
 # read_constants — sources env-var defaults for tunable constants.
 # After calling, the following are exported:
 #   BPT            — bytes per token for the byte-estimate fallback (e.g., "8.0")
 #   LIMIT          — explicit window override on the real path; estimate denominator (150000 when unset)
-#   STOP_BPS       — stop/advisory threshold in basis-points (e.g., 7000)
-#   BLOCK_BPS      — block threshold in basis-points (e.g., 9500)
 #   STALE_DAYS     — sentinel staleness threshold in days (e.g., 7)
 #   SESSIONSTART_SWEEP_DAYS — UUID-aware tight sweep window for sessionstart (default 1)
-#   COMPACT_FIRST_BPS — /checkpoint high-util notice tier (e.g., 9000 = 90.00%)
-#   PANIC_BPS      — /checkpoint panic/degraded-save tier (default 10000 = 100.00%)
-#                    compute_utilization is unclamped so values >10000 are normal;
-#                    PANIC_BPS=10000 correctly fires for all true overflow (>=100%).
 #   DISCOVERY_STALE_DAYS — discovery-file staleness threshold in days (default 7)
 #   SERENA_STALE_DAYS — Serena re-onboarding staleness threshold in days (default 30)
 #   RUN_STATE_STALE_DAYS — run-state record freshness window in days (default 1)
-#   PRECOMPACT_NORUN_CHECKPOINT — opt-in no-run checkpoint+sentinel row (default 0)
 #   TELEMETRY_MAX_BYTES — compaction-telemetry sink rotation size in bytes (default 1048576)
 read_constants() {
     BPT=${QUOIN_BYTES_PER_TOKEN:-8.0}
     LIMIT=${QUOIN_EFFECTIVE_CONTEXT_LIMIT:-150000}
-    STOP_BPS=${QUOIN_STOP_BPS:-7000}
-    BLOCK_BPS=${QUOIN_BLOCK_BPS:-9500}
     STALE_DAYS=${QUOIN_STALE_SENTINEL_DAYS:-7}
     SESSIONSTART_SWEEP_DAYS=${QUOIN_SESSIONSTART_SWEEP_DAYS:-1}
-    COMPACT_FIRST_BPS=${QUOIN_COMPACT_FIRST_BPS:-9000}
-    PANIC_BPS=${QUOIN_PANIC_BPS:-10000}
     DISCOVERY_STALE_DAYS=${QUOIN_DISCOVERY_STALE_DAYS:-7}
     SERENA_STALE_DAYS=${QUOIN_SERENA_STALE_DAYS:-30}
     RUN_STATE_STALE_DAYS=${QUOIN_RUN_STATE_STALE_DAYS:-1}
-    PRECOMPACT_NORUN_CHECKPOINT=${QUOIN_PRECOMPACT_NORUN_CHECKPOINT:-0}
     TELEMETRY_MAX_BYTES=${QUOIN_TELEMETRY_MAX_BYTES:-1048576}
-    export BPT LIMIT STOP_BPS BLOCK_BPS STALE_DAYS SESSIONSTART_SWEEP_DAYS COMPACT_FIRST_BPS PANIC_BPS DISCOVERY_STALE_DAYS SERENA_STALE_DAYS RUN_STATE_STALE_DAYS PRECOMPACT_NORUN_CHECKPOINT TELEMETRY_MAX_BYTES
+    export BPT LIMIT STALE_DAYS SESSIONSTART_SWEEP_DAYS DISCOVERY_STALE_DAYS SERENA_STALE_DAYS RUN_STATE_STALE_DAYS TELEMETRY_MAX_BYTES
 }
 
 # compute_utilization <transcript_path> [project_root] — returns a basis-point
@@ -343,19 +342,8 @@ _ccr_emit_est() {
 
 # _run_state_validate_stale_days <raw> <default> — echo a validated,
 # leading-zero-stripped, length-clamped day count for <raw>, falling back to
-# <default> when <raw> is empty or non-numeric. Shared by run_state_probe
-# and run_state_select so neither reinvents the same validation — but each
-# caller resolves its OWN raw candidate from its own knob precedence FIRST,
-# deliberately NOT shared here: read_constants() pre-resolves and EXPORTS
-# RUN_STATE_STALE_DAYS (default 1, tuned for run_state_select's tight,
-# over-inclusive pre-filter — see that function's own docstring) before
-# either function runs, in any hook that calls read_constants
-# (userpromptsubmit.sh does). If run_state_probe consulted that same
-# exported variable it would silently re-inherit select's tight 1-day
-# default and defeat the wider window this probe needs — a real interaction
-# hit while building this function, not a hypothetical: run_state_probe's
-# own default must stay reachable only via the raw
-# QUOIN_RUN_STATE_STALE_DAYS knob, never via RUN_STATE_STALE_DAYS.
+# <default> when <raw> is empty or non-numeric. Used by run_state_select, which
+# resolves its own raw candidate from its knob precedence first.
 #
 # Numeric-validates before the result ever reaches $(( )) or a find
 # predicate (an unvalidated value is an arithmetic-eval injection sink under
@@ -364,8 +352,7 @@ _ccr_emit_est() {
 # by length alone, without ever numerically comparing the raw value — a huge
 # all-digit knob must not reach an arithmetic comparison, let alone $(( )),
 # unclamped; combined with run-state-*.json having no sweep family, an
-# unclamped knob would turn the probe into a full historical scan on every
-# prompt.
+# unclamped knob would turn the lookup into a full historical scan.
 _run_state_validate_stale_days() {
     _rvsd_raw="$1"
     _rvsd_default="$2"
@@ -383,8 +370,8 @@ _run_state_validate_stale_days() {
     # alternative, ${var#"${var%%[!0]*}"}, retries the shortest-prefix
     # match at every length and goes quadratic, stalling for tens of
     # seconds on a 100k-zero knob. An all-zero value strips to empty and
-    # reads as 0. The stderr redirect keeps run_state_probe's never-emit
-    # contract when the sed itself fails (unresolvable on PATH, or an env
+    # reads as 0. The stderr redirect keeps this helper silent
+    # when the sed itself fails (unresolvable on PATH, or an env
     # too large to exec); the empty-result fallback below already absorbs
     # the failed substitution.
     case "$_rvsd_days" in
@@ -395,109 +382,6 @@ _run_state_validate_stale_days() {
         ?????*) _rvsd_days=36500 ;;
     esac
     printf '%s\n' "$_rvsd_days"
-}
-
-# run_state_probe MEMORY_DIR [SESSION_ID] — return 0 iff MEMORY_DIR holds at
-# least one fresh, active run-state-*.json record (optionally scoped to
-# SESSION_ID). Single-mode: there is no separate at_stage_boundary distinction
-# (D-26) — the probe answers exactly one question, "is there a fresh active
-# run-state record, optionally belonging to SESSION_ID?"
-#
-# Unlike run_state_select's mtime prefilter — deliberately over-inclusive
-# because a downstream run_state.py --max-age-days gate makes the real
-# staleness call — this probe has no downstream gate, so its mtime window IS
-# the final word on "active or not". Default 14 (vs. select's 1) so a
-# boundary record from a long-running phase, or one paused over a weekend,
-# does not read as inactive just because `/run` only refreshes the record
-# at phase boundaries and nothing touches its mtime mid-phase. Still bounded
-# (run-state-*.json is in no sweep family) and overridable via
-# QUOIN_RUN_STATE_STALE_DAYS only — NOT RUN_STATE_STALE_DAYS; see below. A
-# phase or pause that outlives even the widened window is a residual,
-# documented risk — see run/SKILL.md's self-checkpoint bullet.
-#
-# Returns 1 on absence, an unreadable/missing MEMORY_DIR, or any error. Emits
-# nothing on stdout or stderr, ever — callers rely on the exit code alone.
-run_state_probe() {
-    _rsp_dir="$1"
-    _rsp_sid="${2:-}"
-    [ -n "$_rsp_dir" ] || return 1
-    [ -d "$_rsp_dir" ] || return 1
-
-    # QUOIN_RUN_STATE_STALE_DAYS only — deliberately NOT RUN_STATE_STALE_DAYS
-    # (read_constants' exported, select-tuned var); see
-    # _run_state_validate_stale_days's docstring for why.
-    _rsp_days=$(_run_state_validate_stale_days "${QUOIN_RUN_STATE_STALE_DAYS:-}" 14)
-
-    # Split find's output on newlines only (not the default IFS) so a
-    # MEMORY_DIR whose path contains spaces (e.g. under "My Drive") is not
-    # word-split; captured as positional params (not a piped subshell) so
-    # `return` below actually exits this function on the first eligible
-    # candidate, rather than only the subshell a pipe would create. Pathname
-    # expansion is separately suppressed around the capture: IFS-splitting
-    # alone does not stop a glob metacharacter in a candidate's filename
-    # from re-expanding against cwd; `set -f` is restored to its prior
-    # state afterward, not unconditionally unset.
-    _rsp_old_ifs="$IFS"
-    IFS="
-"
-    case "$-" in
-        *f*) _rsp_noglob_was_set=1 ;;
-        *) _rsp_noglob_was_set=0 ;;
-    esac
-    set -f
-    set -- $(find "$_rsp_dir" -maxdepth 1 -type f -name 'run-state-*.json' -mtime -$((_rsp_days + 1)) 2>/dev/null)
-    [ "$_rsp_noglob_was_set" -eq 1 ] || set +f
-    IFS="$_rsp_old_ifs"
-
-    for _rsp_candidate in "$@"; do
-        [ -f "$_rsp_candidate" ] || continue
-        # One run_state_fields pass per candidate — the same 64 KiB-capped,
-        # line-anchored extractor run_state_select uses, aligning the two
-        # probes on both the read cap and the match shape: the old
-        # byte-coupled '"active": true' grep was a false NEGATIVE against a
-        # compact single-line record, and the old sed|tr -dc schema scan
-        # concatenated every digit on a matched line — a single-line record
-        # would have extracted garbage. run_state_fields's line-anchored key
-        # match has neither failure mode, and collapses three forks
-        # (grep/sed/tr) into one.
-        _rsp_kv=$(run_state_fields "$_rsp_candidate" active schema session_id)
-        [ -n "$_rsp_kv" ] || continue
-        _rsp_active_line="" _rsp_schema_line="" _rsp_sid_line=""
-        {
-            IFS= read -r _rsp_active_line
-            IFS= read -r _rsp_schema_line
-            IFS= read -r _rsp_sid_line
-        } <<RSPEOF
-$_rsp_kv
-RSPEOF
-        [ "$_rsp_active_line" = "active=true" ] || continue
-        _rsp_schema="${_rsp_schema_line#schema=}"
-        case "$_rsp_schema" in
-            ''|*[!0-9]*) continue ;;
-            # See run_state_select's twin guard: reject 4+ digit schemas
-            # before the arithmetic test below, not after — an overlong
-            # all-digit value must never reach the shell's integer
-            # comparison, which errors on stderr past the platform's
-            # integer width.
-            ????*) continue ;;
-        esac
-        [ "$_rsp_schema" -le 1 ] 2>/dev/null || continue
-        # SESSION_ID is intentionally uncalled by every consumer as of this
-        # stage (D-27) — T-03, T-05, and T-07 all probe project-scoped. Kept
-        # for forward compatibility (covered by T-02 cases (j)/(k)); do not
-        # delete this branch as dead code. Plain string equality against the
-        # extracted field, matching run_state_select's own idiom: grep -F
-        # treats a newline-bearing pattern as a pattern LIST — any one line
-        # of a multi-line session id could fragment-match an unrelated line
-        # in the record, and a session id arriving from hook stdin JSON can
-        # legally contain '\n'.
-        if [ -n "$_rsp_sid" ]; then
-            _rsp_sid_val="${_rsp_sid_line#session_id=}"
-            [ "$_rsp_sid_val" = "$_rsp_sid" ] || continue
-        fi
-        return 0
-    done
-    return 1
 }
 
 # trash_move <file> <trash_base> — move a file to the trash archive instead of deleting it.
@@ -647,11 +531,8 @@ run_state_select() {
     _rss_sid="$2"
     [ -n "$_rss_dir" ] || return 0
     [ -d "$_rss_dir" ] || return 0
-    # Validation shared with run_state_probe via
-    # _run_state_validate_stale_days; the raw-value precedence itself is
-    # NOT shared — see that function's docstring for why. This function
-    # keeps read_constants' RUN_STATE_STALE_DAYS at top
-    # precedence, unchanged from its original behavior: this function's own
+    # Validation lives in _run_state_validate_stale_days. This function
+    # keeps read_constants' RUN_STATE_STALE_DAYS at top precedence; its own
     # default (1) stays deliberately over-inclusive-but-tight, since a
     # downstream run_state.py --max-age-days gate makes the real staleness
     # call for select's callers, so a short pre-filter here is a
@@ -686,8 +567,8 @@ RSSEOF
         _rss_schema="${_rss_schema_line#schema=}"
         case "$_rss_schema" in
             ''|*[!0-9]*) continue ;;
-            # See run_state_probe's twin guard: reject 4+ digit schemas
-            # before the arithmetic test below, not after.
+            # Reject 4+ digit schemas before the arithmetic test below,
+            # not after.
             ????*) continue ;;
         esac
         [ "$_rss_schema" -le 1 ] 2>/dev/null || continue

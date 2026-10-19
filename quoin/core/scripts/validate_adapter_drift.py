@@ -6,7 +6,9 @@ invariants across core/, adapters/claude/, and legacy skills/ trees.
 Also validates that quoin/scripts/ has a wrapper for every core script
 (AD-WR), that wrappers are delegation-only shims (AD-WD), that pyproject
 force-include ships all required core asset dirs (AD-PK), and that the
-Codex adapter surface is complete (AD-CX).
+Codex adapter surface is complete (AD-CX). A manifest entry with
+"claude_adapter": false is checked for AD-CO and AD-CX only, and AD-AD fires if
+a Claude adapter or stub exists for it.
 
 Lives in core/scripts/ because the manifest and the artifact-path
 conventions are runtime-neutral; references to ## §0 dispatch and
@@ -187,6 +189,29 @@ def check_files_exist(
         })
 
     return core_ok, adapter_ok, stub_ok
+
+
+def check_no_claude_surface(
+    name: str,
+    repo_root: Path,
+    violations: List[Dict[str, str]],
+) -> None:
+    """AD-CO, AD-AD for a claude_adapter=false skill: core doc present, Claude files absent."""
+    core_path = repo_root / "quoin" / "core" / "skills" / f"{name}.md"
+    if not core_path.is_file():
+        violations.append({
+            "invariant": AD_CO,
+            "skill": name,
+            "detail": f"missing quoin/core/skills/{name}.md",
+        })
+    adapter_dir = repo_root / "quoin" / "adapters" / "claude" / "skills" / name
+    stub_dir = repo_root / "quoin" / "skills" / name
+    if adapter_dir.exists() or stub_dir.exists():
+        violations.append({
+            "invariant": AD_AD,
+            "skill": name,
+            "detail": "claude_adapter=false but a Claude adapter or stub is present",
+        })
 
 
 def check_frontmatter(
@@ -791,8 +816,15 @@ def main(argv: Optional[List[str]] = None) -> int:
     # AD-CX: compute codex_enabled once — skip all Codex checks when dir is absent
     codex_enabled: bool = (repo_root / "quoin" / "adapters" / "codex" / "skills").is_dir()
 
+    claude_skills = [s for s in manifest["skills"] if s.get("claude_adapter", True)]
+
     for skill in manifest["skills"]:
         name: str = skill["name"]
+        if not skill.get("claude_adapter", True):
+            check_no_claude_surface(name, repo_root, violations)
+            if codex_enabled:
+                check_codex_surface(name, repo_root, violations)
+            continue
         claude_model: str = skill["claude_model"]
         section_0: bool = bool(skill.get("section_0", False))
         spawn_target: bool = bool(skill.get("spawn_target", False))
@@ -820,7 +852,7 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not install_routing_delegated:
         check_install_sh_ordering(
-            manifest["skills"], install_sh_content, skills_with_iv, violations
+            claude_skills, install_sh_content, skills_with_iv, violations
         )
 
     # AD-WR / AD-WD: core-to-wrapper parity

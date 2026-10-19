@@ -10,7 +10,7 @@
       "quoin/skills/*/SKILL.md": "deprecated stubs, NOT deployed (resolve_skill_source_md prefers the adapter copy under quoin/adapters/claude/skills/).",
       "quoin/QUICKSTART.md": "deployed but its CLAUDE.md mentions are install-procedure references, not section citations; deferred to a follow-up rather than silently omitted.",
       "quoin/docs/*.md": "repo documentation, never deployed to __QUOIN_HOME__, never read at runtime.",
-    "quoin/core/workflow/*.md": "IVG-248 T-02: now deployed to __QUOIN_HOME__/core/workflow/ by deploy_core_workflow, so the prior 'never deployed' rationale no longer holds for this corpus; not yet folded into the in-scope citation sweep — a future stage decision, not this task's."
+      "quoin/core/workflow/*.md": "IVG-248 T-02: now deployed to __QUOIN_HOME__/core/workflow/ by deploy_core_workflow, so the prior 'never deployed' rationale no longer holds for this corpus; not yet folded into the in-scope citation sweep \u2014 a future stage decision, not this task's."
     }
   },
   "records": [
@@ -345,28 +345,6 @@
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
       "note": "generic 'CLAUDE.md now carries only a short pointer back to' \u2014 no specific heading named."
-    },
-    {
-      "file": "quoin/memory/checkpoint-spec.md",
-      "line_hash": "f945ddbde07c601f3fd440b2974fbf14eb3834896dab2cab763f2cb25c644af9",
-      "heading_disposition": "known-exception",
-      "path_form": "repo_source",
-      "note": "'a recognized ## Current stage value' is content from 'Session state tracking' (drop row).",
-      "owner": "follow-up"
-    },
-    {
-      "file": "quoin/memory/checkpoint-spec.md",
-      "line_hash": "036c7f72f65261d6605c805b416ec8fca1c88c8a2d31808e279b151c15ff0008",
-      "heading_disposition": "non-citation",
-      "path_form": "repo_source",
-      "note": "historical/descriptive reference to CLAUDE.md's older wording, not a load-bearing pointer."
-    },
-    {
-      "file": "quoin/memory/lifecycle-guide.md",
-      "line_hash": "229e0c175af2dd5671f05d9e7b56c046f74498ecc7ff8437e0c431c9f1e91c58",
-      "heading_disposition": "non-citation",
-      "path_form": "repo_source",
-      "note": "describes CLAUDE.md's general role (human-readable summary) generically, not heading-specific."
     },
     {
       "file": "quoin/memory/serena-activation.md",

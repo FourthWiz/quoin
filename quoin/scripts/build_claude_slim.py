@@ -134,7 +134,7 @@ CLASSIFICATION: dict[str, tuple[str, str | None]] = {
     "### §0″ Minimum-tier guard": ("drop", "dispatch-guide.md"),
     "### §V Ground-truth verification": ("drop", "verification-guide.md"),
     "### Hooks deployed by quoin": ("drop", "hooks-table.md"),
-    "### Lifecycle skills (checkpoint / end_of_day / sleep / cleanup)": (
+    "### Lifecycle skills (end_of_day / sleep / cleanup)": (
         "drop",
         "lifecycle-guide.md",
     ),

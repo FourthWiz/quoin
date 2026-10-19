@@ -178,7 +178,7 @@ def test_workflow_state_name_avoids_every_cleanup_family(store):
     import fnmatch
 
     families = _cleanup_families()
-    assert len(families) >= 9
+    assert len(families) >= 6
     name = runstore.workflow_state_path(store, "t1").name
     for glob in families:
         assert not fnmatch.fnmatch(name, glob), (name, glob)

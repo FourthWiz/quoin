@@ -82,7 +82,6 @@ WORKTREE_FALLBACK_SKILLS = [
     "start_of_day",
     "triage",
     "weekly_review",
-    "checkpoint",
     "next_steps",
     "sleep",
 ]

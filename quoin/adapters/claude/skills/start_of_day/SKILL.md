@@ -135,20 +135,16 @@ Read `<project-root>/.workflow_artifacts/memory/resume-cookie.md` if present.
 
 ### Step 1b: Sentinel-health check (read-only, lightweight)
 
-Count files under `.workflow_artifacts/memory/` at depth 1 matching the 9 sentinel families that are older than `QUOIN_STALE_SENTINEL_DAYS` (default 7) days AND whose filename suffix is NOT the current session's UUID. This step is **read-only** — no trash_move, no rm, no writes of any kind.
+Count files under `.workflow_artifacts/memory/` at depth 1 matching the 2 live sentinel families that are older than `QUOIN_STALE_SENTINEL_DAYS` (default 7) days AND whose filename suffix is NOT the current session's UUID. This step is **read-only** — no trash_move, no rm, no writes of any kind.
 
-The 9 sentinel families are: `pending-restore-*.txt`, `pending-prompt-*.txt`, `compact-happened-*.txt`, `mid-agent-handoff-*.txt`, `pending-resume-ref-*.txt`, `checkpoint-defer-*.txt`, `postcompact-reset-*.txt`, `checkpoint-pending-compact-*.txt`, `idle-advisory-pending-*.txt`.
+The 2 sentinel families are: `pending-restore-*.txt`, `compact-happened-*.txt`.
 
 ```sh
 # Pseudocode (lightweight count — fail-silent if memory dir absent)
 _sod_stale_days=${QUOIN_STALE_SENTINEL_DAYS:-7}
 _sod_warn_threshold=${QUOIN_SOD_SENTINEL_WARN:-3}
 _sod_count=$(find .workflow_artifacts/memory -maxdepth 1 \
-  \( -name 'pending-restore-*.txt' -o -name 'pending-prompt-*.txt' \
-     -o -name 'compact-happened-*.txt' -o -name 'mid-agent-handoff-*.txt' \
-     -o -name 'pending-resume-ref-*.txt' -o -name 'checkpoint-defer-*.txt' \
-     -o -name 'postcompact-reset-*.txt' -o -name 'checkpoint-pending-compact-*.txt' \
-     -o -name 'idle-advisory-pending-*.txt' \) \
+  \( -name 'pending-restore-*.txt' -o -name 'compact-happened-*.txt' \) \
   -mtime +"$_sod_stale_days" 2>/dev/null | wc -l || echo 0)
 # Exclude current-session files (any ending in -<current_uuid>.txt):
 # In practice Haiku counts all matches; the threshold of 3 provides enough
@@ -204,15 +200,14 @@ Cost tracking (conditional): `/start_of_day` is a lightweight daily-orientation 
   > "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending. Recommend running `/end_of_day` before continuing."
   > "Want to run `/end_of_day` now or skip?"
 - **Signal B alone (M > 0, N = 0), `all_today = true`** (every flagged session dated today — same-day case):
-  > "⚠ M session(s) unflushed today. Recommend running `/checkpoint` to save your place."
-  > "Want to run `/checkpoint` now or skip?"
+  > "ℹ M session(s) unflushed today. Run `/end_of_day` when you wrap up (task state resumes with `/run --resume TASK`)."
 - **Signal B alone (M > 0, N = 0), `all_today = false`** (a flagged session predates today — cross-day case, a prior day was never wrapped up):
   > "⚠ M session(s) unflushed — a prior day was never wrapped up. Recommend running `/end_of_day` before continuing."
   > "Want to run `/end_of_day` now or skip?"
 - **Both signals positive (N > 0 AND M > 0):** the banner follows signal B's branch (a flagged session's date is available to branch on) and separately still mentions the pending insights:
-  > "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending and M session(s) unflushed [today | since a prior day]. Recommend running `/checkpoint` [or `/end_of_day` before continuing, if `all_today = false`]."
-  > "Want to run it now or skip?"
-- If they want to run the recommended command: invoke it inline before continuing (the promotion flow from `/end_of_day` Step 3b applies whenever `/end_of_day` is the recommendation, including the `/checkpoint`-recommended paths where the user chooses to run `/end_of_day` instead)
+  - `all_today = true`: recommend nothing and print one informational line — "ℹ N insight(s) pending and M session(s) unflushed today. Run `/end_of_day` when you wrap up (task state resumes with `/run --resume TASK`)."
+  - `all_today = false`: "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending and M session(s) unflushed since a prior day. Recommend running `/end_of_day` before continuing." then "Want to run it now or skip?" (asked only in this case).
+- If they want to run the recommended command: invoke it inline before continuing (the promotion flow from `/end_of_day` Step 3b applies)
 - If they skip: proceed normally
 
 If neither signal is positive (N = 0 AND M = 0), skip this step silently.

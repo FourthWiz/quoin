@@ -300,7 +300,7 @@ def rg_canon(fs_names: set, canonical_set: set, findings: list) -> None:
 
 
 def rg_manifest(fs_names: set, canonical_set: set, manifest_names: set, findings: list) -> None:
-    """Oracle integrity: skills.json names == CANONICAL_SKILLS == filesystem dirs == 31.
+    """Oracle integrity: skills.json Claude-adapter names (claude_adapter not false) == CANONICAL_SKILLS == filesystem dirs.
 
     Subsumes the runtime `== len(CANONICAL_SKILLS)` / `== 31` count-asserts scattered
     across test_install_fresh_clone.py, test_quoin_cli.py, test_runtime_portability_docs.py,
@@ -634,10 +634,9 @@ def rg_genroster(dev_tests_dir: Path, scripts_dir: Path, manifest_skills: list, 
     # eval_collection extracts the key set.
     _check("SECTION0_TARGET_SKILLS", "inject_pollution_dispatch.py", all_s0, "all-section_0 class")
 
-    # ZC_SKILLS / WORKTREE_FALLBACK_SKILLS / SOURCE_MUTATING_WORKTREE_SKILLS:
+    # WORKTREE_FALLBACK_SKILLS / SOURCE_MUTATING_WORKTREE_SKILLS:
     # no skills.json-derivable field — sanity-check members ⊆ CANONICAL_SKILLS only.
     for file_name, roster_name in [
-        ("inject_pollution_dispatch.py", "ZC_SKILLS"),
         ("test_quoin_stage1_worktree_fallback.py", "WORKTREE_FALLBACK_SKILLS"),
         ("test_quoin_stage1_worktree_fallback.py", "SOURCE_MUTATING_WORKTREE_SKILLS"),
     ]:
@@ -679,7 +678,6 @@ COVERED_ROSTERS: frozenset = frozenset({
     "MINTIER_SONNET_TARGET_SKILLS@inject_pollution_dispatch.py",
     "SECTION0_TARGET_SKILLS@inject_pollution_dispatch.py",
     "OPUS_TIER_SKILLS@test_quoin_stage1_preamble.py",
-    "ZC_SKILLS@inject_pollution_dispatch.py",
     "WORKTREE_FALLBACK_SKILLS@test_quoin_stage1_worktree_fallback.py",
     "SOURCE_MUTATING_WORKTREE_SKILLS@test_quoin_stage1_worktree_fallback.py",
     # RG-MIGRATED (T-06): glob-discovered MIGRATED_TO_ADAPTER copies, all 5 files
@@ -1005,7 +1003,7 @@ def main(argv: Optional[list] = None) -> int:
     dev_tests_dir = repo_pkg / "dev" / "tests"
 
     manifest = load_manifest(manifest_path)
-    manifest_skills = manifest["skills"]
+    manifest_skills = [r for r in manifest["skills"] if r.get("claude_adapter", True)]
     manifest_names = {rec["name"] for rec in manifest_skills}
 
     installer_path = _default_installer(repo_pkg)

@@ -2,8 +2,8 @@
 Structural invariant tests for quoin/skills/cleanup/SKILL.md.
 
 Tests verifying that the /cleanup SKILL.md satisfies the structural
-contracts: Sonnet tier declaration, §0/§0‴/§0c preamble presence and
-ordering, pidfile_acquire/release call sites, write-restriction prose,
+contracts: Sonnet tier declaration, §0/§0‴ preamble presence and
+ordering, write-restriction prose,
 sentinel families, current-session preservation with UUID-before-age
 ordering, UUID-unavailable fail-safe, and recovery instruction safety.
 
@@ -83,62 +83,17 @@ def test_sec0_is_first_body_h2():
     )
 
 
-# ── 4. §0c Pidfile lifecycle heading is present ───────────────────────────────
+# ── 4. §0‴ Minimum-tier guard sits between §0 and the skill body ───────────────
 
-def test_sec0c_present():
-    text = _text()
-    assert "## §0c Pidfile lifecycle" in text, (
-        "cleanup/SKILL.md is missing the '## §0c Pidfile lifecycle' heading."
-    )
-
-
-# ── 5. §0c heading appears after §0 heading ──────────────────────────────────
-
-def test_sec0c_after_sec0():
-    lines = _lines()
-    sec0_idx = _line_index(lines, "## §0 Model dispatch")
-    sec0c_idx = _line_index(lines, "## §0c Pidfile lifecycle")
-    assert sec0_idx is not None, "cleanup/SKILL.md missing '## §0 Model dispatch'"
-    assert sec0c_idx is not None, "cleanup/SKILL.md missing '## §0c Pidfile lifecycle'"
-    assert sec0c_idx > sec0_idx, (
-        f"cleanup/SKILL.md: §0c (line {sec0c_idx+1}) must appear AFTER §0 (line {sec0_idx+1})."
-    )
-
-
-# ── 5b. §0‴ Minimum-tier guard sits strictly between §0 and §0c ──────────────
-
-def test_sec0tripleprime_between_sec0_and_sec0c():
+def test_sec0tripleprime_between_sec0_and_body():
     lines = _lines()
     sec0_idx = _line_index(lines, "## §0 Model dispatch")
     sec0tp_idx = _line_index(lines, "## §0‴ Minimum-tier guard")
-    sec0c_idx = _line_index(lines, "## §0c Pidfile lifecycle")
+    body_idx = _line_index(lines, "## When to use")
     assert sec0_idx is not None, "cleanup/SKILL.md missing '## §0 Model dispatch'"
     assert sec0tp_idx is not None, "cleanup/SKILL.md missing '## §0‴ Minimum-tier guard'"
-    assert sec0c_idx is not None, "cleanup/SKILL.md missing '## §0c Pidfile lifecycle'"
-    assert sec0_idx < sec0tp_idx < sec0c_idx, (
-        f"cleanup/SKILL.md: expected order §0 (line {sec0_idx+1}) < §0‴ "
-        f"(line {sec0tp_idx+1}) < §0c (line {sec0c_idx+1})."
-    )
-
-
-# ── 6. pidfile_acquire cleanup call site present ──────────────────────────────
-
-def test_pidfile_acquire_cleanup():
-    text = _text()
-    assert "pidfile_acquire cleanup" in text, (
-        "cleanup/SKILL.md does not contain 'pidfile_acquire cleanup'. "
-        "The §0c pidfile lifecycle block must call pidfile_acquire with the skill name."
-    )
-
-
-# ── 7. pidfile_release cleanup call site present ──────────────────────────────
-
-def test_pidfile_release_cleanup():
-    text = _text()
-    assert "pidfile_release cleanup" in text, (
-        "cleanup/SKILL.md does not contain 'pidfile_release cleanup'. "
-        "The §0c pidfile lifecycle block must call pidfile_release with the skill name."
-    )
+    assert body_idx is not None, "cleanup/SKILL.md missing '## When to use'"
+    assert sec0_idx < sec0tp_idx < body_idx
 
 
 # ── 8. Write-target / delete-target restriction uses "ONLY" ──────────────────

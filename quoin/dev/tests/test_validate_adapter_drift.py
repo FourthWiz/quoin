@@ -207,6 +207,44 @@ def test_drift_ad_detected(tmp_path):
     assert "DRIFT AD-AD foo:" in result.stderr
 
 
+def _flag_foo_without_claude_adapter(tmp_path):
+    manifest_path = tmp_path / "quoin" / "core" / "workflow" / "skills.json"
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    data["skills"][0]["claude_adapter"] = False
+    manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def test_claude_adapter_false_passes_when_adapter_and_stub_absent(tmp_path):
+    """claude_adapter=false: only AD-CO/AD-CX run; absent Claude files are fine."""
+    import shutil
+    _make_minimal_repo(tmp_path)
+    _flag_foo_without_claude_adapter(tmp_path)
+    shutil.rmtree(tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo")
+    shutil.rmtree(tmp_path / "quoin" / "skills" / "foo")
+    result = _run(tmp_path)
+    assert result.returncode == 0, result.stderr
+
+
+def test_claude_adapter_false_fails_when_adapter_present(tmp_path):
+    """claude_adapter=false: a leftover Claude adapter is an AD-AD violation."""
+    _make_minimal_repo(tmp_path)
+    _flag_foo_without_claude_adapter(tmp_path)
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "DRIFT AD-AD foo:" in result.stderr
+    assert "claude_adapter=false" in result.stderr
+
+
+def test_missing_claude_adapter_key_keeps_full_checks(tmp_path):
+    """No claude_adapter key means true: a missing adapter still fails AD-AD."""
+    _make_minimal_repo(tmp_path)
+    (tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo" / "SKILL.md").unlink()
+    result = _run(tmp_path)
+    assert result.returncode == 2
+    assert "DRIFT AD-AD foo:" in result.stderr
+    assert "missing quoin/adapters/claude/skills/foo/SKILL.md" in result.stderr
+
+
 def test_drift_ls_detected(tmp_path):
     """AD-LS: missing legacy stub is detected."""
     _make_minimal_repo(tmp_path)

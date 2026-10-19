@@ -5,10 +5,13 @@
 # the compact branch is a dedicated early-exit; startup/resume share the
 # banner body below it, which the compact branch never reaches.
 #
-# S-2 responsibility: pending-restore banner emission.
-#   - Sweeps stale pending-prompt-*.txt and pending-restore-*.txt files
-#   - Surfaces pending-restore banner if a sentinel is found for this session
-#     (or mtime-most-recent if no current-session match)
+# Responsibilities, in order:
+#   - compact re-entry (source=compact): one-shot advisory from the run-state record
+#   - run hand-off: asks auto_resume.py whether an abandoned run should be resumed
+#   - missing-EOD banner, discovery-staleness banner, workspace heartbeat
+#   - sweep of stale sentinel files (live and retired families) and pidfile locks
+# No restore banner is emitted: nothing on Claude Code consumes a pending-restore
+# sentinel, and /thorough_plan resumes from its own checkpoint scan.
 #
 # Fail-OPEN: any error → exit 0, no output.
 # Shebang assertion: head -1 ... | grep -qE '^#!/bin/sh( |$)'
@@ -121,7 +124,6 @@ fi
 # it spawns a detached supervisor and returns an advisory naming the task.
 # Decision logic lives in scripts/auto_resume.py. Fail-safe: without a
 # session_id, a memory dir, a run-state record or python3, this does nothing.
-_ar_task=""
 case "$src" in
   startup|resume)
     # Session history for /continue_work: one line per start or resume. The
@@ -140,7 +142,6 @@ case "$src" in
        && command -v python3 >/dev/null 2>&1; then
       _ar_out=$(python3 "$(dirname "$0")/../scripts/auto_resume.py" start --project-root "$cwd" --source "$src" --session-id "$session_id" 2>/dev/null)
       [ -n "$_ar_out" ] && printf '%s\n' "$_ar_out"
-      _ar_task=$(printf '%s' "$_ar_out" | sed -n 's/.*task=\([A-Za-z0-9._-]*\) .*via=supervisor.*/\1/p')
     fi
     ;;
 esac
@@ -202,13 +203,13 @@ if [ "$EOD_BANNER_FIRED" -eq 0 ] && [ -d "$SESSIONS_DIR" ]; then
 
   UNFINISHED_TASKS="${UNFINISHED_TASKS% }"
   # banner shape mirrors quoin/adapters/claude/skills/start_of_day/SKILL.md Step 1 — keep in sync
-  # Same-day (all flagged sessions dated today) -> /checkpoint; cross-day (any predates
-  # today) -> /end_of_day, per T-04 (IVG-137).
+  # Same-day (all flagged sessions dated today) -> wrap-up reminder plus the run
+  # resume command; cross-day (any predates today) -> /end_of_day.
   if [ -n "$UNFINISHED_TASKS" ]; then
     if [ "$ANY_PAST_DAY" -eq 1 ]; then
       _eod_action="a prior day was never wrapped up — run /end_of_day to wrap up the workday."
     else
-      _eod_action="run /checkpoint to save your place (or /end_of_day to wrap up the workday)."
+      _eod_action="run /end_of_day when you wrap up (task state resumes with /run --resume TASK)."
     fi
     printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "[quoin-S-4] Unfinished /end_of_day detected for task(s): %s — %s"}}\n' \
       "$UNFINISHED_TASKS" "$_eod_action"
@@ -273,23 +274,21 @@ if [ "${QUOIN_WORKSPACE_HEARTBEAT:-0}" = "1" ] && command -v python3 >/dev/null 
 fi
 # === end S-04 workspace heartbeat (opt-in) ===
 
-# STEP 2: UUID-aware sweep of all 9 sentinel families.
+# STEP 2: UUID-aware sweep of the live and retired sentinel families.
 # Tight window (SESSIONSTART_SWEEP_DAYS, default 1d) when current session is known;
-# falls back to conservative STALE_DAYS (7d) age-only when session_id is empty (defensive — see D-02).
-# NOTE (D-08): the tight window also applies to pending-restore/pending-resume-ref/mid-agent-handoff,
-# so STEP 4's cross-session fallback now sees only <=1d non-current pending-restore anchors. This is
-# an INTENTIONAL narrowing of the STEP 4 input set (NOT a no-op); the banner-rendering code below is
-# byte-unchanged. Do NOT re-add any "STEP 3+ unchanged" claim.
+# falls back to conservative STALE_DAYS (7d) age-only when session_id is empty (defensive).
+# The live families come from sentinel_globs; the retired families no writer produces any
+# more come from legacy_sentinel_globs and are reclaimed with the same window and the same
+# current-session protection. Stale pidfile locks under sessions/ are trashed too.
 # Safe for paths with spaces: IFS= read -r preserves the full path (verified on the "My Drive" root).
 # Sentinel basenames are FAMILY-<uuid>.txt (no newlines), so the find|while-read pipe is newline-safe
-# for this controlled filename set — diverges from the old -exec form but is correct here.
-# (_lib.sh sourced once at sessionstart.sh:16, so sentinel_globs/trash_move are in scope; no per-file re-source.)
+# for this controlled filename set.
 if [ -n "$session_id" ]; then
   _sweep_days="$SESSIONSTART_SWEEP_DAYS"
 else
-  _sweep_days="$STALE_DAYS"   # no anchor → conservative age-only (defensive, see D-02)
+  _sweep_days="$STALE_DAYS"   # no anchor → conservative age-only (defensive)
 fi
-sentinel_globs | while IFS= read -r _glob; do
+{ sentinel_globs; legacy_sentinel_globs; } | while IFS= read -r _glob; do
   [ -n "$_glob" ] || continue
   find "$MEMORY_DIR" -maxdepth 1 -name "$_glob" -mtime +"$_sweep_days" 2>/dev/null | \
   while IFS= read -r _f; do
@@ -303,107 +302,11 @@ sentinel_globs | while IFS= read -r _glob; do
   done
 done 2>/dev/null || true
 
-# STEP 3: Look for sentinel files (priority order: pending-restore > pending-resume-ref > mid-agent-handoff)
-# Emit AT MOST ONE banner per session start.
-pending_restore=""
-pending_resume_ref=""
-mid_agent_handoff=""
-session_id_match="current-session"
-banner_text=""
-banner_type=""
-
-# STEP 3a: Check for pending-restore (highest priority — direct resume)
-if [ -n "$session_id" ] && [ -f "${MEMORY_DIR}/pending-restore-${session_id}.txt" ]; then
-  pending_restore="${MEMORY_DIR}/pending-restore-${session_id}.txt"
-  session_id_match="current-session"
-fi
-
-# STEP 3b: Check for pending-resume-ref (informational — load as background reference)
-if [ -n "$session_id" ] && [ -f "${MEMORY_DIR}/pending-resume-ref-${session_id}.txt" ]; then
-  pending_resume_ref="${MEMORY_DIR}/pending-resume-ref-${session_id}.txt"
-fi
-
-# STEP 3c: Check for mid-agent-handoff (advisory — skill was running at checkpoint)
-if [ -n "$session_id" ] && [ -f "${MEMORY_DIR}/mid-agent-handoff-${session_id}.txt" ]; then
-  mid_agent_handoff="${MEMORY_DIR}/mid-agent-handoff-${session_id}.txt"
-fi
-
-# STEP 4: Fallback to mtime-most-recent if no current-session match for pending-restore
-# (UUID-shaped session_ids have no time-ordering; lex order is meaningless)
-if [ -z "$pending_restore" ]; then
-  most_recent=$(ls -t "${MEMORY_DIR}"/pending-restore-*.txt 2>/dev/null | head -1)
-  if [ -n "$most_recent" ] && [ -f "$most_recent" ]; then
-    if [ -n "$_ar_task" ] && grep -qF -- "$_ar_task" "$most_recent"; then
-      : # the run-continuation hand-off above already covers this task
-    else
-      pending_restore="$most_recent"
-      session_id_match="mismatch-warning: surfaced from different session (mtime-most-recent fallback)"
-    fi
-  fi
-fi
-
-# STEP 5: Build banner text (AT MOST ONE banner; use highest-priority sentinel)
-# Priority: pending-restore > pending-resume-ref > mid-agent-handoff
-if [ -n "$pending_restore" ]; then
-  sentinel_content=$(cat "$pending_restore" 2>/dev/null)
-  if [ -n "$sentinel_content" ]; then
-    banner_text="Pending restore detected. A /checkpoint --restore is recommended (checkpoint: ${sentinel_content} — session-id match: ${session_id_match})"
-    banner_type="pending-restore"
-
-    # === restore ground-truth backstop (IVG-139) ===
-    # NOTE: intentionally NOT labeled "S-4"/"S-5" — this file already has an internal
-    # "=== S-4 missing-EOD banner ===" block (:118) and "=== S-5 discovery-staleness banner ==="
-    # block (:190) whose numbering is unrelated to architecture stage IDs; reusing either token
-    # here would make it mean three different things in one file (critic round-1 m-1).
-    # Advisory-only: append a task-context-mismatch WARN to the pending-restore banner by
-    # reusing verify_claims.py check_side_effects(skill=checkpoint) UNCHANGED. WARN-not-block.
-    # Fail-OPEN: any error/other-rc -> no suffix (SessionStart cannot block regardless).
-    # Shared-namespace guard (critic round-1 M-1): the pending-restore sentinel family is
-    # SHARED with /thorough_plan (thorough_plan_checkpoint.py:190-191 writes this same
-    # sentinel, pointing at a fixed thorough-plan-progress-{sid}.md filename, :131). The
-    # reused predicate is kind-blind and filename_task() on that filename shape NEVER equals
-    # a real sessions/*.md task, so calling the predicate on it would ALWAYS emit
-    # task_backstop: and ALWAYS warn — a false positive on every normal /thorough_plan
-    # resume. Skip the predicate call entirely for that filename shape instead.
-    _gt_cp=$(printf '%s' "$sentinel_content" | head -1)
-    if [ -n "$_gt_cp" ] && [ -f "$_gt_cp" ] && command -v python3 >/dev/null 2>&1; then
-      case "$(basename "$_gt_cp")" in
-        thorough-plan-progress-*)
-          : ;;  # /thorough_plan owns its own resume; not a /checkpoint task-mismatch signal
-        *)
-          _gt_json=$(python3 "$(dirname "$0")/../scripts/verify_claims.py" \
-            --check-side-effects --skill checkpoint \
-            --checkpoint-file "$_gt_cp" --project-root "$cwd" --json 2>/dev/null)
-          _gt_rc=$?
-          # WARN ONLY on a genuine task-context mismatch (task_backstop predicate) — never on
-          # inflight_missing / checkpoint_file_missing / usage errors (R-04 false-positive guard).
-          if [ "$_gt_rc" -eq 8 ] && printf '%s' "$_gt_json" | grep -q 'task_backstop:'; then
-            banner_text="${banner_text} [quoin-IVG-139 WARN: task-context mismatch — this checkpoint's task differs from your freshest session-state; verify before /checkpoint --restore (advisory only; the /checkpoint picker makes the actual decision)]"
-          fi
-          ;;
-      esac
-    fi
-    # === end restore ground-truth backstop (IVG-139) ===
-  fi
-elif [ -n "$pending_resume_ref" ]; then
-  # Read prior_session_uuid and checkpoint_path from the sentinel
-  ref_prior_uuid=$(grep '^prior_session_uuid=' "$pending_resume_ref" 2>/dev/null | cut -d= -f2)
-  ref_checkpoint=$(grep '^checkpoint_path=' "$pending_resume_ref" 2>/dev/null | cut -d= -f2-)
-  banner_text="Prior session loaded as reference. Checkpoint: ${ref_checkpoint:-unknown}. Run /checkpoint --restore only if you want to resume; otherwise this prior context is read-only background (prior session UUID: ${ref_prior_uuid:-unknown})."
-  banner_type="pending-resume-ref"
-elif [ -n "$mid_agent_handoff" ]; then
-  # Read prior_session_uuid and active_skills from the sentinel
-  handoff_uuid=$(grep '^prior_session_uuid=' "$mid_agent_handoff" 2>/dev/null | cut -d= -f2)
-  handoff_skills=$(grep '^active_skills=' "$mid_agent_handoff" 2>/dev/null | cut -d= -f2-)
-  banner_text="Mid-agent handoff detected: session ${handoff_uuid:-unknown} had active skill(s) [${handoff_skills:-unknown}] when paused. Inspect ${mid_agent_handoff} and decide whether to /checkpoint --restore, /clear and re-run, or abandon."
-  banner_type="mid-agent-handoff"
-fi
-
-# STEP 6: Emit banner if any sentinel was found
-if [ -n "$banner_text" ]; then
-  printf '{"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": "%s"}}\n' \
-    "$banner_text"
-fi
-
-# === S-1 pollution-score writer (stub — populated by S-1) ===
-# (intentionally empty; S-1 implementation extends this block)
+# STEP 3: Pidfile locks left by crashed runs; no reader remains, so any stale one is reclaimed.
+if [ -d "$MEMORY_DIR/sessions" ]; then
+  find "$MEMORY_DIR/sessions" -maxdepth 1 -name '*.pidfile.lock' -mtime +"$_sweep_days" 2>/dev/null | \
+  while IFS= read -r _f; do
+    [ -f "$_f" ] || continue
+    trash_move "$_f" "$MEMORY_DIR" 2>/dev/null || true
+  done
+fi 2>/dev/null || true

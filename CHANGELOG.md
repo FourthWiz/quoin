@@ -4,7 +4,13 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Removed
+
+- **`/checkpoint` is no longer shipped on Claude Code, and compaction no longer saves or announces a restore** (v0.51.0). The Claude skill, its restore banners at SessionStart, the checkpoint file and pending-restore sentinel that `precompact.sh` wrote, the pidfile lifecycle in architect, review, cleanup and sleep, `/run`'s very-high-fill self-checkpoint, the run-state probe, the `checkpoint-spec.md` memory file and the VS Code panel's two checkpoint entries are gone. `precompact.sh` still allows compaction and appends the session record, run notes and telemetry; a run resumes with `/run --resume TASK`, a conversation with `claude --resume SESSION_ID`. The portable `/checkpoint` doc stays for OpenCode and Codex (`claude_adapter: false` in `skills.json`); the shared core helpers still write the `pending-restore` sentinel, which nothing reads on Claude Code and the SessionStart sweep reclaims. `QUOIN_STOP_BPS`, `QUOIN_BLOCK_BPS`, `QUOIN_COMPACT_FIRST_BPS`, `QUOIN_PANIC_BPS` and `QUOIN_PRECOMPACT_NORUN_CHECKPOINT` are no longer read; exporting one has no effect. The VS Code extension keeps its own version (0.1.4) and ships the catalog change with its next release. Upgrade: `bash quoin/install.sh` (or `quoin install`) removes the deployed `skills/checkpoint/`, its `skillOverrides` key, `scripts/pidfile_helpers.sh` and `memory/checkpoint-spec.md`, and leaves any foreign skill of that name alone.
+
 ### Changed
+
+- **`/end_of_day` now runs `/cleanup --no-tasks` after its report** (v0.51.0), moving the automatic sentinel hygiene from `/checkpoint`; pass `--no-cleanup` to skip it. The same-day end-of-day reminders in the SessionStart banner and `/start_of_day` now point at `/end_of_day` and `/run --resume TASK`.
 
 - **Cost estimators kept after checking Claude Code's native cost sources** (v0.50.0). The Agent tool's returned usage covers only a subagent's final request, and the transcript `cost-state` record is partial, undocumented and includes subagent spend the ledger already records separately, so `cost_from_jsonl.py`, `agent_transcript_cost.py` and `cost_ledger_summary.py` stay. The reasons, measurements and revisit triggers are in `quoin/docs/cost-estimators.md`, and a new test fails if an estimator is removed without revisiting them.
 
