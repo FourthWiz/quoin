@@ -43,6 +43,8 @@ TIER1_MEMORY_FILES = (
     "verification-guide.md",
     # Added IVG-137: opt-in /schedule EOD cron recipe (Tier-1 memory file)
     "eod-refresh-routine.md",
+    # Added claude-adapter-optimization stage 3: fixed session-state schema (Tier-1 memory file)
+    "session-schema.md",
     # Added IVG-153: opt-in --autonomous span reference (Tier-1 memory file)
     "autonomous-mode.md",
     # Added IVG-150: shared fail-closed decision-gate guard reference (Tier-1 memory file)
