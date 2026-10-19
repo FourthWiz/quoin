@@ -20,7 +20,7 @@ Detection:
   - Read your current model from the system context ("powered by the model named X").
   - Tier order: haiku < sonnet < opus.
   - Sentinel parsing: the user's prompt is checked for the `[no-redispatch]` family.
-      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §0c at the current tier.
+      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §1 at the current tier.
       * Counter form `[no-redispatch:N]` where N is a positive integer ≥ 2: ABORT (see "Abort rule" below).
       * Counter form `[no-redispatch:1]` is reserved and treated as bare `[no-redispatch]` for forward-compatibility; do not emit it.
   - If current_tier > declared_tier AND prompt does NOT start with any `[no-redispatch]` form:
@@ -55,7 +55,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
 Abort rule (recursion guard):
   - If the prompt starts with `[no-redispatch:N]` AND N ≥ 2: ABORT before any tool calls.
   - Print the one-line error: `Quoin self-dispatch hard-cap reached at N=<N> in sleep. This indicates a recursion bug; aborting before any tool calls. Re-invoke with [no-redispatch] (bare) to override.`
-  - Then stop. Do NOT proceed to §0c.
+  - Then stop. Do NOT proceed to §1.
 
 Manual kill switch:
   - The user can prefix any user-typed slash invocation with bare `[no-redispatch]` to skip dispatch entirely (e.g., `[no-redispatch] /sleep`).
@@ -120,7 +120,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin-stage-1: error-class=worktree; user-choice=c; proceeding at current tier]`
       Then proceed to §1 at the current tier (fail-OPEN per I-01).
 <!-- §0-worktree-fallback-end -->
-Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §0c.
+Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §1 (skill body).
 <!-- §0-end -->
 
 ## §0‴ Minimum-tier guard (execute after §0 — before any §0-sidecar block and the skill body)
@@ -176,30 +176,6 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
       On Option 1: print `[quoin-mintier: aborted; re-invoke /sleep from a Sonnet session]` and STOP.
       On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
 <!-- §0tripleprime-end -->
-
-## §0c Pidfile lifecycle (FIRST STEP after §0 dispatch)
-
-At entry — immediately after §0 dispatch resolves:
-
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire sleep
-```
-
-If the script is missing or fails (e.g., fresh install): emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue without abort (fail-OPEN).
-
-At exit — call from every completion path AND every error/abort path:
-```
-pidfile_release sleep
-```
-
-Use a trap when the skill body involves bash-driven subagents:
-```
-trap 'pidfile_release sleep' EXIT
-```
-
-Purpose: lets `precompact.sh` hook know a `/sleep` session is active.
-
-Otherwise: proceed to §1 (skill body).
 
 ## Overview
 

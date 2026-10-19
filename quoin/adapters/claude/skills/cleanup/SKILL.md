@@ -20,7 +20,7 @@ Detection:
   - Read your current model from the system context ("powered by the model named X").
   - Tier order: haiku < sonnet < opus.
   - Sentinel parsing: the user's prompt is checked for the `[no-redispatch]` family.
-      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §0c at the current tier.
+      * Bare `[no-redispatch]` (parent-emit form AND user manual override): skip dispatch, proceed to §1 at the current tier.
       * Counter form `[no-redispatch:N]` where N is a positive integer ≥ 2: ABORT (see "Abort rule" below).
       * Counter form `[no-redispatch:1]` is reserved and treated as bare `[no-redispatch]` for forward-compatibility; do not emit it.
   - If current_tier > declared_tier AND prompt does NOT start with any `[no-redispatch]` form:
@@ -55,7 +55,7 @@ Pre-dispatch 1M check (IVG-90 Layer 1+2):
 Abort rule (recursion guard):
   - If the prompt starts with `[no-redispatch:N]` AND N ≥ 2: ABORT before any tool calls.
   - Print the one-line error: `Quoin self-dispatch hard-cap reached at N=<N> in cleanup. This indicates a recursion bug; aborting before any tool calls. Re-invoke with [no-redispatch] (bare) to override.`
-  - Then stop. Do NOT proceed to §0c.
+  - Then stop. Do NOT proceed to §1.
 
 Manual kill switch:
   - The user can prefix any user-typed slash invocation with bare `[no-redispatch]` to skip dispatch entirely (e.g., `[no-redispatch] /cleanup`).
@@ -113,7 +113,7 @@ Fail-graceful path with error-class triage (per architecture I-01):
         `[quoin-stage-1: error-class=worktree; user-choice=c; proceeding at current tier]`
       Then proceed to §1 at the current tier (fail-OPEN per I-01).
 <!-- §0-worktree-fallback-end -->
-Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §0c.
+Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sentinel, OR dispatch unavailable): proceed to §1 (skill body).
 <!-- §0-end -->
 
 ## §0‴ Minimum-tier guard (execute after §0 — before any §0-sidecar block and the skill body)
@@ -169,30 +169,6 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
       On Option 1: print `[quoin-mintier: aborted; re-invoke /cleanup from a Sonnet session]` and STOP.
       On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
 <!-- §0tripleprime-end -->
-
-## §0c Pidfile lifecycle (FIRST STEP after §0 dispatch)
-
-At entry — immediately after §0 dispatch resolves:
-
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire cleanup
-```
-
-If the script is missing or fails (e.g., fresh install): emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue without abort (fail-OPEN).
-
-At exit — call from every completion path AND every error/abort path:
-```
-pidfile_release cleanup
-```
-
-Use a trap when the skill body involves bash-driven subagents:
-```
-trap 'pidfile_release cleanup' EXIT
-```
-
-Purpose: lets `precompact.sh` hook know a `/cleanup` session is active.
-
-Otherwise: proceed to §1 (skill body).
 
 ## When to use
 
@@ -266,16 +242,14 @@ If your incoming prompt contains `[quoin-onbehalf]`: SKIP this cost-ledger self-
 
 <!-- quoin:ledger-self-write -->
 
-**Step 8.** Released at the end of `## Task bookkeeping pass`'s final step, always (`--dry-run` included).
-
 ## Task bookkeeping pass (standalone only)
 
-Runs after Core procedure Step 8 on a standalone `/cleanup`. The `/end_of_day` auto-fire passes `--no-tasks`, so no folder is ever moved from an automatic hook point. `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
+Runs after Core procedure Step 7 on a standalone `/cleanup`. The `/end_of_day` auto-fire passes `--no-tasks`, so no folder is ever moved from an automatic hook point. `--no-tasks`: skip steps 1-3, go straight to step 4. Sorts task folders into done, abandoned, nearly-done, in-progress and not-a-task.
 
 1. `python3 __QUOIN_HOME__/scripts/task_bookkeeping.py classify --format table`; print verbatim. Missing script: `[cleanup] task_bookkeeping.py unavailable; skipping task pass`. Non-zero exit: print its stderr line, go to step 4.
 2. `--dry-run`, `[no-interactive]`, `[autonomous]`, or no `AskUserQuestion`: print `[cleanup] task bookkeeping: report-only (<reason>); no folders moved`; when `<reason>` is the no-`AskUserQuestion` case (dispatched subagent), also print `to act on these rows, run: [no-redispatch] /cleanup`. Go to step 4.
 3. Else follow `__QUOIN_HOME__/memory/cleanup-task-bookkeeping.md` (report-only if missing): per-task confirmation, moves only via its `apply` command, print `/pr` or `/end_of_task …` for the user — never invoke them.
-4. Step 7 (not under `--dry-run`; skip any folder moved above), then `pidfile_release cleanup` (always — `--dry-run` included).
+4. Step 7 (not under `--dry-run`; skip any folder moved above).
 
 ## --dry-run
 
@@ -285,7 +259,7 @@ When `/cleanup --dry-run` is invoked:
 2. Run the sentinel, session temp-file, checkpoint, and run-state enumeration (steps 4–5c `find` commands) but make NO trash-moves.
 3. Print the would-trash list (`[cleanup --dry-run] would trash:` then per-bucket headers SENTINELS / SESSION TEMP FILES / CHECKPOINTS / RUN STATE, each followed by its candidate paths; full example: memory/lifecycle-guide.md). If zero candidates: `[cleanup --dry-run] nothing stale to clean (no moves would be made)`.
 4. **Makes NO writes** — no trash-moves, no cost-ledger row.
-5. Task bookkeeping pass: table only, no prompts, no moves; release still happens.
+5. Task bookkeeping pass: table only, no prompts, no moves.
 
 To preview what the `/end_of_day` auto-fire would trash, run `/cleanup --dry-run` standalone; pass `--no-cleanup` to `/end_of_day` to suppress the auto-fire.
 

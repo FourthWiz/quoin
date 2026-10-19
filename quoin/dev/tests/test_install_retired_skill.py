@@ -75,7 +75,6 @@ def test_list_typed_override_does_not_crash_and_is_unchanged():
 
 def test_stale_script_and_memory_file_are_removed(tmp_path, monkeypatch):
     monkeypatch.setattr(installer, "OBSOLETE_MEMORY_FILES", ("checkpoint-spec.md",))
-    monkeypatch.setattr(installer, "OBSOLETE_SCRIPTS", ("pidfile_helpers.sh",))
     (tmp_path / "scripts").mkdir()
     (tmp_path / "memory").mkdir()
     (tmp_path / "scripts" / "pidfile_helpers.sh").write_text("#!/bin/sh\n", encoding="utf-8")

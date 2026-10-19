@@ -2,8 +2,8 @@
 """
 inject_pollution_dispatch.py — Generator for §0' Pollution dispatch AND §0″ Minimum-tier guard.
 
-Inserts/refreshes the §0' Pollution dispatch block (and §0c Pidfile lifecycle for
-architect + review) AND the §0″ Minimum-tier guard block into the 10 Opus-tier
+Inserts/refreshes the §0' Pollution dispatch block AND the §0″ Minimum-tier
+guard block into the 10 Opus-tier
 Claude adapter SKILL.md files at:
   quoin/adapters/claude/skills/<skill>/SKILL.md
 
@@ -35,6 +35,7 @@ import sys
 # ─── Constants (byte-identical to test file literals) ────────────────────────
 
 POLLUTION_HEADING = "## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)"
+# Kept only to detect a leftover §0c block; no generator output carries it any more.
 ZC_HEADING = "## §0c Pidfile lifecycle"
 
 # HEADING BYTE-IDENTITY: the ″ (U+2033 DOUBLE PRIME) must match exactly across
@@ -70,9 +71,6 @@ MINTIER_TARGET_SKILLS = [
     "security_review",
     "enrich",
 ]
-
-# Skills that also need §0c Pidfile lifecycle (inserted BEFORE §0').
-ZC_SKILLS = ["architect", "review"]
 
 # ─── §0‴ Minimum-tier guard (Sonnet tier) — IVG-117 ───────────────────────────
 # Anchor heading for the 19 cheap-tier §0 skills (hand-authored, always present).
@@ -304,7 +302,7 @@ SECTION0_END_MARKER = "<!-- §0-end -->"
 # these axes, never per-file text blobs):
 #   1. skill name (substituted in prose)
 #   2. tier: "haiku" (7) | "sonnet" (12, == MINTIER_SONNET_TARGET_SKILLS)
-#   3. proceed_ref: "§1" (17) | "§0c" (2: cleanup, sleep)
+#   3. proceed_ref: "§1" (19)
 #   4. variant: "worktree" (14 — 11 with clause + 3 without) | "sidecar" (5,
 #      always with clause, distinct wording per D-02)
 #   5. has_autonomous_clause: only meaningful for variant="worktree"
@@ -312,7 +310,7 @@ SECTION0_END_MARKER = "<!-- §0-end -->"
 #   6. extra_comment: the `§0b: intentionally omitted` line (pr, workspace)
 SECTION0_TARGET_SKILLS: dict[str, tuple[str, str, str, bool, bool]] = {
     "capture_insight": ("haiku", "§1", "worktree", True, False),
-    "cleanup": ("sonnet", "§0c", "worktree", False, False),
+    "cleanup": ("sonnet", "§1", "worktree", False, False),
     "continue_work": ("sonnet", "§1", "worktree", False, False),
     "cost_snapshot": ("haiku", "§1", "worktree", True, False),
     "end_of_day": ("sonnet", "§1", "worktree", True, False),
@@ -324,7 +322,7 @@ SECTION0_TARGET_SKILLS: dict[str, tuple[str, str, str, bool, bool]] = {
     "pr": ("sonnet", "§1", "sidecar", True, True),
     "revise-fast": ("sonnet", "§1", "worktree", True, False),
     "rollback": ("sonnet", "§1", "sidecar", True, False),
-    "sleep": ("sonnet", "§0c", "worktree", True, False),
+    "sleep": ("sonnet", "§1", "worktree", True, False),
     "start_of_day": ("haiku", "§1", "worktree", True, False),
     "status": ("haiku", "§1", "worktree", False, False),
     "triage": ("haiku", "§1", "worktree", True, False),
@@ -654,62 +652,6 @@ def inject_section0_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
     os.replace(tmp_path, skill_md)
 
 
-# ─── §0c block bodies (verbatim from f81b6ff, §0c path fixed to __QUOIN_HOME__) ─
-
-# NOTE: The sourced helper path `. __QUOIN_HOME__/scripts/pidfile_helpers.sh` uses
-# the deploy-root placeholder. installer.py substitutes __QUOIN_HOME__ → deploy root
-# and explicitly leaves literal ~/.claude/ UNTOUCHED (lesson 2026-05-15). This is
-# the single deliberate divergence from the f81b6ff text (which had `~/.claude/`).
-
-ZC_BLOCK_ARCHITECT = """\
-## §0c Pidfile lifecycle
-
-This skill is Opus-tier (no §0 dispatch block). §0c is the only §0-class block in this file — it is both first and last. **Phase-4-only variant:** the actual pidfile acquire/release calls are in Phase 4 (the critic loop), not at skill entry. This block is a pointer comment.
-
-The acquire/release pattern is scoped to Phase 4 only (the internal critic loop). When Phase 4 begins, add:
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire architect-phase-4
-```
-When Phase 4 ends (or on any abort from Phase 4): `pidfile_release architect-phase-4`.
-
-If the helper is missing or fails: emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue (fail-OPEN). The full skill entry/exit does NOT acquire — only Phase 4 inner loop.
-
-Purpose: lets `precompact.sh` hook know an `/architect` Phase 4 session is active.
-
-"""
-
-ZC_BLOCK_REVIEW = """\
-## §0c Pidfile lifecycle
-
-This skill is Opus-tier (no §0 dispatch block). §0c is the only §0-class block in this file — it is both first and last.
-
-At entry — immediately after reading this block:
-
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire review
-```
-
-If the script is missing or fails: emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue without abort (fail-OPEN).
-
-At exit — call from every completion path AND every error/abort path:
-```
-pidfile_release review
-```
-
-Use a trap when the skill body involves bash-driven subagents:
-```
-trap 'pidfile_release review' EXIT
-```
-
-Purpose: lets `precompact.sh` hook know a `/review` session is active. `precompact.sh` never blocks — it always allows auto-compaction (`precompact.sh:5-6`, `:14`); pidfile presence instead selects row 2 of its three-row truth table (`precompact.sh:323`, `:506-507`): a deterministic checkpoint is written, with no `pending-restore` sentinel, so the workflow continues uninterrupted.
-
-"""
-
-ZC_BLOCKS = {
-    "architect": ZC_BLOCK_ARCHITECT,
-    "review": ZC_BLOCK_REVIEW,
-}
-
 # ─── §0' shared block template ────────────────────────────────────────────────
 # Variables: {skill_dispatch_contract}
 # All 6 REQUIRED_TOKENS and 3 score-extraction strings are inside this block.
@@ -892,11 +834,6 @@ def render_pollution_block(skill: str) -> str:
     )
 
 
-def render_zc_block(skill: str) -> str:
-    """Render the §0c block for architect or review."""
-    return ZC_BLOCKS[skill]
-
-
 # ─── File manipulation ────────────────────────────────────────────────────────
 
 def _find_first_h2(lines: list[str]) -> int:
@@ -930,27 +867,19 @@ def _replace_existing_block(text: str, heading: str, new_block: str) -> str:
 
 
 def inject_blocks_into_file(skill: str, skill_md: pathlib.Path) -> str:
-    """Return the new content for skill_md with §0' (and §0c if needed) injected.
+    """Return the new content for skill_md with §0' injected.
 
     Strategy (per plan D-A5 / proc:T-02-anchor):
     - If §0' already present: replace in place (idempotent refresh).
     - If §0' absent: find the first H2, insert before it.
-    - For architect/review: handle §0c similarly.
     - FAIL LOUD if no H2 found at all.
     """
     text = skill_md.read_text(encoding="utf-8")
     pollution_block = render_pollution_block(skill)
-    needs_zc = skill in ZC_SKILLS
 
     # ── Refresh path (idempotent): block(s) already present ──
     if POLLUTION_HEADING in text:
         text = _replace_existing_block(text, POLLUTION_HEADING, pollution_block)
-        if needs_zc and ZC_HEADING in text:
-            text = _replace_existing_block(text, ZC_HEADING, render_zc_block(skill))
-        elif needs_zc and ZC_HEADING not in text:
-            # §0c absent but §0' present (shouldn't happen on fresh files, but handle):
-            # Insert §0c immediately before §0'
-            text = text.replace(POLLUTION_HEADING, render_zc_block(skill) + POLLUTION_HEADING, 1)
         return text
 
     # ── Insert path: block(s) absent, find anchor ──
@@ -962,11 +891,7 @@ def inject_blocks_into_file(skill: str, skill_md: pathlib.Path) -> str:
             "FAIL LOUD: the generator requires at least one H2 heading as an insertion point."
         )
 
-    # Build insertion: for ZC skills insert §0c THEN §0'; for others just §0'.
-    if needs_zc:
-        insert_text = render_zc_block(skill) + pollution_block
-    else:
-        insert_text = pollution_block
+    insert_text = pollution_block
 
     # Insert immediately before the anchor line
     lines.insert(anchor_idx, insert_text)
@@ -977,7 +902,7 @@ def inject_mintier_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
     """Inject/refresh §0″ Minimum-tier guard into a single adapter SKILL.md file.
 
     Handles §0″ injection independently of inject_blocks_into_file (which handles
-    §0'/§0c). This is a SEPARATE function to avoid the early-return correctness bug
+    §0'). This is a SEPARATE function to avoid the early-return correctness bug
     in inject_blocks_into_file's refresh path (D-08 in plan).
 
     Strategy (per proc:T-02-anchor):
@@ -1073,10 +998,10 @@ def _get_adapter_dir() -> pathlib.Path:
 
 
 def run_inject(*, dry_run: bool = False) -> int:
-    """Inject/refresh §0' (and §0c) AND §0″ into all 10 target adapter SKILL.md files.
+    """Inject/refresh §0' AND §0″ into all 10 target adapter SKILL.md files.
 
     Two loops:
-    1. Loop over POLLUTION_TARGET_SKILLS — injects §0'/§0c (inject_blocks_into_file).
+    1. Loop over POLLUTION_TARGET_SKILLS — injects §0' (inject_blocks_into_file).
     2. Loop over MINTIER_TARGET_SKILLS — injects §0″ (inject_mintier_block_into_file).
     §0″ injection must run AFTER §0' (it uses §0' as the insertion anchor).
 
@@ -1085,7 +1010,7 @@ def run_inject(*, dry_run: bool = False) -> int:
     adapter_dir = _get_adapter_dir()
     errors = []
 
-    # ── Loop 1: §0' (and §0c) injection ──
+    # ── Loop 1: §0' injection ──
     for skill in POLLUTION_TARGET_SKILLS:
         skill_md = adapter_dir / skill / "SKILL.md"
         if not skill_md.exists():
@@ -1194,7 +1119,7 @@ def run_inject(*, dry_run: bool = False) -> int:
 
 
 def run_check() -> int:
-    """--check mode: verify all 10 adapter SKILL.md files carry correct §0' (and §0c) AND §0″ blocks.
+    """--check mode: verify all 10 adapter SKILL.md files carry correct §0' AND §0″ blocks.
 
     Returns 0 if all files are fresh, 7 if any drift detected.
     Also verifies:
@@ -1297,26 +1222,6 @@ def run_check() -> int:
         # MIN-A: literal threshold value
         if threshold_token not in block:
             drifted.append(f"{skill}: missing threshold value {threshold_token!r} in §0' block")
-
-        # Check §0c for ZC skills
-        if skill in ZC_SKILLS:
-            if ZC_HEADING not in text:
-                drifted.append(f"{skill}: §0c heading missing")
-            else:
-                zc_idx = text.index(ZC_HEADING)
-                p_idx = text.index(POLLUTION_HEADING)
-                if zc_idx >= p_idx:
-                    drifted.append(f"{skill}: §0c appears AFTER §0' (ordering violation)")
-                # Check §0c placeholder discipline: __QUOIN_HOME__ present, no literal ~/.claude/ in source line
-                zc_end = text.find("\n## ", zc_idx + len(ZC_HEADING))
-                zc_block = text[zc_idx : zc_end] if zc_end != -1 else text[zc_idx:]
-                if "__QUOIN_HOME__/scripts/pidfile_helpers.sh" not in zc_block:
-                    drifted.append(f"{skill}: §0c missing __QUOIN_HOME__ placeholder in pidfile source line")
-                # Scan for literal ~/.claude/ in any source line
-                for line in zc_block.splitlines():
-                    if "~/.claude/scripts/pidfile_helpers" in line:
-                        drifted.append(f"{skill}: §0c has literal ~/.claude/ in pidfile source line (must use __QUOIN_HOME__)")
-                        break
 
     # ── §0″ checks (MINTIER_TARGET_SKILLS) ──
     # HEADING BYTE-IDENTITY: the ″ (U+2033) must match exactly — see MINTIER_HEADING constant.

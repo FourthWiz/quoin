@@ -24,7 +24,6 @@ SKILLS_DIR = TESTS_DIR.parent.parent / "adapters" / "claude" / "skills"
 POLLUTION_HEADING = "## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)"
 SESSION_BOOTSTRAP_HEADING = "## Session bootstrap"
 MODEL_REQ_HEADING = "## Model requirement"
-ZC_PIDFILE_HEADING = "## §0c Pidfile lifecycle"
 
 # 9 Opus-tier target skills — must carry §0'.
 POLLUTION_TARGET_SKILLS = [
@@ -135,21 +134,6 @@ def test_pollution_heading_before_session_bootstrap(skill):
         assert p_idx < sb_idx, (
             f"{skill}/SKILL.md: §0' (pos={p_idx}) appears AFTER ## Session bootstrap (pos={sb_idx})"
         )
-
-
-# ─── (c) For architect and review: §0' appears AFTER §0c Pidfile lifecycle ───
-
-@pytest.mark.parametrize("skill", ["architect", "review"])
-def test_pollution_after_zc_for_skills_with_pidfile(skill):
-    text = _read_skill(skill)
-    assert ZC_PIDFILE_HEADING in text, f"{skill}/SKILL.md missing §0c heading"
-    assert POLLUTION_HEADING in text, f"{skill}/SKILL.md missing §0' heading"
-    zc_idx = text.index(ZC_PIDFILE_HEADING)
-    p_idx = text.index(POLLUTION_HEADING)
-    assert zc_idx < p_idx, (
-        f"{skill}/SKILL.md: §0c (pos={zc_idx}) appears AFTER §0' (pos={p_idx}). "
-        "Per D-04: ordering must be §0c → §0' → skill body."
-    )
 
 
 # ─── (d) None of the 12 cheap-tier skills carry §0' ─────────────────────────

@@ -3,7 +3,7 @@ the reference doc, and the runtime-neutral core docs.
 
 Two-slicer pattern (lessons: scoped greps, not whole-file counts) plus a
 handful of cross-file ordering and region-scoped-count assertions that pin
-the report-only resume hint, and the unconditional Step 7/Step 8
+the report-only resume hint, and the unconditional Step 7
 defer-to-the-pass rewording.
 """
 from __future__ import annotations
@@ -72,7 +72,7 @@ def test_slicer_a_contains_required_tokens():
     required = [
         "--no-tasks", "--dry-run", "[no-interactive]", "[autonomous]",
         "report-only", "task_bookkeeping.py classify", "cleanup-task-bookkeeping.md",
-        "pidfile_release cleanup", "[no-redispatch] /cleanup", "skip steps 1",
+        "[no-redispatch] /cleanup", "skip steps 1",
         "not under",
     ]
     for token in required:
@@ -106,12 +106,11 @@ def test_slicer_a_does_not_mention_step_5c_or_step_6():
 # ---------------------------------------------------------------------------
 
 
-def test_order_step6_before_heading_before_last_pidfile_release():
+def test_order_step6_before_heading():
     text = _text(CLEANUP_SKILL)
     step6_idx = text.index("**Step 6.")
     heading_idx = text.index(_BOOKKEEPING_HEADING)
-    last_pidfile_idx = text.rindex("pidfile_release cleanup")
-    assert step6_idx < heading_idx < last_pidfile_idx
+    assert step6_idx < heading_idx
 
 
 def _core_procedure_region(text: str) -> str:
@@ -125,12 +124,10 @@ def test_core_procedure_region_has_zero_literal_pidfile_release_calls():
     assert region.count("pidfile_release cleanup") == 0
 
 
-def test_bookkeeping_region_has_exactly_one_pidfile_release_after_step7():
+def test_bookkeeping_region_has_no_pidfile_release():
     region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
-    assert region.count("pidfile_release cleanup") == 1
-    step7_idx = region.index("Step 7")
-    release_idx = region.index("pidfile_release cleanup")
-    assert step7_idx < release_idx
+    assert region.count("pidfile_release cleanup") == 0
+    assert "Step 7" in region
 
 
 def test_core_procedure_step1_and_step2_are_unconditional_and_mention_pass():

@@ -103,7 +103,6 @@ DEPLOYED_SCRIPTS = (
     "build_preambles.py",
     "session_age_guard.py",
     "pollution_guard.py",  # Claude-adapter-owned §0' on-demand pollution score (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors session_age_guard.py)
-    "pidfile_helpers.sh",
     "sleep_score.py",
     "analyze_cost_ledger.py",
     "git_root_for_dispatch.py",
@@ -162,7 +161,12 @@ DEPLOYED_SCRIPTS = (
 )
 
 # T-05: obsolete artifacts to remove from prior installs
-OBSOLETE_SCRIPTS = ("summarize_for_human.py", "with_env.sh", "audit_corpus_coverage.py")
+OBSOLETE_SCRIPTS = (
+    "summarize_for_human.py",
+    "with_env.sh",
+    "audit_corpus_coverage.py",
+    "pidfile_helpers.sh",
+)
 
 # Skills quoin used to ship; an upgrade removes the deployed directory when it
 # is quoin's own copy (see cleanup_obsolete_skills).

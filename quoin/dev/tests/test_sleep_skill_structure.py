@@ -2,8 +2,8 @@
 Structural invariant tests for quoin/skills/sleep/SKILL.md.
 
 Ten tests verifying that the /sleep SKILL.md satisfies the Stage 3
-structural contracts: Sonnet tier declaration, §0/§0‴/§0c preamble
-presence and ordering, pidfile_acquire/release call sites,
+structural contracts: Sonnet tier declaration, §0/§0‴ preamble
+presence and ordering,
 write-restriction prose, dry-run no-write prose, and deployed-copy sync.
 
 Per Stage 3 plan T-13: purely deterministic pathlib + string parsing.
@@ -63,64 +63,17 @@ def test_sec0_present():
     )
 
 
-# ── 3. §0c Pidfile lifecycle heading is present ───────────────────────────────
+# ── 3. §0‴ Minimum-tier guard sits between §0 and the skill body ───────────────
 
-def test_sec0c_present():
-    text = _text()
-    assert "## §0c Pidfile lifecycle" in text, (
-        "sleep/SKILL.md is missing the '## §0c Pidfile lifecycle' heading. "
-        "The /sleep skill requires pidfile lifecycle protection per Stage 2 contract."
-    )
-
-
-# ── 4. §0c heading appears after §0 heading ──────────────────────────────────
-
-def test_sec0c_after_sec0():
-    lines = _lines()
-    sec0_idx = _line_index(lines, "## §0 Model dispatch")
-    sec0c_idx = _line_index(lines, "## §0c Pidfile lifecycle")
-    assert sec0_idx is not None, "sleep/SKILL.md missing '## §0 Model dispatch'"
-    assert sec0c_idx is not None, "sleep/SKILL.md missing '## §0c Pidfile lifecycle'"
-    assert sec0c_idx > sec0_idx, (
-        f"sleep/SKILL.md: §0c (line {sec0c_idx+1}) must appear AFTER §0 (line {sec0_idx+1}). "
-        "Per architecture: §0 (model tier) fires first, §0c (pidfile) fires second."
-    )
-
-
-# ── 4b. §0‴ Minimum-tier guard sits strictly between §0 and §0c ──────────────
-
-def test_sec0tripleprime_between_sec0_and_sec0c():
+def test_sec0tripleprime_between_sec0_and_body():
     lines = _lines()
     sec0_idx = _line_index(lines, "## §0 Model dispatch")
     sec0tp_idx = _line_index(lines, "## §0‴ Minimum-tier guard")
-    sec0c_idx = _line_index(lines, "## §0c Pidfile lifecycle")
+    body_idx = _line_index(lines, "## Overview")
     assert sec0_idx is not None, "sleep/SKILL.md missing '## §0 Model dispatch'"
     assert sec0tp_idx is not None, "sleep/SKILL.md missing '## §0‴ Minimum-tier guard'"
-    assert sec0c_idx is not None, "sleep/SKILL.md missing '## §0c Pidfile lifecycle'"
-    assert sec0_idx < sec0tp_idx < sec0c_idx, (
-        f"sleep/SKILL.md: expected order §0 (line {sec0_idx+1}) < §0‴ "
-        f"(line {sec0tp_idx+1}) < §0c (line {sec0c_idx+1})."
-    )
-
-
-# ── 5. pidfile_acquire sleep call site present ────────────────────────────────
-
-def test_pidfile_acquire_sleep():
-    text = _text()
-    assert "pidfile_acquire sleep" in text, (
-        "sleep/SKILL.md does not contain 'pidfile_acquire sleep'. "
-        "The §0c pidfile lifecycle block must call pidfile_acquire with the skill name."
-    )
-
-
-# ── 6. pidfile_release sleep call site present ────────────────────────────────
-
-def test_pidfile_release_sleep():
-    text = _text()
-    assert "pidfile_release sleep" in text, (
-        "sleep/SKILL.md does not contain 'pidfile_release sleep'. "
-        "The §0c pidfile lifecycle block must call pidfile_release with the skill name."
-    )
+    assert body_idx is not None, "sleep/SKILL.md missing '## Overview'"
+    assert sec0_idx < sec0tp_idx < body_idx
 
 
 # ── 7. Write-target restriction prose present ─────────────────────────────────
@@ -154,11 +107,7 @@ def run_tests():
     tests = [
         test_model_declared_sonnet,
         test_sec0_present,
-        test_sec0c_present,
-        test_sec0c_after_sec0,
-        test_sec0tripleprime_between_sec0_and_sec0c,
-        test_pidfile_acquire_sleep,
-        test_pidfile_release_sleep,
+                test_sec0tripleprime_between_sec0_and_body,
         test_write_target_restriction_present,
         test_dry_run_no_write,
         test_deployed_copy_sync,

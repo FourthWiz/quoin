@@ -7,12 +7,8 @@ Asserts:
   - Block-scoped token cross-guard (MAJ-2): all 6 REQUIRED_TOKENS from
     test_quoin_pollution_preamble.py + the 3 score-extraction strings from
     test_pollution_score_extraction.py appear INSIDE the extracted §0' block
-  - §0c placeholder discipline (MAJ-1): architect + review §0c block contains
-    __QUOIN_HOME__/scripts/pidfile_helpers.sh and ZERO literal ~/.claude/ in any
-    sourced-helper line
   - Exactly one §0' heading in each of the 7 target adapter files
   - Zero §0' headings in the 14 exclusion-skill adapters (cheap-tier + orchestrators)
-  - Exactly one §0c heading in each of architect + review, ordered before §0'
 
 Per lesson 2026-04-23: NO live LLM calls — only deterministic string matching.
 """
@@ -39,9 +35,7 @@ import inject_pollution_dispatch as generator  # noqa: E402
 ADAPTER_DIR = _TESTS_DIR.parent.parent / "adapters" / "claude" / "skills"
 
 POLLUTION_HEADING = generator.POLLUTION_HEADING
-ZC_HEADING = generator.ZC_HEADING
 TARGET_SKILLS = generator.POLLUTION_TARGET_SKILLS
-ZC_SKILLS = generator.ZC_SKILLS
 
 # 12 cheap-tier skills — must NOT carry §0'.
 CHEAP_TIER_SKILLS = [
@@ -212,32 +206,6 @@ def test_rendered_block_has_threshold_value(skill):
     )
 
 
-# ─── 4. §0c placeholder discipline (MAJ-1) ────────────────────────────────────
-
-@pytest.mark.parametrize("skill", ZC_SKILLS)
-def test_zc_block_uses_quoin_home_placeholder(skill):
-    """The §0c pidfile source line must use __QUOIN_HOME__, not literal ~/.claude/."""
-    text = _read_adapter(skill)
-    assert ZC_HEADING in text, f"{skill}: §0c heading missing"
-
-    # Extract §0c block
-    zc_start = text.index(ZC_HEADING)
-    zc_end = text.find("\n## ", zc_start + len(ZC_HEADING))
-    zc_block = text[zc_start:zc_end] if zc_end != -1 else text[zc_start:]
-
-    assert "__QUOIN_HOME__/scripts/pidfile_helpers.sh" in zc_block, (
-        f"{skill}: §0c block missing __QUOIN_HOME__ placeholder in pidfile source line. "
-        "installer.py substitutes __QUOIN_HOME__ → deploy root; literal ~/.claude/ would "
-        "hardcode the user-mode path and break project-mode / custom-root installs (MAJ-1)."
-    )
-
-    for line in zc_block.splitlines():
-        assert "~/.claude/scripts/pidfile_helpers" not in line, (
-            f"{skill}: §0c block has literal ~/.claude/ in pidfile source line: {line!r}. "
-            "Must use __QUOIN_HOME__/scripts/pidfile_helpers.sh instead (MAJ-1, lesson 2026-05-15)."
-        )
-
-
 # ─── 5. Target adapters have exactly one §0' heading ────────────────────────
 
 @pytest.mark.parametrize("skill", TARGET_SKILLS)
@@ -263,32 +231,6 @@ def test_exclusion_adapter_has_no_pollution_heading(skill):
     assert POLLUTION_HEADING not in text, (
         f"{skill} is a cheap-tier/orchestrator skill but its adapter SKILL.md contains §0'. "
         "The generator must only write to the 7 POLLUTION_TARGET_SKILLS."
-    )
-
-
-# ─── 7. §0c ordering: §0c before §0' in architect + review ──────────────────
-
-@pytest.mark.parametrize("skill", ZC_SKILLS)
-def test_zc_before_pollution_in_zc_skills(skill):
-    """For architect and review: §0c must appear BEFORE §0'."""
-    text = _read_adapter(skill)
-    assert ZC_HEADING in text, f"{skill}: §0c heading missing"
-    assert POLLUTION_HEADING in text, f"{skill}: §0' heading missing"
-    zc_idx = text.index(ZC_HEADING)
-    p_idx = text.index(POLLUTION_HEADING)
-    assert zc_idx < p_idx, (
-        f"{skill}: §0c (pos={zc_idx}) appears AFTER §0' (pos={p_idx}). "
-        "Ordering must be §0c → §0' → skill body."
-    )
-
-
-@pytest.mark.parametrize("skill", ZC_SKILLS)
-def test_each_zc_skill_has_exactly_one_zc_heading(skill):
-    """architect and review must contain the §0c heading exactly once."""
-    text = _read_adapter(skill)
-    count = text.count(ZC_HEADING)
-    assert count == 1, (
-        f"{skill}/SKILL.md contains §0c heading {count} times (expected exactly 1)."
     )
 
 
