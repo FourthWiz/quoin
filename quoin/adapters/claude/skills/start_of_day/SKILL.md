@@ -135,20 +135,16 @@ Read `<project-root>/.workflow_artifacts/memory/resume-cookie.md` if present.
 
 ### Step 1b: Sentinel-health check (read-only, lightweight)
 
-Count files under `.workflow_artifacts/memory/` at depth 1 matching the 9 sentinel families that are older than `QUOIN_STALE_SENTINEL_DAYS` (default 7) days AND whose filename suffix is NOT the current session's UUID. This step is **read-only** — no trash_move, no rm, no writes of any kind.
+Count files under `.workflow_artifacts/memory/` at depth 1 matching the 2 live sentinel families that are older than `QUOIN_STALE_SENTINEL_DAYS` (default 7) days AND whose filename suffix is NOT the current session's UUID. This step is **read-only** — no trash_move, no rm, no writes of any kind.
 
-The 9 sentinel families are: `pending-restore-*.txt`, `pending-prompt-*.txt`, `compact-happened-*.txt`, `mid-agent-handoff-*.txt`, `pending-resume-ref-*.txt`, `checkpoint-defer-*.txt`, `postcompact-reset-*.txt`, `checkpoint-pending-compact-*.txt`, `idle-advisory-pending-*.txt`.
+The 2 sentinel families are: `pending-restore-*.txt`, `compact-happened-*.txt`.
 
 ```sh
 # Pseudocode (lightweight count — fail-silent if memory dir absent)
 _sod_stale_days=${QUOIN_STALE_SENTINEL_DAYS:-7}
 _sod_warn_threshold=${QUOIN_SOD_SENTINEL_WARN:-3}
 _sod_count=$(find .workflow_artifacts/memory -maxdepth 1 \
-  \( -name 'pending-restore-*.txt' -o -name 'pending-prompt-*.txt' \
-     -o -name 'compact-happened-*.txt' -o -name 'mid-agent-handoff-*.txt' \
-     -o -name 'pending-resume-ref-*.txt' -o -name 'checkpoint-defer-*.txt' \
-     -o -name 'postcompact-reset-*.txt' -o -name 'checkpoint-pending-compact-*.txt' \
-     -o -name 'idle-advisory-pending-*.txt' \) \
+  \( -name 'pending-restore-*.txt' -o -name 'compact-happened-*.txt' \) \
   -mtime +"$_sod_stale_days" 2>/dev/null | wc -l || echo 0)
 # Exclude current-session files (any ending in -<current_uuid>.txt):
 # In practice Haiku counts all matches; the threshold of 3 provides enough

@@ -7,7 +7,7 @@ Two-layer test (per plan T-05c / D-04 / MAJ-1):
 Layer 1 — SKILL.md contract (scope-bounded grep):
   Open quoin/skills/sleep/SKILL.md. Assert:
     (a) The literal string '--sentinels' appears inside the '## --purge' H2 section.
-    (b) All 8 sentinel-family literals appear inside the '## --purge' H2 section:
+    (b) Both sentinel-family literals appear inside the '## --purge' H2 section:
         pending-restore-*.txt, pending-prompt-*.txt, compact-happened-*.txt,
         mid-agent-handoff-*.txt, pending-resume-ref-*.txt, checkpoint-defer-*.txt,
         postcompact-reset-*.txt, checkpoint-pending-compact-*.txt
@@ -64,7 +64,7 @@ def _pass(message: str) -> None:
 
 
 def _run_layer1_skill_md_contract() -> bool:
-    """Layer 1: scope-bounded grep for --sentinels and all 8 sentinel family literals."""
+    """Layer 1: scope-bounded grep for --sentinels and both sentinel family literals."""
     print("\n--- Layer 1: SKILL.md contract (scope-bounded grep inside ## --purge) ---")
 
     if not _SKILL_MD.exists():
@@ -87,16 +87,10 @@ def _run_layer1_skill_md_contract() -> bool:
         _fail("Layer 1a: '--sentinels' NOT found in ## --purge section of sleep/SKILL.md")
         failures += 1
 
-    # (b) All 8 sentinel families must appear in the purge section
+    # (b) Both sentinel families must appear in the purge section
     sentinel_families = [
         "pending-restore-*.txt",
-        "pending-prompt-*.txt",
         "compact-happened-*.txt",
-        "mid-agent-handoff-*.txt",
-        "pending-resume-ref-*.txt",
-        "checkpoint-defer-*.txt",
-        "postcompact-reset-*.txt",
-        "checkpoint-pending-compact-*.txt",
     ]
 
     for family in sentinel_families:
@@ -112,7 +106,7 @@ def _run_layer1_skill_md_contract() -> bool:
 
 
 def _run_layer2_negative_safety() -> bool:
-    """Layer 2: --purge --sentinels does NOT enumerate outside the 8 hardcoded families."""
+    """Layer 2: --purge --sentinels does NOT enumerate outside the 2 hardcoded families."""
     print("\n--- Layer 2: negative safety test (write-target restriction for delete path) ---")
 
     if not _SKILL_MD.exists():
@@ -126,7 +120,7 @@ def _run_layer2_negative_safety() -> bool:
 
     # Assert the sentinel iteration is family-specific (not a catch-all glob).
     # The sentinel purge section must NOT contain '*.txt' or 'pending-*.txt' as standalone
-    # patterns that would sweep more than the 8 named families.
+    # patterns that would sweep more than the 2 named families.
     # We check for the hardcoded family list language and absence of dangerous catch-alls.
     if "hardcoded allow-list" in purge_section or "hardcoded" in purge_section:
         _pass("Layer 2a: 'hardcoded' allow-list language present in ## --purge section")

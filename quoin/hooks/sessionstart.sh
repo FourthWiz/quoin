@@ -302,7 +302,7 @@ fi
   done
 done 2>/dev/null || true
 
-# Pidfile locks left by crashed runs; no reader remains, so any stale one is reclaimed.
+# STEP 3: Pidfile locks left by crashed runs; no reader remains, so any stale one is reclaimed.
 if [ -d "$MEMORY_DIR/sessions" ]; then
   find "$MEMORY_DIR/sessions" -maxdepth 1 -name '*.pidfile.lock' -mtime +"$_sweep_days" 2>/dev/null | \
   while IFS= read -r _f; do

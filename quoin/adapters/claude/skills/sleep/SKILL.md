@@ -414,7 +414,7 @@ After successful restore: remove the entry block from its `forgotten/<date>.md` 
 
 **Usage forms (mutually exclusive scope flags):**
 - `/sleep --purge --older-than Nd` (no scope flag) → targets `forgotten/<date>.md` files ONLY (backward-compat default).
-- `/sleep --purge --sentinels --older-than Nd` → targets the 9 sentinel families under `.workflow_artifacts/memory/` ONLY (new).
+- `/sleep --purge --sentinels --older-than Nd` → targets the 2 sentinel families under `.workflow_artifacts/memory/` ONLY (new).
 - `/sleep --purge --all --older-than Nd` → convenience: runs `forgotten/` purge first, then sentinel purge.
 
 Scope flags are mutually exclusive — `--sentinels` and `--all` cannot be combined. Users who want both targets must opt in via `--all`.
@@ -436,22 +436,15 @@ Emit warning at start: "This permanently deletes archive files. Entries cannot b
 
 ### Sentinel purge (--sentinels or --all scope)
 
-**Sentinel families covered (hardcoded allow-list — 9 families):**
+**Sentinel families covered (hardcoded allow-list — 2 families):**
 1. `pending-restore-*.txt`
-2. `pending-prompt-*.txt`
-3. `compact-happened-*.txt`
-4. `mid-agent-handoff-*.txt`
-5. `pending-resume-ref-*.txt`
-6. `checkpoint-defer-*.txt`
-7. `postcompact-reset-*.txt`
-8. `checkpoint-pending-compact-*.txt`
-9. `idle-advisory-pending-*.txt`
+2. `compact-happened-*.txt`
 
-All 9 families live under `.workflow_artifacts/memory/` (the sentinel directory). The family list is a hardcoded allow-list — no user-supplied pattern argument. This is the primary safety mechanism: only files matching one of the 9 named glob patterns are ever considered for deletion.
+Both families live under `.workflow_artifacts/memory/` (the sentinel directory). The family list is a hardcoded allow-list — no user-supplied pattern argument. This is the primary safety mechanism: only files matching one of the 2 named glob patterns are ever considered for deletion.
 
 **Procedure:**
 
-Emit warning at start: "This permanently deletes sentinel files. After purge, restore requires re-saving via /checkpoint."
+Emit warning at start: "This permanently deletes sentinel files."
 
 For each family in the allow-list, find files matching the glob under `.workflow_artifacts/memory/` with `mtime > N days`:
 ```

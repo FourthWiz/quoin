@@ -218,7 +218,7 @@ Use `--dry-run` first to preview what would be trashed without making any moves.
 - Priority 2: stem of the most-recently-modified `__QUOIN_HOME__/projects/<project-hash>/<uuid>.jsonl` file. `<project-hash>` = project absolute path with `/` replaced by `-`.
 - If UUID cannot be obtained: emit `[cleanup] current-session UUID unavailable; skipping sentinel sweep (fail-safe)` and **skip step 4 entirely**. Proceed directly to step 5 (checkpoint sweep). The age-only 30d checkpoint sweep is safe without UUID. NEVER fall back to age-only with any shorter floor for sentinels — if the current session cannot be identified, trash nothing from sentinel families.
 
-**Step 4. Sentinel sweep:** For each of the 9 hardcoded families listed in `## Hardcoded sentinel allow-list`, find candidates under `MEMORY_DIR` at depth 1:
+**Step 4. Sentinel sweep:** For each of the 2 hardcoded families listed in `## Hardcoded sentinel allow-list`, find candidates under `MEMORY_DIR` at depth 1:
 ```sh
 find "$MEMORY_DIR" -maxdepth 1 -name '<family-glob>' \
   -mtime "+${QUOIN_CLEANUP_SENTINEL_WINDOW:-1}" -print0
@@ -290,29 +290,22 @@ When `/cleanup --dry-run` is invoked:
 
 To preview what `/checkpoint` auto-fire would trash without running a full save: use `--no-cleanup` to suppress auto-fire, then run `/cleanup --dry-run` standalone.
 
-## Hardcoded sentinel allow-list (9 families)
+## Hardcoded sentinel allow-list (2 families)
 
-The sentinel sweep targets ONLY these 9 hardcoded families. This is a hardcoded allow-list — no user-supplied pattern argument, no catch-all globs:
+The sentinel sweep targets ONLY these 2 hardcoded families. This is a hardcoded allow-list — no user-supplied pattern argument, no catch-all globs:
 
 1. `pending-restore-*.txt`
-2. `pending-prompt-*.txt`
-3. `compact-happened-*.txt`
-4. `mid-agent-handoff-*.txt`
-5. `pending-resume-ref-*.txt`
-6. `checkpoint-defer-*.txt`
-7. `postcompact-reset-*.txt`
-8. `checkpoint-pending-compact-*.txt`
-9. `idle-advisory-pending-*.txt`
+2. `compact-happened-*.txt`
 
-These families are enumerated literally in the sentinel sweep. No user-supplied pattern is accepted. No catch-all glob (`*.txt`, `pending-*.txt`) is used as the sweep target.
+These families are enumerated literally in the sentinel sweep. No user-supplied pattern is accepted. No catch-all glob (`*.txt`, `pending-*.txt`) is used as the sweep target. Retired families that no writer produces any more are reclaimed by the SessionStart sweep, not listed here.
 
-Canonical machine-readable source: `hooks/_lib.sh:sentinel_globs()` — sessionstart.sh consumes that; this list and sleep/SKILL.md's list MUST stay byte-identical (drift-guarded by test_sentinel_family_parity.py).
+Canonical machine-readable source: `hooks/_lib.sh:sentinel_globs()` — this list and sleep/SKILL.md's list MUST stay byte-identical (drift-guarded by test_sentinel_family_parity.py).
 
-`/cleanup` NEVER targets `lessons-learned.md`, `forgotten/`, or any source file — only the 9 sentinel families above, `checkpoints/*.md`, and the task-keyed `run-state-*.json` / `run-notes-*.md` pair, under `.workflow_artifacts/memory/`.
+`/cleanup` NEVER targets `lessons-learned.md`, `forgotten/`, or any source file — only the 2 sentinel families above, `checkpoints/*.md`, and the task-keyed `run-state-*.json` / `run-notes-*.md` pair, under `.workflow_artifacts/memory/`.
 
 ## Relationship to /sleep --purge --sentinels
 
-`/cleanup` and `/sleep --purge --sentinels` both target the same 9 sentinel families (byte-identical literal lists) but are NOT the same operation (comparison table: memory/lifecycle-guide.md).
+`/cleanup` and `/sleep --purge --sentinels` both target the same 2 sentinel families (byte-identical literal lists) but are NOT the same operation (comparison table: memory/lifecycle-guide.md).
 
 The task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13) is `/cleanup`-only:
 it is not a sentinel family, does not appear in `sentinel_globs()`, and `/sleep --purge
@@ -323,7 +316,7 @@ Use `/sleep --purge --sentinels --older-than Nd` for explicit permanent purge of
 
 ## Write-target / delete-target restriction
 
-**/cleanup ONLY trash-moves files under `.workflow_artifacts/memory/` matching the 9 sentinel families listed above, `sessions/*.body.tmp` / `sessions/*.tmp` (IVG-137 T-06), `checkpoints/*.md`, or the task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13); it never touches `lessons-learned.md`, `forgotten/`, or any real `*.md` session file.**
+**/cleanup ONLY trash-moves files under `.workflow_artifacts/memory/` matching the 2 sentinel families listed above, `sessions/*.body.tmp` / `sessions/*.tmp` (IVG-137 T-06), `checkpoints/*.md`, or the task-keyed `run-state-*.json` / `run-notes-*.md` pair (IVG-258 T-13); it never touches `lessons-learned.md`, `forgotten/`, or any real `*.md` session file.**
 
 Exception: the standalone task bookkeeping pass moves whole task folders, only through `task_bookkeeping.py apply` and only after per-task confirmation, into `.workflow_artifacts/finalized/` or `.workflow_artifacts/trash/<date>/`.
 

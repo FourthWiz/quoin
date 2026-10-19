@@ -7,7 +7,7 @@ Two-layer test (per plan T-08 / D-04 / D-06):
 Layer 1 — SKILL.md contract (scope-bounded grep, section-extracted):
   Open quoin/skills/cleanup/SKILL.md. Extract the
   '## Hardcoded sentinel allow-list' section. Assert:
-    (a) All 9 sentinel-family literals appear in the extracted section.
+    (a) Both sentinel-family literals appear in the extracted section.
     (b) 'hardcoded' allow-list language is present in the section.
     (c) The section mentions 'sentinel_globs' (shared-source pointer — drift guard).
 
@@ -87,7 +87,7 @@ def _pass(message: str) -> None:
 
 
 def _run_layer1_skill_md_contract() -> bool:
-    """Layer 1: scope-bounded grep for all 9 sentinel family literals in allow-list section."""
+    """Layer 1: scope-bounded grep for both sentinel family literals in allow-list section."""
     print("\n--- Layer 1: SKILL.md contract (scope-bounded grep inside ## Hardcoded sentinel allow-list) ---")
 
     if not _SKILL_MD.exists():
@@ -103,17 +103,10 @@ def _run_layer1_skill_md_contract() -> bool:
 
     failures = 0
 
-    # (a) All 9 sentinel families must appear in the allow-list section
+    # (a) Both sentinel families must appear in the allow-list section
     sentinel_families = [
         "pending-restore-*.txt",
-        "pending-prompt-*.txt",
         "compact-happened-*.txt",
-        "mid-agent-handoff-*.txt",
-        "pending-resume-ref-*.txt",
-        "checkpoint-defer-*.txt",
-        "postcompact-reset-*.txt",
-        "checkpoint-pending-compact-*.txt",
-        "idle-advisory-pending-*.txt",
     ]
 
     for family in sentinel_families:
@@ -288,7 +281,7 @@ def main() -> None:
 
 # pytest-compatible: expose as test functions
 def test_layer1_contract() -> None:
-    """pytest wrapper for Layer 1: scope-bounded grep for all 9 families in allow-list section."""
+    """pytest wrapper for Layer 1: scope-bounded grep for both families in allow-list section."""
     assert _run_layer1_skill_md_contract(), "Layer 1: SKILL.md allow-list contract failed"
 
 

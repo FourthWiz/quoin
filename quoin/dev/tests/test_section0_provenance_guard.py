@@ -36,8 +36,8 @@ snapshot) is a cheap extra check, not the mechanism that discriminates.
 
 Snapshot (informational; a maintainer updating the generator template updates
 this alongside, without touching the partition assertions above):
-  corpus_lines=15475, census_lines=4462, generated=4157, handwritten=226,
-  overhang=61 (start_of_day) + 18 (blank, one per other §0 carrier) = 79,
+  corpus_lines=15475, census_lines=4458, generated=4157, handwritten=226,
+  overhang=57 (start_of_day) + 18 (blank, one per other §0 carrier) = 75,
   carriers=29, variants=7, declared hand-written blocks=6.
 """
 from __future__ import annotations
@@ -102,15 +102,15 @@ DECLARED_HANDWRITTEN_BLOCKS = {
 }
 DECLARED_HANDWRITTEN_TOTAL_LINES = 226
 
-START_OF_DAY_TAIL_LINES = 61
+START_OF_DAY_TAIL_LINES = 57
 START_OF_DAY_FIRST_NONBLANK = "### Step 1a: Resume from cookie"
 START_OF_DAY_FIRST_NONBLANK_LINE_1BASED = 126
 
 # Informational snapshot (see module docstring) — not the totality contract.
 SNAPSHOT_CORPUS_LINES = 15475
-SNAPSHOT_CENSUS_LINES = 4462
+SNAPSHOT_CENSUS_LINES = 4458
 SNAPSHOT_GENERATED_LINES = 4157
-SNAPSHOT_OVERHANG_LINES = 79  # 61 (start_of_day tail) + 18 (one blank line each)
+SNAPSHOT_OVERHANG_LINES = 75  # 57 (start_of_day tail) + 18 (one blank line each)
 SNAPSHOT_CARRIERS = 29
 
 
@@ -587,7 +587,7 @@ SHARE_CEILINGS: dict[str, float] = {
                        # generator-owned share
 
     "specify": 44.8625,
-    "start_of_day": 32.2506,  # span-based (27.2506%) + 5.00pp — NEVER the
+    "start_of_day": 32.5184,  # span-based (27.5184%) + 5.00pp — NEVER the
                               # heading-based 42.09% figure an earlier
                               # census over-captured
     "status": 73.6275,
@@ -657,15 +657,15 @@ def test_file_within_share_ceiling(skill):
 def test_start_of_day_ceiling_is_span_based_not_heading_based():
     """Pins the over-capture regression this guard exists to prevent: an
     earlier (withdrawn) heading-based measurement put start_of_day's share
-    at 42.09%; the correct span-based measurement is 27.2506%."""
+    at 42.09%; the correct span-based measurement is 27.5184%."""
     measured = _measured_share("start_of_day")
-    assert abs(measured - 27.2506) < 0.001, (
+    assert abs(measured - 27.5184) < 0.001, (
         f"start_of_day measured share {measured} drifted from the expected "
-        "span-based 27.2506% — if this is legitimate, confirm it was NOT "
+        "span-based 27.5184% — if this is legitimate, confirm it was NOT "
         "caused by reverting to heading-based measurement before updating "
         "this test."
     )
-    assert abs(SHARE_CEILINGS["start_of_day"] - 32.2506) < 0.001
+    assert abs(SHARE_CEILINGS["start_of_day"] - 32.5184) < 0.001
 
 
 # ═══════════ In-domain caps-density metric and per-file ceilings ═══════════
