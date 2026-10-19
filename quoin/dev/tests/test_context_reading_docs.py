@@ -11,7 +11,6 @@ HOOKS_TABLE = REPO_ROOT / "quoin" / "memory" / "hooks-table.md"
 CHECKPOINT_SPEC = REPO_ROOT / "quoin" / "memory" / "checkpoint-spec.md"
 LIFECYCLE = REPO_ROOT / "quoin" / "memory" / "lifecycle-guide.md"
 CLAUDE_MD = REPO_ROOT / "quoin" / "CLAUDE.md"
-CHECKPOINT_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "checkpoint" / "SKILL.md"
 
 
 def _text(path: Path) -> str:
@@ -47,10 +46,3 @@ def test_old_denominator_wording_is_gone():
         text = _text(path)
         assert "Effective token limit used as 100% denominator" not in text, path
         assert "toolkit-chosen denominator" not in text, path
-
-
-def test_checkpoint_notice_names_the_source():
-    text = _text(CHECKPOINT_SKILL)
-    assert "compute_context_reading TRANSCRIPT_PATH" in text
-    assert "Context is at ${PCT_VALUE} (>=" in text
-    assert "(estimated)" in text

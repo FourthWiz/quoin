@@ -81,7 +81,12 @@ def test_runtime_parity_matrix_covers_major_semantics_and_all_migrated_skills():
     for name in skill_names:
         assert f"`{name}`" in matrix
         assert f"quoin/core/skills/{name}.md" in matrix
-        assert f"quoin/adapters/claude/skills/{name}/SKILL.md" in matrix
+        entry = next(s for s in manifest["skills"] if s["name"] == name)
+        row = next(line for line in matrix.splitlines() if line.startswith(f"| `{name}` |"))
+        if entry.get("claude_adapter", True):
+            assert f"quoin/adapters/claude/skills/{name}/SKILL.md" in matrix
+        else:
+            assert "not shipped on Claude Code" in row
         assert f"quoin/adapters/codex/skills/{name}/README.md" in matrix
 
     for semantic in [
@@ -231,7 +236,9 @@ def test_handoff_format_core_and_reference_cross_reference():
 def test_skill_manifest_matches_current_claude_frontmatter():
     manifest = json.loads(read_rel("quoin/core/workflow/skills.json"))
     entries = manifest["skills"]
-    by_name = {entry["name"]: entry for entry in entries}
+    by_name = {
+        entry["name"]: entry for entry in entries if entry.get("claude_adapter", True)
+    }
 
     skill_paths = sorted((REPO_ROOT / "quoin" / "skills").glob("*/SKILL.md"))
     skill_paths_by_name = {path.parent.name: path for path in skill_paths}

@@ -300,7 +300,7 @@ def rg_canon(fs_names: set, canonical_set: set, findings: list) -> None:
 
 
 def rg_manifest(fs_names: set, canonical_set: set, manifest_names: set, findings: list) -> None:
-    """Oracle integrity: skills.json names == CANONICAL_SKILLS == filesystem dirs == 31.
+    """Oracle integrity: skills.json Claude-adapter names (claude_adapter not false) == CANONICAL_SKILLS == filesystem dirs.
 
     Subsumes the runtime `== len(CANONICAL_SKILLS)` / `== 31` count-asserts scattered
     across test_install_fresh_clone.py, test_quoin_cli.py, test_runtime_portability_docs.py,
@@ -1005,7 +1005,7 @@ def main(argv: Optional[list] = None) -> int:
     dev_tests_dir = repo_pkg / "dev" / "tests"
 
     manifest = load_manifest(manifest_path)
-    manifest_skills = manifest["skills"]
+    manifest_skills = [r for r in manifest["skills"] if r.get("claude_adapter", True)]
     manifest_names = {rec["name"] for rec in manifest_skills}
 
     installer_path = _default_installer(repo_pkg)

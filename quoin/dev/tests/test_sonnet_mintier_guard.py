@@ -1,14 +1,14 @@
 """
 Drift-detection tests for the §0‴ Minimum-tier guard (Sonnet tier) block (IVG-117).
 
-The 13 Sonnet-declared cheap-tier skills (checkpoint, cleanup, continue_work,
+The 12 Sonnet-declared cheap-tier skills (cleanup, continue_work,
 end_of_day, end_of_task, expand, gate, implement, pr, revise-fast, rollback,
 sleep, workspace) carry a `## §0‴ Minimum-tier guard ...` block. These tests
 verify structural correctness of that block, mirroring test_mintier_guard.py's
 structure for the Opus §0″ block.
 
 §0‴ anchors on SECTION0_HEADING (the hand-authored §0 block, always present in
-these 13 files) rather than on §0'/§0″ (which only exist on the disjoint Opus-10
+these 12 files) rather than on §0'/§0″ (which only exist on the disjoint Opus-10
 target set). Zero edits to the existing Opus template/constants (D-07) — the 10
 deployed Opus files and test_mintier_guard.py remain byte-frozen.
 
@@ -57,7 +57,6 @@ _MINTIER_BLOCK_BODY: str = _ipd._MINTIER_BLOCK_BODY
 # ─── Constants ────────────────────────────────────────────────────────────────
 
 SONNET_MINTIER_SKILLS = [
-    "checkpoint",
     "cleanup",
     "continue_work",
     "end_of_day",
@@ -353,6 +352,7 @@ def test_sonnet_mintier_target_skills_matches_skills_json_roster():
         e.get("name") or e.get("id")
         for e in entries
         if e.get("claude_model") == "sonnet" and e.get("section_0") is True
+        and e.get("claude_adapter", True)
     }
     derived.discard(None)
 
@@ -380,6 +380,7 @@ def test_sonnet_mintier_target_skills_disjoint_from_opus_and_haiku_rosters():
         e.get("name") or e.get("id")
         for e in entries
         if e.get("claude_model") == "haiku" and e.get("section_0") is True
+        and e.get("claude_adapter", True)
     }
     haiku_section0.discard(None)
     assert sonnet_set.isdisjoint(haiku_section0), (

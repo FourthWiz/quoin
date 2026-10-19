@@ -63,7 +63,6 @@ TIER1_MEMORY_FILES = (
 CANONICAL_SKILLS = (
     "architect",
     "capture_insight",
-    "checkpoint",
     "cleanup",
     "continue_work",
     "cost_snapshot",
@@ -178,7 +177,6 @@ SKILL_OVERRIDES: dict[str, str] = {
     "implement": "on",
     "gate": "on",
     "triage": "on",
-    "checkpoint": "on",
     "specify": "on",
     "enrich": "on",
     # Lifecycle / one-shot skills — invocable by name, no description in auto-suggest

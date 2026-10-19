@@ -39,7 +39,8 @@ BASELINE_FIXTURES = (
     "test_lib_run_state_probe.sh",
     "test_resolve_project_root.sh",
     "test_userpromptsubmit_hook.sh",
-    "test_stage6_checkpoint_probe_wiring_canary.sh",
+    "test_checkpoint_picker_staleness.sh",
+    "test_no_bare_cwd_writes.sh",
 )
 
 

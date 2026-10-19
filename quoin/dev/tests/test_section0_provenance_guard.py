@@ -13,12 +13,12 @@ never from a renderer call keyed by roster membership. That is what makes a
 roster-only edit and a corpus-only edit both observable: each moves only one
 side of the corresponding equality.
 
-Per-family, not union: the five rosters encode 55 (skill, roster)
+Per-family, not union: the five rosters encode 53 (skill, roster)
 membership facts, but only 7 of them (capture_insight, cost_snapshot,
 next_steps, start_of_day, status, triage, weekly_review — all in SECTION0
 and no other roster) are unique to any one roster. A union-based assertion
-can therefore observe at most 7 of 55 facts; asserting each family against
-its own roster observes all 55.
+can therefore observe at most 7 of 53 facts; asserting each family against
+its own roster observes all 53.
 
 Load-bearing assertions (a future maintainer should not "simplify" these):
   - the five per-family carrier equalities (oracle vs SECTION0/POLLUTION/
@@ -29,16 +29,16 @@ Load-bearing assertions (a future maintainer should not "simplify" these):
   - the declared six-block hand-written set, located by heading, each with
     its own line-count assertion
   - the declared-variant-set assertion (exactly 7 glyph tokens)
-  - the blankness assertion on the 19 non-`start_of_day` overhangs
+  - the blankness assertion on the 18 non-`start_of_day` overhangs
 
 Everything else (partition disjointness/coverage/sum, the informational
 snapshot) is a cheap extra check, not the mechanism that discriminates.
 
 Snapshot (informational; a maintainer updating the generator template updates
 this alongside, without touching the partition assertions above):
-  corpus_lines=15475, census_lines=4652, generated=4323, handwritten=249,
-  overhang=61 (start_of_day) + 19 (blank, one per other §0 carrier) = 80,
-  carriers=30, variants=7, declared hand-written blocks=6.
+  corpus_lines=15475, census_lines=4462, generated=4157, handwritten=226,
+  overhang=61 (start_of_day) + 18 (blank, one per other §0 carrier) = 79,
+  carriers=29, variants=7, declared hand-written blocks=6.
 """
 from __future__ import annotations
 
@@ -97,11 +97,10 @@ DECLARED_HANDWRITTEN_BLOCKS = {
     ("implement", "§0a"): 73,
     ("implement", "§0b"): 53,
     ("end_of_task", "§0b"): 52,
-    ("checkpoint", "§0c"): 23,
     ("cleanup", "§0c"): 24,
     ("sleep", "§0c"): 24,
 }
-DECLARED_HANDWRITTEN_TOTAL_LINES = 249
+DECLARED_HANDWRITTEN_TOTAL_LINES = 226
 
 START_OF_DAY_TAIL_LINES = 61
 START_OF_DAY_FIRST_NONBLANK = "### Step 1a: Resume from cookie"
@@ -109,10 +108,10 @@ START_OF_DAY_FIRST_NONBLANK_LINE_1BASED = 126
 
 # Informational snapshot (see module docstring) — not the totality contract.
 SNAPSHOT_CORPUS_LINES = 15475
-SNAPSHOT_CENSUS_LINES = 4652
-SNAPSHOT_GENERATED_LINES = 4323
-SNAPSHOT_OVERHANG_LINES = 80  # 61 (start_of_day tail) + 19 (one blank line each)
-SNAPSHOT_CARRIERS = 30
+SNAPSHOT_CENSUS_LINES = 4462
+SNAPSHOT_GENERATED_LINES = 4157
+SNAPSHOT_OVERHANG_LINES = 79  # 61 (start_of_day tail) + 18 (one blank line each)
+SNAPSHOT_CARRIERS = 29
 
 
 def _variant_of(line: str) -> str | None:
@@ -230,7 +229,7 @@ def test_declared_variant_set_is_exactly_seven():
 
 # ═══════════════════ Per-family carrier assertions (load-bearing) ═══════════
 # Each asserted SEPARATELY with its own message — a single union
-# assertion does not satisfy this. Every one of the 55 (skill, roster)
+# assertion does not satisfy this. Every one of the 53 (skill, roster)
 # membership facts moves exactly one side of exactly one of these five.
 
 def test_oracle_section0_matches_roster():
@@ -286,7 +285,7 @@ def test_zc_two_separators_agree():
 def test_union_equality_cheap_extra_check():
     """NOT the load-bearing assertion — kept only as a cheap extra check.
 
-    A union-based comparison observes at most 7 of the 55 (skill, roster)
+    A union-based comparison observes at most 7 of the 53 (skill, roster)
     membership facts (all 7 unique to SECTION0; POLLUTION/MINTIER/
     MINTIER_SONNET/ZC contribute zero unique members each), so it cannot by
     itself detect most single-member roster drops. The five per-family
@@ -492,7 +491,7 @@ def test_census_snapshot_reproduces_state():
         f"{SNAPSHOT_CARRIERS} — re-seed SNAPSHOT_CARRIERS per the re-seed procedure above."
     )
     assert VARIANT_COUNTS == {
-        "§0": 20, "§0'": 10, "§0a": 1, "§0b": 2, "§0c": 5, "§0″": 10, "§0‴": 13,
+        "§0": 19, "§0'": 10, "§0a": 1, "§0b": 2, "§0c": 4, "§0″": 10, "§0‴": 12,
     }, (
         f"VARIANT_COUNTS={VARIANT_COUNTS} no longer matches the recorded per-variant "
         "block counts — re-seed the literal dict above per the re-seed procedure above."
@@ -530,9 +529,8 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 #
 # Growth side (the same headroom is a blind spot upward): the
 # same 5.00 pp lets a carrier's GENERATED span grow before this guard fires
-# — 25 lines at `next_steps` (binding), 74 at `checkpoint` (loosest);
-# re-derived after IVG-263 moved cleanup/sleep to Sonnet (cleanup was
-# previously binding at 25, now 35 after its own share re-seed). Generated-
+# — 18 lines at `cleanup` (binding), 60 at `end_of_task` (loosest);
+# re-derived after the `checkpoint` skill left the corpus. Generated-
 # span growth is caught by test_generator_fidelity.py's byte-compare and by
 # the byte ceilings in test_footprint_ceilings.py, NOT by this share guard.
 # That asymmetry is a recorded decision, not an oversight.
@@ -540,8 +538,8 @@ def test_roster_gated_renderers_raise_on_non_member(render_fn_name):
 # Zero carve-out: `run` and `thorough_plan` measure exactly 0.0000% (zero
 # §0-family lines at all) and get an exact 0.0 ceiling with NO headroom
 # added — their zero is asserted, not merely unobserved. Note: the roster
-# union is 30 of 32 adapter skills, so this zero carve-out and the "carriers
-# equal the oracle set, size 30" assertion above are the SAME FACT from two
+# union is 29 of 31 adapter skills, so this zero carve-out and the "carriers
+# equal the oracle set, size 29" assertion above are the SAME FACT from two
 # directions, not two independent confirmations.
 #
 # Waiver / re-ratchet procedure: the numerator (generated span) is
@@ -560,7 +558,6 @@ SHARE_HEADROOM_PP = 5.00
 SHARE_CEILINGS: dict[str, float] = {
     "architect": 25.0608,
     "capture_insight": 63.0311,
-    "checkpoint": 18.8218,
     "cleanup": 50.8213,  # re-seeded (IVG-263): tier move to Sonnet adds the
                          # §0‴ Minimum-tier guard block, raising the
                          # generator-owned share
@@ -629,7 +626,7 @@ def test_share_ceilings_key_set_matches_adapter_skills():
         f"skills {sorted(discovered)} "
         f"(sym-diff {sorted(set(SHARE_CEILINGS) ^ discovered)})"
     )
-    assert len(SHARE_CEILINGS) == 32
+    assert len(SHARE_CEILINGS) == 31
 
 
 def test_zero_share_carve_out_is_exact():
@@ -680,7 +677,7 @@ def test_start_of_day_ceiling_is_span_based_not_heading_based():
 # constraint blows through.
 #
 # Corpus-level result: "domination" means the top two files hold >=50% of
-# in-domain caps tokens. Measured on all four report surfaces (manifest-33
+# in-domain caps tokens. Measured on all four report surfaces (adapter-skill
 # corpus slice, the 57-file primary domain, the 39-file secondary domain,
 # and their union) — 28.34%, 29.62%, 16.31%, 13.03% — every one well under
 # 50%. Not dominated; the per-file half ships.
@@ -695,7 +692,7 @@ DENSITY_MATERIALITY_FLOOR = 5  # caps tokens; below this, ratcheting is brittle
 
 CLAUDE_MD = ADAPTER_DIR.parent.parent.parent / "CLAUDE.md"
 
-# 15 files at or above the materiality floor (measured, manifest-33 domain).
+# 14 files at or above the materiality floor (measured, adapter-skill domain).
 # Ratchet-down-only from this first-measured baseline (mirrors the byte
 # ceilings' own "provisional = current size" starting convention).
 DENSITY_CEILINGS: dict[str, int] = {
@@ -704,7 +701,6 @@ DENSITY_CEILINGS: dict[str, int] = {
     "run": 18,
     "critic": 14,
     "thorough_plan": 10,
-    "checkpoint": 9,
     "architect": 8,
     "security_review": 8,
     "end_of_task": 7,
@@ -727,7 +723,7 @@ DENSITY_EXCLUDED_BELOW_FLOOR = {
 
 
 def _in_domain_text(skill: str | None) -> str:
-    """Text of a manifest-33 member with its OWN generator-backed §0-family
+    """Text of a manifest member with its OWN generator-backed §0-family
     spans excised, mirroring derive/density_domains.py's gen_spans() —
     which drops a span only when the skill carries it on a generator
     roster. A block declared in DECLARED_HANDWRITTEN_BLOCKS shares a
@@ -760,18 +756,18 @@ def _in_domain_caps_count(skill: str | None) -> int:
     return sum(len(re.findall(pattern, text)) for _, pattern in CAPS_PATTERNS)
 
 
-MANIFEST_33 = sorted(p.parent.name for p in ADAPTER_FILES) + ["claude_md"]
+MANIFEST = sorted(p.parent.name for p in ADAPTER_FILES) + ["claude_md"]
 
 
-def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
+def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
     covered = set(DENSITY_CEILINGS) | DENSITY_EXCLUDED_BELOW_FLOOR
-    assert covered == set(MANIFEST_33), (
-        f"DENSITY_CEILINGS + DENSITY_EXCLUDED_BELOW_FLOOR != the 33-file manifest "
-        f"(sym-diff {sorted(covered ^ set(MANIFEST_33))}) — every manifest-33 file "
+    assert covered == set(MANIFEST), (
+        f"DENSITY_CEILINGS + DENSITY_EXCLUDED_BELOW_FLOOR != every adapter skill plus CLAUDE.md "
+        f"(sym-diff {sorted(covered ^ set(MANIFEST))}) — every adapter skill and CLAUDE.md "
         "must be named in exactly one of the two sets, never silently absent."
     )
-    assert len(DENSITY_CEILINGS) == 15, (
-        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 15. If a "
+    assert len(DENSITY_CEILINGS) == 14, (
+        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 14. If a "
         "skill's in-domain caps count crossed DENSITY_MATERIALITY_FLOOR, move it "
         "between DENSITY_CEILINGS and DENSITY_EXCLUDED_BELOW_FLOOR and update both "
         "this count and the one below to match."
@@ -782,9 +778,9 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_33_exactly():
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
         "this count and the one above to match."
     )
-    assert sum(DENSITY_CEILINGS.values()) == 164, (
+    assert sum(DENSITY_CEILINGS.values()) == 155, (
         f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
-        "164. A per-file ceiling was re-seeded without updating this checksum — "
+        "155. A per-file ceiling was re-seeded without updating this checksum — "
         "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
         "hunk as the ceiling change."
     )

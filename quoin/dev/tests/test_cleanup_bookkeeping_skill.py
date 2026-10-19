@@ -1,5 +1,5 @@
 """Task-bookkeeping prose contracts across cleanup/SKILL.md,
-checkpoint/SKILL.md, the reference doc, and the runtime-neutral core docs.
+the reference doc, and the runtime-neutral core docs.
 
 Two-slicer pattern (lessons: scoped greps, not whole-file counts) plus a
 handful of cross-file ordering and region-scoped-count assertions that pin
@@ -14,7 +14,6 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SOURCE_ROOT = REPO_ROOT / "quoin"
 CLEANUP_SKILL = SOURCE_ROOT / "adapters" / "claude" / "skills" / "cleanup" / "SKILL.md"
-CHECKPOINT_SKILL = SOURCE_ROOT / "adapters" / "claude" / "skills" / "checkpoint" / "SKILL.md"
 REFERENCE_DOC = SOURCE_ROOT / "memory" / "cleanup-task-bookkeeping.md"
 CORE_CLEANUP_DOC = SOURCE_ROOT / "core" / "skills" / "cleanup.md"
 CLAUDE_MD = SOURCE_ROOT / "CLAUDE.md"
@@ -100,24 +99,6 @@ def test_slicer_a_does_not_mention_step_5c_or_step_6():
     region = _slice_to_next_h2(_text(CLEANUP_SKILL), _BOOKKEEPING_HEADING)
     assert "Step 5c" not in region
     assert "Step 6" not in region
-
-
-# ---------------------------------------------------------------------------
-# Slicer B: checkpoint SKILL.md "### Step 1.47"
-# ---------------------------------------------------------------------------
-
-
-def test_slicer_b_contains_exact_exclusion_sentence():
-    region = _slice_to_next_h3(_text(CHECKPOINT_SKILL), "### Step 1.47")
-    assert (
-        "The `/cleanup` task bookkeeping pass is never run here; it is standalone-only."
-        in region
-    )
-
-
-def test_slicer_b_does_not_mention_task_bookkeeping_script():
-    region = _slice_to_next_h3(_text(CHECKPOINT_SKILL), "### Step 1.47")
-    assert "task_bookkeeping.py" not in region
 
 
 # ---------------------------------------------------------------------------

@@ -62,13 +62,13 @@ def test_both_tree_divergence_exits_2(census, tmp_path):
 
 
 def test_live_tree_census_totals(census):
-    # (c) live-tree census: 32 skills, both trees agree, total never above
+    # (c) live-tree census: 31 skills, both trees agree, total never above
     # the 13,470 B pre-trim baseline (equal at T-01 commit time; the trim
     # batches only ever reduce it — asserting exact equality would red the
     # suite the moment batch 1 lands, so the invariant here is the no-growth
     # bound plus the skill count).
     sizes = census.run_census("both", census.TREES["adapter"], census.TREES["stub"])
-    assert len(sizes) == 32
+    assert len(sizes) == 31
     assert sum(sizes.values()) <= 13470
 
 

@@ -66,7 +66,6 @@ CHEAP_TIER_SKILLS = [
     "triage",
     "sleep",
     "next_steps",
-    "checkpoint",
 ]
 
 

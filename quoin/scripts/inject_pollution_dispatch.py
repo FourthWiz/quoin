@@ -75,17 +75,16 @@ MINTIER_TARGET_SKILLS = [
 ZC_SKILLS = ["architect", "review"]
 
 # ─── §0‴ Minimum-tier guard (Sonnet tier) — IVG-117 ───────────────────────────
-# Anchor heading for the 20 cheap-tier §0 skills (hand-authored, always present).
-# SECTION0_HEADING is verified count==1 across the 13 Sonnet §0‴ target files.
+# Anchor heading for the 19 cheap-tier §0 skills (hand-authored, always present).
+# SECTION0_HEADING is verified count==1 across the 12 Sonnet §0‴ target files.
 SECTION0_HEADING = "## §0 Model dispatch (FIRST STEP — execute before anything else)"
 
-# 13 Sonnet-declared cheap-tier skills that lack an under-tier guard (IVG-117 Gap 1).
+# 12 Sonnet-declared cheap-tier skills that lack an under-tier guard (IVG-117 Gap 1).
 # 7 Haiku-declared skills are structurally exempt (bottom tier — nothing cheaper to
 # guard against). Orchestrators /run and /thorough_plan are excluded per the
 # orchestrator-exclusion rule (mirrors MINTIER_TARGET_SKILLS D-04). Roster mirrors
 # skills.json claude_model=="sonnet" && section_0==true.
 MINTIER_SONNET_TARGET_SKILLS = [
-    "checkpoint",
     "cleanup",
     "continue_work",
     "end_of_day",
@@ -297,23 +296,22 @@ def render_mintier_sonnet_block(skill: str) -> str:
 # `(?=^## )` and would not fix start_of_day's over-capture).
 SECTION0_END_MARKER = "<!-- §0-end -->"
 
-# 20-entry roster: the full §0-carrying skill set (mirrors SECTION0_SKILLS in
+# 19-entry roster: the full §0-carrying skill set (mirrors SECTION0_SKILLS in
 # test_footprint_ceilings.py / test_section0_marker.py and the CLAUDE.md "§0
 # Model dispatch preamble" skill list). Each entry is
 #   skill -> (tier, proceed_ref, variant, has_autonomous_clause, extra_comment)
 # per the 5 template axes (D-03 — variants are template branches keyed to
 # these axes, never per-file text blobs):
 #   1. skill name (substituted in prose)
-#   2. tier: "haiku" (7) | "sonnet" (13, == MINTIER_SONNET_TARGET_SKILLS)
-#   3. proceed_ref: "§1" (17) | "§0c" (3: cleanup, sleep, checkpoint)
-#   4. variant: "worktree" (15 — 12 with clause + 3 without) | "sidecar" (5,
+#   2. tier: "haiku" (7) | "sonnet" (12, == MINTIER_SONNET_TARGET_SKILLS)
+#   3. proceed_ref: "§1" (17) | "§0c" (2: cleanup, sleep)
+#   4. variant: "worktree" (14 — 11 with clause + 3 without) | "sidecar" (5,
 #      always with clause, distinct wording per D-02)
 #   5. has_autonomous_clause: only meaningful for variant="worktree"
 #      (selects between the two Worktree-class-branch sub-templates)
 #   6. extra_comment: the `§0b: intentionally omitted` line (pr, workspace)
 SECTION0_TARGET_SKILLS: dict[str, tuple[str, str, str, bool, bool]] = {
     "capture_insight": ("haiku", "§1", "worktree", True, False),
-    "checkpoint": ("sonnet", "§0c", "worktree", True, False),
     "cleanup": ("sonnet", "§0c", "worktree", False, False),
     "continue_work": ("sonnet", "§1", "worktree", False, False),
     "cost_snapshot": ("haiku", "§1", "worktree", True, False),
@@ -340,7 +338,7 @@ SECTION0_TARGET_SKILLS: dict[str, tuple[str, str, str, bool, bool]] = {
 _SECTION0_SLASH_NAME_OVERRIDES = {"next_steps": "next-steps"}
 
 # Base block: heading through the end of "Manual kill switch:" — shared
-# byte-for-byte across ALL 20 files (verified: sidecar and worktree families
+# byte-for-byte across ALL 19 files (verified: sidecar and worktree families
 # diverge only AFTER this point). {tier}/{proc}/{skill}/{slash} are the only
 # substitution points in this block (D-03 axes 1-3); every other "proceed to
 # §1"/"§0c" occurrence elsewhere in the region is FIXED literal text that does
@@ -1463,8 +1461,11 @@ def run_check() -> int:
         return 7
     print("inject_pollution_dispatch --check: all 10 adapter files are fresh")
     print("inject_pollution_dispatch --check: all 10 §0doubleprime files are fresh")
-    print("inject_pollution_dispatch --check: all 13 §0tripleprime files are fresh")
-    print("inject_pollution_dispatch --check: all 20 §0 files are fresh")
+    print(
+        f"inject_pollution_dispatch --check: all {len(MINTIER_SONNET_TARGET_SKILLS)} "
+        "§0tripleprime files are fresh"
+    )
+    print(f"inject_pollution_dispatch --check: all {len(SECTION0_TARGET_SKILLS)} §0 files are fresh")
     return 0
 
 

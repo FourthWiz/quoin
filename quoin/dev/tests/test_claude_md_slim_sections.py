@@ -254,7 +254,7 @@ GATE_SKILL = _ADAPTER_SKILLS / "gate" / "SKILL.md"
 
 # Live baselines re-verified at implement time (>= comparisons below so
 # unrelated future skill additions do not red this test).
-_LIVE_LEDGER_SELF_WRITE_COUNT = 27
+_LIVE_LEDGER_SELF_WRITE_COUNT = 26
 _LIVE_SAVE_SESSION_STATE_COUNT = 10
 
 
