@@ -185,7 +185,7 @@ if [ "$eod_due" = 1 ]; then
   if [ "$_past_day" -eq 1 ]; then
     nudge="[quoin-S-4] Session ending with unfinished task: ${task_name} — a prior day was never wrapped up; run /end_of_day to wrap up the workday."
   else
-    nudge="[quoin-S-4] Session ending with unfinished task: ${task_name} — run /checkpoint to save your place (resume next session) or /end_of_day to wrap up the workday."
+    nudge="[quoin-S-4] Session ending with unfinished task: ${task_name} — run /end_of_day to wrap up the workday (task state resumes with /run --resume TASK)."
   fi
 fi
 msg="$nudge"

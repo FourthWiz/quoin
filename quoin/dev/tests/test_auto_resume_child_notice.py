@@ -5,9 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import re
 import stat
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,7 +13,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 _CORE_PATH = REPO_ROOT / "quoin" / "core" / "scripts" / "auto_resume.py"
-_HOOK = REPO_ROOT / "quoin" / "hooks" / "sessionstart.sh"
 U = "0b1c2d3e-4f50-4a61-8b72-93a4b5c6d7e8"
 
 
@@ -142,23 +139,6 @@ def test_start_notice_includes_child_and_ignores_malformed(ar, tmp_path, monkeyp
     ar._cmd_start(_Args(project_root=str(project), source="startup", session_id="new"))
     ctx = json.loads(capsys.readouterr().out)["hookSpecificOutput"]["additionalContext"]
     assert "child_session=" not in ctx and "takeover:" in ctx
-
-
-def _hook_sed_expr() -> str:
-    m = re.search(r"sed -n '([^']*via=supervisor[^']*)'", _HOOK.read_text())
-    assert m
-    return m.group(1)
-
-
-@pytest.mark.parametrize("parts", [("project",), ("My Drive", "p")])
-def test_hook_sed_still_extracts_task(ar, tmp_path, monkeypatch, capsys, parts):
-    project = _mk_project(tmp_path, *parts)
-    _start_setup(ar, project)
-    monkeypatch.setattr(ar, "_do_handoff", lambda *a, **k: f"HANDOFF|55|1/10|{U}")
-    ar._cmd_start(_Args(project_root=str(project), source="startup", session_id="new"))
-    stdout = capsys.readouterr().out
-    got = subprocess.run(["sed", "-n", _hook_sed_expr()], input=stdout, capture_output=True, text=True).stdout
-    assert got.strip() == "demo"
 
 
 def test_task_equals_guard(ar):

@@ -188,7 +188,7 @@ def test_neither_signal(dirs):
 # ---------------------------------------------------------------------------
 
 def test_signal_b_same_day_only(dirs):
-    """Every flagged session dated today -> all_today True (recommend /checkpoint)."""
+    """Every flagged session dated today -> all_today True (wrap-up reminder only)."""
     daily, sessions = dirs
     _make_session_file(sessions, "task-a", due=True, date_prefix=TODAY)
     _make_session_file(sessions, "task-b", due=True, date_prefix=TODAY)

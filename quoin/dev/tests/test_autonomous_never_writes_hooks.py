@@ -187,25 +187,19 @@ def test_run_skill_documents_hard_constraint_never_writes_hooks() -> None:
     assert "NEVER modifies or lowers a `QUOIN_*_BPS` constant" in section
 
 
-@pytest.mark.parametrize(
-    "constant,expected_default",
-    [
-        ("QUOIN_BLOCK_BPS", "9500"),
-        ("QUOIN_STOP_BPS", "7000"),
-        ("QUOIN_COMPACT_FIRST_BPS", "9000"),
-        ("QUOIN_PANIC_BPS", "10000"),
-    ],
-)
-def test_lib_sh_thresholds_still_at_known_defaults(constant: str, expected_default: str) -> None:
-    """Belt-and-suspenders content check against the live source of truth
-    (`hooks/_lib.sh`), independent of the structural greps above."""
+def test_lib_sh_has_no_removed_threshold_defaults() -> None:
+    """The retired context-threshold defaults and the no-run checkpoint knob
+    stay out of hooks/_lib.sh, while the two live defaults remain."""
     lib_sh = HOOKS_DIR / "_lib.sh"
     assert lib_sh.is_file()
     text = lib_sh.read_text(encoding="utf-8")
-    pattern = re.compile(r"\$\{" + re.escape(constant) + r":-([^}]+)\}")
-    match = pattern.search(text)
-    assert match, f"constant {constant} not found in hooks/_lib.sh"
-    assert match.group(1) == expected_default, (
-        f"hooks/_lib.sh default for {constant} changed: "
-        f"expected {expected_default!r}, found {match.group(1)!r}"
-    )
+    for needle in (
+        "${QUOIN_BLOCK_BPS:-",
+        "${QUOIN_STOP_BPS:-",
+        "${QUOIN_COMPACT_FIRST_BPS:-",
+        "${QUOIN_PANIC_BPS:-",
+        "PRECOMPACT_NORUN_CHECKPOINT",
+    ):
+        assert needle not in text, f"hooks/_lib.sh still carries {needle}"
+    assert "${QUOIN_BYTES_PER_TOKEN:-8.0}" in text
+    assert "${QUOIN_EFFECTIVE_CONTEXT_LIMIT:-150000}" in text

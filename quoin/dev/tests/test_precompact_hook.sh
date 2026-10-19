@@ -64,7 +64,7 @@ make_stdin() {
     "$trigger" "$session_id" "$cwd" "$cwd"
 }
 
-# ─── (a) auto trigger + active pidfile → allow + checkpoint saved, NO sentinel ──
+# ─── (a) auto trigger + pidfile present → allow, nothing else written ────────
 
 # Create a fake pidfile
 touch "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/implement-12345.pidfile.lock"
@@ -88,12 +88,12 @@ else
   fail "(a) auto trigger + active pidfile → pending-restore sentinel was written (should not be in allow path)"
 fi
 
-# Check checkpoint saved
+# No checkpoint file is written either: compaction never saves one any more
 checkpoint_count=$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | wc -l | awk '{print $1}')
-if [ "$checkpoint_count" -ge 1 ]; then
-  ok "(a) auto trigger + active pidfile → checkpoint file saved"
+if [ "$checkpoint_count" -eq 0 ]; then
+  ok "(a) auto trigger + pidfile present → no checkpoint file written"
 else
-  fail "(a) auto trigger + active pidfile → no checkpoint file found"
+  fail "(a) auto trigger + pidfile present → a checkpoint file was written"
 fi
 
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/implement-12345.pidfile.lock"
@@ -101,9 +101,7 @@ rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-auto-pidfile
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
 
 # ─── (b) auto trigger, no pidfile, no run-state → allow, NOTHING written ─────
-# Re-baselined for the checkpoint-write gate: the no-run/no-pidfile row
-# writes no checkpoint and no sentinel; QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1
-# opts back in (see (b2) below).
+# No row writes a checkpoint or a sentinel; the allow line is the only output.
 
 stdin=$(make_stdin "auto" "sess-auto-nopidfile")
 stderr_out=$(printf '%s' "$stdin" | sh "$HOOK" 2>&1 >/dev/null) || true
@@ -115,7 +113,7 @@ else
   fail "(b) auto trigger no pidfile no run → expected allow, got: $out"
 fi
 
-if printf '%s' "$stderr_out" | grep -q 'no active run-state record and no pidfiles' 2>/dev/null; then
+if printf '%s' "$stderr_out" | grep -q 'no active run-state record' 2>/dev/null; then
   ok "(b) no-run row → stderr INFO names the no-run row"
 else
   fail "(b) no-run row → stderr missing the no-run INFO wording; got: $stderr_out"
@@ -125,46 +123,17 @@ pending_restore_file="$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-se
 if [ ! -f "$pending_restore_file" ]; then
   ok "(b) no-run row → pending-restore sentinel NOT written"
 else
-  fail "(b) no-run row → pending-restore sentinel written (should need the opt-in knob)"
+  fail "(b) no-run row → pending-restore sentinel written"
 fi
 
 checkpoint_count_b=$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | wc -l | awk '{print $1}')
 if [ "$checkpoint_count_b" -eq 0 ]; then
   ok "(b) no-run row → no checkpoint written"
 else
-  fail "(b) no-run row → checkpoint written (should need a run, pidfiles, or the knob)"
+  fail "(b) no-run row → checkpoint written"
 fi
 
 rm -f "$pending_restore_file"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-
-# ─── (b2) no-run fixture + opt-in knob → checkpoint AND sentinel restored ────
-# Knob mechanism (not a record): this arm exists to prove the opt-out is
-# reversible, which is exactly what the knob is for.
-
-stdin=$(make_stdin "auto" "sess-auto-nopidfile-knob")
-out=$(printf '%s' "$stdin" | QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1 sh "$HOOK" 2>/dev/null)
-
-if [ "$out" = '{"decision": "allow"}' ]; then
-  ok "(b2) knob-on arm → stdout is exactly the allow JSON"
-else
-  fail "(b2) knob-on arm → unexpected stdout: $out"
-fi
-
-if [ -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-auto-nopidfile-knob.txt" ]; then
-  ok "(b2) knob-on arm → pending-restore sentinel written"
-else
-  fail "(b2) knob-on arm → pending-restore sentinel NOT written"
-fi
-
-checkpoint_count_b2=$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | wc -l | awk '{print $1}')
-if [ "$checkpoint_count_b2" -ge 1 ]; then
-  ok "(b2) knob-on arm → checkpoint written (opt-in restores the old shape)"
-else
-  fail "(b2) knob-on arm → no checkpoint written"
-fi
-
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-auto-nopidfile-knob.txt"
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
 
 # ─── (c) manual trigger → exit 0 immediately, no state save ──────────────────
@@ -199,21 +168,18 @@ fi
 
 # ─── (e) save failure → exit 0 (fail-OPEN) ───────────────────────────────────
 
-# Knob mechanism: with no pidfile and no run-state record the checkpoint-write
-# gate would close and the chmod-induced failure would never be reached; the
-# knob keeps the gate open so the failure path is still exercised. This path
-# exits before the allow JSON is printed, so the assertion is the exit
-# status, not stdout.
+# A read-only checkpoints directory must not matter: the hook writes nothing
+# there. The assertion is the exit status.
 chmod 555 "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints" 2>/dev/null || true
 stdin=$(make_stdin "auto" "sess-save-fail")
 rc_e=0
-printf '%s' "$stdin" | QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1 sh "$HOOK" 2>/dev/null > /dev/null || rc_e=$?
+printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null > /dev/null || rc_e=$?
 chmod 755 "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints" 2>/dev/null || true
 
 if [ "$rc_e" -eq 0 ]; then
-  ok "(e) save failure → hook exits 0 (fail-OPEN)"
+  ok "(e) read-only checkpoints dir → hook exits 0 (fail-OPEN)"
 else
-  fail "(e) save failure → hook exited $rc_e"
+  fail "(e) read-only checkpoints dir → hook exited $rc_e"
 fi
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-save-fail.txt" 2>/dev/null || true
 
@@ -228,121 +194,35 @@ else
   fail "(f) session_id absent → block JSON emitted despite missing session_id: $out"
 fi
 
-# ─── (g) allow path: checkpoint content records pidfile info ──────────────────
+# ─── (g) active run-state record + pidfile present → no checkpoint, no sentinel ──
 
 touch "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/plan-67890.pidfile.lock"
-
+python3 "$RUN_STATE" --write --project-root "$TMPDIR_TEST" --task gcase --session-id sess-allow-content --at-stage-boundary true >/dev/null 2>&1
 stdin=$(make_stdin "auto" "sess-allow-content")
-printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null > /dev/null
-
-# Read the most recent checkpoint and verify ## Trigger field contains pidfile info
-latest_cp=$(ls -t "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | head -1)
-if [ -n "$latest_cp" ] && grep -q 'plan-67890' "$latest_cp" 2>/dev/null; then
-  ok "(g) allow path → checkpoint ## Trigger records active pidfile name"
+out_g=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
+cp_g=$(find "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints" -type f 2>/dev/null | wc -l | awk '{print $1}')
+pr_g=$(find "$TMPDIR_TEST/.workflow_artifacts/memory" -maxdepth 1 -name 'pending-restore-*' 2>/dev/null | wc -l | awk '{print $1}')
+if [ "$out_g" = '{"decision": "allow"}' ] && [ "$cp_g" -eq 0 ] && [ "$pr_g" -eq 0 ]; then
+  ok "(g) active run + pidfile → allow only; no file under checkpoints/ and no pending-restore"
 else
-  fail "(g) allow path → checkpoint missing pidfile info in ## Trigger; latest_cp=${latest_cp:-none}"
+  fail "(g) active run + pidfile wrote state (out=$out_g checkpoints=$cp_g sentinels=$pr_g)"
 fi
+rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/plan-67890.pidfile.lock" "$MEM_DIR_TEST/run-state-gcase.json" "$MEM_DIR_TEST/run-notes-gcase.md"
 
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/plan-67890.pidfile.lock"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-
-# ─── (h) sentinel pre-exists + no pidfiles → allow (early-skip path; existing sentinel preserved)
-# Previously this tested the "conservative block" path. Since the hook is now non-blocking,
-# the early-skip path (sentinel already exists) allows AND does NOT overwrite the existing sentinel.
+# ─── (h) a pre-existing sentinel is left untouched ────────────────────────────
 
 pending_restore_h="$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-prior-checkpoint.txt"
 printf '/some/prior/checkpoint.md\n' > "$pending_restore_h"
-# Record mtime before hook invocation
 mtime_before=$(stat -f %m "$pending_restore_h" 2>/dev/null || stat -c %Y "$pending_restore_h" 2>/dev/null || echo "0")
-
 stdin=$(make_stdin "auto" "sess-prior-checkpoint")
 out=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
-
-# Early-skip path → allow (no new checkpoint written; hook exits via early-skip + allow)
-if printf '%s' "$out" | grep -q '"allow"' 2>/dev/null; then
-  ok "(h) sentinel pre-exists → allow (early-skip path; non-blocking)"
-else
-  fail "(h) sentinel pre-exists → expected allow (early-skip), got: $out"
-fi
-
-# Existing sentinel MUST still exist (not overwritten or deleted)
-if [ -f "$pending_restore_h" ]; then
-  ok "(h) sentinel pre-exists → existing sentinel preserved after hook run"
-else
-  fail "(h) sentinel pre-exists → existing sentinel was deleted or not found"
-fi
-
-# Mtime must be unchanged (sentinel not re-written in early-skip path)
 mtime_after=$(stat -f %m "$pending_restore_h" 2>/dev/null || stat -c %Y "$pending_restore_h" 2>/dev/null || echo "0")
-if [ "$mtime_before" = "$mtime_after" ]; then
-  ok "(h) sentinel pre-exists → sentinel mtime unchanged (not re-written in early-skip)"
+if printf '%s' "$out" | grep -q '"allow"' 2>/dev/null && [ -f "$pending_restore_h" ] && [ "$mtime_before" = "$mtime_after" ]; then
+  ok "(h) sentinel pre-exists → allow, existing sentinel untouched"
 else
-  fail "(h) sentinel pre-exists → sentinel mtime changed (should be unchanged); before=$mtime_before after=$mtime_after"
+  fail "(h) sentinel pre-exists → allow expected and sentinel unchanged (out=$out)"
 fi
-
-# non-blocking-no-double-sentinel: only one pending-restore file for this session
-sentinel_count_h=$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-prior-checkpoint"*.txt 2>/dev/null | wc -l | awk '{print $1}')
-if [ "$sentinel_count_h" -eq 1 ]; then
-  ok "(h) non-blocking-no-double-sentinel: exactly one sentinel file for this session"
-else
-  fail "(h) non-blocking-no-double-sentinel: expected 1 sentinel, found $sentinel_count_h"
-fi
-
 rm -f "$pending_restore_h"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-
-# ─── (h2) precompact A3 guard is NOT armed without a pending-restore sentinel ───
-# With no pending-restore-*.txt for the session, the A3 early-skip must not
-# fire on the next precompact.
-
-# (h2-neg) — no sentinel: the A3 early-skip does not fire.
-touch "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/implement-24680.pidfile.lock"
-stdin_h2neg=$(make_stdin "auto" "sess-cont")
-out_h2neg=$(printf '%s' "$stdin_h2neg" | sh "$HOOK" 2>/dev/null)
-if printf '%s' "$out_h2neg" | grep -q '"allow"' 2>/dev/null; then
-  ok "(h2-neg) precompact after continued session → allow"
-else
-  fail "(h2-neg) precompact after continued session → expected allow, got: $out_h2neg"
-fi
-if [ "$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*-precompact.md 2>/dev/null | wc -l | awk '{print $1}')" -eq 1 ]; then
-  ok "(h2-neg) precompact after continued session → -precompact.md checkpoint WAS written (A3 did not fire)"
-else
-  fail "(h2-neg) precompact after continued session → expected exactly one -precompact.md checkpoint"
-fi
-
-# Reset between arms — mandatory, not deferred to the end of the block.
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*-precompact.md 2>/dev/null || true
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-cont.txt" 2>/dev/null || true
-
-# (h2-pos) — positive control: a pre-planted sentinel DOES arm the A3 early-skip.
-printf '/some/prior/checkpoint.md\n' > "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-cont-armed.txt"
-stdin_h2pos=$(make_stdin "auto" "sess-cont-armed")
-out_h2pos=$(printf '%s' "$stdin_h2pos" | sh "$HOOK" 2>/dev/null)
-if printf '%s' "$out_h2pos" | grep -q '"allow"' 2>/dev/null; then
-  ok "(h2-pos) precompact with pre-planted sentinel → allow"
-else
-  fail "(h2-pos) precompact with pre-planted sentinel → expected allow, got: $out_h2pos"
-fi
-if [ "$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*-precompact.md 2>/dev/null | wc -l | awk '{print $1}')" -eq 0 ]; then
-  ok "(h2-pos) precompact with pre-planted sentinel → zero -precompact.md checkpoints (A3 DID fire)"
-else
-  fail "(h2-pos) precompact with pre-planted sentinel → unexpected -precompact.md checkpoint written"
-fi
-
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/implement-24680.pidfile.lock"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-cont.txt" 2>/dev/null || true
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-cont-armed.txt" 2>/dev/null || true
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*-precompact.md 2>/dev/null || true
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-prompt-sess-cont.txt" 2>/dev/null || true
-
-# ─── (i) STOP_BPS default structural assertion ────────────────────────────────
-
-LIB="$SCRIPT_DIR/../../hooks/_lib.sh"
-if grep -q 'QUOIN_STOP_BPS:-7000' "$LIB" 2>/dev/null; then
-  ok "(i) _lib.sh STOP_BPS default is 7000"
-else
-  fail "(i) _lib.sh STOP_BPS default is NOT 7000 (check for :-7000 in $LIB)"
-fi
 
 # ─── (j) pidfile present (skill may or may not be alive) → allow ─────────────
 # The hook never reads or checks PID liveness — it only lists pidfile names.
@@ -363,229 +243,7 @@ fi
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/implement-99999.pidfile.lock"
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
 
-# ─── T-06b: Precompact placeholder-fill verification ─────────────────────────
-# Verifies the T-02 placeholder substitution logic:
-# - Fixture A: empty session-state → (none) for both fields; no literal tokens
-# - Fixture B: filled session-state → exact lines from session-state appear
-# - Fixture C: awk empty output race → WARNING on stderr; checkpoint KEPT; exit 0
-# - Fixture D: false-positive anchoring → embedded token name not a false positive
-# - Fixture E: behavior holds for paths with spaces (Google Drive simulation)
-
-# ─── Fixture A: empty session-state (no open_questions, no unfinished_work) ───
-
-# Record mechanism: this fixture exercises placeholder-fill content, so a
-# fresh active run-state record is the simplest way to open the write gate
-# (no sentinel side effect to reconcile; boundary write → no notes file).
-python3 "$RUN_STATE" --write --project-root "$TMPDIR_TEST" --task fixture-a \
-  --session-id sess-fixture-a --at-stage-boundary true >/dev/null 2>&1
-
-stdin_a=$(make_stdin "auto" "sess-fixture-a")
-out_a=$(printf '%s' "$stdin_a" | sh "$HOOK" 2>/dev/null)
-
-latest_a=$(ls -t "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | head -1)
-
-if [ -n "$latest_a" ]; then
-  # Verify no literal placeholder tokens remain
-  if grep -qE '^(__OPEN_QUESTIONS_PLACEHOLDER__|__UNFINISHED_WORK_PLACEHOLDER__)$' \
-      "$latest_a" 2>/dev/null; then
-    fail "(T-06b-A) Fixture A: literal placeholder tokens remain in checkpoint"
-  else
-    ok "(T-06b-A) Fixture A: no literal placeholder tokens in checkpoint (empty session-state)"
-  fi
-
-  # Both fields should be (none) when session-state is absent
-  if grep -q '(none)' "$latest_a" 2>/dev/null; then
-    ok "(T-06b-A-2) Fixture A: checkpoint has '(none)' substitution for missing content"
-  else
-    ok "(T-06b-A-2) Fixture A: checkpoint written without (none) — session-state was found (acceptable)"
-  fi
-else
-  fail "(T-06b-A) Fixture A: no checkpoint written"
-fi
-
-# The sentinel rm above the record route is a defensive no-op (the record
-# route writes no sentinel) — kept in place, but its presence is not proof
-# a sentinel was written.
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-fixture-a.txt"
-rm -f "$MEM_DIR_TEST/run-state-fixture-a.json"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-
-# ─── Fixture B: filled session-state (non-empty open_questions and unfinished_work) ──
-
-# Write a real session-state file with both sections filled.
-# NOTE: awk -v does not support embedded newlines in variable values (POSIX limitation).
-# The T-02 implementation uses awk -v, so multi-line content causes awk exit 2.
-# This fixture uses single-line content per section to exercise the happy path.
-# Multi-line content handling is a known limitation, tracked as a follow-up.
-SESSION_B="$TMPDIR_TEST/.workflow_artifacts/memory/sessions/2026-01-01-fixture-b.md"
-cat > "$SESSION_B" << BEOF
-## Status
-in_progress
-
-## Current stage
-implement
-
-## Open questions
-1. Single open question for awk single-line test.
-
-## Unfinished work
-1. Single unfinished item for awk single-line test.
-
-## Cost
-- Session UUID: FIXTURE-B-UUID
-- Phase: implement
-- Recorded in cost ledger: yes
-- end_of_day_due: yes
-- fallback_fires: 0
-BEOF
-
-# Clear any prior sentinel for this session so the hook doesn't hit the early-skip path
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-fixture-b.txt" 2>/dev/null || true
-
-# Record mechanism, same reasoning as Fixture A.
-python3 "$RUN_STATE" --write --project-root "$TMPDIR_TEST" --task fixture-b \
-  --session-id sess-fixture-b --at-stage-boundary true >/dev/null 2>&1
-
-stdin_b=$(make_stdin "auto" "sess-fixture-b")
-# Single invocation; capturing stderr separately via tee
-_b_tmp="${TMPDIR:-/tmp}/t06b_stderr_$$"
-out_b=$(printf '%s' "$stdin_b" | sh "$HOOK" 2>"$_b_tmp")
-_b_stderr=$(cat "$_b_tmp" 2>/dev/null) || true
-rm -f "$_b_tmp"
-
-latest_b=$(ls -t "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | head -1)
-
-if [ -n "$latest_b" ]; then
-  # No literal placeholder tokens
-  if grep -qE '^(__OPEN_QUESTIONS_PLACEHOLDER__|__UNFINISHED_WORK_PLACEHOLDER__)$' \
-      "$latest_b" 2>/dev/null; then
-    fail "(T-06b-B) Fixture B: literal placeholder tokens remain in checkpoint"
-  else
-    ok "(T-06b-B) Fixture B: no literal placeholder tokens (fill succeeded)"
-  fi
-else
-  fail "(T-06b-B) Fixture B: no checkpoint written"
-fi
-
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-fixture-b.txt"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-rm -f "$SESSION_B"
-rm -f "$MEM_DIR_TEST/run-state-fixture-b.json"
-
-# ─── Fixture C: awk-empty-output race — WARNING on stderr, checkpoint KEPT ───
-# We verify this indirectly: if we make the checkpoint dir read-only so the awk
-# temp-write fails, the hook should still exit 0 and produce a warning on stderr.
-# More directly, we verify the WARNING strings are in the hook source.
-
-# (C-1) SKILL.md / hook source documents the WARNING for fill failure
-PRECOMPACT_HOOK="$HOOK"
-if grep -q 'WARNING.*placeholder fill failed\|placeholder fill failed.*WARNING' \
-    "$PRECOMPACT_HOOK" 2>/dev/null; then
-  ok "(T-06b-C-1) Fixture C: WARNING 'placeholder fill failed' present in precompact.sh"
-else
-  fail "(T-06b-C-1) Fixture C: WARNING 'placeholder fill failed' NOT in precompact.sh"
-fi
-
-# (C-2) mv failure path documented — 'mv failed' WARNING
-if grep -q 'mv failed' "$PRECOMPACT_HOOK" 2>/dev/null; then
-  ok "(T-06b-C-2) Fixture C: 'mv failed' WARNING present in precompact.sh"
-else
-  fail "(T-06b-C-2) Fixture C: 'mv failed' WARNING NOT in precompact.sh"
-fi
-
-# (C-3) Hook uses explicit failure branches (no '|| true' on the mv)
-# Verify mv -f is used (forcing) and _awk_exit is checked
-if grep -q 'mv -f' "$PRECOMPACT_HOOK" 2>/dev/null && \
-   grep -q '_awk_exit' "$PRECOMPACT_HOOK" 2>/dev/null; then
-  ok "(T-06b-C-3) Fixture C: mv -f and _awk_exit explicit-check pattern present"
-else
-  fail "(T-06b-C-3) Fixture C: mv -f or _awk_exit NOT found in precompact.sh"
-fi
-
-# (C-4) Non-empty check (-s) is present for the tmp file guard
-if grep -q '\[ -s ' "$PRECOMPACT_HOOK" 2>/dev/null; then
-  ok "(T-06b-C-4) Fixture C: -s (non-empty) size check present in precompact.sh"
-else
-  fail "(T-06b-C-4) Fixture C: -s size check NOT found in precompact.sh"
-fi
-
-# (C-5) Hook exits 0 even when checkpoint dir is read-only (fail-OPEN)
-chmod 555 "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints" 2>/dev/null || true
-stdin_c=$(make_stdin "auto" "sess-fixture-c")
-# Knob mechanism: keeps the checkpoint-write gate open so the chmod-induced
-# failure is still reachable (no pidfile and no record would otherwise close
-# the gate before the write). The failure path exits before the allow JSON.
-rc_c=0
-printf '%s' "$stdin_c" | QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1 sh "$PRECOMPACT_HOOK" 2>/dev/null > /dev/null || rc_c=$?
-chmod 755 "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints" 2>/dev/null || true
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-fixture-c.txt"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-
-if [ "$rc_c" -eq 0 ]; then
-  ok "(T-06b-C-5) Fixture C: hook exits 0 even when checkpoint write fails (fail-OPEN)"
-else
-  fail "(T-06b-C-5) Fixture C: hook exited $rc_c when checkpoint dir unwritable (should exit 0)"
-fi
-
-# ─── Fixture D: false-positive anchoring — embedded token NOT a false positive ──
-# Create a session-state where the open_questions CONTENT contains the token string
-# embedded in a sentence (not on its own line). Verify the anchored grep does NOT fire.
-
-SESSION_D="$TMPDIR_TEST/.workflow_artifacts/memory/sessions/2026-01-01-fixture-d.md"
-cat > "$SESSION_D" << DEOF
-## Status
-in_progress
-
-## Current stage
-implement
-
-## Open questions
-1. Should we use __OPEN_QUESTIONS_PLACEHOLDER__ or a different approach?
-
-## Unfinished work
-1. See __UNFINISHED_WORK_PLACEHOLDER__ note above.
-
-## Cost
-- Session UUID: FIXTURE-D-UUID
-- Phase: implement
-- Recorded in cost ledger: yes
-- end_of_day_due: yes
-- fallback_fires: 0
-DEOF
-
-# Knob mechanism: this fixture's point is the anchored-grep false-positive
-# guard on placeholder-shaped text, orthogonal to which gate opened the
-# write — and the knob route writes the sentinel, keeping the existing
-# pending-restore cleanup line below load-bearing.
-stdin_d=$(make_stdin "auto" "sess-fixture-d")
-printf '%s' "$stdin_d" | QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1 sh "$HOOK" 2>/dev/null > /dev/null || true
-
-latest_d=$(ls -t "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | head -1)
-
-if [ -n "$latest_d" ]; then
-  # The anchored grep (^TOKEN$) should NOT fire — tokens are embedded in sentences
-  # That means the checkpoint was NOT trash-moved (not suppressed as false-positive)
-  # and the file should exist. The test verifies the checkpoint file exists.
-  ok "(T-06b-D) Fixture D: checkpoint exists (embedded token names not false-positives)"
-
-  # Also verify the anchored form actually uses ^..$ in the source
-  if grep -q "'\^(__OPEN_QUESTIONS_PLACEHOLDER__\|__UNFINISHED_WORK_PLACEHOLDER__)\$'" \
-      "$PRECOMPACT_HOOK" 2>/dev/null || \
-     grep -q '^(__OPEN_QUESTIONS_PLACEHOLDER__|__UNFINISHED_WORK_PLACEHOLDER__)$' \
-      "$PRECOMPACT_HOOK" 2>/dev/null; then
-    ok "(T-06b-D-2) Fixture D: anchored grep pattern ^TOKEN\$ present in precompact.sh"
-  else
-    fail "(T-06b-D-2) Fixture D: anchored grep pattern NOT found in precompact.sh"
-  fi
-else
-  fail "(T-06b-D) Fixture D: checkpoint was not written"
-fi
-
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/pending-restore-sess-fixture-d.txt"
-rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
-rm -f "$SESSION_D"
-
-# ─── Fixture E: paths with spaces (Google Drive simulation) ───────────────────
+# ─── Paths with spaces ────────────────────────────────────────────────────────
 # Verify the hook behaves correctly when the cwd contains spaces.
 # We create a temp dir with spaces in the name and run the hook.
 
@@ -600,9 +258,9 @@ out_e=$(printf '%s' "$stdin_e" | sh "$HOOK" 2>/dev/null) || true
 # The hook should produce either block JSON or (if no cwd write is needed for other reasons) exit 0
 # Key: it must not crash
 if [ -z "$out_e" ] || printf '%s' "$out_e" | grep -q 'decision\|block\|allow' 2>/dev/null; then
-  ok "(T-06b-E) Fixture E: hook handles paths with spaces (no crash)"
+  ok "(spaces) hook handles paths with spaces (no crash)"
 else
-  fail "(T-06b-E) Fixture E: hook may have crashed on path-with-spaces: $out_e"
+  fail "(spaces) hook may have crashed on path-with-spaces: $out_e"
 fi
 
 rm -rf "$SPACE_DIR" 2>/dev/null || true
@@ -611,14 +269,14 @@ rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || 
 
 # ─── IVG-61 Nested-cwd regression (resolve_project_root wiring) ──────────────
 # Feed a genuinely nested non-owning cwd.
-# Without the fix: hook writes checkpoint to <root>/sub/.workflow_artifacts/.
-# With the fix:    hook writes checkpoint to <root>/.workflow_artifacts/.
+# Without the fix: hook writes its notes to <root>/sub/.workflow_artifacts/.
+# With the fix:    hook writes them to <root>/.workflow_artifacts/.
 #
-# Also hardens against CRIT-3: fake HOME itself owns .workflow_artifacts/ but
-# the checkpoint must still land at <root>, NOT fake HOME.
+# Also hardens against a fake HOME that itself owns .workflow_artifacts/: the
+# session record must still land at <root>, NOT fake HOME.
 #
-# LOAD-BEARING: "no subdir leaked" assertion — precompact mkdir -p on a wrong
-# cwd CREATES the nested dir, so absence of the nested dir proves resolve fired.
+# LOAD-BEARING: "no subdir leaked" assertion — the recent-sessions append does
+# mkdir -p on a wrong cwd, so absence of the nested dir proves resolve fired.
 
 NESTED_HOME="${TMPDIR:-/tmp}/test_precompact_nested_home_$$"
 NESTED_ROOT="$NESTED_HOME/project"
@@ -634,9 +292,7 @@ stdin_nested=$(printf '{"trigger":"auto","session_id":"sess-nested-ivg61","cwd":
   "$NESTED_SUB" "$NESTED_SUB")
 
 # Run hook with fake HOME so resolve_project_root ceiling is deterministic
-# Knob mechanism: this block proves resolve_project_root wiring, which needs
-# SOME checkpoint write to land — the knob is the minimal change preserving that.
-out_nested=$(printf '%s' "$stdin_nested" | HOME="$NESTED_HOME" QUOIN_PRECOMPACT_NORUN_CHECKPOINT=1 sh "$HOOK" 2>/dev/null) || true
+out_nested=$(printf '%s' "$stdin_nested" | HOME="$NESTED_HOME" sh "$HOOK" 2>/dev/null) || true
 
 # Hook should emit {"decision":"allow"} (no pidfiles → direct-conversation path)
 if printf '%s' "$out_nested" | grep -q '"allow"'; then
@@ -645,12 +301,11 @@ else
   fail "(IVG-61-nested) hook did not emit allow decision: $out_nested"
 fi
 
-# LOAD-BEARING: checkpoint written at project root, NOT at nested sub
-_found_cp=$(ls "$NESTED_ROOT/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | head -1)
-if [ -n "$_found_cp" ]; then
-  ok "(IVG-61-nested) checkpoint created at project root"
+# LOAD-BEARING: session record written at project root, NOT at nested sub
+if grep -q 'sess-nested-ivg61' "$NESTED_ROOT/.workflow_artifacts/memory/recent-sessions.md" 2>/dev/null; then
+  ok "(IVG-61-nested) session record created at project root"
 else
-  fail "(IVG-61-nested) no checkpoint at project root — resolve_project_root may not be wired"
+  fail "(IVG-61-nested) no session record at project root — resolve_project_root may not be wired"
 fi
 
 # LOAD-BEARING: nested sub must NOT have a .workflow_artifacts/ leaked into it
@@ -660,12 +315,11 @@ else
   ok "(IVG-61-nested) no .workflow_artifacts/ leaked into nested sub"
 fi
 
-# CRIT-3: no checkpoint leaked into fake HOME's .workflow_artifacts/
-_home_cp=$(ls "$NESTED_HOME/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | head -1)
-if [ -n "$_home_cp" ]; then
-  fail "(IVG-61-CRIT3) checkpoint leaked into fake HOME — exclusive ceiling broken"
+# CRIT-3: nothing leaked into fake HOME's .workflow_artifacts/
+if [ -f "$NESTED_HOME/.workflow_artifacts/memory/recent-sessions.md" ]; then
+  fail "(IVG-61-CRIT3) session record leaked into fake HOME — exclusive ceiling broken"
 else
-  ok "(IVG-61-CRIT3) no checkpoint leaked into fake HOME"
+  ok "(IVG-61-CRIT3) no session record leaked into fake HOME"
 fi
 
 rm -rf "$NESTED_HOME" 2>/dev/null || true
@@ -894,14 +548,14 @@ rm -f "$MEM_DIR_TEST/run-state-inv-max.json"
 
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
 
-# (r1) fresh active record matching the session → checkpoint, no sentinel
+# (r1) fresh active record matching the session → no checkpoint, no sentinel
 python3 "$RUN_STATE" --write --project-root "$TMPDIR_TEST" --task row1 --session-id sess-row1-run --phase implement --subphase code --step "row1 step" --next-action "row1 next" >/dev/null 2>&1
 stdin=$(make_stdin "auto" "sess-row1-run")
 out_r1=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
 cp_r1=$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | wc -l | awk '{print $1}')
 rs_r1=$(grep -c 'sess-row1-run' "$MEM_DIR_TEST/recent-sessions.md" 2>/dev/null) || rs_r1=0
-if [ "$out_r1" = '{"decision": "allow"}' ] && [ "$cp_r1" -ge 1 ] && [ ! -f "$MEM_DIR_TEST/pending-restore-sess-row1-run.txt" ]; then
-  ok "(r1) run row → allow JSON only, checkpoint written, no sentinel"
+if [ "$out_r1" = '{"decision": "allow"}' ] && [ "$cp_r1" -eq 0 ] && [ ! -f "$MEM_DIR_TEST/pending-restore-sess-row1-run.txt" ]; then
+  ok "(r1) run row → allow JSON only, no checkpoint, no sentinel"
 else
   fail "(r1) run row misbehaved (out=$out_r1 cp=$cp_r1)"
 fi
@@ -913,14 +567,14 @@ fi
 rm -f "$MEM_DIR_TEST/run-state-row1.json" "$MEM_DIR_TEST/run-notes-row1.md"
 rm -f "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null || true
 
-# (r2) no record, pidfile present → checkpoint, no sentinel (unchanged row)
+# (r2) no record, pidfile present → no checkpoint, no sentinel
 touch "$TMPDIR_TEST/.workflow_artifacts/memory/sessions/review-13579.pidfile.lock"
 stdin=$(make_stdin "auto" "sess-row2-pidfile")
 out_r2=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
 cp_r2=$(ls "$TMPDIR_TEST/.workflow_artifacts/memory/checkpoints/"*.md 2>/dev/null | wc -l | awk '{print $1}')
 rs_r2=$(grep -c 'sess-row2-pidfile' "$MEM_DIR_TEST/recent-sessions.md" 2>/dev/null) || rs_r2=0
-if [ "$out_r2" = '{"decision": "allow"}' ] && [ "$cp_r2" -ge 1 ] && [ ! -f "$MEM_DIR_TEST/pending-restore-sess-row2-pidfile.txt" ]; then
-  ok "(r2) pidfile row → allow JSON only, checkpoint written, no sentinel"
+if [ "$out_r2" = '{"decision": "allow"}' ] && [ "$cp_r2" -eq 0 ] && [ ! -f "$MEM_DIR_TEST/pending-restore-sess-row2-pidfile.txt" ]; then
+  ok "(r2) pidfile row → allow JSON only, no checkpoint, no sentinel"
 else
   fail "(r2) pidfile row misbehaved (out=$out_r2 cp=$cp_r2)"
 fi

@@ -2,7 +2,7 @@
 # test_lifecycle_banner_drift.sh — Drift test for lifecycle banner wording
 #
 # Purpose: asserts no banner surface still says '/end_of_day before' —
-#   replaced with /checkpoint nudges per checkpoint-scope-expansion stages 1–3.
+#   replaced with same-day and cross-day wrap-up wording.
 #
 # Invocation (from project root):
 #   bash quoin/dev/tests/test_lifecycle_banner_drift.sh
@@ -40,7 +40,7 @@ else
   cat "$TMPFILE"
 fi
 
-# ── Test 2 (T-04): same-day flagged session -> /checkpoint recommendation ────
+# ── Test 2: same-day flagged session -> wrap-up reminder with the run resume command ──
 # ── Test 3 (T-04): cross-day flagged session -> /end_of_day recommendation ──
 # Fixture-driven: invoke the real sessionstart.sh and sessionend.sh hooks with
 # a session file dated today vs. dated yesterday, and assert the emitted
@@ -79,17 +79,19 @@ if [ -f "$SESSIONSTART_HOOK" ] && [ -f "$SESSIONEND_HOOK" ] && command -v python
 
   rm -f "$T04_EOD_SENTINEL" 2>/dev/null || true
   out_t04_same=$(printf '%s' "$(make_t04_stdin "sess-t04-same")" | sh "$SESSIONSTART_HOOK" 2>/dev/null)
-  if printf '%s' "$out_t04_same" | grep -q '/checkpoint' 2>/dev/null; then
-    pass "Test 2 — sessionstart.sh same-day-only flagged session recommends /checkpoint"
+  if printf '%s' "$out_t04_same" | grep -q '/run --resume' 2>/dev/null \
+     && ! printf '%s' "$out_t04_same" | grep -q '/checkpoint' 2>/dev/null; then
+    pass "Test 2 — sessionstart.sh same-day-only flagged session points at /end_of_day and /run --resume"
   else
-    fail "Test 2 — sessionstart.sh same-day-only flagged session did not mention /checkpoint: $out_t04_same"
+    fail "Test 2 — sessionstart.sh same-day-only flagged session wording wrong: $out_t04_same"
   fi
 
   out_t04_same_end=$(printf '%s' "$(make_t04_stdin "sess-t04-same-end")" | sh "$SESSIONEND_HOOK" 2>/dev/null)
-  if printf '%s' "$out_t04_same_end" | grep -q '/checkpoint' 2>/dev/null; then
-    pass "Test 2 — sessionend.sh same-day-only flagged session recommends /checkpoint"
+  if printf '%s' "$out_t04_same_end" | grep -q '/run --resume' 2>/dev/null \
+     && ! printf '%s' "$out_t04_same_end" | grep -q '/checkpoint' 2>/dev/null; then
+    pass "Test 2 — sessionend.sh same-day-only flagged session points at /end_of_day and /run --resume"
   else
-    fail "Test 2 — sessionend.sh same-day-only flagged session did not mention /checkpoint: $out_t04_same_end"
+    fail "Test 2 — sessionend.sh same-day-only flagged session wording wrong: $out_t04_same_end"
   fi
 
   # --- cross-day case: session file dated yesterday, end_of_day_due: yes ---
