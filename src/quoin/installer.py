@@ -1201,10 +1201,13 @@ def deploy_hooks(
         event_list[:] = [
             s for s in event_list
             if not (
-                s.get("matcher") == matcher
+                isinstance(s, dict)
+                and s.get("matcher") == matcher
+                and isinstance(s.get("hooks"), list)
                 and any(
-                    h.get("command", "").endswith(script_name)
-                    for h in s.get("hooks", [])
+                    isinstance(h, dict)
+                    and str(h.get("command", "")).endswith(script_name)
+                    for h in s["hooks"]
                 )
             )
         ]

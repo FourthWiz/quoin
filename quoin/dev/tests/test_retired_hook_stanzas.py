@@ -116,3 +116,24 @@ def test_relative_command_and_null_hooks_are_safe(tmp_path, monkeypatch):
     assert stanzas[0]["hooks"][0]["command"] == "hooks/retired_demo.sh"
     assert stanzas[1]["hooks"] is None
     assert "hooks" not in stanzas[2]
+
+
+def test_malformed_stanzas_under_quoin_events_do_not_crash_install(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    dest = home / ".claude"
+    dest.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    settings = {"hooks": {"UserPromptSubmit": [
+        {"matcher": "*", "hooks": None},
+        {"matcher": "*", "hooks": ["junk", 3, {"command": None}]},
+        "not-a-dict",
+        _stanza("/opt/x/other.sh"),
+    ]}}
+    (dest / "settings.json").write_text(json.dumps(settings), encoding="utf-8")
+    deploy_hooks(QUOIN_SRC, dest)
+    result = json.loads((dest / "settings.json").read_text(encoding="utf-8"))
+    cmds = [s["hooks"][0]["command"] for s in result["hooks"]["UserPromptSubmit"]
+            if isinstance(s, dict) and isinstance(s.get("hooks"), list)
+            and s["hooks"] and isinstance(s["hooks"][0], dict) and s["hooks"][0].get("command")]
+    assert sum(c.endswith("userpromptsubmit.sh") for c in cmds) == 1
+    assert "/opt/x/other.sh" in cmds
