@@ -8,6 +8,7 @@ The following files are explicitly **excluded** from terse-style writing — the
 
 **Hand-edited files:**
 - `quoin/CLAUDE.md` (this file).
+- `quoin/CLAUDE.core.md` (hand-edited always-on rules text, the second input of the slim generator `quoin/scripts/build_claude_slim.py`; not deployed on its own; keep it in step with `quoin/CLAUDE.md` and regenerate `CLAUDE.slim.md` after every edit).
 - `quoin/memory/lessons-learned.md`.
 - `quoin/memory/terse-rubric.md` (+ deployed copy at `__QUOIN_HOME__/memory/`) — compressing recreates the v1 CRIT-2 circular dependency.
 - `quoin/memory/format-kit.md` (+ deployed copy at `__QUOIN_HOME__/memory/`) — v3 content-type → primitive mapping.
@@ -36,7 +37,7 @@ The following files are explicitly **excluded** from terse-style writing — the
 - `quoin/memory/cleanup-task-bookkeeping.md` (+ `__QUOIN_HOME__/memory/cleanup-task-bookkeeping.md` deployed copy — full interactive procedure for the standalone `/cleanup` task bookkeeping pass; added IVG-262)
 
 **Generated Tier-1 files (never hand-edit; regenerate with `quoin/scripts/build_claude_slim.py`):**
-- `quoin/memory/workflow-catalog.md` (+ `__QUOIN_HOME__/memory/workflow-catalog.md` deployed copy — full verbatim text of every section dropped from `CLAUDE.slim.md`, generated from `quoin/CLAUDE.md` by `quoin/scripts/build_claude_slim.py`; regenerate with `python3 quoin/scripts/build_claude_slim.py`; added IVG-164 stage 1 2026-08-07). This is the first GENERATED member of `TIER1_MEMORY_FILES` — the precedent for "generated but Tier-1-listed" already exists above in this file's **Source files:** block for `skills/<skill>/preamble.md`, which is listed "only for disambiguation — NOT a Tier 1 hand-edited source file"; the same disambiguation applies here. Tier-1 membership here means always-English + never terse-rewritten — it does NOT mean hand-editable, and `/sleep` must never treat it as a hand-maintained memory file.
+- `quoin/memory/workflow-catalog.md` (+ `__QUOIN_HOME__/memory/workflow-catalog.md` deployed copy — full verbatim text of every section of `quoin/CLAUDE.md` except the title line, generated from `quoin/CLAUDE.md` by `quoin/scripts/build_claude_slim.py`; regenerate with `python3 quoin/scripts/build_claude_slim.py`; added IVG-164 stage 1 2026-08-07). This is the first GENERATED member of `TIER1_MEMORY_FILES` — the precedent for "generated but Tier-1-listed" already exists above in this file's **Source files:** block for `skills/<skill>/preamble.md`, which is listed "only for disambiguation — NOT a Tier 1 hand-edited source file"; the same disambiguation applies here. Tier-1 membership here means always-English + never terse-rewritten — it does NOT mean hand-editable, and `/sleep` must never treat it as a hand-maintained memory file.
 
 NOTE: QUICKSTART.md sits at `quoin/` root and deploys to `__QUOIN_HOME__/QUICKSTART.md` (NOT under `memory/`) — this is intentional. Do NOT normalize paths.
 - `quoin/QUICKSTART.md` (+ `__QUOIN_HOME__/QUICKSTART.md` deployed copy).

@@ -9,6 +9,10 @@ architecture-AC-3 reachability/ownership groups that close AC-3 limbs 2 and
 4 (gates render and block; cost-ledger + session-state writes occur)
 mechanically, independent of the T-11 behavioral pilot.
 
+The slim file now carries the hand-written core text plus a resolution
+sentence; every rule paragraph below is asserted verbatim in the catalog,
+where the full rules live.
+
 Independence discipline: the eight verbatim anchors below are hardcoded
 literal strings transcribed directly from the live quoin/CLAUDE.md source
 (not derived via build_claude_slim.CLASSIFICATION or its parser), so a bug
@@ -124,27 +128,26 @@ ARCHIVING_ANCHOR = (
 )
 
 
-def test_never_auto_invoke_rule_present_verbatim_in_slim():
+def test_never_auto_invoke_rule_present_verbatim_in_catalog():
     # 362 B live (D-13: live measurement wins over the plan's hand-counted
     # 363 B — same 1-2 B hand-count divergence T-02 recorded for its own
     # moved paragraphs).
     assert len(NEVER_AUTO_INVOKE_PARAGRAPH.encode("utf-8")) == 362
-    slim_text = SLIM.read_text(encoding="utf-8")
-    assert NEVER_AUTO_INVOKE_PARAGRAPH in slim_text, (
+    catalog_text = CATALOG.read_text(encoding="utf-8")
+    assert NEVER_AUTO_INVOKE_PARAGRAPH in catalog_text, (
         "the never-auto-invoke CRITICAL RULE is missing verbatim from "
-        "CLAUDE.slim.md — this is a main-session-essential safety rule and "
-        "must never be dropped"
+        "workflow-catalog.md"
     )
 
 
-def test_branch_hygiene_enforcement_present_verbatim_in_slim():
+def test_branch_hygiene_enforcement_present_verbatim_in_catalog():
     # 655 B live (D-13: live measurement wins over the plan's hand-counted
     # 656 B).
     assert len(BRANCH_HYGIENE_ENFORCEMENT_PARAGRAPH.encode("utf-8")) == 655
-    slim_text = SLIM.read_text(encoding="utf-8")
-    assert BRANCH_HYGIENE_ENFORCEMENT_PARAGRAPH in slim_text, (
+    catalog_text = CATALOG.read_text(encoding="utf-8")
+    assert BRANCH_HYGIENE_ENFORCEMENT_PARAGRAPH in catalog_text, (
         "the branch-hygiene three-layer enforcement summary is missing "
-        "verbatim from CLAUDE.slim.md"
+        "verbatim from workflow-catalog.md"
     )
 
 
@@ -158,29 +161,27 @@ def test_task_layout_convention_present_in_slim():
     assert TASK_LAYOUT_ANCHOR in slim_text
 
 
-def test_git_pr_safety_section_present_verbatim_in_slim():
-    """The full '### Git & PR Safety' section (push/PR restrictions) survives."""
+def test_git_pr_safety_section_present_verbatim_in_catalog():
+    """The full '### Git & PR Safety' section (push/PR restrictions) is in the catalog."""
     source_text = SOURCE.read_text(encoding="utf-8")
     sections = _local_sections(source_text)
     heading = "### Git & PR Safety"
     assert heading in sections, "heading not found in live source"
-    slim_text = SLIM.read_text(encoding="utf-8")
-    assert sections[heading] in slim_text, (
+    catalog_text = CATALOG.read_text(encoding="utf-8")
+    assert sections[heading] in catalog_text, (
         "the '### Git & PR Safety' section (push/PR restrictions) is "
-        "missing verbatim from CLAUDE.slim.md"
+        "missing verbatim from workflow-catalog.md"
     )
 
 
-def test_workflow_conventions_present_verbatim_in_slim():
-    """D-14: '### Workflow conventions' (209 B) — never-finalize-early rule #1."""
-    slim_text = SLIM.read_text(encoding="utf-8")
-    assert WORKFLOW_CONVENTIONS_ANCHOR in slim_text
+def test_workflow_conventions_present_verbatim_in_catalog():
+    """'### Workflow conventions' — never-finalize-early rule #1."""
+    assert WORKFLOW_CONVENTIONS_ANCHOR in CATALOG.read_text(encoding="utf-8")
 
 
-def test_archiving_completed_work_present_verbatim_in_slim():
-    """D-14: '### Archiving completed work' (312 B) — never-finalize-early rule #2."""
-    slim_text = SLIM.read_text(encoding="utf-8")
-    assert ARCHIVING_ANCHOR in slim_text
+def test_archiving_completed_work_present_verbatim_in_catalog():
+    """'### Archiving completed work' — never-finalize-early rule #2."""
+    assert ARCHIVING_ANCHOR in CATALOG.read_text(encoding="utf-8")
 
 
 def test_substitute_quoin_home_leaves_zero_residual(tmp_path):
@@ -206,45 +207,39 @@ def test_substitute_quoin_home_leaves_zero_residual(tmp_path):
 
 # --- AC-3 mechanical closure: two assertion groups ---------------------------
 
-# (a) AC-3-scoped reachability sub-test. Sections that carry gate-invocation /
-# cost-ledger / session-state prose and are classified drop — closing AC-3
-# limbs 2 (gates render and block) and 4 (cost-ledger + session-state writes
-# occur) mechanically, without a live run.
-AC3_DROPPED_SECTIONS = [
-    "### Cost tracking",
-    "### Session state tracking",
-    "### Communication",
-]
+# (a) Reachability: every source section except the title is verbatim in the
+# catalog under its original heading, and the slim file carries the sentence
+# that tells a reader where to look.
+RESOLUTION_SENTENCE = (
+    "Full rules: every section of the workflow rules is kept verbatim, under "
+    "its original heading, in __QUOIN_HOME__/memory/workflow-catalog.md; "
+    'a skill citing CLAUDE.md "<section>" means that section there.'
+)
+_TITLE = "# Development Workflow — Shared Rules"
+_NON_TITLE_HEADINGS = [h for h in _local_sections(SOURCE.read_text(encoding="utf-8")) if h != _TITLE]
 
 
-@pytest.mark.parametrize("heading", AC3_DROPPED_SECTIONS)
-def test_ac3_dropped_section_reachable_in_catalog_and_index(heading):
-    source_text = SOURCE.read_text(encoding="utf-8")
-    sections = _local_sections(source_text)
-    assert heading in sections, f"heading not found in live source: {heading!r}"
-    section_text = sections[heading]
+def test_non_title_heading_set_is_the_expected_size():
+    assert len(_NON_TITLE_HEADINGS) == 35
+
+
+@pytest.mark.parametrize("heading", _NON_TITLE_HEADINGS)
+def test_every_source_section_reachable_in_catalog_and_resolution_sentence(heading):
+    section_text = _local_sections(SOURCE.read_text(encoding="utf-8"))[heading]
 
     catalog_text = CATALOG.read_text(encoding="utf-8")
     assert section_text in catalog_text, (
         f"full section bytes for {heading!r} not found verbatim in "
         "workflow-catalog.md"
     )
+    assert f"\n{heading}\n" in catalog_text
 
-    # Substituted deployed projection of the catalog still carries it. Some
-    # of these sections (Cost tracking, Session state tracking) themselves
-    # cite `__QUOIN_HOME__/memory/...` pointers, so the expected operand is
-    # the SAME substitution applied to the section text, not the raw text.
+    # The substituted deployed projection of the catalog still carries it.
     substituted_catalog = catalog_text.replace(QUOIN_HOME_PLACEHOLDER, PROJECT_STANDIN)
     substituted_section = section_text.replace(QUOIN_HOME_PLACEHOLDER, PROJECT_STANDIN)
-    assert substituted_section in substituted_catalog, (
-        f"{heading!r} section bytes disappeared after __QUOIN_HOME__ "
-        "substitution"
-    )
+    assert substituted_section in substituted_catalog
 
-    slim_text = SLIM.read_text(encoding="utf-8")
-    assert f"- {heading} -> " in slim_text, (
-        f"CLAUDE.slim.md's pointer index carries no row naming {heading!r}"
-    )
+    assert RESOLUTION_SENTENCE in SLIM.read_text(encoding="utf-8")
 
 
 # (b) SKILL.md-ownership assertions over the deployed adapter corpus: the

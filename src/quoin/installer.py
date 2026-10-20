@@ -1734,13 +1734,13 @@ def regenerate_verification_step(source_dir: pathlib.Path, *, allow_writes: bool
 
 def check_slim_outputs_fresh(source_dir: pathlib.Path) -> list[str]:
     """Byte-compare committed CLAUDE.slim.md / memory/workflow-catalog.md against a
-    fresh regen (IVG-164 review round-1 MAJOR 1).
+    fresh regen from CLAUDE.md and CLAUDE.core.md.
 
-    Project-scope installs always run with allow_writes=False (T-07 MAJ-6), so
-    regenerate_pollution_dispatch's self-heal pattern above can never fire for the
-    one scope where --claude-md-variant slim is legal — an edit to quoin/CLAUDE.md
-    that skips re-running build_claude_slim.py would otherwise deploy stale
-    generated content silently. This is a read-only CHECK, never a write: it
+    Slim is the default variant in both scopes and installs often run with
+    allow_writes=False, so regenerate_pollution_dispatch's self-heal pattern above
+    cannot fire — an edit to quoin/CLAUDE.md or quoin/CLAUDE.core.md that skips
+    re-running build_claude_slim.py would otherwise deploy stale generated content
+    silently. This is a read-only CHECK, never a write: it
     borrows build_claude_slim.py's `build_outputs()` function and CLASSIFICATION
     table via runpy with a non-`"__main__"` run_name, so the script's own
     argparse/main()/file-write side effects never execute.
@@ -1770,8 +1770,13 @@ def check_slim_outputs_fresh(source_dir: pathlib.Path) -> list[str]:
         source_text = claude_md.read_text(encoding="utf-8")
     except (Exception, SystemExit) as exc:
         return [f"{script} (staleness check unavailable: {type(exc).__name__}: {exc})"]
+    core_md = source_dir / "CLAUDE.core.md"
     try:
-        slim_text, catalog_text = build_outputs(source_text)
+        core_text = core_md.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"{core_md} (core text unreadable: {type(exc).__name__}: {exc})"]
+    try:
+        slim_text, catalog_text = build_outputs(source_text, core_text)
     except classification_error as exc:
         return [f"{claude_md} (regen aborted, CLASSIFICATION/heading mismatch: {exc})"]
 

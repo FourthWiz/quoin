@@ -7,15 +7,10 @@ This test therefore ceilings the MARKER BLOCK, not the whole deployed file
 (that would conflate quoin's own budget with user-owned content — see the
 advisory whole-file projection at the bottom, which is deliberately loose).
 
-All addends are pinned exactly (plan MIN-1 r2 / MAJ-2 r3: every term in the
-projection is a named, re-derivable constant, no `~` approximations). Live
-figures re-derived at implement time (round-4 critic's well-formed blank-line
-model): keep set 7,298 B, generated header
-338 B (pinned verbatim in T-04), pointer index 1,439 B (140 B header + 1,298 B
-of 24 rows + 1 blank) -> CLAUDE.slim.md source == 9,075 B exactly (keep set
-shrank 13 B when the retired lifecycle skill left the single-root sentence). This
-matches the live committed file byte-for-byte (T-08 does not hand-transcribe
-this figure a second time; it reads the committed file directly).
+All addends are pinned exactly: every term in the projection is a named,
+re-derivable constant, no `~` approximations. The slim file is the title
+line, the hand-written core text, one resolution sentence and one topic-guide
+line (about 2 KB); the test reads the committed file directly.
 """
 from __future__ import annotations
 
@@ -33,7 +28,7 @@ QUOIN_HOME_PLACEHOLDER = "__QUOIN_HOME__"
 # MARKER_FRAME): opening + closing install.sh marker lines.
 MARKER_FRAME = 56
 
-SLIM_MARKER_BLOCK_CEILING = 10_240
+SLIM_MARKER_BLOCK_CEILING = 2_560
 
 # Fixed, environment-independent worst-case project `.claude` path (same
 # discipline as the sibling ceiling test's HOME_STANDIN: a literal, not
@@ -53,6 +48,7 @@ assert len(PROJECT_STANDIN) == 104, len(PROJECT_STANDIN)
 # calibrated for a different destination (the user's ~/.claude/CLAUDE.md).
 PROJECT_PRE_MARKER_BUDGET = 6_144
 DEPLOYED_CEILING = 40_000
+SLIM_BYTES = 2_328
 
 
 def test_slim_source_marker_block_below_ceiling():
@@ -77,28 +73,24 @@ def test_slim_deployed_projection_below_ceiling_exact_figures():
     """
     slim_text = SLIM.read_text(encoding="utf-8")
     source_len = len(slim_text.encode("utf-8"))
-    assert source_len == 9_075, (
-        f"CLAUDE.slim.md source is {source_len} B, expected 9,075 B exactly "
-        "(7,298 B keep set + 338 B pinned header + 1,439 B pointer index). "
-        "If this changed intentionally, re-pin every downstream figure in "
-        "this file and in T-12's claude_md_slim ceiling."
+    assert source_len == SLIM_BYTES, (
+        f"CLAUDE.slim.md source is {source_len} B, expected {SLIM_BYTES} B exactly. "
+        "If this changed intentionally, re-pin the figures in this file and the "
+        "claude_md_slim ratchet in test_footprint_ceilings.py."
     )
 
     marker_block_source = source_len + MARKER_FRAME
-    assert marker_block_source == 9_131, marker_block_source
+    assert marker_block_source == SLIM_BYTES + MARKER_FRAME
 
     substituted = slim_text.replace(QUOIN_HOME_PLACEHOLDER, PROJECT_STANDIN)
     substituted_len = len(substituted.encode("utf-8"))
     placeholder_count = slim_text.count(QUOIN_HOME_PLACEHOLDER)
-    assert placeholder_count == 2, placeholder_count
+    assert placeholder_count == 1, placeholder_count
     sub_delta = placeholder_count * (len(PROJECT_STANDIN) - len(QUOIN_HOME_PLACEHOLDER))
     assert substituted_len == source_len + sub_delta
 
     marker_block_substituted = substituted_len + MARKER_FRAME
-    assert marker_block_substituted == 9_311, marker_block_substituted
-
-    headroom = SLIM_MARKER_BLOCK_CEILING - marker_block_substituted
-    assert headroom == 929, headroom
+    assert marker_block_substituted == SLIM_BYTES + sub_delta + MARKER_FRAME
     assert marker_block_substituted <= SLIM_MARKER_BLOCK_CEILING, (
         f"CLAUDE.slim.md substituted marker block is {marker_block_substituted} B "
         f"on a {len(PROJECT_STANDIN)}-char worst-case project path; "

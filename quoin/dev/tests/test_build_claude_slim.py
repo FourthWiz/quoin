@@ -24,6 +24,7 @@ sys.path.insert(0, str(_SCRIPTS))
 import build_claude_slim as bcs  # noqa: E402
 
 SOURCE = _SOURCE_ROOT / "CLAUDE.md"
+CORE = _SOURCE_ROOT / "CLAUDE.core.md"
 SLIM = _SOURCE_ROOT / "CLAUDE.slim.md"
 CATALOG = _SOURCE_ROOT / "memory" / "workflow-catalog.md"
 INSTALLER = _REPO_ROOT / "src" / "quoin" / "installer.py"
@@ -67,17 +68,21 @@ def _local_sections(text: str) -> list[tuple[str, str]]:
     return out
 
 
+def _core() -> str:
+    return CORE.read_text(encoding="utf-8")
+
+
 def test_slim_regen_byte_identical():
     """Regenerating from the live source reproduces the committed CLAUDE.slim.md exactly."""
     source_text = SOURCE.read_text(encoding="utf-8")
-    slim_text, _catalog_text = bcs.build_outputs(source_text)
+    slim_text, _catalog_text = bcs.build_outputs(source_text, _core())
     assert slim_text == SLIM.read_text(encoding="utf-8")
 
 
 def test_catalog_regen_byte_identical():
     """Regenerating from the live source reproduces the committed workflow-catalog.md exactly."""
     source_text = SOURCE.read_text(encoding="utf-8")
-    _slim_text, catalog_text = bcs.build_outputs(source_text)
+    _slim_text, catalog_text = bcs.build_outputs(source_text, _core())
     assert catalog_text == CATALOG.read_text(encoding="utf-8")
 
 
@@ -112,23 +117,20 @@ def test_every_keep_section_bytes_present_in_slim():
 
 
 def test_classification_table_matches_plan_table():
-    """CLASSIFICATION has exactly 12 keep rows / 24 drop rows with the expected byte sums.
+    """CLASSIFICATION keeps only the title row and drops the other 35 sections.
 
-    Hard-coded mirror of a plan decision (T-04's 36-row table) — a wrong
-    membership reds here even though every content assertion above would
-    still pass (e.g. additionally keeping ### Task profiles, or additionally
-    dropping ## Task subfolder convention). Byte sums computed here via the
-    assertion-local parser, independent of the generator's own --census.
+    Byte sums computed here via the assertion-local parser, independent of the
+    generator's own --census. The keep and drop sums must cover the whole source.
     """
-    assert len(EXPECTED_KEEP_HEADINGS) == 12, EXPECTED_KEEP_HEADINGS
-    assert len(EXPECTED_DROP_HEADINGS) == 24, EXPECTED_DROP_HEADINGS
+    assert EXPECTED_KEEP_HEADINGS == ["# Development Workflow — Shared Rules"], EXPECTED_KEEP_HEADINGS
+    assert len(EXPECTED_DROP_HEADINGS) == 35, EXPECTED_DROP_HEADINGS
 
     source_text = SOURCE.read_text(encoding="utf-8")
     sections = dict(_local_sections(source_text))
     keep_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_KEEP_HEADINGS)
     drop_bytes = sum(len(sections[h].encode("utf-8")) for h in EXPECTED_DROP_HEADINGS)
-    assert keep_bytes == 7298, keep_bytes  # finalization-rule bullet shortened
-    assert drop_bytes == 31347, drop_bytes  # session-state tracking now points at session-schema.md instead of an inline template
+    assert keep_bytes == 41, keep_bytes
+    assert keep_bytes + drop_bytes == len(source_text.encode("utf-8"))
 
 
 def test_classification_table_is_bijective_with_source_headings():
@@ -146,7 +148,7 @@ def test_unclassified_heading_aborts(tmp_path):
     source_text = SOURCE.read_text(encoding="utf-8")
     mutated = source_text + "\n### A Wholly New Unclassified Heading\n\nBody.\n"
     with pytest.raises(bcs.ClassificationError):
-        bcs.build_outputs(mutated)
+        bcs.build_outputs(mutated, _core())
 
 
 def test_orphan_table_entry_aborts(tmp_path, monkeypatch):
@@ -156,7 +158,7 @@ def test_orphan_table_entry_aborts(tmp_path, monkeypatch):
     patched["### Nonexistent Heading Not In Source"] = ("drop", "workflow-catalog.md")
     monkeypatch.setattr(bcs, "CLASSIFICATION", patched)
     with pytest.raises(bcs.ClassificationError):
-        bcs.build_outputs(source_text)
+        bcs.build_outputs(source_text, _core())
 
 
 def test_fenced_pseudo_heading_not_treated_as_heading():
@@ -196,16 +198,17 @@ def test_container_h2_keep_stops_at_first_child_heading():
     assert "intro prose" in span
 
 
-def test_pointer_index_row_grammar_and_count():
-    """Every non-header index line matches the pinned row grammar; count == drop-row count."""
+def test_slim_ends_with_resolution_sentence_and_topic_guide_line():
+    """The slim file closes with the resolution sentence and one topic-guide line."""
     slim_text = SLIM.read_text(encoding="utf-8")
-    idx = slim_text.index("Dropped sections live in full under")
-    index_block = slim_text[idx:]
-    lines = [ln for ln in index_block.split("\n")[1:] if ln.strip()]
-    pattern = re.compile(r"^- (?P<heading>#{1,3} .+) -> (?P<target>[A-Za-z0-9._-]+\.(md|yaml))$")
-    for ln in lines:
-        assert pattern.match(ln), f"index row does not match grammar: {ln!r}"
-    assert len(lines) == len(EXPECTED_DROP_HEADINGS) == 24
+    lines = slim_text.rstrip("\n").split("\n")
+    assert lines[-2].startswith("Full rules: every section of the workflow rules is kept verbatim")
+    assert "__QUOIN_HOME__/memory/workflow-catalog.md" in lines[-2]
+    guide_line = lines[-1]
+    assert guide_line.startswith("Topic guides (same folder): ")
+    names = guide_line[len("Topic guides (same folder): "):].split(", ")
+    assert names == sorted(names) and len(names) == len(set(names))
+    assert all(re.fullmatch(r"[A-Za-z0-9._-]+\.md", n) for n in names), names
 
 
 def test_index_targets_are_deployed_memory_files():
@@ -242,12 +245,8 @@ def test_index_targets_are_deployed_memory_files():
         guide_targets.add(tgt)
         assert (memory_dir / tgt).exists(), f"index target not a real file: {tgt}"
         assert tgt in tier1, f"index target not in TIER1_MEMORY_FILES: {tgt}"
-    # 13 catalog targets (not the plan's original 12 — round-4 critic MIN-3
-    # additionally re-targets row 35 "### /sleep importance signals" from
-    # sleep-signals.yaml to workflow-catalog.md, since the YAML carries the
-    # row's data, not its prose). 9 distinct guides across the 11 remaining
-    # guide-bearing rows.
-    assert catalog_targets == 13, catalog_targets
+    # 24 rows land only in the catalog; 9 distinct guides across the other 11.
+    assert catalog_targets == 24, catalog_targets
     assert len(guide_targets) == 9, guide_targets
 
 
@@ -296,18 +295,19 @@ def test_slim_headings_subset_of_source_headings():
     slim_headings = {h for _p, h in bcs._fence_aware_headings(SLIM.read_text(encoding="utf-8"))}
     assert slim_headings <= source_headings, slim_headings - source_headings
     assert slim_headings == set(EXPECTED_KEEP_HEADINGS)
+    assert slim_headings == {"# Development Workflow — Shared Rules"}
 
 
 def test_slim_placeholder_count_derived_not_magic():
-    """slim's __QUOIN_HOME__ count == 1 (index header) + occurrences inside keep sections."""
+    """slim's __QUOIN_HOME__ count == 1 (resolution sentence) + keep sections + core text."""
     source_text = SOURCE.read_text(encoding="utf-8")
     sections = dict(_local_sections(source_text))
     keep_placeholder_occurrences = sum(
         sections[h].count("__QUOIN_HOME__") for h in EXPECTED_KEEP_HEADINGS
     )
-    expected = 1 + keep_placeholder_occurrences
+    expected = 1 + keep_placeholder_occurrences + _core().count("__QUOIN_HOME__")
     slim_text = SLIM.read_text(encoding="utf-8")
-    assert slim_text.count("__QUOIN_HOME__") == expected == 2
+    assert slim_text.count("__QUOIN_HOME__") == expected == 1
 
 
 def test_check_mode_exits_clean_on_committed_outputs():
@@ -335,6 +335,7 @@ def _copy_repo_for_check_mutation(tmp_path: Path) -> Path:
     (scratch_source_root / "memory").mkdir()
     shutil.copy(_SCRIPTS / "build_claude_slim.py", scratch_source_root / "scripts" / "build_claude_slim.py")
     shutil.copy(SOURCE, scratch_source_root / "CLAUDE.md")
+    shutil.copy(CORE, scratch_source_root / "CLAUDE.core.md")
     shutil.copy(SLIM, scratch_source_root / "CLAUDE.slim.md")
     shutil.copy(CATALOG, scratch_source_root / "memory" / "workflow-catalog.md")
     return scratch_repo
@@ -361,6 +362,51 @@ def test_check_mode_exits_7_on_one_character_edit(tmp_path):
     assert result.returncode == 7, result.stdout + result.stderr
 
 
+def test_check_mode_exits_7_on_one_character_core_edit(tmp_path):
+    """A core-text edit without regeneration makes `--check` exit 7."""
+    scratch_repo = _copy_repo_for_check_mutation(tmp_path)
+    scratch_core = scratch_repo / "quoin" / "CLAUDE.core.md"
+    scratch_core.write_text(scratch_core.read_text(encoding="utf-8") + "x", encoding="utf-8")
+    result = subprocess.run(
+        [sys.executable, str(scratch_repo / "quoin" / "scripts" / "build_claude_slim.py"), "--check"],
+        cwd=str(scratch_repo),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 7, result.stdout + result.stderr
+
+
+def test_missing_core_file_exits_2_cleanly(tmp_path):
+    scratch_repo = _copy_repo_for_check_mutation(tmp_path)
+    (scratch_repo / "quoin" / "CLAUDE.core.md").unlink()
+    result = subprocess.run(
+        [sys.executable, str(scratch_repo / "quoin" / "scripts" / "build_claude_slim.py"), "--check"],
+        cwd=str(scratch_repo),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "core text not found" in result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_core_text_with_heading_aborts():
+    """A heading in the core text would let the slim heading set escape the source's."""
+    with pytest.raises(bcs.ClassificationError, match="headings"):
+        bcs.build_outputs(SOURCE.read_text(encoding="utf-8"), _core() + "\n## Extra\n\ntext\n")
+
+
+def test_topic_guides_include_core_named_files_and_skip_paths():
+    core = "see `foo-guide.md` and .workflow_artifacts/memory/lessons-learned.md and `MEMORY.md` and insights-<date>.md\n"
+    guides = bcs._topic_guides(core)
+    assert "foo-guide.md" in guides
+    assert "lessons-learned.md" not in guides
+    assert "MEMORY.md" not in guides
+    assert "<date>.md" not in guides
+
+
 def test_deployed_copy_refuses_to_write_even_when_source_exists(tmp_path):
     """Round-2 minor 2 regression: a DEPLOYED copy (fake ~/.claude/scripts/)
     whose inferred repo root happens to contain quoin/CLAUDE.md must refuse the
@@ -380,6 +426,7 @@ def test_deployed_copy_refuses_to_write_even_when_source_exists(tmp_path):
     (fake_source_root / "CLAUDE.md").write_text(
         SOURCE.read_text(encoding="utf-8"), encoding="utf-8"
     )
+    (fake_source_root / "CLAUDE.core.md").write_text(_core(), encoding="utf-8")
     sentinel = "PRE-EXISTING CONTENT MUST SURVIVE\n"
     (fake_source_root / "CLAUDE.slim.md").write_text(sentinel, encoding="utf-8")
     (fake_source_root / "memory" / "workflow-catalog.md").write_text(
