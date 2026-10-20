@@ -296,6 +296,28 @@ def measure_sessionstart_outputs(pkg, work):
     return out
 
 
+MARKER_START = "# === DEV WORKFLOW START ==="
+MARKER_END = "# === DEV WORKFLOW END ==="
+
+
+def marker_footprint(path):
+    """Return (marker_block, pre_marker) sizes for a deployed rules file.
+
+    marker_block spans the START line through the END line inclusive and is
+    None when either marker is absent; pre_marker counts the chars before START.
+    """
+    if not path.is_file():
+        return None, None
+    text = path.read_bytes().decode("utf-8", errors="replace")
+    start = text.find(MARKER_START)
+    end = text.find(MARKER_END)
+    if start < 0 or end < start:
+        return None, (len(text) if start < 0 else None)
+    end_line = text.find("\n", end)
+    block = text[start:(end_line if end_line >= 0 else len(text))]
+    return ({"chars": len(block), "bytes": len(block.encode("utf-8"))}, len(text[:start]))
+
+
 def measure_footprints(home_claude):
     fr = _load_module("_fr_baseline", SRC_ROOT / "scripts" / "footprint_report.py")
     snap = fr.capture_snapshot(home_claude)
@@ -309,8 +331,10 @@ def measure_footprints(home_claude):
         return {"chars": len(raw.decode("utf-8", errors="replace")), "bytes": len(raw)}
 
     cats = snap["categories"]
+    marker_block, pre_marker = marker_footprint(dep)
     return {
-        "claude_md": {"label": "always-on", "source": cb(src), "deployed": cb(dep)},
+        "claude_md": {"label": "always-on", "source": cb(src), "deployed": cb(dep),
+                      "marker_block": marker_block, "pre_marker": pre_marker},
         "memory": {"label": "on-demand", "total_bytes": cats["memory"]["total_bytes"],
                    "files": len(cats["memory"]["files"])},
         "skill_bodies": {"label": "on-demand", "total_bytes": cats["skills"]["total_bytes"],
@@ -427,6 +451,7 @@ def render_md(label, data):
     cm = fp["claude_md"]
     L += ["", "### Footprints", "",
           "- CLAUDE.md (always-on): source %s, deployed %s" % (cm["source"], cm["deployed"]),
+          "- CLAUDE.md marker block %s, pre-marker chars %s" % (cm.get("marker_block"), cm.get("pre_marker")),
           "- memory files (on-demand): %s bytes in %s files" % (fp["memory"]["total_bytes"], fp["memory"]["files"]),
           "- SKILL.md bodies (on-demand): %s bytes in %s files" % (fp["skill_bodies"]["total_bytes"], fp["skill_bodies"]["files"])]
     sl = data["skill_listing"]
