@@ -1,6 +1,6 @@
 ---
 name: weekly_review
-description: "Aggregates the week's work into a structured review from daily caches, session files, and git history. Use for: /weekly_review, 'weekly summary', 'what did I do this week', 'week recap', 'friday review', 'weekly report'."
+description: "Aggregates the week's work into a structured review from daily caches, sessions and git history. Use for: /weekly_review, 'weekly summary', 'what did I do this week'."
 model: haiku
 ---
 

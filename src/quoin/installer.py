@@ -214,6 +214,8 @@ SKILL_OVERRIDES: dict[str, str] = {
     "continue_work": "name-only",
     "security_review": "name-only",
     "workspace": "name-only",
+    # Dispatched by name from /thorough_plan; its description says not for direct use.
+    "revise-fast": "name-only",
 }
 
 _MARKER_START = "# === DEV WORKFLOW START ==="

@@ -356,6 +356,55 @@ def _ask_install_questions(
     )
 
 
+CLAUDE_MD_VARIANT_STATE_FILE = ".quoin-claude-md-variant"
+CLAUDE_MD_VARIANT_ENV = "QUOIN_CLAUDE_MD_VARIANT"
+_CLAUDE_MD_VARIANTS = ("full", "slim")
+
+
+def _resolve_claude_md_variant(args: argparse.Namespace, dest_root: pathlib.Path) -> tuple[str, str]:
+    """Return (variant, origin). Precedence: flag, env, stored choice, slim default.
+
+    Origin is one of flag, env, stored, default. Invalid env or stored values
+    are ignored with a warning.
+    """
+    flag = getattr(args, "claude_md_variant", None)
+    if flag:
+        return flag, "flag"
+    env = os.environ.get(CLAUDE_MD_VARIANT_ENV, "").strip()
+    if env:
+        if env in _CLAUDE_MD_VARIANTS:
+            return env, "env"
+        print(
+            f"quoin: ignoring invalid {CLAUDE_MD_VARIANT_ENV}={env!r} (expected full or slim)",
+            file=sys.stderr,
+        )
+    state = dest_root / CLAUDE_MD_VARIANT_STATE_FILE
+    try:
+        stored = state.read_text(encoding="utf-8").strip()
+    except OSError:
+        stored = ""
+    if stored:
+        if stored in _CLAUDE_MD_VARIANTS:
+            return stored, "stored"
+        print(
+            f"quoin: ignoring invalid value {stored!r} in {state} (expected full or slim)",
+            file=sys.stderr,
+        )
+    return "slim", "default"
+
+
+def _store_claude_md_variant(dest_root: pathlib.Path, variant: str) -> None:
+    """Persist an explicit choice: 'full' writes the state file, 'slim' removes it."""
+    state = dest_root / CLAUDE_MD_VARIANT_STATE_FILE
+    try:
+        if variant == "full":
+            state.write_text("full\n", encoding="utf-8")
+        else:
+            state.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"quoin: could not update {state}: {exc}", file=sys.stderr)
+
+
 def _cmd_claude_install(args: argparse.Namespace) -> int:
     from quoin import installer
 
@@ -371,35 +420,45 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     scope: str = getattr(args, "scope", None) or "user"
     is_project_mode = scope.startswith("project")
 
-    # IVG-164 T-07: --claude-md-variant slim is a project-scope pilot only this wave.
-    # Placed here (before check_prerequisites) so the guard is a literal no-op: nothing
-    # has been probed or written yet when it fires.
-    claude_md_variant: str = getattr(args, "claude_md_variant", "full") or "full"
-    if claude_md_variant == "slim" and not is_project_mode:
-        print(
-            "quoin: --claude-md-variant slim is a project-scope pilot only this wave "
-            "(see IVG-164); re-run with --scope project",
-            file=sys.stderr,
-        )
-        return 1
+    # Slim is the default rules variant in both scopes. An explicit choice is
+    # remembered per scope (state file in the deploy root), so a later plain
+    # reinstall keeps it.
+    claude_md_variant, variant_origin = _resolve_claude_md_variant(args, dest_root)
 
-    # review-1.md MAJOR 1: project installs never regenerate (allow_writes is forced
-    # False below for is_project_mode), so a slim install must fail closed rather than
-    # silently deploy a CLAUDE.slim.md / workflow-catalog.md that's stale vs the live
-    # quoin/CLAUDE.md. Placed here (before any deploy_* call) so, like the guard
-    # above, nothing has been probed or written yet when it fires.
+    # Project installs never regenerate (allow_writes is forced False below), so a
+    # stale generated slim must be caught here, before any deploy_* call. An
+    # explicitly requested slim fails closed; a merely defaulted slim falls back
+    # to the full rules for this install so a stale generated file never blocks it.
     if claude_md_variant == "slim":
         stale = installer.check_slim_outputs_fresh(source_dir)
         if stale:
+            broken = any(
+                "staleness check unavailable" in e or "regen aborted" in e or "core text unreadable" in e
+                for e in stale
+            )
+            if variant_origin in ("flag", "env"):
+                print(
+                    "quoin: --claude-md-variant slim aborted — generated output(s) are "
+                    "stale vs a fresh regen of " + str(source_dir / "CLAUDE.md") + ": "
+                    + ", ".join(stale) + ". Either run "
+                    "'python3 quoin/scripts/build_claude_slim.py' in the quoin repo "
+                    "checkout and commit the result, or pass "
+                    "'--claude-md-variant full' to install the full rules.",
+                    file=sys.stderr,
+                )
+                return 1
+            if broken:
+                headline = "slim freshness check is broken (please report this)"
+            else:
+                headline = "generated slim rules are stale"
             print(
-                "quoin: --claude-md-variant slim aborted — generated output(s) are "
-                "stale vs a fresh regen of " + str(source_dir / "CLAUDE.md") + ": "
-                + ", ".join(stale) + ". Run "
-                "'python3 quoin/scripts/build_claude_slim.py' in the quoin repo "
-                "checkout and commit the result before installing the slim variant.",
+                "WARNING: " + headline + "; installing the full rules for this run.\n"
+                "  " + "\n  ".join(stale) + "\n"
+                "  Regenerate with 'python3 quoin/scripts/build_claude_slim.py' in the quoin "
+                "repo checkout, or pass '--claude-md-variant full' to silence this.",
                 file=sys.stderr,
             )
-            return 1
+            claude_md_variant = "full"
 
     # Mutex: --scope project is only valid with --runtime claude
     if is_project_mode and getattr(args, "runtime", "claude") == "codex":
@@ -576,8 +635,8 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         claude_md_path = dest_root / "CLAUDE.md"
     source_claude_name = "CLAUDE.slim.md" if claude_md_variant == "slim" else "CLAUDE.md"
     print(
-        f"Using CLAUDE.md variant: {claude_md_variant} (source {source_claude_name}) "
-        f"→ {claude_md_path}"
+        f"Using CLAUDE.md variant: {claude_md_variant} ({variant_origin}; source "
+        f"{source_claude_name}) → {claude_md_path}"
     )
     installer.merge_workflow_rules(
         source_dir,
@@ -600,6 +659,10 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         if len(violations) > 5:
             print(f"  ... ({len(violations) - 5} more)", file=sys.stderr)
         return 1
+
+    # Remember an explicit variant choice only after the install proved clean.
+    if variant_origin == "flag":
+        _store_claude_md_variant(dest_root, claude_md_variant)
 
     # T-07: preamble regeneration last
     installer.regenerate_preambles(source_dir, allow_writes=allow_writes)
@@ -2940,10 +3003,11 @@ def main(argv: list[str] | None = None) -> int:
     install_p.add_argument(
         "--claude-md-variant",
         choices=("full", "slim"),
-        default="full",
+        default=None,
         help=(
-            "CLAUDE.md variant to merge: 'full' (default) or 'slim' "
-            "(IVG-164 project-scope pilot; requires --scope project)."
+            "CLAUDE.md variant to merge: 'slim' (default: core rules plus pointers "
+            "to the memory catalog) or 'full' (all rules inline); an explicit "
+            "choice is remembered for later installs"
         ),
     )
     install_p.add_argument(

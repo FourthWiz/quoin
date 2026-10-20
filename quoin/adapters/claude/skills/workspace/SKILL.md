@@ -1,6 +1,6 @@
 ---
 name: workspace
-description: "Manages per-repo git-worktree workspaces for concurrent sessions: create, status, takeover, teardown. Use for: /workspace, 'create a workspace', 'new worktree', 'check workspace status', 'take over this workspace', 'tear down this workspace'."
+description: "Manages per-repo git-worktree workspaces: create, status, takeover, teardown. Use for: /workspace, 'create a workspace', 'new worktree', 'tear down this workspace'."
 model: sonnet
 ---
 

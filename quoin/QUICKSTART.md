@@ -112,7 +112,7 @@ installed component. See `quoin/docs/streamdeck/README.md` in the Quoin reposito
 
 ## Files
 
-- `~/.claude/CLAUDE.md` — shared rules all skills follow (user-level)
+- `~/.claude/CLAUDE.md` — short core rules all skills follow (user-level); the full rules are in `~/.claude/memory/workflow-catalog.md`
 - `.workflow_artifacts/` — all workflow artifacts: memory, task plans, session state (gitignored)
 - `.workflow_artifacts/cache/` — auto-maintained code summary cache (knowledge cache)
 - `~/.claude/skills/` — all workflow skill definitions (user-level)

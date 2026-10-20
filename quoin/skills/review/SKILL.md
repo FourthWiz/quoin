@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Deep code review (Opus) verifying the implementation matches the plan and is production-ready. Use for: /review, 'code review', 'review my changes', 'does this look right', 'check the implementation', 'post-implementation review'."
+description: "Deep code review checking the implementation against the plan. Use for: /review, 'code review', 'review my changes', 'check the implementation'."
 model: opus
 ---
 

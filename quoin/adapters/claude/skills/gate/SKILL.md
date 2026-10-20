@@ -1,6 +1,6 @@
 ---
 name: gate
-description: "Automated quality gate that runs checks and requires explicit human approval before the next phase. Use for: /gate, 'check before proceeding', 'run the gate', 'verify before next step'. The workflow STOPS here until the user says go."
+description: "Quality gate: runs automated checks, then stops for explicit human approval. Use for: /gate, 'run the gate', 'check before proceeding'."
 model: sonnet
 ---
 

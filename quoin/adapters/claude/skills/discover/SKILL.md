@@ -1,6 +1,6 @@
 ---
 name: discover
-description: "Scans all repos in the project folder and saves inventory, architecture overview, and dependency map to memory. Use for: /discover, 'scan my repos', 'map the codebase', 'what repos do I have', 'index the project', 'learn my codebase'."
+description: "Scans all repos in the project and saves inventory, architecture and dependency map to memory. Use for: /discover, 'scan my repos', 'map the codebase'."
 model: opus
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: pr
-description: "Creates a pull request: optional version bump, push, gh pr create, wait for merge, switch to merge target. Use for: /pr, 'create a PR', 'open a pull request', 'submit for review'."
+description: "Creates a pull request: optional version bump, push, gh pr create, wait for merge. Use for: /pr, 'create a PR', 'open a pull request'."
 model: sonnet
 ---
 

@@ -422,7 +422,7 @@ NON_QUOIN_OVERRIDE_KEYS: frozenset = frozenset({"init", "keybindings-help"})
 # from SKILL_OVERRIDES (computed at authorship time as the exact diff —
 # CANONICAL_SKILLS minus the quoin keys of SKILL_OVERRIDES on `main`).
 SKILL_OVERRIDES_OPTIONAL: frozenset = frozenset({
-    "architect", "capture_insight", "discover", "end_of_task", "revise", "revise-fast",
+    "architect", "capture_insight", "discover", "end_of_task", "revise",
 })
 
 

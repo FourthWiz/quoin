@@ -1,6 +1,6 @@
 ---
 name: rollback
-description: "Safely undoes an implementation phase or reverts specific tasks, mapping commits to plan tasks; requires explicit confirmation. Use for: /rollback, 'undo the implementation', 'revert the last changes', 'undo task 3', 'reset to pre-implementation'."
+description: "Undoes an implementation phase or specific tasks, mapping commits to plan tasks; asks for confirmation. Use for: /rollback, 'undo the implementation', 'undo task 3'."
 model: sonnet
 ---
 

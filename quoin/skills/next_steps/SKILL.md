@@ -1,6 +1,6 @@
 ---
 name: next_steps
-description: "Append-only queue for future work items. Use for: /next-steps, /next-steps add <text>, /next-steps list, /next-steps list --all, /next-steps done N. Manages a ## Queue section in next-steps.md at the project root."
+description: "Append-only queue of future work items. Use for: /next-steps, /next-steps add <text>, /next-steps list [--all], /next-steps done N."
 model: haiku
 ---
 

@@ -121,9 +121,7 @@ CEILINGS = {
     # claude_md_slim ratchets the generated CLAUDE.slim.md the same way:
     # measured post-generation size 9,161 B (well-formed blank-line model)
     # * 1.10 rounded up.
-    "claude_md_slim": 10078,  # post-generation 9161 * 1.10 rounded up
-    # Re-checked: measured 9161 B, candidate 9161*1.10=10078 B (rounded up)
-    # == prior ceiling 10078 B -> unchanged. Net effect zero; recorded anyway.
+    "claude_md_slim": 2561,  # post-generation 2328 * 1.10 rounded up (core text composition)
 }
 
 

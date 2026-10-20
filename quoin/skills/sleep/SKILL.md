@@ -1,6 +1,6 @@
 ---
 name: sleep
-description: "Memory consolidation: scans daily insights and session files, promotes patterns to lessons-learned.md, soft-forgets stale entries to forgotten/. Use for: /sleep [--dry-run] [--restore <pattern>] [--purge]; auto-invoked by /end_of_day as its final step."
+description: "Consolidates insights into lessons-learned.md and soft-forgets stale entries. Use for: /sleep [--dry-run] [--restore <pattern>] [--purge]; /end_of_day invokes it."
 model: sonnet
 ---
 

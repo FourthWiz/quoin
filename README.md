@@ -145,7 +145,7 @@ GitHub redirects the old `FourthWiz/claude_dev_workflow` URL to this repository.
 
 | Runtime | Setup command | Scope | Implemented behavior |
 |---------|---------------|-------|----------------------|
-| Claude Code | `quoin install --runtime claude` | Global adapter under `~/.claude` | Skills, scripts, hooks, memory files, `CLAUDE.md` workflow rules, slash-command workflow |
+| Claude Code | `quoin install --runtime claude` | Global adapter under `~/.claude` | Skills, scripts, hooks, memory files, short `CLAUDE.md` core rules (full rules in `memory/workflow-catalog.md`), slash-command workflow |
 | Codex | `quoin install --runtime codex --project-root .` | Repo-local `AGENTS.md` | Portable artifact workflow, generated root instructions, readiness/smoke checks, handoff validation, cost event writer |
 
 The portable core is shared. Runtime-specific mechanics are adapter-owned:
@@ -231,7 +231,7 @@ After installing the Claude adapter:
 ```
 
 Claude-specific command behavior, model assignments, hook behavior, and
-cost-capture plumbing are documented in `quoin/CLAUDE.md`.
+cost-capture plumbing are documented in `quoin/CLAUDE.md`; the installed `~/.claude/CLAUDE.md` carries only the short core rules, with every section kept in `~/.claude/memory/workflow-catalog.md`.
 
 ## Claude Skills
 

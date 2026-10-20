@@ -1,6 +1,6 @@
 ---
 name: architect
-description: "Deep architectural analysis, system design, and stage decomposition for complex or cross-repo problems. Use for: /architect, 'architecture design', 'system design', 'cross-repo analysis', 'how should we build this', 'what's the best approach for'."
+description: "Architectural analysis, system design and stage decomposition for complex or cross-repo work. Use for: /architect, 'system design', 'how should we build this'."
 model: opus
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: init_workflow
-description: "Initializes the workflow in a project folder: creates .workflow_artifacts/, runs /discover, generates a quickstart. Use for: /init_workflow, 'initialize workflow', 'set up dev workflow', 'install workflow', 'bootstrap workflow'. Requires install.sh first (rules land in __QUOIN_HOME__/CLAUDE.md)."
+description: "Bootstraps the workflow in a project (.workflow_artifacts/, /discover, quickstart). Use for: /init_workflow, 'set up dev workflow'. Needs install.sh first (rules in __QUOIN_HOME__/CLAUDE.md)."
 model: opus
 ---
 # Initialize Development Workflow (deprecated stub)

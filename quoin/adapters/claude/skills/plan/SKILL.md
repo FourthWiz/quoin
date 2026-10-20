@@ -1,6 +1,6 @@
 ---
 name: plan
-description: "Creates a detailed, implementation-ready plan for a development task (Opus). Use for: /plan, 'plan this', 'create a plan', 'break this down into tasks', 'how should we implement'. Standalone or as part of /thorough_plan orchestration."
+description: "Writes a detailed, implementation-ready plan for a task. Use for: /plan, 'plan this', 'create a plan', 'break this down into tasks'."
 model: opus
 ---
 

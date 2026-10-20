@@ -10,7 +10,7 @@
       "quoin/skills/*/SKILL.md": "deprecated stubs, NOT deployed (resolve_skill_source_md prefers the adapter copy under quoin/adapters/claude/skills/).",
       "quoin/QUICKSTART.md": "deployed but its CLAUDE.md mentions are install-procedure references, not section citations; deferred to a follow-up rather than silently omitted.",
       "quoin/docs/*.md": "repo documentation, never deployed to __QUOIN_HOME__, never read at runtime.",
-      "quoin/core/workflow/*.md": "IVG-248 T-02: now deployed to __QUOIN_HOME__/core/workflow/ by deploy_core_workflow, so the prior 'never deployed' rationale no longer holds for this corpus; not yet folded into the in-scope citation sweep \u2014 a future stage decision, not this task's."
+      "quoin/core/workflow/*.md": "IVG-248 T-02: now deployed to __QUOIN_HOME__/core/workflow/ by deploy_core_workflow, so the prior 'never deployed' rationale no longer holds for this corpus; not yet folded into the in-scope citation sweep — a future stage decision, not this task's."
     }
   },
   "records": [
@@ -19,61 +19,61 @@
       "line_hash": "f79d29586a7f1ba47610a98677757f3f26249e10118f40b2b7dbd3abdd97a3f1",
       "heading_disposition": "non-citation",
       "path_form": "none",
-      "note": "generic 'cache entry format defined in CLAUDE.md' \u2014 no heading quoted."
+      "note": "generic 'cache entry format defined in CLAUDE.md' — no heading quoted."
     },
     {
       "file": "quoin/adapters/claude/skills/architect/SKILL.md",
       "line_hash": "b70218b859999295fdc4f488c686b47e676d56edff72fc11e1a603d90b131c6a",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names '### Session state tracking' (drop row); valid under the full CLAUDE.md variant (content unmoved by T-02), not guaranteed reachable under the slim project-scope pilot; shared fallback boilerplate repeated in 6 other planning skills.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/architect/SKILL.md",
       "line_hash": "5129f1044662204ac1ae8f855e0ae629f86fe1063012b209fe26e934d36f8774",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Knowledge cache' (drop row); valid under full variant, not slim-reachability-guaranteed.",
-      "owner": "follow-up"
+      "note": "names 'Knowledge cache'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Knowledge cache"
     },
     {
       "file": "quoin/adapters/claude/skills/critic/SKILL.md",
       "line_hash": "59fae7362925a25644f105e5e49e326f8e318c63d82a3ff6147dd7b7207da6ca",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names '### Session state tracking' (drop row); same shared fallback boilerplate as architect:448.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/discover/SKILL.md",
       "line_hash": "5c537382f3b06b46345321137b0416ad270c2b83d8629600e0b27a8cc10b0e0f",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Knowledge cache' schema (drop row).",
-      "owner": "follow-up"
+      "note": "names 'Knowledge cache'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Knowledge cache"
     },
     {
       "file": "quoin/adapters/claude/skills/discover/SKILL.md",
       "line_hash": "d82fb97c21368d2cc5d04c6183e0007f0168b5add0efb440106b887be33046e0",
       "heading_disposition": "non-citation",
       "path_form": "none",
-      "note": "generic 'cache entry format defined in CLAUDE.md' \u2014 no heading quoted."
+      "note": "generic 'cache entry format defined in CLAUDE.md' — no heading quoted."
     },
     {
       "file": "quoin/adapters/claude/skills/discover/SKILL.md",
       "line_hash": "fbca8fb7b4708e95944031dd164690ac1690d43d5537881cdf509b8ff40ada91",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "quotes 'Knowledge cache' section (drop row).",
-      "owner": "follow-up"
+      "note": "names 'Knowledge cache'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Knowledge cache"
     },
     {
       "file": "quoin/adapters/claude/skills/end_of_day/SKILL.md",
       "line_hash": "acbaf4b94c64769fbed053e100ade087505a18d96853c182c5ccbbb11a451d5f",
       "heading_disposition": "non-citation",
       "path_form": "none",
-      "note": "template placeholder '<relevant SKILL.md or CLAUDE.md section>' \u2014 not a specific heading."
+      "note": "template placeholder '<relevant SKILL.md or CLAUDE.md section>' — not a specific heading."
     },
     {
       "file": "quoin/adapters/claude/skills/expand/SKILL.md",
@@ -92,17 +92,17 @@
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
       "line_hash": "7a8fd927045015d7663dcb30360eebe46ac4568d496f496a735d49521e893a55",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "quotes 'Multi-stage tasks' (drop row).",
-      "owner": "follow-up"
+      "note": "names 'Multi-stage tasks'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Multi-stage tasks"
     },
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
       "line_hash": "e7524f42b8ca64cb74c09f5987fe414628b247eaf167ef441596c19436130e0e",
       "heading_disposition": "non-citation",
       "path_form": "none",
-      "note": "verbatim quote of deploy_drift_check.py's own 'not covered' tool-output string, which lists CLAUDE.md as a literal category name \u2014 not a content pointer."
+      "note": "verbatim quote of deploy_drift_check.py's own 'not covered' tool-output string, which lists CLAUDE.md as a literal category name — not a content pointer."
     },
     {
       "file": "quoin/adapters/claude/skills/gate/SKILL.md",
@@ -120,7 +120,7 @@
     },
     {
       "file": "quoin/adapters/claude/skills/init_workflow/SKILL.md",
-      "line_hash": "2d717a8140954877c80e895a8ff67ff6f5c1baf9e1c9fd121bc3eba269aaa02c",
+      "line_hash": "0c32df00b923e66ed090947994d8455244d12d0ea5166489f3c866fa96d4c499",
       "heading_disposition": "known-exception",
       "path_form": "quoin_home_claude_md",
       "note": "YAML frontmatter description: field; always-loaded text owned by stage 4 (spec FR-6/AC-7 description-trim work); trimmed to the D-09 template in S-4 batch 2 with the __QUOIN_HOME__/CLAUDE.md citation RETAINED as the single permitted constraint clause (plan D-03); accurate under user scope, unreachable under the project-scope pilot.",
@@ -145,21 +145,21 @@
       "line_hash": "dd421c4e3e9ab708e1e0506d048cd823c6450bc0bf2a4af7563feb45ae6324f1",
       "heading_disposition": "non-citation",
       "path_form": "project_relative",
-      "note": "describes the target project's own CLAUDE.md \u2014 same as init_workflow:150."
+      "note": "describes the target project's own CLAUDE.md — same as init_workflow:150."
     },
     {
       "file": "quoin/adapters/claude/skills/init_workflow/SKILL.md",
       "line_hash": "1e6dbfdf653ba1afba534433b55ac44f999eb1c386ac74230cec5eaad6f2c2b1",
       "heading_disposition": "non-citation",
       "path_form": "project_relative",
-      "note": "describes the target project's own CLAUDE.md \u2014 same as init_workflow:150."
+      "note": "describes the target project's own CLAUDE.md — same as init_workflow:150."
     },
     {
       "file": "quoin/adapters/claude/skills/init_workflow/SKILL.md",
       "line_hash": "f68f51b91d5e6ee056a37f66e071721584b402ac74131b883dca90ce39b22bc5",
       "heading_disposition": "non-citation",
       "path_form": "project_relative",
-      "note": "describes the target project's own CLAUDE.md \u2014 same as init_workflow:150."
+      "note": "describes the target project's own CLAUDE.md — same as init_workflow:150."
     },
     {
       "file": "quoin/adapters/claude/skills/init_workflow/SKILL.md",
@@ -173,70 +173,70 @@
       "line_hash": "e4702f2836016974bcf16976a68eae59d355d47250055aa3c4be86cdbe9b7a2e",
       "heading_disposition": "non-citation",
       "path_form": "none",
-      "note": "template placeholder '<which SKILL.md file or CLAUDE.md section>' \u2014 not a specific heading."
+      "note": "template placeholder '<which SKILL.md file or CLAUDE.md section>' — not a specific heading."
     },
     {
       "file": "quoin/adapters/claude/skills/plan/SKILL.md",
       "line_hash": "856741ad75ce4d0fd3dab01466f185950f165393414a17767c900824ace6d52d",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "quotes 'Communication' (drop row).",
-      "owner": "follow-up"
+      "note": "names 'Communication'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Communication"
     },
     {
       "file": "quoin/adapters/claude/skills/plan/SKILL.md",
       "line_hash": "1dd04e5d7d573736259050068fed547a7468389cd17807059a52f3af7ca356ad",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/pr/SKILL.md",
       "line_hash": "493028749c4404ab1a99a37af25dd2aa69c3d4f3ba1e1a21dc95355906579441",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "generic 'cost tracking rules in CLAUDE.md' \u2014 'Cost tracking' is a drop row.",
-      "owner": "follow-up"
+      "note": "names 'Cost tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Cost tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/review/SKILL.md",
       "line_hash": "19a6a022f1359eab7b36360c4b606d261232ef5744c2e6007ff8f11ff4a21fec",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/review/SKILL.md",
       "line_hash": "44642f82874848eeed3584b22968620806709f83eb8e5f51eb907a445fb2be28",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "quotes '## Working Rules' \u2014 a keep row, survives in CLAUDE.slim.md verbatim.",
+      "note": "cites 'Working Rules'; kept verbatim under that heading in the workflow catalog.",
       "cited_heading": "## Working Rules"
     },
     {
       "file": "quoin/adapters/claude/skills/revise-fast/SKILL.md",
       "line_hash": "01d2dcf55fa86a1456f7728def2283fa39031cba90074483f04ed983dd7982c3",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/revise/SKILL.md",
       "line_hash": "01d2dcf55fa86a1456f7728def2283fa39031cba90074483f04ed983dd7982c3",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/run/SKILL.md",
       "line_hash": "5a8b3581310b50c3d914101b7df70b48e9e9735992d194229cd171e3df7db4c0",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "'the critical rule in CLAUDE.md' refers to the never-auto-invoke rule, now in '### Explicit-command rule' \u2014 a keep row.",
+      "note": "cites 'Explicit-command rule'; kept verbatim under that heading in the workflow catalog.",
       "cited_heading": "### Explicit-command rule"
     },
     {
@@ -244,39 +244,39 @@
       "line_hash": "b7c92d88864fb5acbc12e1e1d8b6a43ed58b9635ee6c9ca4bee0e23c3752dd7c",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
-      "note": "generic 'Read CLAUDE.md for shared workflow rules' \u2014 whole-file instruction, valid under either variant."
+      "note": "generic 'Read CLAUDE.md for shared workflow rules' — whole-file instruction, valid under either variant."
     },
     {
       "file": "quoin/adapters/claude/skills/run/SKILL.md",
       "line_hash": "362647eec2531e255b0305bf945fd71d060c92317fba33c8bec528fd0dc95cd9",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "generic 'cost tracking rules in CLAUDE.md' \u2014 'Cost tracking' is a drop row.",
-      "owner": "follow-up"
+      "note": "names 'Cost tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Cost tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/run/SKILL.md",
       "line_hash": "142923d22bc567d29f15320ab53389cf773c7ee2e4b15cab806b0a8beae9e0df",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "'CLAUDE.md's workflow sequence' refers to '## Workflow sequence' \u2014 a keep row.",
+      "note": "cites 'Workflow sequence'; kept verbatim under that heading in the workflow catalog.",
       "cited_heading": "## Workflow sequence"
     },
     {
       "file": "quoin/adapters/claude/skills/security_review/SKILL.md",
       "line_hash": "19a6a022f1359eab7b36360c4b606d261232ef5744c2e6007ff8f11ff4a21fec",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "names 'Session state tracking' (drop row) \u2014 shared fallback boilerplate.",
-      "owner": "follow-up"
+      "note": "names 'Session state tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Session state tracking"
     },
     {
       "file": "quoin/adapters/claude/skills/sleep/SKILL.md",
       "line_hash": "6b783efa79158e718109ebf4ec556e62aa8f58eef306482f77dd005c4450dd04",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "descriptive intro prose naming '### /sleep importance signals' (drop row); the runtime read path itself was fixed at sleep:200/230.",
-      "owner": "follow-up"
+      "note": "names '/sleep importance signals'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### /sleep importance signals"
     },
     {
       "file": "quoin/adapters/claude/skills/sleep/SKILL.md",
@@ -304,7 +304,7 @@
       "line_hash": "6d8bb0fbc707c81c0701e49cb0ee9bfc73ba652a6b51d0d22394635964358c22",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "'Hard rule in CLAUDE.md \u2014 explicit invocation only' refers to '### Explicit-command rule' \u2014 a keep row.",
+      "note": "cites 'Explicit-command rule'; kept verbatim under that heading in the workflow catalog.",
       "cited_heading": "### Explicit-command rule"
     },
     {
@@ -318,17 +318,17 @@
     {
       "file": "quoin/adapters/claude/skills/workspace/SKILL.md",
       "line_hash": "cbde285255fcb3feaf0debb4d2ff6ad472fbc3ac442aaba87a456d5b8f56903f",
-      "heading_disposition": "known-exception",
+      "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "generic 'cost tracking rules in CLAUDE.md' \u2014 'Cost tracking' is a drop row.",
-      "owner": "follow-up"
+      "note": "names 'Cost tracking'; every source section is kept verbatim under its heading in the workflow catalog, which the slim file points at.",
+      "cited_heading": "### Cost tracking"
     },
     {
       "file": "quoin/memory/autonomous-mode.md",
       "line_hash": "90ca324b8e09c13bfda492181f7838362f45e46c47897aa0045a8cec183bb7f8",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
-      "note": "'Workflow sequence' section named \u2014 a keep row.",
+      "note": "cites 'Workflow sequence'; kept verbatim under that heading in the workflow catalog.",
       "cited_heading": "## Workflow sequence"
     },
     {
@@ -336,7 +336,7 @@
       "line_hash": "38e9813bb2ff0081e1d40b20b5320e9b8aad54dc52f08fb303d5a57d015f5b98",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
-      "note": "generic 'CLAUDE.md now carries only a short pointer back to' \u2014 no specific heading named."
+      "note": "generic 'CLAUDE.md now carries only a short pointer back to' — no specific heading named."
     },
     {
       "file": "quoin/memory/serena-activation.md",
@@ -390,14 +390,14 @@
     },
     {
       "file": "quoin/memory/tier1-files.md",
-      "line_hash": "e6273dc2f7fb2d628b54c88b681083ef5117d696c551ccd10281071945e7de3d",
+      "line_hash": "5731a492ceb9e02188cd01a82320bf3a9b5c90a4596ef1f128a27e7fbbf9e1cb",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
       "note": "T-03 registration bullet describing the generator's provenance (regenerate from quoin/CLAUDE.md)."
     },
     {
       "file": "quoin/memory/workflow-catalog.md",
-      "line_hash": "fa12d32a130ac39fb15d46f7ed9555ae255c0d54cbab4cef8b01c8a762027fa0",
+      "line_hash": "89502e5f41aff2fc93417d2288a9a6c18d93c8a4f5fa40249227a742a22782f6",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
       "note": "generated file's own self-describing header comment (T-04 pinned Output B header)."
@@ -407,7 +407,7 @@
       "line_hash": "1ab39969a27129be5cf9b5cf84a8911801f0a4bb66a752b1f02d408b536a1c36",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
-      "note": "inherited verbatim copy of CLAUDE.md's own 'Session independence' drop-row prose ('reads CLAUDE.md, lessons-learned.md, ...') \u2014 generic, no specific heading pointer."
+      "note": "inherited verbatim copy of CLAUDE.md's own 'Session independence' drop-row prose ('reads CLAUDE.md, lessons-learned.md, ...') — generic, no specific heading pointer."
     },
     {
       "file": "quoin/scripts/analyze_cost_ledger.py",
@@ -439,7 +439,7 @@
     },
     {
       "file": "quoin/scripts/build_claude_slim.py",
-      "line_hash": "8a4b446c287d4ce39b1bab59a692b0c563e69a5dc4128ca5ac0303f1449ad20c",
+      "line_hash": "d043820dcf5555d41007ee7e97e2c64df1e7a4d5a73603ad5bc62212211ae684",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
       "note": "pinned generated-header string constant naming its own source file."
@@ -561,7 +561,7 @@
       "line_hash": "aa3ee9c4eb98a0674f1960b370426e3fcc61674f82a0ac27f20bacf14e9c1f52",
       "heading_disposition": "known-exception",
       "path_form": "quoin_home_claude_md",
-      "note": "load_config()'s CLAUDE.md fallback leg (docstring) \u2014 genuine section parser for the now-drop '### /sleep importance signals' heading; ALREADY INERT (CLAUDE.md contains zero ```yaml``` fences, verified live), superseded at the SKILL.md layer by sleep:200/230's fix; not changed in this stage per the plan's explicit scope.",
+      "note": "load_config()'s CLAUDE.md fallback leg (docstring) — genuine section parser for the now-drop '### /sleep importance signals' heading; ALREADY INERT (CLAUDE.md contains zero ```yaml``` fences, verified live), superseded at the SKILL.md layer by sleep:200/230's fix; not changed in this stage per the plan's explicit scope.",
       "owner": "none (already inert)"
     },
     {
@@ -624,6 +624,27 @@
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
       "note": "write-mode guard comment describing the round-1 source-absence hazard (review round-2 minor 2 fix)."
+    },
+    {
+      "file": "quoin/memory/tier1-files.md",
+      "line_hash": "b815d59276f7631e7c92f5858463cd467a263a6f156b5dbd5ed45edac3006e59",
+      "heading_disposition": "non-citation",
+      "path_form": "none",
+      "note": "lists quoin/CLAUDE.core.md as a hand-edited source file; no heading cited."
+    },
+    {
+      "file": "quoin/scripts/build_claude_slim.py",
+      "line_hash": "610c7124cf43cc8a60af9d89c31062a130ec7f5a3d65e49bf49d34a107961c4e",
+      "heading_disposition": "non-citation",
+      "path_form": "none",
+      "note": "generated-file header comment naming the source files; no heading cited."
+    },
+    {
+      "file": "quoin/scripts/build_claude_slim.py",
+      "line_hash": "74f424278d08f3ad8e009065e1cc71e0909968c5e2be114323304c73f3ace243",
+      "heading_disposition": "non-citation",
+      "path_form": "none",
+      "note": "resolution-sentence text in the generator; names the citation form generically, no heading cited."
     }
   ]
 }

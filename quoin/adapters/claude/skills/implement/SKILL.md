@@ -1,6 +1,6 @@
 ---
 name: implement
-description: "Implementation agent (Sonnet) that turns a converged plan into code and tests. Use for: /implement, 'implement task N from the plan', 'start coding', 'build this based on the plan'."
+description: "Turns a converged plan into code and tests (Sonnet). Use for: /implement, 'implement task N from the plan', 'start coding'."
 model: sonnet
 ---
 
