@@ -125,16 +125,49 @@ def test_heading_removal_passes_only_with_allowance(repo):
     assert _run(repo, "--allow-heading-removal", "Tail").returncode == 0
 
 
-def test_start_of_day_must_stay_untouched(repo):
-    sod = repo / SUBDIR / "start_of_day"
-    sod.mkdir()
-    (sod / "SKILL.md").write_text("---\nname: start_of_day\n---\n# SOD\nbody\n", encoding="utf-8")
+CONTENT_BASE = BASE.replace("<!-- §0-end -->\n\n", "<!-- §0-end -->\n\n### Anchor line\nfirst tail\nsecond tail\n\n")
+
+
+def _commit_content_base(repo):
+    _write(repo, CONTENT_BASE)
     _git(repo, "add", "-A")
-    _git(repo, "commit", "-q", "-m", "sod")
-    (sod / "SKILL.md").write_text("---\nname: start_of_day\n---\n# SOD\n", encoding="utf-8")
-    proc = _run(repo, "start_of_day")
-    assert proc.returncode == 1
-    assert "FAIL start_of_day" in proc.stdout
+    _git(repo, "commit", "-q", "-m", "content overhang")
+
+
+def test_content_overhang_may_change_when_first_line_stays(repo):
+    _commit_content_base(repo)
+    _write(repo, CONTENT_BASE.replace("second tail\n", "shorter\n"))
+    proc = _run(repo)
+    assert proc.returncode == 0, proc.stdout
+
+
+def test_content_overhang_first_line_change_fails(repo):
+    _commit_content_base(repo)
+    _write(repo, CONTENT_BASE.replace("### Anchor line", "### Other line"))
+    proc = _run(repo)
+    assert proc.returncode == 1, proc.stdout
+    assert "FAIL demo:" in proc.stdout
+
+
+def test_content_overhang_turning_blank_fails(repo):
+    _commit_content_base(repo)
+    _write(repo, BASE)
+    proc = _run(repo)
+    assert proc.returncode == 1, proc.stdout
+
+
+def test_content_overhang_losing_its_marker_fails(repo):
+    _commit_content_base(repo)
+    _write(repo, CONTENT_BASE.replace("<!-- §0-end -->\n", ""))
+    proc = _run(repo)
+    assert proc.returncode == 1, proc.stdout
+    assert "overhang" in proc.stdout
+
+
+def test_blank_overhang_cannot_change(repo):
+    _write(repo, BASE.replace("<!-- §0-end -->\n\n", "<!-- §0-end -->\n\n\n"))
+    proc = _run(repo)
+    assert proc.returncode == 1, proc.stdout
 
 
 def test_unknown_ref_is_usage_error(repo):
