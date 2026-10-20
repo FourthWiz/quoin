@@ -272,7 +272,7 @@ When spawning a scan agent for a repo that has stale cache entries (case 2 from 
 >
 > Cache writes are best-effort. If a write fails, warn and continue with the scan — the scan findings are the priority.
 
-This variant produces the same scan findings as a normal scan agent, plus refreshed cache entries. The `/architect` session uses the scan findings (not the cache) for its Phase 2 synthesis — the cache update is a side effect that benefits future sessions.
+This variant produces the same scan findings as a normal scan agent, plus refreshed cache entries.
 
 **Do NOT use this variant for case 3 repos** (no cache exists). Cache population from scratch is `/discover`'s responsibility. The stale-cache variant only updates existing entries.
 
@@ -633,9 +633,6 @@ The scan/synthesize split exists to avoid paying Opus rates for bulk file readin
 - **Never read raw source files in the main Opus session for bulk exploration.** That is what scan agents are for. The only exception is targeted reads of specific files directly relevant to a specific synthesis question during Phase 2. Prefer reading individual files over spawning new scan agents for single-file needs.
 - **Spawn scan agents per-repo, not per-file.** Each agent pays ~41K tokens of base overhead. A per-file agent for a 200-line file is pure waste.
 - **Batch small repos.** If a repo has fewer than ~5 source files, batch it with another small repo into a single scan agent.
-- **Use /discover output when available.** If `.workflow_artifacts/memory/repos-inventory.md` exists and the repo HEAD has not changed (check `.workflow_artifacts/cache/_staleness.md` (or `.workflow_artifacts/memory/repo-heads.md`)), the /discover output IS the scan. Do not re-scan.
-- **Use cache entries when available.** If `.workflow_artifacts/cache/<repo-name>/_index.md` exists and the repo HEAD matches `_staleness.md`, load cache entries instead of spawning a scan agent. This eliminates the ~41K token base overhead per scan agent AND reduces scan output tokens from ~3,000–5,000 to ~500–1,500 per repo. Cache entries load in seconds; scan agents take minutes.
-- **Targeted re-scans during synthesis.** If Phase 2 reveals a gap in the scan findings (e.g., "I need to see the exact error handling in payment.service.ts"), read that specific file directly in the Opus session. Do NOT spawn a whole new scan agent for one file.
 
 ## Tier 3 critic outputs
 

@@ -486,8 +486,6 @@ summary: <clamped, one line, <=600 B>
        timeout, escalate to the user with the partial artifact
        and ask whether to proceed to /implement with a flagged
        plan, or stop.
-  NOTE: This retry only fires for subagents dispatched BY /thorough_plan.
-  Standalone /revise and /plan invocations have no automatic retry.
 - **Pass context explicitly.** Each agent starts with limited knowledge. Give them the file paths and repo locations they need.
 
 ## Phase-boundary checkpoints (IVG-98)
@@ -603,9 +601,6 @@ Run the checkpoint procedure at each of these points:
 - **Orchestrator writes:** `{date}-{task}-orchestrator.md` (fully owned; updated at each boundary via helper)
 - **Subagents write:** `{date}-{task}.md` (per-phase tracking only; orchestrator never reads this for resume)
 - **PRIMARY resume anchor:** `thorough-plan-progress-{sid}.md` checkpoint file (T-04 direct scan)
-
-The sentinel `pending-restore-{sid}.txt` is still written at each boundary by the shared core
-helper; on Claude Code nothing reads it, and the T-04 direct scan is the only resume path.
 
 The checkpoint file includes `## Last user intent` with the next-phase re-entry string (e.g.,
 `"thorough_plan {task}: last completed boundary thorough-plan:round-1-plan; next phase to run: critic.

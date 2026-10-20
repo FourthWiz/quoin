@@ -440,10 +440,6 @@ On dispatch success: inject the summary inline and proceed; cache stays hot.
 
 On dispatch failure (harness rejects subagent or times out): fall back to keeping the raw result inline. Emit the one-line warning: `[implement-stage-5: large-result summarizer unavailable; proceeding with raw inline]`
 
-This matches the §0 dispatch fail-OPEN pattern (architecture I-01): cost guardrail is best-effort, not load-bearing for correctness.
-
-**Tunability:** threshold (5120) and model (`"sonnet"`) are explicit named constants in this prose — change both here and re-install. Soak data from T-13 AC-3 (Stage 5 testing) will determine if threshold should be raised.
-
 ### Code quality
 - Follow existing code style and conventions in the repository
 - Write meaningful variable and function names
@@ -732,9 +728,7 @@ This is what `/end_of_day` and `/start_of_day` read.
 ## Important behaviors
 
 - **Don't over-think architecture.** That was the architect's and planner's job. If you find yourself redesigning the approach, stop and escalate to `/review` or `/thorough_plan`.
-- **Test everything you touch.** No exceptions. If you change a function, its tests must pass. If it has no tests, write them.
 - **Small, reviewable changes.** Each commit and PR should be easy for a human to review. If a PR is over 500 lines of diff, consider splitting it.
-- **Keep the plan updated.** The plan is the source of truth. If reality diverges, the plan should reflect that.
 
 ## After implementation
 

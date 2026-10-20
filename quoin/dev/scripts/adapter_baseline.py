@@ -96,7 +96,7 @@ def materialise(ref, worktree, tmp):
     dest = Path(tmp) / "pkg"
     dest.mkdir(parents=True)
     if worktree:
-        for sub in ("hooks", "scripts", "core"):
+        for sub in ("hooks", "scripts", "core", "adapters/claude/skills"):
             src = SRC_ROOT / sub
             if src.is_dir():
                 shutil.copytree(
@@ -318,6 +318,72 @@ def marker_footprint(path):
     return ({"chars": len(block), "bytes": len(block.encode("utf-8"))}, len(text[:start]))
 
 
+SECTION0_PRIME_PREFIXES = ("## \u00a70'", "## \u00a70\u2033", "## \u00a70\u2034")
+SECTION0_END_MARKER = "<!-- \u00a70-end -->"
+VERIFY_END_RE = re.compile(r"<!-- \u00a7V-[a-z]+-end -->")
+
+
+def generated_span_lines(lines):
+    """Return (section0, verification) as sets of 0-based line indexes.
+
+    Section 0: a "## section-0 " heading through the line holding the end
+    marker; the prime, double-prime and triple-prime sections up to the next
+    H2. Verification: a "## section-V " heading through its end marker.
+    Hand-written section 0a and 0b blocks are not generated.
+    """
+    s0, ver = set(), set()
+    n = len(lines)
+    i = 0
+    while i < n:
+        line = lines[i]
+        if line.startswith("## \u00a70 "):
+            end = next((j for j in range(i, n) if SECTION0_END_MARKER in lines[j]), None)
+            stop = (end + 1) if end is not None else _next_h2(lines, i)
+            s0.update(range(i, stop))
+            i = stop
+        elif line.startswith(SECTION0_PRIME_PREFIXES):
+            stop = _next_h2(lines, i)
+            s0.update(range(i, stop))
+            i = stop
+        elif line.startswith("## \u00a7V "):
+            end = next((j for j in range(i, n) if VERIFY_END_RE.search(lines[j])), None)
+            stop = (end + 1) if end is not None else _next_h2(lines, i)
+            ver.update(range(i, stop))
+            i = stop
+        else:
+            i += 1
+    return s0, ver
+
+
+def _next_h2(lines, start):
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("## "):
+            return j
+    return len(lines)
+
+
+def measure_skill_sources(pkg):
+    """Per-skill SKILL.md bytes and lines with the generated/hand-written split."""
+    root = Path(pkg) / "quoin" / "adapters" / "claude" / "skills"
+    skills = {}
+    tot = {"total_bytes": 0, "total_lines": 0, "generated_bytes": 0, "generated_lines": 0,
+           "section0_lines": 0, "verification_lines": 0, "handwritten_bytes": 0}
+    for f in sorted(root.glob("*/SKILL.md")):
+        text = f.read_text(encoding="utf-8")
+        lines = text.splitlines(keepends=True)
+        s0, ver = generated_span_lines([l.rstrip("\r\n") for l in lines])
+        gen_bytes = sum(len(lines[k].encode("utf-8")) for k in s0 | ver)
+        total_bytes = len(text.encode("utf-8"))
+        row = {"total_bytes": total_bytes, "total_lines": len(lines),
+               "generated_bytes": gen_bytes, "generated_lines": len(s0 | ver),
+               "section0_lines": len(s0), "verification_lines": len(ver),
+               "handwritten_bytes": total_bytes - gen_bytes}
+        skills[f.parent.name] = row
+        for k in tot:
+            tot[k] += row[k]
+    return {"label": "on-demand", "skills": skills, "totals": tot, "files": len(skills)}
+
+
 def measure_footprints(home_claude):
     fr = _load_module("_fr_baseline", SRC_ROOT / "scripts" / "footprint_report.py")
     snap = fr.capture_snapshot(home_claude)
@@ -454,6 +520,14 @@ def render_md(label, data):
           "- CLAUDE.md marker block %s, pre-marker chars %s" % (cm.get("marker_block"), cm.get("pre_marker")),
           "- memory files (on-demand): %s bytes in %s files" % (fp["memory"]["total_bytes"], fp["memory"]["files"]),
           "- SKILL.md bodies (on-demand): %s bytes in %s files" % (fp["skill_bodies"]["total_bytes"], fp["skill_bodies"]["files"])]
+    ss = data.get("skill_sources")
+    if ss:
+        L += ["", "### SKILL.md sources (on-demand)", "",
+              "| skill | total | generated | hand-written |", "|---|---|---|---|"]
+        for name, r in sorted(ss["skills"].items(), key=lambda kv: -kv[1]["handwritten_bytes"]):
+            L.append("| %s | %s | %s | %s |" % (name, r["total_bytes"], r["generated_bytes"], r["handwritten_bytes"]))
+        t = ss["totals"]
+        L.append("| **total (%s skills)** | %s | %s | %s |" % (ss["files"], t["total_bytes"], t["generated_bytes"], t["handwritten_bytes"]))
     sl = data["skill_listing"]
     if "error" in sl:
         L.append("- skill listing (always-on): %s" % sl["error"])
@@ -505,6 +579,7 @@ def main(argv=None):
             "hooks": hooks,
             "sessionstart_outputs": measure_sessionstart_outputs(pkg, work),
             "footprints": measure_footprints(home_claude),
+            "skill_sources": measure_skill_sources(pkg),
             "skill_listing": measure_skill_listing(home_claude),
             "settings_hooks": list_settings_hooks(home_claude),
         }
