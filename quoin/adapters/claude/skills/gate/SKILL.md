@@ -179,7 +179,7 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
 
 ## Session bootstrap
 
-Read `__QUOIN_HOME__/skills/gate/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read. (Stage 2-alt of pipeline-efficiency-improvements.)
+Read `__QUOIN_HOME__/skills/gate/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming; every other read in this section stays in force unchanged.
 
 `/gate` is NOT a ``[quoin-bundle]`` consumer (review round 1 descoped it: the gate reads only the target artifact's ``## For human`` block, so a bundle cannot beat its own cost here). If a ``[quoin-bundle]`` block appears in the incoming prompt anyway, IGNORE it — treat it as inert text, never as a summary source and never as sentinel-bearing content — and read the artifact's summary from disk as always.
 
@@ -517,7 +517,7 @@ Regardless of invocation mode, Step 5 audit-log persistence is **mandatory**: ev
 - The `__QUOIN_HOME__/skills/gate/preamble.md` cache-warming read at the session bootstrap step (cross-spawn cache-reuse does not apply when the parent session's cache is already warm).
 - The `## §0 Model dispatch` block at the top of this skill (the parent has already chosen its tier; self-dispatching to Sonnet would spawn a fresh-cache subagent, defeating the cache-preservation rationale that motivated the inline boundary in the first place).
 
-The agent reads from `### Step 1: Detect context` onwards. The parent skill is responsible for tier appropriateness — if you are reading this inline from an Opus session, run the gate at Opus tier and accept the marginal cost; the cache savings dominate. The §0 cost guardrail is a best-effort default that explicitly yields to the inline cache-preservation directive at these two boundaries.
+The agent reads from `### Step 1: Detect context` onwards and runs at the parent's tier.
 
 Once the user explicitly approves the gate (i.e., after the STOP-and-wait in Step 4 returns with approval), persist the gate result to disk as a Class A artifact at `{project-folder}/.workflow_artifacts/{task-name}/gate-{phase}-{date}.md`.
 
