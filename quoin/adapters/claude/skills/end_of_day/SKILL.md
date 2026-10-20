@@ -1,6 +1,6 @@
 ---
 name: end_of_day
-description: "Consolidates today's work across all sessions into a daily cache for next-day resumption. Use for: /end_of_day, 'wrapping up', 'done for the day', 'save my progress', 'end of day', 'EOD'. Feeds /start_of_day."
+description: "Consolidates today's sessions into a daily cache for next-day resumption. Use for: /end_of_day, 'wrapping up', 'done for the day', 'EOD'."
 model: sonnet
 ---
 

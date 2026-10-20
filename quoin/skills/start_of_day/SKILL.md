@@ -1,6 +1,6 @@
 ---
 name: start_of_day
-description: "Restores context from the daily cache and unfinished sessions so you can resume where you left off. Use for: /start_of_day, 'what was I working on', 'pick up where I left off', 'morning standup', 'SOD', 'start of day'."
+description: "Restores context from the daily cache and unfinished sessions. Use for: /start_of_day, 'what was I working on', 'pick up where I left off', 'SOD'."
 model: haiku
 ---
 

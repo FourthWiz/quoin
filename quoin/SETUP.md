@@ -26,7 +26,7 @@ claude
 
 **`install.sh` — user-level, run once per machine:**
 1. **Copies skills** — all 31 skills into `~/.claude/skills/` (globally available in every project)
-2. **Writes workflow rules** — appends shared rules to `~/.claude/CLAUDE.md` (auto-loaded by Claude Code everywhere)
+2. **Writes workflow rules** — appends the short core rules to `~/.claude/CLAUDE.md` (auto-loaded by Claude Code everywhere); the full rules live in `~/.claude/memory/workflow-catalog.md`
 
 **`/init_workflow` — run once per project inside Claude:**
 3. **Configures permissions** — creates `.claude/settings.json` with allow/deny lists
@@ -60,9 +60,11 @@ done
 ```bash
 echo "" >> ~/.claude/CLAUDE.md
 echo "# === DEV WORKFLOW START ===" >> ~/.claude/CLAUDE.md
-cat /path/to/quoin/CLAUDE.md >> ~/.claude/CLAUDE.md
+sed "s|__QUOIN_HOME__|$HOME/.claude|g" /path/to/quoin/CLAUDE.slim.md >> ~/.claude/CLAUDE.md
 echo "# === DEV WORKFLOW END ===" >> ~/.claude/CLAUDE.md
 ```
+
+The default rules are the short core text in `CLAUDE.slim.md`; the sed call fills in the path to the catalog of full rules. To install every rule inline instead, pass `--claude-md-variant full` to `install.sh` (or set `QUOIN_CLAUDE_MD_VARIANT=full`). An explicit `--claude-md-variant` choice is remembered per scope in `.quoin-claude-md-variant` inside the install folder (`~/.claude/` for user scope, `<project>/.claude/` for project scope; commit that file to share the choice with the team, or add it to `.gitignore` to keep it personal). `--claude-md-variant slim` clears it.
 
 ### 3. Create project artifact structure
 ```bash

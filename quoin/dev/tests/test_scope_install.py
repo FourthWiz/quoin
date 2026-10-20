@@ -791,35 +791,181 @@ def test_variant_missing_source_exits_with_variant_name(tmp_path, capsys):
     assert "CLAUDE.slim.md" in err
 
 
-def test_variant_slim_user_guard_returns_1_no_deploy(monkeypatch, capsys, tmp_path):
-    """Guard cell: --claude-md-variant slim + user scope returns 1 BEFORE any
-    file is written. Three required assertions (MIN-2 r2): return==1, deploy_memory
-    never reached, and the exact stderr string is present — distinguishing this
-    from an unrelated check_prerequisites miss on the runner."""
+def _install_harness(tmp_path, monkeypatch, *, source_dir=None, scope="user", placeholder_violations=None):
+    """Run _cmd_claude_install with every deploy step stubbed; return (run, merges, dest_root).
+
+    run(variant=None) invokes the command; merges collects the source_claude_name
+    each merge_workflow_rules call received.
+    """
+    import argparse
+    import unittest.mock
+
+    import quoin.cli as cli_mod
     import quoin.installer as inst
 
-    def _raise(*_a, **_kw):
-        raise AssertionError("deploy_memory must not be reached past the slim+user guard")
-
-    monkeypatch.setattr(inst, "deploy_memory", _raise)
-
-    from quoin.cli import _cmd_claude_install
-    import argparse
-    args = argparse.Namespace(
-        scope="user",
-        claude_md_variant="slim",
-        allow_hook_merge=False,
-        runtime="claude",
-        check=False,
-        source_dir=str(QUOIN_SRC),
-        force_merge=False,
-        dev=False,
-        use_pip=False,
+    dest_root = tmp_path / "scope_root" / ".claude"
+    dest_root.mkdir(parents=True)
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(exist_ok=True)
+    merges: list = []
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(cli_mod, "_resolve_dest_root", lambda args: dest_root)
+    for name in ("deploy_memory", "deploy_quickstart", "deploy_scripts", "deploy_core_scripts",
+                 "cleanup_obsolete_scripts", "deploy_hooks", "regenerate_preambles",
+                 "deploy_core_workflow", "deploy_dashboard_assets", "cleanup_obsolete_memory",
+                 "cleanup_obsolete_skills"):
+        monkeypatch.setattr(inst, name, lambda *a, **kw: None)
+    monkeypatch.setattr(inst, "check_prerequisites", lambda: [])
+    monkeypatch.setattr(inst, "deploy_skills", lambda *a, **kw: 0)
+    monkeypatch.setattr(
+        inst, "merge_workflow_rules",
+        lambda *a, **kw: merges.append(kw.get("source_claude_name")),
     )
-    result = _cmd_claude_install(args)
-    assert result == 1
+    monkeypatch.setattr(inst, "assert_no_placeholders", lambda *a, **kw: placeholder_violations or [])
+    monkeypatch.delenv("QUOIN_CLAUDE_MD_VARIANT", raising=False)
+
+    def run(variant=None):
+        args = argparse.Namespace(
+            scope=scope, claude_md_variant=variant, allow_hook_merge=True, runtime="claude",
+            check=False, source_dir=str(source_dir or QUOIN_SRC), force_merge=False, dev=False,
+            use_pip=False,
+        )
+        with unittest.mock.patch.object(pathlib.Path, "home", return_value=fake_home), \
+             unittest.mock.patch("time.sleep"):
+            return cli_mod._cmd_claude_install(args)
+
+    return run, merges, dest_root
+
+
+STATE = ".quoin-claude-md-variant"
+
+
+def test_variant_slim_user_scope_merges_from_claude_slim_md(tmp_path, monkeypatch):
+    run, merges, _dest = _install_harness(tmp_path, monkeypatch)
+    assert run("slim") == 0
+    assert merges == ["CLAUDE.slim.md"]
+
+
+def test_variant_full_user_scope_merges_from_claude_md(tmp_path, monkeypatch):
+    run, merges, _dest = _install_harness(tmp_path, monkeypatch)
+    assert run("full") == 0
+    assert merges == ["CLAUDE.md"]
+
+
+def test_default_variant_is_slim_with_default_origin(tmp_path, monkeypatch, capsys):
+    run, merges, dest = _install_harness(tmp_path, monkeypatch)
+    assert run() == 0
+    assert merges == ["CLAUDE.slim.md"]
+    assert "(default;" in capsys.readouterr().out
+    assert not (dest / STATE).exists()
+
+
+def test_explicit_full_is_remembered_and_explicit_slim_clears_it(tmp_path, monkeypatch):
+    run, merges, dest = _install_harness(tmp_path, monkeypatch)
+    assert run("full") == 0
+    assert (dest / STATE).read_text(encoding="utf-8").strip() == "full"
+    assert run() == 0
+    assert merges == ["CLAUDE.md", "CLAUDE.md"]
+    assert run("slim") == 0
+    assert not (dest / STATE).exists()
+    assert merges[-1] == "CLAUDE.slim.md"
+    assert run() == 0
+    assert merges[-1] == "CLAUDE.slim.md"
+
+
+def test_env_variant_overrides_and_never_writes_state(tmp_path, monkeypatch):
+    run, merges, dest = _install_harness(tmp_path, monkeypatch)
+    monkeypatch.setenv("QUOIN_CLAUDE_MD_VARIANT", "full")
+    assert run() == 0
+    assert merges == ["CLAUDE.md"]
+    assert not (dest / STATE).exists()
+
+
+def test_flag_overrides_env_and_stored_choice(tmp_path, monkeypatch):
+    run, merges, dest = _install_harness(tmp_path, monkeypatch)
+    (dest / STATE).write_text("full\n", encoding="utf-8")
+    monkeypatch.setenv("QUOIN_CLAUDE_MD_VARIANT", "full")
+    assert run("slim") == 0
+    assert merges == ["CLAUDE.slim.md"]
+
+
+def test_invalid_stored_value_warns_and_resolves_slim(tmp_path, monkeypatch, capsys):
+    run, merges, dest = _install_harness(tmp_path, monkeypatch)
+    (dest / STATE).write_text("bogus\n", encoding="utf-8")
+    assert run() == 0
+    assert merges == ["CLAUDE.slim.md"]
+    assert "ignoring invalid value" in capsys.readouterr().err
+
+
+def test_resolver_defaults_to_slim_default(tmp_path, monkeypatch):
+    import argparse
+
+    from quoin.cli import _resolve_claude_md_variant
+
+    monkeypatch.delenv("QUOIN_CLAUDE_MD_VARIANT", raising=False)
+    assert _resolve_claude_md_variant(argparse.Namespace(claude_md_variant=None), tmp_path) == ("slim", "default")
+
+
+def test_failed_placeholder_check_leaves_no_state_file(tmp_path, monkeypatch):
+    run, _merges, dest = _install_harness(tmp_path, monkeypatch, placeholder_violations=["leaked"])
+    assert run("full") == 1
+    assert not (dest / STATE).exists()
+
+
+def test_defaulted_slim_with_stale_outputs_falls_back_to_full_with_warning(tmp_path, monkeypatch, capsys):
+    scratch = _copy_slim_source_tree(tmp_path)
+    slim_path = scratch / "CLAUDE.slim.md"
+    slim_path.write_text(slim_path.read_text(encoding="utf-8") + "x", encoding="utf-8")
+    run, merges, dest = _install_harness(tmp_path, monkeypatch, source_dir=scratch)
+    assert run() == 0
+    assert merges == ["CLAUDE.md"]
     err = capsys.readouterr().err
-    assert "--claude-md-variant slim is a project-scope pilot only this wave" in err
+    assert "generated slim rules are stale" in err
+    assert "freshness check is broken" not in err
+    assert not (dest / STATE).exists()
+
+
+def test_defaulted_slim_with_broken_check_warns_about_the_check(tmp_path, monkeypatch, capsys):
+    scratch = _copy_slim_source_tree(tmp_path)
+    (scratch / "scripts" / "build_claude_slim.py").write_text("raise RuntimeError('boom')\n", encoding="utf-8")
+    run, merges, _dest = _install_harness(tmp_path, monkeypatch, source_dir=scratch)
+    assert run() == 0
+    assert merges == ["CLAUDE.md"]
+    err = capsys.readouterr().err
+    assert "freshness check is broken" in err
+    assert "generated slim rules are stale" not in err
+
+
+def test_explicit_slim_with_stale_outputs_aborts_naming_both_remedies(tmp_path, monkeypatch, capsys):
+    scratch = _copy_slim_source_tree(tmp_path)
+    slim_path = scratch / "CLAUDE.slim.md"
+    slim_path.write_text(slim_path.read_text(encoding="utf-8") + "x", encoding="utf-8")
+    run, merges, _dest = _install_harness(tmp_path, monkeypatch, source_dir=scratch)
+    assert run("slim") == 1
+    assert merges == []
+    err = capsys.readouterr().err
+    assert "build_claude_slim.py" in err and "--claude-md-variant full" in err
+
+
+def test_wheel_data_dir_layout_default_install_resolves_slim_without_warning(tmp_path, monkeypatch, capsys):
+    import shutil
+
+    from quoin.installer import check_slim_outputs_fresh
+
+    data_dir = tmp_path / "site-packages" / "quoin" / "data"
+    (data_dir / "scripts").mkdir(parents=True)
+    (data_dir / "memory").mkdir()
+    (data_dir / "skills").mkdir()
+    shutil.copy(QUOIN_SRC / "scripts" / "build_claude_slim.py", data_dir / "scripts" / "build_claude_slim.py")
+    for name in ("CLAUDE.md", "CLAUDE.slim.md", "CLAUDE.core.md"):
+        shutil.copy(QUOIN_SRC / name, data_dir / name)
+    shutil.copy(QUOIN_SRC / "memory" / "workflow-catalog.md", data_dir / "memory" / "workflow-catalog.md")
+    assert check_slim_outputs_fresh(data_dir) == []
+
+    run, merges, _dest = _install_harness(tmp_path, monkeypatch, source_dir=data_dir)
+    assert run() == 0
+    assert merges == ["CLAUDE.slim.md"]
+    assert "WARNING" not in capsys.readouterr().err
 
 
 def test_claude_md_variant_flag_present_in_install_help():
@@ -852,10 +998,10 @@ def test_claude_md_variant_flag_forwarded(monkeypatch):
     main(["install", "--source-dir", str(QUOIN_SRC), "--scope", "project", "--claude-md-variant", "slim"])
     assert captured_args.get("claude_md_variant") == "slim"
 
-    # default (flag omitted) is "full"
+    # default (flag omitted) is None; the resolver turns it into slim
     captured_args.clear()
     main(["install", "--source-dir", str(QUOIN_SRC)])
-    assert captured_args.get("claude_md_variant") == "full"
+    assert captured_args.get("claude_md_variant") is None
 
 
 def _write_python_stub(tmp_path: Path) -> dict:
@@ -925,6 +1071,17 @@ def test_install_sh_forwards_claude_md_variant(tmp_path):
     )
     assert "--claude-md-variant slim" in result2.stdout, result2.stdout + result2.stderr
 
+    # User scope forwards the flag too
+    result_user = subprocess.run(
+        ["bash", str(install_sh), "--scope", "user", "--claude-md-variant", "slim"],
+        cwd=str(tmp_path),
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=env,
+    )
+    assert "--claude-md-variant slim" in result_user.stdout, result_user.stdout + result_user.stderr
+
     # Missing-value form exits 2 (fails during arg parsing, before any Python probe)
     result3 = subprocess.run(
         ["bash", str(install_sh), "--claude-md-variant"],
@@ -962,6 +1119,7 @@ def _copy_slim_source_tree(tmp_path: Path) -> Path:
     )
     shutil.copy(QUOIN_SRC / "CLAUDE.md", scratch / "CLAUDE.md")
     shutil.copy(QUOIN_SRC / "CLAUDE.slim.md", scratch / "CLAUDE.slim.md")
+    shutil.copy(QUOIN_SRC / "CLAUDE.core.md", scratch / "CLAUDE.core.md")
     shutil.copy(
         QUOIN_SRC / "memory" / "workflow-catalog.md",
         scratch / "memory" / "workflow-catalog.md",

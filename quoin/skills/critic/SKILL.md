@@ -1,6 +1,6 @@
 ---
 name: critic
-description: "Senior technical critic (Opus) reviewing implementation plans for gaps, risks, and integration issues against the actual codebase. Use for: /critic, 'critique this plan', 'review the plan', 'find issues with this plan', 'what's wrong with this approach'."
+description: "Critiques an implementation plan for gaps, risks and integration issues against the codebase. Use for: /critic, 'critique this plan', 'find issues with this plan'."
 model: opus
 ---
 

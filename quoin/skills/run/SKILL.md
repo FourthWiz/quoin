@@ -1,6 +1,6 @@
 ---
 name: run
-description: "End-to-end workflow orchestrator chaining every phase, pausing at each gate for confirmation. Use for: /run, 'run the full workflow', 'end to end', 'do everything', 'full pipeline'. Accepts profile tags (small:/medium:/large:/strict:) and max_rounds: N."
+description: "End-to-end orchestrator chaining every phase, pausing at each gate. Use for: /run, 'run the full workflow', 'do everything'. Tags: small:/medium:/large:/strict:, max_rounds: N."
 model: opus
 ---
 

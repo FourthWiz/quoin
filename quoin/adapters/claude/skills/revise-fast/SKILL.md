@@ -1,6 +1,6 @@
 ---
 name: revise-fast
-description: "Fast Sonnet variant of /revise for cost-efficient plan revision; used by /thorough_plan in non-strict mode. Use for: /revise-fast. Not intended for direct user invocation — use /revise."
+description: "Fast Sonnet plan revision used by /thorough_plan. Use for: /revise-fast. Not for direct use; use /revise."
 model: sonnet
 ---
 

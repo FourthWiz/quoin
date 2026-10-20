@@ -277,7 +277,7 @@ You can also invoke `/capture_insight` explicitly to log something the user call
 
 The file `.workflow_artifacts/memory/lessons-learned.md` accumulates insights from completed tasks. It captures what surprised us, what went wrong, and what to do differently next time.
 
-**Reading:** Every planning skill (`/plan`, `/critic`, `/architect`) should read `lessons-learned.md` at the start to avoid repeating known mistakes.
+**Reading:** Every planning skill (`/plan`, `/critic`, `/architect`) should read `lessons-learned.md` at the start to avoid repeating known mistakes. Native auto memory (`MEMORY.md`) is for personal, ad-hoc facts; when a takeaway is a reusable engineering lesson, append it here instead (or keep only a one-line pointer to this file in auto memory).
 
 **Writing:** Append a new entry after each task reaches merge (or after a rollback, or when the user shares a lesson). Format:
 

@@ -1,6 +1,6 @@
 ---
 name: end_of_task
-description: "Finalizes a completed, reviewed task: commits, pushes the branch, captures lessons, marks complete. Use for: /end_of_task, 'finalize this', 'we're done', 'ship it', 'task complete', 'wrap up this task'. Requires /review first; does NOT create a PR."
+description: "Finalizes a reviewed task: commits, pushes the branch, captures lessons. Use for: /end_of_task, 'ship it', 'we're done'. Needs /review first; creates no PR."
 model: sonnet
 ---
 

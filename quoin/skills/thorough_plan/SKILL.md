@@ -1,6 +1,6 @@
 ---
 name: thorough_plan
-description: "Triages tasks by size (Small/Medium/Large) and orchestrates the matching planning path. Use for: /thorough_plan, 'plan this', 'plan this thoroughly', 'detailed plan with review', 'plan and critique', 'full planning cycle'. Always the entry point for planned work."
+description: "Triages a task as Small/Medium/Large and runs the matching planning path. Use for: /thorough_plan, 'plan this', 'plan this thoroughly', 'full planning cycle'."
 model: opus
 ---
 

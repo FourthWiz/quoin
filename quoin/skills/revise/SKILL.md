@@ -1,6 +1,6 @@
 ---
 name: revise
-description: "Revises an implementation plan based on critic feedback, addressing all critical and major issues (Opus). Use for: /revise, 'fix the plan', 'address the critic's comments', 'update the plan based on feedback'."
+description: "Revises a plan to address critic feedback. Use for: /revise, 'fix the plan', 'address the critic's comments'."
 model: opus
 ---
 

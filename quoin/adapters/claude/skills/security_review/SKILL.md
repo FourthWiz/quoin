@@ -1,6 +1,6 @@
 ---
 name: security_review
-description: "Standalone OWASP-style security pass (Opus): injection, secrets exposure, authorization gaps, dependency risk. Use for: /security_review, 'security review', 'OWASP'. Auto-included in Large /review fan-out."
+description: "OWASP-style security pass: injection, secrets, authorization gaps, dependency risk. Use for: /security_review, 'security review'. Auto-included in Large /review."
 model: opus
 ---
 

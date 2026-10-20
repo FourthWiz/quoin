@@ -1,6 +1,6 @@
 ---
 name: triage
-description: "Routes a natural-language prompt to the right workflow skill and tells the user which command to type. Use for: /triage, 'what should I run', 'which skill fits this', 'route this', 'pick the right command for me', 'I'm not sure what to do next'. Never invokes skills directly — always propose-only."
+description: "Routes a prompt to the right skill; propose-only. Use for: /triage, 'what should I run', 'which skill fits this', 'route this', 'pick the right command for me', 'I'm not sure what to do next'."
 model: haiku
 ---
 

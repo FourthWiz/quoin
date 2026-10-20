@@ -1,6 +1,6 @@
 ---
 name: enrich
-description: "Sharpens a raw task prompt upstream of /specify — fills genuine gaps via targeted questions and writes enriched-prompt.md. Use for: /enrich, 'sharpen this prompt', 'tighten this task description', 'fill in the gaps before we spec this'. Never writes a spec/plan or invokes a downstream phase."
+description: "Sharpens a raw task prompt before /specify by filling genuine gaps. Use for: /enrich, 'sharpen this prompt', 'tighten this task description'. Invokes nothing downstream."
 model: opus
 ---
 

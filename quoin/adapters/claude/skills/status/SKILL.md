@@ -1,6 +1,6 @@
 ---
 name: status
-description: "Renders the quoin workflow pipeline graph with the active phase marked. Use for: /status, 'where am I', 'what phase am I in', 'show workflow progress', 'pipeline graph', 'workflow status'. Read-only — no file artifacts produced."
+description: "Shows the workflow pipeline graph with the active phase marked. Use for: /status, 'where am I', 'what phase am I in'. Read-only."
 model: haiku
 ---
 

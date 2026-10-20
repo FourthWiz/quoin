@@ -527,11 +527,12 @@ def test_adapter_check_workflow_step_order_and_command_matches_manifest():
     assert re.search(r"^permissions:\s*$", text, re.MULTILINE), text
     assert re.search(r"^\s*contents:\s*read\s*$", text, re.MULTILINE), text
     run_lines = [line.strip()[len("run: "):] for line in text.splitlines() if line.strip().startswith("run:")]
-    assert len(run_lines) == 4, run_lines
+    assert len(run_lines) == 5, run_lines
     assert "validate_adapter_drift.py" in run_lines[0], run_lines
     assert "check_registration.py" in run_lines[1], run_lines
     assert "quoin.opencode_adapter check-manifest" in run_lines[2], run_lines
     assert "quoin doctor --runtime opencode --smoke" in run_lines[3], run_lines
+    assert "build_claude_slim.py --check" in run_lines[4], run_lines
 
     manifest_data = manifest.load_manifest(SOURCE_DIR)
     expected_command = manifest_data["validation"]["commands"][0]

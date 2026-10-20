@@ -1,6 +1,6 @@
 ---
 name: specify
-description: "Interactive intent elicitation that produces a structured feature spec (spec.md) upstream of /architect and planning. Use for: /specify, 'write a spec for X', 'capture the intent for this feature', 'what are the user stories', 'define acceptance criteria', 'turn this idea into a spec'."
+description: "Elicits intent and writes a structured feature spec (spec.md) before /architect. Use for: /specify, 'write a spec for X', 'define acceptance criteria'."
 model: opus
 ---
 

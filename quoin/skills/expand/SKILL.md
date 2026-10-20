@@ -1,7 +1,7 @@
 ---
 name: expand
 model: sonnet
-description: "Expands compressed (terse) workflow artifacts back to English for human reading. Use for: /expand <path>, 'show me the English version of', 'expand this file', 'what does this terse file say'. Never used as a contract approval path."
+description: "Expands terse workflow artifacts back to English. Use for: /expand <path>, 'expand this file', 'what does this terse file say'. Never a contract-approval path."
 ---
 # Expand (deprecated stub)
 

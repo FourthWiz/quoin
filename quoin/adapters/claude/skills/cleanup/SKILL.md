@@ -1,6 +1,6 @@
 ---
 name: cleanup
-description: "Trash-moves stale sentinels and old checkpoints into a recoverable archive (.workflow_artifacts/memory/trash/). Use for: /cleanup [--dry-run] [--no-tasks]; auto-fires from /end_of_day unless --no-cleanup. Recovery is manual mv — NOT /sleep --restore."
+description: "Moves stale sentinels and old checkpoints to a recoverable trash folder. Use for: /cleanup [--dry-run] [--no-tasks]. Restore by manual mv, NOT /sleep --restore."
 model: sonnet
 ---
 

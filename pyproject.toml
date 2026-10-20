@@ -61,6 +61,7 @@ exclude = [
 "quoin/QUICKSTART.md" = "src/quoin/data/QUICKSTART.md"
 "quoin/CLAUDE.md" = "src/quoin/data/CLAUDE.md"
 "quoin/CLAUDE.slim.md" = "src/quoin/data/CLAUDE.slim.md"
+"quoin/CLAUDE.core.md" = "src/quoin/data/CLAUDE.core.md"
 "quoin/memory" = "src/quoin/data/memory"
 "quoin/plugins" = "src/quoin/data/plugins"
 "quoin/tools/agentdesk/agentdesk.zsh" = "src/quoin/data/tools/agentdesk/agentdesk.zsh"

@@ -81,6 +81,7 @@ def test_no_quoin_foundation_stage_prose_in_skills():
             str(QUOIN_DIR / "skills"),
             str(QUOIN_DIR / "CLAUDE.md"),
             str(QUOIN_DIR / "CLAUDE.slim.md"),
+            str(QUOIN_DIR / "CLAUDE.core.md"),
             str(QUOIN_DIR / "memory" / "workflow-catalog.md"),
         ],
         capture_output=True,
