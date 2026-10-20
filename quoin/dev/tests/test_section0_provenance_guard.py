@@ -34,8 +34,8 @@ snapshot) is a cheap extra check, not the mechanism that discriminates.
 
 Snapshot (informational; a maintainer updating the generator template updates
 this alongside, without touching the partition assertions above):
-  corpus_lines=15475, census_lines=4315 plus the live start_of_day tail,
-  generated=4119, handwritten=178,
+  corpus_lines=15475, census_lines=4310 plus the live start_of_day tail,
+  generated=4119, handwritten=173,
   overhang=the live start_of_day tail + 18 (blank, one per other §0 carrier),
   carriers=29, variants=6, declared hand-written blocks=3.
 """
@@ -92,9 +92,9 @@ DECLARED_VARIANT_SET = {"§0", "§0'", "§0a", "§0b", "§0″", "§0‴"}
 DECLARED_HANDWRITTEN_BLOCKS = {
     ("implement", "§0a"): 73,
     ("implement", "§0b"): 53,
-    ("end_of_task", "§0b"): 52,
+    ("end_of_task", "§0b"): 47,
 }
-DECLARED_HANDWRITTEN_TOTAL_LINES = 178
+DECLARED_HANDWRITTEN_TOTAL_LINES = 173
 
 START_OF_DAY_FIRST_NONBLANK = "### Step 1a: Resume from cookie"
 START_OF_DAY_NEXT_H2 = "## Session bootstrap"
@@ -103,7 +103,7 @@ START_OF_DAY_NEXT_H2 = "## Session bootstrap"
 SNAPSHOT_CORPUS_LINES = 15475
 # The census counts every §0 block up to the next H2, so it includes the
 # start_of_day tail; the snapshot is stated without that tail.
-SNAPSHOT_CENSUS_LINES = 4315
+SNAPSHOT_CENSUS_LINES = 4310
 SNAPSHOT_GENERATED_LINES = 4119
 SNAPSHOT_OVERHANG_LINES = 18  # one blank line for each carrier except start_of_day
 SNAPSHOT_CARRIERS = 29
@@ -675,7 +675,7 @@ DENSITY_CEILINGS: dict[str, int] = {
     "thorough_plan": 10,
     "architect": 8,
     "security_review": 8,
-    "end_of_task": 7,
+    "end_of_task": 6,
     "revise": 7,
     "revise-fast": 7,
     "end_of_day": 7,
@@ -750,9 +750,9 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
         "this count and the one above to match."
     )
-    assert sum(DENSITY_CEILINGS.values()) == 155, (
+    assert sum(DENSITY_CEILINGS.values()) == 154, (
         f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
-        "155. A per-file ceiling was re-seeded without updating this checksum — "
+        "154. A per-file ceiling was re-seeded without updating this checksum — "
         "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
         "hunk as the ceiling change."
     )
