@@ -105,7 +105,7 @@ CEILINGS = {
     "skill:revise-fast": 29330,  # post-description-trim 26663 * 1.10, monotonic vs prior 29521 Re-checked, no change (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
     "skill:rollback": 23984,  # post-description-trim 21803 * 1.10, monotonic vs prior 24247 Re-checked, no change (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
     "skill:sleep": 31120,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3381 B measured; headroom unchanged.
-    "skill:start_of_day": 28944,  # post-description-trim 26312 * 1.10, monotonic vs prior 29155 Re-checked, no change (measured 26312 B, candidate 28944 B == prior ceiling 28944 B; unchanged).
+    "skill:start_of_day": 27770,  # measured 25245 B, ceiling is that size plus 10 percent rounded up.
     "skill:status": 9841,  # post-slim 8946 * 1.10 Re-checked, no change (measured 8946 B, candidate 9841 B == prior ceiling 9841 B; unchanged).
     "skill:triage": 34356,  # post-description-trim 31232 * 1.10, monotonic vs prior 34422 Re-checked, no change (measured 31232 B, candidate 34356 B == prior ceiling 34356 B; unchanged).
     "skill:weekly_review": 18633,  # post-description-trim 16939 * 1.10, monotonic vs prior 18803 Re-checked, no change (measured 16939 B, candidate 18633 B == prior ceiling 18633 B; unchanged).
