@@ -159,7 +159,7 @@ early-emitted manifest — it does NOT run a claimless reconcile.
 ## Session-state fields
 
 `verification_ran` (default `no`) / `verification_mismatches` (default `0`) live in the same
-`## Cost` YAML block as `fallback_fires`, atomic-rename increment, never decremented. Omission or
+`## Cost` lines as `fallback_fires` (`session-schema.md`); reset to those defaults at every session write. Omission or
 `no` is read as a **positive failure signal**, never a silent pass (MAJ-1) — this is why
 `start_of_day` treats a missing flag on an in-scope session as a mismatch in its own right.
 `end_of_day`'s Cost-summary and `weekly_review`'s Cost-data step roll up `verification_mismatches`

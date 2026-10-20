@@ -281,11 +281,12 @@ On Approve: write `.workflow_artifacts/spec.md.tmp` with the Write tool, then ru
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `in_progress` (or `completed` if `spec.md` is written and validated)
-- **Current stage:** `specify`
-- **Completed in this session:** what was elicited and what `spec.md` covers
-- **Unfinished work:** any open questions the user deferred, or sections still needing confirmation
-- **Cost:** YAML block with Session UUID, Phase (`specify`), Recorded in cost ledger
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`, or `completed` once `spec.md` is written and validated
+- Current stage: `specify`
+- Next command: `/architect <task>` (Small: `/thorough_plan <task>`)
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
+

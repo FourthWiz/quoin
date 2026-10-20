@@ -2,14 +2,14 @@
 # test_sessionend_verify.sh — Tests for sessionend.sh STEP 5b/7/7b §V backstop (T-12/T-09)
 # Run from project root: bash quoin/dev/tests/test_sessionend_verify.sh
 # All tests exit 0 on PASS, emit "FAIL: <reason>" and set FAIL counter.
-# Mirrors test_sessionend_close_snapshot.sh style: POSIX sh, mktemp, trap-based cleanup.
+# Style: POSIX sh, mktemp, trap-based cleanup.
 #
 # Covers T-12 acceptance (a)-(j):
 #   (a) manifest-present MISMATCH folded into the single systemMessage
 #   (b) manifest-absent at EOD-class -> absent banner
 #   (c) no gh invocation (--finalized-only always)
 #   (d) verify_claims.py absent on a non-EOD-class / eod_due==0 fixture -> silent exit 0
-#   (e) STEP 8 Close snapshot runs iff eod_due==1
+#   (e) nudge fires iff eod_due==1 and the session file is never modified
 #   (f) exactly one systemMessage JSON emitted in every branch
 #   (g) present-but-EMPTY manifest WITH in-window work -> empty-manifest banner
 #   (h) hook audit line goes to the DISTINCT .hookaudit.md sibling; manifest path
@@ -17,7 +17,7 @@
 #   (i) quiet-day no-false-banner: present-but-EMPTY manifest with only
 #       out-of-window finalized/ folders -> no banner, exit 0
 #   (j) eod_due==1 + wrapper-absent -> STEP 5b falls through (no exit); nudge
-#       still fires AND Close snapshot is still appended
+#       still fires and no Close snapshot is appended
 
 PASS=0; FAIL=0
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -171,12 +171,12 @@ fi
 trap - EXIT
 rm -rf "$TD_WORLD" "$TD_HOME"
 
-# ── Test E (acceptance e): STEP 8 Close snapshot runs iff eod_due==1 ─────────
+# ── Test E (acceptance e): nudge fires iff eod_due==1; session file is never modified ──
 echo ""
-echo "Test E: Close snapshot appended iff eod_due==1 (independent of §V reconcile)"
+echo "Test E: nudge fires iff eod_due==1, and the session file is never modified"
 
-_run_close_snapshot_fixture() {
-  # $1 = end_of_day_due value ("yes" or "no"); prints "snapshot_count session_file"
+_run_nudge_fixture() {
+  # $1 = end_of_day_due value ("yes" or "no"); prints "SKIP ..." or "changed nudge world home"
   world=$(mktemp -d)
   home=$(mktemp -d)
   mkdir -p "$world/.workflow_artifacts/memory/sessions"
@@ -185,12 +185,12 @@ _run_close_snapshot_fixture() {
   printf '## Cost\nend_of_day_due: %s\n' "$1" > "$session_file"
   printf 'daily cache\n' > "$world/.workflow_artifacts/memory/daily/${TODAY}.md"
 
+  # Fake project transcript newer than the session file: with the old snapshot
+  # step present this setup made the hook append to the session file.
   proj_hash=$(printf '%s' "$world" | sed 's|/|-|g')
   jsonl_dir="$home/.claude/projects/$proj_hash"
   mkdir -p "$jsonl_dir"
-  test_uuid="deadbeef-0000-1234-5678-abcdef000099"
-  jsonl="$jsonl_dir/${test_uuid}.jsonl"
-  printf '{}' > "$jsonl"
+  printf '{}' > "$jsonl_dir/deadbeef-0000-1234-5678-abcdef000099.jsonl"
 
   thirty_min_ago=$(date -v-30M +%Y%m%d%H%M 2>/dev/null) || thirty_min_ago=""
   if [ -z "$thirty_min_ago" ] || ! touch -t "${thirty_min_ago}" "$session_file" 2>/dev/null; then
@@ -198,31 +198,34 @@ _run_close_snapshot_fixture() {
     return
   fi
 
+  before=$(cksum < "$session_file")
   stdin=$(printf '{"cwd":"%s"}' "$world")
   out=$(printf '%s' "$stdin" | env HOME="$home" sh "$HOOKS_DIR/sessionend.sh" 2>/dev/null)
-  count=$(grep -c '^## Close snapshot$' "$session_file" 2>/dev/null); count=${count:-0}
-  echo "$count $session_file $world $home"
-  printf '%s' "$out" > "$world/.hook-stdout"
+  after=$(cksum < "$session_file")
+  changed=0; [ "$before" = "$after" ] || changed=1
+  nudge=0; printf '%s' "$out" | grep -q 'quoin-S-4' && nudge=1
+  echo "$changed $nudge $world $home"
 }
 
-TE1_RESULT=$(_run_close_snapshot_fixture "yes")
-TE1_COUNT=$(printf '%s' "$TE1_RESULT" | awk '{print $1}')
+TE1_RESULT=$(_run_nudge_fixture "yes")
+TE1_CHANGED=$(printf '%s' "$TE1_RESULT" | awk '{print $1}')
+TE1_NUDGE=$(printf '%s' "$TE1_RESULT" | awk '{print $2}')
 TE1_WORLD=$(printf '%s' "$TE1_RESULT" | awk '{print $3}')
 TE1_HOME=$(printf '%s' "$TE1_RESULT" | awk '{print $4}')
 
-TE2_RESULT=$(_run_close_snapshot_fixture "no")
-TE2_COUNT=$(printf '%s' "$TE2_RESULT" | awk '{print $1}')
+TE2_RESULT=$(_run_nudge_fixture "no")
+TE2_CHANGED=$(printf '%s' "$TE2_RESULT" | awk '{print $1}')
+TE2_NUDGE=$(printf '%s' "$TE2_RESULT" | awk '{print $2}')
 TE2_WORLD=$(printf '%s' "$TE2_RESULT" | awk '{print $3}')
 TE2_HOME=$(printf '%s' "$TE2_RESULT" | awk '{print $4}')
 
-if [ "$TE1_COUNT" = "SKIP" ] || [ "$TE2_COUNT" = "SKIP" ]; then
-  skip "Test E — touch -t not available on this platform; Close-snapshot gate test cannot run"
+if [ "$TE1_CHANGED" = "SKIP" ] || [ "$TE2_CHANGED" = "SKIP" ]; then
+  skip "Test E — touch -t not available on this platform; nudge test cannot run"
 else
-  TE1_NUDGE=$(grep -q 'quoin-S-4' "$TE1_WORLD/.hook-stdout" 2>/dev/null && echo 1 || echo 0)
-  if [ "$TE1_COUNT" -eq 1 ] && [ "$TE1_NUDGE" -eq 1 ] && [ "$TE2_COUNT" -eq 0 ]; then
-    pass "Test E — Close snapshot appended + nudge fires when eod_due=yes; withheld when eod_due=no even though STEP 5b reconcile ran"
+  if [ "$TE1_NUDGE" -eq 1 ] && [ "$TE1_CHANGED" -eq 0 ] && [ "$TE2_NUDGE" -eq 0 ] && [ "$TE2_CHANGED" -eq 0 ]; then
+    pass "Test E — nudge fires when eod_due=yes, withheld when no; session file never modified"
   else
-    fail "Test E — yes_count=$TE1_COUNT yes_nudge=$TE1_NUDGE no_count=$TE2_COUNT (expected 1/1/0)"
+    fail "Test E — yes: nudge=$TE1_NUDGE changed=$TE1_CHANGED; no: nudge=$TE2_NUDGE changed=$TE2_CHANGED (expected 1/0 and 0/0)"
   fi
 fi
 rm -rf "$TE1_WORLD" "$TE1_HOME" "$TE2_WORLD" "$TE2_HOME" 2>/dev/null || true
@@ -322,9 +325,9 @@ fi
 trap - EXIT
 rm -rf "$TI_WORLD" "$TI_HOME"
 
-# ── Test J (acceptance j): eod_due==1 + wrapper-absent -> fall-through, nudge + snapshot still fire ──
+# ── Test J (acceptance j): eod_due==1 + wrapper-absent -> fall-through, nudge still fires, no snapshot ──
 echo ""
-echo "Test J: eod_due==1 + verify_claims.py absent -> STEP 5b falls through (no exit); nudge + Close snapshot still fire"
+echo "Test J: eod_due==1 + verify_claims.py absent -> STEP 5b falls through (no exit); nudge still fires, no Close snapshot"
 TJ_WORLD=$(mktemp -d)
 TJ_HOME=$(mktemp -d)
 trap 'rm -rf "$TJ_WORLD" "$TJ_HOME"' EXIT
@@ -350,8 +353,8 @@ if [ -n "$THIRTY_MIN_AGO_J" ] && touch -t "${THIRTY_MIN_AGO_J}" "$TJ_SESSION_FIL
   rm -rf "$(dirname "$(dirname "$TJ_HOOK")")" 2>/dev/null || true
 
   TJ_SNAP_COUNT=$(grep -c '^## Close snapshot$' "$TJ_SESSION_FILE" 2>/dev/null); TJ_SNAP_COUNT=${TJ_SNAP_COUNT:-0}
-  if [ "$TJ_EXIT" -eq 0 ] && printf '%s' "$TJ_OUT" | grep -q 'quoin-S-4' && [ "$TJ_SNAP_COUNT" -eq 1 ]; then
-    pass "Test J — wrapper-absent fall-through: nudge still fires AND Close snapshot still appended"
+  if [ "$TJ_EXIT" -eq 0 ] && printf '%s' "$TJ_OUT" | grep -q 'quoin-S-4' && [ "$TJ_SNAP_COUNT" -eq 0 ]; then
+    pass "Test J — wrapper-absent fall-through: nudge still fires and no Close snapshot is appended"
   else
     fail "Test J — exit=$TJ_EXIT snapshot_count=$TJ_SNAP_COUNT output=$TJ_OUT"
   fi

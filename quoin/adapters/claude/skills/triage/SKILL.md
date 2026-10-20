@@ -173,7 +173,7 @@ Run the following checks. All are **best-effort and read-only** — if a command
 | On `main`/`master` with clean working tree | `git status 2>/dev/null` clean + `git branch --show-current 2>/dev/null` is `main` or `master` | `/start_of_day` +1, `/thorough_plan` +1 | `/end_of_task` −2 |
 | Today's daily cache exists | `ls .workflow_artifacts/memory/daily/$(date +%Y-%m-%d).md 2>/dev/null` found | `/end_of_day` +1 | `/start_of_day` −1 |
 | No daily cache for today AND no session file for today | Daily cache absent + `ls .workflow_artifacts/memory/sessions/$(date +%Y-%m-%d)-*.md 2>/dev/null` absent | `/start_of_day` +2 | — |
-| Active session file with `Status: in_progress` | `grep -l "Status: in_progress" .workflow_artifacts/memory/sessions/$(date +%Y-%m-%d)-*.md 2>/dev/null` non-empty | `/implement` +1, `/review` +1 | `/init_workflow` −2 |
+| Active session file with status `in_progress` | `awk 'FILENAME ~ /-orchestrator\.md$/{nextfile} FNR==1{s=0} /^## Status: in_progress/{print FILENAME; nextfile} s&&NF{if($0=="in_progress")print FILENAME; s=0} /^## Status$/{s=1}' .workflow_artifacts/memory/sessions/$(date +%Y-%m-%d)-*.md 2>/dev/null` non-empty | `/implement` +1, `/review` +1 | `/init_workflow` −2 |
 | It's Friday (local date) | `date +%u 2>/dev/null` == 5 (uses local timezone — correct; `date +%u` respects the system clock) | `/weekly_review` +1 | — |
 | Knowledge cache stale (>7 days) | `stat -f %m .workflow_artifacts/cache/_staleness.md 2>/dev/null` (macOS) or `stat -c %Y` (Linux) > 7 days, or file absent | `/discover` +1 | — |
 

@@ -20,7 +20,10 @@
 # SessionEnd runs asynchronously; exit code is ignored. Fail-OPEN by design.
 #
 # Fail-OPEN: any error → exit 0, no output. STEP 5b (§V) never `exit`s on failure —
-# only STEP 4 (no recent session file) and STEP 7b (Close-snapshot gate) may exit.
+# only STEP 4 (no recent session file) may exit early.
+#
+# The hook never modifies a session file: the session state schema
+# (memory/session-schema.md) has no hook-written block.
 
 . "$(dirname "$0")/_lib.sh" && read_constants
 
@@ -199,72 +202,5 @@ fi
 if [ -n "$msg" ]; then
   printf '{"systemMessage": "%s"}\n' "$(printf '%s' "$msg" | sed 's/"/\\"/g')"
 fi
-
-# STEP 7b: MAJ-1 — explicit guard LOGICALLY EQUIVALENT to STEP 8's original
-# `end_of_day_due: yes` entry gate (not byte-identical: eod_due=1 iff that same
-# grep succeeds). Close snapshot stays behind its original gate even though STEP 5b
-# (reconcile) and STEP 7 (banner) now run for every EOD-class session.
-[ "$eod_due" = 1 ] || exit 0
-
-# STEP 8: Capture Close snapshot
-# Writes a ## Close snapshot block to the active session-state file so /end_of_day
-# Step 3e can reconcile the session UUID into the cost ledger.
-# Fail-OPEN: every failure path falls through to exit 0 with no output.
-# No new dependencies (python3, stat, find, sed, grep, basename, date, mktemp, cat).
-# No stdout output — the existing STEP 7 systemMessage is the only stdout line.
-_S2_TMP=""
-_S2_BLOCK=""
-_S2_CLEANUP() { rm -f "$_S2_TMP" "$_S2_BLOCK" 2>/dev/null || true; }
-
-proj_hash=$(printf '%s' "$cwd" | sed 's|/|-|g') || { _S2_CLEANUP; exit 0; }
-jsonl_dir="$HOME/.claude/projects/$proj_hash"
-[ -d "$jsonl_dir" ] || exit 0
-
-_S2_TMP=$(mktemp 2>/dev/null) || _S2_TMP="${TMPDIR:-/tmp}/quoin-s2-tmp-$$"
-find "$jsonl_dir" -maxdepth 1 -name '*.jsonl' -mmin -60 2>/dev/null > "$_S2_TMP" || { _S2_CLEANUP; exit 0; }
-
-# Select JSONL with greatest mtime using python3; fallback to stat -f %m (BSD)
-selected_jsonl=$(python3 - "$_S2_TMP" <<'PYEOF' 2>/dev/null
-import sys, os
-with open(sys.argv[1]) as f:
-    files = [l.strip() for l in f if l.strip()]
-if not files:
-    sys.exit(1)
-best = max(files, key=lambda p: os.path.getmtime(p))
-print(best)
-PYEOF
-) || selected_jsonl=""
-
-if [ -z "$selected_jsonl" ]; then
-  _S2_CLEANUP; exit 0
-fi
-
-# Get mtime of selected JSONL (seconds since epoch)
-jsonl_mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$selected_jsonl" 2>/dev/null) \
-  || jsonl_mtime=$(stat -f %m "$selected_jsonl" 2>/dev/null) \
-  || jsonl_mtime=0
-
-# Get mtime of session-state file
-session_mtime=$(python3 -c "import os,sys; print(int(os.path.getmtime(sys.argv[1])))" "$RECENT_FILE" 2>/dev/null) \
-  || session_mtime=$(stat -f %m "$RECENT_FILE" 2>/dev/null) \
-  || session_mtime=0
-
-# Stale cross-check: skip if JSONL was modified before the session-state file
-if [ "$jsonl_mtime" -lt "$session_mtime" ] 2>/dev/null; then
-  _S2_CLEANUP; exit 0
-fi
-
-jsonl_uuid=$(basename "$selected_jsonl" .jsonl) || { _S2_CLEANUP; exit 0; }
-
-# Idempotency check: skip if UUID already recorded in the session file
-grep -q "Session UUID:[[:space:]]*$jsonl_uuid" "$RECENT_FILE" 2>/dev/null && { _S2_CLEANUP; exit 0; }
-
-# Build the snapshot block in a tmpfile then atomically append it
-_S2_BLOCK=$(mktemp 2>/dev/null) || _S2_BLOCK="${TMPDIR:-/tmp}/quoin-s2-block-$$"
-printf '\n## Close snapshot\n- Closed at: %s\n- JSONL UUID: %s\n- Project: %s\n- Note: session closed; UUID captured by sessionend hook for EOD reconciliation\n' \
-  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$jsonl_uuid" "$proj_hash" > "$_S2_BLOCK" 2>/dev/null || { _S2_CLEANUP; exit 0; }
-
-cat "$_S2_BLOCK" >> "$RECENT_FILE" 2>/dev/null || true
-_S2_CLEANUP
 
 exit 0

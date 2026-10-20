@@ -262,14 +262,14 @@ Derive a descriptive kebab-case name from the task. Ask the user if not obvious.
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `in_progress`
-- **Current stage:** `plan`
-- **Completed in this session:** what the plan covers
-- **Unfinished work:** anything deferred or not yet planned
-- **Decisions made:** key choices and their rationale
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`
+- Current stage: `plan`
+- Next command: `/critic` under `/thorough_plan`, else `/implement`
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Write planner trace breadcrumb
 

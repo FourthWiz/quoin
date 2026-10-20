@@ -30,7 +30,6 @@ NEW_FIXTURES = (
 BASELINE_FIXTURES = (
     "test_sessionstart_pending_restore.sh",
     "test_session_lifecycle_hooks.sh",
-    "test_sessionend_close_snapshot.sh",
     "test_sessionend_verify.sh",
     "test_precompact_hook.sh",
     "test_postcompact_hook.sh",

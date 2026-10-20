@@ -607,14 +607,15 @@ if verdict == REVISE and round > max_rounds:
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `in_progress`
-- **Current stage:** `architect`
-- **Completed in this session:** what was explored and what `architecture.md` covers
-- **Unfinished work:** any open questions, unresolved risks, or areas needing spikes
-- **Decisions made:** key architectural choices and their rationale
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`
+- Current stage: `architect`
+- Next command: `/thorough_plan <task>`
+- Architectural design summary: optional; this skill replaces it, every other writer keeps it.
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Important behaviors
 

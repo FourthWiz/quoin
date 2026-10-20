@@ -196,11 +196,12 @@ STOP after writing and echoing `enriched-prompt.md` — never invokes a downstre
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `completed` (enrichment is a single-pass skill; there is no partial state to resume)
-- **Current stage:** `enrich`
-- **Completed in this session:** whether material enrichment was needed, and a one-line summary of what changed
-- **Unfinished work:** any open questions the user deferred
-- **Cost:** YAML block with Session UUID, Phase (`enrich`), Recorded in cost ledger
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `completed` (single pass, nothing to resume)
+- Current stage: `enrich`
+- Next command: `/specify <task>`
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
+

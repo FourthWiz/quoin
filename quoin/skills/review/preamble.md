@@ -6,7 +6,7 @@ source_files:
 - quoin/memory/format-kit.md
 - quoin/memory/glossary.md
 source_hashes:
-  quoin/memory/format-kit.md: e2b97c426c93b44bf39c8bcae0c32b868790ee1e
+  quoin/memory/format-kit.md: eef314636e164a15271dde9c2682dab45a12da2a
   quoin/memory/glossary.md: 1dc852b1f090c7cd2c75fb60b468221d6415de17
 total_bytes: 4385
 ---

@@ -143,11 +143,12 @@
         "## Completed in this session",
         "## Architectural design summary",
         "## Unfinished work",
+        "## Next command",
         "## Decisions made",
         "## Open questions",
         "## Cost"
       ],
-      "notes": "format-kit.md §2 session/<date>-<task>.md entry; Class A — no For human block"
+      "notes": "format-kit.md §2 session/<date>-<task>.md entry; shape and field rules in session-schema.md; Class A — no For human block"
     },
     "gate": {
       "class": "A",

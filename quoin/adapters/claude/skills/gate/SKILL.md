@@ -226,7 +226,7 @@ Comprehensive checks. Used after `/implement` for Large tasks and after `/review
 
 ## Determining the gate level
 
-Read the task profile from the convergence summary at the top of `current-plan.md` (look for "Task profile: Small/Medium/Large"), or from the session state file. Then apply:
+Read the task profile from the convergence summary at the top of `current-plan.md` (look for "Task profile: Small/Medium/Large"), or from the `profile:` field in the frontmatter of `current-plan.md`. Then apply:
 
 | Previous phase | Next phase | Small | Medium | Large |
 |---------------|-----------|-------|--------|-------|
