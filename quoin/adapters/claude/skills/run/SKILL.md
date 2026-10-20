@@ -420,9 +420,6 @@ printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
     "unknown-PHASE-$(date -u +%s)" "$(date -u +%Y-%m-%d)" "PHASE" "MODEL" \
     "/run subagent (on-behalf write failed)" "0" >> "$LEDGER"
 ```
-This post-check is embedded in every call site of this bash block — including the two
-`/gate` spawns and any other managed phase — so no managed spawn is left with a silent
-zero-row path (closes the F-01 gap: a no-fallback spawn is no longer possible here).
 Nested-orchestrator case is correct by construction: `/run` prepends `[quoin-onbehalf]` to the
 `/architect` and `/thorough_plan` spawns; those children strip their own marker (skip their own
 self-write, per T-06/D-9) and independently prepend a FRESH `[quoin-onbehalf]` to THEIR OWN
@@ -433,9 +430,7 @@ non-inherited, no double-suppression.
 self-writer today (it aggregates at task close rather than self-writing a session-start row), so
 there is no child self-write to suppress for it — the on-behalf write above still fires for the
 `end-of-task` phase (parity with the other 7 phases); it simply has no corresponding T-06 skip
-predicate to pair with. This "7" counts the on-behalf MANAGED phase roster (the 8 spawned phases
-enumerated above, of which `end_of_task` is one) — the fast-path triage step runs inline (`D-12`)
-and is never spawned, so it is deliberately outside this mechanism and this count is unchanged.
+predicate to pair with.
 
 **Opt-out (`QUOIN_INLINE_COST_CAPTURE=0`):** every phase spawn reverts to the pre-`IVG-249` behavior
 — the child self-writes its own 6/7-col session-start row (col 8 empty), or `end_of_task`
@@ -487,10 +482,7 @@ still emits the decision-gate block, not an envelope. Do not open
 __QUOIN_HOME__/core/workflow/handoff-format.md unless you need other
 shapes/escaping."
 
-With `spec:` no longer part of the dispatch payload, the trailing note above
-is the only path to the full contract (needed for the partial/needs-decision/
-blocked shapes and the escaping rules this template omits); a compliant
-COMPLETE return never requires opening it. The whole envelope (marker to
+The whole envelope (marker to
 marker) is clamped to 1,024 B — stated once here, not repeated at each phase
 section or re-dispatch site below.
 
@@ -1573,16 +1565,6 @@ Rough estimates only — `/end_of_task` computes actual costs from the cost ledg
 | Medium, fast route | ~$2.75–$4.00 — genuinely favorable: saves the architect + planning passes, net of moving `/implement` to Opus |
 | Large, fast route | ~$5.25–$7.50 — genuinely favorable, same architect/planning saving as Medium, offset upward by the retained `/security_review` OWASP subagent this route keeps unconditionally on Large (see the Large carve-out) — an offset Medium's fast route does not carry |
 
-The fast route's saving comes from skipping `/architect` and `/thorough_plan` entirely (their Opus
-planning/critic passes), net of the cost added by forcing `/implement` to Opus instead of Sonnet on
-that same run. On Medium/Large that trade is favorable — the skipped phases cost more than the
-`/implement` tier bump. On Small, the trade reverses: Small already skips `/architect` and already
-runs a single-pass review, so there is nothing left to skip except one Opus `/plan` pass, while the
-`/implement` tier bump still applies in full — the fast route's sole justification (cost) does not
-hold on the Small profile, and choosing it there is a legitimate choice only when the human
-confirming Checkpoint A1 (or the formulation-bar-gated autonomous evaluation) has already accepted
-that tradeoff.
-
 ## Error handling
 
 - **Subagent failure:** inform the user, offer to retry the phase. If the failed subagent was Phase 6 (`/end_of_task`), see "end_of_task failure recovery (inline finish)" under Phase 6 above before archiving.
@@ -1618,8 +1600,6 @@ that tradeoff.
        timeout, escalate to the user with the partial artifact
        and ask whether to proceed to the next phase with a flagged
        artifact, or stop.
-  NOTE: This retry only fires for subagents dispatched BY /run.
-  Standalone invocations of sub-skills have no automatic retry.
 - **Within-phase PARTIAL continuation (autonomous, T-12).** When a phase
   subagent returns a structured `PARTIAL` signal (see "Subagent session
   management" above) instead of its normal phase-complete summary:
@@ -1697,7 +1677,5 @@ no threshold is read from `hooks/_lib.sh` here and none is redefined.
 
 - **Orchestrate, don't perform.** Never write plan content, code, or review findings yourself. Always spawn the appropriate subagent skill. **Named exception:** the Phase 1.6 fast-route routing stub (`<task_dir>/current-plan.md`), which the orchestrator writes itself, inline. The stub's provenance markers exist precisely so it is never mistaken for planned content — writing it is a mechanical transcription of acceptance criteria the user already approved upstream, not authored plan content; no design judgment is exercised, which is what this rule exists to prevent.
 - **Checkpoints are mandatory.** Even when the user said "run everything" at the start — every phase boundary requires a conscious confirmation.
-- **Preserve artifacts on stop.** All work produced before a stop stays in `.workflow_artifacts/<task-name>/`. The user can resume with individual skills or `/run --resume`.
 - **Gates are blocking.** Never skip a gate. If a gate fails, do not proceed.
-- **Fresh session for review.** `/review` must be a fresh subagent session for unbiased assessment.
 - **Keep checkpoint summaries concise.** Key facts only — offer "show <artifact>" for details.

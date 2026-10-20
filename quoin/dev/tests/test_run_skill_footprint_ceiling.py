@@ -20,7 +20,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
 
 # Ratchet: measured size at ceiling-authoring time * 1.10, rounded up.
-CEILING_BYTES = 153000
+CEILING_BYTES = 150559
 # Raised deliberately for the tasks-complete entry, the automatic-retry budget and the
 # headless no-yield references: measured about 139 KB after those additions, times 1.10.
 
