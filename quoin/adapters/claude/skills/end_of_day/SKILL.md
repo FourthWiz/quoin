@@ -209,7 +209,7 @@ the normal session-selection (Step 3). The procedure identifies session files th
 NEVER appeared in any daily-cache file body — these sessions were silently skipped and their
 work was never captured.
 
-**Step 0a: Reconcile covered-but-due sessions (runs BEFORE orphan detection below; mirror image of the orphan procedure — orphans are flag=no-but-uncovered, this is flag=yes-but-already-covered):**
+**Step 0a: Reconcile covered-but-due sessions (runs BEFORE orphan detection below; the mirror image of an orphan — flag=yes but already covered):**
 
 If `QUOIN_DISABLE_EOD_RECONCILE=1` is set, skip this step entirely and proceed straight to the
 orphan detection procedure below (fail-OPEN default — today's Step 0 behavior, unchanged). If the
@@ -222,10 +222,9 @@ shared helper script is unavailable for any reason, also skip Step 0a and fall t
    Parse two labelled lists from stdout: `COVERED:` (sessions with `end_of_day_due: yes` whose
    slug — via the same guarded base-slug derivation `find_orphans()` uses — is already present in
    a daily-cache body, i.e. should have been flipped to `no` already but wasn't) and `UNCOVERED:`
-   (genuine backlog, unchanged from today's classification). Round 4 scope note: a phase/stage-
-   suffixed slug (e.g. `foo-review`, `foo-s3-implement`) whose root task IS covered still classifies
-   `UNCOVERED` here — this is documented, intended behavior for this round (only the `-orchestrator`
-   suffix is reconciled), not a bug.
+   (genuine backlog, unchanged from today's classification). A phase/stage-
+   suffixed slug (e.g. `foo-review`, `foo-s3-implement`) whose root task is covered still classifies
+   `UNCOVERED`; only the `-orchestrator` suffix is reconciled.
 2. For each file in `COVERED:`, atomically flip `end_of_day_due: no` — same mechanism as Step 3d:
    open the file, replace the `end_of_day_due: yes` line with `end_of_day_due: no`, write to
    `<path>.tmp`, then `os.rename(tmp, path)`.
@@ -235,27 +234,24 @@ shared helper script is unavailable for any reason, also skip Step 0a and fall t
    `select_unprocessed_sessions.py --show-window` invocation that opens Step 2 below — otherwise a
    covered-but-still-`yes` file would leak into `script_file_list`/`in_scope` and get built into
    that day's daily cache a second time.
-5. Covered auto-flips from this step are OUTSIDE `in_scope` for the Step 3 build — that work was
-   already captured in an earlier daily body, so these files do NOT enter the Step 3 daily-cache
-   build and do NOT enter the §V side-effect predicate (which only inspects `in_scope`).
+5. Covered auto-flips from this step are OUTSIDE `in_scope`: that work is already in an earlier
+   daily body, so these files do NOT enter the Step 3 daily-cache build or the §V side-effect
+   predicate (which only inspects `in_scope`).
 6. This reconciliation runs ONLY inside `--recover-orphans` invocations, not on every `/end_of_day`
-   run (kept opt-in per the plan's "one-time reconciliation mode" framing — see Open questions).
-7. Because `find_orphans()` (used by the orphan-detection procedure immediately below) shares the
-   same guarded base-slug derivation as this step's `find_covered_due_sessions()`, a covered
-   `<task>-orchestrator` session just flipped to `no` here is never re-surfaced as an orphan by the
-   orphan-detection procedure that runs next in the same `--recover-orphans` invocation — both
-   procedures agree on the same base-slug coverage verdict.
+   run.
+7. `find_orphans()` shares its guarded base-slug derivation with this step's
+   `find_covered_due_sessions()`, so a covered `<task>-orchestrator` session just flipped to `no`
+   here is never re-surfaced as an orphan later in the same `--recover-orphans` invocation.
 
 **One-time validation before relying on this by default:** run
 `python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py --reconcile-covered
---project-root <root>` (dry-run, no writes) against the real backlog and manually eyeball the
-`COVERED:`/`UNCOVERED:` partition — specifically confirm `-orchestrator.md` files classify
-correctly. Separately count, from the same dry-run pass, how many `UNCOVERED:` files are
-phase/stage-suffixed (`-review`, `-implement`, `-pr`, `-critic-rN`, `-plan`, `-revise`, `-stageN`,
-`-sN`, letter-indexed sub-stages, etc.) versus how many are `-orchestrator`-suffixed — report both
-counts separately in the session-state file. These two populations are NOT reconciled the same way
-this round (only `-orchestrator` is fixed); recording the phase/stage-suffixed count explicitly
-keeps that residual visible rather than silently folded into a single aggregate number.
+--project-root <root>` (dry-run, no writes) against the real backlog and eyeball the
+`COVERED:`/`UNCOVERED:` partition, confirming `-orchestrator.md` files classify correctly. From
+the same pass, count the `UNCOVERED:` files that are phase/stage-suffixed (`-review`,
+`-implement`, `-pr`, `-critic-rN`, `-plan`, `-revise`, `-stageN`, `-sN`, letter-indexed
+sub-stages, etc.) separately from the `-orchestrator`-suffixed ones, and record both counts in
+the session-state file; only `-orchestrator` is reconciled, so the separate count keeps that
+residual visible.
 
 **Orphan detection procedure (proc:T-19):**
 1. Scan all session files under `.workflow_artifacts/memory/sessions/`. For each with
@@ -280,14 +276,13 @@ keeps that residual visible rather than silently folded into a single aggregate 
 8. For each confirmed group: treat those sessions as `end_of_day_due: yes` for THIS run only.
    Do NOT permanently flip the flag until AFTER the daily-cache write succeeds (crash safety).
    After the daily-cache write, Step 3d flips them to `no` per normal flow.
-9. Per-session granularity is NOT supported in this revision — group-level confirmation only.
-   Per-session selection is a follow-up item tracked in next-steps.md.
+9. Confirmation is group-level only; per-session selection is not supported.
 
 ### Step 1: Save current session state (skip if no active task)
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-Write session-state files in v3 format per the §5.4 Class A writer mechanism (reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; session artifact type per format-kit §2; validate via validate_artifact.py with retry-once-then-English-fallback). Write `daily/insights-{date}.md` in v3 format per the §5.4 Class A mechanism — append-only structure (each insight as an entry per the template at Step 3 of /capture_insight); body uses caveman prose with terse-rubric for the entry content; no V-02 section-set strict-match (insights file uses the default minimal section set since each entry is its own implicit "section"); validate via validate_artifact.py and accept default fallback semantics on V-failure. `daily/{date}.md` (the rendered daily briefing) remains Class B per parent Stage 3 work — the file gets a `## For human` block prepended (composed directly by the dispatched model in the same generation as the body — no script invocation). The terse-rubric applies inside prose-shaped sections only (composed with format-kit per format-kit §5).
+Write session-state files in v3 format per the §5.4 Class A writer mechanism (reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; session artifact type per format-kit §2; validate via validate_artifact.py with retry-once-then-English-fallback). Write `daily/insights-{date}.md` the same way: append-only, one entry per insight per the template at Step 3 of /capture_insight, terse-rubric prose, no V-02 section-set strict-match (default minimal section set), default fallback semantics on V-failure. `daily/{date}.md` (the rendered daily briefing) stays Class B: the file gets a `## For human` block prepended, composed directly by the dispatched model in the same generation as the body (no script invocation). The terse-rubric applies inside prose-shaped sections only (composed with format-kit per format-kit §5).
 
 **If this session has no active task** (e.g. you opened a fresh session just to run `/end_of_day`), skip the session-state write and proceed to Step 2. The existing session files on disk are the source of truth.
 
@@ -304,15 +299,15 @@ The session file follows the fixed schema in `__QUOIN_HOME__/memory/session-sche
 python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py --lower-bound-source daily --project-root <root> --show-window --include-finalized-marked
 ```
 
-Parse the first output line `WINDOW: <lower_bound>..<today>` for `lower_bound` and `today` — the script derives both itself, so no manual date arithmetic is required. **Stdout parse rule (amended):** lines prefixed neither `WINDOW:` nor `FINALIZED:` are `script_file_list`, reused in Step 3. Lines prefixed `FINALIZED: <path>` are `finalized_marked` — in-window sessions that a prior `/end_of_task` run already flipped to `end_of_day_due: no` via its `--flip-finalized-task` step (see end_of_task SKILL.md Sub-phase B), but which still need to appear in THIS run's "Completed today" digest since it hasn't run since. Do NOT fold `FINALIZED:` lines into `script_file_list` — a literal reading of the old wording ("the remaining stdout lines are script_file_list") would incorrectly include them, and the `FINALIZED: ` prefix makes those lines invalid paths if mis-parsed that way.
+Parse the first output line `WINDOW: <lower_bound>..<today>` for `lower_bound` and `today` — the script derives both itself, so no manual date arithmetic is required. **Stdout parse rule:** lines prefixed neither `WINDOW:` nor `FINALIZED:` are `script_file_list`, reused in Step 3. Lines prefixed `FINALIZED: <path>` are `finalized_marked` — in-window sessions that a prior `/end_of_task` run already flipped to `end_of_day_due: no` via its `--flip-finalized-task` step (see end_of_task SKILL.md Sub-phase B), but which still belong in THIS run's "Completed today" digest. Do NOT fold `FINALIZED:` lines into `script_file_list`; the prefix makes them invalid paths.
 
 (`--recover-orphans` runs only) `confirmed_orphans` = the session files confirmed via Step 0's RECENT/HISTORICAL orphan prompts, treated as `end_of_day_due: yes` for THIS run only. The script structurally cannot see these — they are still `end_of_day_due: no` on disk. Define:
 
 `in_scope = script_file_list ∪ confirmed_orphans ∪ finalized_marked`
 
-This union — not `script_file_list` alone — is the definitive set for BOTH the Step 3 daily-cache build and the Step 3d flag-flip. `finalized_marked` sessions are `end_of_day_due: no` by construction (flipped by `/end_of_task`'s single-invocation flip step) — they enter the Step 3 build (so finalized-task work still appears in "Completed today") but Step 3d's flip is a no-op on them (already `no` — idempotent, no special-casing needed). On a normal run (no `--recover-orphans`, none confirmed, and no finalized-marked sessions in window), `confirmed_orphans` and `finalized_marked` are both empty and `in_scope == script_file_list` — unchanged behavior. The `finalized_marked` union does not affect §V's side-effect predicate: those sessions are treated identically to any other already-`no` file.
+This union — not `script_file_list` alone — is the definitive set for BOTH the Step 3 daily-cache build and the Step 3d flag-flip. `finalized_marked` sessions are already `end_of_day_due: no` (flipped by `/end_of_task`), so they enter the Step 3 build (finalized-task work still appears in "Completed today") while Step 3d's flip is an idempotent no-op on them; §V's side-effect predicate treats them like any other already-`no` file. On a normal run (no `--recover-orphans`, none confirmed, no finalized-marked sessions in window) `confirmed_orphans` and `finalized_marked` are empty and `in_scope == script_file_list`.
 
-The script is authoritative for selection. The fallback lower_bound-discovery prose in Step 3 below is retained ONLY as an explanatory fallback for when the script is unavailable.
+The script is authoritative for selection; the fallback prose in Step 3 applies only when it is unavailable.
 
 Scan all repos in the project folder and update `.workflow_artifacts/memory/git-log.md` with recent commits. This is a rolling window — keep the last ~50 commits across all repos, newest first.
 
@@ -357,17 +352,17 @@ The goal is to capture the *logic* of recent changes — not just file lists but
 
 `lower_bound`, `today`, and `script_file_list` were already computed ONCE at the start of Step 2 (the mandatory `select_unprocessed_sessions.py --show-window` run) — reuse them here. Do NOT invoke the script a second time in Step 3.
 
-`in_scope` (`script_file_list ∪ confirmed_orphans`, defined in Step 2) is the definitive set of session files for this run.
+`in_scope` (`script_file_list ∪ confirmed_orphans ∪ finalized_marked`, defined in Step 2) is the definitive set of session files for this run.
 
 For reference, the script's selection rule (authoritative — the fallback prose below is only for when the script is unavailable): a session file at `.workflow_artifacts/memory/sessions/<FILE>` is "unprocessed and in scope" iff ALL of:
   (a) basename matches `^\d{4}-\d{2}-\d{2}-.+\.md$`
   (b) `## Cost` block contains `end_of_day_due: yes` (missing field treated as `yes` per D-02)
-  (c) `file_date <= today`. Selection is otherwise flag-authoritative only — `lower_bound` plays NO role in this selection filter; it exists purely to scope the reporting window used further below (Cost / Step 3b insights). Do not wire `lower_bound` into this filter — that would reintroduce the IVG-103 regression this plan fixes.
+  (c) `file_date <= today`. Selection is otherwise flag-authoritative only — `lower_bound` plays NO role in this filter; it only scopes the reporting window used below (Cost / Step 3b insights). Do not wire `lower_bound` into this filter.
 
 Legacy session files lacking the `end_of_day_due` line are treated as `yes` (D-02).
 Future-dated files (date > today) are excluded.
 
-**Fallback lower_bound discovery** (explanatory only — use ONLY when the script is unavailable; the script is otherwise authoritative):
+**Fallback lower_bound discovery** (use ONLY when the script is unavailable):
 1. Scan `daily/<YYYY-MM-DD>.md` files (excluding `insights-*.md`). Find the most recent one by
    date. Call its date `last_daily_date`.
 2. If no prior daily exists → `lower_bound = today`.
@@ -378,7 +373,7 @@ Future-dated files (date > today) are excluded.
 Example: if last daily is 2026-05-13 and today is 2026-05-16, scan dates 2026-05-14,
 2026-05-15, 2026-05-16 (lower_bound = 2026-05-14).
 
-**Same-day re-run — one deterministic rule:** the script always runs exactly once per `/end_of_day` invocation (at the start of Step 2), regardless of merge vs fresh-write mode. Branching happens ONLY at the WRITE step below — there is no "skipped" or short-circuited script-invocation path:
+**Same-day re-run — one deterministic rule:** the script runs exactly once per `/end_of_day` invocation (at the start of Step 2) in both modes. Branching happens ONLY at the WRITE step below:
 - `daily/<today>.md` does NOT exist → fresh write, build the daily cache from `in_scope`.
 - `daily/<today>.md` ALREADY exists → MERGE mode (`proc:D-06`, section-by-section algorithm) rather than overwrite. `in_scope` — which naturally excludes files an earlier same-day run already flipped to `no` — becomes the `new_tasks` / `new_session_rows` inputs to `merge_daily()`. `merge_daily()`'s `## Completed today` algorithm is a task-name set-union, latest wins: overwrite on same key. If unable to merge (proc:D-06 step 12 detects unrecoverable corruption), refuse with:
 `daily/<today>.md is malformed; rename to <date>.md.bak and re-run`.
@@ -447,9 +442,10 @@ To populate the **Cost summary** section: for each active task, check if `.workf
 
 If `in_scope` contains any file dated before `lower_bound` (a straggler — captured via flag-authoritative selection, not via a widened reporting window), append to the Cost summary: "; N straggler session(s) from before the window are included in Sessions processed/Completed today but excluded from this window's cost count." This makes the exclusion visible instead of silent; the straggler's own historical cost-ledger rows and insight files are not re-swept here because a prior `/end_of_day` run already reported (or should have reported) that date.
 
-Also scan all session-state files in the processed window — same selection rule as Step 3 (the set of files selected by the hybrid date-window + flag rule). For each file, read the `## Cost` block and extract the `fallback_fires:` field via regex `^- fallback_fires:\s*(\d+)\s*$`. Sum per task across the processed window. For each task with window fallback total > 0, append the suffix `; <K> fallback fires in window` to that task's Cost summary line. When the window spans more than one day, use `Window total fallback fires: <K>` at the bottom of the Cost summary block; for a single-day window, use `Day total fallback fires: <K>` (backward-compat). After the total line, add: "A non-zero fallback count indicates one or more Class B writers fell back to v2-style write (no `## For human` summary, no validator gate). Investigate which skill emitted `[format-kit-skipped]` and triage before next session." Sessions lacking the `fallback_fires` line (pre-Stage-4) are treated as 0 — no warning emitted.
+Also scan all session-state files in the processed window — same selection rule as Step 3 (the files selected by the hybrid date-window + flag rule) — and roll up two `## Cost` counters, each summed per task across the window; sessions lacking the line are treated as 0 with no warning:
 
-Using the same in-scope file set, also extract each file's `verification_mismatches:` field via regex `^- verification_mismatches:\s*(\d+)\s*$` and sum per task across the processed window (mirror the `fallback_fires` roll-up above — same scan, same window, same per-task/window-total shape). For each task with a window total > 0, append the suffix `; <K> verification mismatches in window` to that task's Cost summary line. When the window spans more than one day, use `Window total verification mismatches: <K>` at the bottom of the Cost summary block; for a single-day window, use `Day total verification mismatches: <K>`. After the total line, add: "A non-zero verification-mismatch count means a skill's claims contradicted re-derived ground truth (§V) — investigate which skill and re-run its verification before trusting its output." Sessions lacking the `verification_mismatches` line (pre-IVG-115) are treated as 0 — no warning emitted.
+- `fallback_fires:`, extracted via regex `^- fallback_fires:\s*(\d+)\s*$`. For each task with a window total > 0, append the suffix `; <K> fallback fires in window` to that task's Cost summary line. When the window spans more than one day, use `Window total fallback fires: <K>` at the bottom of the Cost summary block; for a single-day window, use `Day total fallback fires: <K>`. After the total line, add: "A non-zero fallback count indicates one or more Class B writers fell back to v2-style write (no `## For human` summary, no validator gate). Investigate which skill emitted `[format-kit-skipped]` and triage before next session."
+- `verification_mismatches:`, extracted via regex `^- verification_mismatches:\s*(\d+)\s*$`. For each task with a window total > 0, append the suffix `; <K> verification mismatches in window`. When the window spans more than one day, use `Window total verification mismatches: <K>` at the bottom of the Cost summary block; for a single-day window, use `Day total verification mismatches: <K>`. After the total line, add: "A non-zero verification-mismatch count means a skill's claims contradicted re-derived ground truth (§V) — investigate which skill and re-run its verification before trusting its output."
 
 ## §V Claims manifest (emit as an always-run early step)
 
@@ -661,5 +657,4 @@ After Step 5 completes and the user has been shown the report, check for `--skip
 - **Be specific about resumption points.** "Continue implementing" is useless. "Continue with Task 4 (add retry logic to payment.service.ts:processRefund), branch `feat/payment-retry`, tests for Tasks 1-3 passing" is useful.
 - **Don't overwrite previous sessions.** If there's already a session file for this task today (from an earlier session), update it rather than replacing it — preserve the history of what was done earlier.
 - **Git log captures logic, not just files.** "Modified 3 files" tells you nothing. "Added exponential backoff to payment retries because Stripe recommends it for idempotent requests" tells you everything.
-- **--skip-sleep flag.** Pass `--skip-sleep` to `/end_of_day` to suppress the automatic Step 6 `/sleep` invocation. Use this when memory consolidation is not needed (e.g., brief sessions, first-run calibration, or when running `/sleep` standalone later).
 - **--no-cleanup flag.** Pass `--no-cleanup` to `/end_of_day` to suppress the automatic Step 5b `/cleanup` invocation.
