@@ -4,6 +4,10 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Added
+
+- **A dev-only census measures how a `/run` orchestrator's context grows by phase** (v0.56.0). `quoin/dev/scripts/run_context_census.py` reads local Claude Code transcripts offline, tags each `/run` span autonomous or interactive from positive evidence only, and prices every inline gate segment as it ran and as a same-tier subagent would have run it, including the orchestrator turns a spawn adds. On this machine's 181 `/run` transcripts a spawned post-implement gate would cost about 15 percent more than the inline gate in autonomous runs, because the subagent pays to write a fresh base context while the orchestrator still pays for the launch and hand-back turns. The post-implement and post-review gates therefore stay inline, and fast-route triage and checkpoint summaries stay in the orchestrator. No skill or rule text changes.
+
 ### Changed
 
 - **The lifecycle skills `/end_of_task`, `/end_of_day` and `/start_of_day` carry shorter instructions** (v0.55.0). Incident dates, tracker and round tags, repeated explanations and rationale that did not change an instruction were removed; commands, flags, sentinels, labels and ordering rules are unchanged. The start_of_day size checks now anchor on structure instead of a frozen line count, and the trim checker lets an overhang that carries content change as long as its first line stays.
