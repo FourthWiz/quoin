@@ -115,6 +115,7 @@ def subagent(root, sid, agent_id, first_tool, first_ctx, tool_use_id="x"):
     t.asst(first_ctx + 500, text="done")
     with open(d / ("agent-%s.jsonl" % agent_id), "w") as fh:
         for e in t.lines:
+            e["isSidechain"] = True  # every entry of a real subagent transcript
             fh.write(json.dumps(e) + "\n")
     (d / ("agent-%s.meta.json" % agent_id)).write_text(json.dumps(
         {"description": "x", "toolUseId": tool_use_id, "model": "sonnet"}))
@@ -191,6 +192,20 @@ def corpus(tmp_path):
     t.asst(34000, text="Checkpoint B: architecture approved")
     t.write(root, "s-auto-token")
     subagent(root, "s-auto-token", "agate", ("Skill", {"skill": "gate"}), 54000)
+
+    # The same shape with the hand-back delivered as an agent message.
+    t = Transcript()
+    run_start(t, "--autonomous t")
+    t.asst(20000, text="setup")
+    t.spawn_async(30000, "agate3", "Post-architect gate")
+    t.asst(30500, text="gate is running")
+    t.user('Another Claude session sent a message:\n<agent-message from="agate3">\n'
+           '  [quoin-handoff/1.0 return]\n  verdict: PASS\n</agent-message>', minutes=10)
+    t.bash(32500, "python3 ~/.claude/scripts/agent_transcript_cost.py --agent agate3 "
+           ">> .workflow_artifacts/t/cost-ledger.md", text="Gate PASS")
+    t.asst(33000, text="Checkpoint B: architecture approved")
+    t.write(root, "s-auto-message")
+    subagent(root, "s-auto-message", "agate3", ("Skill", {"skill": "gate"}), 55000)
 
     # Headless plain start whose span has no spawn: relaunch into an inline gate.
     t = Transcript()
@@ -271,9 +286,9 @@ def test_selection_and_start_forms(census, corpus):
     res = run(census, corpus, excluded=["s-excluded"])
     c = res["corpus"]
     assert sorted(r["session"] for r in res["rows"]) == [
-        "s-auto-token", "s-interactive", "s-relaunch", "s-two"]
+        "s-auto-message", "s-auto-token", "s-interactive", "s-relaunch", "s-two"]
     assert c["files_excluded"] == 1
-    assert c["starts_tag"] == 4 and c["starts_plain"] == 1
+    assert c["starts_tag"] == 5 and c["starts_plain"] == 1
     assert c["malformed_lines"] == 1
 
 
@@ -365,7 +380,14 @@ def test_gate_spawn_overhead_turns(census, corpus):
     assert len(sp["overhead_before"]) == 2
     assert len(sp["overhead_after"]) == 2
     assert res["inputs"]["O"] is not None
-    assert res["inputs"]["S"] == 33000 - 30500
+    assert res["inputs"]["S"] == ((33000 - 30500) + (32500 - 30500)) / 2
+
+
+def test_agent_message_hand_back_is_the_return(census, corpus):
+    sp = row(run(census, corpus), "s-auto-message")["spawns"][0]
+    assert sp["return_pos"] is not None
+    assert sp["return_growth"] == 32500 - 30500
+    assert len(sp["overhead_before"]) == 2 and len(sp["overhead_after"]) == 1
 
 
 def test_long_wait_spawn_is_flagged(census, corpus):
@@ -378,8 +400,8 @@ def test_long_wait_spawn_is_flagged(census, corpus):
 def test_base_context_from_gate_subagents_only(census, corpus, monkeypatch):
     monkeypatch.setattr(census, "MIN_GATE_SUBAGENTS", 2)
     inputs = run(census, corpus)["inputs"]
-    assert inputs["gate_subagents"] == 2 and not inputs["B_fallback"]
-    assert inputs["B"] == (54000 + 56000) / 2
+    assert inputs["gate_subagents"] == 3 and not inputs["B_fallback"]
+    assert inputs["B"] == 55000
 
 
 # ---------------------------------------------------------------------------

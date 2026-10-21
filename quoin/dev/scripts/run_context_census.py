@@ -65,6 +65,8 @@ STRATA = ("all", "autonomous", "interactive")
 
 AGENT_ID_RE = re.compile(r"agentId:\s*([A-Za-z0-9_-]+)")
 TASK_ID_RE = re.compile(r"<task-id>\s*([A-Za-z0-9_-]+)\s*</task-id>")
+# Subagent hand-backs delivered as a message from the subagent session.
+AGENT_MESSAGE_RE = re.compile(r'<agent-message from="([A-Za-z0-9_-]+)"')
 GATE_LOG_RE = re.compile(r"gate-[^/\"'\s]*\.md$")
 
 
@@ -179,9 +181,10 @@ def _parse_ts(value):
         return None
 
 
-def parse_transcript(path: Path, dedup=True):
+def parse_transcript(path: Path, dedup=True, sidechain=False):
     """Return (events, malformed_lines). Events are Turn, UserEvent or the
-    string "compact", in file order. Sidechain entries are skipped."""
+    string "compact", in file order. Sidechain entries are skipped in a main
+    transcript; a subagent transcript is all sidechain, so it keeps them."""
     events = []
     malformed = 0
     by_id = {}
@@ -195,7 +198,7 @@ def parse_transcript(path: Path, dedup=True):
             except ValueError:
                 malformed += 1
                 continue
-            if not isinstance(e, dict) or e.get("isSidechain"):
+            if not isinstance(e, dict) or (e.get("isSidechain") and not sidechain):
                 continue
             etype = e.get("type")
             if etype == "system" and e.get("subtype") == "compact_boundary":
@@ -238,9 +241,13 @@ def parse_transcript(path: Path, dedup=True):
                         elif b.get("type") == "text":
                             ev.texts.append(str(b.get("text") or ""))
                 joined = "\n".join(ev.texts)
+                hand_back = AGENT_MESSAGE_RE.search(joined)
                 if joined.lstrip().startswith(NOTIFICATION):
                     m = TASK_ID_RE.search(joined)
                     ev.notification_id = m.group(1) if m else ""
+                    ev.texts = []
+                elif hand_back:
+                    ev.notification_id = hand_back.group(1)
                     ev.texts = []
                 events.append(ev)
     return events, malformed
@@ -303,7 +310,7 @@ def span_mode(events, lo, hi, widen=False):
 
 def _first_tool_uses(path: Path, limit_turns=40):
     """Return (turns, tool_uses) from the head of a subagent transcript."""
-    events, _ = parse_transcript(path)
+    events, _ = parse_transcript(path, sidechain=True)
     turns = [e for e in events if isinstance(e, Turn)][:limit_turns]
     uses = [tu for t in turns for tu in t.tool_uses]
     return turns, uses
