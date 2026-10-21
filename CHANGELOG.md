@@ -6,6 +6,8 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- **Native Claude Code Workflows are not used for `/run` stages (v0.57.0).** A workflow run takes no mid-run input, so `/gate` approvals between phases cannot happen inside one, and it resumes only within the same session, while `/run --resume` and the `quoin run --autonomous` supervisor continue from fresh sessions. The decision record is `quoin/docs/native-workflows.md`, pinned by `quoin/dev/tests/test_native_workflow_decision.py`.
+
 - **The lifecycle skills `/end_of_task`, `/end_of_day` and `/start_of_day` carry shorter instructions** (v0.55.0). Incident dates, tracker and round tags, repeated explanations and rationale that did not change an instruction were removed; commands, flags, sentinels, labels and ordering rules are unchanged. The start_of_day size checks now anchor on structure instead of a frozen line count, and the trim checker lets an overhang that carries content change as long as its first line stays.
 
 - **SKILL.md bodies are shortened and measured per skill** (v0.54.0). Text that restated harness behaviour or repeated a rule stated elsewhere in the same file was removed from run, review, gate, architect, thorough_plan and implement (5.5 KB hand-written in total; behaviour unchanged). The adapter baseline now reports generated and hand-written bytes per skill, and a dev-only trim checker verifies that frontmatter, generated sections, headings, code fences and markers are unchanged after an edit. Upgrade with `bash quoin/install.sh`.
