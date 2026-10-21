@@ -16,7 +16,7 @@ For every main-session transcript that contains a /run start it:
   checkpoint summary turns and the spawned phases;
 * prices each inline segment as it ran (actual) and as a same-tier subagent
   would have run it (counterfactual), charging the orchestrator turns a spawn
-  adds (launch, wait, verdict and ledger turns) and the returned summary.
+  adds (launch, wait, hand-back and ledger turns) and the returned summary.
 
 The saving is a modelled counterfactual on recorded usage rows, not a measured
 re-run. Typical use (from the git root):
