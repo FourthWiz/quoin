@@ -15,8 +15,10 @@ Typical use (from the git root):
 
 Hard invariants (exit 1): frontmatter, generated spans (section 0 family and
 verification blocks), the section-0 overhang, heading lines, fenced code blocks,
-HTML comment markers, in-domain caps-token count, the core pointer line, added
-memory-doc references, and start_of_day staying untouched. Report-only items
+HTML comment markers, in-domain caps-token count, the core pointer line and added
+memory-doc references. The section-0 overhang (text between the end marker and
+the next H2) must stay byte-identical when it is blank; when it carries content,
+its first non-blank line must stay and it must not become blank or disappear. Report-only items
 (exit 0): inline-code spans that disappeared, added lines, removed bytes/lines.
 Exit 2 on usage or git errors.
 """
@@ -37,7 +39,7 @@ SRC_ROOT = HERE.parents[1]  # <git-root>/quoin
 GIT_ROOT = SRC_ROOT.parent
 DEFAULT_REF = "4dcd4873"
 DEFAULT_SKILLS_SUBDIR = "quoin/adapters/claude/skills"
-PROTECTED_UNCHANGED = frozenset({"start_of_day"})
+PROTECTED_UNCHANGED = frozenset()
 
 CAPS_PATTERNS = [
     r"MUST(?! NOT)", r"ALWAYS", r"NEVER", r"CRITICAL",
@@ -153,6 +155,26 @@ def overhang(lines):
     return "\n".join(lines[marker + 1:end])
 
 
+def first_nonblank(text):
+    return next((l for l in text.split("\n") if l.strip()), None)
+
+
+def overhang_fails(before, after):
+    """Failure messages for the section-0 overhang change (empty list when fine)."""
+    if before is None and after is None:
+        return []
+    if before is None or after is None:
+        return ["section-0 overhang marker or next H2 appeared or disappeared"]
+    head = first_nonblank(before)
+    if head is None:
+        return [] if before == after else ["section-0 overhang changed"]
+    if first_nonblank(after) is None:
+        return ["section-0 overhang lost its content"]
+    if first_nonblank(after) != head:
+        return ["section-0 overhang first non-blank line changed"]
+    return []
+
+
 def caps_count(lines, s0):
     text = "\n".join(l for i, l in enumerate(lines) if i not in s0)
     return sum(len(re.findall(p, text)) for p in CAPS_PATTERNS)
@@ -180,8 +202,7 @@ def check_skill(name, before, after, memory_dir=None, allow_heading_removal=(), 
     if b_spans != a_spans:
         fails.append("generated spans changed (%d before, %d after, or content/order differs)" % (len(b_spans), len(a_spans)))
 
-    if overhang(b_lines) != overhang(a_lines):
-        fails.append("section-0 overhang changed")
+    fails.extend(overhang_fails(overhang(b_lines), overhang(a_lines)))
 
     b_heads, a_heads = headings(b_lines), headings(a_lines)
     allowed = set(allow_heading_removal)

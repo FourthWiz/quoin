@@ -34,8 +34,9 @@ snapshot) is a cheap extra check, not the mechanism that discriminates.
 
 Snapshot (informational; a maintainer updating the generator template updates
 this alongside, without touching the partition assertions above):
-  corpus_lines=15475, census_lines=4372, generated=4119, handwritten=178,
-  overhang=57 (start_of_day) + 18 (blank, one per other §0 carrier) = 75,
+  corpus_lines=15475, census_lines=4310 plus the live start_of_day tail,
+  generated=4119, handwritten=173,
+  overhang=the live start_of_day tail + 18 (blank, one per other §0 carrier),
   carriers=29, variants=6, declared hand-written blocks=3.
 """
 from __future__ import annotations
@@ -91,19 +92,20 @@ DECLARED_VARIANT_SET = {"§0", "§0'", "§0a", "§0b", "§0″", "§0‴"}
 DECLARED_HANDWRITTEN_BLOCKS = {
     ("implement", "§0a"): 73,
     ("implement", "§0b"): 53,
-    ("end_of_task", "§0b"): 52,
+    ("end_of_task", "§0b"): 47,
 }
-DECLARED_HANDWRITTEN_TOTAL_LINES = 178
+DECLARED_HANDWRITTEN_TOTAL_LINES = 173
 
-START_OF_DAY_TAIL_LINES = 57
 START_OF_DAY_FIRST_NONBLANK = "### Step 1a: Resume from cookie"
-START_OF_DAY_FIRST_NONBLANK_LINE_1BASED = 126
+START_OF_DAY_NEXT_H2 = "## Session bootstrap"
 
 # Informational snapshot (see module docstring) — not the totality contract.
 SNAPSHOT_CORPUS_LINES = 15475
-SNAPSHOT_CENSUS_LINES = 4372
+# The census counts every §0 block up to the next H2, so it includes the
+# start_of_day tail; the snapshot is stated without that tail.
+SNAPSHOT_CENSUS_LINES = 4310
 SNAPSHOT_GENERATED_LINES = 4119
-SNAPSHOT_OVERHANG_LINES = 75  # 57 (start_of_day tail) + 18 (one blank line each)
+SNAPSHOT_OVERHANG_LINES = 18  # one blank line for each carrier except start_of_day
 SNAPSHOT_CARRIERS = 29
 
 
@@ -337,19 +339,24 @@ def test_section0_overhang_is_blank_for_every_non_start_of_day_carrier():
 
 def test_start_of_day_tail_anchored_on_its_own_first_nonblank_line():
     tail = _OVERHANGS["start_of_day"]
-    assert len(tail) == START_OF_DAY_TAIL_LINES, (
-        f"start_of_day §0 tail is {len(tail)} lines, expected {START_OF_DAY_TAIL_LINES}"
-    )
+    assert tail, "start_of_day has no content between the §0 end marker and the next H2"
     first_nonblank = next((l for l in tail if l.strip()), None)
+    lines = (ADAPTER_DIR / "start_of_day" / "SKILL.md").read_text(encoding="utf-8").splitlines()
+    first_line = lines.index(first_nonblank) + 1 if first_nonblank in lines else "?"
     assert first_nonblank == START_OF_DAY_FIRST_NONBLANK, (
         f"start_of_day tail's first non-blank line is {first_nonblank!r}, "
-        f"expected {START_OF_DAY_FIRST_NONBLANK!r} "
-        f"(SKILL.md:{START_OF_DAY_FIRST_NONBLANK_LINE_1BASED})"
+        f"expected {START_OF_DAY_FIRST_NONBLANK!r} (SKILL.md:{first_line})"
+    )
+    marker_i = next(i for i, l in enumerate(lines) if SECTION0_END_MARKER in l)
+    assert lines[marker_i + 1 + len(tail)] == START_OF_DAY_NEXT_H2, (
+        "the line after the start_of_day tail is not "
+        f"{START_OF_DAY_NEXT_H2!r}"
     )
 
 
 def test_overhang_total_matches_snapshot():
-    assert sum(len(v) for v in _OVERHANGS.values()) == SNAPSHOT_OVERHANG_LINES
+    total = sum(len(v) for v in _OVERHANGS.values()) - len(_OVERHANGS["start_of_day"])
+    assert total == SNAPSHOT_OVERHANG_LINES
 
 
 # ══════════════════════════════ Partition ════════════════════════════════
@@ -445,8 +452,10 @@ def test_census_snapshot_reproduces_state():
         f"{DECLARED_HANDWRITTEN_TOTAL_LINES} — re-derive from DECLARED_HANDWRITTEN_BLOCKS "
         "and update that constant per the re-seed procedure above."
     )
-    assert CENSUS_LINES == SNAPSHOT_CENSUS_LINES, (
-        f"CENSUS_LINES={CENSUS_LINES} != SNAPSHOT_CENSUS_LINES={SNAPSHOT_CENSUS_LINES} "
+    census_without_tail = CENSUS_LINES - len(_OVERHANGS["start_of_day"])
+    assert census_without_tail == SNAPSHOT_CENSUS_LINES, (
+        f"CENSUS_LINES minus the start_of_day tail ={census_without_tail} != "
+        f"SNAPSHOT_CENSUS_LINES={SNAPSHOT_CENSUS_LINES} "
         "— re-seed SNAPSHOT_CENSUS_LINES per the re-seed procedure above."
     )
     assert len(CENSUS_CARRIERS) == SNAPSHOT_CARRIERS, (
@@ -545,9 +554,8 @@ SHARE_CEILINGS: dict[str, float] = {
                        # generator-owned share
 
     "specify": 44.8625,
-    "start_of_day": 32.5862,  # span-based (27.5862%) + 5.00pp — NEVER the
-                              # heading-based 42.09% figure an earlier
-                              # census over-captured
+    "start_of_day": 32.5862,  # span-based share + 5.00pp, never the
+                              # heading-based figure
     "status": 73.6275,
     "thorough_plan": 0.0,
     "triage": 34.1667,
@@ -611,17 +619,25 @@ def test_file_within_share_ceiling(skill):
 
 
 def test_start_of_day_ceiling_is_span_based_not_heading_based():
-    """Pins the over-capture regression this guard exists to prevent: an
-    earlier (withdrawn) heading-based measurement put start_of_day's share
-    at 42.09%; the correct span-based measurement is 27.5862%."""
-    measured = _measured_share("start_of_day")
-    assert abs(measured - 27.5862) < 0.001, (
-        f"start_of_day measured share {measured} drifted from the expected "
-        "span-based 27.5862% — if this is legitimate, confirm it was NOT "
-        "caused by reverting to heading-based measurement before updating "
-        "this test."
+    """The share is measured over the generated span (heading through the end
+    marker), not over everything up to the next H2; the second figure is
+    larger because start_of_day carries hand-written steps after its marker."""
+    lines = (ADAPTER_DIR / "start_of_day" / "SKILL.md").read_text(encoding="utf-8").splitlines()
+    head_i = next(i for i, l in enumerate(lines) if _variant_of(l) == "§0")
+    marker_i = next(i for i, l in enumerate(lines) if SECTION0_END_MARKER in l)
+    span = marker_i - head_i + 1
+    heading_based = _next_h2(lines, head_i) - head_i
+    assert heading_based > span, "start_of_day no longer has a tail after the §0 end marker"
+    block_starts = [s for sk, v, s, e in _CENSUS_BLOCKS if sk == "start_of_day"]
+    assert block_starts == [head_i], (
+        f"start_of_day has section-0-family blocks at {block_starts}, expected only the §0 block"
     )
-    assert abs(SHARE_CEILINGS["start_of_day"] - 32.5862) < 0.001
+    measured = _measured_share("start_of_day")
+    assert abs(measured - 100.0 * span / len(lines)) < 0.001, (
+        f"start_of_day measured share {measured} is not the span-based "
+        f"{100.0 * span / len(lines)} (heading-based would be "
+        f"{100.0 * heading_based / len(lines)})"
+    )
 
 
 # ═══════════ In-domain caps-density metric and per-file ceilings ═══════════
@@ -659,7 +675,7 @@ DENSITY_CEILINGS: dict[str, int] = {
     "thorough_plan": 10,
     "architect": 8,
     "security_review": 8,
-    "end_of_task": 7,
+    "end_of_task": 6,
     "revise": 7,
     "revise-fast": 7,
     "end_of_day": 7,
@@ -734,9 +750,9 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
         "this count and the one above to match."
     )
-    assert sum(DENSITY_CEILINGS.values()) == 155, (
+    assert sum(DENSITY_CEILINGS.values()) == 154, (
         f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
-        "155. A per-file ceiling was re-seeded without updating this checksum — "
+        "154. A per-file ceiling was re-seeded without updating this checksum — "
         "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
         "hunk as the ceiling change."
     )

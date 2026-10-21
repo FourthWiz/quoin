@@ -95,7 +95,7 @@ CEILINGS = {
     "skill:cleanup": 22543,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3386 B measured; headroom unchanged.
     "skill:continue_work": 16019,  # post-description-trim 14562 * 1.10, monotonic vs prior 16077 Re-checked, no change (measured 14562 B, candidate 16019 B == prior ceiling 16019 B; unchanged).
     "skill:cost_snapshot": 22204,  # held (this ratchet only ever tightens, never loosens) — candidate 20209*1.10=22230 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 20209 B, candidate 22230 B > prior ceiling 22204 B; unchanged).
-    "skill:end_of_day": 49834,  # post-description-trim 45303 * 1.10, monotonic vs prior 50058 Re-checked, no change (measured 45303 B, candidate 49834 B == prior ceiling 49834 B; unchanged).
+    "skill:end_of_day": 48887,  # measured 44442 B, ceiling is that size plus 10 percent rounded up.
     "skill:end_of_task": 55541,  # post-description-trim 50491 * 1.10, monotonic vs prior 55771 Re-checked and held (measured 53393 B, candidate 58733 B > prior ceiling 55541 B; unchanged).
     "skill:expand": 20921,  # post-description-trim 19019 * 1.10, monotonic vs prior 21229 Re-checked, no change (measured 19019 B, candidate 20921 B == prior ceiling 20921 B; unchanged).
     "skill:gate": 61580,  # post-description-trim 55981 * 1.10, monotonic vs prior 62430 Re-checked and held (measured 59458 B, candidate 65404 B > prior ceiling 61580 B; unchanged).
@@ -105,7 +105,7 @@ CEILINGS = {
     "skill:revise-fast": 29330,  # post-description-trim 26663 * 1.10, monotonic vs prior 29521 Re-checked, no change (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
     "skill:rollback": 23984,  # post-description-trim 21803 * 1.10, monotonic vs prior 24247 Re-checked, no change (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
     "skill:sleep": 31120,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3381 B measured; headroom unchanged.
-    "skill:start_of_day": 28944,  # post-description-trim 26312 * 1.10, monotonic vs prior 29155 Re-checked, no change (measured 26312 B, candidate 28944 B == prior ceiling 28944 B; unchanged).
+    "skill:start_of_day": 27770,  # measured 25245 B, ceiling is that size plus 10 percent rounded up.
     "skill:status": 9841,  # post-slim 8946 * 1.10 Re-checked, no change (measured 8946 B, candidate 9841 B == prior ceiling 9841 B; unchanged).
     "skill:triage": 34356,  # post-description-trim 31232 * 1.10, monotonic vs prior 34422 Re-checked, no change (measured 31232 B, candidate 34356 B == prior ceiling 34356 B; unchanged).
     "skill:weekly_review": 18633,  # post-description-trim 16939 * 1.10, monotonic vs prior 18803 Re-checked, no change (measured 16939 B, candidate 18633 B == prior ceiling 18633 B; unchanged).

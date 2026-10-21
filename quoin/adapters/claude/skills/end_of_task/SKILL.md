@@ -225,7 +225,7 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
 ## §0b Session-age guard (FIRST STEP after §0 dispatch)
 
 This skill has 8 sequential steps; running it in a heavy / long-lived
-session is a known cause of stream-idle timeouts (Apr 28 18:13 incident).
+session is a known cause of stream-idle timeouts.
 Before doing any work, check session activity age. For the ordered rule below, first parse
 (and strip) the `[no-session-age-guard]`, `[autonomous]`, and `[no-interactive]` leading
 sentinels from the incoming prompt (`[autonomous]`→`_AUTONOMOUS=true`,
@@ -238,20 +238,18 @@ python3 __QUOIN_HOME__/scripts/session_age_guard.py --threshold-hours 6.0 --proj
 
 The guard's exit-code contract is UNCHANGED (still exit 1 only on `OVER`, exit
 0 otherwise, fail-OPEN on other codes). On **exit 1 (`OVER|...`)**, evaluate this ORDERED rule
-(IVG-146 absorbed; composes AC-7/AC-8 with the fail-closed contract —
-`__QUOIN_HOME__/memory/decision-gate-guard.md`):
+(see `__QUOIN_HOME__/memory/decision-gate-guard.md`):
 
 1. **`[no-session-age-guard]` present** → strip + BYPASS the guard entirely (UNCHANGED
    power-user path); continue to `## When to use`.
-2. **`_AUTONOMOUS`** → preserve the current autonomous behavior EXACTLY (pinned, do NOT change):
-   STOP on `OVER` with the verbatim message below. Autonomous `/end_of_task` is NOT bypassed
-   (`/run` injects `[autonomous]`, never `[no-session-age-guard]`), so an autonomous OVER stops
-   exactly as it does today — this task does not newly STOP nor newly bypass an autonomous run.
+2. **`_AUTONOMOUS`** → preserve the current autonomous behavior: STOP on `OVER` with the
+   verbatim message below. Autonomous `/end_of_task` is not bypassed (`/run` injects
+   `[autonomous]`, never `[no-session-age-guard]`).
 3. **`[no-interactive]` / non-interactive (and NOT `_AUTONOMOUS`)** → FAIL CLOSED: a human
    cannot pick a session-age option in a background context, so run
    `python3 __QUOIN_HOME__/scripts/decision_gate_guard.py fail-closed --task <task-name> --skill end_of_task --site session-age --reason "session over the age cap; proceed/fresh-session/abort decision could not be surfaced" --resume-hint "re-run /end_of_task interactively, or prefix [no-session-age-guard]"`,
    echo its `gate-result: NEEDS-DECISION` block as the final message, and STOP — it emits no envelope here even under `return: envelope`.
-4. **else (interactive)** → present an `AskUserQuestion` 3-option list (IVG-146 UX):
+4. **else (interactive)** → present an `AskUserQuestion` 3-option list:
    - **Proceed in this session** — continue `/end_of_task` now despite the age (override).
    - **Finish in a fresh session (recommended)** — STOP and re-run `/end_of_task` in a fresh
      session (task state is in the artifacts).
@@ -271,33 +269,25 @@ If the helper is missing OR exits with a non-0/1 code: emit the warning
 `[session-age-guard: helper unavailable; proceeding]` and continue
 (fail-OPEN, mirrors §0 dispatch fail-OPEN per architecture I-01).
 
-Manual override: prefix the user invocation with `[no-session-age-guard]`
-to skip the check entirely. Strip the sentinel before processing.
-
 ## Autonomous mode bootstrap
 
 Parse the incoming prompt for the `[autonomous]` sentinel (may stack after `[no-redispatch]`,
-e.g. `[no-redispatch] [autonomous]`, since `/run` prefixes it onto this skill's terminal
-Phase-6 spawn). If present, set internal state `_AUTONOMOUS=true` for the remainder of this
-skill's execution; strip the sentinel before further parsing. Default `_AUTONOMOUS=false`
-(opt-in only).
+e.g. `[no-redispatch] [autonomous]`; `/run` prefixes it onto the Phase-6 spawn). If present, set
+`_AUTONOMOUS=true` for the rest of the run and strip the sentinel. Default `_AUTONOMOUS=false`.
 
-Also parse the `[no-interactive]` sentinel (leading, stackable, stripped before further
-parsing — same convention). If present, set `_INTERACTIVE=false`; default `_INTERACTIVE=true`
-(interactive). `/run` injects `[no-interactive]` onto every NON-autonomous phase-subagent
-spawn so a background decision gate FAILS CLOSED instead of silently proceeding — see
-`__QUOIN_HOME__/memory/decision-gate-guard.md`. `[autonomous]` and `[no-interactive]` are
-mutually exclusive per spawn (autonomous carries pre-authorized answers; no-interactive has
-none, so it fails closed).
+Also parse the `[no-interactive]` sentinel the same way. If present, set `_INTERACTIVE=false`;
+default `_INTERACTIVE=true`. `/run` injects it onto every non-autonomous phase-subagent spawn so
+a background decision gate FAILS CLOSED instead of silently proceeding — see
+`__QUOIN_HOME__/memory/decision-gate-guard.md`. The two sentinels are mutually exclusive per
+spawn (autonomous carries pre-authorized answers; no-interactive has none).
 
-`_AUTONOMOUS` gates ONLY the four interactive body-prompt sites in the
-"Process" section below (Steps 1b, 2, 3, 4) — it does not change the §0 dispatch / §0b
-session-age-guard behavior above, and does not change the order of or preconditions for
-(APPROVED review, passed gate) any of the 8 sequential steps. **The "never auto-create a
+`_AUTONOMOUS` gates only the four interactive prompt sites in "Process" (Steps 1b, 2, 3, 4);
+it does not change §0 dispatch, §0b, or the order and preconditions (APPROVED review, passed
+gate) of the 8 sequential steps. **The "never auto-create a
 PR" invariant is unchanged in every mode, including autonomous — `/end_of_task` never
 creates a PR, autonomous or not.**
 
-`[quoin-onbehalf]` handling: `/run` prepends this marker to the Phase 6 spawn under default-ON capture. Strip it at bootstrap step 0 (per-spawn, non-inherited — never propagate it to a `§0` dispatch child). This skill has no session-start ledger row to suppress; the orchestrator writes the `end-of-task` row on its behalf.
+`[quoin-onbehalf]` handling: `/run` prepends this marker to the Phase 6 spawn. Strip it at bootstrap (per-spawn, non-inherited — never propagate it to a `§0` dispatch child). This skill writes no session-start ledger row; the orchestrator writes the `end-of-task` row on its behalf.
 
 ## When to use
 
@@ -308,7 +298,7 @@ Only after:
 
 This skill is never auto-invoked. The user must consciously accept the work.
 
-**Exception: `/run` orchestrator.** When this skill is spawned by `/run` as a subagent, the user has already confirmed the finalization checkpoint ("yes, finalize and push"). This constitutes explicit user acceptance — the user consciously chose to run the full pipeline and confirmed at Checkpoint D. All preconditions (APPROVED review, passed gate) are still enforced. If you see evidence that you were spawned by `/run`, proceed normally through all 8 steps.
+**Exception: `/run` orchestrator.** When spawned by `/run` as a subagent, the user has already confirmed finalization at Checkpoint D ("yes, finalize and push"), which counts as explicit acceptance. All preconditions (APPROVED review, passed gate) are still enforced; proceed through all 8 steps.
 
 ## Process
 
@@ -324,8 +314,8 @@ Execute these steps inline (never dispatch for interactive steps):
 
 Before touching git, verify everything is clean:
 
-1. **Review status** — resolve the artifact path via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` (or stage=None for legacy tasks), then look for `<task_dir>/review-*.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate. If no review file exists at the resolved path, STOP and tell the user: "No review found — please run `/review` first." If a review exists, read the latest one and confirm verdict is APPROVED. If not approved, stop and tell the user. (architecture.md and cost-ledger.md ALWAYS at task root per D-03.) **Retain the resolved `<N-or-name>` (or empty string for a legacy/single-stage task) as `<stage-value>`** — Sub-phase B's lessons-append idempotency guard (Step 7, T-11) keys on task+stage, not task alone, so it needs this value.
-2. **Tests pass** — first run `python3 __QUOIN_HOME__/scripts/gate_fullsuite_sidecar.py check --project-root "$(pwd)" --format text`, using the same `--project-root` convention `gate/SKILL.md`'s reuse-contract bullet pins (the outer project root that owns `.workflow_artifacts/`, not the git repo root — see that file for the contract, not restated here). Exit 0 → the post-review gate's full-suite result is reusable (already size-aware — a red Small/Medium suite never reaches this branch); report `Tests: reused post-review gate full-suite (verdict PASS, SHA <sha12>, trees clean)`, reading `<sha12>` directly from `check`'s own exit-0 text output, and SKIP the re-run. Any non-zero exit, or the script missing, → run the test suite exactly as today, echoing the emitted `reason` when present (exit 1 and, since the review-round-1 fix, exit 3 both emit one on stdout), else the stderr line (exit 2 argparse failures emit no structured `reason` — echo stderr verbatim instead) — so the operator sees why it re-ran. `QUOIN_DISABLE_FULLSUITE_REUSE=1` forces a re-run. A reused (skipped) verification counts as PASS for every downstream step — it never blocks Steps 6-8, so Sub-phase B's cost aggregation and `cost-summary.json` write happen regardless of whether the suite was re-run; a suite that genuinely fails still halts before commit/push.
+1. **Review status** — resolve the artifact path via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]` (or stage=None for legacy tasks), then look for `<task_dir>/review-*.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate. If no review file exists at the resolved path, STOP and tell the user: "No review found — please run `/review` first." If a review exists, read the latest one and confirm verdict is APPROVED. If not approved, stop and tell the user. (architecture.md and cost-ledger.md always stay at the task root.) **Retain the resolved `<N-or-name>` (or empty string for a legacy/single-stage task) as `<stage-value>`** — Sub-phase B's lessons-append idempotency guard (Step 7) keys on task+stage, not task alone, so it needs this value.
+2. **Tests pass** — first run `python3 __QUOIN_HOME__/scripts/gate_fullsuite_sidecar.py check --project-root "$(pwd)" --format text`, using the `--project-root` convention `gate/SKILL.md`'s reuse-contract bullet pins (the outer project root that owns `.workflow_artifacts/`, not the git repo root). Exit 0 → the post-review gate's full-suite result is reusable (already size-aware — a red Small/Medium suite never reaches this branch); report `Tests: reused post-review gate full-suite (verdict PASS, SHA <sha12>, trees clean)`, reading `<sha12>` directly from `check`'s own exit-0 text output, and SKIP the re-run. Any non-zero exit, or the script missing, → run the test suite exactly as today, echoing the emitted `reason` when present (exit 1 and exit 3 both emit one on stdout), else the stderr line (exit 2 argparse failures emit no structured `reason` — echo stderr verbatim instead) — so the operator sees why it re-ran. `QUOIN_DISABLE_FULLSUITE_REUSE=1` forces a re-run. A reused verification counts as PASS downstream and never blocks Steps 6-8, so cost aggregation and the `cost-summary.json` write happen either way; a suite that genuinely fails still halts before commit/push.
 3. **Branch state** — check if the branch is up to date with the base branch. If behind, rebase/merge and re-run tests. If push is blocked because task commits are on a protected branch (main/master), do NOT force-push; instead follow the safe reset-to-origin recipe at `__QUOIN_HOME__/memory/branch-recovery.md` — move the mis-placed commits onto a feature branch first, then run the recipe to restore the protected branch to origin.
 4. **No secrets** — quick scan of the diff for passwords, API keys, tokens.
 
@@ -536,7 +526,7 @@ Write `.workflow_artifacts/<task-name>/eot-preflights.json` (fixed name — no d
 }
 ```
 
-`"stage"` is `<stage-value>` from Step 1 (empty string for a legacy/single-stage task) — carried through so Sub-phase B (T-11) can key its lessons-append idempotency guard on task+stage.
+`"stage"` is `<stage-value>` from Step 1 (empty string for a legacy/single-stage task); Sub-phase B keys its lessons-append idempotency guard on task+stage.
 
 The orchestrator OVERWRITES any stale file from a prior run. Each `/end_of_task`
 invocation produces exactly one `eot-preflights.json`. Sub-phases MUST NOT
@@ -561,7 +551,7 @@ Spawn an Agent subagent:
     2. If `commit_list` is non-empty and `commit_message` is non-empty:
        - Stage the listed files (`git add <file>` for each, not `git add .`)
        - Commit with the provided `commit_message`
-    3. **Push (idempotent, T-11):** `git fetch origin <current-branch-name>` then compare
+    3. **Push (idempotent):** `git fetch origin <current-branch-name>` then compare
        `git rev-parse HEAD` against `git rev-parse origin/<current-branch-name>`. If they
        are EQUAL (already pushed — e.g. a kill-after-push resume re-running this
        sub-phase), SKIP the push as a no-op and record `"push_skipped": true` in
@@ -588,31 +578,31 @@ Spawn an Agent subagent:
     Cost ledger: `<absolute-path-to-task-dir>/cost-ledger.md`
     Lessons-learned: `.workflow_artifacts/memory/lessons-learned.md`
     Session state dir: `.workflow_artifacts/memory/sessions/`
-    Sub-phase B sentinel (autonomous only, T-11): `.workflow_artifacts/memory/autonomous-progress-<task_name>/end_of_task.subphaseB.done`
+    Sub-phase B sentinel (autonomous only): `.workflow_artifacts/memory/autonomous-progress-<task_name>/end_of_task.subphaseB.done`
 
-    **Entry-skip guard (T-11, `_AUTONOMOUS` only) — run BEFORE step 1:** if
+    **Entry-skip guard (`_AUTONOMOUS` only) — run BEFORE step 1:** if
     `_AUTONOMOUS` is true and `autonomous-progress-<task_name>/end_of_task.subphaseB.done`
     already exists, this whole sub-phase already ran on a prior attempt (e.g. a
     kill-after-push, before-done-sentinel resume) — SKIP everything below as a
     no-op and report "Sub-phase B already complete (subphaseB.done sentinel
     present) — skipping." Do NOT re-append lessons, re-touch session state, or
-    recompute cost. This sentinel is unconditional-safe: it only ever skips
-    already-finished work, never unfinished work. It ALSO counts toward the
-    T-06 union forward-progress glob (`autonomous-progress-{task}/*.done`).
+    recompute cost. It only ever skips
+    already-finished work. It also counts toward the forward-progress glob
+    (`autonomous-progress-{task}/*.done`).
 
     Steps:
     1. Read `eot-preflights.json` for `lessons_text`, `task_name`, and `stage`.
-    2. **Lessons-append idempotency (T-11, keyed on task+stage, unconditional —
-       runs whether or not `_AUTONOMOUS`):** if `lessons_text` is non-empty, first
+    2. **Lessons-append idempotency (keyed on task+stage; runs whether or not
+       `_AUTONOMOUS`):** if `lessons_text` is non-empty, first
        grep `lessons-learned.md` for an existing entry heading matching this
        task+stage: `## .* — <task_name>` when `stage` is empty, or
        `## .* — <task_name> \[stage-<stage>\]` when `stage` is non-empty (a
        stage-2 lessons entry must never be false-skipped by a stage-1 entry's
-       heading, and vice versa — MINOR fix). If a matching heading is already
+       heading, and vice versa). If a matching heading is already
        present, SKIP the append (already recorded — belt-and-suspenders behind
        the Sub-phase B entry-skip sentinel above) and note it in the report.
 
-       **Cross-project dedup guard (IVG-119, runs only when the append would
+       **Cross-project dedup guard (runs only when the append would
        proceed):** write `lessons_text` to a temp file, then call
        `python3 __QUOIN_HOME__/scripts/lessons_guard.py --candidate-file <tmp> --lessons-file .workflow_artifacts/memory/lessons-learned.md --candidate-slug <task_name>`.
        The guard COMPLEMENTS the heading-grep above (grep catches same-task
@@ -634,11 +624,9 @@ Spawn an Agent subagent:
     3. Update `.workflow_artifacts/memory/sessions/<date>-<task_name>.md`:
        write it to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md`: Status `completed`, Current stage `end_of_task`,
        branch name and commit hash from eot-preflights.json in one Completed item, Next command `/pr`.
-    3a. **Flip finalized-task session flags (single invocation; primary survival mechanism for
-        IVG-137; opt-out via `QUOIN_DISABLE_EOT_FLAG_FLIP=1`).** Runs AFTER Step 3 (session-state
-        marked completed) and AFTER Sub-phase A's commit/push already succeeded (mirrors
-        crash-safety ordering — a finalized-task marker on an un-pushed task would be premature).
-        Unless `QUOIN_DISABLE_EOT_FLAG_FLIP=1` is set, run:
+    3a. **Flip finalized-task session flags (single invocation; opt-out via
+        `QUOIN_DISABLE_EOT_FLAG_FLIP=1`).** Runs AFTER Step 3 (session-state marked completed) and
+        AFTER Sub-phase A's commit/push succeeded. Unless `QUOIN_DISABLE_EOT_FLAG_FLIP=1` is set, run:
         ```bash
         python3 __QUOIN_HOME__/core/scripts/select_unprocessed_sessions.py \
             --flip-finalized-task <task_name> \
@@ -652,21 +640,15 @@ Spawn an Agent subagent:
         orchestrator sibling, if one exists), atomically flips each matched file to
         `end_of_day_due: no`, and writes a `finalized_by_end_of_task: <today>` marker on each in
         the same write (idempotent — safe to re-run; re-running only refreshes the date). Print
-        the flipped-file-path list from stdout in the Step 6 report below. The exact-equality
-        match means this step never touches another task's sessions, even one whose slug happens
-        to end in `-orchestrator`. Round 4 scope note: this exact-equality match does NOT reach
+        the flipped-file-path list from stdout in the Step 6 report below. The exact-equality match never touches another task's sessions. It does not reach
         phase/stage-suffixed sessions of the same task (e.g. `<task_name>-review.md`,
-        `<task_name>-implement.md`) — same documented residual as `/end_of_day`'s reconciliation
-        pre-pass, not a new gap; those sessions remain `end_of_day_due: yes` and surface as
-        ordinary backlog exactly as they do today.
+        `<task_name>-implement.md`); those stay `end_of_day_due: yes` and surface as ordinary backlog.
 
-        The `finalized_by_end_of_task` marker is read-only provenance metadata — it does NOT
-        change `end_of_day_due` flag-authoritative selection semantics (IVG-103 unchanged). It is
-        consumed only by `/end_of_day`'s `find_finalized_marked()` producer (via
-        `--include-finalized-marked`, riding the same `--show-window` call), which unions
-        same-window marked sessions into `in_scope` so finalized-task work still appears in that
-        day's "Completed today" digest even though the flag is already `no` by the time
-        `/end_of_day` next runs.
+        The `finalized_by_end_of_task` marker is read-only provenance; it does not
+        change `end_of_day_due` flag-authoritative selection. Only `/end_of_day`'s
+        `find_finalized_marked()` producer consumes it (via `--include-finalized-marked`, on the
+        same `--show-window` call), unioning same-window marked sessions into `in_scope` so
+        finalized-task work still appears in that day's "Completed today" digest.
 
         If the script is unavailable or errors, fail-OPEN: emit `[quoin: end_of_task flag-flip
         unavailable; sessions remain end_of_day_due: yes — will surface as ordinary backlog on the
@@ -675,9 +657,8 @@ Spawn an Agent subagent:
     4. Cost aggregation — run `python3 __QUOIN_HOME__/scripts/cost_ledger_summary.py --ledger <task-dir>/cost-ledger.md --project-path "$(pwd)" --out <task-dir>/cost-summary.json` from the project root; on script missing or non-zero exit, fall back to the manual procedure a-d below and set `fallback_note` to name that origin. Manual procedure — read cost-ledger.md and compute:
        a. Binary check: `command -v npx` — if unavailable, skip ccusage and use
           cost_from_jsonl.py fallback for ALL UUIDs (see below).
-       a2. Inline-first precedence rule (per ledger row, applied BEFORE the UUID
-          lookups in (b)/(c) below — mirrors the core `classify_attribution()`
-          verdict used by the Python readers): a row whose 8th column carries a
+       a2. Inline-first precedence rule (per ledger row, applied BEFORE the lookups
+          in (b)/(c) below; mirrors core `classify_attribution()`): a row whose 8th column carries a
           parseable `usd` with `src` ≠ `unresolved` is **resolved** — use that
           inline `usd` directly for the row's UUID and EXCLUDE it from the
           ccusage/`cost_from_jsonl.py` lookup set below (no lookup needed, no risk
@@ -710,11 +691,9 @@ Spawn an Agent subagent:
           `unresolvable_count` (col-8 `unresolvable` rows plus legacy rows whose
           JSONL lookup failed, per (a2)). `grand_total` = `resolved_total` (kept as
           an explicit alias for backward compatibility with existing consumers).
-       **Re-runnable (T-11):** this whole computation reads from cost-ledger.md
-       (append-only, never mutated by this step) and OVERWRITES cost-summary.json
-       (fixed name — see step 5) — re-running it after a kill/resume recomputes the
-       same totals from the same ledger and overwrites the same file; it never
-       blind-appends a second total row anywhere.
+       **Re-runnable:** this computation reads cost-ledger.md (never mutated here) and
+       OVERWRITES cost-summary.json (fixed name, step 5); after a kill/resume it recomputes the
+       same totals into the same file and never blind-appends a second total row anywhere.
     5. Write `.workflow_artifacts/<task_name>/cost-summary.json` (fixed name, overwritten):
        ```json
        {
@@ -737,18 +716,16 @@ Spawn an Agent subagent:
        the existing ccusage-unavailable trigger) — this is what makes the existing
        `costService`/`normalize_total` partial-detection fire for cost-attribution
        partiality, not just for the ccusage-fallback case.
-       NOTE: `fallback_used=true` means "partial estimate — some ledger UUIDs did not
-       resolve to JSONL sessions, OR some ledger rows are col-8-unresolvable". It does
-       NOT mean the cost is unavailable. A present `grand_total`/`resolved_total` with
-       `fallback_used=true` should be rendered as `~$X (partial)`. Only a null or absent
-       total key means unavailable. Consumer map: this file is consumed only by
-       `costService.ts` (extension). `/cost_snapshot` and `dashboard_model.py` consume
-       `cost-ledger.md` instead — do NOT wire them to this file.
+       `fallback_used=true` means a partial estimate (some ledger UUIDs did not resolve to JSONL
+       sessions, or some rows are col-8-unresolvable), not that the cost is unavailable: render a
+       present `grand_total`/`resolved_total` as `~$X (partial)`; only a null or absent total key
+       means unavailable. Only `costService.ts` (extension) consumes this file; `/cost_snapshot`
+       and `dashboard_model.py` read `cost-ledger.md` — do NOT wire them to this file.
     6. Report: lessons appended (yes/no, or "skipped — already recorded"), session state
        updated, finalized-task sessions flipped (count, or "skipped —
        QUOIN_DISABLE_EOT_FLAG_FLIP set" / "skipped — script unavailable"), cost summary
        written.
-    7. **Write the Sub-phase B entry-skip sentinel (T-11, `_AUTONOMOUS` only) — LAST, after
+    7. **Write the Sub-phase B entry-skip sentinel (`_AUTONOMOUS` only) — LAST, after
        everything above succeeds:** atomically write
        `autonomous-progress-<task_name>/end_of_task.subphaseB.done`
        (pipe the content into `python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`). Inert when
@@ -772,7 +749,7 @@ Spawn an Agent subagent:
     - `<absolute-path-to-task-dir>/cost-summary.json` (read BEFORE the move — it lives
       inside the task folder which you are about to move)
     Task dir: `<absolute-path-to-task-dir>`
-    Done sentinel (autonomous only, T-11): `.workflow_artifacts/memory/autonomous-done-<task_name>.md`
+    Done sentinel (autonomous only): `.workflow_artifacts/memory/autonomous-done-<task_name>.md`
 
     Steps:
     1. Read `cost-summary.json` from the task dir (BEFORE any move).
@@ -780,7 +757,7 @@ Spawn an Agent subagent:
     3. Delete planner trace breadcrumb (if present):
        Run: python3 __QUOIN_HOME__/scripts/fsops.py rm "<task_dir>/.planner-trace.md" || true
        Tier-3 ephemeral — must not persist in the finalized archive; runs BEFORE the archive move.
-    4. **Archive (idempotent, T-11)** based on `archive_type`:
+    4. **Archive (idempotent)** based on `archive_type`:
        - `"subtask"`: target = `.workflow_artifacts/<parent>/finalized/<subtask>/`.
        - `"feature"`: target = `.workflow_artifacts/finalized/<task_name>/`.
        - `"none"`: skip the move entirely — no target, nothing to check.
@@ -817,17 +794,15 @@ Spawn an Agent subagent:
 
        Next: when you're ready, create a PR from the branch.
        ```
-    6. **Write the done-sentinel (T-11, `_AUTONOMOUS` only) — LAST, after the archive move
+    6. **Write the done-sentinel (`_AUTONOMOUS` only) — LAST, after the archive move
        (step 4) AND the report print (step 5) above, never before either:** atomically
        write `.workflow_artifacts/memory/autonomous-done-<task_name>.md`
        (pipe the content into `python3 __QUOIN_HOME__/scripts/fsops.py write-atomic --parents "<f>"`), deliberately
-       OUTSIDE the just-archived task folder so the record survives the move. This is the
-       final terminal signal an external supervisor's relaunch loop checks for SUCCESS —
-       anchoring it here (after both the move and the report, not attached to any earlier
-       step) means a kill at any prior boundary in this 8-step process — including
-       after-push-before-Sub-phase-B, after-Sub-phase-B-before-archive, and
-       after-archive-before-done — safely re-runs from where it left off with no
-       duplicated work, and only a kill AFTER this final write is a true, safe SUCCESS.
+       OUTSIDE the just-archived task folder so the record survives the move. It is the
+       terminal signal an external supervisor's relaunch loop checks for SUCCESS. A kill at any
+       earlier boundary (after-push-before-Sub-phase-B, after-Sub-phase-B-before-archive,
+       after-archive-before-done) safely re-runs from where it left off with no
+       duplicated work; only a kill AFTER this write is a true SUCCESS.
        Inert when `_AUTONOMOUS` is false — plain (non-autonomous) `/end_of_task` never
        writes it.
 
@@ -835,7 +810,7 @@ Spawn an Agent subagent:
 
 ## Important behaviors
 
-- **Run tests one last time.** Even if they passed 5 minutes ago. Code might have changed.
+- **Tests are verified at finalization.** Step 1 re-runs the suite or reuses the post-review gate result.
 - **Never force-push.** Use regular `git push`. If the branch has diverged, tell the user and let them decide how to resolve.
 - **No PR creation.** This skill pushes the branch only. The user creates the PR separately when they're ready. Remind them at the end.
 - **Cost aggregation runs before archive.** The ledger file is inside the task folder — it must be read before the folder is moved.
