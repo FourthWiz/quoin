@@ -617,18 +617,22 @@ def invoke(
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
-        # Get git diff from workdir
-        try:
-            diff_proc = subprocess.run(
-                ["git", "diff", "HEAD"],
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            result["diff_patch"] = diff_proc.stdout
-        except Exception:
-            result["diff_patch"] = ""
+        # A plain `git diff` in the agent's clone reads agent-writable
+        # .git/config (fsmonitor, filters) and would run it under the
+        # operator's environment. Verified rows are scored from the
+        # harness-owned capture_patch() bytes instead, so skip it there.
+        if task_spec.get("source") != "swebench_verified":
+            try:
+                diff_proc = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=str(workdir),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                result["diff_patch"] = diff_proc.stdout
+            except Exception:
+                result["diff_patch"] = ""
 
         # Capture .workflow_artifacts/ evidence into THIS task's own result
         # directory (T-15). The old default — `workdir.parent /
