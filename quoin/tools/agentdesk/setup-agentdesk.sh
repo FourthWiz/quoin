@@ -174,7 +174,11 @@ Zellij and Ghostty keybinding steps, ~/.zshrc).
 Options:
   --keybinds-only          Only run the Ghostty and Zellij keybinding steps.
                            Use this after reloading Ghostty to finish the setup.
-  --revert-keybinds        Remove the Agent Desk keybinding changes from the
+  --refresh                Only rewrite the helper file and the Zellij layout
+                           (no Homebrew, keybinding or ~/.zshrc changes).
+                           quoin install runs this when Agent Desk is set up.
+                           Cannot be combined with other options.
+  --revert-keybinds       Remove the Agent Desk keybinding changes from the
                            Zellij config (and say where the Ghostty edit is).
                            Cannot be combined with other options.
   --assume-alt             Treat Option as already sending Alt in your terminal,
@@ -1144,6 +1148,7 @@ if [ -n "${BASH_SOURCE[0]:-}" ] && [ "${BASH_SOURCE[0]}" != "$0" ]; then
 fi
 
 KEYBINDS_ONLY=0
+REFRESH_ONLY=0
 REVERT_KEYBINDS=0
 ASSUME_ALT=0
 GHOSTTY_OPT_IN=0
@@ -1152,7 +1157,8 @@ _flag_count=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --keybinds-only)         KEYBINDS_ONLY=1 ;;
-    --revert-keybinds)       REVERT_KEYBINDS=1 ;;
+    --refresh)               REFRESH_ONLY=1 ;;
+    --revert-keybinds)      REVERT_KEYBINDS=1 ;;
     --assume-alt)            ASSUME_ALT=1 ;;
     --ghostty-option-as-alt) GHOSTTY_OPT_IN=1 ;;
     -h|--help)               usage; exit 0 ;;
@@ -1170,6 +1176,11 @@ if [ "$REVERT_KEYBINDS" = "1" ] && [ "$_flag_count" -gt 1 ]; then
   usage >&2
   exit 2
 fi
+if [ "$REFRESH_ONLY" = "1" ] && [ "$_flag_count" -gt 1 ]; then
+  echo "--refresh cannot be combined with other options." >&2
+  usage >&2
+  exit 2
+fi
 
 if [ "$REVERT_KEYBINDS" = "1" ]; then
   revert_zellij_keybinds "$ZELLIJ_CONFIG"
@@ -1183,6 +1194,9 @@ if [ "$KEYBINDS_ONLY" = "1" ]; then
   exit 0
 fi
 
+if [ "$REFRESH_ONLY" = "1" ]; then
+  echo "Agent Desk: refresh helper and layout"
+else
 echo "============================================================"
 echo "Agent Desk setup"
 echo "Ghostty + Zellij + Claude default + Codex on demand"
@@ -1203,6 +1217,7 @@ brew_install_if_missing "fzf" "fzf"
 echo
 echo "Installing Ghostty if missing..."
 brew_cask_install_if_missing "ghostty" "/Applications/Ghostty.app"
+fi
 
 echo
 echo "Step 2: write/update Agent Desk helper file if changed"
@@ -1822,6 +1837,13 @@ echo "Step 3: write/update Zellij layout if changed"
 
 mkdir -p "$ZELLIJ_LAYOUT_DIR"
 write_standard_layout "$ZELLIJ_LAYOUT"
+
+if [ "$REFRESH_ONLY" = "1" ]; then
+  echo
+  echo "Agent Desk refresh complete. New agentdesk sessions use the updated layout;"
+  echo "attaching to an existing session keeps the layout it was started with."
+  exit 0
+fi
 
 echo
 echo "Step 3b: configure Zellij copy_command"

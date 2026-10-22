@@ -344,11 +344,11 @@ def _ask_install_questions(
     run = bool(getattr(args, "setup_agentdesk", False))
     declined = False
     already = False
-    if interactive and not is_project_mode and not run:
+    if not is_project_mode and not run:
         already = install_prompts.agentdesk_already_set_up(pathlib.Path.home() / ".zshrc")
         # The setup script installs Homebrew and a macOS cask, so other hosts
         # only get the flag.
-        if not already and sys.platform == "darwin":
+        if interactive and not already and sys.platform == "darwin":
             run = install_prompts.ask_yes_no(install_prompts.AGENTDESK_QUESTION, default=False)
             declined = not run
     return _InstallAnswers(
@@ -710,6 +710,19 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
                 print(
                     f"quoin: warning: agentdesk setup exited with status {rc}; quoin itself "
                     "is installed. Re-run the install with --setup-agentdesk to retry.",
+                    file=sys.stderr,
+                )
+    elif answers.agentdesk_already and not is_project_mode:
+        # The full setup is not repeated, but the layout ships with quoin, so an
+        # already set-up agentdesk would otherwise keep launching the old one.
+        script = pathlib.Path.home() / ".config" / "agentdesk" / "setup-agentdesk.sh"
+        if script.is_file():
+            print()
+            rc = install_prompts.refresh_agentdesk(script)
+            if rc != 0:
+                print(
+                    f"quoin: warning: agentdesk refresh exited with status {rc}; quoin itself "
+                    f"is installed. Retry with: bash {script} --refresh",
                     file=sys.stderr,
                 )
 

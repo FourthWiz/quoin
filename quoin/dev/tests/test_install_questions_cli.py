@@ -34,6 +34,8 @@ class Session:
         self.project.mkdir(exist_ok=True)
         self.prompts_asked = 0
         self.runner_calls = []
+        self.refresh_calls = []
+        self.refresh_rc = 0
 
     def run(self, *, scope="project", answers=None, interactive=True, darwin=True, **flags):
         mp = self.mp
@@ -53,6 +55,7 @@ class Session:
         mp.setattr("builtins.input", fake_input)
         mp.setattr("sys.platform", "darwin" if darwin else "linux")
         mp.setattr(ip, "run_agentdesk_setup", lambda script: self.runner_calls.append(script) or 0)
+        mp.setattr(ip, "refresh_agentdesk", lambda script: self.refresh_calls.append(script) or self.refresh_rc)
         ns = dict(
             scope="project" if scope == "project" else "user",
             allow_hook_merge=True, runtime="claude", check=False,

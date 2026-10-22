@@ -85,3 +85,15 @@ def run_agentdesk_setup(script: pathlib.Path) -> int:
         return 130
     except OSError:
         return 127
+
+
+def refresh_agentdesk(script: pathlib.Path) -> int:
+    """Rewrite only the agentdesk helper and zellij layout; never raises."""
+    try:
+        return subprocess.run(
+            ["bash", str(script), "--refresh"], stdin=subprocess.DEVNULL, check=False
+        ).returncode
+    except KeyboardInterrupt:
+        return 130
+    except OSError:
+        return 127

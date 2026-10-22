@@ -313,9 +313,11 @@ def store_value_snapshot(path):
 try:
     from quoin import install_prompts as _install_prompts
     REAL_RUN_AGENTDESK_SETUP = _install_prompts.run_agentdesk_setup
+    REAL_REFRESH_AGENTDESK = _install_prompts.refresh_agentdesk
 except ImportError:  # pragma: no cover
     _install_prompts = None
     REAL_RUN_AGENTDESK_SETUP = None
+    REAL_REFRESH_AGENTDESK = None
 
 
 def _fail_if_called(*_a, **_k):
@@ -330,6 +332,7 @@ def _install_prompts_non_interactive():
     mp = pytest.MonkeyPatch()
     mp.setenv("QUOIN_INSTALL_NO_PROMPT", "1")
     mp.setattr(_install_prompts, "run_agentdesk_setup", _fail_if_called)
+    mp.setattr(_install_prompts, "refresh_agentdesk", _fail_if_called)
     try:
         yield
     finally:
