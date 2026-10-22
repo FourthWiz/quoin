@@ -598,6 +598,18 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
             verdict="error",
             evidence_path=str(exc),
             transcript_events=events_so_far,
+            wall_clock_seconds=elapsed,
+            tokens_in=inv.get("tokens_in"),
+            tokens_out=inv.get("tokens_out"),
+            tokens_cache_read=inv.get("tokens_cache_read"),
+            tokens_cache_write=inv.get("tokens_cache_write"),
+            gate_intervention_count=inv.get("gate_intervention_count", 0),
+            turn_count=inv.get("turn_count", 0),
+            cost_runtime_usd=inv.get("cost_runtime_usd"),
+            cost_estimated_usd=inv.get("cost_estimated_usd"),
+            cost_delta_usd=inv.get("cost_delta_usd"),
+            cost_available=inv.get("cost_available", False),
+            prompt=inv.get("prompt", ""),
             extra=extra,
             judge_extra=(
                 {"judge_final": False, "failure_reason": "judge-exception"}

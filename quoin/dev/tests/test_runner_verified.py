@@ -187,6 +187,9 @@ def test_raising_judge_keeps_patch_and_row_stays_pending(env):
     m = _json(t / "metrics.json")
     assert m["tree_sha"] and m["terminal_state"] == "completed"
     assert m["failure_reason"] == "harness-exception-RuntimeError"
+    assert m["wall_clock_seconds"] > 0
+    assert _json(t / "cost.json")["cost_runtime_usd"] == 0.5
+    assert (t / "prompt.txt").read_text() == "p"
 
     before = {p.name: p.read_bytes() for p in t.iterdir() if p.name != "judge.json"}
     runner._load_cell_adapter = lambda c: (_ for _ in ()).throw(AssertionError("adapter loaded"))
