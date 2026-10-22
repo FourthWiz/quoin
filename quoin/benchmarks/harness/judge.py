@@ -22,10 +22,15 @@ on re-run given the same upstream harness version (pinned in requirements-bench.
 from __future__ import annotations
 
 import json
+import os
+import re
+import shutil
 import subprocess
+import sys
 import tempfile
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -69,6 +74,7 @@ class JudgeResult:
     verdict: str  # pass | fail | error | timeout
     evidence_path: Optional[str]
     judge_runtime_seconds: float
+    extra: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -420,6 +426,204 @@ def judge_scenario(
 
 
 # ---------------------------------------------------------------------------
+# SWE-bench Verified judge
+# ---------------------------------------------------------------------------
+
+SWEBENCH_PINNED_VERSION = "3.0.17"
+VERIFIED_DATASET = "princeton-nlp/SWE-bench_Verified"
+LITE_DATASET = "princeton-nlp/SWE-bench_Lite"
+SWEBENCH_PYTHON_ENV = "QUOIN_BENCH_SWEBENCH_PYTHON"
+SWEBENCH_NAMESPACE_ENV = "QUOIN_BENCH_SWEBENCH_NAMESPACE"
+VERIFIED_MODEL_NAME = "quoin-bench"
+
+_SOURCE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-[0-9]+$")
+_VERIFIED_JUDGE_LOCK = threading.Lock()
+_LOG_TAIL_CHARS = 8000
+
+
+def build_verified_command(
+    python: str,
+    source_id: str,
+    predictions_path,
+    judge_run_id: str,
+    namespace: Optional[str] = None,
+) -> list:
+    cmd = [
+        python, "-m", "swebench.harness.run_evaluation",
+        "--dataset_name", VERIFIED_DATASET,
+        "--split", "test",
+        "--instance_ids", source_id,
+        "--predictions_path", str(predictions_path),
+        "--max_workers", "1",
+        "--timeout", "1800",
+        "--run_id", judge_run_id,
+    ]
+    if namespace is not None:
+        cmd += ["--namespace", namespace]
+    return cmd
+
+
+def parse_verified_report(report_path, source_id: str) -> tuple:
+    """Return (verdict, reason, final) from the run report; stdout is never consulted."""
+    try:
+        report = json.loads(Path(report_path).read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            raise ValueError("report is not an object")
+    except (OSError, ValueError):
+        return ("error", "report-missing", False)
+
+    def ids(key):
+        value = report.get(key)
+        return value if isinstance(value, list) else []
+
+    if source_id in ids("resolved_ids"):
+        return ("pass", "resolved", True)
+    if source_id in ids("unresolved_ids") or source_id in ids("empty_patch_ids"):
+        return ("fail", "unresolved", True)
+    if source_id in ids("error_ids"):
+        return ("error", "judge-instance-error", False)
+    return ("error", "report-missing-instance", False)
+
+
+def _hf_cached_revisions() -> Optional[list]:
+    """Best-effort list of cached revisions of the Verified dataset; None when none found."""
+    root = os.environ.get("HF_DATASETS_CACHE")
+    if not root:
+        hf_home = os.environ.get("HF_HOME")
+        root = (
+            os.path.join(hf_home, "datasets") if hf_home
+            else os.path.expanduser("~/.cache/huggingface/datasets")
+        )
+    try:
+        base = Path(root)
+        if not base.is_dir():
+            return None
+        target = VERIFIED_DATASET.replace("/", "___").lower()
+        revisions = set()
+        for entry in base.iterdir():
+            if entry.name.lower() != target or not entry.is_dir():
+                continue
+            for rev in entry.glob("default/*/*"):
+                if rev.is_dir():
+                    revisions.add(rev.name)
+        return sorted(revisions) or None
+    except OSError:
+        return None
+
+
+def _tail(text, limit: int = _LOG_TAIL_CHARS) -> str:
+    if isinstance(text, bytes):
+        text = text.decode("utf-8", "replace")
+    return (text or "")[-limit:]
+
+
+def judge_swebench_verified(
+    task_spec: dict,
+    patch_path,
+    run_id: str,
+    evidence_dir,
+    *,
+    cell: Optional[str] = None,
+    snapshot_revision: Optional[str] = None,
+    run=subprocess.run,
+    python: Optional[str] = None,
+    timeout: int = 3600,
+) -> JudgeResult:
+    """Judge a Verified patch with the pinned swebench harness; never raises for valid arguments."""
+    start = time.monotonic()
+    task_id = task_spec["id"]
+    source_id = task_spec.get("source_id", "")
+    extra: dict = {"dataset": VERIFIED_DATASET}
+
+    def done(verdict, reason, final, evidence=None):
+        extra["judge_final"] = final
+        extra["failure_reason"] = None if reason in ("resolved", "unresolved") else reason
+        return JudgeResult(
+            task_id=task_id, source_benchmark="swebench_verified", verdict=verdict,
+            evidence_path=evidence if evidence is not None else reason,
+            judge_runtime_seconds=time.monotonic() - start, extra=dict(extra),
+        )
+
+    if not isinstance(source_id, str) or not _SOURCE_ID_RE.match(source_id):
+        return done("error", "bad-source-id", False)
+    patch_path = Path(patch_path)
+    if not patch_path.is_file():
+        return done("error", "patch-file-missing", False)
+    try:
+        raw = patch_path.read_bytes()
+    except OSError:
+        return done("error", "patch-file-missing", False)
+    try:
+        patch = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return done("error", "patch-not-utf8", True)
+    if not patch.strip():
+        return done("fail", "empty-patch", True)
+    if not patch.endswith("\n"):
+        patch += "\n"
+
+    python = python or os.environ.get(SWEBENCH_PYTHON_ENV) or sys.executable
+    namespace = os.environ.get(SWEBENCH_NAMESPACE_ENV)
+    judge_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{run_id}-{cell or 'nocell'}-{task_spec['id']}")
+    extra["judge_run_id"] = judge_run_id
+    revisions = _hf_cached_revisions()
+    extra["judge_dataset_revision"] = revisions
+    extra["snapshot_revision"] = snapshot_revision
+    if revisions and snapshot_revision and snapshot_revision not in revisions:
+        extra["dataset_revision_mismatch"] = True
+
+    probed = False
+    try:
+        probe = run(
+            [python, "-c", "import importlib.metadata as m; print(m.version('swebench'))"],
+            capture_output=True, text=True, timeout=60,
+        )
+        probed = True
+        if probe.returncode != 0:
+            return done("error", "swebench-not-installed", False)
+        version = (probe.stdout or "").strip()
+        extra["swebench_version"] = version
+        if version != SWEBENCH_PINNED_VERSION:
+            return done("error", "swebench-version-mismatch", False)
+
+        eval_dir = Path(evidence_dir) / "swebench_eval"
+        shutil.rmtree(eval_dir, ignore_errors=True)
+        eval_dir.mkdir(parents=True, exist_ok=True)
+        predictions = eval_dir / "predictions.json"
+        predictions.write_text(
+            json.dumps([{
+                "instance_id": source_id,
+                "model_patch": patch,
+                "model_name_or_path": VERIFIED_MODEL_NAME,
+            }]),
+            encoding="utf-8",
+        )
+        cmd = build_verified_command(python, source_id, predictions.resolve(), judge_run_id, namespace)
+        with _VERIFIED_JUDGE_LOCK:
+            proc = run(cmd, cwd=str(eval_dir), capture_output=True, text=True, timeout=timeout)
+        (eval_dir / "judge-stdout.txt").write_text(_tail(getattr(proc, "stdout", "")), encoding="utf-8")
+        (eval_dir / "judge-stderr.txt").write_text(_tail(getattr(proc, "stderr", "")), encoding="utf-8")
+        report = eval_dir / f"{VERIFIED_MODEL_NAME}.{judge_run_id}.json"
+        extra["report_path"] = str(report)
+        extra["instance_report_path"] = (
+            f"logs/run_evaluation/{judge_run_id}/{VERIFIED_MODEL_NAME}/{source_id}/report.json"
+        )
+        verdict, reason, final = parse_verified_report(report, source_id)
+        return done(verdict, reason, final, evidence=str(report))
+    except subprocess.TimeoutExpired:
+        return done("error", "judge-timeout", False)
+    except (FileNotFoundError, PermissionError) as exc:
+        extra["exception_type"] = type(exc).__name__
+        return done("error", "judge-oserror" if probed else "swebench-python-missing", False)
+    except OSError as exc:
+        extra["exception_type"] = type(exc).__name__
+        return done("error", "judge-oserror", False)
+    except Exception as exc:
+        extra["exception_type"] = type(exc).__name__
+        return done("error", "judge-exception", False)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -430,6 +634,8 @@ def judge_task(
     run_id: str,
     evidence_dir: Optional[Path] = None,
     invocation_extra: Optional[dict] = None,
+    task_spec: Optional[dict] = None,
+    judge_context: Optional[dict] = None,
 ) -> JudgeResult:
     """
     Dispatch to the appropriate judge based on task source.
@@ -443,6 +649,13 @@ def judge_task(
     flags the cell recorded (e.g. workflow-artifact evidence). Every
     pre-existing branch here ignores it.
     """
+    if task_spec is not None and task_spec.get("source") == "swebench_verified":
+        ctx = judge_context or {}
+        return judge_swebench_verified(
+            task_spec, Path(task_dir) / "diff.patch", run_id, evidence_dir or task_dir,
+            cell=ctx.get("cell"), snapshot_revision=ctx.get("snapshot_revision"),
+        )
+
     source = _infer_source(task_id)
 
     if source == "evalplus_humaneval_plus":

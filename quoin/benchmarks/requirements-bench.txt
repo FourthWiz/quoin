@@ -14,7 +14,11 @@ evalplus>=0.3.0  # Pin exact version at benchmark time
 
 # SWE-bench: Software Engineering benchmark
 # Source: https://github.com/SWE-bench/SWE-bench
-swebench>=3.0.0  # Pin exact version at benchmark time
+# swebench 3.0.17: uploaded to PyPI 2025-04-18, wheel sha256
+# 5a2f6c6d6df164d81474e6901275e73802dc5817905c82902438928544c593b3.
+# The judge interpreter (QUOIN_BENCH_SWEBENCH_PYTHON) needs Docker and network
+# access to HuggingFace; the Verified judge refuses any other version.
+swebench==3.0.17
 
 # statsmodels: Wilson CIs and McNemar test (invariant statistics)
 # Used in harness/aggregate.py

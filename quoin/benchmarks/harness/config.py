@@ -72,6 +72,12 @@ class HarnessConfig:
     )
     """Cell IDs to run. Must match REQUIRED_MODE_IDS in validate_benchmarks.py."""
 
+    repo_cache_root: Optional[Path] = None
+    """Verified-task mirror cache; None means the environment or default location."""
+
+    repo_work_root: Optional[Path] = None
+    """Parent directory for per-task Verified clones; None means the system temp dir."""
+
     max_parallel: int = 4
     """Maximum number of concurrent task executions."""
 

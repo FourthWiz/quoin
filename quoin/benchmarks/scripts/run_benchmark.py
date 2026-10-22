@@ -572,6 +572,113 @@ def _resolve_suite_arg(value: str, benchmarks_dir: Path = _BENCHMARKS_DIR) -> Pa
     sys.exit(1)
 
 
+def _verified_tasks(tasks: list) -> list:
+    return [t for t in tasks if t.get("source") == "swebench_verified"]
+
+
+def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
+    """Build the repo mirrors and prove each Verified task prepares cleanly.
+
+    Network access happens only in the mirror step; no model is called.
+    """
+    import time
+
+    from quoin.benchmarks.harness.repo_prep import (
+        RepoPrepError, check_pin_refs, cleanup_task_repo, prepare_mirrors,
+        prepare_task_repo,
+    )
+
+    verified = _verified_tasks(tasks)
+    if not verified:
+        print(f"ERROR: {suite_path} has no swebench_verified tasks", file=sys.stderr)
+        return 2
+
+    problems: dict = {}
+    try:
+        prepare_mirrors(tasks)
+    except RepoPrepError as exc:
+        print(f"ERROR: mirror preparation failed: {exc}", file=sys.stderr)
+        return 1
+    for line in check_pin_refs(tasks):
+        problems[line.split(":", 1)[0]] = line
+
+    trials: dict = {}
+    for task in verified:
+        if task["id"] in problems:
+            continue
+        started = time.monotonic()
+        try:
+            prepared = prepare_task_repo(task)
+            note = cleanup_task_repo(prepared.path)
+            trials[task["id"]] = "trial ok in %.1fs" % (time.monotonic() - started)
+            if note:
+                trials[task["id"]] += f" (cleanup: {note})"
+        except RepoPrepError as exc:
+            problems[task["id"]] = f"{task['id']}: {exc.reason}"
+            trials[task["id"]] = "trial failed: %s after %.1fs" % (exc.reason, time.monotonic() - started)
+        except Exception as exc:
+            problems[task["id"]] = f"{task['id']}: unexpected-{type(exc).__name__}"
+            trials[task["id"]] = f"trial failed: unexpected-{type(exc).__name__}"
+
+    for task in verified:
+        status = "FAIL" if task["id"] in problems else "OK"
+        detail = trials.get(task["id"]) or problems.get(task["id"], "")
+        print(f"{task['id']} {task['repo']} {task['base_commit'][:12]} {status} {detail}".rstrip())
+    return 1 if problems else 0
+
+
+def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) -> int:
+    """Re-judge recorded Verified sessions whose verdict is not final; spawns no agent."""
+    from quoin.benchmarks.harness import runner
+    from quoin.benchmarks.harness.aggregate import aggregate_run
+    from quoin.benchmarks.scripts.check_invariants import check_invariants
+
+    run_path = run_dir / run_id
+    if not run_path.is_dir():
+        print(f"ERROR: run directory not found: {run_path}", file=sys.stderr)
+        return 2
+    try:
+        tiered = json.loads(suite_path.read_text(encoding="utf-8")).get("tiered") or {}
+    except (OSError, ValueError):
+        tiered = {}
+    rows = runner.judge_pending_rows(
+        run_dir, run_id, tasks,
+        snapshot_revision=tiered.get("dataset_revision"),
+        judge=runner.judge_task,
+    )
+    for row in rows:
+        print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
+    if not rows:
+        print("No pending Verified rows to judge.")
+
+    started_at = finished_at = None
+    try:
+        previous = json.loads((run_path / "summary.json").read_text(encoding="utf-8"))
+        started_at, finished_at = previous.get("started_at"), previous.get("finished_at")
+    except (OSError, ValueError):
+        pass
+    aggregate_run(run_dir, run_id, started_at=started_at, finished_at=finished_at)
+    inv_report = check_invariants(run_dir, run_id)
+    (run_path / "invariants-report.md").write_text(inv_report.to_markdown(), encoding="utf-8")
+    print(f"Summary refreshed: {run_path / 'summary.md'}")
+    return 0 if all(r["judge_final"] for r in rows) else 1
+
+
+def _check_flag_conflicts(parser, args) -> None:
+    exclusive = [
+        ("--prepare-repos", args.prepare_repos),
+        ("--judge-only", args.judge_only),
+        ("--dry-run", args.dry_run),
+        ("--verify-model", args.verify_model),
+    ]
+    for i, (name, active) in enumerate(exclusive[:2]):
+        if not active:
+            continue
+        for other, other_active in exclusive:
+            if other != name and other_active:
+                parser.error(f"{name} cannot be combined with {other}")
+
+
 def main() -> None:
     from quoin.benchmarks.scripts import spend_ledger
 
@@ -595,7 +702,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--run-id",
-        required=True,
+        required=False,
         help="Unique run identifier (e.g., v0-smoke, v1)",
     )
     parser.add_argument(
@@ -706,7 +813,23 @@ def main() -> None:
              "ledger precheck. When omitted, the ceiling is derived from "
              "the ledger's own latest reauth-note (or the $50 default).",
     )
+    parser.add_argument(
+        "--prepare-repos",
+        action="store_true",
+        help="Clone the repo mirrors for Verified tasks and check that each task"
+             " prepares cleanly. Needs network access; makes no model call.",
+    )
+    parser.add_argument(
+        "--judge-only",
+        action="store_true",
+        help="Re-judge recorded Verified sessions in --run-id whose verdict is not"
+             " final. Spawns no agent.",
+    )
     args = parser.parse_args()
+
+    if args.run_id is None and not args.prepare_repos:
+        parser.error("the following arguments are required: --run-id")
+    _check_flag_conflicts(parser, args)
 
     if args.verify_model:
         if args.spend_ledger is None:
@@ -727,6 +850,11 @@ def main() -> None:
         sys.exit(1)
 
     suite = json.loads(suite_path.read_text(encoding="utf-8"))["tasks"]
+
+    if args.prepare_repos:
+        sys.exit(_prepare_repos_main(suite_path, suite))
+    if args.judge_only:
+        sys.exit(_judge_only_main(suite_path, suite, args.run_dir, args.run_id))
 
     if args.dry_run:
         print(f"DRY RUN — Run ID: {args.run_id}")
