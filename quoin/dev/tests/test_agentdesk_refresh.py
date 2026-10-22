@@ -1,7 +1,7 @@
 """setup-agentdesk.sh --refresh and the refresh step of ``quoin install``.
 
-A machine that already ran the agentdesk setup gets the new helper and layout
-on every user-scope install, without the Homebrew, keybinding or ~/.zshrc
+A machine that already ran the agentdesk setup is asked on each interactive
+user-scope install whether to update the helper and layout, without the Homebrew, keybinding or ~/.zshrc
 steps of the full setup.
 """
 from __future__ import annotations
@@ -89,40 +89,61 @@ def sess(tmp_path, monkeypatch, capsys):
 
 
 class TestInstallRefresh:
+    SCRIPT = ".config/agentdesk/setup-agentdesk.sh"
+
     def _set_up(self, sess):
         (sess.home / ".zshrc").write_text(ip.AGENTDESK_SOURCE_LINE + "\n")
 
-    def test_already_set_up_install_refreshes(self, sess):
+    def test_yes_refreshes(self, sess):
         self._set_up(sess)
-        assert sess.run(scope="user", interactive=False) == 0
-        assert sess.refresh_calls == [sess.home / ".config/agentdesk/setup-agentdesk.sh"]
+        assert sess.run(scope="user", answers=["n", "n", "y"]) == 0
+        assert sess.refresh_calls == [sess.home / self.SCRIPT]
         assert sess.runner_calls == []
+        assert "Update its helper and zellij layout" in sess.prompts()
 
-    def test_interactive_install_refreshes_without_asking(self, sess):
+    def test_enter_defaults_to_yes(self, sess):
         self._set_up(sess)
-        assert sess.run(scope="user", answers=["n", "n"]) == 0
-        assert sess.prompts_asked == 2
+        assert sess.run(scope="user", answers=["n", "n", ""]) == 0
         assert len(sess.refresh_calls) == 1
 
-    def test_not_set_up_does_not_refresh(self, sess):
+    def test_no_skips_and_prints_the_command(self, sess, capsys):
+        self._set_up(sess)
+        assert sess.run(scope="user", answers=["n", "n", "n"]) == 0
+        assert sess.refresh_calls == []
+        assert f"{sess.home / self.SCRIPT} --refresh" in capsys.readouterr().out
+
+    def test_non_interactive_only_prints_the_command(self, sess, capsys):
+        self._set_up(sess)
         assert sess.run(scope="user", interactive=False) == 0
         assert sess.refresh_calls == []
+        assert "--refresh" in capsys.readouterr().out
 
-    def test_full_setup_flag_does_not_also_refresh(self, sess):
+    def test_asked_off_darwin_too(self, sess):
         self._set_up(sess)
-        assert sess.run(scope="user", interactive=False, setup_agentdesk=True) == 0
+        assert sess.run(scope="user", darwin=False, answers=["n", "n", "y"]) == 0
+        assert len(sess.refresh_calls) == 1
+
+    def test_not_set_up_is_not_asked(self, sess):
+        assert sess.run(scope="user", darwin=False, answers=["n", "n"]) == 0
+        assert sess.prompts_asked == 2
+        assert sess.refresh_calls == []
+
+    def test_full_setup_flag_does_not_also_ask(self, sess):
+        self._set_up(sess)
+        assert sess.run(scope="user", answers=["n", "n"], setup_agentdesk=True) == 0
         assert len(sess.runner_calls) == 1
         assert sess.refresh_calls == []
 
-    def test_project_scope_does_not_refresh(self, sess):
+    def test_project_scope_is_not_asked(self, sess):
         self._set_up(sess)
-        assert sess.run(interactive=False) == 0
+        assert sess.run(answers=["n", "n"]) == 0
+        assert sess.prompts_asked == 2
         assert sess.refresh_calls == []
 
     def test_failed_refresh_is_a_warning(self, sess, capsys):
         self._set_up(sess)
         sess.refresh_rc = 3
-        assert sess.run(scope="user", interactive=False) == 0
+        assert sess.run(scope="user", answers=["n", "n", "y"]) == 0
         err = capsys.readouterr().err
         assert "agentdesk refresh exited with status 3" in err
         assert "--refresh" in err
