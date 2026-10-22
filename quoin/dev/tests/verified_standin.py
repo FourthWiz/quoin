@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
+from typing import Optional
 
 INSTANCE_ID = "org__repo-1"
 REPO = "org/repo"
@@ -24,14 +25,19 @@ def git(args, cwd, env_extra=None) -> str:
     return out.stdout.decode("utf-8", "replace").strip()
 
 
-def build_upstream(tmp_path: Path) -> dict:
-    """Upstream with commit A (the base), a later commit B on main, and tag v1 on B."""
+def build_upstream(tmp_path: Path, extra_base_files: Optional[dict] = None) -> dict:
+    """Upstream with commit A (the base), a later commit B on main, and tag v1 on B.
+
+    `extra_base_files` maps relative paths to bytes committed in A as well.
+    """
     root = tmp_path / "upstream"
     repo = root / "org" / "repo"
     repo.mkdir(parents=True)
     git(["init", "-q", "-b", "main"], repo)
     (repo / "a.txt").write_text("base\n", encoding="utf-8")
     (repo / "crlf.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
+    for rel, data in (extra_base_files or {}).items():
+        (repo / rel).write_bytes(data)
     git(["add", "-A"], repo)
     git(["commit", "-q", "-m", "A"], repo)
     base = git(["rev-parse", "HEAD"], repo)

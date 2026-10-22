@@ -374,13 +374,13 @@ _CAPTURE_OVERRIDES = [
     "-c", "core.safecrlf=false",
 ]
 
-# `$GIT_DIR/info/attributes` outranks every `.gitattributes` in the tree, so
-# this leaves each attribute that could rewrite content on `add` (filters,
-# line-ending and encoding conversion, ident expansion) or alter the diff
-# (drivers, forced binary) unspecified, whatever the snapshot's own files say.
-_NEUTRAL_ATTRIBUTES = (
-    b"* !filter !diff !merge !text !eol !crlf !ident !working-tree-encoding\n"
-)
+# Capture reads `.gitattributes` from the base commit (GIT_ATTR_SOURCE), not
+# from the snapshot, so `add` undoes exactly the line-ending, ident and
+# encoding conversion the clone's checkout applied, and the agent's own
+# `.gitattributes` edits cannot change how files are hashed. On top of that,
+# `$GIT_DIR/info/attributes` outranks every tree attribute and switches off
+# the drivers that would run a command or change the diff output.
+_NEUTRAL_ATTRIBUTES = b"* !filter !diff !merge\n"
 
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 _O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
@@ -649,6 +649,7 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
             counts = _snapshot_worktree(path, snapshot)
             git_dir = _init_harness_git_dir(scratch, Path(prepared.mirror))
             env = _harness_git_env(scratch, git_dir, snapshot)
+            env["GIT_ATTR_SOURCE"] = base
             have = _git(["cat-file", "-e", f"{base}^{{commit}}"], snapshot, env=env, check=False)
             if have.returncode != 0:
                 raise RepoPrepError("base-missing", base[:12])

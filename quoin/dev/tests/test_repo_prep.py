@@ -239,6 +239,53 @@ def test_capture_neutralizes_worktree_gitattributes(world, tmp_path):
     _g(fresh.path, "apply", "--check", "p.patch")
 
 
+_BASE_ATTR_FILES = {
+    ".gitattributes": b"*.crlf text eol=crlf\n*.id ident\n",
+    "w.crlf": b"one\ntwo\nthree\n",
+    "v.id": b"$Id$\nbody\n",
+}
+
+
+@pytest.fixture
+def attr_world(tmp_path, monkeypatch):
+    standin = build_upstream(tmp_path, extra_base_files=_BASE_ATTR_FILES)
+    cache = configure_env(monkeypatch, tmp_path, standin)
+    work = tmp_path / "work"
+    work.mkdir()
+    prepare_mirrors([standin["task"]], log=lambda *_: None)
+    return {**standin, "cache": cache, "work": work, "tmp": tmp_path}
+
+
+def test_capture_is_empty_for_untouched_files_converted_on_checkout(attr_world):
+    p = _prep(attr_world)
+    # Checkout applied the base tree's attributes, so the worktree bytes
+    # differ from the blobs; capture must undo exactly that conversion.
+    assert (p.path / "w.crlf").read_bytes() == b"one\r\ntwo\r\nthree\r\n"
+    assert (p.path / "v.id").read_bytes().startswith(b"$Id: ")
+    cap = capture_patch(p, attr_world["base"])
+    assert cap.patch_bytes == b""
+
+
+def test_capture_edit_under_eol_crlf_is_not_a_full_rewrite(attr_world):
+    p = _prep(attr_world)
+    (p.path / "w.crlf").write_bytes(b"one\r\nTWO\r\nthree\r\n")
+    cap = capture_patch(p, attr_world["base"])
+    assert b"-two\n" in cap.patch_bytes and b"+TWO\n" in cap.patch_bytes
+    assert b"-one" not in cap.patch_bytes and b"-three" not in cap.patch_bytes
+    assert b"v.id" not in cap.patch_bytes
+    fresh = _prep(attr_world)
+    (fresh.path / "p.patch").write_bytes(cap.patch_bytes)
+    _g(fresh.path, "apply", "--check", "p.patch")
+
+
+def test_capture_ignores_agent_edits_to_conversion_attributes(attr_world):
+    p = _prep(attr_world)
+    (p.path / ".gitattributes").write_text("* -text\n")
+    cap = capture_patch(p, attr_world["base"])
+    assert b"w.crlf" not in cap.patch_bytes and b"v.id" not in cap.patch_bytes
+    assert b"+* -text" in cap.patch_bytes
+
+
 def test_capture_records_symlinks_without_following(world, tmp_path):
     p = _prep(world)
     outside = tmp_path / "outside"
