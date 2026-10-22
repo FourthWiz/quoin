@@ -526,7 +526,9 @@ def run_benchmark(
 
     # Aggregate results
     print("\nAggregating results...")
-    summary = aggregate_run(run_dir, run_id, started_at=started_at, finished_at=finished_at)
+    summary = aggregate_run(
+        run_dir, run_id, started_at=started_at, finished_at=finished_at, suite_path=suite_path,
+    )
     print(f"  Summary written to: {run_dir / run_id / 'summary.md'}")
 
     # Run invariants check
@@ -660,7 +662,9 @@ def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) 
         started_at, finished_at = previous.get("started_at"), previous.get("finished_at")
     except (OSError, ValueError):
         pass
-    aggregate_run(run_dir, run_id, started_at=started_at, finished_at=finished_at)
+    aggregate_run(
+        run_dir, run_id, started_at=started_at, finished_at=finished_at, suite_path=suite_path,
+    )
     inv_report = check_invariants(run_dir, run_id)
     (run_path / "invariants-report.md").write_text(inv_report.to_markdown(), encoding="utf-8")
     print(f"Summary refreshed: {run_path / 'summary.md'}")
@@ -828,11 +832,26 @@ def main() -> None:
         help="Re-judge recorded Verified sessions in --run-id whose verdict is not"
              " final. Spawns no agent.",
     )
+    parser.add_argument(
+        "--retries",
+        type=int,
+        default=0,
+        help="Harness retries per task. Only 0 is supported in v1; final pass rate"
+             " equals first-attempt pass rate.",
+    )
     args = parser.parse_args()
 
     if args.run_id is None and not args.prepare_repos:
         parser.error("the following arguments are required: --run-id")
     _check_flag_conflicts(parser, args)
+
+    if args.retries != 0:
+        print(
+            f"ERROR: --retries {args.retries} is not supported in v1; "
+            "only --retries 0 (the default) is accepted",
+            file=sys.stderr,
+        )
+        sys.exit(2)
 
     if args.verify_model:
         if args.spend_ledger is None:

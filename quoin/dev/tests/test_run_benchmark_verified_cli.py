@@ -150,3 +150,29 @@ def test_judge_only_needs_verified_tasks(monkeypatch, standin):
     code = _main(monkeypatch, "--suite", str(legacy), "--run-dir", str(run_dir),
                  "--judge-only", "--run-id", "R")
     assert code == 2
+
+
+@pytest.mark.parametrize("retries", ["1", "-1", "3"])
+def test_nonzero_retries_exit_before_anything_runs(monkeypatch, capsys, shim, retries):
+    code = _main(monkeypatch, "--suite", "tiered-small", "--run-id", "R", "--dry-run", "--retries", retries)
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "not supported in v1" in err and f"--retries {retries}" in err
+    assert not shim.exists()
+
+
+def test_retries_zero_matches_the_default(monkeypatch, capsys, shim):
+    assert _main_returns(monkeypatch, "--suite", "tiered-small", "--run-id", "R", "--dry-run") is not None
+    without_flag = capsys.readouterr().out
+    _main_returns(monkeypatch, "--suite", "tiered-small", "--run-id", "R", "--dry-run", "--retries", "0")
+    assert capsys.readouterr().out == without_flag
+    assert not shim.exists()
+
+
+def _main_returns(monkeypatch, *argv):
+    monkeypatch.setattr(sys, "argv", ["run_benchmark.py", *argv])
+    try:
+        run_benchmark.main()
+    except SystemExit as exc:
+        return exc.code if exc.code is not None else 0
+    return 0
