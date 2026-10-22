@@ -273,3 +273,17 @@ def test_respawn_removes_stale_judge_json(env, monkeypatch):
     monkeypatch.setattr(runner, "write_session_json", spy)
     _run(env, FakeAdapter(act=commit_change), StubJudge(raises=RuntimeError("die")))
     assert seen["stale_present"] is False
+
+
+def test_capture_failure_reason_is_recorded(env, monkeypatch):
+    def too_big(*a, **k):
+        raise repo_prep.RepoPrepError("patch-too-large", "diff exceeds 10 bytes")
+
+    monkeypatch.setattr(runner, "capture_patch", too_big)
+    judge = StubJudge()
+    res = _run(env, FakeAdapter(act=commit_change), judge)
+    metrics = _json(_t_dir(env) / "metrics.json")
+    assert judge.calls == [] and res.verdict == "error"
+    assert metrics["capture_error"] == "patch-too-large"
+    assert metrics["capture_error_detail"] == "diff exceeds 10 bytes"
+    assert metrics["failure_reason"] == "patch-capture-failed"

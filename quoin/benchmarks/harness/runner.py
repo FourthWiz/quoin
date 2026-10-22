@@ -479,6 +479,9 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
             patch = capture_patch(prepared, task_spec["base_commit"])
         except RepoPrepError as e:
             capture_error = e.reason
+            extra["capture_error"] = e.reason
+            if e.detail:
+                extra["capture_error_detail"] = e.detail[:300]
         patch_bytes = patch.patch_bytes if patch else b""
         cleanup_note = cleanup_task_repo(prepared.path)
         cleaned = True

@@ -223,6 +223,17 @@ def test_revision_mismatch_is_flagged(tmp_path, monkeypatch):
 
 def test_undeletable_old_evaluation_dir_is_non_final_error(tmp_path, monkeypatch):
     _judge(tmp_path, Runner(report=_report(resolved=[SID])))
+    # A silent partial delete leaves the old resolved report in place; the
+    # re-judge must not parse it as a fresh, final result.
+    monkeypatch.setattr(judge.shutil, "rmtree", lambda *a, **k: None)
+    runner = Runner(report=None)
+    out = _judge(tmp_path, runner)
+    assert out.extra["failure_reason"] == "judge-oserror" and out.extra["judge_final"] is False
+    assert runner.sent is None
+
+
+def test_raising_delete_of_old_evaluation_dir_is_non_final_error(tmp_path, monkeypatch):
+    _judge(tmp_path, Runner(report=_report(resolved=[SID])))
     monkeypatch.setattr(judge.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(OSError("busy")))
     out = _judge(tmp_path, Runner(report=_report(resolved=[SID])))
     assert out.extra["failure_reason"] == "judge-oserror" and out.extra["judge_final"] is False
