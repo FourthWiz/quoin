@@ -226,6 +226,7 @@ class PreparedRepo:
     instance_id: str = ""
     git_config_bytes: bytes = b""
     git_info_bytes: dict = field(default_factory=dict)
+    mirror: Optional[Path] = None
 
 
 _INFO_FILES = ("exclude", "attributes")
@@ -280,6 +281,7 @@ def _prepare_into(path: Path, mirror: Path, iid: str, base: str) -> PreparedRepo
         instance_id=iid,
         git_config_bytes=(path / ".git" / "config").read_bytes(),
         git_info_bytes={name: _read_optional(info / name) for name in _INFO_FILES},
+        mirror=mirror,
     )
 
 
@@ -327,6 +329,8 @@ def cleanup_task_repo(path) -> Optional[str]:
         return f"{type(exc).__name__}: {exc}"[:200]
 
 
+
+
 @dataclass
 class CapturedPatch:
     patch_bytes: bytes
@@ -338,111 +342,333 @@ class CapturedPatch:
     excluded_paths: list
     head_commit: str
     decode_lossy: bool
+    symlinks_recorded: int = 0
+    special_files_skipped: int = 0
 
+
+# Patch capture never runs git against anything the agent controls. The agent
+# owns the clone's working tree and everything under its `.git` (config,
+# index, refs, objects, nested repositories), so capture first copies the
+# working tree into a harness-owned snapshot, dropping every `.git` entry at
+# any depth, and then diffs that snapshot with a git dir and index the harness
+# creates fresh outside the clone. Base objects come from the harness's own
+# mirror through an alternates file. Symlinks are recorded as symlinks (their
+# target text, mode 120000) and are never followed, so nothing outside the
+# clone is read.
+
+MAX_PATCH_BYTES = 10 * 1024 * 1024
+MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
+MAX_SNAPSHOT_ENTRIES = 500_000
+MAX_SNAPSHOT_DEPTH = 128
+_READ_CHUNK = 1024 * 1024
+_SMALL_READ_LIMIT = 1024 * 1024
+_CAPTURE_PREFIX = "qbench_capture_"
 
 _CAPTURE_OVERRIDES = [
     "-c", "core.fsmonitor=false",
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.untrackedCache=false",
     "-c", "core.attributesFile=/dev/null",
+    "-c", "core.excludesFile=/dev/null",
+    "-c", "core.autocrlf=false",
+    "-c", "core.safecrlf=false",
 ]
 
+# `$GIT_DIR/info/attributes` outranks every `.gitattributes` in the tree, so
+# this leaves each attribute that could rewrite content on `add` (filters,
+# line-ending and encoding conversion, ident expansion) or alter the diff
+# (drivers, forced binary) unspecified, whatever the snapshot's own files say.
+_NEUTRAL_ATTRIBUTES = (
+    b"* !filter !diff !merge !text !eol !crlf !ident !working-tree-encoding\n"
+)
 
-MAX_PATCH_BYTES = 10 * 1024 * 1024
-
-# Entries inside .git that redirect git to another directory or layer extra
-# configuration, objects or attributes on top of the pinned ones.
-_GIT_REDIRECT_FILES = ("commondir", "gitdir", "config.worktree", "grafts", "shallow")
-_GIT_REDIRECT_DIRS = ("worktrees",)
+_O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
+_REF_NAME = re.compile(r"^refs/heads/[A-Za-z0-9._/-]+$")
 
 
-def _neutralize_git_dir(git_dir: Path) -> bool:
-    """Make `git_dir` a self-contained real directory; return True if anything was removed.
+@dataclass
+class _SnapshotCounts:
+    bytes: int = 0
+    entries: int = 0
+    symlinks: int = 0
+    special: int = 0
 
-    The agent controls the working tree and everything under `.git`, so a
-    redirect such as `commondir` could make the harness's own `git add -A`
-    read a config that defines a clean filter. A symlinked or missing `.git`
-    cannot be made safe and is refused.
-    """
+
+def _copy_regular(dir_fd: int, name: str, target: Path, counts: _SnapshotCounts) -> None:
     try:
-        st = os.lstat(git_dir)
-    except OSError as exc:
-        raise RepoPrepError("git-dir-invalid", str(exc)[:200]) from exc
-    if not stat.S_ISDIR(st.st_mode):
-        raise RepoPrepError("git-dir-invalid", ".git is not a real directory")
-    changed = False
-    for name in _GIT_REDIRECT_FILES:
-        target = git_dir / name
-        if os.path.lexists(target):
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-            changed = True
-    for name in _GIT_REDIRECT_DIRS:
-        target = git_dir / name
-        if os.path.lexists(target):
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            else:
-                target.unlink()
-            changed = True
-    alternates = git_dir / "objects" / "info" / "alternates"
-    if os.path.lexists(alternates):
-        alternates.unlink()
-        changed = True
-    return changed
+        src = os.open(name, os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK, dir_fd=dir_fd)
+    except OSError:
+        counts.special += 1
+        return
+    try:
+        st = os.fstat(src)
+        if not stat.S_ISREG(st.st_mode):
+            counts.special += 1
+            return
+        mode = 0o755 if st.st_mode & stat.S_IXUSR else 0o644
+        dst = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, mode)
+        try:
+            os.fchmod(dst, mode)
+            while True:
+                chunk = os.read(src, _READ_CHUNK)
+                if not chunk:
+                    break
+                counts.bytes += len(chunk)
+                if counts.bytes > MAX_SNAPSHOT_BYTES:
+                    raise RepoPrepError("snapshot-too-large", f"working tree exceeds {MAX_SNAPSHOT_BYTES} bytes")
+                os.write(dst, chunk)
+        finally:
+            os.close(dst)
+    finally:
+        os.close(src)
 
 
-def _capture_env(path: Path, git_dir: Path) -> dict:
+def _snapshot_dir(dir_fd: int, out_dir: Path, depth: int, counts: _SnapshotCounts) -> None:
+    if depth > MAX_SNAPSHOT_DEPTH:
+        raise RepoPrepError("snapshot-too-deep", f"directory depth exceeds {MAX_SNAPSHOT_DEPTH}")
+    with os.scandir(dir_fd) as it:
+        names = sorted(entry.name for entry in it)
+    for name in names:
+        if name.lower() == ".git" or (depth == 0 and name in PATCH_EXCLUDES):
+            continue
+        counts.entries += 1
+        if counts.entries > MAX_SNAPSHOT_ENTRIES:
+            raise RepoPrepError("snapshot-too-large", f"more than {MAX_SNAPSHOT_ENTRIES} entries")
+        try:
+            st = os.stat(name, dir_fd=dir_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            continue
+        target = out_dir / name
+        if stat.S_ISLNK(st.st_mode):
+            os.symlink(os.readlink(name, dir_fd=dir_fd), target)
+            counts.symlinks += 1
+        elif stat.S_ISDIR(st.st_mode):
+            try:
+                child = os.open(name, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW, dir_fd=dir_fd)
+            except OSError:
+                counts.special += 1
+                continue
+            try:
+                target.mkdir()
+                _snapshot_dir(child, target, depth + 1, counts)
+            finally:
+                os.close(child)
+        elif stat.S_ISREG(st.st_mode):
+            _copy_regular(dir_fd, name, target, counts)
+        else:
+            counts.special += 1
+
+
+def _snapshot_worktree(src: Path, dst: Path) -> _SnapshotCounts:
+    """Copy the agent's working tree into `dst` without following any symlink.
+
+    Directories and files are opened relative to their parent's descriptor
+    with O_NOFOLLOW, so a path swapped for a symlink mid-walk is not followed.
+    Sockets, FIFOs and devices are skipped. The byte cap is enforced while
+    reading, not from `st_size`.
+    """
+    counts = _SnapshotCounts()
+    root = os.open(src, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW)
+    try:
+        _snapshot_dir(root, dst, 0, counts)
+    finally:
+        os.close(root)
+    return counts
+
+
+def _read_small_nofollow(path: Path, limit: int = _SMALL_READ_LIMIT) -> Optional[bytes]:
+    """Read a small regular file without following a final symlink; None if unusable."""
+    try:
+        fd = os.open(path, os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        data = os.read(fd, limit + 1)
+        return None if len(data) > limit else data
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _agent_git_dir(path: Path) -> Optional[Path]:
+    git_dir = path / ".git"
+    try:
+        if stat.S_ISDIR(os.lstat(git_dir).st_mode):
+            return git_dir
+    except OSError:
+        pass
+    return None
+
+
+def _agent_head(path: Path) -> str:
+    """Best-effort, informational HEAD of the agent's clone, read as plain files."""
+    git_dir = _agent_git_dir(path)
+    if git_dir is None:
+        return ""
+    head = (_read_small_nofollow(git_dir / "HEAD", 4096) or b"").decode("ascii", "replace").strip()
+    if _SHA40.match(head):
+        return head
+    if not head.startswith("ref: "):
+        return ""
+    ref = head[5:].strip()
+    if not _REF_NAME.match(ref) or ".." in ref:
+        return ""
+    loose = (_read_small_nofollow(git_dir / ref, 4096) or b"").decode("ascii", "replace").strip()
+    if _SHA40.match(loose):
+        return loose
+    packed = (_read_small_nofollow(git_dir / "packed-refs") or b"").decode("ascii", "replace")
+    for line in packed.splitlines():
+        parts = line.split(" ")
+        if len(parts) == 2 and parts[1] == ref and _SHA40.match(parts[0]):
+            return parts[0]
+    return ""
+
+
+def _agent_git_state_modified(path: Path, prepared: Optional[PreparedRepo]) -> tuple:
+    """Report whether the agent changed its clone's config or info files (never written back)."""
+    if prepared is None:
+        return False, False
+    git_dir = _agent_git_dir(path)
+    if git_dir is None:
+        return True, True
+    config_modified = _read_small_nofollow(git_dir / "config") != prepared.git_config_bytes
+    info_modified = any(
+        _read_small_nofollow(git_dir / "info" / name) != prepared.git_info_bytes.get(name)
+        for name in _INFO_FILES
+    )
+    return config_modified, info_modified
+
+
+def _git_capped(args: list, cwd: Path, env: dict, limit: int, timeout: int = 600) -> bytes:
+    """Run git and return stdout, killing it as soon as stdout passes `limit` bytes."""
+    timed_out = threading.Event()
+    with tempfile.TemporaryFile() as err:
+        proc = subprocess.Popen(
+            ["git", *[str(a) for a in args]], cwd=str(cwd), env=env,
+            stdout=subprocess.PIPE, stderr=err, stdin=subprocess.DEVNULL,
+        )
+
+        def _kill():
+            timed_out.set()
+            proc.kill()
+
+        timer = threading.Timer(timeout, _kill)
+        timer.start()
+        chunks = []
+        total = 0
+        over = False
+        try:
+            while True:
+                chunk = proc.stdout.read(_READ_CHUNK)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > limit:
+                    over = True
+                    proc.kill()
+                    break
+                chunks.append(chunk)
+        finally:
+            timer.cancel()
+            proc.stdout.close()
+            rc = proc.wait()
+        if over:
+            raise RepoPrepError("patch-too-large", f"diff exceeds {limit} bytes")
+        if timed_out.is_set():
+            raise RepoPrepError("git-timeout", f"git {' '.join(map(str, args[:2]))}")
+        if rc != 0:
+            err.seek(0)
+            tail = err.read().decode("utf-8", "replace").strip()[-400:]
+            raise RepoPrepError("git-failed", f"git {' '.join(map(str, args[:2]))}: {tail}")
+    return b"".join(chunks)
+
+
+def _harness_git_env(scratch: Path, git_dir: Path, worktree: Path) -> dict:
+    home = scratch / "home"
+    home.mkdir(exist_ok=True)
     env = hermetic_git_env()
+    env["HOME"] = str(home)
     env["GIT_DIR"] = str(git_dir)
     env["GIT_COMMON_DIR"] = str(git_dir)
-    env["GIT_WORK_TREE"] = str(path)
-    env["GIT_CEILING_DIRECTORIES"] = str(path.parent)
+    env["GIT_WORK_TREE"] = str(worktree)
+    env["GIT_INDEX_FILE"] = str(git_dir / "capture-index")
+    env["GIT_CEILING_DIRECTORIES"] = str(scratch)
+    env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env["GIT_ATTR_NOSYSTEM"] = "1"
+    env["GIT_OPTIONAL_LOCKS"] = "0"
     return env
 
 
+def _init_harness_git_dir(scratch: Path, mirror: Path) -> Path:
+    """Create an empty git dir that borrows objects read-only from the harness mirror."""
+    repo = scratch / "repo"
+    init_env = hermetic_git_env()
+    init_env["HOME"] = str(scratch / "home")
+    _git(["init", "--template=", "-q", repo], scratch, env=init_env)
+    git_dir = repo / ".git"
+    (git_dir / "objects" / "info").mkdir(parents=True, exist_ok=True)
+    (git_dir / "objects" / "info" / "alternates").write_text(
+        str(Path(mirror).resolve() / "objects") + "\n", encoding="utf-8"
+    )
+    (git_dir / "info").mkdir(exist_ok=True)
+    (git_dir / "info" / "attributes").write_bytes(_NEUTRAL_ATTRIBUTES)
+    return git_dir
+
+
+_CAPTURE_LIMIT_REASONS = ("patch-too-large", "snapshot-too-large", "snapshot-too-deep")
+
+
 def capture_patch(repo, base_commit: str) -> CapturedPatch:
-    """Capture everything the agent changed relative to `base_commit` as patch bytes."""
+    """Capture everything the agent changed relative to `base_commit` as patch bytes.
+
+    `repo` must be the `PreparedRepo` returned by `prepare_task_repo`; its
+    mirror supplies the base objects so nothing is read from the clone's
+    own git metadata.
+    """
     import hashlib
 
     prepared = repo if isinstance(repo, PreparedRepo) else None
     path = Path(prepared.path if prepared else repo)
-    git_dir = path / ".git"
-    config_modified = False
-    info_modified = False
     try:
-        if _neutralize_git_dir(git_dir):
-            config_modified = True
-        if prepared is not None:
-            if _read_optional(git_dir / "config") != prepared.git_config_bytes:
-                config_modified = True
-                (git_dir / "config").write_bytes(prepared.git_config_bytes)
-            info_dir = git_dir / "info"
-            for name in _INFO_FILES:
-                wanted = prepared.git_info_bytes.get(name)
-                if _read_optional(info_dir / name) != wanted:
-                    info_modified = True
-                    if wanted is None:
-                        (info_dir / name).unlink()
-                    else:
-                        (info_dir / name).write_bytes(wanted)
-        env = _capture_env(path, git_dir)
-        _git([*_CAPTURE_OVERRIDES, "add", "-A"], path, env=env)
-        pathspecs = [f":(top,exclude){p}" for p in PATCH_EXCLUDES]
-        diff = _git(
-            [*_CAPTURE_OVERRIDES, "diff", "--cached", "--binary", "--no-color",
-             "--no-ext-diff", "--no-textconv", base_commit, "--", ".", *pathspecs],
-            path, env=env,
-        )
-        head = _git(["rev-parse", "HEAD"], path, env=env, check=False)
+        base = _validate_commit(base_commit)
+        if prepared is None or prepared.mirror is None or not Path(prepared.mirror).is_dir():
+            raise RepoPrepError("mirror-unavailable", "capture needs the harness mirror for the base objects")
+        parent = path.parent if path.parent.is_dir() else None
+        scratch = Path(tempfile.mkdtemp(prefix=_CAPTURE_PREFIX, dir=str(parent) if parent else None))
     except (RepoPrepError, OSError) as exc:
         raise RepoPrepError("patch-capture-failed", str(exc)[:300]) from exc
-    data = diff.stdout
-    if len(data) > MAX_PATCH_BYTES:
-        raise RepoPrepError("patch-too-large", f"{len(data)} bytes exceeds {MAX_PATCH_BYTES}")
+    try:
+        try:
+            snapshot = scratch / "tree"
+            snapshot.mkdir()
+            counts = _snapshot_worktree(path, snapshot)
+            git_dir = _init_harness_git_dir(scratch, Path(prepared.mirror))
+            env = _harness_git_env(scratch, git_dir, snapshot)
+            have = _git(["cat-file", "-e", f"{base}^{{commit}}"], snapshot, env=env, check=False)
+            if have.returncode != 0:
+                raise RepoPrepError("base-missing", base[:12])
+            _git([*_CAPTURE_OVERRIDES, "read-tree", base], snapshot, env=env)
+            _git([*_CAPTURE_OVERRIDES, "add", "-A"], snapshot, env=env)
+            pathspecs = [f":(top,exclude){p}" for p in PATCH_EXCLUDES]
+            data = _git_capped(
+                [*_CAPTURE_OVERRIDES, "diff", "--cached", "--binary", "--no-color",
+                 "--no-ext-diff", "--no-textconv", base, "--", ".", *pathspecs],
+                snapshot, env, MAX_PATCH_BYTES,
+            )
+        except RepoPrepError as exc:
+            if exc.reason in _CAPTURE_LIMIT_REASONS:
+                raise
+            raise RepoPrepError("patch-capture-failed", str(exc)[:300]) from exc
+        except OSError as exc:
+            raise RepoPrepError("patch-capture-failed", f"{type(exc).__name__}: {exc}"[:300]) from exc
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    config_modified, info_modified = _agent_git_state_modified(path, prepared)
     try:
         text = data.decode("utf-8")
         lossy = False
@@ -457,6 +683,8 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
         repo_config_modified=config_modified,
         repo_info_modified=info_modified,
         excluded_paths=list(PATCH_EXCLUDES),
-        head_commit=_text(head) if head.returncode == 0 else "",
+        head_commit=_agent_head(path),
         decode_lossy=lossy,
+        symlinks_recorded=counts.symlinks,
+        special_files_skipped=counts.special,
     )

@@ -135,12 +135,17 @@ def test_capture_ignores_agent_written_fsmonitor_and_filter(world, tmp_path):
     assert cap.repo_config_modified
 
 
-def test_capture_ignores_commondir_redirect_with_clean_filter(world, tmp_path):
-    p = _prep(world)
-    marker = tmp_path / "filter-ran"
+def _filter_script(tmp_path, marker):
     clean = tmp_path / "clean.sh"
     clean.write_text(f"#!/bin/sh\ntouch {marker}\nsed s/secret/FILTERED/\n")
     clean.chmod(0o755)
+    return clean
+
+
+def test_capture_ignores_commondir_redirect_with_clean_filter(world, tmp_path):
+    p = _prep(world)
+    marker = tmp_path / "filter-ran"
+    clean = _filter_script(tmp_path, marker)
     evil = tmp_path / "evil-gitdir"
     shutil.copytree(p.path / ".git", evil)
     with open(evil / "config", "a", encoding="utf-8") as fh:
@@ -151,31 +156,158 @@ def test_capture_ignores_commondir_redirect_with_clean_filter(world, tmp_path):
     cap = capture_patch(p, world["base"])
     assert not marker.exists()
     assert b"+secret" in cap.patch_bytes and b"FILTERED" not in cap.patch_bytes
-    assert not (p.path / ".git" / "commondir").exists()
-    assert cap.repo_config_modified
 
 
-def test_capture_removes_alternates_and_worktree_config(world, tmp_path):
+def _arm_nested_filter(repo_dir, clean):
+    with open(repo_dir / "config", "a", encoding="utf-8") as fh:
+        fh.write(f'[filter "x"]\n\tclean = {clean}\n')
+
+
+def test_capture_ignores_embedded_repo_clean_filter(world, tmp_path):
     p = _prep(world)
-    alt = p.path / ".git" / "objects" / "info" / "alternates"
+    marker = tmp_path / "filter-ran"
+    clean = _filter_script(tmp_path, marker)
+    sub = p.path / "sub"
+    sub.mkdir()
+    _g(sub, "init", "-q")
+    (sub / ".gitattributes").write_text("* filter=x\n")
+    (sub / "f.txt").write_text("base\n")
+    _g(sub, "add", "-A")
+    _g(sub, "commit", "-q", "-m", "nested")
+    _g(p.path, "add", "sub")
+    _g(p.path, "commit", "-q", "-m", "gitlink")
+    _arm_nested_filter(sub / ".git", clean)
+    (sub / "f.txt").write_text("secret\n")
+    cap = capture_patch(p, world["base"])
+    assert not marker.exists()
+    assert b"sub/f.txt" in cap.patch_bytes and b"+secret" in cap.patch_bytes
+    assert b"160000" not in cap.patch_bytes and b".git" not in cap.patch_bytes.replace(b".gitattributes", b"")
+
+
+def test_capture_ignores_submodule_clean_filter(world, tmp_path):
+    src = tmp_path / "smsrc"
+    src.mkdir()
+    _g(src, "init", "-q")
+    (src / ".gitattributes").write_text("* filter=x\n")
+    (src / "f.txt").write_text("base\n")
+    _g(src, "add", "-A")
+    _g(src, "commit", "-q", "-m", "sm")
+    p = _prep(world)
+    git(["-c", "protocol.file.allow=always", "submodule", "add", "-q", str(src), "sm"], p.path)
+    _g(p.path, "commit", "-q", "-m", "add submodule")
+    modules = p.path / ".git" / "modules" / "sm"
+    assert modules.is_dir() and (p.path / "sm" / ".git").is_file()
+    marker = tmp_path / "filter-ran"
+    _arm_nested_filter(modules, _filter_script(tmp_path, marker))
+    (p.path / "sm" / "f.txt").write_text("secret\n")
+    cap = capture_patch(p, world["base"])
+    assert not marker.exists()
+    assert b"sm/f.txt" in cap.patch_bytes and b"+secret" in cap.patch_bytes
+    assert b"FILTERED" not in cap.patch_bytes
+
+
+def test_capture_sees_edits_hidden_by_agent_index_flags(world):
+    p = _prep(world)
+    _g(p.path, "update-index", "--skip-worktree", "a.txt")
+    _g(p.path, "update-index", "--assume-unchanged", "crlf.txt")
+    (p.path / "a.txt").write_text("base\nhidden edit\n")
+    (p.path / "crlf.txt").write_bytes(b"one\r\nhidden\r\n")
+    cap = capture_patch(p, world["base"])
+    assert b"+hidden edit" in cap.patch_bytes
+    assert b"+hidden\r\n" in cap.patch_bytes
+
+
+def test_capture_ignores_agent_replace_refs(world):
+    p = _prep(world)
+    (p.path / "a.txt").write_text("base\nreal change\n")
+    _g(p.path, "commit", "-q", "-am", "change")
+    _g(p.path, "replace", world["base"], _g(p.path, "rev-parse", "HEAD"))
+    cap = capture_patch(p, world["base"])
+    assert b"+real change" in cap.patch_bytes
+
+
+def test_capture_neutralizes_worktree_gitattributes(world, tmp_path):
+    p = _prep(world)
+    (p.path / ".gitattributes").write_text("* text=auto eol=lf\n*.u16 working-tree-encoding=UTF-16\n")
+    (p.path / "new.txt").write_bytes(b"x\r\ny\r\n")
+    (p.path / "w.u16").write_bytes(b"plain\n")
+    cap = capture_patch(p, world["base"])
+    assert b"+x\r\n" in cap.patch_bytes
+    assert b"+plain\n" in cap.patch_bytes
+    fresh = _prep(world)
+    (fresh.path / "p.patch").write_bytes(cap.patch_bytes)
+    _g(fresh.path, "apply", "--check", "p.patch")
+
+
+def test_capture_records_symlinks_without_following(world, tmp_path):
+    p = _prep(world)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "secret.txt").write_text("TOP-SECRET-FILE\n")
+    (outside / "inner.txt").write_text("TOP-SECRET-DIR\n")
+    (p.path / "link.txt").symlink_to(outside / "secret.txt")
+    (p.path / "linkdir").symlink_to(outside)
+    cap = capture_patch(p, world["base"])
+    assert b"TOP-SECRET" not in cap.patch_bytes
+    assert b"new file mode 120000" in cap.patch_bytes
+    assert str(outside / "secret.txt").encode() in cap.patch_bytes
+    assert b"linkdir/inner.txt" not in cap.patch_bytes
+    assert cap.symlinks_recorded == 2
+
+
+def test_capture_never_writes_through_agent_git_symlinks(world, tmp_path):
+    p = _prep(world)
+    gd = p.path / ".git"
+    precious = tmp_path / "precious.cfg"
+    precious.write_text("precious\n")
+    (gd / "config").unlink()
+    (gd / "config").symlink_to(precious)
+    outside_info = tmp_path / "outside-info"
+    outside_info.mkdir()
+    (outside_info / "exclude").write_text("keep\n")
+    shutil.rmtree(gd / "info", ignore_errors=True)
+    (gd / "info").symlink_to(outside_info)
+    outside_objinfo = tmp_path / "outside-objinfo"
+    outside_objinfo.mkdir()
+    (outside_objinfo / "alternates").write_text("keep\n")
+    shutil.rmtree(gd / "objects" / "info", ignore_errors=True)
+    (gd / "objects" / "info").symlink_to(outside_objinfo)
+    (p.path / "a.txt").write_text("base\nedit\n")
+    cap = capture_patch(p, world["base"])
+    assert b"+edit" in cap.patch_bytes
+    assert precious.read_text() == "precious\n"
+    assert (outside_info / "exclude").read_text() == "keep\n"
+    assert (outside_objinfo / "alternates").read_text() == "keep\n"
+    assert cap.repo_config_modified and cap.repo_info_modified
+
+
+def test_capture_leaves_agent_git_dir_untouched(world, tmp_path):
+    p = _prep(world)
+    gd = p.path / ".git"
+    alt = gd / "objects" / "info" / "alternates"
     alt.parent.mkdir(parents=True, exist_ok=True)
     alt.write_text(str(tmp_path / "elsewhere") + "\n")
-    (p.path / ".git" / "config.worktree").write_text("[core]\n\tfsmonitor = true\n")
+    (gd / "config.worktree").write_text("[core]\n\tfsmonitor = true\n")
     (p.path / "a.txt").write_text("x\n")
     cap = capture_patch(p, world["base"])
     assert b"+x" in cap.patch_bytes
-    assert not alt.exists() and not (p.path / ".git" / "config.worktree").exists()
+    assert alt.exists() and (gd / "config.worktree").exists()
 
 
-def test_capture_refuses_symlinked_git_dir(world, tmp_path):
+def test_capture_works_with_symlinked_or_missing_git_dir(world, tmp_path):
     p = _prep(world)
     moved = tmp_path / "moved-git"
     shutil.move(str(p.path / ".git"), str(moved))
     (p.path / ".git").symlink_to(moved)
-    with pytest.raises(RepoPrepError) as exc:
-        capture_patch(p, world["base"])
-    assert exc.value.reason == "patch-capture-failed"
-    assert "git-dir-invalid" in exc.value.detail
+    (p.path / "a.txt").write_text("base\nviasymlink\n")
+    cap = capture_patch(p, world["base"])
+    assert b"+viasymlink" in cap.patch_bytes and cap.head_commit == ""
+
+    q = _prep(world)
+    shutil.rmtree(q.path / ".git")
+    (q.path / "a.txt").write_text("base\nnogit\n")
+    cap2 = capture_patch(q, world["base"])
+    assert b"+nogit" in cap2.patch_bytes
 
 
 def test_capture_rejects_oversized_patch(world, monkeypatch):
@@ -187,7 +319,29 @@ def test_capture_rejects_oversized_patch(world, monkeypatch):
     assert exc.value.reason == "patch-too-large"
 
 
-def test_capture_resets_info_exclude_and_attributes(world):
+def test_capture_snapshot_cap_applies_while_reading(world, monkeypatch):
+    p = _prep(world)
+    monkeypatch.setattr(repo_prep, "MAX_SNAPSHOT_BYTES", 1024)
+    monkeypatch.setattr(repo_prep, "_READ_CHUNK", 256)
+    (p.path / "huge.bin").write_bytes(b"z" * 4096)
+    with pytest.raises(RepoPrepError) as exc:
+        capture_patch(p, world["base"])
+    assert exc.value.reason == "snapshot-too-large"
+    assert not [d for d in os.listdir(p.path.parent) if d.startswith("qbench_capture_")]
+
+
+def test_capture_skips_fifo_and_requires_prepared_repo(world):
+    p = _prep(world)
+    os.mkfifo(p.path / "pipe")
+    (p.path / "a.txt").write_text("base\nfifo-ok\n")
+    cap = capture_patch(p, world["base"])
+    assert b"+fifo-ok" in cap.patch_bytes and cap.special_files_skipped == 1
+    with pytest.raises(RepoPrepError) as exc:
+        capture_patch(p.path, world["base"])
+    assert exc.value.reason == "patch-capture-failed"
+
+
+def test_capture_honours_info_exclude_never(world):
     p = _prep(world)
     info = p.path / ".git" / "info"
     info.mkdir(exist_ok=True)
@@ -196,7 +350,6 @@ def test_capture_resets_info_exclude_and_attributes(world):
     (p.path / "hidden.txt").write_text("surprise\n")
     cap = capture_patch(p, world["base"])
     assert b"+surprise" in cap.patch_bytes
-    assert not (info / "exclude").exists() and not (info / "attributes").exists()
     assert cap.repo_info_modified
 
 
@@ -291,13 +444,3 @@ def test_cleanup_handles_readonly_and_refuses_foreign_paths(world, tmp_path, mon
     monkeypatch.setattr(repo_prep.shutil, "rmtree", boom)
     reason = cleanup_task_repo(q.path)
     assert isinstance(reason, str) and "stuck" in reason
-
-
-def test_capture_failure_when_git_dir_deleted(world):
-    import shutil
-
-    p = _prep(world)
-    shutil.rmtree(p.path / ".git")
-    with pytest.raises(RepoPrepError) as exc:
-        capture_patch(p, world["base"])
-    assert exc.value.reason == "patch-capture-failed"
