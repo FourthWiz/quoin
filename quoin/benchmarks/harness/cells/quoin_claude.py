@@ -420,6 +420,8 @@ def invoke(
         events_seen = 0
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+        from ..stream_metrics import StreamMetrics
+        stream_metrics = StreamMetrics()
         turn_count = 0
         gate_intervention_count = 0
         retry_delay = 1.0
@@ -489,6 +491,7 @@ def invoke(
 
             events.append(event)
             events_seen += 1
+            stream_metrics.observe(event)
             if transcript_file is not None:
                 transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
                 transcript_file.flush()
@@ -684,6 +687,7 @@ def invoke(
         result["tokens_out"] = tokens_out if tokens_out else None
         result["tokens_cache_read"] = tokens_cache_read if tokens_cache_read else None
         result["tokens_cache_write"] = tokens_cache_write if tokens_cache_write else None
+        result["extra"].update(stream_metrics.as_extra())
 
         if total_cost_usd is not None:
             result["cost_available"] = True

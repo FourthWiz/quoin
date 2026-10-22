@@ -381,6 +381,8 @@ def invoke(
         events_seen = 0
         total_cost_usd: Optional[float] = None
         tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+        from ..stream_metrics import StreamMetrics
+        stream_metrics = StreamMetrics()
         turn_count = 0
         session_errored = False
         retry_delay = 1.0
@@ -464,6 +466,7 @@ def invoke(
 
             events.append(event)
             events_seen += 1
+            stream_metrics.observe(event)
             if transcript_file is not None:
                 transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
                 transcript_file.flush()
@@ -672,6 +675,7 @@ def invoke(
         # metrics.json never collides with a base key (T-01).
         result["extra"]["had_assistant_event"] = turn_count > 0 and not session_errored
         result["extra"]["session_errored"] = session_errored
+        result["extra"].update(stream_metrics.as_extra())
 
         # Cost handling
         if total_cost_usd is not None:
