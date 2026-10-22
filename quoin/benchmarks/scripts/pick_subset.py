@@ -243,6 +243,8 @@ DEFAULT_PROBLEMS_PATH = _DATA_DIR / "swebench-verified-problems.json"
 SNAPSHOT_FIELDS = ["instance_id", "repo", "base_commit", "difficulty"]
 VERIFIED_SOURCE_FILE = "data/test-00000-of-00001.parquet"
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+_INSTANCE_ID = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-[0-9]+$")
+_REPO_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 
 
 class TieredSuiteError(Exception):
@@ -277,10 +279,23 @@ def load_verified_snapshot(path) -> dict:
     if not _SHA40.match(str(snap["revision"])):
         raise TieredSuiteError("snapshot revision is not a 40-hex commit SHA")
     rows = snap["rows"]
+    if not isinstance(rows, list):
+        raise TieredSuiteError("snapshot 'rows' must be a list")
     if snap["row_count"] != len(rows):
         raise TieredSuiteError(
             f"snapshot row_count {snap['row_count']} != {len(rows)} rows"
         )
+    for idx, r in enumerate(rows):
+        if not isinstance(r, dict) or sorted(r.keys()) != sorted(SNAPSHOT_FIELDS):
+            raise TieredSuiteError(
+                f"snapshot row {idx} must be an object with exactly the keys {SNAPSHOT_FIELDS}"
+            )
+        if not all(isinstance(v, str) for v in r.values()):
+            raise TieredSuiteError(f"snapshot row {idx} has a non-string value")
+        if not _INSTANCE_ID.match(r["instance_id"]):
+            raise TieredSuiteError(f"snapshot row {idx} has a malformed instance_id")
+        if not _REPO_NAME.match(r["repo"]) or ".." in r["repo"]:
+            raise TieredSuiteError(f"snapshot row {idx} has a malformed repo")
     ids = [r.get("instance_id") for r in rows]
     if ids != sorted(set(ids)):
         raise TieredSuiteError("snapshot rows must be sorted and unique by instance_id")
@@ -309,6 +324,9 @@ def load_verified_problems(path, revision: str) -> dict:
     problems = data.get("problems")
     if not isinstance(problems, dict):
         raise TieredSuiteError("problems file has no 'problems' mapping")
+    for key, value in problems.items():
+        if not isinstance(value, str) or not value:
+            raise TieredSuiteError(f"problems entry {key!r} is not a non-empty string")
     return problems
 
 

@@ -344,3 +344,67 @@ def test_provenance_mentions_recorded_values():
         needles += [t["id"], t["source_id"]]
     for n in needles:
         assert n in prov, n
+
+
+# --- snapshot and problems validation ---------------------------------------
+
+def _rewrite_snapshot(tmp_path, mutate):
+    sp, pp, _ = _synthetic(tmp_path)
+    snap = json.loads(sp.read_text(encoding="utf-8"))
+    mutate(snap["rows"])
+    sp.write_text(json.dumps(snap), encoding="utf-8")
+    return sp, pp
+
+
+def _run_main(sp, pp, capsys):
+    with pytest.raises(SystemExit) as exc:
+        pick_subset.main([
+            "--suite", "tiered-small", "--seed", "1729",
+            "--snapshot", str(sp), "--problems", str(pp),
+            "--output", str(sp.parent / "out.json"),
+        ])
+    err = capsys.readouterr().err
+    return exc.value.code, err
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda rows: rows.__setitem__(0, "not a dict"),
+        lambda rows: rows[0].pop("repo"),
+        lambda rows: rows[0].__setitem__("instance_id", None),
+        lambda rows: rows[0].__setitem__("extra", "x"),
+        lambda rows: rows[0].__setitem__("repo", "../evil"),
+        lambda rows: rows[0].__setitem__("repo", "a/b/c"),
+        lambda rows: rows[0].__setitem__("instance_id", "bad id;rm"),
+    ],
+)
+def test_malformed_snapshot_rows_exit_two(tmp_path, capsys, mutate):
+    sp, pp = _rewrite_snapshot(tmp_path, mutate)
+    code, err = _run_main(sp, pp, capsys)
+    assert code == 2
+    assert "ERROR:" in err
+    assert "Traceback" not in err
+
+
+@pytest.mark.parametrize("bad", ["", 42])
+def test_problems_values_must_be_nonempty_strings(tmp_path, capsys, bad):
+    sp, pp, _ = _synthetic(tmp_path)
+    data = json.loads(pp.read_text(encoding="utf-8"))
+    first = sorted(data["problems"])[0]
+    data["problems"][first] = bad
+    pp.write_text(json.dumps(data), encoding="utf-8")
+    code, err = _run_main(sp, pp, capsys)
+    assert code == 2
+    assert "ERROR:" in err
+    assert "Traceback" not in err
+
+
+def test_json_data_files_are_byte_pinned_by_gitattributes():
+    repo_root = BENCH.parent.parent
+    out = subprocess.run(
+        ["git", "check-attr", "text", "--", "quoin/benchmarks/data/swebench-verified-snapshot.json"],
+        cwd=repo_root, capture_output=True, text=True,
+    )
+    assert out.returncode == 0
+    assert out.stdout.strip().endswith("unset")
