@@ -431,7 +431,7 @@ def invoke(
             env=env,
             start_new_session=group,
         )
-        pgid = proc.pid
+        pgid = proc.pid if group else None
 
         # Ring buffer, not an unbounded list — see simple_claude.invoke
         # for the full rationale; both cells share the same streaming

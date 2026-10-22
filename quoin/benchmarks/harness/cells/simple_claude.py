@@ -388,7 +388,7 @@ def invoke(
             env=dict(session_env) if session_env is not None else None,
             start_new_session=group,
         )
-        pgid = proc.pid
+        pgid = proc.pid if group else None
 
         # Ring buffer, not an unbounded list: peak retained memory is
         # bounded regardless of session length. A `--verbose` stream-json
