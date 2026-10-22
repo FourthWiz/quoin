@@ -587,7 +587,13 @@ def judge_swebench_verified(
             return done("error", "swebench-version-mismatch", False)
 
         eval_dir = Path(evidence_dir) / "swebench_eval"
-        shutil.rmtree(eval_dir, ignore_errors=True)
+        try:
+            if eval_dir.exists():
+                shutil.rmtree(eval_dir)
+        except OSError:
+            pass
+        if eval_dir.exists():
+            return done("error", "judge-oserror", False)
         eval_dir.mkdir(parents=True, exist_ok=True)
         predictions = eval_dir / "predictions.json"
         predictions.write_text(

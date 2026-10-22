@@ -344,7 +344,64 @@ _CAPTURE_OVERRIDES = [
     "-c", "core.fsmonitor=false",
     "-c", "core.hooksPath=/dev/null",
     "-c", "core.untrackedCache=false",
+    "-c", "core.attributesFile=/dev/null",
 ]
+
+
+MAX_PATCH_BYTES = 10 * 1024 * 1024
+
+# Entries inside .git that redirect git to another directory or layer extra
+# configuration, objects or attributes on top of the pinned ones.
+_GIT_REDIRECT_FILES = ("commondir", "gitdir", "config.worktree", "grafts", "shallow")
+_GIT_REDIRECT_DIRS = ("worktrees",)
+
+
+def _neutralize_git_dir(git_dir: Path) -> bool:
+    """Make `git_dir` a self-contained real directory; return True if anything was removed.
+
+    The agent controls the working tree and everything under `.git`, so a
+    redirect such as `commondir` could make the harness's own `git add -A`
+    read a config that defines a clean filter. A symlinked or missing `.git`
+    cannot be made safe and is refused.
+    """
+    try:
+        st = os.lstat(git_dir)
+    except OSError as exc:
+        raise RepoPrepError("git-dir-invalid", str(exc)[:200]) from exc
+    if not stat.S_ISDIR(st.st_mode):
+        raise RepoPrepError("git-dir-invalid", ".git is not a real directory")
+    changed = False
+    for name in _GIT_REDIRECT_FILES:
+        target = git_dir / name
+        if os.path.lexists(target):
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            changed = True
+    for name in _GIT_REDIRECT_DIRS:
+        target = git_dir / name
+        if os.path.lexists(target):
+            if target.is_dir() and not target.is_symlink():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+            changed = True
+    alternates = git_dir / "objects" / "info" / "alternates"
+    if os.path.lexists(alternates):
+        alternates.unlink()
+        changed = True
+    return changed
+
+
+def _capture_env(path: Path, git_dir: Path) -> dict:
+    env = hermetic_git_env()
+    env["GIT_DIR"] = str(git_dir)
+    env["GIT_COMMON_DIR"] = str(git_dir)
+    env["GIT_WORK_TREE"] = str(path)
+    env["GIT_CEILING_DIRECTORIES"] = str(path.parent)
+    env["GIT_ATTR_NOSYSTEM"] = "1"
+    return env
 
 
 def capture_patch(repo, base_commit: str) -> CapturedPatch:
@@ -357,6 +414,8 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
     config_modified = False
     info_modified = False
     try:
+        if _neutralize_git_dir(git_dir):
+            config_modified = True
         if prepared is not None:
             if _read_optional(git_dir / "config") != prepared.git_config_bytes:
                 config_modified = True
@@ -370,7 +429,7 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
                         (info_dir / name).unlink()
                     else:
                         (info_dir / name).write_bytes(wanted)
-        env = hermetic_git_env()
+        env = _capture_env(path, git_dir)
         _git([*_CAPTURE_OVERRIDES, "add", "-A"], path, env=env)
         pathspecs = [f":(top,exclude){p}" for p in PATCH_EXCLUDES]
         diff = _git(
@@ -382,6 +441,8 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
     except (RepoPrepError, OSError) as exc:
         raise RepoPrepError("patch-capture-failed", str(exc)[:300]) from exc
     data = diff.stdout
+    if len(data) > MAX_PATCH_BYTES:
+        raise RepoPrepError("patch-too-large", f"{len(data)} bytes exceeds {MAX_PATCH_BYTES}")
     try:
         text = data.decode("utf-8")
         lossy = False

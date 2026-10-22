@@ -453,6 +453,7 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
     events_so_far: list = []
     inv: dict = {}
     elapsed = 0.0
+    start = None
     try:
         start = time.monotonic()
         extra_kwargs = _threadable_kwargs(adapter, config)
@@ -504,6 +505,7 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
             )
 
         (t_dir).mkdir(parents=True, exist_ok=True)
+        (t_dir / "judge.json").unlink(missing_ok=True)
         (t_dir / "diff.patch").write_bytes(patch_bytes)
         write_session_json(t_dir, {
             "task_id": task_id,
@@ -585,6 +587,8 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
             diff_patch_bytes=patch_bytes,
         )
     except Exception as exc:
+        if not elapsed and start is not None:
+            elapsed = time.monotonic() - start
         if not extra.get("transcript_streamed") and not events_so_far:
             streamed = t_dir / "transcript.jsonl"
             try:

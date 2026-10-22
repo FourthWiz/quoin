@@ -219,3 +219,10 @@ def test_revision_mismatch_is_flagged(tmp_path, monkeypatch):
     assert out.extra["dataset_revision_mismatch"] is True
     ok = _judge(tmp_path, Runner(report=_report(resolved=[SID])), snapshot_revision="abc123")
     assert "dataset_revision_mismatch" not in ok.extra
+
+
+def test_undeletable_old_evaluation_dir_is_non_final_error(tmp_path, monkeypatch):
+    _judge(tmp_path, Runner(report=_report(resolved=[SID])))
+    monkeypatch.setattr(judge.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(OSError("busy")))
+    out = _judge(tmp_path, Runner(report=_report(resolved=[SID])))
+    assert out.extra["failure_reason"] == "judge-oserror" and out.extra["judge_final"] is False

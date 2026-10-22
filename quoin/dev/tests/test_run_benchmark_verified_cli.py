@@ -141,3 +141,12 @@ def test_judge_only_missing_run_dir(monkeypatch, standin):
     code = _main(monkeypatch, "--suite", str(standin["suite"]), "--run-dir",
                  str(standin["tmp"] / "nope"), "--judge-only", "--run-id", "R")
     assert code == 2
+
+
+def test_judge_only_needs_verified_tasks(monkeypatch, standin):
+    run_dir = standin["tmp"] / "runs"
+    (run_dir / "R").mkdir(parents=True)
+    legacy = Path(runner.__file__).resolve().parent.parent / "suite-v1.json"
+    code = _main(monkeypatch, "--suite", str(legacy), "--run-dir", str(run_dir),
+                 "--judge-only", "--run-id", "R")
+    assert code == 2

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from pathlib import Path
 
 import pytest
@@ -245,3 +246,30 @@ def test_non_verified_specs_use_legacy_path(env):
     res = _run(env, FakeAdapter(), legacy_judge, spec=lite)
     assert seen["called"] and res.verdict == "fail"
     assert not (env["cfg"].run_dir / "r1" / "simple-claude" / "swebench_lite_001" / "session.json").exists()
+
+
+def test_wall_time_kept_when_invoke_raises(env):
+    class Boom(FakeAdapter):
+        def invoke(self, **kw):
+            time.sleep(0.02)
+            raise RuntimeError("spawn died")
+
+    _run(env, Boom(), StubJudge())
+    assert _json(_t_dir(env) / "metrics.json")["wall_clock_seconds"] > 0
+
+
+def test_respawn_removes_stale_judge_json(env, monkeypatch):
+    t = _t_dir(env)
+    t.mkdir(parents=True)
+    (t / "judge.json").write_text(json.dumps({"verdict": "pass", "judge_final": True}))
+
+    seen = {}
+    real = runner.write_session_json
+
+    def spy(t_dir, data):
+        seen["stale_present"] = (Path(t_dir) / "judge.json").exists()
+        return real(t_dir, data)
+
+    monkeypatch.setattr(runner, "write_session_json", spy)
+    _run(env, FakeAdapter(act=commit_change), StubJudge(raises=RuntimeError("die")))
+    assert seen["stale_present"] is False

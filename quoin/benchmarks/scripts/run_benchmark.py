@@ -633,6 +633,9 @@ def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) 
     from quoin.benchmarks.harness.aggregate import aggregate_run
     from quoin.benchmarks.scripts.check_invariants import check_invariants
 
+    if not _verified_tasks(tasks):
+        print(f"ERROR: {suite_path} has no swebench_verified tasks", file=sys.stderr)
+        return 2
     run_path = run_dir / run_id
     if not run_path.is_dir():
         print(f"ERROR: run directory not found: {run_path}", file=sys.stderr)

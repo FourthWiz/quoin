@@ -6,6 +6,7 @@ tmp_path; the socket patch below only guards in-process code.
 from __future__ import annotations
 
 import os
+import shutil
 import socket
 import stat
 import subprocess
@@ -132,6 +133,58 @@ def test_capture_ignores_agent_written_fsmonitor_and_filter(world, tmp_path):
     assert not marker.exists()
     assert b"+secret" in cap.patch_bytes and b"FILTERED" not in cap.patch_bytes
     assert cap.repo_config_modified
+
+
+def test_capture_ignores_commondir_redirect_with_clean_filter(world, tmp_path):
+    p = _prep(world)
+    marker = tmp_path / "filter-ran"
+    clean = tmp_path / "clean.sh"
+    clean.write_text(f"#!/bin/sh\ntouch {marker}\nsed s/secret/FILTERED/\n")
+    clean.chmod(0o755)
+    evil = tmp_path / "evil-gitdir"
+    shutil.copytree(p.path / ".git", evil)
+    with open(evil / "config", "a", encoding="utf-8") as fh:
+        fh.write(f'[filter "x"]\n\tclean = {clean}\n')
+    (p.path / ".git" / "commondir").write_text(str(evil) + "\n")
+    (p.path / ".gitattributes").write_text("*.dat filter=x\n")
+    (p.path / "f.dat").write_text("secret\n")
+    cap = capture_patch(p, world["base"])
+    assert not marker.exists()
+    assert b"+secret" in cap.patch_bytes and b"FILTERED" not in cap.patch_bytes
+    assert not (p.path / ".git" / "commondir").exists()
+    assert cap.repo_config_modified
+
+
+def test_capture_removes_alternates_and_worktree_config(world, tmp_path):
+    p = _prep(world)
+    alt = p.path / ".git" / "objects" / "info" / "alternates"
+    alt.parent.mkdir(parents=True, exist_ok=True)
+    alt.write_text(str(tmp_path / "elsewhere") + "\n")
+    (p.path / ".git" / "config.worktree").write_text("[core]\n\tfsmonitor = true\n")
+    (p.path / "a.txt").write_text("x\n")
+    cap = capture_patch(p, world["base"])
+    assert b"+x" in cap.patch_bytes
+    assert not alt.exists() and not (p.path / ".git" / "config.worktree").exists()
+
+
+def test_capture_refuses_symlinked_git_dir(world, tmp_path):
+    p = _prep(world)
+    moved = tmp_path / "moved-git"
+    shutil.move(str(p.path / ".git"), str(moved))
+    (p.path / ".git").symlink_to(moved)
+    with pytest.raises(RepoPrepError) as exc:
+        capture_patch(p, world["base"])
+    assert exc.value.reason == "patch-capture-failed"
+    assert "git-dir-invalid" in exc.value.detail
+
+
+def test_capture_rejects_oversized_patch(world, monkeypatch):
+    p = _prep(world)
+    monkeypatch.setattr(repo_prep, "MAX_PATCH_BYTES", 64)
+    (p.path / "big.txt").write_text("y" * 500 + "\n")
+    with pytest.raises(RepoPrepError) as exc:
+        capture_patch(p, world["base"])
+    assert exc.value.reason == "patch-too-large"
 
 
 def test_capture_resets_info_exclude_and_attributes(world):
