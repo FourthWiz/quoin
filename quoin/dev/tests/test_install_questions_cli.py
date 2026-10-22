@@ -34,6 +34,8 @@ class Session:
         self.project.mkdir(exist_ok=True)
         self.prompts_asked = 0
         self.runner_calls = []
+        self.refresh_calls = []
+        self.refresh_rc = 0
 
     def run(self, *, scope="project", answers=None, interactive=True, darwin=True, **flags):
         mp = self.mp
@@ -53,6 +55,7 @@ class Session:
         mp.setattr("builtins.input", fake_input)
         mp.setattr("sys.platform", "darwin" if darwin else "linux")
         mp.setattr(ip, "run_agentdesk_setup", lambda script: self.runner_calls.append(script) or 0)
+        mp.setattr(ip, "refresh_agentdesk", lambda script: self.refresh_calls.append(script) or self.refresh_rc)
         ns = dict(
             scope="project" if scope == "project" else "user",
             allow_hook_merge=True, runtime="claude", check=False,
@@ -195,9 +198,12 @@ class TestAgentdeskQuestion:
 
     def test_skipped_when_zshrc_has_source_line(self, sess, capsys):
         (sess.home / ".zshrc").write_text(ip.AGENTDESK_SOURCE_LINE + "\n")
-        assert sess.run(scope="user", answers=["n", "n"]) == 0
-        assert sess.prompts_asked == 2
-        assert "--setup-agentdesk" not in capsys.readouterr().out
+        assert sess.run(scope="user", answers=["n", "n", "n"]) == 0
+        assert sess.prompts_asked == 3
+        assert sess.runner_calls == []
+        out = capsys.readouterr().out
+        assert "Homebrew if missing" not in out
+        assert "--setup-agentdesk" not in out
 
     def test_not_asked_off_darwin_but_hint_and_flag_remain(self, sess, capsys):
         assert sess.run(scope="user", darwin=False, answers=["n", "n"]) == 0

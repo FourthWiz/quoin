@@ -291,6 +291,7 @@ class _InstallAnswers(NamedTuple):
     agentdesk_declined: bool
     agentdesk_already: bool
     warned_mods: Tuple[str, ...]
+    agentdesk_refresh: bool = False
 
 
 def _ask_install_questions(
@@ -344,15 +345,21 @@ def _ask_install_questions(
     run = bool(getattr(args, "setup_agentdesk", False))
     declined = False
     already = False
-    if interactive and not is_project_mode and not run:
+    refresh = False
+    if not is_project_mode and not run:
         already = install_prompts.agentdesk_already_set_up(pathlib.Path.home() / ".zshrc")
+        if interactive and already:
+            refresh = install_prompts.ask_yes_no(
+                install_prompts.AGENTDESK_REFRESH_QUESTION, default=True
+            )
         # The setup script installs Homebrew and a macOS cask, so other hosts
         # only get the flag.
-        if not already and sys.platform == "darwin":
+        elif interactive and sys.platform == "darwin":
             run = install_prompts.ask_yes_no(install_prompts.AGENTDESK_QUESTION, default=False)
             declined = not run
     return _InstallAnswers(
-        modes["context-tracker"], modes["workflow-tasks"], run, declined, already, tuple(warned)
+        modes["context-tracker"], modes["workflow-tasks"], run, declined, already, tuple(warned),
+        refresh,
     )
 
 
@@ -710,6 +717,24 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
                 print(
                     f"quoin: warning: agentdesk setup exited with status {rc}; quoin itself "
                     "is installed. Re-run the install with --setup-agentdesk to retry.",
+                    file=sys.stderr,
+                )
+    elif answers.agentdesk_already and not is_project_mode:
+        script = pathlib.Path.home() / ".config" / "agentdesk" / "setup-agentdesk.sh"
+        if not answers.agentdesk_refresh:
+            if script.is_file():
+                print()
+                print(
+                    "To update the agentdesk layout to the version shipped with this "
+                    f"quoin, run: bash {script} --refresh"
+                )
+        elif script.is_file():
+            print()
+            rc = install_prompts.refresh_agentdesk(script)
+            if rc != 0:
+                print(
+                    f"quoin: warning: agentdesk refresh exited with status {rc}; quoin itself "
+                    f"is installed. Retry with: bash {script} --refresh",
                     file=sys.stderr,
                 )
 
