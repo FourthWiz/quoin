@@ -241,6 +241,10 @@ def _build_prompt(task_spec: dict) -> str:
             f"Implement the fix in the repository. When done, your changes will be "
             f"evaluated by the SWE-bench harness."
         )
+    elif source == "swebench_verified":
+        from ..verified_prompt import build_verified_prompt
+
+        return build_verified_prompt(task_spec)
     elif source == "quoin_scenario":
         # The suite entry's `description` is the scenario's Prompt verbatim
         # plus the fixture's concretely-named target subsystem (T-06, D-05).
