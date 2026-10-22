@@ -49,6 +49,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import uuid
@@ -543,6 +544,34 @@ def run_benchmark(
     print(f"\nRun complete: {run_id}")
 
 
+_BENCHMARKS_DIR = Path(__file__).resolve().parent.parent
+_SUITE_FILE_RE = re.compile(r"^suite-[a-z0-9][a-z0-9-]*\.json$")
+
+
+def _resolve_suite_arg(value: str, benchmarks_dir: Path = _BENCHMARKS_DIR) -> Path:
+    """Map a bare suite alias such as "tiered-small" to its suite file.
+
+    A value with no path separator and no .json suffix is an alias for
+    suite-<alias>.json next to this script's benchmarks directory, whatever the
+    current directory is. Anything else is treated as a plain path.
+    """
+    if "/" in value or os.sep in value or value.endswith(".json"):
+        return Path(value)
+    candidate = benchmarks_dir / f"suite-{value}.json"
+    if candidate.is_file():
+        return candidate
+    known = sorted(
+        p.name[len("suite-"):-len(".json")]
+        for p in benchmarks_dir.glob("suite-*.json")
+        if _SUITE_FILE_RE.match(p.name)
+    )
+    print(
+        f"ERROR: unknown suite alias '{value}'; known aliases: {', '.join(known)}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+
+
 def main() -> None:
     from quoin.benchmarks.scripts import spend_ledger
 
@@ -551,9 +580,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--suite",
-        type=Path,
-        default=Path("quoin/benchmarks/suite-v1.json"),
-        help="Path to suite-v1.json (default: quoin/benchmarks/suite-v1.json)",
+        type=str,
+        default="quoin/benchmarks/suite-v1.json",
+        help=(
+            "Suite file path, or a bare alias such as tiered-small that resolves to"
+            " quoin/benchmarks/suite-<alias>.json (default: quoin/benchmarks/suite-v1.json)"
+        ),
     )
     parser.add_argument(
         "--cells",
@@ -688,7 +720,7 @@ def main() -> None:
         sys.exit(verify_model(ledger_path=args.spend_ledger, authorised=args.authorised_usd))
 
     cells = [c.strip() for c in args.cells.split(",") if c.strip()]
-    suite_path = args.suite
+    suite_path = _resolve_suite_arg(args.suite)
 
     if not suite_path.exists():
         print(f"ERROR: Suite file not found: {suite_path}", file=sys.stderr)
