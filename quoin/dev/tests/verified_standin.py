@@ -37,6 +37,7 @@ def build_upstream(tmp_path: Path, extra_base_files: Optional[dict] = None) -> d
     (repo / "a.txt").write_text("base\n", encoding="utf-8")
     (repo / "crlf.txt").write_bytes(b"one\r\ntwo\r\nthree\r\n")
     for rel, data in (extra_base_files or {}).items():
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).write_bytes(data)
     git(["add", "-A"], repo)
     git(["commit", "-q", "-m", "A"], repo)

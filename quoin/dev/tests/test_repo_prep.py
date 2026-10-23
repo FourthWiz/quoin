@@ -491,3 +491,124 @@ def test_cleanup_handles_readonly_and_refuses_foreign_paths(world, tmp_path, mon
     monkeypatch.setattr(repo_prep.shutil, "rmtree", boom)
     reason = cleanup_task_repo(q.path)
     assert isinstance(reason, str) and "stuck" in reason
+
+
+def test_capture_skips_names_git_rejects(world):
+    p = _prep(world)
+    (p.path / ".git ").mkdir()
+    (p.path / ".git " / "x.txt").write_text("hidden\n")
+    (p.path / "GIT~1").write_text("alias\n")
+    (p.path / "a.txt").write_text("base\nkept\n")
+    cap = capture_patch(p, world["base"])
+    assert cap.rejected_names == 2
+    assert b"+kept" in cap.patch_bytes
+    assert b"hidden" not in cap.patch_bytes and b"GIT~1" not in cap.patch_bytes
+
+
+def test_capture_counts_readlink_race_as_special(world, monkeypatch):
+    p = _prep(world)
+    (p.path / "link.txt").symlink_to("a.txt")
+
+    def racing(*a, **k):
+        raise OSError(22, "Invalid argument")
+
+    monkeypatch.setattr(repo_prep.os, "readlink", racing)
+    cap = capture_patch(p, world["base"])
+    assert cap.special_files_skipped == 1 and cap.symlinks_recorded == 0
+    assert b"link.txt" not in cap.patch_bytes
+
+
+def test_capture_leaves_out_oversize_files(world):
+    p = _prep(world)
+    big = p.path / "big.bin"
+    with open(big, "wb") as fh:
+        fh.truncate(101 * 1024 * 1024)
+    (p.path / "a.txt").write_text("base\nsmall-ok\n")
+    cap = capture_patch(p, world["base"])
+    assert cap.oversize_files == ["big.bin"]
+    assert b"big.bin" not in cap.patch_bytes and b"+small-ok" in cap.patch_bytes
+
+
+def test_capture_drops_a_file_that_grows_past_the_cap_while_copied(world, monkeypatch):
+    p = _prep(world)
+    monkeypatch.setattr(repo_prep, "MAX_SNAPSHOT_FILE_BYTES", 1024)
+    monkeypatch.setattr(repo_prep, "_READ_CHUNK", 256)
+    real_fstat = os.fstat
+
+    class _Stat:
+        def __init__(self, st):
+            self._st = st
+            self.st_size = 0
+
+        def __getattr__(self, name):
+            return getattr(self._st, name)
+
+    monkeypatch.setattr(repo_prep.os, "fstat", lambda fd: _Stat(real_fstat(fd)))
+    (p.path / "grow.bin").write_bytes(b"z" * 4096)
+    cap = capture_patch(p, world["base"])
+    assert cap.oversize_files == ["grow.bin"]
+    assert b"grow.bin" not in cap.patch_bytes
+
+
+def test_heavy_directories_do_not_change_the_patch(world):
+    p = _prep(world)
+    (p.path / "a.txt").write_text("base\nedit\n")
+    plain = capture_patch(p, world["base"])
+    (p.path / ".venv").mkdir()
+    (p.path / ".venv" / "lib.py").write_text("x\n")
+    (p.path / "pkg" / "node_modules").mkdir(parents=True)
+    (p.path / "pkg" / "node_modules" / "m.js").write_text("y\n")
+    with_heavy = capture_patch(p, world["base"])
+    assert with_heavy.skipped_heavy_dirs == 2
+    assert b".venv" not in with_heavy.patch_bytes and b"node_modules" not in with_heavy.patch_bytes
+    assert with_heavy.patch_bytes == plain.patch_bytes
+
+
+def test_heavy_dir_tracked_in_base_is_reported(tmp_path, monkeypatch, world):
+    assert repo_prep.check_heavy_dirs([world["task"]], world["cache"]) == []
+    other = tmp_path / "tracked"
+    other.mkdir()
+    standin = build_upstream(other, extra_base_files={"node_modules/x.js": b"tracked\n"})
+    cache = configure_env(monkeypatch, other, standin)
+    prepare_mirrors([standin["task"]], log=lambda *_: None)
+    problems = repo_prep.check_heavy_dirs([standin["task"]], cache)
+    assert len(problems) == 1 and "heavy-dir-tracked node_modules/x.js" in problems[0]
+
+
+def test_capture_error_carries_the_inner_reason(world, tmp_path):
+    p = _prep(world)
+    empty = tmp_path / "empty.git"
+    git(["init", "--bare", "-q", str(empty)], tmp_path)
+    p.mirror = empty
+    with pytest.raises(RepoPrepError) as exc:
+        capture_patch(p, world["base"])
+    assert exc.value.reason == "patch-capture-failed"
+    assert exc.value.inner_reason == "base-missing"
+    p.mirror = None
+    with pytest.raises(RepoPrepError) as exc:
+        capture_patch(p, world["base"])
+    assert exc.value.inner_reason == "mirror-unavailable"
+
+
+def test_attr_source_support_is_parsed_from_the_version_line():
+    assert repo_prep._parse_attr_source_support("git version 2.41.0") is False
+    assert repo_prep._parse_attr_source_support("git version 2.54.0") is True
+    assert repo_prep._parse_attr_source_support("git version 3.0.1 (Apple Git-1)") is True
+    assert repo_prep._parse_attr_source_support("nonsense") is False
+
+
+def test_attr_source_probe_is_cached_and_recorded(world, monkeypatch):
+    calls = []
+
+    class _Proc:
+        returncode = 0
+        stdout = "git version 2.41.0"
+
+    monkeypatch.setattr(repo_prep.subprocess, "run", lambda *a, **k: calls.append(a) or _Proc())
+    repo_prep.git_supports_attr_source.cache_clear()
+    try:
+        assert repo_prep.git_supports_attr_source() is False
+        assert repo_prep.git_supports_attr_source() is False
+        assert len(calls) == 1
+    finally:
+        repo_prep.git_supports_attr_source.cache_clear()

@@ -14,6 +14,7 @@ operator's git config, templates, hooks and credential helpers never apply.
 from __future__ import annotations
 
 import atexit
+import functools
 import os
 import re
 import shutil
@@ -54,9 +55,10 @@ _EMPTY_HOME: Optional[str] = None
 class RepoPrepError(RuntimeError):
     """Repository preparation or patch capture failed; `reason` is a short kebab string."""
 
-    def __init__(self, reason: str, detail: str = ""):
+    def __init__(self, reason: str, detail: str = "", inner_reason: str = ""):
         self.reason = reason
         self.detail = detail
+        self.inner_reason = inner_reason
         super().__init__(f"{reason}: {detail}" if detail else reason)
 
 
@@ -214,6 +216,39 @@ def check_pin_refs(tasks: list, cache_root=None) -> list:
             problems.append(f"{task['id']}: pin ref missing for {iid}")
         elif _text(proc) != base:
             problems.append(f"{task['id']}: pin ref for {iid} points at {_text(proc)[:12]}, expected {base[:12]}")
+    return problems
+
+
+def check_heavy_dirs(tasks: list, cache_root=None) -> list:
+    """Offline check that no Verified task's base tree tracks a path under a heavy directory.
+
+    Patch capture skips these directories at any depth, so a tracked file under
+    one would silently drop out of a patch that edits it.
+    """
+    root = _resolve_cache_root(cache_root)
+    problems = []
+    for task in tasks:
+        if not _is_verified(task):
+            continue
+        try:
+            repo = validate_repo_name(task["repo"])
+            base = _validate_commit(task["base_commit"])
+        except RepoPrepError as exc:
+            problems.append(f"{task.get('id')}: {exc.reason}")
+            continue
+        mirror = mirror_path(root, repo)
+        if not mirror.is_dir():
+            problems.append(f"{task['id']}: mirror missing for {repo}")
+            continue
+        proc = _git(["ls-tree", "-r", "--name-only", "-z", base], mirror, check=False)
+        if proc.returncode != 0:
+            problems.append(f"{task['id']}: base-missing")
+            continue
+        for raw in proc.stdout.split(b"\0"):
+            parts = raw.decode("utf-8", "replace").split("/")
+            if any(part in HEAVY_DIR_NAMES for part in parts[:-1]):
+                problems.append(f"{task['id']}: heavy-dir-tracked {'/'.join(parts)}")
+                break
     return problems
 
 
@@ -375,6 +410,10 @@ class CapturedPatch:
     decode_lossy: bool
     symlinks_recorded: int = 0
     special_files_skipped: int = 0
+    rejected_names: int = 0
+    oversize_files: list = field(default_factory=list)
+    skipped_heavy_dirs: int = 0
+    attr_source_supported: bool = True
 
 
 # Patch capture never runs git against anything the agent controls. The agent
@@ -391,6 +430,17 @@ MAX_PATCH_BYTES = 10 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024 * 1024
 MAX_SNAPSHOT_ENTRIES = 500_000
 MAX_SNAPSHOT_DEPTH = 128
+MAX_SNAPSHOT_FILE_BYTES = 100 * 1024 * 1024
+MAX_LISTED_OVERSIZE = 20
+# Directories that hold installed dependencies or tool caches. They are
+# skipped at any depth: they are git-ignored in practice, can hold millions of
+# entries, and are not part of what the agent changed.
+HEAVY_DIR_NAMES = (
+    ".venv", "venv", ".tox", "node_modules", "__pycache__",
+    ".mypy_cache", ".pytest_cache", ".eggs",
+)
+_MIN_ATTR_SOURCE_GIT = (2, 42)
+_NTFS_SHORT_GIT = re.compile(r"^git~[0-9]+$")
 _READ_CHUNK = 1024 * 1024
 _SMALL_READ_LIMIT = 1024 * 1024
 _CAPTURE_PREFIX = "qbench_capture_"
@@ -425,9 +475,44 @@ class _SnapshotCounts:
     entries: int = 0
     symlinks: int = 0
     special: int = 0
+    rejected_names: int = 0
+    skipped_heavy_dirs: int = 0
+    oversize_total: int = 0
+    oversize_files: list = field(default_factory=list)
+
+    def note_oversize(self, rel: str) -> None:
+        self.oversize_total += 1
+        if len(self.oversize_files) < MAX_LISTED_OVERSIZE:
+            self.oversize_files.append(rel)
 
 
-def _copy_regular(dir_fd: int, name: str, target: Path, counts: _SnapshotCounts) -> None:
+def _git_rejected_name(name: str) -> bool:
+    """Names `git add` refuses because they alias the `.git` directory on some filesystems."""
+    lowered = name.lower()
+    if lowered == ".git":
+        return False
+    return lowered.rstrip(" .") == ".git" or bool(_NTFS_SHORT_GIT.match(lowered))
+
+
+@functools.lru_cache(maxsize=1)
+def git_supports_attr_source() -> bool:
+    """Whether the installed git honours GIT_ATTR_SOURCE (git 2.42 or newer)."""
+    try:
+        proc = subprocess.run(
+            ["git", "version"], capture_output=True, text=True, timeout=30,
+            env=hermetic_git_env(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return proc.returncode == 0 and _parse_attr_source_support(proc.stdout)
+
+
+def _parse_attr_source_support(version_output: str) -> bool:
+    match = re.search(r"(\d+)\.(\d+)", version_output or "")
+    return bool(match) and (int(match.group(1)), int(match.group(2))) >= _MIN_ATTR_SOURCE_GIT
+
+
+def _copy_regular(dir_fd: int, name: str, target: Path, counts: _SnapshotCounts, rel: str) -> None:
     try:
         src = os.open(name, os.O_RDONLY | _O_NOFOLLOW | _O_NONBLOCK, dir_fd=dir_fd)
     except OSError:
@@ -438,25 +523,40 @@ def _copy_regular(dir_fd: int, name: str, target: Path, counts: _SnapshotCounts)
         if not stat.S_ISREG(st.st_mode):
             counts.special += 1
             return
+        if st.st_size > MAX_SNAPSHOT_FILE_BYTES:
+            counts.note_oversize(rel)
+            return
         mode = 0o755 if st.st_mode & stat.S_IXUSR else 0o644
         dst = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | _O_NOFOLLOW, mode)
+        file_bytes = 0
         try:
             os.fchmod(dst, mode)
             while True:
                 chunk = os.read(src, _READ_CHUNK)
                 if not chunk:
                     break
+                file_bytes += len(chunk)
+                if file_bytes > MAX_SNAPSHOT_FILE_BYTES:
+                    counts.bytes -= file_bytes - len(chunk)
+                    counts.note_oversize(rel)
+                    os.close(dst)
+                    dst = -1
+                    os.unlink(target)
+                    return
                 counts.bytes += len(chunk)
                 if counts.bytes > MAX_SNAPSHOT_BYTES:
                     raise RepoPrepError("snapshot-too-large", f"working tree exceeds {MAX_SNAPSHOT_BYTES} bytes")
                 os.write(dst, chunk)
         finally:
-            os.close(dst)
+            if dst >= 0:
+                os.close(dst)
     finally:
         os.close(src)
 
 
-def _snapshot_dir(dir_fd: int, out_dir: Path, depth: int, counts: _SnapshotCounts) -> None:
+def _snapshot_dir(
+    dir_fd: int, out_dir: Path, depth: int, counts: _SnapshotCounts, rel: str = "",
+) -> None:
     if depth > MAX_SNAPSHOT_DEPTH:
         raise RepoPrepError("snapshot-too-deep", f"directory depth exceeds {MAX_SNAPSHOT_DEPTH}")
     with os.scandir(dir_fd) as it:
@@ -464,6 +564,10 @@ def _snapshot_dir(dir_fd: int, out_dir: Path, depth: int, counts: _SnapshotCount
     for name in names:
         if name.lower() == ".git" or (depth == 0 and name in PATCH_EXCLUDES):
             continue
+        if _git_rejected_name(name):
+            counts.rejected_names += 1
+            continue
+        child_rel = f"{rel}{name}"
         counts.entries += 1
         if counts.entries > MAX_SNAPSHOT_ENTRIES:
             raise RepoPrepError("snapshot-too-large", f"more than {MAX_SNAPSHOT_ENTRIES} entries")
@@ -473,9 +577,17 @@ def _snapshot_dir(dir_fd: int, out_dir: Path, depth: int, counts: _SnapshotCount
             continue
         target = out_dir / name
         if stat.S_ISLNK(st.st_mode):
-            os.symlink(os.readlink(name, dir_fd=dir_fd), target)
+            try:
+                link_target = os.readlink(name, dir_fd=dir_fd)
+            except OSError:
+                counts.special += 1
+                continue
+            os.symlink(link_target, target)
             counts.symlinks += 1
         elif stat.S_ISDIR(st.st_mode):
+            if name in HEAVY_DIR_NAMES:
+                counts.skipped_heavy_dirs += 1
+                continue
             try:
                 child = os.open(name, os.O_RDONLY | _O_DIRECTORY | _O_NOFOLLOW, dir_fd=dir_fd)
             except OSError:
@@ -483,11 +595,11 @@ def _snapshot_dir(dir_fd: int, out_dir: Path, depth: int, counts: _SnapshotCount
                 continue
             try:
                 target.mkdir()
-                _snapshot_dir(child, target, depth + 1, counts)
+                _snapshot_dir(child, target, depth + 1, counts, child_rel + "/")
             finally:
                 os.close(child)
         elif stat.S_ISREG(st.st_mode):
-            _copy_regular(dir_fd, name, target, counts)
+            _copy_regular(dir_fd, name, target, counts, child_rel)
         else:
             counts.special += 1
 
@@ -671,7 +783,9 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
             raise RepoPrepError("mirror-unavailable", "capture needs the harness mirror for the base objects")
         parent = path.parent if path.parent.is_dir() else None
         scratch = Path(tempfile.mkdtemp(prefix=_CAPTURE_PREFIX, dir=str(parent) if parent else None))
-    except (RepoPrepError, OSError) as exc:
+    except RepoPrepError as exc:
+        raise RepoPrepError("patch-capture-failed", str(exc)[:300], exc.reason) from exc
+    except OSError as exc:
         raise RepoPrepError("patch-capture-failed", str(exc)[:300]) from exc
     try:
         try:
@@ -695,7 +809,7 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
         except RepoPrepError as exc:
             if exc.reason in _CAPTURE_LIMIT_REASONS:
                 raise
-            raise RepoPrepError("patch-capture-failed", str(exc)[:300]) from exc
+            raise RepoPrepError("patch-capture-failed", str(exc)[:300], exc.reason) from exc
         except OSError as exc:
             raise RepoPrepError("patch-capture-failed", f"{type(exc).__name__}: {exc}"[:300]) from exc
     finally:
@@ -719,4 +833,8 @@ def capture_patch(repo, base_commit: str) -> CapturedPatch:
         decode_lossy=lossy,
         symlinks_recorded=counts.symlinks,
         special_files_skipped=counts.special,
+        rejected_names=counts.rejected_names,
+        oversize_files=list(counts.oversize_files),
+        skipped_heavy_dirs=counts.skipped_heavy_dirs,
+        attr_source_supported=git_supports_attr_source(),
     )

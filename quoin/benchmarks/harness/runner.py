@@ -538,7 +538,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             patch = capture_patch(prepared, task_spec["base_commit"])
         except RepoPrepError as e:
             capture_error = e.reason
-            extra["capture_error"] = e.reason
+            extra["capture_error"] = e.inner_reason or e.reason
             if e.detail:
                 extra["capture_error_detail"] = e.detail[:300]
         patch_bytes = patch.patch_bytes if patch else b""
@@ -588,6 +588,10 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             "patch_decode_lossy": bool(patch and patch.decode_lossy),
             "repo_config_modified": bool(patch and patch.repo_config_modified),
             "repo_info_modified": bool(patch and patch.repo_info_modified),
+            "capture_rejected_names": patch.rejected_names if patch else 0,
+            "capture_oversize_files": list(patch.oversize_files) if patch else [],
+            "capture_skipped_heavy_dirs": patch.skipped_heavy_dirs if patch else 0,
+            "capture_attr_source_supported": patch.attr_source_supported if patch else None,
             "clone_cleanup_failed": cleanup_note,
             "cost_runtime_usd": inv.get("cost_runtime_usd"),
             "wall_clock_seconds": elapsed,

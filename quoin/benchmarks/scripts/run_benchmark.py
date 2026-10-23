@@ -593,8 +593,8 @@ def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
     import time
 
     from quoin.benchmarks.harness.repo_prep import (
-        RepoPrepError, check_pin_refs, cleanup_task_repo, prepare_mirrors,
-        prepare_task_repo,
+        RepoPrepError, check_heavy_dirs, check_pin_refs, cleanup_task_repo,
+        prepare_mirrors, prepare_task_repo,
     )
 
     verified = _verified_tasks(tasks)
@@ -610,6 +610,8 @@ def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
         return 1
     for line in check_pin_refs(tasks):
         problems[line.split(":", 1)[0]] = line
+    for line in check_heavy_dirs(tasks):
+        problems.setdefault(line.split(":", 1)[0], line)
 
     trials: dict = {}
     for task in verified:
@@ -923,6 +925,9 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
     problems = repo_prep.check_pin_refs(tasks)
     if problems:
         return _refuse("pin-refs", "; ".join(problems))
+    heavy = repo_prep.check_heavy_dirs(tasks)
+    if heavy:
+        return _refuse("heavy-dir-tracked", "; ".join(heavy))
 
     swebench_version = "skipped"
     if not args.skip_judge:
