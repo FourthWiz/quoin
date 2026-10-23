@@ -1013,7 +1013,9 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
                 cell: HarnessConfig(
                     suite_path=suite_path, run_dir=run_dir, cells=[cell], max_parallel=1,
                     budget=BudgetSpec(wall_clock_seconds=600, max_retries=0),
-                    quoin_install_mode="skip", expected_quoin_commit=expected, arm_root=arm_root,
+                    quoin_install_mode="skip",
+                    expected_quoin_commit=expected if cell == "quoin-claude" else None,
+                    arm_root=arm_root if cell == "quoin-claude" else None,
                     max_budget_usd=cap, session_env=envs[cell], arm_identity=identities[cell],
                     defer_judge=True, row_write_hold=gate_state.hold,
                 )
