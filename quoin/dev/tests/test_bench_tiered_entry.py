@@ -60,11 +60,12 @@ def tw(tmp_path, monkeypatch, arm_repo, auth, sandbox_parent):  # noqa: F811
     checkout.mkdir()
     git(["init", "-q", "-b", "main"], checkout)
 
-    state = {"docker_rc": 0, "swebench": judge.SWEBENCH_PINNED_VERSION}
+    state = {"docker_rc": 0, "swebench": judge.SWEBENCH_PINNED_VERSION, "docker_probes": 0}
     real_run = subprocess.run
 
     def fake_docker(argv, *a, **k):
         if argv and argv[0] == "docker":
+            state["docker_probes"] += 1
             return subprocess.CompletedProcess(argv, state["docker_rc"], b"", b"")
         return real_run(argv, *a, **k)
 
@@ -431,7 +432,8 @@ def test_bench_tiered_forwards_the_remaining_arguments(cli_path, monkeypatch):
 
 FLAGS = ["--yes", "--run-id", "--run-dir", "--spend-ledger", "--authorised-usd",
          "--max-budget-usd-per-task", "--parity-min-gap", "--parity-min-ratio",
-         "--ignore-parity", "--judge-emulation"]
+         "--ignore-parity", "--judge-emulation", "--clean", "--clean-mirrors",
+         "--clean-explicit-ledger"]
 
 
 def test_bench_tiered_help_lists_the_options(cli_path, capsys):
@@ -836,3 +838,80 @@ def test_checkout_without_the_entry_script_is_not_a_checkout(cli_path, tmp_path,
 def test_a_bad_explicit_repo_root_does_not_fall_back(cli_path, tmp_path, capsys):
     assert cli.main(["bench", "tiered", "--repo-root", str(tmp_path / "nope")]) == 2
     assert "source checkout" in capsys.readouterr().err
+
+
+# --- option parsing and clean dispatch ----------------------------------------------
+
+def test_an_abbreviated_option_is_rejected(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        tiered_entry.main(["--repo-r", str(tmp_path)])
+    assert exc.value.code == 2
+
+
+def test_an_abbreviated_repo_root_is_rejected_through_the_cli(cli_path, tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["bench", "tiered", "--repo-r", str(tmp_path)])
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("extra", [
+    ["--ignore-parity"], ["--parity-min-gap", "5"], ["--parity-min-ratio=3"], ["--skip-judge"],
+])
+def test_clean_refuses_run_only_options(capsys, extra):
+    assert tiered_entry.main(["--clean", *extra]) == 2
+    err = capsys.readouterr().err
+    assert "REFUSED: clean:" in err and extra[0].split("=")[0] in err
+
+
+@pytest.mark.parametrize("flag", ["--clean-mirrors", "--clean-explicit-ledger"])
+def test_clean_sub_options_need_clean(capsys, flag):
+    assert tiered_entry.main([flag]) == 2
+    assert "REFUSED: clean:" in capsys.readouterr().err
+
+
+def test_clean_conflicts_are_read_from_sys_argv_when_argv_is_none(monkeypatch, capsys):
+    monkeypatch.setattr(sys, "argv", ["tiered_entry.py", "--clean", "--ignore-parity"])
+    assert tiered_entry.main(prog="tiered_entry.py") == 2
+    assert "REFUSED: clean:" in capsys.readouterr().err
+
+
+# --- judge probes and the judge-only tail -------------------------------------------
+
+def test_the_estimate_does_not_probe_the_judge_again(tw):
+    w = tw
+    assert _go(w, "--yes") == 0
+    # judge_possible, the re-probe after the pilot, and the full leg's own preflight.
+    assert w["state"]["docker_probes"] == 3
+    w["state"]["docker_probes"] = 0
+    shutil.rmtree(w["runs"] / "R" / "quoin-claude" / "verified_medium_001")
+    assert _go(w, "--yes") == 0
+    assert w["state"]["docker_probes"] == 2
+
+
+def _pilot_finishes_every_row(w, monkeypatch):
+    done = []
+    w["hooks"].append(lambda kw: done.append(True) if kw.get("quiet_deferred_hint") else None)
+    real = run_benchmark._paired_rows_to_spawn
+    monkeypatch.setattr(run_benchmark, "_paired_rows_to_spawn",
+                        lambda *a, **k: 0 if done else real(*a, **k))
+
+
+def test_judge_only_after_a_pilot_that_finished_every_row_fails(tw, monkeypatch, capsys):
+    w = tw
+    _pilot_finishes_every_row(w, monkeypatch)
+    monkeypatch.setattr(run_benchmark, "_judge_only_main", lambda *a, **k: 1)
+    assert _go(w, "--yes") == 1
+    out = capsys.readouterr().out
+    assert tiered_entry.RERUN_HINT in out
+    assert "judge: ran" not in out and "judge: deferred" not in out
+    assert [c["tiers"] for c in w["calls"]] == ["easy"]
+
+
+def test_judge_only_after_a_pilot_that_finished_every_row(tw, monkeypatch, capsys):
+    w = tw
+    _pilot_finishes_every_row(w, monkeypatch)
+    assert _go(w, "--yes") == 0
+    out = capsys.readouterr().out
+    assert "judge: ran" in out
+    assert len(w["judged"]) == 4
+    assert [c["tiers"] for c in w["calls"]] == ["easy"]

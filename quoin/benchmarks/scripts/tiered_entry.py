@@ -68,6 +68,7 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(
         prog=prog,
+        allow_abbrev=False,
         description=(
             "Run the tiered paired SWE-bench benchmark end to end: prepare repo mirrors, "
             "confirm the worst-case spend once, run a pilot tier, check permission-denial "
@@ -80,7 +81,12 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
             "  1  interrupted, aborted, judging failed, or the spend prompt was declined\n"
             "  2  refused before spending anything (options, auth, spend ceilings, checkout)\n"
             "  3  a spend guard stopped the run\n"
-            "  4  parity stop: the arms differ in permission denials, or denial data is missing"
+            "  4  parity stop: the arms differ in permission denials, or denial data is missing\n"
+            "\n"
+            "with --clean:\n"
+            "  0  deleted, or nothing to delete\n"
+            "  1  declined, or a deletion failed\n"
+            "  2  refused (options, no terminal without --yes)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -122,7 +128,31 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
                         help="Commit the quoin arm must run, passed to every leg")
     parser.add_argument("--repo-root", type=Path, default=CHECKOUT_ROOT,
                         help="Quoin checkout root (default: %(default)s)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Delete this run's leftovers after listing them and asking once")
+    parser.add_argument("--clean-mirrors", action="store_true",
+                        help="With --clean, also delete the repo mirror cache")
+    parser.add_argument("--clean-explicit-ledger", action="store_true",
+                        help="With --clean, also delete a ledger given with --spend-ledger")
     return parser
+
+
+# Options that only make sense for a run; --clean refuses them.
+RUN_ONLY_OPTIONS = (
+    "--ignore-parity", "--judge-emulation", "--parity-min-gap", "--parity-min-ratio",
+    "--skip-judge", "--pilot-tier", "--wall-clock-seconds", "--arm-root",
+    "--expected-quoin-commit",
+)
+
+
+def _explicit(argv: list, names: tuple) -> list:
+    """Names given on the command line, as an exact token or as --name=value.
+
+    Parsed values cannot tell a default from an explicit one for options with
+    non-None defaults; with abbreviations disabled these are the only spellings.
+    """
+    return [name for name in names
+            if any(tok == name or tok.startswith(name + "=") for tok in argv)]
 
 
 # --- resolution -------------------------------------------------------------
@@ -530,7 +560,9 @@ def orchestrate(args) -> int:
         print("prepare: done")
 
     judge_ok, why = judge_possible(args)
-    pre = rb._paired_preflight(leg_namespace(res, skip_judge=not judge_ok), res.suite_path, res.doc)
+    # The estimate needs only the spawn count; judging was probed just above, and the
+    # full leg's own preflight checks it again before anything is spent.
+    pre = rb._paired_preflight(leg_namespace(res, skip_judge=True), res.suite_path, res.doc)
     if isinstance(pre, int):
         return pre
     worst = print_estimate(res, pre.n_spawns, rows_pilot, pre.suite_ceiling)
@@ -591,7 +623,21 @@ def orchestrate(args) -> int:
 
 
 def main(argv=None, prog: str = "quoin bench tiered") -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
     args = build_parser(prog).parse_args(argv)
+    if (args.clean_mirrors or args.clean_explicit_ledger) and not args.clean:
+        return _rb()._refuse("clean", "--clean-mirrors and --clean-explicit-ledger need --clean")
+    if args.clean:
+        conflicts = _explicit(argv, RUN_ONLY_OPTIONS)
+        if conflicts:
+            return _rb()._refuse("clean", f"--clean cannot be combined with {', '.join(conflicts)}")
+        from quoin.benchmarks.scripts import tiered_clean
+
+        try:
+            return tiered_clean.run_clean(args)
+        except KeyboardInterrupt:
+            print("interrupted")
+            return 1
     try:
         return orchestrate(args)
     except KeyboardInterrupt:
