@@ -306,6 +306,14 @@ def test_kill_exited_deletes_and_removes_record(ctx, capsys, tmp_path):
     assert {s for s, a in ctx.calls() if a.startswith("delete")} == {str(ctx.sock)}
 
 
+def test_kill_exited_without_record_deletes_by_name(ctx, capsys, tmp_path):
+    ctx.listing(exited("old-agents"))
+    rc, _, _ = ctx.run(capsys, "sessions", "kill", "old-agents", cwd=tmp_path)
+    assert rc == 0
+    assert ctx.deletes() == ["delete-session -- old-agents"]
+    assert ctx.deletes()[0].endswith("-- old-agents")
+
+
 def test_kill_running_needs_force(ctx, capsys, tmp_path):
     ctx.listing(live("proj-agents"))
     rc, _, err = ctx.run(capsys, "sessions", "kill", "proj-agents", cwd=tmp_path)

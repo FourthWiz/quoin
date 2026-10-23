@@ -522,7 +522,10 @@ view while the session runs and show again after you detach or quit.
 
 **Keyboard seems stuck.** From another terminal run `quoin sessions` and
 `quoin attach NAME` to get a second client in the same session, then close the
-stuck tab or detach it with `Alt s`, then `d`. The full list of checks (mode
+stuck terminal tab or window; the session keeps running and the new client stays
+attached. Do not detach with `Alt s`, then `d` in the new client, because that
+detaches the working one; use it in the stuck tab only if the Alt keys still
+work there. The full list of checks (mode
 name in the status bar, a floating pane in front, Option not sent as Alt, and
 `reset` for a garbled terminal) is the "If the keyboard seems stuck" section of
 `quoin/tools/agentdesk/KEYBIND-VERIFY.md`.

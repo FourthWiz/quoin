@@ -43,7 +43,7 @@ physical key. On a stock-default config, Esc and Enter also leave every mode exc
 
 | Mode | Old key | New key | Russian layout | Leave the mode |
 |------|---------|---------|----------------|----------------|
-| locked | Ctrl g | Alt g | Alt п | Alt g, Alt п, Ctrl g, Ctrl п |
+| locked | Ctrl g | Alt g | Alt п | Alt g, Alt п, Ctrl п (Ctrl g only on configs that keep Zellij's default keys) |
 | pane | Ctrl p | Alt a | Alt ф | Alt a, Alt ф, Esc, Enter |
 | tab | Ctrl t | Alt x | Alt ч | Alt x, Alt ч, Esc, Enter |
 | resize | Ctrl n | Alt r | Alt к | Alt r, Alt к, Esc, Enter |
@@ -90,15 +90,16 @@ with the ABC input source and once with Russian.
 4. Each mode key enters its mode and the same key leaves it again: Alt a, Alt x,
    Alt r, Alt m, Alt v, Alt s, Alt z. In tab mode, `n` opens a tab only while the
    mode is active.
-5. `Alt g` locks Zellij: `Alt s` then `q` does nothing while locked. `Ctrl g`
-   (or `Alt g`) unlocks. Under the Russian layout `Ctrl п` unlocks as well.
+5. `Alt g` locks Zellij: `Alt s` then `q` does nothing while locked. `Alt g`
+   unlocks. Under the Russian layout `Alt п` and `Ctrl п` unlock as well. `Ctrl g`
+   unlocks only on a config that keeps Zellij's default keys.
 6. In a pane running Claude Code: `Ctrl b`, `Ctrl t`, `Ctrl g`, `Ctrl s` and
    `Ctrl o` reach Claude Code; `Alt p` opens the model picker and `Alt o` toggles
    fast mode.
 7. In a shell pane: `Ctrl p` and `Ctrl n` walk shell history, `Ctrl h` is
    backspace.
 8. `Option+Left` and `Option+Right` move by word in the shell prompt.
-9. In a locked session `Ctrl g` unlocks it, so you can always get back to normal.
+9. In a locked session `Alt g` unlocks it, so you can always get back to normal.
 
 ### Per input source
 
@@ -106,7 +107,7 @@ with the ABC input source and once with Russian.
 |-------|-----|---------|
 | `Alt s` opens session mode | `Alt s` | `Alt ы` |
 | `Alt g` locks | `Alt g` | `Alt п` |
-| `Ctrl g` unlocks | `Ctrl g` | `Ctrl п` |
+| unlock | `Alt g` | `Alt п` or `Ctrl п` |
 | quit from session mode | `q` | `й` |
 
 Which character and encoding Ghostty sends under the Russian layout can differ
@@ -118,21 +119,25 @@ that chord.
 Work down this list; stop at the first step that helps.
 
 1. Read the mode name in the status bar. `LOCKED` means keys go straight to the
-   pane and the mode keys are off: press `Alt g` (or `Ctrl g`) to leave it. Any
-   other mode name: press the same Alt key that entered it again (for example
-   `Alt s` for session mode), or `Esc` on a config that keeps the default exit
-   keys.
-2. Look for a floating or plugin pane in front of the others. `Esc` closes it;
-   `Alt f` hides the floating panes.
-3. If `Alt` does nothing at all, Ghostty is not sending Option as Alt. Re-run the
-   setup check, reload the Ghostty config and use the left Option key (the right
+   pane and the mode keys are off: press `Alt g` (Russian: `Alt п` or `Ctrl п`; `Ctrl g`
+   only on a config that keeps Zellij's default keys) to leave it. Rename and
+   search modes are left with `Esc` or `Enter`, not an Alt key. Any other mode
+   name: press the same Alt key that entered it again (for example `Alt s` for
+   session mode), or `Esc` on a config that keeps the default exit keys.
+2. Look for a floating or plugin pane in front of the others. `Esc` closes a plugin pane;
+   `Alt f` hides floating terminal panes.
+3. If `Alt` does nothing at all, Ghostty is not sending Option as Alt. Reload the
+   Ghostty config, then run `bash ~/.config/agentdesk/setup-agentdesk.sh --keybinds-only`
+   and use the left Option key (the right
    one types accents and symbols).
 4. `Ctrl+Q` does nothing by design: it is unbound so a stray press cannot end a
    session. Quit with `Alt s`, then `q`.
 5. From another terminal run `quoin sessions` to list the sessions and
    `quoin attach NAME` to get a second client in the same session. Then close the
-   stuck tab (the session keeps running), or detach the stuck client with
-   `Alt s`, then `d`.
+   stuck terminal tab or window; the session keeps running and the new client
+   stays attached. (If the Alt keys still work in the stuck tab, `Alt s`, then
+   `d` detaches that client, but a stuck client usually takes no keys. Do not
+   press them in the new client: that detaches the working one.)
 6. Last resort: `quoin sessions kill NAME --force` ends the session and
    everything running in it.
 7. If the terminal itself stays garbled after Zellij is gone (typed keys echo as

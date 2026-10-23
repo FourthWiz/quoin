@@ -72,8 +72,8 @@ _sanitize_session_name() {
 # `quoin attach` to find a session from its folder. Best effort: any failure is
 # silent and the launch carries on (the lookup then falls back to the session
 # name). The writer never starts python3; its only extra processes are the
-# `$(mktemp ...)` command substitution, `mv`, and `mkdir` the first time, so it
-# adds little to a launch.
+# `$(mktemp ...)` command substitution, `mv`, `rm -f` on the failure path, and
+# `mkdir` the first time, so it adds little to a launch.
 _agentdesk_record_dir() {
   printf '%s\n' "${HOME:-}/.config/agentdesk/sessions"
 }
