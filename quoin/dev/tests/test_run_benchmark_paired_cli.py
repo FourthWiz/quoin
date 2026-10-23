@@ -483,3 +483,31 @@ def test_quiet_skip_judge_run_prints_no_deferred_line(monkeypatch, capsys, tmp_p
     doc = json.loads(standin["suite"].read_text())
     assert run_benchmark._paired_main(args, standin["suite"], doc, quiet_deferred_hint=True) == 0
     assert "Judging deferred" not in capsys.readouterr().out
+
+
+def _widen_check(tmp_path, monkeypatch, stored, requested):
+    extra = {"max_budget_usd_per_task": 5.5, "arm_config_mode": "symmetric"}
+    if stored is not None:
+        extra["tiers"] = stored
+    _manifest_args(tmp_path, monkeypatch, extra=extra)
+    return run_benchmark._check_resume_manifest(
+        tmp_path / "runs", "R", tmp_path / "suite.json", 5.5, requested)
+
+
+@pytest.mark.parametrize("stored,requested", [
+    (["easy"], ["easy", "medium"]),
+    (["easy", "medium"], ["easy", "medium"]),
+])
+def test_resume_may_add_tiers(tmp_path, monkeypatch, stored, requested):
+    assert _widen_check(tmp_path, monkeypatch, stored, requested) is None
+
+
+@pytest.mark.parametrize("stored,requested", [
+    (["easy", "medium"], ["easy"]),
+    (["easy"], ["medium"]),
+    (None, ["easy"]),
+    ([], ["easy"]),
+])
+def test_resume_may_not_drop_tiers(tmp_path, monkeypatch, stored, requested):
+    why = _widen_check(tmp_path, monkeypatch, stored, requested)
+    assert why and "tiers differ from the stored manifest" in why

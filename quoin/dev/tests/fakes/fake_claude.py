@@ -104,7 +104,8 @@ def read_log(bin_dir) -> list:
 # Scenario keys: ``delay`` (seconds before the result), ``cost`` ({"plain",
 # "quoin"} dollars), ``contaminated_plain`` (replay the recorded contaminated
 # init on the plain arm), ``background`` ("devnull" or "inherit": leave a child
-# running), ``no_result``, ``result_subtype``, ``write_skill`` (a skill directory to create in the
+# running), ``denials`` ({"plain": int, "quoin": int} permission denials reported in
+# the result event; default 0), ``no_result``, ``result_subtype``, ``write_skill`` (a skill directory to create in the
 # config dir), ``commit_in`` (a repository that gets an empty commit), ``commit``, and ``runs``: a map from the 1-based run number to a
 # dict that replaces the keys above for that run only. ``sleep_forever`` makes
 # the run wait until it is signalled.
@@ -200,7 +201,9 @@ if not opts.get("no_result"):
     subtype = opts.get("result_subtype", "success")
     emit({"type": "result", "subtype": subtype, "is_error": subtype != "success",
           "terminal_reason": "completed" if subtype == "success" else "budget_exhausted",
-          "total_cost_usd": cost, "permission_denials": [],
+          "total_cost_usd": cost,
+          "permission_denials": [{"tool_name": "Bash", "tool_use_id": "fake-%d" % n}
+                                 for n in range(int((opts.get("denials") or {}).get(arm, 0)))],
           "modelUsage": {"claude-opus-4-7": {"inputTokens": 10, "outputTokens": 5,
                                               "cacheReadInputTokens": 0,
                                               "cacheCreationInputTokens": 0, "costUSD": cost}}})

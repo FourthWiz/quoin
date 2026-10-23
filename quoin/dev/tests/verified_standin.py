@@ -60,3 +60,37 @@ def configure_env(monkeypatch, tmp_path: Path, standin: dict) -> Path:
     monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(cache))
     monkeypatch.setenv("QUOIN_BENCH_REPO_URL_TEMPLATE", standin["url_template"])
     return cache
+
+
+def build_tiered_standin(tmp_path: Path, monkeypatch, tiers=None, cap: float = 5.5,
+                         headroom_caps: int = 2) -> dict:
+    """A paired tiered suite over the offline upstream; mirrors are left for the caller.
+
+    The ceiling sits `headroom_caps` caps above the worst-case target because a killed
+    session settles at the cap, so a re-run after one interrupt must still fit.
+    """
+    import json
+
+    tiers = {"easy": 2, "medium": 1} if tiers is None else tiers
+    up = build_upstream(tmp_path)
+    configure_env(monkeypatch, tmp_path, up)
+    tasks = []
+    for tier, count in tiers.items():
+        for i in range(1, count + 1):
+            tasks.append(dict(
+                up["task"], id=f"verified_{tier}_00{i}", tier=tier,
+                source_id=f"org__repo-{len(tasks) + 1}", wall_clock_seconds=20,
+            ))
+    target = cap * len(tasks) * 2
+    ceiling = target + headroom_caps * cap
+    suite = tmp_path / "suite-standin.json"
+    suite.write_text(json.dumps({
+        "tiered": {
+            "paired_run": True, "dataset_revision": "rev", "documented_cap_usd": cap,
+            "worst_case_target_usd": target, "worst_case_ceiling_usd": ceiling,
+            "tiers": {tier: {"n": count} for tier, count in tiers.items()},
+        },
+        "tasks": tasks,
+    }))
+    return {"suite": suite, "tasks": tasks, "upstream": up, "target": target, "ceiling": ceiling,
+            "cap": cap}

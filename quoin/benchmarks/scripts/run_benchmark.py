@@ -773,8 +773,12 @@ def _check_resume_manifest(run_dir, run_id, suite_path, cap, tier_names) -> Opti
         return "stored max_budget_usd_per_task is unreadable"
     if stored_cap != round(float(cap), 2):
         return f"--max-budget-usd-per-task differs from the stored {manifest.get('max_budget_usd_per_task')}"
-    if sorted(manifest.get("tiers") or []) != sorted(tier_names):
-        return "tiers differ from the stored manifest"
+    stored_tiers = set(manifest.get("tiers") or [])
+    if not stored_tiers or not stored_tiers <= set(tier_names):
+        return (
+            f"tiers differ from the stored manifest (stored {sorted(stored_tiers)}, "
+            f"requested {sorted(tier_names)}); a resume may add tiers, not drop them"
+        )
     if manifest.get("arm_config_mode") != "symmetric":
         return "arm_config_mode differs from the stored manifest"
     return None
