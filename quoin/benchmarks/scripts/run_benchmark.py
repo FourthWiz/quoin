@@ -50,6 +50,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import uuid
@@ -865,7 +866,7 @@ def _paired_final_manifest_checks(outcome) -> str:
 def _paired_main(args, suite_path: Path, doc: dict) -> int:
     """Run the paired benchmark; every refusal exits 2 before any repo prep or session."""
     import signal
-    import tempfile  # noqa: F401  (sandbox parent resolves through tempfile at call time)
+    import tempfile
 
     from quoin.benchmarks.harness import (
         arm_identity, arm_sandbox, judge, paired_run, paired_spend, repo_prep, runner,
@@ -960,11 +961,14 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
     signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
     previous = {sig: signal.signal(sig, gate_state.handler) for sig in signals}
     sandboxes: list = []
+    run_parent: Optional[Path] = None
     try:
         try:
-            plain = arm_sandbox.create_sandbox("plain")
+            run_parent = Path(os.path.realpath(tempfile.mkdtemp(prefix="qbench_run_")))
+            arm_sandbox.assert_private_dir(run_parent)
+            plain = arm_sandbox.create_sandbox("plain", run_parent)
             sandboxes.append(plain)
-            quoin_box = arm_sandbox.create_sandbox("quoin")
+            quoin_box = arm_sandbox.create_sandbox("quoin", run_parent)
             sandboxes.append(quoin_box)
             install = arm_sandbox.install_quoin(quoin_box, arm_root, expected)
             if not install.get("ok"):
@@ -1123,12 +1127,20 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
         print(f"Interrupted by {exc.signal_name}", file=sys.stderr)
         return 1
     finally:
-        for box in sandboxes:
-            note = arm_sandbox.remove_sandbox(box)
-            if note:
-                print(note, file=sys.stderr)
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        # A second signal must not abort the cleanup, so ignore them until the
+        # sandboxes are gone and the previous handlers are back.
+        for sig in previous:
+            signal.signal(sig, signal.SIG_IGN)
+        try:
+            for box in sandboxes:
+                note = arm_sandbox.remove_sandbox(box)
+                if note:
+                    print(note, file=sys.stderr)
+            if run_parent is not None:
+                shutil.rmtree(run_parent, ignore_errors=True)
+        finally:
+            for sig, handler in previous.items():
+                signal.signal(sig, handler)
 
 
 def main() -> None:
@@ -1337,6 +1349,9 @@ def main() -> None:
         sys.exit(2)
     if args.tiers and not isinstance(suite_doc.get("tiered"), dict):
         print("ERROR: --tiers needs a suite with a tiered block", file=sys.stderr)
+        sys.exit(2)
+    if args.tiers and not paired:
+        print("ERROR: --tiers applies only to paired suites", file=sys.stderr)
         sys.exit(2)
 
     if args.prepare_repos:

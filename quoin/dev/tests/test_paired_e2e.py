@@ -118,7 +118,8 @@ def _arm_of(start):
 
 
 def _no_leftovers(w):
-    assert list(w["sandbox_parent"].glob("qbench_sandbox_*")) == []
+    assert list(w["sandbox_parent"].rglob("qbench_sandbox_*")) == []
+    assert list(w["sandbox_parent"].glob("qbench_run_*")) == []
 
 
 def _ledger(w):
@@ -163,6 +164,29 @@ def test_environment_is_the_allowlist_and_stays_in_the_sandbox(world):
     init = next(json.loads(l) for l in (plain_row / "transcript.jsonl").read_text().splitlines()
                 if '"init"' in l)
     assert set(init["skills"]) <= {"run", "debug", "code-review"}
+
+
+def test_both_sandboxes_share_a_private_run_parent_and_not_the_operator_temp_dir(world):
+    w = world
+    real_create = arm_sandbox.create_sandbox
+    seen = []
+
+    def spy(kind, parent=None):
+        box = real_create(kind, parent)
+        seen.append((kind, parent, box))
+        return box
+
+    w["monkeypatch"].setattr(arm_sandbox, "create_sandbox", spy)
+    assert _run(w, "--skip-judge") == 0
+    assert [k for k, _, _ in seen] == ["plain", "quoin"]
+    parents = {p for _, p, _ in seen}
+    assert len(parents) == 1
+    parent = parents.pop()
+    assert parent is not None and parent != w["sandbox_parent"]
+    assert parent.name.startswith("qbench_run_")
+    assert not parent.exists()
+    for start in _starts(w):
+        assert os.path.realpath(start["home"]).startswith(os.path.realpath(parent))
 
 
 def test_clean_run_leaves_only_the_expected_files(world):

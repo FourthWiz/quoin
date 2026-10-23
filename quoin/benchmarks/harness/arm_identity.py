@@ -24,7 +24,7 @@ QUOIN_REQUIRED = "quoin-required"
 # quoin installed, so it cannot prove that quoin is present.
 BUILTIN_NAME_COLLISIONS = frozenset({"run", "review", "status", "plan"})
 
-WORKDIR_CONFIG_NAMES = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude")
+WORKDIR_CONFIG_NAMES = ("CLAUDE.md", "CLAUDE.local.md", "AGENTS.md", ".claude", ".mcp.json")
 
 RULES_MARKERS = ("# === DEV WORKFLOW START ===", "# === DEV WORKFLOW END ===")
 

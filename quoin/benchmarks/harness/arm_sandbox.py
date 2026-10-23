@@ -55,6 +55,10 @@ class Sandbox:
     home: Path
     claude_dir: Path
 
+    @property
+    def tmp_dir(self) -> Path:
+        return self.home / "tmp"
+
 
 def assert_private_dir(path: Path) -> None:
     """Raise unless `path` is a plain directory owned by this user with no group or other access."""
@@ -82,6 +86,7 @@ def create_sandbox(kind: str, parent: Optional[Path] = None) -> Sandbox:
         home = Path(os.path.realpath(path))
         claude_dir = home / ".claude"
         claude_dir.mkdir(mode=0o700)
+        (home / "tmp").mkdir(mode=0o700)
         write_base_settings(claude_dir)
     except BaseException:
         shutil.rmtree(path, ignore_errors=True)
@@ -162,6 +167,9 @@ def build_session_env(sandbox_or_none: Optional[Sandbox], cell: str, run_id: str
     env["GIT_AUTHOR_EMAIL"] = env["GIT_COMMITTER_EMAIL"] = BENCH_GIT_IDENTITY["email"]
     if sandbox_or_none is not None:
         env["HOME"] = str(sandbox_or_none.home)
+        # The operator's TMPDIR is the directory that holds every sandbox, so a
+        # session must scratch in its own sandbox instead.
+        env["TMPDIR"] = str(sandbox_or_none.tmp_dir)
         env["CLAUDE_CONFIG_DIR"] = str(sandbox_or_none.claude_dir)
     else:
         env["HOME"] = str(Path.home())
@@ -175,8 +183,34 @@ def session_env_keys(env: dict) -> List[str]:
     return sorted(env)
 
 
-def _file_digest(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def _entry_digest(path: Path) -> Tuple[int, str]:
+    """(size, sha256) of a regular file read in chunks, or of a symlink's link text.
+
+    Links are never followed: an agent-planted link must not pull in a target
+    outside the config directory or a file too large to read.
+    """
+    st = os.lstat(path)
+    digest = hashlib.sha256()
+    if stat.S_ISLNK(st.st_mode):
+        digest.update(b"symlink\0" + os.readlink(path).encode("utf-8", "surrogateescape"))
+        return 0, digest.hexdigest()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return st.st_size, digest.hexdigest()
+
+
+def _identity_files(root: Path) -> List[Path]:
+    """Files and symlinks under `root`, without descending into symlinked directories."""
+    found: List[Path] = []
+    for current, dirs, files in os.walk(root, followlinks=False):
+        for name in dirs:
+            full = Path(current) / name
+            if os.path.islink(full):
+                found.append(full)
+        for name in files:
+            found.append(Path(current) / name)
+    return sorted(found)
 
 
 def config_fingerprint(claude_dir: Path) -> str:
@@ -191,14 +225,17 @@ def config_fingerprint(claude_dir: Path) -> str:
     entries = []
     for name in _IDENTITY_DIRS:
         root = claude_dir / name
-        if root.is_dir():
-            for path in sorted(root.rglob("*")):
-                if path.is_file():
-                    entries.append((str(path.relative_to(claude_dir)), path.stat().st_size,
-                                    _file_digest(path)))
+        if root.is_dir() and not os.path.islink(root):
+            for path in _identity_files(root):
+                size, sha = _entry_digest(path)
+                entries.append((str(path.relative_to(claude_dir)), size, sha))
+        elif os.path.islink(root):
+            size, sha = _entry_digest(root)
+            entries.append((name, size, sha))
     rules = claude_dir / "CLAUDE.md"
-    if rules.is_file():
-        entries.append(("CLAUDE.md", rules.stat().st_size, _file_digest(rules)))
+    if os.path.lexists(rules):
+        size, sha = _entry_digest(rules)
+        entries.append(("CLAUDE.md", size, sha))
     for rel, size, sha in entries:
         digest.update(f"{rel}\0{size}\0{sha}\n".encode())
     settings = {}
@@ -232,13 +269,15 @@ def remove_sandbox(sandbox: Sandbox) -> Optional[str]:
         home = Path(sandbox.home)
         if not home.name.startswith(SANDBOX_PREFIX):
             return f"refused to remove a path without the sandbox prefix: {home}"
-        for root, dirs, files in os.walk(home):
+        if os.path.islink(home) or not os.path.isdir(home):
+            return f"refused to remove a sandbox that is not a plain directory: {home}"
+        for root, dirs, files in os.walk(home, followlinks=False):
             for name in dirs + files:
                 try:
                     os.chmod(os.path.join(root, name), 0o700, follow_symlinks=False)
                 except (OSError, NotImplementedError):
                     pass
-        os.chmod(home, 0o700)
+        os.chmod(home, 0o700, follow_symlinks=False)
         shutil.rmtree(home)
         return None
     except Exception as exc:  # noqa: BLE001 - cleanup must not mask the run's own outcome

@@ -71,7 +71,8 @@ def test_session_env_is_exactly_the_allowlist(tmp_path, cell, with_sandbox):
     expected = {"PATH", "LANG", "HTTPS_PROXY", "CLAUDE_CODE_OAUTH_TOKEN", "HOME",
                 "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"}
     if with_sandbox:
-        expected.add("CLAUDE_CONFIG_DIR")
+        expected |= {"CLAUDE_CONFIG_DIR", "TMPDIR"}
+        assert env["TMPDIR"] == str(box.home / "tmp")
         assert env["CLAUDE_CONFIG_DIR"] == str(box.claude_dir)
         assert env["HOME"] == str(box.home)
     else:
@@ -81,6 +82,55 @@ def test_session_env_is_exactly_the_allowlist(tmp_path, cell, with_sandbox):
         assert env["QUOIN_BENCHMARK_RUN"] == "run1"
     assert set(env) == expected
     assert sb.session_env_keys(env) == sorted(expected)
+
+
+def test_each_session_scratches_in_its_own_sandbox_not_the_shared_temp_dir(tmp_path):
+    operator_tmp = tmp_path / "operator_tmp"
+    operator_tmp.mkdir()
+    parent = tmp_path / "run"
+    parent.mkdir(mode=0o700)
+    plain = sb.create_sandbox("plain", parent)
+    quoin = sb.create_sandbox("quoin", parent)
+    environ = dict(OPERATOR_ENV, TMPDIR=str(operator_tmp))
+    plain_env = sb.build_session_env(plain, "simple-claude", "r", AUTH, environ=environ)
+    quoin_env = sb.build_session_env(quoin, "quoin-claude", "r", AUTH, environ=environ)
+    assert plain_env["TMPDIR"] != str(operator_tmp)
+    assert os.path.isdir(plain_env["TMPDIR"]) and os.lstat(plain_env["TMPDIR"]).st_mode & 0o077 == 0
+    # What the plain session sees when it lists its scratch area or its config
+    # location must hold nothing of the quoin sandbox.
+    assert os.listdir(plain_env["TMPDIR"]) == []
+    for value in plain_env.values():
+        assert str(quoin.home) not in value
+    for value in quoin_env.values():
+        assert str(plain.home) not in value
+    assert not str(plain.tmp_dir).startswith(str(quoin.home))
+    assert not str(quoin.tmp_dir).startswith(str(plain.home))
+
+
+def test_fingerprint_does_not_follow_planted_symlinks(tmp_path):
+    box = sb.create_sandbox("plain", parent=tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "x.md").write_text("one")
+    (box.claude_dir / "skills").symlink_to(outside)
+    first = sb.config_fingerprint(box.claude_dir)
+    (outside / "x.md").write_text("two")
+    assert sb.config_fingerprint(box.claude_dir) == first
+    (box.claude_dir / "skills").unlink()
+    assert sb.config_fingerprint(box.claude_dir) != first
+
+
+def test_remove_sandbox_refuses_a_swapped_symlink(tmp_path):
+    box = sb.create_sandbox("plain", parent=tmp_path)
+    victim = tmp_path / "victim"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("k")
+    moved = tmp_path / "moved"
+    box.home.rename(moved)
+    box.home.symlink_to(victim)
+    note = sb.remove_sandbox(box)
+    assert note is not None
+    assert (victim / "keep.txt").read_text() == "k"
 
 
 def test_select_auth():

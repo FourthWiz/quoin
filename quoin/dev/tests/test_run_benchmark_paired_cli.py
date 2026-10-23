@@ -120,7 +120,8 @@ def _args(tmp_path, arm_repo, suite="tiered-small", **over):
 
 
 def _no_leftovers(sandbox_parent):
-    assert list(sandbox_parent.glob("qbench_sandbox_*")) == []
+    assert list(sandbox_parent.rglob("qbench_sandbox_*")) == []
+    assert list(sandbox_parent.glob("qbench_run_*")) == []
 
 
 REFUSALS = [
