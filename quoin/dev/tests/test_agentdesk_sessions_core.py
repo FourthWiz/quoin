@@ -92,7 +92,7 @@ def test_delete_session_shapes():
         return _proc(err="nope", rc=2)
 
     assert ads.delete_session("z", {}, "n", force=True, run=run) == (False, "nope")
-    assert calls == [["z", "delete-session", "--force", "n"]]
+    assert calls == [["z", "delete-session", "--force", "--", "n"]]
     assert ads.delete_session("z", {}, "n", run=lambda *a, **k: _proc()) == (True, "")
 
 

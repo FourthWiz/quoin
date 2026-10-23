@@ -78,6 +78,17 @@ _agentdesk_record_dir() {
   printf '%s\n' "${HOME:-}/.config/agentdesk/sessions"
 }
 
+# Key hints shown at launch and attach. Must stay byte-identical to
+# KEY_HINTS in src/quoin/agentdesk_sessions.py; a parity test pins the two.
+_agentdesk_key_hints() {
+  printf '%s\n' \
+    'Keys inside an Agent Desk session (need Ghostty macos-option-as-alt):' \
+    '  detach   Alt s, then d' \
+    '  quit     Alt s, then q' \
+    'Ctrl+Q is intentionally unbound. From another terminal, `quoin sessions`' \
+    'lists sessions and `quoin attach` gets you back in.'
+}
+
 _agentdesk_record_session() {
   local name="$1" root="$2" dir tmp
 
@@ -1969,6 +1980,7 @@ HELP
   echo "Starting agent desk:"
   echo "  PROJECT_ROOT=$PROJECT_ROOT"
   echo "  SESSION=$session_name"
+  _agentdesk_key_hints
   echo "  REPOS:"
   cat "$project_root/.workflow_artifacts/repos.md"
   echo
@@ -2078,6 +2090,7 @@ HELP
     return 1
   fi
 
+  _agentdesk_key_hints
   zellij attach "$session_name"
 }
 
