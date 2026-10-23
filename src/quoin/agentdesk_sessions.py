@@ -331,7 +331,7 @@ def _format_rows(rows) -> list:
 
 def _safe_cwd_note(cwd, err):
     if cwd is None:
-        print("note: the current directory no longer exists; showing all sessions", file=err)
+        print("note: the current directory no longer exists; not matching sessions to a folder", file=err)
 
 
 def _names(rows) -> str:
@@ -474,6 +474,8 @@ def run_attach(args, environ, cwd, out, err, run=subprocess.run) -> int:
         print(exc.message, file=err)
         return exc.code
     name = getattr(args, "name", None)
+    if cwd is None and not name:
+        _safe_cwd_note(cwd, err)
     if name:
         row = next((r for r in listing.rows if r.session.name == name), None)
         if row is None:
