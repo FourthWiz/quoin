@@ -269,8 +269,12 @@ It deletes:
   directory or a path inside it is not scanned.
 
 It keeps the repository mirror cache unless `--clean-mirrors` is given; with it,
-only the `*.git` mirrors and `*.git.partial-*` leftovers inside the cache are
-deleted, and the cache directory itself only if nothing else is left in it. It
+only the `<owner>__<repo>.git` bare mirrors and their `.git.partial-<pid>`
+leftovers inside the cache are deleted, and the cache directory itself only if
+nothing else is left in it. Nothing is deleted from a cache directory that is
+itself protected (the home directory or the checkout, say), and a `.git`
+directory, a worktree's `.git` file or any other `*.git` name is never treated
+as a mirror. A symlinked cache is listed as kept and its target left alone. It
 also keeps an explicit `--spend-ledger` unless `--clean-explicit-ledger` is
 given, the directories and ledgers of other run ids, and always the home
 directory, `~/.claude`, `~/.config` and the checkout.
