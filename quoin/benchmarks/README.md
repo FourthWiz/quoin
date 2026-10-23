@@ -328,6 +328,19 @@ With nine tasks, treat differences as directional.
 - Broad Bash can read the operator's real configuration by absolute path, for
   example the real `~/.claude` tree, and no identity check sees that. The access
   is symmetric, but only the plain arm could gain quoin text from it.
+- Both arms run as the same user, so a session that knows the absolute path of
+  the other arm's sandbox can read it. The run's parent directory is
+  traverse-only (mode 0100) so it cannot be listed, but the path is not secret
+  from a determined agent.
+- The auth value is in each session's environment, so an agent that runs `env`
+  can write it into `transcript.jsonl` or a patch. Redact the exact value and
+  any proxy credentials before publishing or attaching run evidence.
+- Settings, MCP servers, output styles and home dotfiles that a session writes
+  persist into the next session of the same arm. Only skills, commands, agents,
+  hooks, the rules file and the identity-bearing settings keys are fingerprinted.
+- `--usd-cap` counts spend for the current invocation only, so each `--resume`
+  leg starts again from zero. The suite ceiling and the authorised ceiling are
+  read from the spend ledger and hold across legs.
 - Quoin's installer adds its `rm -rf` deny rules to the quoin arm only.
 - New files under a git-ignored path are left out of the patch, as in
   SWE-bench's own diff. Files over 100 MiB and dependency or cache directories

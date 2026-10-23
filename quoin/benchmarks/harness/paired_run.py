@@ -187,7 +187,35 @@ def _classify_stop(message: str) -> str:
     return "spend-ceiling" if message.startswith("spend-ceiling") else "authorised-ceiling"
 
 
+def final_recheck(plan: PairedPlan, outcome: PairedOutcome, cells=None) -> None:
+    """Examine each arm once more after its last session, which no later spawn would check.
+
+    `cells` defaults to the arms that ran a session in this invocation.
+    """
+    if cells is None:
+        cells = [c for c in PAIR_ORDER if any(r["cell"] == c for r in outcome.rows)]
+    for cell in cells:
+        recheck = plan.identity_recheck.get(cell)
+        problems = recheck() if recheck else []
+        if problems:
+            outcome.stop_reason = "abort"
+            outcome.abort_detail = list(problems)
+            outcome.abort_cell = cell
+            outcome.abort_task_id = None
+            outcome.abort_kind = "recheck"
+            prior = [r["task_id"] for r in outcome.rows if r["cell"] == cell]
+            outcome.abort_prior_task_id = prior[-1] if prior else None
+            return
+
+
 def run_paired(plan: PairedPlan, *, run_task=runner.run_one_task, log=print) -> PairedOutcome:
+    outcome = _run_pairs(plan, run_task=run_task, log=log)
+    if outcome.abort_kind is None:
+        final_recheck(plan, outcome)
+    return outcome
+
+
+def _run_pairs(plan: PairedPlan, *, run_task, log) -> PairedOutcome:
     for config in plan.configs.values():
         runner._check_spend_critical_fields_threadable(config)
 

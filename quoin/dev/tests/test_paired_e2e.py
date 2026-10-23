@@ -152,7 +152,8 @@ def test_environment_is_the_allowlist_and_stays_in_the_sandbox(world):
         keys = set(start["env_keys"]) - PLATFORM_INJECTED_ENV
         expected = {k for k in arm_sandbox.PASSTHROUGH_KEYS if k in os.environ}
         expected |= {"CLAUDE_CODE_OAUTH_TOKEN", "HOME", "CLAUDE_CONFIG_DIR", "GIT_AUTHOR_NAME",
-                     "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"}
+                     "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL",
+                     "CLAUDE_CODE_TMPDIR"}
         if _arm_of(start) == "quoin-claude":
             expected |= {"QUOIN_GATE_AUTO_APPROVE", "QUOIN_BENCHMARK_RUN"}
         assert keys == expected
@@ -160,6 +161,15 @@ def test_environment_is_the_allowlist_and_stays_in_the_sandbox(world):
         assert os.path.realpath(start["home"]).startswith(parent)
         assert os.path.realpath(start["config_dir"]).startswith(parent)
         assert real_claude not in json.dumps(start)
+    by_arm = {}
+    for start in _starts(w):
+        assert start["cli_tmp_exists"] is True
+        assert len(start["cli_tmp"]) <= arm_sandbox.CLI_TMP_MAX_LENGTH
+        by_arm.setdefault(_arm_of(start), set()).add(start["cli_tmp"])
+    assert all(len(v) == 1 for v in by_arm.values())
+    assert by_arm["simple-claude"].isdisjoint(by_arm["quoin-claude"])
+    for value in by_arm["simple-claude"] | by_arm["quoin-claude"]:
+        assert not os.path.exists(value)
     plain_row = w["runs"] / "R" / "simple-claude" / w["tasks"][0]["id"]
     init = next(json.loads(l) for l in (plain_row / "transcript.jsonl").read_text().splitlines()
                 if '"init"' in l)
@@ -328,19 +338,88 @@ def test_a_skill_written_into_the_plain_sandbox_aborts_before_the_next_plain_tas
     assert any("plain config directory changed" in r for r in resumed["invalid_reasons"])
 
 
-def test_arm_checkout_moving_mid_run_aborts_instead_of_recording_quoin_errors(world):
+def _git_reset_to(w):
+    root = w["arm_repo"]["root"]
+    subprocess.run(["git", "-C", str(root), "reset", "-q", "--hard", w["arm_repo"]["head"]],
+                   check=True, capture_output=True)
+
+
+def test_arm_checkout_moving_mid_run_stops_resumably_without_voiding_the_run(world):
     w = world
     _scenario(w, {"runs": {"1": {"commit_in": str(w["arm_repo"]["root"])}}})
     assert _run(w, "--skip-judge") == 1
     starts = _starts(w)
     assert [_arm_of(s) for s in starts] == ["simple-claude"]
-    label = read_manifest(w["runs"] / "R")["contamination_checks"]
-    assert label.startswith("runtime-tripped") and "quoin arm checkout moved" in label
-    assert f"quoin-claude/{w['tasks'][0]['id']}" in label
-    assert _summary(w)["tiered"]["validity"]["valid"] is False
+    manifest = read_manifest(w["runs"] / "R")
+    assert "arm contamination" not in json.dumps(manifest.get("run_invalid_reasons") or [])
+    assert not manifest.get("run_invalid_reasons")
+    assert _summary(w)["tiered"]["validity"]["valid"] is True
+    # The quoin session was refused before it spawned, so it settles at zero.
     rows = _ledger(w)
-    assert len([r for r in rows if r["kind"] == "reservation"]) == 1
-    assert len([r for r in rows if r["kind"] == "settlement"]) == 1
+    assert len([r for r in rows if r["kind"] == "reservation"]) == 2
+    settlements = [r for r in rows if r["kind"] == "settlement"]
+    assert len(settlements) == 2 and settlements[-1]["actual_usd"] == 0
+    assert len(_starts(w)) == 1
+    _no_leftovers(w)
+
+    # With the checkout back on the expected commit the run resumes and finishes.
+    _scenario(w, {})
+    _git_reset_to(w)
+    assert _run(w, "--skip-judge", "--resume") == 0
+    assert _summary(w)["tiered"]["validity"]["valid"] is True
+
+
+def test_a_git_failure_reading_the_arm_head_mid_run_does_not_void_the_run(world):
+    w = world
+    calls = {"n": 0}
+    from quoin.benchmarks.scripts import run_three_arm_gate as gate
+
+    real_head = gate.worktree_head
+
+    def flaky(root):
+        calls["n"] += 1
+        return None if calls["n"] > 1 else real_head(root)
+
+    w["monkeypatch"].setattr(gate, "worktree_head", flaky)
+    assert _run(w, "--skip-judge", **{"--expected-quoin-commit": None}) == 0
+    assert calls["n"] == 1  # read once at start, never re-read per spawn
+    manifest = read_manifest(w["runs"] / "R")
+    assert not manifest.get("run_invalid_reasons")
+    assert _summary(w)["tiered"]["validity"]["valid"] is True
+    _no_leftovers(w)
+
+
+def test_a_skill_written_by_the_last_plain_session_still_voids_the_run(world):
+    w = world
+    _scenario(w, {"runs": {"5": {"write_skill": "injected"}}})
+    assert _run(w, "--skip-judge") == 1
+    assert len(_starts(w)) == 6
+    manifest = read_manifest(w["runs"] / "R")
+    assert "plain config directory changed" in manifest["contamination_checks"]
+    assert _summary(w)["tiered"]["validity"]["valid"] is False
+    _no_leftovers(w)
+
+
+def test_run_parent_cannot_be_listed_while_sessions_run(world):
+    w = world
+    seen = []
+    real_create = arm_sandbox.create_sandbox
+
+    def spy(kind, parent=None):
+        box = real_create(kind, parent)
+        seen.append(parent)
+        return box
+
+    w["monkeypatch"].setattr(arm_sandbox, "create_sandbox", spy)
+    real_install = arm_sandbox.install_quoin
+
+    def install(box, *a, **k):
+        seen.append(os.stat(seen[0]).st_mode & 0o777)
+        return real_install(box, *a, **k)
+
+    w["monkeypatch"].setattr(arm_sandbox, "install_quoin", install)
+    assert _run(w, "--skip-judge") == 0
+    assert seen[-1] == 0o100
     _no_leftovers(w)
 
 

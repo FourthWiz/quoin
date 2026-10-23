@@ -871,8 +871,10 @@ def _paired_abort_label(outcome) -> Optional[str]:
     """Human-readable account of the check or row that ended the run, or None."""
     if outcome.stop_reason != "abort" or not outcome.abort_cell:
         return None
-    detail = (outcome.abort_detail or ["abort"])[0]
+    detail = "; ".join(outcome.abort_detail or ["abort"])
     where = f"{outcome.abort_cell}/{outcome.abort_task_id}"
+    if outcome.abort_kind == "recheck" and not outcome.abort_task_id:
+        return f"{detail} (found after the last {outcome.abort_cell} session)"
     if outcome.abort_kind == "recheck":
         prior = f"; the last {outcome.abort_cell} session ran on {outcome.abort_prior_task_id}" \
             if outcome.abort_prior_task_id else ""
@@ -1015,6 +1017,9 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
             sandboxes.append(plain)
             quoin_box = arm_sandbox.create_sandbox("quoin", run_parent)
             sandboxes.append(quoin_box)
+            # Traverse only: a session of either arm cannot list the run parent
+            # to find the other arm's sandbox.
+            os.chmod(run_parent, 0o100)
             install = arm_sandbox.install_quoin(quoin_box, arm_root, expected)
             if not install.get("ok"):
                 return _refuse("quoin-install", str(install.get("reason")))
@@ -1057,9 +1062,6 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
                 out = []
                 if arm_sandbox.config_fingerprint(quoin_box.claude_dir) != quoin_print:
                     out.append("quoin config directory changed since the install")
-                head = gate.worktree_head(arm_root)
-                if head != expected:
-                    out.append(f"quoin arm checkout moved from {expected} to {head}")
                 return out
 
             configs = {
@@ -1146,6 +1148,11 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
             interrupted = exc.signal_name
 
         if interrupted:
+            late = paired_run.PairedOutcome()
+            paired_run.final_recheck(plan, late, cells=arms)
+            reason = _paired_run_invalid_reason(late)
+            if reason and reason not in invalid_reasons:
+                invalid_reasons.append(reason)
             write_manifest(interrupted=interrupted)
             print(f"Interrupted by {interrupted}; rerun with --resume to continue", file=sys.stderr)
             return 1
@@ -1194,6 +1201,11 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
         for sig in previous:
             signal.signal(sig, signal.SIG_IGN)
         try:
+            if run_parent is not None:
+                try:
+                    os.chmod(run_parent, 0o700)
+                except OSError:
+                    pass
             for box in sandboxes:
                 note = arm_sandbox.remove_sandbox(box)
                 if note:

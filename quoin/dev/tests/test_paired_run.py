@@ -112,6 +112,23 @@ def test_recheck_abort_names_the_cell_task_and_the_prior_session(tmp_path):
     assert out.abort_prior_task_id == "t1"
 
 
+def test_final_recheck_examines_the_last_session_of_each_arm(tmp_path):
+    state = {"calls": 0}
+    session_count = lambda: len(fake.calls)  # noqa: E731
+
+    def recheck():
+        state["calls"] += 1
+        return ["drift"] if session_count() == 6 else []
+
+    fake = FakeRunTask(tmp_path)
+    plan = _plan(tmp_path, identity_recheck={"simple-claude": recheck})
+    out = pr.run_paired(plan, run_task=fake, log=lambda *_: None)
+    assert len(fake.calls) == 6
+    assert out.stop_reason == "abort" and out.abort_detail == ["drift"]
+    assert (out.abort_cell, out.abort_task_id, out.abort_kind) == ("simple-claude", None, "recheck")
+    assert out.abort_prior_task_id == "t3"
+
+
 def test_row_abort_names_the_row_that_tripped(tmp_path):
     fake = FakeRunTask(tmp_path, reasons={("quoin-claude", "t2"): "auth-failure"})
     out = pr.run_paired(_plan(tmp_path), run_task=fake, log=lambda *_: None)
