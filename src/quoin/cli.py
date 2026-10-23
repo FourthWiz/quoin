@@ -3658,10 +3658,16 @@ def main(argv: list[str] | None = None) -> int:
                                  help="Stop the session if it is running, then delete it.")
     sessions_prune_p = sessions_sub.add_parser(
         "prune",
-        description="Delete every EXITED Agent Desk session and the launch records left behind.",
+        description=(
+            "Delete EXITED Agent Desk sessions that have a launch record, and the launch records "
+            "left behind. Never touches a running session."
+        ),
         help="Delete EXITED sessions",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
+            "EXITED sessions started before launch records existed are listed as skipped: Zellij\n"
+            "shares its resurrection cache across socket directories, so one may belong to plain\n"
+            "Zellij. Delete them with `quoin sessions kill NAME` or --include-unrecorded.\n\n"
             "EXITED sessions that are not Agent Desk's (Zellij shares its resurrection cache across\n"
             "socket directories) are left alone and can still force a _N suffix on a new session;\n"
             "remove one with `zellij delete-session NAME` in a shell that has not sourced the launcher.\n\n"
@@ -3670,6 +3676,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     sessions_prune_p.add_argument("--dry-run", action="store_true",
                                   help="Report what would be removed without removing it.")
+    sessions_prune_p.add_argument("--include-unrecorded", dest="prune_unrecorded", action="store_true",
+                                  help="Also delete EXITED sessions that have no launch record "
+                                       "but carry an Agent Desk name.")
     sessions_prune_p.add_argument("--json", dest="prune_json", action="store_true",
                                   help="Print the result as JSON.")
 

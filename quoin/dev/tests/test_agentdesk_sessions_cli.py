@@ -302,7 +302,7 @@ def test_kill_exited_deletes_and_removes_record(ctx, capsys, tmp_path):
     rec = ctx.record("proj-agents_2", tmp_path)
     rc, out, _ = ctx.run(capsys, "sessions", "kill", "proj-agents_2", cwd=tmp_path)
     assert rc == 0 and not rec.exists()
-    assert ctx.deletes() == ["delete-session proj-agents_2"]
+    assert ctx.deletes() == ["delete-session -- proj-agents_2"]
     assert {s for s, a in ctx.calls() if a.startswith("delete")} == {str(ctx.sock)}
 
 
@@ -311,7 +311,7 @@ def test_kill_running_needs_force(ctx, capsys, tmp_path):
     rc, _, err = ctx.run(capsys, "sessions", "kill", "proj-agents", cwd=tmp_path)
     assert rc == 1 and "--force" in err and ctx.deletes() == []
     rc, _, _ = ctx.run(capsys, "sessions", "kill", "proj-agents", "--force", cwd=tmp_path)
-    assert rc == 0 and ctx.deletes() == ["delete-session --force proj-agents"]
+    assert rc == 0 and ctx.deletes() == ["delete-session --force -- proj-agents"]
 
 
 def test_kill_unknown_and_foreign_exited(ctx, capsys, tmp_path):
@@ -340,19 +340,33 @@ def test_kill_ignores_record_for_another_socket(ctx, capsys, tmp_path):
 
 # ------------------------------------------------------------------- prune
 
-def test_prune_deletes_only_agentdesk_exited(ctx, capsys, tmp_path):
+def test_prune_deletes_only_recorded_exited(ctx, capsys, tmp_path):
     ctx.listing(exited("a-agents"), exited("deck-1"), live("run-agents"), exited("scratch"))
     r1 = ctx.record("deck-1", tmp_path)
-    r2 = ctx.record("a-agents", tmp_path)
     rc, out, _ = ctx.run(capsys, "sessions", "prune", "--json", cwd=tmp_path)
     got = json.loads(out)
-    assert rc == 0 and sorted(got["removed"]) == ["a-agents", "deck-1"] and got["failed"] == []
-    assert sorted(ctx.deletes()) == ["delete-session a-agents", "delete-session deck-1"]
-    assert not r1.exists() and not r2.exists()
+    assert rc == 0 and got["removed"] == ["deck-1"] and got["failed"] == []
+    assert got["skipped"] == ["a-agents"]
+    assert ctx.deletes() == ["delete-session -- deck-1"]
+    assert not r1.exists()
+    # A live row and a foreign EXITED row appear in no list.
+    assert "run-agents" not in out and "scratch" not in out
+
+
+def test_prune_include_unrecorded_reproduces_full_prune(ctx, capsys, tmp_path):
+    ctx.listing(exited("a-agents"), exited("deck-1"), live("run-agents"), exited("scratch"))
+    r1 = ctx.record("deck-1", tmp_path)
+    rc, out, _ = ctx.run(capsys, "sessions", "prune", "--include-unrecorded", "--json", cwd=tmp_path)
+    got = json.loads(out)
+    assert rc == 0 and sorted(got["removed"]) == ["a-agents", "deck-1"] and got["skipped"] == []
+    assert sorted(ctx.deletes()) == ["delete-session -- a-agents", "delete-session -- deck-1"]
+    assert not r1.exists()
 
 
 def test_prune_partial_failure(ctx, capsys, tmp_path):
     ctx.listing(exited("a-agents"), exited("b-agents"))
+    ctx.record("a-agents", tmp_path)
+    ctx.record("b-agents", tmp_path)
     ctx.fail_delete("a-agents", 2, "nope")
     rc, out, err = ctx.run(capsys, "sessions", "prune", "--json", cwd=tmp_path)
     got = json.loads(out)
@@ -363,8 +377,42 @@ def test_prune_partial_failure(ctx, capsys, tmp_path):
 
 def test_prune_text_output(ctx, capsys, tmp_path):
     ctx.listing(exited("a-agents"))
+    ctx.record("a-agents", tmp_path)
     rc, out, _ = ctx.run(capsys, "sessions", "prune", cwd=tmp_path)
-    assert rc == 0 and "Removed: a-agents" in out
+    assert rc == 0 and "Removed: a-agents" in out and "Skipped" not in out
+
+
+def test_prune_text_reports_skipped_with_hint(ctx, capsys, tmp_path):
+    ctx.listing(exited("old-agents"))
+    rc, out, _ = ctx.run(capsys, "sessions", "prune", cwd=tmp_path)
+    assert rc == 0 and ctx.deletes() == []
+    assert "Skipped (no launch record; may belong to plain Zellij): old-agents" in out
+    assert "quoin sessions kill NAME" in out and "--include-unrecorded" in out
+    assert "Nothing to prune" not in out
+
+
+def test_prune_dry_run_lists_skipped(ctx, capsys, tmp_path):
+    ctx.listing(exited("old-agents"), exited("deck-1"))
+    ctx.record("deck-1", tmp_path)
+    rc, out, _ = ctx.run(capsys, "sessions", "prune", "--dry-run", "--json", cwd=tmp_path)
+    got = json.loads(out)
+    assert got["skipped"] == ["old-agents"] and got["removed"] == ["deck-1"] and got["dry_run"] is True
+    assert ctx.deletes() == []
+
+
+def test_prune_help_describes_record_default(capsys):
+    with pytest.raises(SystemExit):
+        cli.main(["sessions", "prune", "--help"])
+    out = capsys.readouterr().out
+    assert "Delete every EXITED" not in out and "--include-unrecorded" in out
+
+
+def test_prune_separator_before_dash_name(ctx, capsys, tmp_path):
+    ctx.listing(exited("-x-agents"))
+    ctx.record("-x-agents", tmp_path)
+    rc, out, _ = ctx.run(capsys, "sessions", "prune", "--json", cwd=tmp_path)
+    assert rc == 0 and json.loads(out)["removed"] == ["-x-agents"]
+    assert ctx.deletes() == ["delete-session -- -x-agents"]
 
 
 def _old(path, age=600):
@@ -525,3 +573,67 @@ def test_attach_survives_deleted_cwd(ctx, capsys, execs, tmp_path, monkeypatch):
         cli.main(["attach"])
     assert execs[0][1][-1] == "b-agents"
     assert "no longer exists" in capsys.readouterr().err
+
+
+# exec failure and dash names
+
+@pytest.mark.parametrize("exc", [FileNotFoundError(2, "No such file or directory"),
+                                 PermissionError(13, "Permission denied")])
+def test_attach_by_name_exec_failure_exits_2(ctx, capsys, monkeypatch, tmp_path, exc):
+    ctx.listing(live("foo"))
+
+    def boom(file, argv, env):
+        raise exc
+
+    monkeypatch.setattr(os, "execvpe", boom)
+    rc, _, err = ctx.run(capsys, "attach", "foo", cwd=tmp_path)
+    assert rc == 2 and "Traceback" not in err
+    assert len(err.strip().splitlines()) == 1 and err.startswith("could not run zellij:")
+
+
+def test_attach_autopick_exec_failure_exits_2(ctx, capsys, monkeypatch, proj):
+    ctx.listing(live("proj-agents"))
+    monkeypatch.setattr(os, "execvpe", lambda *a: (_ for _ in ()).throw(FileNotFoundError(2, "gone")))
+    rc, _, err = ctx.run(capsys, "attach", cwd=proj)
+    assert rc == 2 and err.startswith("could not run zellij:") and "Traceback" not in err
+
+
+def test_attach_tty_pick_exec_failure_exits_2(ctx, capsys, monkeypatch, proj):
+    _two(ctx, proj)
+    monkeypatch.setattr(ads, "_is_tty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+    monkeypatch.setattr(os, "execvpe", lambda *a: (_ for _ in ()).throw(PermissionError(13, "denied")))
+    rc, _, err = ctx.run(capsys, "attach", cwd=proj)
+    assert rc == 2 and err.startswith("could not run zellij:") and "Traceback" not in err
+
+
+def _no_exec(monkeypatch):
+    monkeypatch.setattr(os, "execvpe", lambda *a: pytest.fail("exec must not run for a dash name"))
+
+
+def test_attach_refuses_dash_name_by_name(ctx, capsys, monkeypatch, proj):
+    ctx.listing(live("-x-agents"))
+    ctx.record("-x-agents", proj)
+    _no_exec(monkeypatch)
+    rc, _, err = ctx.run(capsys, "attach", "--", "-x-agents", cwd=proj)
+    assert rc == 1 and "starts with '-'" in err
+
+
+def test_attach_refuses_dash_name_on_autopick(ctx, capsys, monkeypatch, proj):
+    ctx.listing(live("-x-agents"))
+    ctx.record("-x-agents", proj)
+    _no_exec(monkeypatch)
+    rc, _, err = ctx.run(capsys, "attach", cwd=proj)
+    assert rc == 1 and "starts with '-'" in err
+
+
+def test_attach_refuses_dash_name_on_tty_pick(ctx, capsys, monkeypatch, proj):
+    ctx.listing(live("-x-agents"), live("proj-agents"))
+    ctx.record("-x-agents", proj)
+    ctx.record("proj-agents", proj)
+    monkeypatch.setattr(ads, "_is_tty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt="": "1")
+    _no_exec(monkeypatch)
+    rc, out, err = ctx.run(capsys, "attach", cwd=proj)
+    assert "-x-agents" in out.splitlines()[0]
+    assert rc == 1 and "starts with '-'" in err

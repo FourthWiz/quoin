@@ -150,7 +150,8 @@ def list_sessions(zellij, env, run=subprocess.run) -> list:
 
 def delete_session(zellij, env, name, force=False, run=subprocess.run):
     """Run `zellij delete-session`; returns (ok, error_text)."""
-    argv = [zellij, "delete-session"] + (["--force"] if force else []) + [name]
+    # "--" keeps a name that starts with "-" from being read as an option.
+    argv = [zellij, "delete-session"] + (["--force"] if force else []) + ["--", name]
     try:
         proc = run(argv, capture_output=True, text=True, timeout=ZELLIJ_TIMEOUT,
                    env=env, stdin=subprocess.DEVNULL)
@@ -403,11 +404,17 @@ def _run_kill(args, environ, cwd, out, err, run) -> int:
 def _run_prune(args, environ, cwd, out, err, run) -> int:
     listing = load(environ, cwd, run=run)
     dry = bool(getattr(args, "dry_run", False))
-    removed, failed, records_removed = [], [], []
+    include_unrecorded = bool(getattr(args, "prune_unrecorded", False))
+    removed, failed, records_removed, skipped = [], [], [], []
     for row in listing.rows:
         if row.session.state != "exited":
             continue
         name = row.session.name
+        if row.record is None and not include_unrecorded:
+            # Kept by the `-agents` name rule alone: it may be a plain Zellij
+            # session, so deleting its resurrection data needs an explicit ask.
+            skipped.append(name)
+            continue
         if dry:
             removed.append(name)
             continue
@@ -439,7 +446,7 @@ def _run_prune(args, environ, cwd, out, err, run) -> int:
             continue
         records_removed.append(entry)
     if getattr(args, "prune_json", False):
-        print(json.dumps({"removed": removed, "failed": failed,
+        print(json.dumps({"removed": removed, "failed": failed, "skipped": skipped,
                           "records_removed": records_removed, "dry_run": dry}, indent=2), file=out)
     else:
         verb = "Would remove" if dry else "Removed"
@@ -449,7 +456,11 @@ def _run_prune(args, environ, cwd, out, err, run) -> int:
             print("Failed: %s: %s" % (f["name"], f["error"]), file=err)
         if records_removed:
             print("%s %d stale record(s)" % (verb, len(records_removed)), file=out)
-        if not (removed or failed or records_removed):
+        if skipped:
+            print("Skipped (no launch record; may belong to plain Zellij): %s" % ", ".join(skipped), file=out)
+            print("Delete them with `quoin sessions kill NAME` or "
+                  "`quoin sessions prune --include-unrecorded`.", file=out)
+        if not (removed or failed or records_removed or skipped):
             print("Nothing to prune.", file=out)
     return 1 if failed else 0
 
@@ -458,10 +469,24 @@ def _is_tty() -> bool:
     return sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def _exec_attach(listing: Listing, name: str, out, err):
+def _exec_attach(listing: Listing, name: str, out, err) -> int:
+    """Replace this process with `zellij attach NAME`.
+
+    Returns only when no exec happened: 1 for a refused name, 2 when the exec
+    failed, 0 if a stubbed exec returned. The attach argv carries no "--", so
+    a name Zellij would read as an option is refused here instead.
+    """
+    if name.startswith("-"):
+        print("refusing to attach to a session name that starts with '-'", file=err)
+        return 1
     out.flush()
     err.flush()
-    os.execvpe(listing.zellij, ["zellij", "attach", name], listing.env)
+    try:
+        os.execvpe(listing.zellij, ["zellij", "attach", name], listing.env)
+    except OSError as exc:
+        print("could not run zellij: %s" % exc, file=err)
+        return 2
+    return 0
 
 
 def run_attach(args, environ, cwd, out, err, run=subprocess.run) -> int:
@@ -481,16 +506,14 @@ def run_attach(args, environ, cwd, out, err, run=subprocess.run) -> int:
         if row is None:
             print("no Agent Desk session named %s. Known sessions: %s" % (name, _names(listing.rows)), file=err)
             return 1
-        _exec_attach(listing, name, out, err)
-        return 0
+        return _exec_attach(listing, name, out, err)
     live = [r for r in listing.rows if r.session.live]
     if not live:
         print("No live Agent Desk sessions. Run `quoin sessions --all` to see EXITED ones.", file=err)
         return 1
     matches = [r for r in live if r.match]
     if len(matches) == 1:
-        _exec_attach(listing, matches[0].session.name, out, err)
-        return 0
+        return _exec_attach(listing, matches[0].session.name, out, err)
     cands = matches or live
     for i, line in enumerate(_format_rows(cands), 1):
         print("%d) %s" % (i, line), file=out)
@@ -505,6 +528,5 @@ def run_attach(args, environ, cwd, out, err, run=subprocess.run) -> int:
         if not answer:
             return 1
         if answer.isdigit() and 1 <= int(answer) <= len(cands):
-            _exec_attach(listing, cands[int(answer) - 1].session.name, out, err)
-            return 0
+            return _exec_attach(listing, cands[int(answer) - 1].session.name, out, err)
     return 1
