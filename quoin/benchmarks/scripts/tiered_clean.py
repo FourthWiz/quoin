@@ -14,6 +14,11 @@ benchmark run. The filter compares file identities (device and inode), not path
 strings, so a differently spelled path to the same directory (a case variant on
 a case-insensitive file system, a `..` detour) is still recognised. Symlinks are
 removed as links; their targets are never touched.
+
+Mirrors are listed only from a mirror cache that itself passes the filter, and
+only entries shaped like the ones repo_prep writes (`<owner>__<repo>.git` bare
+repositories and their `.partial-<pid>` leftovers). A `.git` directory, a
+worktree's `.git` file or any other `*.git` name is never a mirror.
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ except Exception:
 
 import os
 import pwd
+import re
 import shutil
 import stat
 import sys
@@ -49,11 +55,10 @@ SYSTEM_TMP = "/tmp"
 # The manifest is written before the first cell, so even a run stopped early has
 # it; superseded rows hold only arm cell directories.
 RUN_MANIFEST = "run-manifest.yaml"
-ARM_DIRS = ("simple-claude", "quoin-claude")
 # Entries repo_prep leaves in the mirror cache: `<owner>__<repo>.git` mirrors and
 # `.git.partial-<pid>` clones interrupted before their rename.
-MIRROR_SUFFIX = ".git"
-MIRROR_PARTIAL = ".git.partial-"
+MIRROR_NAME = re.compile(r"^[^/]+__[^/]+\.git$")
+MIRROR_PARTIAL_NAME = re.compile(r"^[^/]+__[^/]+\.git\.partial-\d+$")
 
 RUN_KINDS = ("run directory", "superseded rows")
 MIRROR_ROOT_KIND = "mirror cache"
@@ -68,6 +73,8 @@ class Candidate:
     root: Path
     is_link: bool
     note: str = ""
+    # The candidate this one was listed from; it is only deleted while that passes too.
+    parent: Optional["Candidate"] = None
 
 
 def _uid() -> int:
@@ -264,43 +271,67 @@ def collect(res, args) -> tuple:
     mirrors = _location(repo_prep._resolve_cache_root(None))
     c = _candidate(mirrors, MIRROR_ROOT_KIND, mirrors.parent)
     if c is not None:
-        if args.clean_mirrors:
-            delete.extend(_mirror_entries(c))
-        else:
+        if not args.clean_mirrors:
             kept.append((c, "mirror cache; pass --clean-mirrors to delete"))
+        elif c.is_link:
+            kept.append((c, "mirror cache is a symlink; its target is not cleaned"))
+        else:
+            delete.extend(_mirror_entries(c))
     return delete, skipped, kept
+
+
+def _is_mirror(entry) -> bool:
+    """True for a directory named and shaped like a mirror repo_prep writes."""
+    name = entry.name
+    full = MIRROR_NAME.match(name) is not None
+    if not (full or MIRROR_PARTIAL_NAME.match(name)):
+        return False
+    try:
+        if not entry.is_dir(follow_symlinks=False):
+            return False
+    except OSError:
+        return False
+    if not full:
+        # An interrupted clone may stop before it has written anything.
+        return True
+    # A finished mirror is a bare repository.
+    path = Path(entry.path)
+    head, objects = _lstat(path / "HEAD"), _lstat(path / "objects")
+    return (head is not None and stat.S_ISREG(head.st_mode)
+            and objects is not None and stat.S_ISDIR(objects.st_mode))
 
 
 def _mirror_entries(root: Candidate) -> list:
     """The mirrors inside the cache, then the cache itself (removed only if left empty).
 
-    Anything else in the cache directory is left alone, so pointing the cache
-    variable at an ordinary directory deletes nothing in it.
+    Every mirror carries the cache as its parent, so none is deleted when the cache
+    itself fails the safety filter. Anything that is not a mirror is left alone.
     """
     out = []
     base = _real(root.path)
-    if not root.is_link:
-        try:
-            entries = sorted(os.scandir(base), key=lambda e: e.name)
-        except OSError:
-            entries = []
-        for entry in entries:
-            name = entry.name
-            if not (name.endswith(MIRROR_SUFFIX) or MIRROR_PARTIAL in name):
-                continue
-            c = _candidate(base / name, "mirror", base)
-            if c is not None:
-                out.append(c)
-        root.note = "only if empty afterwards"
-        out.append(root)
+    try:
+        entries = sorted(os.scandir(base), key=lambda e: e.name)
+    except OSError:
+        entries = []
+    for entry in entries:
+        if not _is_mirror(entry):
+            continue
+        c = _candidate(base / entry.name, "mirror", base)
+        if c is not None:
+            c.parent = root
+            out.append(c)
+    root.note = "only if empty afterwards"
+    out.append(root)
     return out
 
 
 def _looks_like_run(path: Path) -> bool:
+    from quoin.benchmarks.harness import paired_run
+
     st = _lstat(path / RUN_MANIFEST)
     if st is not None and stat.S_ISREG(st.st_mode):
         return True
-    for arm in ARM_DIRS:
+    for arm in paired_run.PAIR_ORDER:
         st = _lstat(path / arm)
         if st is not None and stat.S_ISDIR(st.st_mode):
             return True
@@ -309,6 +340,11 @@ def _looks_like_run(path: Path) -> bool:
 
 def check(c: Candidate, guard: Guard) -> Optional[str]:
     """The reason this candidate must not be deleted, or None."""
+    if c.parent is not None:
+        # The cache is checked first: no entry is listed from a cache that fails.
+        reason = check(c.parent, guard)
+        if reason:
+            return f"inside a skipped {c.parent.kind} ({reason})"
     own = _ident(c.path, follow=False)
     if own is None:
         return None
@@ -329,10 +365,37 @@ def check(c: Candidate, guard: Guard) -> Optional[str]:
     return None
 
 
+def _chmod_entry(dfd: int, entry: str, st, mode: int) -> None:
+    """chmod one directory entry without ever following a link swapped in for it."""
+    if _CHMOD_NOFOLLOW:
+        os.chmod(entry, mode, dir_fd=dfd, follow_symlinks=False)
+        return
+    # Linux has no no-follow chmod: pin the inode with O_PATH, check it is still the
+    # directory that was stat'ed, and chmod it through its /proc fd link.
+    o_path = getattr(os, "O_PATH", None)
+    if o_path is None or not os.path.isdir("/proc/self/fd"):
+        return  # left as is; rmtree then reports what it cannot delete
+    fd = os.open(entry, o_path | os.O_NOFOLLOW, dir_fd=dfd)
+    try:
+        pinned = os.fstat(fd)
+        if (stat.S_ISDIR(pinned.st_mode)
+                and (pinned.st_dev, pinned.st_ino) == (st.st_dev, st.st_ino)):
+            os.chmod(f"/proc/self/fd/{fd}", mode)
+    finally:
+        os.close(fd)
+
+
 def _repair_at(pfd: int, name: str) -> None:
-    """Give the owner rwx on a directory tree, top-down, without following links."""
+    """Give the owner rwx on a directory tree, top-down, without following links.
+
+    Refuses (OSError) a tree with a directory on another file system, so the
+    rmtree that follows never reaches into a mounted volume. One fd is held per
+    directory level, so a tree deeper than the fd limit fails with EMFILE and is
+    reported as not deleted; rmtree has the same limit.
+    """
     # An explicit stack: a very deep tree must not hit the recursion limit.
     stack = [(pfd, name)]
+    top_dev = None
     try:
         while stack:
             dfd, entry = stack.pop()
@@ -340,15 +403,22 @@ def _repair_at(pfd: int, name: str) -> None:
                 os.close(dfd)
                 continue
             st = os.lstat(entry, dir_fd=dfd)
-            if not stat.S_ISDIR(st.st_mode) or st.st_uid != _uid():
+            if not stat.S_ISDIR(st.st_mode):
+                continue
+            if top_dev is None:
+                top_dev = st.st_dev
+            elif st.st_dev != top_dev:
+                raise OSError(f"{entry} is on another file system")
+            if st.st_uid != _uid():
                 continue
             if st.st_mode & 0o700 != 0o700:
-                # If the entry is swapped for a link in between, the link itself is
-                # changed, never its target.
-                os.chmod(entry, stat.S_IMODE(st.st_mode) | 0o700, dir_fd=dfd,
-                         follow_symlinks=not _CHMOD_NOFOLLOW)
+                _chmod_entry(dfd, entry, st, stat.S_IMODE(st.st_mode) | 0o700)
             fd = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
-            opened = os.fstat(fd)
+            try:
+                opened = os.fstat(fd)
+            except OSError:
+                os.close(fd)
+                raise
             if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
                 os.close(fd)
                 continue

@@ -60,6 +60,24 @@ def _make_unreadable_tree(run_a: Path) -> None:
     os.chmod(run_a / "locked", 0o000)
 
 
+def _bare(path: Path) -> Path:
+    """A directory shaped like a bare repository (a HEAD file and objects/)."""
+    (path / "objects").mkdir(parents=True)
+    (path / "HEAD").write_text("ref: refs/heads/main\n")
+    return path
+
+
+def _decoys(where: Path) -> list:
+    """Entries a mirror cleanup must never delete, seeded into `where`."""
+    git_dir = where / ".git"
+    (git_dir / "objects").mkdir(parents=True)
+    (git_dir / "HEAD").write_text("x")
+    wt = where / "wt"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: elsewhere\n")
+    return [git_dir, wt / ".git", _bare(where / "dotfiles.git"), _bare(where / "plain.git")]
+
+
 @pytest.fixture
 def ct(tmp_path, monkeypatch):
     c = CT()
@@ -114,7 +132,7 @@ def ct(tmp_path, monkeypatch):
     c.mirrors = tmp_path / "mirrors"
     c.mirrors.mkdir()
     (c.mirrors / "repo").write_text("x")
-    (c.mirrors / "owner__repo.git" / "objects").mkdir(parents=True)
+    _bare(c.mirrors / "owner__repo.git")
     (c.mirrors / "owner__other.git.partial-123").mkdir()
     monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(c.mirrors))
 
@@ -248,6 +266,93 @@ def test_an_ordinary_directory_named_as_the_mirror_cache_is_untouched(ct, monkey
     assert (precious / "thesis.tex").read_text() == "x"
 
 
+@pytest.mark.parametrize("where", ["home", "checkout", "cwd"])
+def test_nothing_inside_a_protected_or_working_directory_cache_is_deleted(
+        ct, monkeypatch, capsys, where):
+    c = ct
+    if where == "cwd":
+        base = c.tmp_path / "project"
+        base.mkdir()
+        monkeypatch.chdir(base)
+        cache = "."
+    else:
+        base = getattr(c, where)
+        cache = str(base)
+    seeded = [*_decoys(base), _bare(base / "owner__x.git"), base / "o__r.git.partial-7"]
+    seeded[-1].mkdir()
+    monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", cache)
+    rc = _clean(c, "--yes", "--clean-mirrors")
+    out = capsys.readouterr().out
+    assert all(os.path.lexists(p) for p in seeded[:4]), out
+    if where == "cwd":
+        # An ordinary directory: its real mirrors go, nothing else does.
+        assert rc == 0 and _gone(seeded[4]) and _gone(seeded[5])
+        assert "delete  mirror:" in out
+    else:
+        assert all(os.path.lexists(p) for p in seeded), out
+        assert "delete  mirror:" not in out
+        assert "inside a skipped mirror cache (protected path)" in out
+
+
+def test_only_mirror_shaped_directories_are_deleted_from_an_ordinary_cache(ct, capsys):
+    c = ct
+    decoys = _decoys(c.mirrors)
+    (c.mirrors / "owner__file.git").write_text("x")
+    (c.mirrors / "owner__empty.git").mkdir()
+    (c.mirrors / "owner__link.git").symlink_to(c.mirrors / "owner__repo.git")
+    (c.mirrors / "o__r.git.partial-x").mkdir()
+    assert _clean(c, "--yes", "--clean-mirrors") == 0
+    out = capsys.readouterr().out
+    assert _gone(c.mirrors / "owner__repo.git") and _gone(c.mirrors / "owner__other.git.partial-123")
+    for p in decoys + [c.mirrors / n for n in ("owner__file.git", "owner__empty.git",
+                                               "owner__link.git", "o__r.git.partial-x")]:
+        assert os.path.lexists(p), (p, out)
+
+
+def test_a_symlinked_mirror_cache_is_listed_as_kept(ct, monkeypatch, capsys):
+    c = ct
+    link = c.tmp_path / "mirrors-link"
+    link.symlink_to(c.mirrors)
+    monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(link))
+    assert _clean(c, "--yes", "--clean-mirrors") == 0
+    line = _line(capsys.readouterr().out, link)
+    assert line.lstrip().startswith("keep") and "symlink; its target is not cleaned" in line
+    assert link.is_symlink() and (c.mirrors / "owner__repo.git").is_dir()
+
+
+def test_a_tree_reaching_another_file_system_is_not_deleted(ct, monkeypatch, capsys):
+    c = ct
+    os.chmod(c.run_a, 0o700)
+    mount = c.run_a / "mnt"
+    (mount / "data").mkdir(parents=True)
+    os.chmod(c.run_a, 0o100)
+    real_lstat = os.lstat
+
+    def fake_lstat(path, *a, **k):
+        st = real_lstat(path, *a, **k)
+        if os.fspath(path) == "mnt":
+            fields = list(st)
+            fields[stat.ST_DEV] = st.st_dev + 1
+            return os.stat_result(fields)
+        return st
+
+    monkeypatch.setattr(tiered_clean.os, "lstat", fake_lstat)
+    assert _clean(c, "--yes") == 1
+    assert "mnt is on another file system" in capsys.readouterr().out
+    monkeypatch.setattr(tiered_clean.os, "lstat", real_lstat)
+    os.chmod(c.run_a, 0o700)
+    assert (mount / "data").is_dir()
+
+
+def test_without_a_safe_chmod_a_locked_tree_is_left_as_is(ct, monkeypatch, capsys):
+    c = ct
+    monkeypatch.setattr(tiered_clean, "_CHMOD_NOFOLLOW", False)
+    monkeypatch.delattr(tiered_clean.os, "O_PATH", raising=False)
+    assert _clean(c, "--yes") == 1
+    assert f"could not delete {c.run_a}" in capsys.readouterr().out
+    assert stat.S_IMODE(os.lstat(c.run_a).st_mode) == 0o100
+
+
 def test_no_terminal_without_yes_is_refused(ct, capsys):
     c = ct
     before = _snapshot(c)
@@ -331,12 +436,13 @@ def test_a_case_variant_of_home_as_the_mirror_cache_is_protected(ct, monkeypatch
     if not _case_insensitive(c.home):
         pytest.skip("the temp file system is case-sensitive")
     flipped = c.tmp_path / "HOME"
-    (c.home / "x.git").mkdir()
+    seeded = [_bare(c.home / "x.git"), _bare(c.home / "owner__x.git"), *_decoys(c.home)]
     monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(flipped))
     assert _clean(c, "--yes", "--clean-mirrors") == 0
     line = _line(capsys.readouterr().out, flipped)
     assert line.lstrip().startswith("skip") and "(protected path" in line
     assert (c.home / ".claude" / "settings.json").is_file()
+    assert all(os.path.lexists(p) for p in seeded)
 
 
 def test_a_case_variant_of_the_checkout_as_the_run_directory_is_protected(ct, capsys):
