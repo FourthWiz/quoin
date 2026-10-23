@@ -497,7 +497,8 @@ quoin sessions --all            # every Agent Desk session in the socket directo
 quoin sessions --all --json     # same, as JSON (name, age, state, live, root, match)
 quoin attach [NAME]             # attach; without a name, pick the one for this folder
 quoin sessions kill NAME        # delete an EXITED session (--force stops a running one)
-quoin sessions prune [--dry-run]  # delete all EXITED sessions and stale launch records
+quoin sessions prune [--dry-run]  # delete EXITED sessions that have a launch record, plus stale records
+quoin sessions prune --include-unrecorded  # also delete EXITED Agent Desk sessions without a record
 ```
 
 A session belongs to a folder when its launch record (written by the launcher
@@ -505,12 +506,26 @@ to `~/.config/agentdesk/sessions/NAME`) names that folder or a parent of the
 current directory. Sessions started before the launcher wrote records match by
 name instead (`<folder>-agents`, `<folder>-agents_2`, ...) until they are
 restarted. Live sessions show as `running`; the session you are inside shows
-as `current`. `prune` leaves EXITED sessions that are not Agent Desk's alone:
-Zellij shares its resurrection cache across socket directories, so such a name
-can still force a `_N` suffix on a new session; remove it with
-`zellij delete-session NAME` in a shell that has not sourced the launcher.
+as `current`. `prune` deletes EXITED sessions only when they have a launch
+record. An EXITED session without one (started before records existed) is
+listed as skipped, because Zellij shares its resurrection cache across socket
+directories and the name may belong to plain Zellij; delete it with
+`quoin sessions kill NAME`, or pass `--include-unrecorded` to delete them all.
+EXITED sessions that are not Agent Desk's are never touched and can still force
+a `_N` suffix on a new session; remove one with `zellij delete-session NAME` in
+a shell that has not sourced the launcher.
 Inside a session, detach with `Alt s`, then `d`, and quit with `Alt s`, then
 `q` (both need Ghostty `macos-option-as-alt`); `Ctrl+Q` is intentionally unbound.
+The launcher prints these keys when it starts or attaches to a session, but
+Zellij switches to the alternate screen right after, so the lines scroll out of
+view while the session runs and show again after you detach or quit.
+
+**Keyboard seems stuck.** From another terminal run `quoin sessions` and
+`quoin attach NAME` to get a second client in the same session, then close the
+stuck tab or detach it with `Alt s`, then `d`. The full list of checks (mode
+name in the status bar, a floating pane in front, Option not sent as Alt, and
+`reset` for a garbled terminal) is the "If the keyboard seems stuck" section of
+`quoin/tools/agentdesk/KEYBIND-VERIFY.md`.
 
 **Scripted launch:**
 

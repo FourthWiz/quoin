@@ -113,6 +113,38 @@ Which character and encoding Ghostty sends under the Russian layout can differ
 by version; if an alias does not react, note it and use the Latin layout for
 that chord.
 
+## If the keyboard seems stuck
+
+Work down this list; stop at the first step that helps.
+
+1. Read the mode name in the status bar. `LOCKED` means keys go straight to the
+   pane and the mode keys are off: press `Alt g` (or `Ctrl g`) to leave it. Any
+   other mode name: press the same Alt key that entered it again (for example
+   `Alt s` for session mode), or `Esc` on a config that keeps the default exit
+   keys.
+2. Look for a floating or plugin pane in front of the others. `Esc` closes it;
+   `Alt f` hides the floating panes.
+3. If `Alt` does nothing at all, Ghostty is not sending Option as Alt. Re-run the
+   setup check, reload the Ghostty config and use the left Option key (the right
+   one types accents and symbols).
+4. `Ctrl+Q` does nothing by design: it is unbound so a stray press cannot end a
+   session. Quit with `Alt s`, then `q`.
+5. From another terminal run `quoin sessions` to list the sessions and
+   `quoin attach NAME` to get a second client in the same session. Then close the
+   stuck tab (the session keeps running), or detach the stuck client with
+   `Alt s`, then `d`.
+6. Last resort: `quoin sessions kill NAME --force` ends the session and
+   everything running in it.
+7. If the terminal itself stays garbled after Zellij is gone (typed keys echo as
+   escape sequences), run `reset`.
+
+The investigation into reports of a frozen keyboard found no cause in the
+launcher or the keybinding region: a new session started with the Agent Desk
+layout shows no startup tips or release notes, every mode can be left from the
+merged config, and typed input reached the focused pane at once. The cause is
+therefore still open and is tracked separately; the steps above are the way out
+in the meantime.
+
 ## Verifying the config
 
 ```sh
