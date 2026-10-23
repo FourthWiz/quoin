@@ -126,7 +126,8 @@ def log(obj):
 
 log({"event": "start", "pid": os.getpid(), "pgid": os.getpgid(0), "argv": sys.argv[1:],
      "env_keys": sorted(os.environ), "home": os.environ.get("HOME"),
-     "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"), "cwd": os.getcwd(), "t0": T0})
+     "config_dir": os.environ.get("CLAUDE_CONFIG_DIR"), "cli_tmp": os.environ.get("CLAUDE_CODE_TMPDIR"),
+     "cli_tmp_exists": os.path.isdir(os.environ.get("CLAUDE_CODE_TMPDIR") or ""), "cwd": os.getcwd(), "t0": T0})
 run_no = sum(1 for line in open(LOG) if '"event": "start"' in line)
 opts = dict(scenario)
 opts.update(scenario.get("runs", {}).get(str(run_no), {}))

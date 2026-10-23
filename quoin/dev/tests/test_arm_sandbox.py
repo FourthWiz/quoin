@@ -23,6 +23,23 @@ OPERATOR_ENV = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _remove_created_sandboxes(monkeypatch):
+    made = []
+    real = sb.create_sandbox
+
+    def tracking(*a, **k):
+        box = real(*a, **k)
+        made.append(box)
+        return box
+
+    monkeypatch.setattr(sb, "create_sandbox", tracking)
+    yield
+    for box in made:
+        if box.cli_tmp is not None and os.path.isdir(box.cli_tmp):
+            sb._force_remove(box.cli_tmp)
+
+
 def _git(cwd, *args):
     subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
                    check=True, capture_output=True)
@@ -71,8 +88,9 @@ def test_session_env_is_exactly_the_allowlist(tmp_path, cell, with_sandbox):
     expected = {"PATH", "LANG", "HTTPS_PROXY", "CLAUDE_CODE_OAUTH_TOKEN", "HOME",
                 "GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL"}
     if with_sandbox:
-        expected |= {"CLAUDE_CONFIG_DIR", "TMPDIR"}
+        expected |= {"CLAUDE_CONFIG_DIR", "TMPDIR", "CLAUDE_CODE_TMPDIR"}
         assert env["TMPDIR"] == str(box.home / "tmp")
+        assert env["CLAUDE_CODE_TMPDIR"] == str(box.cli_tmp)
         assert env["CLAUDE_CONFIG_DIR"] == str(box.claude_dir)
         assert env["HOME"] == str(box.home)
     else:
@@ -103,6 +121,12 @@ def test_each_session_scratches_in_its_own_sandbox_not_the_shared_temp_dir(tmp_p
         assert str(quoin.home) not in value
     for value in quoin_env.values():
         assert str(plain.home) not in value
+    assert plain_env["CLAUDE_CODE_TMPDIR"] != quoin_env["CLAUDE_CODE_TMPDIR"]
+    for box, env in ((plain, plain_env), (quoin, quoin_env)):
+        cli_tmp = env["CLAUDE_CODE_TMPDIR"]
+        assert os.lstat(cli_tmp).st_mode & 0o077 == 0 and os.listdir(cli_tmp) == []
+        assert cli_tmp != str(operator_tmp) and not cli_tmp.startswith(str(box.home))
+        assert len(cli_tmp) <= sb.CLI_TMP_MAX_LENGTH
     assert not str(plain.tmp_dir).startswith(str(quoin.home))
     assert not str(quoin.tmp_dir).startswith(str(plain.home))
 
@@ -184,8 +208,10 @@ def test_remove_sandbox(tmp_path):
     (box.claude_dir / "locked").mkdir()
     (box.claude_dir / "locked" / "f").write_text("x")
     (box.claude_dir / "locked").chmod(0o500)
+    (box.cli_tmp / "claude-1" / "s").mkdir(parents=True)
+    (box.cli_tmp / "claude-1" / "s").chmod(0o500)
     assert sb.remove_sandbox(box) is None
-    assert not box.home.exists()
+    assert not box.home.exists() and not box.cli_tmp.exists()
     stranger = tmp_path / "keep"
     stranger.mkdir()
     message = sb.remove_sandbox(sb.Sandbox("plain", stranger, stranger / ".claude"))
@@ -240,3 +266,20 @@ def test_installed_plugin_names(tmp_path):
     assert sb.installed_plugin_names(claude) == ["demo@market"]
     path.write_text("not json")
     assert sb.installed_plugin_names(claude) == ["<unparsable>"]
+
+
+def test_fingerprint_does_not_open_a_planted_fifo(tmp_path):
+    box = sb.create_sandbox("plain", parent=tmp_path)
+    before = sb.config_fingerprint(box.claude_dir)
+    (box.claude_dir / "skills").mkdir()
+    os.mkfifo(box.claude_dir / "skills" / "pipe")
+    result = {}
+    import threading
+
+    thread = threading.Thread(target=lambda: result.update(fp=sb.config_fingerprint(box.claude_dir)),
+                              daemon=True)
+    thread.start()
+    thread.join(timeout=10)
+    assert not thread.is_alive(), "fingerprint blocked on a FIFO"
+    assert result["fp"] != before
+    sb.remove_sandbox(box)

@@ -85,13 +85,18 @@ def test_leader_exit_reap_kills_a_lingering_child_and_returns_early_when_it_exit
     assert _wait_gone(pgid)
 
 
-def test_leader_exit_reap_escalates_to_kill_after_the_grace():
+def test_leader_exit_reap_escalates_to_kill_after_the_grace(tmp_path):
+    ready = tmp_path / "ready"
     code = ("import signal, subprocess, sys\n"
-            "child = 'import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)'\n"
-            "subprocess.Popen([sys.executable, '-c', child])\n")
-    leader = _spawn(code)
+            "child = ('import signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); '\n"
+            "         'open(sys.argv[1], \"w\").close(); time.sleep(60)')\n"
+            "subprocess.Popen([sys.executable, '-c', child, sys.argv[1]])\n")
+    leader = subprocess.Popen([sys.executable, "-c", code, str(ready)], start_new_session=True)
     leader.wait(timeout=5)
-    time.sleep(0.3)
+    deadline = time.monotonic() + 10
+    while not ready.exists() and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert ready.exists()
     start = time.monotonic()
     assert proc_group.leader_exited_reap(leader, leader.pid, grace=0.3) is True
     assert time.monotonic() - start >= 0.3

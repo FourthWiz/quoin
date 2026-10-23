@@ -22,6 +22,10 @@ from typing import List, Optional, Tuple
 from .repo_prep import BENCH_GIT_IDENTITY
 
 SANDBOX_PREFIX = "qbench_sandbox_"
+CLI_TMP_PREFIX = "qbc_"
+# The CLI places unix sockets under this directory, which macOS limits to about
+# 104 bytes in total, so the directory itself has to stay short.
+CLI_TMP_MAX_LENGTH = 40
 
 SANDBOX_BASE_PERMISSIONS = {
     "allow": ["Read", "Edit", "Write", "Glob", "Grep", "Bash"],
@@ -54,6 +58,7 @@ class Sandbox:
     kind: str
     home: Path
     claude_dir: Path
+    cli_tmp: Optional[Path] = None
 
     @property
     def tmp_dir(self) -> Path:
@@ -81,6 +86,7 @@ def create_sandbox(kind: str, parent: Optional[Path] = None) -> Sandbox:
     if parent is not None and os.path.islink(parent):
         raise RuntimeError(f"sandbox parent is a symlink: {parent}")
     path = Path(tempfile.mkdtemp(prefix=SANDBOX_PREFIX + kind + "_", dir=parent))
+    cli_tmp: Optional[Path] = None
     try:
         assert_private_dir(path)
         home = Path(os.path.realpath(path))
@@ -88,10 +94,27 @@ def create_sandbox(kind: str, parent: Optional[Path] = None) -> Sandbox:
         claude_dir.mkdir(mode=0o700)
         (home / "tmp").mkdir(mode=0o700)
         write_base_settings(claude_dir)
+        cli_tmp = _make_cli_tmp()
+    except BaseException:
+        shutil.rmtree(path, ignore_errors=True)
+        if cli_tmp is not None:
+            shutil.rmtree(cli_tmp, ignore_errors=True)
+        raise
+    return Sandbox(kind=kind, home=home, claude_dir=claude_dir, cli_tmp=cli_tmp)
+
+
+def _make_cli_tmp() -> Path:
+    """A short private directory for the CLI's own temp root, which TMPDIR does not move."""
+    base = "/tmp" if os.path.isdir("/tmp") else tempfile.gettempdir()
+    path = Path(os.path.realpath(tempfile.mkdtemp(prefix=CLI_TMP_PREFIX, dir=base)))
+    try:
+        assert_private_dir(path)
+        if len(str(path)) > CLI_TMP_MAX_LENGTH:
+            raise RuntimeError(f"CLI temp directory path is too long for a unix socket: {path}")
     except BaseException:
         shutil.rmtree(path, ignore_errors=True)
         raise
-    return Sandbox(kind=kind, home=home, claude_dir=claude_dir)
+    return path
 
 
 def check_arm_tree(arm_root: Path, expected_commit: str) -> List[str]:
@@ -171,6 +194,10 @@ def build_session_env(sandbox_or_none: Optional[Sandbox], cell: str, run_id: str
         # session must scratch in its own sandbox instead.
         env["TMPDIR"] = str(sandbox_or_none.tmp_dir)
         env["CLAUDE_CONFIG_DIR"] = str(sandbox_or_none.claude_dir)
+        if sandbox_or_none.cli_tmp is not None:
+            # The CLI keeps its scratch and task output under a per-user root
+            # that ignores TMPDIR, shared with every other session of this user.
+            env["CLAUDE_CODE_TMPDIR"] = str(sandbox_or_none.cli_tmp)
     else:
         env["HOME"] = str(Path.home())
     if cell == "quoin-claude":
@@ -186,17 +213,29 @@ def session_env_keys(env: dict) -> List[str]:
 def _entry_digest(path: Path) -> Tuple[int, str]:
     """(size, sha256) of a regular file read in chunks, or of a symlink's link text.
 
-    Links are never followed: an agent-planted link must not pull in a target
-    outside the config directory or a file too large to read.
+    Links are never followed and other file types are never opened: an
+    agent-planted link must not pull in a target outside the config directory,
+    and a FIFO or device would block the read.
     """
     st = os.lstat(path)
     digest = hashlib.sha256()
     if stat.S_ISLNK(st.st_mode):
         digest.update(b"symlink\0" + os.readlink(path).encode("utf-8", "surrogateescape"))
         return 0, digest.hexdigest()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(1 << 20), b""):
-            digest.update(chunk)
+    if not stat.S_ISREG(st.st_mode):
+        digest.update(b"special\0" + str(stat.S_IFMT(st.st_mode)).encode())
+        return 0, digest.hexdigest()
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            digest.update(b"special\0swapped")
+            return 0, digest.hexdigest()
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            for chunk in iter(lambda: handle.read(1 << 20), b""):
+                digest.update(chunk)
+    finally:
+        os.close(fd)
     return st.st_size, digest.hexdigest()
 
 
@@ -263,22 +302,36 @@ def installed_plugin_names(claude_dir: Path) -> List[str]:
         return ["<unparsable>"]
 
 
+def _force_remove(path: Path) -> None:
+    for root, dirs, files in os.walk(path, followlinks=False):
+        for name in dirs + files:
+            try:
+                os.chmod(os.path.join(root, name), 0o700, follow_symlinks=False)
+            except (OSError, NotImplementedError):
+                pass
+    os.chmod(path, 0o700)
+    shutil.rmtree(path)
+
+
 def remove_sandbox(sandbox: Sandbox) -> Optional[str]:
     """Delete a sandbox this module created; returns a message on failure, never raises."""
+    notes = []
     try:
         home = Path(sandbox.home)
         if not home.name.startswith(SANDBOX_PREFIX):
             return f"refused to remove a path without the sandbox prefix: {home}"
         if os.path.islink(home) or not os.path.isdir(home):
             return f"refused to remove a sandbox that is not a plain directory: {home}"
-        for root, dirs, files in os.walk(home, followlinks=False):
-            for name in dirs + files:
-                try:
-                    os.chmod(os.path.join(root, name), 0o700, follow_symlinks=False)
-                except (OSError, NotImplementedError):
-                    pass
-        os.chmod(home, 0o700, follow_symlinks=False)
-        shutil.rmtree(home)
-        return None
+        _force_remove(home)
     except Exception as exc:  # noqa: BLE001 - cleanup must not mask the run's own outcome
-        return f"sandbox removal failed: {exc}"
+        notes.append(f"sandbox removal failed: {exc}")
+    cli_tmp = sandbox.cli_tmp
+    if cli_tmp is not None:
+        try:
+            if not Path(cli_tmp).name.startswith(CLI_TMP_PREFIX) or os.path.islink(cli_tmp):
+                notes.append(f"refused to remove a CLI temp directory that is not ours: {cli_tmp}")
+            elif os.path.isdir(cli_tmp):
+                _force_remove(Path(cli_tmp))
+        except Exception as exc:  # noqa: BLE001
+            notes.append(f"CLI temp directory removal failed: {exc}")
+    return "; ".join(notes) or None
