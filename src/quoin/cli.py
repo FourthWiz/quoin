@@ -2908,7 +2908,66 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 2  # ABORTED
 
 
+_BENCH_CHECKOUT_MSG = (
+    "quoin bench needs a source checkout of the quoin repo "
+    "(run from the repo root or pass --repo-root)"
+)
+
+
+def _bench_candidates(rest: list[str]) -> list[pathlib.Path]:
+    """Directories that may be a quoin source checkout, most explicit first."""
+    found: list[pathlib.Path] = []
+    for i, token in enumerate(rest):
+        if token == "--repo-root" and i + 1 < len(rest):
+            found.append(pathlib.Path(rest[i + 1]).expanduser())
+        elif token.startswith("--repo-root="):
+            found.append(pathlib.Path(token.split("=", 1)[1]).expanduser())
+    found.append(pathlib.Path(__file__).resolve().parents[2])
+    cwd = pathlib.Path.cwd()
+    found.extend([cwd, *cwd.parents])
+    return found
+
+
+def _locate_bench_checkout(rest: list[str]) -> Optional[pathlib.Path]:
+    """The first candidate holding the benchmark scripts; makes them importable."""
+    for candidate in _bench_candidates(rest):
+        bench = candidate / "quoin" / "benchmarks"
+        if (bench / "__init__.py").is_file() and (bench / "scripts" / "run_benchmark.py").is_file():
+            import quoin
+
+            inner = str(candidate / "quoin")
+            if inner not in quoin.__path__:
+                quoin.__path__.append(inner)
+            return candidate
+    return None
+
+
+def _cmd_bench(rest: list[str]) -> int:
+    """`quoin bench tiered ...`: hand everything after `tiered` to the benchmark entry point."""
+    if rest[:1] == ["tiered"]:
+        if _locate_bench_checkout(rest[1:]) is None:
+            print(_BENCH_CHECKOUT_MSG, file=sys.stderr)
+            return 2
+        from quoin.benchmarks.scripts import tiered_entry
+
+        return tiered_entry.main(rest[1:], prog="quoin bench tiered")
+    if not rest or rest[0] in ("-h", "--help"):
+        if _locate_bench_checkout(rest[1:]) is None:
+            print(_BENCH_CHECKOUT_MSG, file=sys.stderr)
+            return 2
+        from quoin.benchmarks.scripts import tiered_entry
+
+        print("usage: quoin bench tiered [options]\n")
+        print(tiered_entry.build_parser().format_help())
+        return 0
+    print("usage: quoin bench tiered [options]", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["bench"]:
+        return _cmd_bench(argv[1:])
     parser = argparse.ArgumentParser(
         prog="quoin",
         description="Quoin — workflow state for stateless coding agents",
@@ -3606,6 +3665,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     _sd_paths(_sd_status_p)
     _sd_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
+    sub.add_parser(
+        "bench",
+        help="Run the tiered paired SWE-bench benchmark from a source checkout "
+             "(quoin bench tiered --help)",
+    )
 
     router_p = sub.add_parser(
         "router",

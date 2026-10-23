@@ -186,6 +186,8 @@ implemented in T-19. See `methodology.md` for the auto-mode caveats.
 
 ## Tiered paired benchmark (SWE-bench Verified)
 
+To run it end to end from a source checkout, use `quoin bench tiered` (see `quoin bench tiered --help`); the steps below are the manual path.
+
 `suite-tiered-small.json` holds nine SWE-bench Verified tasks in three
 difficulty tiers (4 easy, 3 medium, 2 large). The paired run gives every task
 to two arms, one after the other: `simple-claude` (Claude Code with no quoin)
