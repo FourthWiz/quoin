@@ -33,6 +33,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from .. import agentdesk_sessions
 from . import (COMPONENT_VERSION, PAYLOAD_DIR, hooks_merge, jsonfile, macos, manifest, migrations,
                payload_build, payload_fingerprint, payload_files, prereqs, shims)
 
@@ -379,13 +380,7 @@ def _plugin_uuid(plugin_dir):
 
 def _socket_dir(environ, uid=None):
     """Agent Desk's rule, identical to the payload's: ZELLIJ_SOCKET_DIR, else XDG_RUNTIME_DIR or /tmp."""
-    explicit = environ.get("ZELLIJ_SOCKET_DIR")
-    if isinstance(explicit, str) and explicit:
-        return explicit
-    base = environ.get("XDG_RUNTIME_DIR")
-    if not (isinstance(base, str) and base):
-        base = "/tmp"
-    return "%s/zellij-agentdesk-%d" % (base, os.getuid() if uid is None else uid)
+    return agentdesk_sessions.socket_dir(environ, uid)
 
 
 # ------------------------------------------------------------------ marker model
