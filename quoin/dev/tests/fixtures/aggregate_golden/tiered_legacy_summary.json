@@ -1,0 +1,40 @@
+{
+  "run_id": "run-tiered",
+  "started_at": null,
+  "finished_at": null,
+  "cells": {
+    "quoin-claude": {
+      "n_tasks": 4,
+      "pass_at_1": 0.75,
+      "n_pass": 3,
+      "wilson_ci_95": [
+        0.1,
+        0.9
+      ],
+      "mean_cost_usd_or_null": 2.5,
+      "total_cost_usd_or_null": 7.5,
+      "mean_wall_clock_s": 30.0,
+      "p50_wall_clock_s": 30.0,
+      "p95_wall_clock_s": 43.5,
+      "gate_intervention_count": 0,
+      "headline_metric_pass_per_dollar_or_null": 0.3
+    },
+    "simple-claude": {
+      "n_tasks": 5,
+      "pass_at_1": 0.4,
+      "n_pass": 2,
+      "wilson_ci_95": [
+        0.1,
+        0.9
+      ],
+      "mean_cost_usd_or_null": 3.1,
+      "total_cost_usd_or_null": 15.5,
+      "mean_wall_clock_s": 30.0,
+      "p50_wall_clock_s": 30.0,
+      "p95_wall_clock_s": 48.0,
+      "gate_intervention_count": 0,
+      "headline_metric_pass_per_dollar_or_null": 0.12903225806451613
+    }
+  },
+  "within_claude_pair_mcnemar_pvalue": 0.5
+}

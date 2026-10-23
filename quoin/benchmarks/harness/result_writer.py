@@ -63,6 +63,12 @@ class RunResult:
     # Extra metadata
     extra: dict[str, Any] = field(default_factory=dict)
 
+    # Verified path: source label for judge.json, extra judge.json keys, and the
+    # patch as captured bytes (written verbatim in place of `diff_patch`).
+    source_benchmark: Optional[str] = None
+    judge_extra: dict[str, Any] = field(default_factory=dict)
+    diff_patch_bytes: Optional[bytes] = None
+
 
 @dataclass
 class CellResult:
@@ -79,6 +85,33 @@ class CellResult:
 def task_result_dir(run_dir: Path, run_id: str, cell: str, task_id: str) -> Path:
     """Return the canonical per-task result directory path."""
     return run_dir / run_id / cell / task_id
+
+
+def write_judge_json(
+    out_dir: Path,
+    task_id: str,
+    source_benchmark: str,
+    verdict: str,
+    evidence_path: Optional[str],
+    judge_runtime_seconds: float,
+    judge_extra: Optional[dict] = None,
+) -> Path:
+    """Write judge.json; extra keys follow the five standard ones."""
+    judge_data: dict[str, Any] = {
+        "task_id": task_id,
+        "source_benchmark": source_benchmark,
+        "verdict": verdict,
+        "evidence_path": evidence_path,
+        "judge_runtime_seconds": judge_runtime_seconds,
+    }
+    if judge_extra:
+        judge_data.update(judge_extra)
+    path = Path(out_dir) / "judge.json"
+    path.write_text(
+        json.dumps(judge_data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 def write_run_result(result: RunResult, run_dir: Path) -> Path:
@@ -109,19 +142,20 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
         )
 
     # diff.patch
-    (out_dir / "diff.patch").write_text(result.diff_patch, encoding="utf-8")
+    if result.diff_patch_bytes is not None:
+        (out_dir / "diff.patch").write_bytes(result.diff_patch_bytes)
+    else:
+        (out_dir / "diff.patch").write_text(result.diff_patch, encoding="utf-8")
 
     # judge.json
-    judge_data = {
-        "task_id": result.task_id,
-        "source_benchmark": _infer_source(result.task_id),
-        "verdict": result.verdict,
-        "evidence_path": result.evidence_path,
-        "judge_runtime_seconds": result.judge_runtime_seconds,
-    }
-    (out_dir / "judge.json").write_text(
-        json.dumps(judge_data, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
+    write_judge_json(
+        out_dir,
+        result.task_id,
+        result.source_benchmark or _infer_source(result.task_id),
+        result.verdict,
+        result.evidence_path,
+        result.judge_runtime_seconds,
+        result.judge_extra,
     )
 
     # metrics.json

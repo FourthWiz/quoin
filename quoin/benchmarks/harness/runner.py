@@ -19,6 +19,9 @@ respecting --resume (skips tasks whose result dir is already well-formed).
 
 from __future__ import annotations
 
+import dataclasses
+import functools
+import contextlib
 import inspect
 import json
 import os
@@ -28,16 +31,26 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from . import arm_identity as _arm_identity
 from .config import BudgetSpec, HarnessConfig
 from .isolation import create_task_worktree, cleanup_task_worktree
 from .judge import judge_task
+from .repo_prep import RepoPrepError, capture_patch, cleanup_task_repo, prepare_task_repo
 from .result_writer import (
     CellResult,
     RunResult,
     is_result_complete,
     task_result_dir,
+    write_judge_json,
     write_run_result,
 )
+from .session_state import (
+    classify_session,
+    is_judge_pending,
+    iter_transcript_events,
+    write_session_json,
+)
+from .verified_prompt import VERIFIED_PROMPT_TEMPLATE_VERSION
 
 # Terminal verdicts a cell can report on its own invocation result. When the
 # cell reports one of these, the judge is never called — the cell already
@@ -87,7 +100,12 @@ def _assert_no_remote_in_gate_mode(worktree_path: Path) -> None:
 # None", because several threadable fields (quoin_install_script,
 # quoin_install_mode) default to non-None values that every cell — including
 # ones that declare neither spend-critical field — must keep working with.
-_SPEND_CRITICAL_FIELDS = ("max_budget_usd", "expected_quoin_commit")
+_SPEND_CRITICAL_FIELDS = (
+    "max_budget_usd",
+    "expected_quoin_commit",
+    "session_env",
+    "arm_identity",
+)
 
 
 class SpendTracker:
@@ -133,6 +151,8 @@ _THREADABLE_CONFIG_FIELDS = (
     "quoin_install_mode",
     "arm_root",
     "max_budget_usd",
+    "session_env",
+    "arm_identity",
 )
 
 
@@ -247,6 +267,8 @@ def run_one_task(
         )
 
     adapter = _load_cell_adapter(cell)
+    if task_spec.get("source") == "swebench_verified":
+        return _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir)
     budget = config.budget
 
     worktree_path: Optional[Path] = None
@@ -390,6 +412,344 @@ def run_one_task(
     # Write all six output files
     write_run_result(result, run_dir)
     return result
+
+
+@functools.lru_cache(maxsize=None)
+def _suite_dataset_revision(suite_path) -> Optional[str]:
+    try:
+        data = json.loads(Path(suite_path).read_text(encoding="utf-8"))
+        value = data["tiered"]["dataset_revision"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    return value if isinstance(value, str) else None
+
+
+def _verified_result(cell, task_id, run_id, **fields) -> RunResult:
+    return RunResult(
+        cell=cell, task_id=task_id, run_id=run_id,
+        source_benchmark="swebench_verified", **fields,
+    )
+
+
+def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> RunResult:
+    """Run one Verified task, holding `config.row_write_hold` (when set) from
+    just before session.json is written until the final result files exist."""
+    stack = contextlib.ExitStack()
+    try:
+        return _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stack)
+    finally:
+        stack.close()
+
+
+def _overshoot(cost, cap) -> Optional[float]:
+    numeric = (int, float)
+    if isinstance(cost, bool) or isinstance(cap, bool):
+        return None
+    if not isinstance(cost, numeric) or not isinstance(cap, numeric):
+        return None
+    if cost != cost or cap != cap or cost in (float("inf"), float("-inf")):
+        return None
+    return max(0.0, float(cost) - float(cap))
+
+
+def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stack) -> RunResult:
+    task_id = task_spec["id"]
+    run_dir = config.run_dir
+    budget = config.budget
+
+    try:
+        prepared = prepare_task_repo(task_spec, config.repo_cache_root, config.repo_work_root)
+    except Exception as e:
+        reason = e.reason if isinstance(e, RepoPrepError) else "unexpected-" + type(e).__name__
+        result = _verified_result(
+            cell, task_id, run_id,
+            verdict="error",
+            evidence_path=f"repo-prep: {reason}",
+            transcript_events=[{
+                "type": "harness_note",
+                "note": "no agent session was started",
+                "reason": reason,
+            }],
+            extra={"failure_reason": "repo-prep-" + reason, "pre_spawn_error": True},
+            judge_extra={"judge_final": True, "judged": False},
+        )
+        write_run_result(result, run_dir)
+        return result
+
+    identity = config.arm_identity
+    if identity is not None:
+        problems = _arm_identity.check_workdir(prepared.path)
+        if problems:
+            reason = (
+                _arm_identity.PLAIN_REASON
+                if getattr(identity, "mode", None) == _arm_identity.QUOIN_FREE
+                else "quoin-arm-contaminated"
+            )
+            cleanup_task_repo(prepared.path)
+            result = _verified_result(
+                cell, task_id, run_id,
+                verdict="error",
+                evidence_path=f"arm identity: {reason}",
+                transcript_events=[{
+                    "type": "harness_note",
+                    "note": "no agent session was started",
+                    "reason": reason,
+                }],
+                extra={
+                    "failure_reason": reason,
+                    "pre_spawn_error": True,
+                    "identity_problems": list(problems),
+                },
+                judge_extra={"judge_final": True, "judged": False},
+            )
+            write_run_result(result, run_dir)
+            return result
+
+    cleaned = False
+    patch = None
+    session_written = False
+    extra: dict = {}
+    events_so_far: list = []
+    inv: dict = {}
+    elapsed = 0.0
+    start = None
+    try:
+        start = time.monotonic()
+        extra_kwargs = _threadable_kwargs(adapter, config)
+        if "run_output_dir" in inspect.signature(adapter.invoke).parameters:
+            extra_kwargs["run_output_dir"] = t_dir
+        inv = adapter.invoke(
+            task_spec=task_spec,
+            workdir=prepared.path,
+            budget=BudgetSpec(
+                wall_clock_seconds=budget.wall_clock_seconds,
+                max_retries=budget.max_retries,
+            ),
+            run_id=run_id,
+            **extra_kwargs,
+        )
+        # The session has finished and is paid for: from here until the row's
+        # metrics exist, an interrupt would make a resume pay for it again.
+        if config.row_write_hold is not None:
+            stack.enter_context(config.row_write_hold())
+        elapsed = time.monotonic() - start
+        extra = dict(inv.get("extra", {}))
+        extra["threaded_kwargs"] = sorted(extra_kwargs.keys())
+        events_so_far = inv.get("transcript_events", [])
+
+        capture_error = None
+        try:
+            patch = capture_patch(prepared, task_spec["base_commit"])
+        except RepoPrepError as e:
+            capture_error = e.reason
+            extra["capture_error"] = e.inner_reason or e.reason
+            if e.detail:
+                extra["capture_error_detail"] = e.detail[:300]
+        patch_bytes = patch.patch_bytes if patch else b""
+        cleanup_note = cleanup_task_repo(prepared.path)
+        cleaned = True
+        if cleanup_note is not None:
+            extra["clone_cleanup_failed"] = cleanup_note
+
+        stats = {"skipped_lines": 0}
+        if extra.get("transcript_streamed"):
+            events = iter_transcript_events(t_dir / "transcript.jsonl", stats)
+            outcome = classify_session(inv.get("verdict"), extra, events)
+            outcome.skipped_lines += stats["skipped_lines"]
+        else:
+            outcome = classify_session(inv.get("verdict"), extra, events_so_far)
+
+        not_judged_reason = None
+        if outcome.judge_required and capture_error:
+            not_judged_reason = "patch-capture-failed"
+        elif outcome.judge_required and patch is not None and patch.decode_lossy:
+            not_judged_reason = "patch-not-utf8"
+        if not_judged_reason:
+            outcome = dataclasses.replace(
+                outcome, terminal_state="error", verdict_if_terminal="error",
+                failure_reason=not_judged_reason, judge_required=False,
+            )
+
+        (t_dir).mkdir(parents=True, exist_ok=True)
+        (t_dir / "judge.json").unlink(missing_ok=True)
+        (t_dir / "diff.patch").write_bytes(patch_bytes)
+        write_session_json(t_dir, {
+            "task_id": task_id,
+            "cell": cell,
+            "run_id": run_id,
+            "source": "swebench_verified",
+            "source_id": task_spec.get("source_id"),
+            "base_commit": task_spec.get("base_commit"),
+            "tree_sha": prepared.tree_sha,
+            "prep_refs": prepared.refs,
+            "head_commit_after": patch.head_commit if patch else "",
+            **outcome.to_dict(),
+            "patch_sha256": patch.sha256 if patch else None,
+            "patch_bytes": len(patch_bytes),
+            "patch_excluded_paths": patch.excluded_paths if patch else [],
+            "patch_decode_lossy": bool(patch and patch.decode_lossy),
+            "repo_config_modified": bool(patch and patch.repo_config_modified),
+            "repo_info_modified": bool(patch and patch.repo_info_modified),
+            "capture_rejected_names": patch.rejected_names if patch else 0,
+            "capture_oversize_files": list(patch.oversize_files) if patch else [],
+            "capture_skipped_heavy_dirs": patch.skipped_heavy_dirs if patch else 0,
+            "capture_attr_source_supported": patch.attr_source_supported if patch else None,
+            "clone_cleanup_failed": cleanup_note,
+            "cost_runtime_usd": inv.get("cost_runtime_usd"),
+            "wall_clock_seconds": elapsed,
+            "prompt_template_version": VERIFIED_PROMPT_TEMPLATE_VERSION,
+        })
+        session_written = True
+
+        extra.update({
+            "tree_sha": prepared.tree_sha,
+            "prep_refs": prepared.refs,
+            "head_commit_after": patch.head_commit if patch else "",
+            "terminal_state": outcome.terminal_state,
+            "session_errored": outcome.session_errored,
+            "patch_excluded_paths": patch.excluded_paths if patch else [],
+            "patch_sha256": patch.sha256 if patch else None,
+            "genuine_assistant_turns": outcome.genuine_assistant_turns,
+            "api_key_source": outcome.api_key_source,
+            "result_subtype": outcome.result_subtype,
+            "skipped_transcript_lines": outcome.skipped_lines,
+        })
+        if outcome.failure_reason is not None:
+            extra["failure_reason"] = outcome.failure_reason
+        extra["cap_usd"] = config.max_budget_usd
+        extra["overshoot_usd"] = _overshoot(inv.get("cost_runtime_usd"), config.max_budget_usd)
+
+        if outcome.judge_required and config.defer_judge:
+            verdict, evidence, judge_seconds = "error", "judge-deferred", 0.0
+            judge_extra = {
+                "judge_final": False,
+                "judged": False,
+                "failure_reason": "judge-deferred",
+            }
+        elif outcome.judge_required:
+            judged = judge_task(
+                task_id, t_dir, run_id,
+                evidence_dir=t_dir,
+                invocation_extra=extra,
+                task_spec=task_spec,
+                judge_context={
+                    "cell": cell,
+                    "snapshot_revision": _suite_dataset_revision(str(config.suite_path)),
+                },
+            )
+            verdict, evidence, judge_seconds = judged.verdict, judged.evidence_path, judged.judge_runtime_seconds
+            judge_extra = dict(judged.extra)
+        else:
+            verdict, evidence, judge_seconds = outcome.verdict_if_terminal, outcome.failure_reason, 0.0
+            judge_extra = {"judge_final": True, "judged": False}
+
+        result = _verified_result(
+            cell, task_id, run_id,
+            transcript_events=events_so_far,
+            verdict=verdict,
+            evidence_path=evidence,
+            judge_runtime_seconds=judge_seconds,
+            wall_clock_seconds=elapsed,
+            tokens_in=inv.get("tokens_in"),
+            tokens_out=inv.get("tokens_out"),
+            tokens_cache_read=inv.get("tokens_cache_read"),
+            tokens_cache_write=inv.get("tokens_cache_write"),
+            gate_intervention_count=inv.get("gate_intervention_count", 0),
+            turn_count=inv.get("turn_count", 0),
+            cost_runtime_usd=inv.get("cost_runtime_usd"),
+            cost_estimated_usd=inv.get("cost_estimated_usd"),
+            cost_delta_usd=inv.get("cost_delta_usd"),
+            cost_available=inv.get("cost_available", False),
+            prompt=inv.get("prompt", ""),
+            extra=extra,
+            judge_extra=judge_extra,
+            diff_patch_bytes=patch_bytes,
+        )
+    except Exception as exc:
+        if not elapsed and start is not None:
+            elapsed = time.monotonic() - start
+        if not extra.get("transcript_streamed") and not events_so_far:
+            streamed = t_dir / "transcript.jsonl"
+            try:
+                if streamed.is_file() and streamed.stat().st_size > 0:
+                    extra["transcript_streamed"] = True
+            except OSError:
+                pass
+        extra["failure_reason"] = "harness-exception-" + type(exc).__name__
+        result = _verified_result(
+            cell, task_id, run_id,
+            verdict="error",
+            evidence_path=str(exc),
+            transcript_events=events_so_far,
+            wall_clock_seconds=elapsed,
+            tokens_in=inv.get("tokens_in"),
+            tokens_out=inv.get("tokens_out"),
+            tokens_cache_read=inv.get("tokens_cache_read"),
+            tokens_cache_write=inv.get("tokens_cache_write"),
+            gate_intervention_count=inv.get("gate_intervention_count", 0),
+            turn_count=inv.get("turn_count", 0),
+            cost_runtime_usd=inv.get("cost_runtime_usd"),
+            cost_estimated_usd=inv.get("cost_estimated_usd"),
+            cost_delta_usd=inv.get("cost_delta_usd"),
+            cost_available=inv.get("cost_available", False),
+            prompt=inv.get("prompt", ""),
+            extra=extra,
+            judge_extra=(
+                {"judge_final": False, "failure_reason": "judge-exception"}
+                if session_written else {}
+            ),
+            diff_patch_bytes=patch.patch_bytes if patch else b"",
+        )
+    finally:
+        if not cleaned:
+            cleanup_task_repo(prepared.path)
+
+    write_run_result(result, run_dir)
+    stack.close()
+    return result
+
+
+def judge_pending_rows(
+    run_dir,
+    run_id: str,
+    suite_tasks: list,
+    *,
+    snapshot_revision: Optional[str] = None,
+    judge=None,
+) -> list:
+    """Re-judge Verified rows whose session was recorded but whose verdict is not final."""
+    judge = judge if judge is not None else judge_task
+    base = Path(run_dir) / run_id
+    rows = []
+    if not base.is_dir():
+        return rows
+    for cell_dir in sorted(p for p in base.iterdir() if p.is_dir()):
+        for spec in suite_tasks:
+            if spec.get("source") != "swebench_verified":
+                continue
+            t_dir = cell_dir / spec["id"]
+            if not t_dir.is_dir() or not is_judge_pending(t_dir):
+                continue
+            try:
+                judged = judge(
+                    spec["id"], t_dir, run_id,
+                    evidence_dir=t_dir,
+                    task_spec=spec,
+                    judge_context={"cell": cell_dir.name, "snapshot_revision": snapshot_revision},
+                )
+            except Exception as exc:
+                rows.append({"cell": cell_dir.name, "task_id": spec["id"], "verdict": "error",
+                             "judge_final": False, "error": type(exc).__name__})
+                continue
+            write_judge_json(
+                t_dir, spec["id"], "swebench_verified", judged.verdict,
+                judged.evidence_path, judged.judge_runtime_seconds, judged.extra,
+            )
+            rows.append({
+                "cell": cell_dir.name, "task_id": spec["id"], "verdict": judged.verdict,
+                "judge_final": bool(judged.extra.get("judge_final")),
+            })
+    return rows
 
 
 def run_cell(

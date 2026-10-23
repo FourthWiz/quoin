@@ -538,3 +538,53 @@ def _agentdesk_home_isolation(request, tmp_path_factory):
         pytest.fail(
             f"{request.node.nodeid} changed real home files: " + ", ".join(changed)
         )
+
+
+# Modules whose tests build or drive the paired-run machinery. Any attempt to
+# start a real `claude` or `docker` there lands on a marker shim instead and
+# fails the test at teardown.
+PAID_PATH_GUARDED_MODULES = frozenset({
+    "test_arm_identity",
+    "test_paired_spend",
+    "test_cell_paired_params",
+    "test_arm_sandbox",
+    "test_runner_verified",
+    "test_paired_run",
+    "test_run_benchmark_paired_cli",
+    "test_tiered_report",
+    "test_paired_e2e",
+})
+_PAID_PATH_COMMANDS = ("claude", "docker")
+
+
+def make_paid_path_guard_dir(root):
+    """Create marker shims named `claude` and `docker` under `root`; return the dir."""
+    guard = Path(root) / "paid_path_guard"
+    guard.mkdir(parents=True, exist_ok=True)
+    for name in _PAID_PATH_COMMANDS:
+        shim = guard / name
+        shim.write_text('#!/bin/sh\n: > "%s/%s.invoked"\nexit 99\n' % (guard, name))
+        shim.chmod(0o755)
+    return guard
+
+
+def paid_path_violations(guard):
+    """Names of guarded commands that were started through the shims in `guard`."""
+    return [n for n in _PAID_PATH_COMMANDS if (Path(guard) / (n + ".invoked")).exists()]
+
+
+@pytest.fixture(autouse=True)
+def _paid_path_guard(request, tmp_path_factory):
+    path = getattr(request.node, "path", None)
+    if path is None or path.stem not in PAID_PATH_GUARDED_MODULES:
+        yield
+        return
+    monkeypatch = request.getfixturevalue("monkeypatch")
+    guard = make_paid_path_guard_dir(tmp_path_factory.mktemp("paid-path-guard"))
+    monkeypatch.setenv("PATH", "%s%s%s" % (guard, os.pathsep, os.environ.get("PATH", "")))
+    yield
+    used = paid_path_violations(guard)
+    if used:
+        pytest.fail(
+            f"{request.node.nodeid} started a paid-path command: " + ", ".join(used)
+        )

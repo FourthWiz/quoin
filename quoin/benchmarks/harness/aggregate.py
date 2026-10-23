@@ -27,6 +27,7 @@ Statistical methods:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import statistics
 from pathlib import Path
@@ -114,6 +115,7 @@ def aggregate_run(
     run_id: str,
     started_at: Optional[str] = None,
     finished_at: Optional[str] = None,
+    suite_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """
     Aggregate all task results for a run.
@@ -242,6 +244,8 @@ def aggregate_run(
         "within_claude_pair_mcnemar_pvalue": mcnemar_p,
     }
 
+    tiered_md = _build_tiered_section(summary, run_path, suite_path)
+
     # Write summary.json
     summary_json_path = run_path / "summary.json"
     summary_json_path.write_text(
@@ -251,10 +255,58 @@ def aggregate_run(
 
     # Write summary.md
     summary_md = _render_markdown_report(summary, cells_data, run_id)
+    if tiered_md:
+        summary_md = summary_md + tiered_md
     summary_md_path = run_path / "summary.md"
     summary_md_path.write_text(summary_md, encoding="utf-8")
 
     return summary
+
+
+_TIERED_ERROR_LIMIT = 200
+
+
+def _build_tiered_section(summary: dict, run_path: Path, suite_path: Optional[Path]) -> str:
+    """Add the tiered comparison to `summary` when the run's suite is tiered.
+
+    Returns the Markdown section, or an empty string for any other suite. A
+    failure while building, serializing or rendering is recorded in the
+    summary instead of raised, so the summary files are always written.
+    """
+    try:
+        from . import tiered_report
+
+        manifest = tiered_report.read_manifest(run_path)
+        suite_file = None
+        if suite_path is not None:
+            suite_file = Path(suite_path)
+        elif manifest.get("suite_path"):
+            suite_file = Path(manifest["suite_path"])
+        if suite_file is None:
+            return ""
+        if not suite_file.is_file():
+            error = f"suite file not found: {suite_file}"[:_TIERED_ERROR_LIMIT]
+            summary["tiered"] = {"error": error}
+            return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
+        raw = suite_file.read_bytes()
+        suite = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
+        summary["tiered"] = {"error": error}
+        return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
+    if not isinstance(suite, dict) or not isinstance(suite.get("tiered"), dict):
+        return ""
+    try:
+        sha = hashlib.sha256(raw).hexdigest()[:16]
+        tiered = tiered_report.build_tiered_report(run_path, suite, manifest, suite_sha=sha)
+        json.dumps(tiered)
+        tiered_md = tiered_report.render_tiered_markdown(tiered, _format_md_table)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
+        summary["tiered"] = {"error": error}
+        return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
+    summary["tiered"] = tiered
+    return tiered_md
 
 
 def _render_markdown_report(

@@ -224,6 +224,9 @@ def _derive_added_extra_keys() -> set:
         for block in re.findall(r'result\["extra"\]\.update\((\{.*?\})\)', src, re.DOTALL):
             keys |= set(re.findall(r'"([a-zA-Z0-9_]+)"\s*:', block))
 
+    from quoin.benchmarks.harness import stream_metrics
+    keys |= set(stream_metrics.EXTRA_KEYS)
+
     runner_src = inspect.getsource(runner)
     keys |= set(re.findall(r'invocation_extra\["([a-zA-Z0-9_]+)"\]\s*=', runner_src))
     return keys

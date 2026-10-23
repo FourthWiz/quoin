@@ -1,0 +1,2 @@
+quoin/benchmarks/data/*.json -text
+quoin/benchmarks/suite-tiered-small.json -text

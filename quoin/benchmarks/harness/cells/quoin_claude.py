@@ -39,6 +39,7 @@ import io
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -48,6 +49,8 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+from .. import proc_group
+from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
 from .simple_claude import (
@@ -239,6 +242,8 @@ def invoke(
     expected_quoin_commit: Optional[str] = None,
     max_budget_usd: Optional[float] = None,
     run_output_dir: Optional[Path] = None,
+    session_env: Optional[dict] = None,
+    arm_identity=None,
 ) -> dict:
     """
     Invoke Claude Code with the full Quoin workflow.
@@ -277,6 +282,14 @@ def invoke(
         under `run_output_dir/workflow_artifacts_evidence`, arm- and
         task-unique. When omitted, falls back to a run-id-and-cell-unique
         temp path rather than the old shared-across-every-task default.
+
+    session_env:
+        Complete environment for the CLI process. When given, nothing is
+        inherited from the operator's environment, the CLI starts in its own
+        process group, and a missing spend cap refuses the spawn.
+    arm_identity:
+        An `ArmIdentity`; the init event is checked against it and a mismatch
+        kills the session before it can spend further.
 
     Returns
     -------
@@ -359,18 +372,24 @@ def invoke(
     # spent (D-03). A failed/skipped install, an unresolvable commit, or a
     # commit mismatch are all fatal — a silently-wrong install would make
     # the candidate arm secretly measure whatever was installed last.
+    # A paired run's refusals before the spawn are not sessions: flag them so
+    # they settle at zero and a resume runs them again.
+    refusal_flags = {"pre_spawn_error": True} if session_env is not None else {}
     if not install_result["ok"]:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "install-failed"
+        result["extra"].update(refusal_flags)
         return result
     if commit_error is not None:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "commit-unresolvable"
         result["extra"]["commit_error"] = commit_error
+        result["extra"].update(refusal_flags)
         return result
     if expected_quoin_commit is not None and installed_quoin_commit != expected_quoin_commit:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "commit-mismatch"
+        result["extra"].update(refusal_flags)
         return result
 
     # Fail-closed guards, evaluated in gate mode only (D-08's CRIT-2 fix).
@@ -381,19 +400,25 @@ def invoke(
     if gate_mode and not expected_commit_armed:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "expected-commit-unarmed"
+        result["extra"].update(refusal_flags)
         return result
 
     cmd = _build_claude_argv(prompt, model, max_budget_usd)
     budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
     result["extra"]["budget_cap_armed"] = budget_cap_armed
     result["extra"]["max_budget_usd_applied"] = max_budget_usd
-    if gate_mode and not budget_cap_armed:
+    if (gate_mode or session_env is not None) and not budget_cap_armed:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "budget-cap-unarmed"
+        if session_env is not None:
+            result["extra"]["pre_spawn_error"] = True
         return result
 
+    group = session_env is not None or arm_identity is not None
+    check = InitIdentityCheck(arm_identity) if arm_identity is not None else None
+
     # Build subprocess environment with gate auto-approve
-    env = os.environ.copy()
+    env = dict(session_env) if session_env is not None else os.environ.copy()
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
 
@@ -411,54 +436,69 @@ def invoke(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            start_new_session=group,
         )
+        pgid = proc.pid if group else None
 
-        # Ring buffer, not an unbounded list — see simple_claude.invoke
-        # for the full rationale; both cells share the same streaming
-        # shape.
-        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
-        events_seen = 0
-        total_cost_usd: Optional[float] = None
-        tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
-        turn_count = 0
-        gate_intervention_count = 0
-        retry_delay = 1.0
-        budget_halted = False
-
-        # Stream every retained event to transcript.jsonl AS IT ARRIVES —
-        # see simple_claude.invoke for the full rationale.
         transcript_file = None
-        if run_output_dir is not None:
-            try:
-                run_output_dir.mkdir(parents=True, exist_ok=True)
-                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
-            except OSError:
-                transcript_file = None
-        # Set at OPEN time — see simple_claude.invoke for the full
-        # rationale: a generic exception handler downstream must be able to
-        # tell a partially-streamed transcript apart from an empty one
-        # without depending on this loop ever reaching its normal exit.
-        result["extra"]["transcript_streamed"] = transcript_file is not None
-
-        # Drain stderr on a daemon thread started at spawn — see
-        # simple_claude.invoke for the full rationale, including why the
-        # retained buffer is a bounded diagnostic tail (`deque`) with
-        # budget-halt detection folded in incrementally rather than an
-        # unbounded accumulator.
-        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
-        stderr_halt_event = threading.Event()
-        stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
-        )
-        stderr_thread.start()
-
-        # See simple_claude.invoke for the full rationale — a real OS pipe
-        # gets the chunk-based, timer-driven read; a test double without a
-        # usable fd keeps the pre-fix line-buffered read.
         try:
-            stdout_fd: Optional[int] = proc.stdout.fileno()
-        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
-            stdout_fd = None
+
+            # Ring buffer, not an unbounded list — see simple_claude.invoke
+            # for the full rationale; both cells share the same streaming
+            # shape.
+            events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+            events_seen = 0
+            total_cost_usd: Optional[float] = None
+            tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+            from ..stream_metrics import StreamMetrics
+            stream_metrics = StreamMetrics()
+            turn_count = 0
+            gate_intervention_count = 0
+            retry_delay = 1.0
+            budget_halted = False
+            identity_tripped = False
+
+            # Stream every retained event to transcript.jsonl AS IT ARRIVES —
+            # see simple_claude.invoke for the full rationale.
+            transcript_file = None
+            if run_output_dir is not None:
+                try:
+                    run_output_dir.mkdir(parents=True, exist_ok=True)
+                    transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+                except OSError:
+                    transcript_file = None
+            # Set at OPEN time — see simple_claude.invoke for the full
+            # rationale: a generic exception handler downstream must be able to
+            # tell a partially-streamed transcript apart from an empty one
+            # without depending on this loop ever reaching its normal exit.
+            result["extra"]["transcript_streamed"] = transcript_file is not None
+
+            # Drain stderr on a daemon thread started at spawn — see
+            # simple_claude.invoke for the full rationale, including why the
+            # retained buffer is a bounded diagnostic tail (`deque`) with
+            # budget-halt detection folded in incrementally rather than an
+            # unbounded accumulator.
+            stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+            stderr_halt_event = threading.Event()
+            stderr_thread = threading.Thread(
+                target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
+            )
+            stderr_thread.start()
+
+            # See simple_claude.invoke for the full rationale — a real OS pipe
+            # gets the chunk-based, timer-driven read; a test double without a
+            # usable fd keeps the pre-fix line-buffered read.
+            try:
+                stdout_fd: Optional[int] = proc.stdout.fileno()
+            except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+                stdout_fd = None
+        except BaseException:
+            # The session is already paid for; whatever interrupts the setup
+            # must not leave it running with nobody watching.
+            if transcript_file is not None:
+                transcript_file.close()
+            proc_group.kill_and_reap(proc, pgid, group)
+            raise
 
         def _handle_stream_line(raw_line: str) -> str:
             """Parse and record one stream-json line — see
@@ -468,7 +508,7 @@ def invoke(
             """
             nonlocal total_cost_usd, tokens_in, tokens_out, tokens_cache_read
             nonlocal tokens_cache_write, turn_count, budget_halted
-            nonlocal events_seen, gate_intervention_count
+            nonlocal events_seen, gate_intervention_count, identity_tripped
 
             line = raw_line.strip()
             if not line:
@@ -489,6 +529,9 @@ def invoke(
 
             events.append(event)
             events_seen += 1
+            stream_metrics.observe(event)
+            if check is not None and check.observe(event) is not None:
+                identity_tripped = True
             if transcript_file is not None:
                 transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
                 transcript_file.flush()
@@ -515,13 +558,24 @@ def invoke(
             if event_type == "assistant":
                 turn_count += 1
 
-            return "ok"
+            return "identity_trip" if identity_tripped else "ok"
 
         try:
             read_buffer = ""
             try:
                 timed_out = False
+                leader_reaped = False
+                group_gone = False
+                drain_deadline = None
                 while True:
+                    if group and not leader_reaped and proc.poll() is not None:
+                        # The leader is gone but a background child may still hold
+                        # the inherited pipes, so EOF would never arrive.
+                        group_gone = proc_group.leader_exited_reap(proc, pgid, grace=0.5)
+                        leader_reaped = True
+                        drain_deadline = time.monotonic() + 2.0
+                    if drain_deadline is not None and time.monotonic() > drain_deadline:
+                        break
                     # Timer-driven, not event-driven — see simple_claude.invoke.
                     elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
                     remaining = budget_seconds - elapsed
@@ -563,13 +617,15 @@ def invoke(
                             break
 
                         outcome = _handle_stream_line(raw_line)
+                        if outcome == "identity_trip":
+                            break
                         if outcome == "rate_limited":
                             backoff_start = time.monotonic()
                             time.sleep(min(retry_delay, remaining))
                             backoff_total += time.monotonic() - backoff_start
                             retry_delay = min(retry_delay * 2, 60.0)
 
-                    if timed_out:
+                    if timed_out or identity_tripped:
                         break
 
                 # Flush a final unterminated line — see
@@ -580,16 +636,25 @@ def invoke(
                 # a buffered terminal event worth recovering, and an
                 # earlier fix that only flushed on the clean-exit path
                 # left the timeout branch dropping it exactly as before.
-                if read_buffer.strip():
+                if read_buffer.strip() and not identity_tripped:
                     _handle_stream_line(read_buffer)
                     read_buffer = ""
 
-                if timed_out:
-                    proc.terminate()
+                if identity_tripped:
+                    proc_group.signal_tree(proc, signal.SIGKILL, group)
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    result["verdict"] = "error"
+                    result["extra"]["failure_reason"] = check.reason
+                    result["extra"]["identity_trip"] = True
+                elif timed_out:
+                    proc_group.signal_tree(proc, signal.SIGTERM, group)
                     try:
                         proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        proc.kill()
+                        proc_group.signal_tree(proc, signal.SIGKILL, group)
                     result["verdict"] = "timeout"
                 else:
                     proc.wait(timeout=10)
@@ -597,11 +662,13 @@ def invoke(
                 # Guaranteed regardless of how the block above exits — see
                 # simple_claude.invoke.
                 if proc.poll() is None:
-                    proc.kill()
+                    proc_group.signal_tree(proc, signal.SIGKILL, group)
                     try:
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         pass
+                if group and not group_gone:
+                    proc_group.reap_group(pgid)
                 stderr_thread.join(timeout=5)
         finally:
             if transcript_file is not None:
@@ -617,18 +684,22 @@ def invoke(
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
-        # Get git diff from workdir
-        try:
-            diff_proc = subprocess.run(
-                ["git", "diff", "HEAD"],
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            result["diff_patch"] = diff_proc.stdout
-        except Exception:
-            result["diff_patch"] = ""
+        # A plain `git diff` in the agent's clone reads agent-writable
+        # .git/config (fsmonitor, filters) and would run it under the
+        # operator's environment. Verified rows are scored from the
+        # harness-owned capture_patch() bytes instead, so skip it there.
+        if task_spec.get("source") != "swebench_verified":
+            try:
+                diff_proc = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=str(workdir),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                result["diff_patch"] = diff_proc.stdout
+            except Exception:
+                result["diff_patch"] = ""
 
         # Capture .workflow_artifacts/ evidence into THIS task's own result
         # directory (T-15). The old default — `workdir.parent /
@@ -680,6 +751,9 @@ def invoke(
         result["tokens_out"] = tokens_out if tokens_out else None
         result["tokens_cache_read"] = tokens_cache_read if tokens_cache_read else None
         result["tokens_cache_write"] = tokens_cache_write if tokens_cache_write else None
+        result["extra"].update(stream_metrics.as_extra())
+        if check is not None:
+            result["extra"]["arm_identity"] = check.record()
 
         if total_cost_usd is not None:
             result["cost_available"] = True
@@ -710,5 +784,7 @@ def invoke(
     except Exception as exc:
         result["verdict"] = "error"
         result["transcript_events"] = [{"type": "error", "error": str(exc)}]
+        if check is not None:
+            result["extra"]["arm_identity"] = check.record()
 
     return result

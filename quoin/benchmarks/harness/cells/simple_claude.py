@@ -30,6 +30,7 @@ import io
 import json
 import os
 import select
+import signal
 import subprocess
 import threading
 import time
@@ -37,6 +38,8 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+from .. import proc_group
+from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
 from ..cost import estimate_cost, load_pricing
 
@@ -241,6 +244,10 @@ def _build_prompt(task_spec: dict) -> str:
             f"Implement the fix in the repository. When done, your changes will be "
             f"evaluated by the SWE-bench harness."
         )
+    elif source == "swebench_verified":
+        from ..verified_prompt import build_verified_prompt
+
+        return build_verified_prompt(task_spec)
     elif source == "quoin_scenario":
         # The suite entry's `description` is the scenario's Prompt verbatim
         # plus the fixture's concretely-named target subsystem (T-06, D-05).
@@ -278,6 +285,8 @@ def invoke(
     run_id: str,
     max_budget_usd: Optional[float] = None,
     run_output_dir: Optional[Path] = None,
+    session_env: Optional[dict] = None,
+    arm_identity=None,
 ) -> dict:
     """
     Invoke Claude Code CLI in simple (no-quoin) mode.
@@ -303,6 +312,14 @@ def invoke(
         buffer's cap. When omitted, no file is written here and the
         caller (`result_writer.write_run_result`) writes the (possibly
         truncated) ring-buffer contents instead, as before.
+
+    session_env:
+        Complete environment for the CLI process. When given, nothing is
+        inherited from the operator's environment, the CLI starts in its own
+        process group, and a missing spend cap refuses the spawn.
+    arm_identity:
+        An `ArmIdentity`; the init event is checked against it and a mismatch
+        kills the session before it can spend further.
 
     Returns
     -------
@@ -340,10 +357,15 @@ def invoke(
     budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
     result["extra"]["budget_cap_armed"] = budget_cap_armed
     result["extra"]["max_budget_usd_applied"] = max_budget_usd
-    if gate_mode and not budget_cap_armed:
+    if (gate_mode or session_env is not None) and not budget_cap_armed:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "budget-cap-unarmed"
+        if session_env is not None:
+            result["extra"]["pre_spawn_error"] = True
         return result
+
+    group = session_env is not None or arm_identity is not None
+    check = InitIdentityCheck(arm_identity) if arm_identity is not None else None
 
     budget_seconds = budget.wall_clock_seconds
     wall_start = time.monotonic()
@@ -363,76 +385,92 @@ def invoke(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=dict(session_env) if session_env is not None else None,
+            start_new_session=group,
         )
+        pgid = proc.pid if group else None
 
-        # Ring buffer, not an unbounded list: peak retained memory is
-        # bounded regardless of session length. A `--verbose` stream-json
-        # session running the full wall clock can emit far more than this
-        # many events, and nothing downstream needs the full history in
-        # MEMORY — `turn_count` and the budget-halt check are both
-        # maintained incrementally below, not recomputed from a full
-        # concatenation at the end. The full ORDERED event stream, if
-        # anyone needs it, is what `transcript_file` below writes.
-        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
-        events_seen = 0
-        total_cost_usd: Optional[float] = None
-        tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
-        turn_count = 0
-        session_errored = False
-        retry_delay = 1.0
-        budget_halted = False
-
-        # Stream every retained event to transcript.jsonl AS IT ARRIVES,
-        # when the caller gave us this task's own result directory — the
-        # file on disk is then the FULL transcript regardless of the ring
-        # buffer's cap above, closing the silent-truncation gap: nothing
-        # previously recorded that the ring buffer had dropped anything,
-        # and the file was only ever written from the (possibly
-        # truncated) buffer after the fact.
         transcript_file = None
-        if run_output_dir is not None:
-            try:
-                run_output_dir.mkdir(parents=True, exist_ok=True)
-                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
-            except OSError:
-                transcript_file = None
-        # Set at OPEN time, not after the loop: an exception raised anywhere
-        # below (a JSON error, a killed-process TimeoutExpired, the git-diff
-        # subprocess) must still leave `extra["transcript_streamed"]`
-        # correctly True whenever a file was actually opened, so a generic
-        # exception handler downstream (`runner.py`) can tell a
-        # partially-streamed transcript apart from an empty one and never
-        # clobber it with the (possibly-empty) ring buffer.
-        result["extra"]["transcript_streamed"] = transcript_file is not None
-
-        # Drain stderr on a daemon thread started at spawn: a session
-        # that writes past one pipe buffer's worth of stderr over a long
-        # run would otherwise block in the child's own write(2), which
-        # stops it emitting stdout too — and the wall-clock check below
-        # never gets a chance to fire because it sits above a blocking
-        # `readline()` that then never returns. The retained buffer is a
-        # bounded diagnostic tail (`deque(maxlen=...)`), not an unbounded
-        # accumulator — a session emitting tens of MB of stderr must not
-        # grow this process's memory by a matching amount. The budget-halt
-        # marker is checked per-line, incrementally, as each line is
-        # drained (via `stderr_halt_event`), so bounding the buffer never
-        # costs detection accuracy.
-        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
-        stderr_halt_event = threading.Event()
-        stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
-        )
-        stderr_thread.start()
-
-        # A real OS pipe has a usable fd — that's the case this fix
-        # targets. A test double or anything else without one (matching
-        # `_wait_readable`'s own fallback) keeps the pre-fix line-buffered
-        # read, since there is no partial-line-blocking hazard to close
-        # for something that was never a real pipe in the first place.
         try:
-            stdout_fd: Optional[int] = proc.stdout.fileno()
-        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
-            stdout_fd = None
+
+            # Ring buffer, not an unbounded list: peak retained memory is
+            # bounded regardless of session length. A `--verbose` stream-json
+            # session running the full wall clock can emit far more than this
+            # many events, and nothing downstream needs the full history in
+            # MEMORY — `turn_count` and the budget-halt check are both
+            # maintained incrementally below, not recomputed from a full
+            # concatenation at the end. The full ORDERED event stream, if
+            # anyone needs it, is what `transcript_file` below writes.
+            events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+            events_seen = 0
+            total_cost_usd: Optional[float] = None
+            tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+            from ..stream_metrics import StreamMetrics
+            stream_metrics = StreamMetrics()
+            turn_count = 0
+            session_errored = False
+            retry_delay = 1.0
+            budget_halted = False
+            identity_tripped = False
+
+            # Stream every retained event to transcript.jsonl AS IT ARRIVES,
+            # when the caller gave us this task's own result directory — the
+            # file on disk is then the FULL transcript regardless of the ring
+            # buffer's cap above, closing the silent-truncation gap: nothing
+            # previously recorded that the ring buffer had dropped anything,
+            # and the file was only ever written from the (possibly
+            # truncated) buffer after the fact.
+            transcript_file = None
+            if run_output_dir is not None:
+                try:
+                    run_output_dir.mkdir(parents=True, exist_ok=True)
+                    transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+                except OSError:
+                    transcript_file = None
+            # Set at OPEN time, not after the loop: an exception raised anywhere
+            # below (a JSON error, a killed-process TimeoutExpired, the git-diff
+            # subprocess) must still leave `extra["transcript_streamed"]`
+            # correctly True whenever a file was actually opened, so a generic
+            # exception handler downstream (`runner.py`) can tell a
+            # partially-streamed transcript apart from an empty one and never
+            # clobber it with the (possibly-empty) ring buffer.
+            result["extra"]["transcript_streamed"] = transcript_file is not None
+
+            # Drain stderr on a daemon thread started at spawn: a session
+            # that writes past one pipe buffer's worth of stderr over a long
+            # run would otherwise block in the child's own write(2), which
+            # stops it emitting stdout too — and the wall-clock check below
+            # never gets a chance to fire because it sits above a blocking
+            # `readline()` that then never returns. The retained buffer is a
+            # bounded diagnostic tail (`deque(maxlen=...)`), not an unbounded
+            # accumulator — a session emitting tens of MB of stderr must not
+            # grow this process's memory by a matching amount. The budget-halt
+            # marker is checked per-line, incrementally, as each line is
+            # drained (via `stderr_halt_event`), so bounding the buffer never
+            # costs detection accuracy.
+            stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+            stderr_halt_event = threading.Event()
+            stderr_thread = threading.Thread(
+                target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
+            )
+            stderr_thread.start()
+
+            # A real OS pipe has a usable fd — that's the case this fix
+            # targets. A test double or anything else without one (matching
+            # `_wait_readable`'s own fallback) keeps the pre-fix line-buffered
+            # read, since there is no partial-line-blocking hazard to close
+            # for something that was never a real pipe in the first place.
+            try:
+                stdout_fd: Optional[int] = proc.stdout.fileno()
+            except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+                stdout_fd = None
+        except BaseException:
+            # The session is already paid for; whatever interrupts the setup
+            # must not leave it running with nobody watching.
+            if transcript_file is not None:
+                transcript_file.close()
+            proc_group.kill_and_reap(proc, pgid, group)
+            raise
 
         def _handle_stream_line(raw_line: str) -> str:
             """Parse and record one stream-json line. Returns "rate_limited"
@@ -440,7 +478,7 @@ def invoke(
             on, "skip" for a blank or unparseable line, "ok" otherwise."""
             nonlocal total_cost_usd, tokens_in, tokens_out, tokens_cache_read
             nonlocal tokens_cache_write, turn_count, session_errored, budget_halted
-            nonlocal events_seen
+            nonlocal events_seen, identity_tripped
 
             line = raw_line.strip()
             if not line:
@@ -460,6 +498,9 @@ def invoke(
 
             events.append(event)
             events_seen += 1
+            stream_metrics.observe(event)
+            if check is not None and check.observe(event) is not None:
+                identity_tripped = True
             if transcript_file is not None:
                 transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
                 transcript_file.flush()
@@ -491,13 +532,24 @@ def invoke(
             if event_type == "assistant":
                 turn_count += 1
 
-            return "ok"
+            return "identity_trip" if identity_tripped else "ok"
 
         try:
             read_buffer = ""
             try:
                 timed_out = False
+                leader_reaped = False
+                group_gone = False
+                drain_deadline = None
                 while True:
+                    if group and not leader_reaped and proc.poll() is not None:
+                        # The leader is gone but a background child may still hold
+                        # the inherited pipes, so EOF would never arrive.
+                        group_gone = proc_group.leader_exited_reap(proc, pgid, grace=0.5)
+                        leader_reaped = True
+                        drain_deadline = time.monotonic() + 2.0
+                    if drain_deadline is not None and time.monotonic() > drain_deadline:
+                        break
                     # Timer-driven, not event-driven: re-evaluated at least
                     # every _POLL_INTERVAL_SECONDS even when stdout is
                     # silent, via the bounded select() below — not only when
@@ -556,6 +608,8 @@ def invoke(
                             break
 
                         outcome = _handle_stream_line(raw_line)
+                        if outcome == "identity_trip":
+                            break
                         if outcome == "rate_limited":
                             # Exponential backoff; pause does not count
                             # against budget, and is itself capped by
@@ -566,7 +620,7 @@ def invoke(
                             backoff_total += time.monotonic() - backoff_start
                             retry_delay = min(retry_delay * 2, 60.0)
 
-                    if timed_out:
+                    if timed_out or identity_tripped:
                         break
 
                 # A final line with no trailing newline is never flushed
@@ -581,16 +635,25 @@ def invoke(
                 # buffered terminal event worth recovering, and an earlier
                 # fix that only flushed on the clean-exit path left the
                 # timeout branch dropping it exactly as before.
-                if read_buffer.strip():
+                if read_buffer.strip() and not identity_tripped:
                     _handle_stream_line(read_buffer)
                     read_buffer = ""
 
-                if timed_out:
-                    proc.terminate()
+                if identity_tripped:
+                    proc_group.signal_tree(proc, signal.SIGKILL, group)
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    result["verdict"] = "error"
+                    result["extra"]["failure_reason"] = check.reason
+                    result["extra"]["identity_trip"] = True
+                elif timed_out:
+                    proc_group.signal_tree(proc, signal.SIGTERM, group)
                     try:
                         proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        proc.kill()
+                        proc_group.signal_tree(proc, signal.SIGKILL, group)
                     result["verdict"] = "timeout"
                 else:
                     proc.wait(timeout=10)
@@ -600,11 +663,13 @@ def invoke(
                 # must not leave a paid `claude` process (or its stderr
                 # drain thread) orphaned.
                 if proc.poll() is None:
-                    proc.kill()
+                    proc_group.signal_tree(proc, signal.SIGKILL, group)
                     try:
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         pass
+                if group and not group_gone:
+                    proc_group.reap_group(pgid)
                 stderr_thread.join(timeout=5)
         finally:
             if transcript_file is not None:
@@ -623,18 +688,22 @@ def invoke(
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
-        # Get git diff from workdir
-        try:
-            diff_proc = subprocess.run(
-                ["git", "diff", "HEAD"],
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            result["diff_patch"] = diff_proc.stdout
-        except Exception:
-            result["diff_patch"] = ""
+        # A plain `git diff` in the agent's clone reads agent-writable
+        # .git/config (fsmonitor, filters) and would run it under the
+        # operator's environment. Verified rows are scored from the
+        # harness-owned capture_patch() bytes instead, so skip it there.
+        if task_spec.get("source") != "swebench_verified":
+            try:
+                diff_proc = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=str(workdir),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                result["diff_patch"] = diff_proc.stdout
+            except Exception:
+                result["diff_patch"] = ""
 
         # The ring buffer silently drops the OLDEST events once
         # `events_seen` exceeds its cap — record that it happened (rather
@@ -664,6 +733,9 @@ def invoke(
         # metrics.json never collides with a base key (T-01).
         result["extra"]["had_assistant_event"] = turn_count > 0 and not session_errored
         result["extra"]["session_errored"] = session_errored
+        result["extra"].update(stream_metrics.as_extra())
+        if check is not None:
+            result["extra"]["arm_identity"] = check.record()
 
         # Cost handling
         if total_cost_usd is not None:
@@ -697,5 +769,7 @@ def invoke(
     except Exception as exc:
         result["verdict"] = "error"
         result["transcript_events"] = [{"type": "error", "error": str(exc)}]
+        if check is not None:
+            result["extra"]["arm_identity"] = check.record()
 
     return result
