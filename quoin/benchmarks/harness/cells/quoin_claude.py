@@ -372,18 +372,24 @@ def invoke(
     # spent (D-03). A failed/skipped install, an unresolvable commit, or a
     # commit mismatch are all fatal — a silently-wrong install would make
     # the candidate arm secretly measure whatever was installed last.
+    # A paired run's refusals before the spawn are not sessions: flag them so
+    # they settle at zero and a resume runs them again.
+    refusal_flags = {"pre_spawn_error": True} if session_env is not None else {}
     if not install_result["ok"]:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "install-failed"
+        result["extra"].update(refusal_flags)
         return result
     if commit_error is not None:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "commit-unresolvable"
         result["extra"]["commit_error"] = commit_error
+        result["extra"].update(refusal_flags)
         return result
     if expected_quoin_commit is not None and installed_quoin_commit != expected_quoin_commit:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "commit-mismatch"
+        result["extra"].update(refusal_flags)
         return result
 
     # Fail-closed guards, evaluated in gate mode only (D-08's CRIT-2 fix).
@@ -394,6 +400,7 @@ def invoke(
     if gate_mode and not expected_commit_armed:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "expected-commit-unarmed"
+        result["extra"].update(refusal_flags)
         return result
 
     cmd = _build_claude_argv(prompt, model, max_budget_usd)

@@ -97,6 +97,37 @@ def test_identity_recheck_problem_aborts_without_a_reservation(tmp_path):
     assert fake.calls == [] and not plan.ledger.exists()
 
 
+def test_recheck_abort_names_the_cell_task_and_the_prior_session(tmp_path):
+    state = {"calls": 0}
+
+    def recheck():
+        state["calls"] += 1
+        return ["drift"] if state["calls"] >= 2 else []
+
+    fake = FakeRunTask(tmp_path)
+    plan = _plan(tmp_path, identity_recheck={"simple-claude": recheck})
+    out = pr.run_paired(plan, run_task=fake, log=lambda *_: None)
+    assert out.stop_reason == "abort"
+    assert (out.abort_cell, out.abort_task_id, out.abort_kind) == ("simple-claude", "t2", "recheck")
+    assert out.abort_prior_task_id == "t1"
+
+
+def test_row_abort_names_the_row_that_tripped(tmp_path):
+    fake = FakeRunTask(tmp_path, reasons={("quoin-claude", "t2"): "auth-failure"})
+    out = pr.run_paired(_plan(tmp_path), run_task=fake, log=lambda *_: None)
+    assert (out.abort_cell, out.abort_task_id, out.abort_kind) == ("quoin-claude", "t2", "row")
+
+
+@pytest.mark.parametrize("reason", ["install-failed", "commit-unresolvable", "commit-mismatch",
+                                    "expected-commit-unarmed"])
+def test_quoin_pre_spawn_refusals_stop_the_run_and_are_spawned_again(tmp_path, reason):
+    runs = tmp_path / "runs"
+    fake = FakeRunTask(tmp_path, reasons={("quoin-claude", "t1"): reason})
+    out = pr.run_paired(_plan(tmp_path), run_task=fake, log=lambda *_: None)
+    assert out.stop_reason == "abort" and out.abort_detail == [reason]
+    assert pr.row_state(runs / "r1" / "quoin-claude" / "t1") == "respawn"
+
+
 def test_usd_cap_stops_at_the_pair_boundary(tmp_path):
     fake = FakeRunTask(tmp_path, cost=0.4)
     out = pr.run_paired(_plan(tmp_path, n=5, usd_cap=1.0), run_task=fake, log=lambda *_: None)
@@ -269,6 +300,22 @@ def test_interrupt_after_session_write_is_held_until_metrics_exist(env, _restore
     assert pr.settlement_actual_from_row(t) == pytest.approx(0.5)
 
 
+def test_interrupt_during_patch_capture_is_held_until_metrics_exist(env, _restore_runner, monkeypatch):
+    gate = pr.InterruptGate()
+    real_capture = runner.capture_patch
+
+    def capture_then_signal(*a, **k):
+        gate.handler(signal.SIGTERM, None)
+        return real_capture(*a, **k)
+
+    monkeypatch.setattr(runner, "capture_patch", capture_then_signal)
+    t = _t_dir(env)
+    with pytest.raises(pr.PairedInterrupted):
+        _real(env, FakeAdapter(act=commit_change), StubJudge(), hold=gate.hold)
+    assert (t / "session.json").exists() and (t / "metrics.json").exists()
+    assert pr.settlement_actual_from_row(t) == pytest.approx(0.5)
+
+
 def test_interrupt_through_run_paired_settles_actual_cost(env, _restore_runner, monkeypatch):
     gate = pr.InterruptGate()
     real_write = runner.write_session_json
@@ -340,6 +387,21 @@ def test_validity_block_is_valid_after_a_clean_rerun(tmp_path):
     assert report["validity"]["final"] is True
 
 
+def test_run_level_invalid_reasons_from_the_manifest_invalidate_the_report(tmp_path):
+    from quoin.benchmarks.harness import tiered_report
+
+    suite = {"tiered": {"tiers": {"easy": {}}}, "tasks": [{"id": "t1", "tier": "easy"}]}
+    run_path = tmp_path / "runs" / "r1"
+    pr.run_paired(_plan(tmp_path, n=1), run_task=FakeRunTask(tmp_path), log=lambda *_: None)
+    _judged(run_path, pr.PAIR_ORDER, "t1")
+    clean = tiered_report.build_tiered_report(run_path, suite, {})
+    assert clean["validity"]["valid"] is True
+    tripped = tiered_report.build_tiered_report(
+        run_path, suite, {"run_invalid_reasons": ["arm contamination check failed: x"]})
+    assert tripped["validity"]["valid"] is False
+    assert "arm contamination check failed: x" in tripped["validity"]["invalid_reasons"]
+
+
 def test_repeated_harness_exception_row_counts_as_error(tmp_path):
     from quoin.benchmarks.harness import tiered_report
 
@@ -358,3 +420,5 @@ def test_paired_run_shares_the_report_reason_sets():
 
     assert pr.ABORT_REASONS is tiered_report.ABORT_REASONS
     assert pr.RESPAWN_REASONS is tiered_report.RESPAWN_REASONS
+    assert tiered_report.QUOIN_PRE_SPAWN_REASONS <= tiered_report.ABORT_REASONS
+    assert tiered_report.QUOIN_PRE_SPAWN_REASONS <= tiered_report.RESPAWN_REASONS

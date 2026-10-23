@@ -93,6 +93,14 @@ class PairedOutcome:
     stop_reason: Optional[str] = None
     abort_detail: Optional[list] = None
     rows: list = field(default_factory=list)
+    # Where a run-ending abort was raised: the cell and task, and whether it
+    # came from the check before a spawn ("recheck") or from a finished row
+    # ("row"). `abort_prior_task_id` is the task whose session of that cell ran
+    # last in this invocation, the one a pre-spawn check can be reporting on.
+    abort_cell: Optional[str] = None
+    abort_task_id: Optional[str] = None
+    abort_kind: Optional[str] = None
+    abort_prior_task_id: Optional[str] = None
 
 
 def resolve_wall_clock(flag, task_spec) -> float:
@@ -228,6 +236,11 @@ def run_paired(plan: PairedPlan, *, run_task=runner.run_one_task, log=print) -> 
             if problems:
                 outcome.stop_reason = "abort"
                 outcome.abort_detail = list(problems)
+                outcome.abort_cell = cell
+                outcome.abort_task_id = task_id
+                outcome.abort_kind = "recheck"
+                prior = [r["task_id"] for r in outcome.rows if r["cell"] == cell]
+                outcome.abort_prior_task_id = prior[-1] if prior else None
                 return outcome
             ok, message = paired_spend.spawn_precheck(plan.ledger, plan.cap, plan.authorised)
             if not ok:
@@ -269,6 +282,9 @@ def run_paired(plan: PairedPlan, *, run_task=runner.run_one_task, log=print) -> 
             if reason in ABORT_REASONS:
                 outcome.stop_reason = "abort"
                 outcome.abort_detail = [reason]
+                outcome.abort_cell = cell
+                outcome.abort_task_id = task_id
+                outcome.abort_kind = "row"
                 return outcome
         outcome.pairs_completed += 1
         if plan.usd_cap is not None and tracker_total > plan.usd_cap:

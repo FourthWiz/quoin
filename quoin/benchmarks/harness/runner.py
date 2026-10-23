@@ -528,6 +528,10 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             run_id=run_id,
             **extra_kwargs,
         )
+        # The session has finished and is paid for: from here until the row's
+        # metrics exist, an interrupt would make a resume pay for it again.
+        if config.row_write_hold is not None:
+            stack.enter_context(config.row_write_hold())
         elapsed = time.monotonic() - start
         extra = dict(inv.get("extra", {}))
         extra["threaded_kwargs"] = sorted(extra_kwargs.keys())
@@ -569,8 +573,6 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
         (t_dir).mkdir(parents=True, exist_ok=True)
         (t_dir / "judge.json").unlink(missing_ok=True)
         (t_dir / "diff.patch").write_bytes(patch_bytes)
-        if config.row_write_hold is not None:
-            stack.enter_context(config.row_write_hold())
         write_session_json(t_dir, {
             "task_id": task_id,
             "cell": cell,

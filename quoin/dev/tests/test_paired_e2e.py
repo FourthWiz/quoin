@@ -309,6 +309,38 @@ def test_a_skill_written_into_the_plain_sandbox_aborts_before_the_next_plain_tas
     manifest = read_manifest(w["runs"] / "R")
     assert manifest["contamination_checks"].startswith("runtime-tripped")
     assert "plain config directory changed" in manifest["contamination_checks"]
+    # The check fires before the second plain task and names the arm and task
+    # it was about to start, plus the task whose session wrote the skill.
+    label = manifest["contamination_checks"]
+    assert f"simple-claude/{w['tasks'][1]['id']}" in label
+    assert f"ran on {w['tasks'][0]['id']}" in label
+    validity = _summary(w)["tiered"]["validity"]
+    assert validity["valid"] is False
+    assert any("plain config directory changed" in r for r in validity["invalid_reasons"])
+    _no_leftovers(w)
+
+    # The rebuilt sandbox on resume passes its checks, but the run stays invalid.
+    _scenario(w, {})
+    assert _run(w, "--skip-judge", "--resume") == 0
+    assert read_manifest(w["runs"] / "R")["contamination_checks"] == "static-passed; runtime-passed"
+    resumed = _summary(w)["tiered"]["validity"]
+    assert resumed["valid"] is False
+    assert any("plain config directory changed" in r for r in resumed["invalid_reasons"])
+
+
+def test_arm_checkout_moving_mid_run_aborts_instead_of_recording_quoin_errors(world):
+    w = world
+    _scenario(w, {"runs": {"1": {"commit_in": str(w["arm_repo"]["root"])}}})
+    assert _run(w, "--skip-judge") == 1
+    starts = _starts(w)
+    assert [_arm_of(s) for s in starts] == ["simple-claude"]
+    label = read_manifest(w["runs"] / "R")["contamination_checks"]
+    assert label.startswith("runtime-tripped") and "quoin arm checkout moved" in label
+    assert f"quoin-claude/{w['tasks'][0]['id']}" in label
+    assert _summary(w)["tiered"]["validity"]["valid"] is False
+    rows = _ledger(w)
+    assert len([r for r in rows if r["kind"] == "reservation"]) == 1
+    assert len([r for r in rows if r["kind"] == "settlement"]) == 1
     _no_leftovers(w)
 
 

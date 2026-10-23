@@ -105,7 +105,7 @@ def read_log(bin_dir) -> list:
 # "quoin"} dollars), ``contaminated_plain`` (replay the recorded contaminated
 # init on the plain arm), ``background`` ("devnull" or "inherit": leave a child
 # running), ``no_result``, ``result_subtype``, ``write_skill`` (a skill directory to create in the
-# config dir), ``commit``, and ``runs``: a map from the 1-based run number to a
+# config dir), ``commit_in`` (a repository that gets an empty commit), ``commit``, and ``runs``: a map from the 1-based run number to a
 # dict that replaces the keys above for that run only. ``sleep_forever`` makes
 # the run wait until it is signalled.
 
@@ -175,6 +175,9 @@ if opts.get("write_skill"):
 
 with open("a.txt", "a") as fh:
     fh.write("edited by %s run %d\n" % (arm, run_no))
+if opts.get("commit_in"):
+    subprocess.run(["git", "-C", opts["commit_in"], "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                    "commit", "-q", "--allow-empty", "-m", "moved"], check=False)
 if opts.get("commit"):
     subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
                     "commit", "-q", "-am", "agent"], check=False)

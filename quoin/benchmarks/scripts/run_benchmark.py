@@ -779,6 +779,17 @@ def _check_resume_manifest(run_dir, run_id, suite_path, cap, tier_names) -> Opti
     return None
 
 
+def _check_resume_commit(run_dir, run_id, expected: str) -> Optional[str]:
+    """Reason a resume would mix quoin commits, or None."""
+    from quoin.benchmarks.harness.tiered_report import read_manifest
+
+    stored = read_manifest(run_dir / run_id).get("expected_quoin_commit")
+    if stored != expected:
+        return (f"quoin commit {expected} differs from the {stored} the earlier legs of this "
+                "run used; start a new --run-id")
+    return None
+
+
 def _paired_dry_run(args, suite_path: Path, doc: dict) -> int:
     """Print the paired matrix and worst case; starts no process."""
     from quoin.benchmarks.harness import paired_run, repo_prep
@@ -856,11 +867,37 @@ def _paired_dry_run(args, suite_path: Path, doc: dict) -> int:
     return 0
 
 
+def _paired_abort_label(outcome) -> Optional[str]:
+    """Human-readable account of the check or row that ended the run, or None."""
+    if outcome.stop_reason != "abort" or not outcome.abort_cell:
+        return None
+    detail = (outcome.abort_detail or ["abort"])[0]
+    where = f"{outcome.abort_cell}/{outcome.abort_task_id}"
+    if outcome.abort_kind == "recheck":
+        prior = f"; the last {outcome.abort_cell} session ran on {outcome.abort_prior_task_id}" \
+            if outcome.abort_prior_task_id else ""
+        return f"{detail} (found before {where}{prior})"
+    return f"{detail} on {where}"
+
+
 def _paired_final_manifest_checks(outcome) -> str:
-    if outcome.stop_reason == "abort" and outcome.rows:
-        last = outcome.rows[-1]
-        return f"runtime-tripped: {(outcome.abort_detail or ['abort'])[0]} on {last['cell']}/{last['task_id']}"
-    return "static-passed; runtime-passed"
+    label = _paired_abort_label(outcome)
+    if label is None:
+        return "static-passed; runtime-passed"
+    if outcome.abort_kind == "recheck":
+        return f"runtime-tripped: {label}"
+    from quoin.benchmarks.harness.tiered_report import IDENTITY_TRIP_REASONS
+
+    detail = (outcome.abort_detail or ["abort"])[0]
+    prefix = "runtime-tripped" if detail in IDENTITY_TRIP_REASONS else "aborted"
+    return f"{prefix}: {label}"
+
+
+def _paired_run_invalid_reason(outcome) -> Optional[str]:
+    """A reason the whole run is invalid when the abort came from a pre-spawn check."""
+    if outcome.abort_kind != "recheck":
+        return None
+    return f"arm contamination check failed: {_paired_abort_label(outcome)}"
 
 
 def _paired_main(args, suite_path: Path, doc: dict) -> int:
@@ -956,6 +993,13 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
     tree_problems = arm_sandbox.check_arm_tree(arm_root, expected)
     if tree_problems:
         return _refuse("arm-tree", "; ".join(tree_problems))
+    carried_invalid: list = []
+    if args.resume and has_rows:
+        why = _check_resume_commit(run_dir, run_id, expected)
+        if why:
+            return _refuse("resume", why)
+        from quoin.benchmarks.harness.tiered_report import read_manifest
+        carried_invalid = list(read_manifest(run_path).get("run_invalid_reasons") or [])
 
     gate_state = paired_run.InterruptGate()
     signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -1009,9 +1053,13 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
                 return out
 
             def recheck_quoin():
+                out = []
                 if arm_sandbox.config_fingerprint(quoin_box.claude_dir) != quoin_print:
-                    return ["quoin config directory changed since the install"]
-                return []
+                    out.append("quoin config directory changed since the install")
+                head = gate.worktree_head(arm_root)
+                if head != expected:
+                    out.append(f"quoin arm checkout moved from {expected} to {head}")
+                return out
 
             configs = {
                 cell: HarnessConfig(
@@ -1071,7 +1119,11 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
             "suite_path_resolved": str(suite_path.resolve()),
         }
 
+        invalid_reasons = list(carried_invalid)
+
         def write_manifest(**more):
+            if invalid_reasons:
+                more.setdefault("run_invalid_reasons", list(invalid_reasons))
             return _write_manifest(
                 run_dir, run_id, suite_path, arms, 1, args.resume, args.repo_root,
                 wall_clock_seconds=extra["wall_clock_budget_seconds"], usd_cap=args.usd_cap,
@@ -1099,6 +1151,9 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
         if not args.skip_judge and outcome.stop_reason is None:
             for row in paired_run.judge_phase(plan, doc["tasks"], tiered.get("dataset_revision")):
                 print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
+        reason = _paired_run_invalid_reason(outcome)
+        if reason and reason not in invalid_reasons:
+            invalid_reasons.append(reason)
         write_manifest(contamination_checks=_paired_final_manifest_checks(outcome))
 
         finished_at = datetime.datetime.utcnow().isoformat() + "Z"

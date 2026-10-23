@@ -30,10 +30,16 @@ IDENTITY_TRIP_REASONS = frozenset({
     "plain-arm-contaminated", "quoin-arm-missing-quoin", "quoin-arm-contaminated",
 })
 SYSTEMIC_REASONS = frozenset({"auth-failure", "no-assistant-turn"})
+# Refusals a quoin cell makes before it spawns anything: no session ran, so the
+# row is spawned again on resume, and the run stops because the next row would
+# be refused the same way.
+QUOIN_PRE_SPAWN_REASONS = frozenset({
+    "install-failed", "commit-unresolvable", "commit-mismatch", "expected-commit-unarmed",
+})
 # Reasons that end a paired run, and reasons whose recorded row is re-spawned
 # on resume; the paired orchestrator and this report must agree on both.
-ABORT_REASONS = IDENTITY_TRIP_REASONS | SYSTEMIC_REASONS | {"budget-cap-unarmed"}
-RESPAWN_REASONS = IDENTITY_TRIP_REASONS | {"budget-cap-unarmed"}
+ABORT_REASONS = IDENTITY_TRIP_REASONS | SYSTEMIC_REASONS | QUOIN_PRE_SPAWN_REASONS | {"budget-cap-unarmed"}
+RESPAWN_REASONS = IDENTITY_TRIP_REASONS | QUOIN_PRE_SPAWN_REASONS | {"budget-cap-unarmed"}
 _PLAIN_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
 _ERROR_TEXT_LIMIT = 200
 RETRIES_STATEMENT = "Final pass rate equals first-attempt pass rate (retries=0)."
@@ -412,6 +418,8 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
     invalid = []
     if lists["identity_trip_rows"]:
         invalid.append("arm identity check failed for %s" % ", ".join(lists["identity_trip_rows"]))
+    for reason in manifest.get("run_invalid_reasons") or []:
+        invalid.append(reason)
     if sha_match is False:
         invalid.append("suite SHA differs from the one recorded at run start")
 

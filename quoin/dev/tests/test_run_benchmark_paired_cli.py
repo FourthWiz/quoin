@@ -222,12 +222,12 @@ def test_interrupt_exits_one_and_records_it(monkeypatch, tmp_path, arm_repo, aut
     _no_leftovers(sandbox_parent)
 
 
-def _resume_setup(tmp_path, standin, stored_cap):
+def _resume_setup(tmp_path, standin, stored_cap, commit=None):
     runs = tmp_path / "runs"
     run_benchmark._write_manifest(
         runs, "R", standin["suite"], list(paired_run.PAIR_ORDER), 1, False, REPO,
         extra={"max_budget_usd_per_task": stored_cap, "tiers": ["easy"],
-               "arm_config_mode": "symmetric"},
+               "arm_config_mode": "symmetric", "expected_quoin_commit": commit},
     )
     manifest = runs / "R" / "run-manifest.yaml"
     manifest.write_text(manifest.read_text().replace(
@@ -241,7 +241,7 @@ def _resume_setup(tmp_path, standin, stored_cap):
 def test_judge_phase_runs_and_every_row_is_final(monkeypatch, tmp_path, arm_repo, auth, standin,
                                                  paired_arm_stubs, docker_ok, sandbox_parent):
     task_id = standin["task"]["id"]
-    _resume_setup(tmp_path, standin, "5.5")
+    _resume_setup(tmp_path, standin, "5.5", arm_repo["head"])
     runs = tmp_path / "runs" / "R"
     (runs / "simple-claude" / task_id / "session.json").write_text(
         json.dumps({"judge_required": True, "verdict": "error"}))
@@ -261,7 +261,7 @@ def test_judge_phase_runs_and_every_row_is_final(monkeypatch, tmp_path, arm_repo
 
 def test_resume_with_different_cap_refuses(monkeypatch, capsys, tmp_path, arm_repo, auth, standin,
                                            paired_arm_stubs, sandbox_parent):
-    _resume_setup(tmp_path, standin, "5.50")
+    _resume_setup(tmp_path, standin, "5.50", arm_repo["head"])
     code = _main(monkeypatch, *_args(tmp_path, arm_repo, suite=standin["suite"],
                                      **{"--max-budget-usd-per-task": "5.0"}),
                  "--skip-judge", "--resume")
@@ -272,15 +272,34 @@ def test_resume_with_different_cap_refuses(monkeypatch, capsys, tmp_path, arm_re
 def test_resume_with_the_same_cap_written_differently_continues(monkeypatch, tmp_path, arm_repo,
                                                                 auth, standin, paired_arm_stubs,
                                                                 sandbox_parent):
-    _resume_setup(tmp_path, standin, "5.50")
+    _resume_setup(tmp_path, standin, "5.50", arm_repo["head"])
     _complete(monkeypatch)
     assert _main(monkeypatch, *_args(tmp_path, arm_repo, suite=standin["suite"]),
                  "--skip-judge", "--resume") == 0
 
 
+def test_resume_with_a_different_quoin_commit_refuses_before_any_side_effect(
+        monkeypatch, capsys, tmp_path, arm_repo, auth, standin, paired_arm_stubs, sandbox_parent):
+    _resume_setup(tmp_path, standin, "5.5", "f" * 40)
+    before = (tmp_path / "runs" / "R" / "run-manifest.yaml").read_text()
+    code = _main(monkeypatch, *_args(tmp_path, arm_repo, suite=standin["suite"]),
+                 "--skip-judge", "--resume")
+    err = capsys.readouterr().err
+    assert code == 2 and "REFUSED: resume" in err and "quoin commit" in err
+    assert (tmp_path / "runs" / "R" / "run-manifest.yaml").read_text() == before
+    _no_leftovers(sandbox_parent)
+
+
+def test_tiers_flag_is_refused_on_a_suite_that_is_not_paired(monkeypatch, capsys, tmp_path):
+    suite = tmp_path / "suite.json"
+    suite.write_text(json.dumps({"tiered": {"tiers": {"easy": {"n": 1}}}, "tasks": []}))
+    assert _main(monkeypatch, "--suite", str(suite), "--run-id", "R", "--tiers", "easy") == 2
+    assert "--tiers applies only to paired suites" in capsys.readouterr().err
+
+
 def test_existing_rows_without_resume_refuse(monkeypatch, capsys, tmp_path, arm_repo, auth, standin,
                                              sandbox_parent):
-    _resume_setup(tmp_path, standin, "5.5")
+    _resume_setup(tmp_path, standin, "5.5", arm_repo["head"])
     code = _main(monkeypatch, *_args(tmp_path, arm_repo, suite=standin["suite"]), "--skip-judge")
     assert code == 2 and "REFUSED: run-dir" in capsys.readouterr().err
 

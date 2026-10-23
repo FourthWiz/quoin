@@ -168,3 +168,37 @@ def test_gate_mode_refusal_without_session_env_has_no_pre_spawn_flag(cell, tmp_p
     result = _invoke(cell, tmp_path, bin_dir, cap=None)
     assert result["extra"]["failure_reason"] == "budget-cap-unarmed"
     assert "pre_spawn_error" not in result["extra"]
+
+
+@pytest.mark.parametrize("paired", [True, False])
+@pytest.mark.parametrize("failure,setup", [
+    ("install-failed", "install"), ("commit-unresolvable", "nogit"), ("commit-mismatch", "mismatch"),
+])
+def test_quoin_pre_spawn_refusals_are_flagged_only_in_paired_mode(tmp_path, monkeypatch, paired,
+                                                                  failure, setup):
+    bin_dir = make_fake_claude(tmp_path, {"steps": [{"emit": INIT}, {"emit": RESULT}]})
+    kwargs = {"session_env": _session_env(bin_dir)} if paired else {}
+    if setup == "install":
+        monkeypatch.setattr(
+            quoin_claude, "_initialize_workflow_artifacts",
+            lambda *a, **k: {"ok": False, "reason": "x", "returncode": 1},
+        )
+    elif setup == "mismatch":
+        kwargs["expected_quoin_commit"] = "1" * 40
+    else:
+        kwargs["arm_root"] = tmp_path / "does-not-exist"
+        kwargs["expected_quoin_commit"] = "1" * 40
+    work, arm = _clone(tmp_path)
+    kwargs.setdefault("arm_root", arm)
+    kwargs.setdefault("expected_quoin_commit", gate.worktree_head(arm))
+    task = {"id": "t1", "source": "swebench_verified", "source_id": "org__repo-1",
+            "description": "Fix it.", "repo": "org/repo", "base_commit": "0" * 40}
+    result = quoin_claude.invoke(task_spec=task, workdir=work,
+                                 budget=BudgetSpec(wall_clock_seconds=60), run_id="r1",
+                                 max_budget_usd=5.0, **kwargs)
+    assert result["extra"]["failure_reason"] == failure
+    assert result["extra"].get("pre_spawn_error", False) is paired
+    assert read_log(bin_dir) == []
+    if paired:
+        run = RunResult(cell="c", task_id="t1", run_id="r1", verdict="error", extra=result["extra"])
+        assert settlement_actual(run) == 0.0
