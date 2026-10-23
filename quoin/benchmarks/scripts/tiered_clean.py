@@ -6,11 +6,14 @@ superseded rows of the same run id, the default spend ledger, the harness temp
 roots and (on request) the repo mirror cache, asks once, then deletes. It never
 starts a process, opens a network connection or calls a model.
 
-Every candidate passes a safety filter first: it must sit inside the directory it
-was derived from, must not be or contain the home directory, the checkout or a
-path the listing says it keeps, must not lie inside ~/.claude or ~/.config, and a
-run directory must look like a benchmark run. Symlinks are removed as links;
-their targets are never touched.
+Every candidate passes a safety filter first, and again just before it is
+deleted: it must sit inside the directory it was derived from, must not be or
+contain the home directory, the checkout or a path the listing says it keeps,
+must not lie inside ~/.claude or ~/.config, and a run directory must look like a
+benchmark run. The filter compares file identities (device and inode), not path
+strings, so a differently spelled path to the same directory (a case variant on
+a case-insensitive file system, a `..` detour) is still recognised. Symlinks are
+removed as links; their targets are never touched.
 """
 
 from __future__ import annotations
@@ -43,11 +46,17 @@ from typing import Optional
 TEMP_PREFIXES = ("qbench_", "qbc_")
 TEMP_NAMES = ("quoin-benchmarks",)
 SYSTEM_TMP = "/tmp"
-# File and directory names a benchmark run directory holds; the manifest is written
-# before the first cell, so even a run stopped early has one of them.
-RUN_MARKERS = ("run-manifest.yaml", "summary.json", "summary.md", "simple-claude", "quoin-claude")
+# The manifest is written before the first cell, so even a run stopped early has
+# it; superseded rows hold only arm cell directories.
+RUN_MANIFEST = "run-manifest.yaml"
+ARM_DIRS = ("simple-claude", "quoin-claude")
+# Entries repo_prep leaves in the mirror cache: `<owner>__<repo>.git` mirrors and
+# `.git.partial-<pid>` clones interrupted before their rename.
+MIRROR_SUFFIX = ".git"
+MIRROR_PARTIAL = ".git.partial-"
 
 RUN_KINDS = ("run directory", "superseded rows")
+MIRROR_ROOT_KIND = "mirror cache"
 LEDGER_KINDS = ("default ledger", "explicit ledger")
 NOT_A_LEDGER = "not a ledger file"
 
@@ -75,8 +84,56 @@ def _real(path) -> Path:
     return Path(os.path.realpath(path))
 
 
-def _inside(p: Path, root: Path) -> bool:
-    return p == root or p.is_relative_to(root)
+def _ident(path, follow: bool = True):
+    """(st_dev, st_ino) of the path, or None when it cannot be stat'ed."""
+    try:
+        st = os.stat(path) if follow else os.lstat(path)
+    except OSError:
+        return None
+    return (st.st_dev, st.st_ino)
+
+
+def _up(path) -> set:
+    """Identities of the directory the path resolves to and every directory above it."""
+    ids = set()
+    p = _real(path)
+    while True:
+        i = _ident(p)
+        if i is not None:
+            ids.add(i)
+        if p.parent == p:
+            return ids
+        p = p.parent
+
+
+def _chain(path) -> set:
+    """Identities of the entry itself (not followed) and every directory above it."""
+    path = Path(os.path.abspath(path))
+    ids = _up(path.parent)
+    own = _ident(path, follow=False)
+    if own is not None:
+        ids.add(own)
+    return ids
+
+
+@dataclass
+class Guard:
+    protected: set      # identities of protected paths
+    holds_protected: set  # identities of protected paths and every directory above them
+    config: set         # identities of ~/.claude and ~/.config
+    holds_kept: set     # identities of kept paths and every directory above them
+
+
+def guard_for(protected, kept_paths, config_trees) -> Guard:
+    prot = {i for i in (_ident(p) for p in protected) if i is not None}
+    holds = set()
+    for p in protected:
+        holds |= _up(p)
+    kept = set()
+    for p in kept_paths:
+        kept |= _chain(p) | _up(p)
+    cfg = {i for i in (_ident(t) for t in config_trees) if i is not None}
+    return Guard(prot, holds, cfg, kept)
 
 
 def _homes() -> list:
@@ -114,28 +171,26 @@ def _candidate(path: Path, kind: str, root: Path, note: str = "") -> Optional[Ca
     return Candidate(path, kind, root, stat.S_ISLNK(st.st_mode), note)
 
 
-def _is_ledger_file(c: Candidate, explicit: bool) -> bool:
+def _ledger_note(c: Candidate, explicit: bool) -> Optional[str]:
+    """The listing note for a ledger file, or None when the path is not a ledger."""
     from quoin.benchmarks.scripts import spend_ledger
 
     st = _lstat(c.path)
     if st is None or not (stat.S_ISREG(st.st_mode) or stat.S_ISLNK(st.st_mode)):
-        return False
-    if not explicit or c.path.suffix == ".jsonl":
-        return True
+        return None
     try:
-        spend_ledger.recorded_total(c.path)
+        return f"recorded ${spend_ledger.recorded_total(c.path):.2f}"
     except (OSError, ValueError):
-        return False
-    return True
-
-
-def _ledger_note(path: Path) -> str:
-    from quoin.benchmarks.scripts import spend_ledger
-
-    try:
-        return f"recorded ${spend_ledger.recorded_total(path):.2f}"
-    except (OSError, ValueError):
+        # An unreadable default (or explicit .jsonl) ledger is still deletable; any
+        # other explicit file must parse as a ledger.
+        if explicit and c.path.suffix != ".jsonl":
+            return None
         return "recorded total unreadable"
+
+
+def _homes_above(path) -> bool:
+    homes = {i for i in (_ident(h) for h in _homes()) if i is not None}
+    return bool(homes & _up(path))
 
 
 def _temp_roots() -> list:
@@ -143,8 +198,13 @@ def _temp_roots() -> list:
     roots = []
     for base in (tempfile.gettempdir(), SYSTEM_TMP):
         real = _real(base)
-        if real.is_dir() and real not in roots:
-            roots.append(real)
+        if not real.is_dir() or any(_ident(real) == _ident(r) for r in roots):
+            continue
+        # A temp directory pointed at home (or inside it) would turn the prefix
+        # scan loose on the user's own files.
+        if _homes_above(real):
+            continue
+        roots.append(real)
     for root in roots:
         try:
             entries = list(os.scandir(root))
@@ -191,73 +251,140 @@ def collect(res, args) -> tuple:
             continue
         if kind == "explicit ledger" and not args.clean_explicit_ledger:
             kept.append((c, "explicit --spend-ledger; pass --clean-explicit-ledger to delete"))
-        elif not _is_ledger_file(c, explicit=kind == "explicit ledger"):
-            skipped.append((c, NOT_A_LEDGER))
         else:
-            c.note = _ledger_note(path)
-            delete.append(c)
+            note = _ledger_note(c, explicit=kind == "explicit ledger")
+            if note is None:
+                skipped.append((c, NOT_A_LEDGER))
+            else:
+                c.note = note
+                delete.append(c)
 
     delete.extend(_temp_roots())
 
     mirrors = _location(repo_prep._resolve_cache_root(None))
-    c = _candidate(mirrors, "mirror cache", mirrors)
+    c = _candidate(mirrors, MIRROR_ROOT_KIND, mirrors.parent)
     if c is not None:
         if args.clean_mirrors:
-            delete.append(c)
+            delete.extend(_mirror_entries(c))
         else:
             kept.append((c, "mirror cache; pass --clean-mirrors to delete"))
     return delete, skipped, kept
 
 
-def check(c: Candidate, protected: set, kept_paths: set, config_trees: set) -> Optional[str]:
+def _mirror_entries(root: Candidate) -> list:
+    """The mirrors inside the cache, then the cache itself (removed only if left empty).
+
+    Anything else in the cache directory is left alone, so pointing the cache
+    variable at an ordinary directory deletes nothing in it.
+    """
+    out = []
+    base = _real(root.path)
+    if not root.is_link:
+        try:
+            entries = sorted(os.scandir(base), key=lambda e: e.name)
+        except OSError:
+            entries = []
+        for entry in entries:
+            name = entry.name
+            if not (name.endswith(MIRROR_SUFFIX) or MIRROR_PARTIAL in name):
+                continue
+            c = _candidate(base / name, "mirror", base)
+            if c is not None:
+                out.append(c)
+        root.note = "only if empty afterwards"
+        out.append(root)
+    return out
+
+
+def _looks_like_run(path: Path) -> bool:
+    st = _lstat(path / RUN_MANIFEST)
+    if st is not None and stat.S_ISREG(st.st_mode):
+        return True
+    for arm in ARM_DIRS:
+        st = _lstat(path / arm)
+        if st is not None and stat.S_ISDIR(st.st_mode):
+            return True
+    return False
+
+
+def check(c: Candidate, guard: Guard) -> Optional[str]:
     """The reason this candidate must not be deleted, or None."""
-    if not _inside(c.path, c.root):
+    own = _ident(c.path, follow=False)
+    if own is None:
+        return None
+    chain = _chain(c.path)
+    root = _ident(c.root)
+    if root is None or root not in chain:
         return "outside its allowed root"
-    if c.path in protected:
+    if own in guard.protected:
         return "protected path"
-    if any(_inside(p, c.path) for p in protected):
+    if own in guard.holds_protected:
         return "contains a protected path"
-    if any(_inside(c.path, t) for t in config_trees):
+    if chain & guard.config:
         return "inside ~/.claude or ~/.config"
-    if any(_inside(p, c.path) for p in kept_paths):
+    if own in guard.holds_kept:
         return "contains a kept path (pass the flag to delete it)"
-    if c.kind in RUN_KINDS and not c.is_link:
-        if not any(_lstat(c.path / marker) is not None for marker in RUN_MARKERS):
-            return "does not look like a benchmark run"
+    if c.kind in RUN_KINDS and not c.is_link and not _looks_like_run(c.path):
+        return "does not look like a benchmark run"
     return None
 
 
 def _repair_at(pfd: int, name: str) -> None:
     """Give the owner rwx on a directory tree, top-down, without following links."""
-    st = os.lstat(name, dir_fd=pfd)
-    if not stat.S_ISDIR(st.st_mode) or st.st_uid != _uid():
-        return
-    if st.st_mode & 0o700 != 0o700:
-        os.chmod(name, stat.S_IMODE(st.st_mode) | 0o700, dir_fd=pfd)
-    fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=pfd)
+    # An explicit stack: a very deep tree must not hit the recursion limit.
+    stack = [(pfd, name)]
     try:
-        with os.scandir(fd) as entries:
-            children = [e.name for e in entries if e.is_dir(follow_symlinks=False)]
-        for child in children:
-            _repair_at(fd, child)
+        while stack:
+            dfd, entry = stack.pop()
+            if entry is None:
+                os.close(dfd)
+                continue
+            st = os.lstat(entry, dir_fd=dfd)
+            if not stat.S_ISDIR(st.st_mode) or st.st_uid != _uid():
+                continue
+            if st.st_mode & 0o700 != 0o700:
+                # If the entry is swapped for a link in between, the link itself is
+                # changed, never its target.
+                os.chmod(entry, stat.S_IMODE(st.st_mode) | 0o700, dir_fd=dfd,
+                         follow_symlinks=not _CHMOD_NOFOLLOW)
+            fd = os.open(entry, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=dfd)
+            opened = os.fstat(fd)
+            if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino):
+                os.close(fd)
+                continue
+            stack.append((fd, None))
+            with os.scandir(fd) as entries:
+                children = [e.name for e in entries if e.is_dir(follow_symlinks=False)]
+            stack.extend((fd, child) for child in children)
     finally:
-        os.close(fd)
+        for dfd, entry in stack:
+            if entry is None:
+                os.close(dfd)
+
+
+_CHMOD_NOFOLLOW = os.chmod in os.supports_follow_symlinks
 
 
 def _repair(parent: Path, name: str) -> None:
-    pfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    pfd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
     try:
         _repair_at(pfd, name)
     finally:
         os.close(pfd)
 
 
-def _remove(c: Candidate) -> None:
+def _remove(c: Candidate) -> bool:
+    """Delete the candidate; False when it is left in place on purpose."""
     try:
         st = os.lstat(c.path)
     except FileNotFoundError:
         # Already removed with a candidate that contained it.
-        return
+        return True
+    if c.kind == MIRROR_ROOT_KIND:
+        if stat.S_ISDIR(st.st_mode) and not os.listdir(c.path):
+            os.rmdir(c.path)
+            return True
+        return False
     if stat.S_ISLNK(st.st_mode) or stat.S_ISREG(st.st_mode):
         os.unlink(c.path)
     elif stat.S_ISDIR(st.st_mode):
@@ -268,6 +395,7 @@ def _remove(c: Candidate) -> None:
         shutil.rmtree(c.path)
     else:
         raise OSError("not a file, directory or symlink")
+    return True
 
 
 def _ask(question: str, *, yes: bool, stdin=None, out=None) -> Optional[int]:
@@ -294,7 +422,8 @@ def _ask(question: str, *, yes: bool, stdin=None, out=None) -> Optional[int]:
 
 
 def _line(verb: str, c: Candidate, detail: str) -> str:
-    suffix = f" ({detail})" if detail else ""
+    parts = (["link"] if c.is_link else []) + ([detail] if detail else [])
+    suffix = f" ({'; '.join(parts)})" if parts else ""
     return f"  {verb:<7} {c.kind}: {c.path}{suffix}"
 
 
@@ -305,20 +434,18 @@ def run_clean(args) -> int:
     if isinstance(res, int):
         return res
     delete, skipped, kept = collect(res, args)
-    kept_paths = set()
-    for c, _reason in kept + skipped:
-        kept_paths |= {c.path, _real(c.path)}
-    protected = protected_paths(res.repo_root)
-    config_trees = _config_trees()
+    kept_paths = [c.path for c, _reason in kept + skipped]
+    guard = guard_for(protected_paths(res.repo_root), kept_paths, _config_trees())
     accepted = []
     for c in delete:
-        reason = check(c, protected, kept_paths, config_trees)
+        reason = check(c, guard)
         if reason:
             skipped.append((c, reason))
         else:
             accepted.append(c)
 
-    print(f"clean: run {res.run_id} in {res.run_dir} (do not clean while this run is active)")
+    print(f"clean: run {res.run_id} in {res.run_dir} (do not clean while any "
+          "benchmark run is active: the harness temp directories are shared by every run)")
     for c in accepted:
         print(_line("delete", c, c.note))
     for c, reason in kept:
@@ -336,11 +463,19 @@ def run_clean(args) -> int:
     deleted = 0
     worktree_root = False
     for c in accepted:
+        # The answer may have come long after the listing; check again right before.
+        reason = check(c, guard)
+        if reason:
+            print(f"clean: skipped {c.path}: {reason}")
+            continue
         try:
-            _remove(c)
-        except OSError as exc:
+            removed = _remove(c)
+        except (OSError, RecursionError) as exc:
             print(f"clean: could not delete {c.path}: {exc}")
             failed = True
+            continue
+        if not removed:
+            print(f"clean: kept {c.path} (not empty)")
             continue
         deleted += 1
         worktree_root = worktree_root or (c.kind == "temp root" and c.path.name in TEMP_NAMES)

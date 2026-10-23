@@ -114,6 +114,8 @@ def ct(tmp_path, monkeypatch):
     c.mirrors = tmp_path / "mirrors"
     c.mirrors.mkdir()
     (c.mirrors / "repo").write_text("x")
+    (c.mirrors / "owner__repo.git" / "objects").mkdir(parents=True)
+    (c.mirrors / "owner__other.git.partial-123").mkdir()
     monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(c.mirrors))
 
     # Traverse-only parent last, so the seeding above could still write into it.
@@ -212,9 +214,38 @@ def test_a_run_holding_only_its_manifest_is_deleted(ct, capsys):
 
 def test_mirrors_are_deleted_only_with_their_flag(ct, capsys):
     c = ct
+    assert _clean(c, "--yes") == 0
+    assert (c.mirrors / "owner__repo.git").is_dir()
     assert _clean(c, "--yes", "--clean-mirrors") == 0
-    assert _line(capsys.readouterr().out, c.mirrors).lstrip().startswith("delete")
+    out = capsys.readouterr().out
+    assert _line(out, c.mirrors / "owner__repo.git").lstrip().startswith("delete")
+    assert _gone(c.mirrors / "owner__repo.git") and _gone(c.mirrors / "owner__other.git.partial-123")
+
+
+def test_clean_mirrors_leaves_other_files_and_the_cache_holding_them(ct, capsys):
+    c = ct
+    (c.mirrors / "notes").mkdir()
+    assert _clean(c, "--yes", "--clean-mirrors") == 0
+    assert f"clean: kept {c.mirrors} (not empty)" in capsys.readouterr().out
+    assert (c.mirrors / "repo").read_text() == "x" and (c.mirrors / "notes").is_dir()
+    assert _gone(c.mirrors / "owner__repo.git")
+
+
+def test_clean_mirrors_removes_the_cache_once_it_is_empty(ct):
+    c = ct
+    (c.mirrors / "repo").unlink()
+    assert _clean(c, "--yes", "--clean-mirrors") == 0
     assert _gone(c.mirrors)
+
+
+def test_an_ordinary_directory_named_as_the_mirror_cache_is_untouched(ct, monkeypatch):
+    c = ct
+    precious = c.tmp_path / "precious"
+    precious.mkdir()
+    (precious / "thesis.tex").write_text("x")
+    monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(precious))
+    assert _clean(c, "--yes", "--clean-mirrors") == 0
+    assert (precious / "thesis.tex").read_text() == "x"
 
 
 def test_no_terminal_without_yes_is_refused(ct, capsys):
@@ -289,6 +320,87 @@ def test_a_directory_is_never_an_explicit_ledger(ct, capsys, which):
     _protected_case(c, capsys, path, "not a ledger file", "--clean-explicit-ledger",
                     **{"--spend-ledger": str(path)})
     assert path.is_dir() and (c.home / ".claude" / "settings.json").is_file()
+
+
+def _case_insensitive(path: Path) -> bool:
+    return os.path.exists(str(path.parent / path.name.swapcase()))
+
+
+def test_a_case_variant_of_home_as_the_mirror_cache_is_protected(ct, monkeypatch, capsys):
+    c = ct
+    if not _case_insensitive(c.home):
+        pytest.skip("the temp file system is case-sensitive")
+    flipped = c.tmp_path / "HOME"
+    (c.home / "x.git").mkdir()
+    monkeypatch.setenv("QUOIN_BENCH_REPO_CACHE", str(flipped))
+    assert _clean(c, "--yes", "--clean-mirrors") == 0
+    line = _line(capsys.readouterr().out, flipped)
+    assert line.lstrip().startswith("skip") and "(protected path" in line
+    assert (c.home / ".claude" / "settings.json").is_file()
+
+
+def test_a_case_variant_of_the_checkout_as_the_run_directory_is_protected(ct, capsys):
+    c = ct
+    if not _case_insensitive(c.checkout):
+        pytest.skip("the temp file system is case-sensitive")
+    (c.checkout / "run-manifest.yaml").write_text("x")
+    _protected_case(c, capsys, c.tmp_path / "CHECKOUT", "protected path",
+                    **{"--run-dir": str(c.tmp_path), "--run-id": "CHECKOUT"})
+    assert (c.checkout / "run-manifest.yaml").is_file()
+
+
+@pytest.mark.parametrize("which", ["home", "checkout"])
+def test_another_spelling_of_a_protected_path_is_recognised(ct, which):
+    # A `..` detour keeps the string different on any file system; only the
+    # file identity says it is the same directory.
+    c = ct
+    target = {"home": c.home, "checkout": c.checkout}[which]
+    other = "checkout" if which == "home" else "home"
+    spelled = c.tmp_path / other / ".." / target.name
+    assert str(spelled) != str(target)
+    guard = tiered_clean.guard_for(tiered_clean.protected_paths(c.checkout), [],
+                                   tiered_clean._config_trees())
+    cand = tiered_clean.Candidate(spelled, "temp root", c.tmp_path, False)
+    assert tiered_clean.check(cand, guard) == "protected path"
+    holder = tiered_clean.Candidate(c.tmp_path / other / ".." / ".." / c.tmp_path.name,
+                                    "temp root", c.tmp_path.parent, False)
+    assert tiered_clean.check(holder, guard) == "contains a protected path"
+
+
+def test_another_spelling_inside_claude_config_is_recognised(ct):
+    c = ct
+    (c.home / ".claude" / "qbench_x").mkdir()
+    spelled = c.home / ".config" / ".." / ".claude" / "qbench_x"
+    guard = tiered_clean.guard_for(tiered_clean.protected_paths(c.checkout), [],
+                                   tiered_clean._config_trees())
+    cand = tiered_clean.Candidate(spelled, "temp root", c.home / ".claude", False)
+    assert tiered_clean.check(cand, guard) == "inside ~/.claude or ~/.config"
+
+
+def test_a_temp_directory_inside_home_is_not_scanned(ct, monkeypatch, capsys):
+    c = ct
+    (c.home / "qbc_mine").mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(c.home))
+    assert _clean(c, "--yes") == 0
+    assert (c.home / "qbc_mine").is_dir()
+    assert str(c.home / "qbc_mine") not in capsys.readouterr().out
+
+
+def test_a_candidate_that_became_protected_after_the_listing_is_skipped(ct, monkeypatch, capsys):
+    c = ct
+    calls = []
+    real_check = tiered_clean.check
+
+    def check_then_protect(cand, guard):
+        calls.append(cand.path)
+        if cand.path == c.ledger and calls.count(c.ledger) == 2:
+            guard.protected.add(tiered_clean._ident(c.ledger, follow=False))
+        return real_check(cand, guard)
+
+    monkeypatch.setattr(tiered_clean, "check", check_then_protect)
+    assert _clean(c, "--yes") == 0
+    assert f"clean: skipped {c.ledger}: protected path" in capsys.readouterr().out
+    assert c.ledger.is_file()
 
 
 def test_protected_paths_hold_the_homes_root_and_checkouts(ct):
@@ -369,6 +481,25 @@ def test_a_kept_mirror_cache_protects_the_temp_root_holding_it(ct, monkeypatch, 
     assert (holder / "mirrors" / "repo").is_file()
     assert _clean(c, "--yes", "--clean-mirrors") == 0
     assert _gone(holder)
+
+
+@pytest.mark.parametrize("marker", ["summary.md", "summary.json", "simple-claude"])
+def test_a_single_summary_or_an_arm_named_file_is_not_a_run(ct, capsys, marker):
+    c = ct
+    notes = c.tmp_path / "notes"
+    notes.mkdir()
+    (notes / marker).write_text("x")
+    assert _clean(c, "--yes", **{"--run-dir": str(c.tmp_path), "--run-id": "notes"}) == 0
+    line = _line(capsys.readouterr().out, notes)
+    assert line.lstrip().startswith("skip") and "(does not look like a benchmark run" in line
+    assert (notes / marker).is_file()
+
+
+def test_a_symlinked_candidate_is_marked_as_a_link(ct, monkeypatch, capsys):
+    c = ct
+    monkeypatch.setattr(sys, "stdin", Tty("n\n"))
+    assert _clean(c) == 1
+    assert "(link)" in _line(capsys.readouterr().out, c.tmp / "qbench_link")
 
 
 def test_a_directory_that_is_not_a_run_is_skipped(ct, capsys):
