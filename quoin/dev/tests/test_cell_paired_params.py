@@ -202,3 +202,41 @@ def test_quoin_pre_spawn_refusals_are_flagged_only_in_paired_mode(tmp_path, monk
     if paired:
         run = RunResult(cell="c", task_id="t1", run_id="r1", verdict="error", extra=result["extra"])
         assert settlement_actual(run) == 0.0
+
+
+@pytest.mark.parametrize("cell", CELLS, ids=_ID)
+def test_interrupt_while_setting_up_the_stream_does_not_orphan_the_session(cell, tmp_path, monkeypatch):
+    bin_dir = make_fake_claude(tmp_path, {"steps": [{"emit": INIT}, {"sleep": 60}]})
+
+    class Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        def start(self):
+            raise KeyboardInterrupt
+
+    import subprocess
+
+    spawned = []
+    real_popen = subprocess.Popen
+
+    class Recording(real_popen):
+        def __init__(self, argv, *a, **k):
+            super().__init__(argv, *a, **k)
+            if argv and os.path.basename(str(argv[0])) == "claude":
+                spawned.append(self.pid)
+
+    monkeypatch.setattr(subprocess, "Popen", Recording)
+    monkeypatch.setattr(cell.threading, "Thread", Boom)
+    with pytest.raises(KeyboardInterrupt):
+        _invoke(cell, tmp_path, bin_dir, session_env=_session_env(bin_dir))
+    assert len(spawned) == 1
+    pgid = spawned[0]
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError):
+            return
+        time.sleep(0.05)
+    pytest.fail("the spawned session is still running")

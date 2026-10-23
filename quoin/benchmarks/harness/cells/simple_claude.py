@@ -390,77 +390,87 @@ def invoke(
         )
         pgid = proc.pid if group else None
 
-        # Ring buffer, not an unbounded list: peak retained memory is
-        # bounded regardless of session length. A `--verbose` stream-json
-        # session running the full wall clock can emit far more than this
-        # many events, and nothing downstream needs the full history in
-        # MEMORY — `turn_count` and the budget-halt check are both
-        # maintained incrementally below, not recomputed from a full
-        # concatenation at the end. The full ORDERED event stream, if
-        # anyone needs it, is what `transcript_file` below writes.
-        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
-        events_seen = 0
-        total_cost_usd: Optional[float] = None
-        tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
-        from ..stream_metrics import StreamMetrics
-        stream_metrics = StreamMetrics()
-        turn_count = 0
-        session_errored = False
-        retry_delay = 1.0
-        budget_halted = False
-        identity_tripped = False
-
-        # Stream every retained event to transcript.jsonl AS IT ARRIVES,
-        # when the caller gave us this task's own result directory — the
-        # file on disk is then the FULL transcript regardless of the ring
-        # buffer's cap above, closing the silent-truncation gap: nothing
-        # previously recorded that the ring buffer had dropped anything,
-        # and the file was only ever written from the (possibly
-        # truncated) buffer after the fact.
         transcript_file = None
-        if run_output_dir is not None:
-            try:
-                run_output_dir.mkdir(parents=True, exist_ok=True)
-                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
-            except OSError:
-                transcript_file = None
-        # Set at OPEN time, not after the loop: an exception raised anywhere
-        # below (a JSON error, a killed-process TimeoutExpired, the git-diff
-        # subprocess) must still leave `extra["transcript_streamed"]`
-        # correctly True whenever a file was actually opened, so a generic
-        # exception handler downstream (`runner.py`) can tell a
-        # partially-streamed transcript apart from an empty one and never
-        # clobber it with the (possibly-empty) ring buffer.
-        result["extra"]["transcript_streamed"] = transcript_file is not None
-
-        # Drain stderr on a daemon thread started at spawn: a session
-        # that writes past one pipe buffer's worth of stderr over a long
-        # run would otherwise block in the child's own write(2), which
-        # stops it emitting stdout too — and the wall-clock check below
-        # never gets a chance to fire because it sits above a blocking
-        # `readline()` that then never returns. The retained buffer is a
-        # bounded diagnostic tail (`deque(maxlen=...)`), not an unbounded
-        # accumulator — a session emitting tens of MB of stderr must not
-        # grow this process's memory by a matching amount. The budget-halt
-        # marker is checked per-line, incrementally, as each line is
-        # drained (via `stderr_halt_event`), so bounding the buffer never
-        # costs detection accuracy.
-        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
-        stderr_halt_event = threading.Event()
-        stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
-        )
-        stderr_thread.start()
-
-        # A real OS pipe has a usable fd — that's the case this fix
-        # targets. A test double or anything else without one (matching
-        # `_wait_readable`'s own fallback) keeps the pre-fix line-buffered
-        # read, since there is no partial-line-blocking hazard to close
-        # for something that was never a real pipe in the first place.
         try:
-            stdout_fd: Optional[int] = proc.stdout.fileno()
-        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
-            stdout_fd = None
+
+            # Ring buffer, not an unbounded list: peak retained memory is
+            # bounded regardless of session length. A `--verbose` stream-json
+            # session running the full wall clock can emit far more than this
+            # many events, and nothing downstream needs the full history in
+            # MEMORY — `turn_count` and the budget-halt check are both
+            # maintained incrementally below, not recomputed from a full
+            # concatenation at the end. The full ORDERED event stream, if
+            # anyone needs it, is what `transcript_file` below writes.
+            events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+            events_seen = 0
+            total_cost_usd: Optional[float] = None
+            tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+            from ..stream_metrics import StreamMetrics
+            stream_metrics = StreamMetrics()
+            turn_count = 0
+            session_errored = False
+            retry_delay = 1.0
+            budget_halted = False
+            identity_tripped = False
+
+            # Stream every retained event to transcript.jsonl AS IT ARRIVES,
+            # when the caller gave us this task's own result directory — the
+            # file on disk is then the FULL transcript regardless of the ring
+            # buffer's cap above, closing the silent-truncation gap: nothing
+            # previously recorded that the ring buffer had dropped anything,
+            # and the file was only ever written from the (possibly
+            # truncated) buffer after the fact.
+            transcript_file = None
+            if run_output_dir is not None:
+                try:
+                    run_output_dir.mkdir(parents=True, exist_ok=True)
+                    transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+                except OSError:
+                    transcript_file = None
+            # Set at OPEN time, not after the loop: an exception raised anywhere
+            # below (a JSON error, a killed-process TimeoutExpired, the git-diff
+            # subprocess) must still leave `extra["transcript_streamed"]`
+            # correctly True whenever a file was actually opened, so a generic
+            # exception handler downstream (`runner.py`) can tell a
+            # partially-streamed transcript apart from an empty one and never
+            # clobber it with the (possibly-empty) ring buffer.
+            result["extra"]["transcript_streamed"] = transcript_file is not None
+
+            # Drain stderr on a daemon thread started at spawn: a session
+            # that writes past one pipe buffer's worth of stderr over a long
+            # run would otherwise block in the child's own write(2), which
+            # stops it emitting stdout too — and the wall-clock check below
+            # never gets a chance to fire because it sits above a blocking
+            # `readline()` that then never returns. The retained buffer is a
+            # bounded diagnostic tail (`deque(maxlen=...)`), not an unbounded
+            # accumulator — a session emitting tens of MB of stderr must not
+            # grow this process's memory by a matching amount. The budget-halt
+            # marker is checked per-line, incrementally, as each line is
+            # drained (via `stderr_halt_event`), so bounding the buffer never
+            # costs detection accuracy.
+            stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+            stderr_halt_event = threading.Event()
+            stderr_thread = threading.Thread(
+                target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
+            )
+            stderr_thread.start()
+
+            # A real OS pipe has a usable fd — that's the case this fix
+            # targets. A test double or anything else without one (matching
+            # `_wait_readable`'s own fallback) keeps the pre-fix line-buffered
+            # read, since there is no partial-line-blocking hazard to close
+            # for something that was never a real pipe in the first place.
+            try:
+                stdout_fd: Optional[int] = proc.stdout.fileno()
+            except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+                stdout_fd = None
+        except BaseException:
+            # The session is already paid for; whatever interrupts the setup
+            # must not leave it running with nobody watching.
+            if transcript_file is not None:
+                transcript_file.close()
+            proc_group.kill_and_reap(proc, pgid, group)
+            raise
 
         def _handle_stream_line(raw_line: str) -> str:
             """Parse and record one stream-json line. Returns "rate_limited"
@@ -529,12 +539,13 @@ def invoke(
             try:
                 timed_out = False
                 leader_reaped = False
+                group_gone = False
                 drain_deadline = None
                 while True:
                     if group and not leader_reaped and proc.poll() is not None:
                         # The leader is gone but a background child may still hold
                         # the inherited pipes, so EOF would never arrive.
-                        proc_group.leader_exited_reap(proc, pgid, grace=0.5)
+                        group_gone = proc_group.leader_exited_reap(proc, pgid, grace=0.5)
                         leader_reaped = True
                         drain_deadline = time.monotonic() + 2.0
                     if drain_deadline is not None and time.monotonic() > drain_deadline:
@@ -657,7 +668,7 @@ def invoke(
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         pass
-                if group:
+                if group and not group_gone:
                     proc_group.reap_group(pgid)
                 stderr_thread.join(timeout=5)
         finally:

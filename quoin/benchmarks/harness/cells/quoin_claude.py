@@ -440,55 +440,65 @@ def invoke(
         )
         pgid = proc.pid if group else None
 
-        # Ring buffer, not an unbounded list — see simple_claude.invoke
-        # for the full rationale; both cells share the same streaming
-        # shape.
-        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
-        events_seen = 0
-        total_cost_usd: Optional[float] = None
-        tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
-        from ..stream_metrics import StreamMetrics
-        stream_metrics = StreamMetrics()
-        turn_count = 0
-        gate_intervention_count = 0
-        retry_delay = 1.0
-        budget_halted = False
-        identity_tripped = False
-
-        # Stream every retained event to transcript.jsonl AS IT ARRIVES —
-        # see simple_claude.invoke for the full rationale.
         transcript_file = None
-        if run_output_dir is not None:
-            try:
-                run_output_dir.mkdir(parents=True, exist_ok=True)
-                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
-            except OSError:
-                transcript_file = None
-        # Set at OPEN time — see simple_claude.invoke for the full
-        # rationale: a generic exception handler downstream must be able to
-        # tell a partially-streamed transcript apart from an empty one
-        # without depending on this loop ever reaching its normal exit.
-        result["extra"]["transcript_streamed"] = transcript_file is not None
-
-        # Drain stderr on a daemon thread started at spawn — see
-        # simple_claude.invoke for the full rationale, including why the
-        # retained buffer is a bounded diagnostic tail (`deque`) with
-        # budget-halt detection folded in incrementally rather than an
-        # unbounded accumulator.
-        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
-        stderr_halt_event = threading.Event()
-        stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
-        )
-        stderr_thread.start()
-
-        # See simple_claude.invoke for the full rationale — a real OS pipe
-        # gets the chunk-based, timer-driven read; a test double without a
-        # usable fd keeps the pre-fix line-buffered read.
         try:
-            stdout_fd: Optional[int] = proc.stdout.fileno()
-        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
-            stdout_fd = None
+
+            # Ring buffer, not an unbounded list — see simple_claude.invoke
+            # for the full rationale; both cells share the same streaming
+            # shape.
+            events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+            events_seen = 0
+            total_cost_usd: Optional[float] = None
+            tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+            from ..stream_metrics import StreamMetrics
+            stream_metrics = StreamMetrics()
+            turn_count = 0
+            gate_intervention_count = 0
+            retry_delay = 1.0
+            budget_halted = False
+            identity_tripped = False
+
+            # Stream every retained event to transcript.jsonl AS IT ARRIVES —
+            # see simple_claude.invoke for the full rationale.
+            transcript_file = None
+            if run_output_dir is not None:
+                try:
+                    run_output_dir.mkdir(parents=True, exist_ok=True)
+                    transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+                except OSError:
+                    transcript_file = None
+            # Set at OPEN time — see simple_claude.invoke for the full
+            # rationale: a generic exception handler downstream must be able to
+            # tell a partially-streamed transcript apart from an empty one
+            # without depending on this loop ever reaching its normal exit.
+            result["extra"]["transcript_streamed"] = transcript_file is not None
+
+            # Drain stderr on a daemon thread started at spawn — see
+            # simple_claude.invoke for the full rationale, including why the
+            # retained buffer is a bounded diagnostic tail (`deque`) with
+            # budget-halt detection folded in incrementally rather than an
+            # unbounded accumulator.
+            stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+            stderr_halt_event = threading.Event()
+            stderr_thread = threading.Thread(
+                target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
+            )
+            stderr_thread.start()
+
+            # See simple_claude.invoke for the full rationale — a real OS pipe
+            # gets the chunk-based, timer-driven read; a test double without a
+            # usable fd keeps the pre-fix line-buffered read.
+            try:
+                stdout_fd: Optional[int] = proc.stdout.fileno()
+            except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+                stdout_fd = None
+        except BaseException:
+            # The session is already paid for; whatever interrupts the setup
+            # must not leave it running with nobody watching.
+            if transcript_file is not None:
+                transcript_file.close()
+            proc_group.kill_and_reap(proc, pgid, group)
+            raise
 
         def _handle_stream_line(raw_line: str) -> str:
             """Parse and record one stream-json line — see
@@ -555,12 +565,13 @@ def invoke(
             try:
                 timed_out = False
                 leader_reaped = False
+                group_gone = False
                 drain_deadline = None
                 while True:
                     if group and not leader_reaped and proc.poll() is not None:
                         # The leader is gone but a background child may still hold
                         # the inherited pipes, so EOF would never arrive.
-                        proc_group.leader_exited_reap(proc, pgid, grace=0.5)
+                        group_gone = proc_group.leader_exited_reap(proc, pgid, grace=0.5)
                         leader_reaped = True
                         drain_deadline = time.monotonic() + 2.0
                     if drain_deadline is not None and time.monotonic() > drain_deadline:
@@ -656,7 +667,7 @@ def invoke(
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         pass
-                if group:
+                if group and not group_gone:
                     proc_group.reap_group(pgid)
                 stderr_thread.join(timeout=5)
         finally:

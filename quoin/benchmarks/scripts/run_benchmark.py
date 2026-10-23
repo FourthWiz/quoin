@@ -1006,6 +1006,7 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
     previous = {sig: signal.signal(sig, gate_state.handler) for sig in signals}
     sandboxes: list = []
     run_parent: Optional[Path] = None
+    manifest_writer = None
     try:
         try:
             run_parent = Path(os.path.realpath(tempfile.mkdtemp(prefix="qbench_run_")))
@@ -1130,6 +1131,7 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
                 extra={**extra, **more}, started_at=started_at,
             )
 
+        manifest_writer = write_manifest
         write_manifest()
         print(f"Max parallel: 1 (paired mode runs one session at a time; --max-parallel "
               f"{args.max_parallel} ignored)")
@@ -1180,6 +1182,11 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
         return 0 if pending == 0 else 1
     except paired_run.PairedInterrupted as exc:
         print(f"Interrupted by {exc.signal_name}", file=sys.stderr)
+        if manifest_writer is not None:
+            try:
+                manifest_writer(interrupted=exc.signal_name)
+            except Exception as err:  # noqa: BLE001 - the interrupt is the outcome to report
+                print(f"could not record the interruption: {err}", file=sys.stderr)
         return 1
     finally:
         # A second signal must not abort the cleanup, so ignore them until the
