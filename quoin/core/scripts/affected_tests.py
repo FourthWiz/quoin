@@ -1932,6 +1932,22 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_agentdesk_standard_layout.py",
     ),
     (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_session_record.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_sessions_parity.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_launch_hints.py",
+    ),
+    (
+        "src/quoin/agentdesk_sessions.py",
+        "quoin/dev/tests/test_agentdesk_launch_hints.py",
+    ),
+    (
         "quoin/tools/agentdesk/setup-agentdesk.sh",
         "quoin/dev/tests/test_agentdesk_standard_layout.py",
     ),

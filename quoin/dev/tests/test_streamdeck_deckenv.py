@@ -216,6 +216,8 @@ def test_socket_dir_matches_agentdesk(de, tmp_path, xdg, zsock):
     out = subprocess.run([zsh, "-f", "-c", 'source "$1"; print -r -- "$ZELLIJ_SOCKET_DIR"', "_", str(AGENTDESK)],
                          env=environ, cwd=str(work), capture_output=True, text=True, timeout=30)
     assert out.stdout.strip().splitlines()[-1] == de.agentdesk_socket_dir(environ), out.stderr
+    from quoin import agentdesk_sessions
+    assert agentdesk_sessions.socket_dir(environ) == de.agentdesk_socket_dir(environ)
 
 
 def test_empty_values_count_as_unset(de):
