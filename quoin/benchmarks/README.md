@@ -264,19 +264,27 @@ It deletes:
 - the default spend ledger; its recorded total is shown in the listing before
   the question, because the record is gone once the file is;
 - `qbench_*`, `qbc_*` and `quoin-benchmarks` directories you own directly
-  under the temp directory and under `/tmp`.
+  under the temp directory and under `/tmp`. These are shared by every run, so
+  they are removed whichever run id you name; a temp directory set to the home
+  directory or a path inside it is not scanned.
 
-It keeps the repository mirror cache unless `--clean-mirrors` is given, an
-explicit `--spend-ledger` unless `--clean-explicit-ledger` is given, other run
-ids, and always the home directory, `~/.claude`, `~/.config` and the checkout.
+It keeps the repository mirror cache unless `--clean-mirrors` is given; with it,
+only the `*.git` mirrors and `*.git.partial-*` leftovers inside the cache are
+deleted, and the cache directory itself only if nothing else is left in it. It
+also keeps an explicit `--spend-ledger` unless `--clean-explicit-ledger` is
+given, the directories and ledgers of other run ids, and always the home
+directory, `~/.claude`, `~/.config` and the checkout.
 
-Safety rules: a path that contains a kept or protected path is skipped; a
-ledger must be a file, never a directory; a run directory must look like a
-benchmark run (it holds `run-manifest.yaml`, `summary.json`, `summary.md` or an
-arm cell directory); symlinks are removed as links and their targets are left
-alone; traverse-only directories the harness leaves are given back owner
-permissions before removal, without following links. Do not run it while a run
-is active, because it cannot tell. Temp roots of the three-arm gate harness
+Safety rules: a path that contains a kept or protected path is skipped; paths
+are compared by file identity, so another spelling of a protected directory
+(for example a case variant on a case-insensitive file system) is still
+protected; a ledger must be a file, never a directory; a run directory must
+look like a benchmark run (it holds a `run-manifest.yaml` file or an arm cell
+directory); symlinks are removed as links, marked `link` in the listing, and
+their targets are left alone; traverse-only directories the harness leaves are
+given back owner permissions before removal, without following links; every
+check runs again just before each deletion. Do not run it while any benchmark
+run is active, because it cannot tell. Temp roots of the three-arm gate harness
 (`quoin-gate-raw-config-*`) are not touched. When it removes a
 `quoin-benchmarks` worktree root it prints a reminder to run
 `git worktree prune` in the arm checkout.
