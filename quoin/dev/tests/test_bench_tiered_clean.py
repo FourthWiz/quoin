@@ -170,7 +170,7 @@ def _gone(p: Path) -> bool:
     return not os.path.lexists(p)
 
 
-# --- AC14: the listing, the one question and the deletion ---------------------------
+# --- the listing, the one question and the deletion ---------------------------
 
 def test_yes_deletes_this_runs_leftovers_and_keeps_the_rest(ct, monkeypatch, capsys):
     c = ct
@@ -225,7 +225,7 @@ def test_no_terminal_without_yes_is_refused(ct, capsys):
     assert _snapshot(c) == before
 
 
-# --- AC15: symlinks and protected paths ---------------------------------------------
+# --- symlinks and protected paths ---------------------------------------------
 
 def test_a_symlinked_temp_root_is_unlinked_not_followed(ct):
     c = ct
@@ -382,7 +382,7 @@ def test_a_directory_that_is_not_a_run_is_skipped(ct, capsys):
     assert (stuff / "a.txt").is_file()
 
 
-# --- AC16: the recorded total and explicit ledgers -----------------------------------
+# --- the recorded total and explicit ledgers -----------------------------------
 
 def test_an_explicit_ledger_is_kept_unless_its_flag_is_given(ct, capsys):
     c = ct
