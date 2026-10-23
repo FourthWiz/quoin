@@ -129,7 +129,7 @@ def proj(tmp_path):
     return p
 
 
-# ---------------------------------------------------------------- AC1: socket
+# socket directory
 
 def test_socket_dir_from_xdg(ctx, capsys, tmp_path):
     ctx.listing(live("a-agents"))
@@ -170,7 +170,7 @@ def test_listing_argv_is_exact(ctx, capsys, tmp_path):
     assert [a for _, a in ctx.calls()] == ["list-sessions -n"]
 
 
-# ----------------------------------------------------------------- AC2: listing
+# listing
 
 def test_all_json_four_entries(ctx, capsys, tmp_path):
     ctx.listing(current("proj-agents", "1m"), live("proj-agents_2", "5h"),
@@ -202,7 +202,7 @@ def test_text_output_marks_name_matches(ctx, capsys, proj):
     assert rc == 0 and "(by name)" in out and "created 3m ago" in out and "running" in out
 
 
-# -------------------------------------------------------------------- AC3 / AC4
+# folder matching
 
 def test_record_match_equal_and_under_but_not_other(ctx, capsys, proj, tmp_path):
     ctx.listing(live("proj-agents"))
@@ -222,7 +222,7 @@ def test_name_match_for_legacy_session_and_not_projector(ctx, capsys, proj):
     assert [(e["name"], e["match"]) for e in got] == [("proj-agents_2", "name")]
 
 
-# ------------------------------------------------------------------------ AC5
+# empty and error cases
 
 def test_no_match_message_mentions_all(ctx, capsys, proj, tmp_path):
     ctx.listing(live("zzz-agents"))
@@ -279,7 +279,7 @@ def test_list_flags_with_subcommand_rejected(ctx, capsys, tmp_path):
     assert ctx.calls() == []
 
 
-# ------------------------------------------------------------------------ AC11
+# help text
 
 KEYS = ("Alt s, then d", "Alt s, then q", "Ctrl+Q")
 
@@ -295,7 +295,7 @@ def test_help_has_key_hints(argv, capsys):
         assert k in out
 
 
-# -------------------------------------------------------------------- AC9: kill
+# kill
 
 def test_kill_exited_deletes_and_removes_record(ctx, capsys, tmp_path):
     ctx.listing(exited("proj-agents_2"))

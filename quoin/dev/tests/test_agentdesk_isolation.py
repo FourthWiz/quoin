@@ -48,6 +48,39 @@ def test_env_helpers_resolve_state_under_temp_root(builder, tmp_path):
     assert str(state.resolve()).startswith(str(tmp_path.resolve()))
 
 
+def _record_dir(env, cwd):
+    script = f'source "{za.AGENTDESK_ZSH}"\n_agentdesk_record_dir'
+    result = subprocess.run(
+        ["zsh", "-c", script], env=env, capture_output=True, text=True,
+        cwd=str(cwd), timeout=za.SUBPROCESS_TIMEOUT,
+    )
+    assert result.returncode == 0, result.stderr
+    return Path(result.stdout.strip())
+
+
+@pytest.mark.parametrize("builder", ["mock", "sessions", "help", "public"])
+def test_env_helpers_resolve_record_dir_under_temp_root(builder, tmp_path):
+    if builder == "mock":
+        env = za._make_mock_env(tmp_path)
+    elif builder == "sessions":
+        env = za._make_mock_env_with_sessions(tmp_path, ["a"])
+    elif builder == "help":
+        env = help_mod._mock_env(tmp_path)
+    else:
+        env = pl._env(tmp_path, str(tmp_path / "rt"))
+    rec = _record_dir(env, tmp_path)
+    assert str(rec).startswith(str(tmp_path))
+    assert str(rec.resolve()).startswith(str(tmp_path.resolve()))
+
+
+def test_python_record_dir_is_under_temp_home():
+    from quoin import agentdesk_sessions
+    rec = Path(agentdesk_sessions.records_dir(os.environ))
+    assert rec.parts[-3:] == (".config", "agentdesk", "sessions")
+    assert Path(os.environ["HOME"]).resolve() != Path(cf._REAL_HOME).resolve()
+    assert str(rec).startswith(os.environ["HOME"])
+
+
 # ── child-env resolution guard ──────────────────────────────────────────────
 
 @pytest.fixture

@@ -488,6 +488,30 @@ or start a new one; non-interactive runs start a fresh session with a numeric
 suffix (foo_1, foo_2, ...). `--if-exists` overrides this. To resume an existing
 session, use `agentdesk-attach SESSION-NAME`.
 
+**Find, attach to and clean up sessions from any shell** (no need to have
+sourced the launcher):
+
+```bash
+quoin sessions                  # Agent Desk sessions for the current folder
+quoin sessions --all            # every Agent Desk session in the socket directory
+quoin sessions --all --json     # same, as JSON (name, age, state, live, root, match)
+quoin attach [NAME]             # attach; without a name, pick the one for this folder
+quoin sessions kill NAME        # delete an EXITED session (--force stops a running one)
+quoin sessions prune [--dry-run]  # delete all EXITED sessions and stale launch records
+```
+
+A session belongs to a folder when its launch record (written by the launcher
+to `~/.config/agentdesk/sessions/NAME`) names that folder or a parent of the
+current directory. Sessions started before the launcher wrote records match by
+name instead (`<folder>-agents`, `<folder>-agents_2`, ...) until they are
+restarted. Live sessions show as `running`; the session you are inside shows
+as `current`. `prune` leaves EXITED sessions that are not Agent Desk's alone:
+Zellij shares its resurrection cache across socket directories, so such a name
+can still force a `_N` suffix on a new session; remove it with
+`zellij delete-session NAME` in a shell that has not sourced the launcher.
+Inside a session, detach with `Alt s`, then `d`, and quit with `Alt s`, then
+`q` (both need Ghostty `macos-option-as-alt`); `Ctrl+Q` is intentionally unbound.
+
 **Scripted launch:**
 
 - `--panes LIST` starts the session with an explicit pane set (for example
