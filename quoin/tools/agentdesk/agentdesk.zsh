@@ -71,7 +71,9 @@ _sanitize_session_name() {
 # Per-session record of the project root, read by `quoin sessions` and
 # `quoin attach` to find a session from its folder. Best effort: any failure is
 # silent and the launch carries on (the lookup then falls back to the session
-# name). Pure shell so it adds no process start-up to a launch.
+# name). The writer never starts python3; its only extra processes are the
+# `$(mktemp ...)` command substitution, `mv`, and `mkdir` the first time, so it
+# adds little to a launch.
 _agentdesk_record_dir() {
   printf '%s\n' "${HOME:-}/.config/agentdesk/sessions"
 }
@@ -81,8 +83,10 @@ _agentdesk_record_session() {
 
   case "$name" in ''|.|..|*/*) return 0 ;; esac
   [ -n "${HOME:-}" ] && [ -n "$root" ] && [ -n "${ZELLIJ_SOCKET_DIR:-}" ] || return 0
-  dir="$(_agentdesk_record_dir)"
-  mkdir -p "$dir" 2>/dev/null || return 0
+  # Keep in step with _agentdesk_record_dir; assigned inline to skip a subshell.
+  dir="${HOME}/.config/agentdesk/sessions"
+  # -m reaches only the last component; an existing directory keeps its mode.
+  [ -d "$dir" ] || mkdir -p -m 700 "$dir" 2>/dev/null || return 0
   [ -d "$dir/$name" ] && return 0
   tmp="$(mktemp "$dir/.agentdesk-record.XXXXXX" 2>/dev/null)" || return 0
   # >| so an interactive shell with noclobber still writes into the file mktemp made.

@@ -43,10 +43,12 @@ def test_real_listing_shapes(tmp_path):
         started = run_zellij(env, sock, "attach", "-b", "-c", name, timeout=30)
         assert started.returncode == 0, started.stderr
         deadline = time.time() + 15
-        found = {}
-        while time.time() < deadline and name not in found:
+        while True:
             found = _names(zellij, env, sock)
+            if name in found or time.time() >= deadline:
+                break
             time.sleep(0.3)
+        assert name in found, found
         assert found[name].state == "running" and found[name].live
         assert found[name].age
 
@@ -54,9 +56,12 @@ def test_real_listing_shapes(tmp_path):
         # A background session that never rendered a client leaves nothing to
         # resurrect, so it disappears from the listing instead of turning EXITED.
         deadline = time.time() + 10
-        while time.time() < deadline and name in _names(zellij, env, sock):
+        while True:
+            names = _names(zellij, env, sock)
+            if name not in names or time.time() >= deadline:
+                break
             time.sleep(0.3)
-        assert name not in _names(zellij, env, sock)
+        assert name not in names, names
 
         # A second, empty socket directory lists nothing either.
         assert ads.list_sessions(zellij, env2, run=_runner(sock2)) == []

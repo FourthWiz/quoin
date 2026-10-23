@@ -126,3 +126,40 @@ def test_record_call_sits_between_socket_guard_and_create_call():
 def test_record_temp_template_ends_in_x_run():
     text = pl.AGENTDESK_ZSH.read_text()
     assert re.search(r'mktemp "\$dir/\.agentdesk-record\.XXXXXX"', text)
+
+
+def _launch_with_umask(tmp_path, rt_dir, umask="022", pre=""):
+    env = pl._env(tmp_path, rt_dir)
+    script = '%sumask %s; source "$0"; shift; agentdesk "$@"' % (pre, umask)
+    argv = ["zsh", "-c", script, str(pl.AGENTDESK_ZSH), "_", "--name", "deck-1",
+            "--panes", "shell", "--no-prompt"]
+    proc = subprocess.run(argv, env=env, cwd=str(tmp_path / "proj"), stdin=subprocess.DEVNULL,
+                          capture_output=True, text=True, timeout=pl.SUBPROCESS_TIMEOUT)
+    assert proc.returncode == 0, proc.stderr
+    return env
+
+
+def test_new_record_dir_is_private_even_with_open_umask(tmp_path, rt_dir):
+    _launch_with_umask(tmp_path, rt_dir, "022")
+    d = _record_dir(tmp_path)
+    assert stat.S_IMODE(d.stat().st_mode) == 0o700
+    assert stat.S_IMODE((d / "deck-1").stat().st_mode) == 0o600
+
+
+def test_existing_record_dir_keeps_its_mode(tmp_path, rt_dir):
+    d = _record_dir(tmp_path)
+    d.mkdir(parents=True)
+    d.chmod(0o755)
+    _launch_with_umask(tmp_path, rt_dir, "022")
+    assert stat.S_IMODE(d.stat().st_mode) == 0o755
+    assert (d / "deck-1").is_file()
+
+
+def test_record_lands_in_the_directory_the_helper_reports(tmp_path, rt_dir):
+    env = _launch_with_umask(tmp_path, rt_dir)
+    proc = subprocess.run(["zsh", "-c", 'source "$0"; _agentdesk_record_dir', str(pl.AGENTDESK_ZSH)],
+                          env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                          timeout=pl.SUBPROCESS_TIMEOUT)
+    reported = Path(proc.stdout.strip())
+    assert reported == _record_dir(tmp_path)
+    assert (reported / "deck-1").is_file()
