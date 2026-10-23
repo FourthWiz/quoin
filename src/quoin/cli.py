@@ -2916,15 +2916,27 @@ _BENCH_CHECKOUT_MSG = (
 
 def _bench_candidates(rest: list[str]) -> list[pathlib.Path]:
     """Directories that may be a quoin source checkout, most explicit first."""
-    found: list[pathlib.Path] = []
     for i, token in enumerate(rest):
+        # An explicit root is the only candidate: falling back would mix code from one tree
+        # with run state from another.
         if token == "--repo-root" and i + 1 < len(rest):
-            found.append(pathlib.Path(rest[i + 1]).expanduser())
-        elif token.startswith("--repo-root="):
-            found.append(pathlib.Path(token.split("=", 1)[1]).expanduser())
-    found.append(pathlib.Path(__file__).resolve().parents[2])
+            return [pathlib.Path(rest[i + 1]).expanduser()]
+        if token.startswith("--repo-root="):
+            return [pathlib.Path(token.split("=", 1)[1]).expanduser()]
+    found = [pathlib.Path(__file__).resolve().parents[2]]
     cwd = pathlib.Path.cwd()
-    found.extend([cwd, *cwd.parents])
+    found.append(cwd)
+    # Only the enclosing git checkout is considered, never arbitrary ancestors, so a
+    # writable parent directory cannot supply code that gets imported.
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if top.returncode == 0 and top.stdout.strip():
+            found.append(pathlib.Path(top.stdout.strip()))
+    except (OSError, subprocess.SubprocessError):
+        pass
     return found
 
 
@@ -2932,7 +2944,12 @@ def _locate_bench_checkout(rest: list[str]) -> Optional[pathlib.Path]:
     """The first candidate holding the benchmark scripts; makes them importable."""
     for candidate in _bench_candidates(rest):
         bench = candidate / "quoin" / "benchmarks"
-        if (bench / "__init__.py").is_file() and (bench / "scripts" / "run_benchmark.py").is_file():
+        scripts = bench / "scripts"
+        if (
+            (bench / "__init__.py").is_file()
+            and (scripts / "run_benchmark.py").is_file()
+            and (scripts / "tiered_entry.py").is_file()
+        ):
             import quoin
 
             inner = str(candidate / "quoin")
@@ -2957,7 +2974,6 @@ def _cmd_bench(rest: list[str]) -> int:
             return 2
         from quoin.benchmarks.scripts import tiered_entry
 
-        print("usage: quoin bench tiered [options]\n")
         print(tiered_entry.build_parser().format_help())
         return 0
     print("usage: quoin bench tiered [options]", file=sys.stderr)

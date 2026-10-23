@@ -177,17 +177,24 @@ def resolve(args):
         args.run_dir or repo_root / ".workflow_artifacts" / "quoin-benchmarks" / "runs"
     ).resolve()
     ledger = Path(args.spend_ledger or run_dir / f"{args.run_id}.spend-ledger.jsonl").resolve()
+    from quoin.benchmarks.scripts import spend_ledger
+
     cap = args.max_budget_usd_per_task or tiered.get("documented_cap_usd")
     if cap is None:
         return rb._refuse("cap-set", "the suite has no documented cap; pass --max-budget-usd-per-task")
     authorised = args.authorised_usd or tiered.get("worst_case_ceiling_usd")
     if authorised is None:
         return rb._refuse("authorised-set", "the suite has no ceiling; pass --authorised-usd")
+    try:
+        cap = spend_ledger.positive_finite_float(str(cap))
+        authorised = spend_ledger.positive_finite_float(str(authorised))
+    except argparse.ArgumentTypeError as exc:
+        return rb._refuse("suite", f"spend figure is not a positive finite number: {exc}")
     return Resolved(
         args=args, suite_path=suite_path, alias_used=alias_used, doc=doc, tasks=doc["tasks"],
         tier_names=tier_names, pilot_tier=args.pilot_tier, run_id=args.run_id,
         repo_root=repo_root, run_dir=run_dir, run_path=run_dir / args.run_id, ledger=ledger,
-        cap=float(cap), authorised=float(authorised),
+        cap=cap, authorised=authorised,
     )
 
 
@@ -204,6 +211,20 @@ def check_pilot_tier(res: Resolved) -> Optional[int]:
         advice = "start a new --run-id"
     return _rb()._refuse(
         "pilot-tier", f"this run's pilot recorded tiers {sorted(stored)}; {advice}",
+    )
+
+
+def check_resume_ledger(res: Resolved) -> Optional[int]:
+    """Refuse a resume that points at a different spend ledger than the run started with."""
+    from quoin.benchmarks.harness.tiered_report import read_manifest
+
+    stored = read_manifest(res.run_path).get("spend_ledger")
+    if not stored or Path(stored).resolve() == res.ledger:
+        return None
+    return _rb()._refuse(
+        "spend-ledger",
+        f"this run recorded its spend in {stored}; re-run with that --spend-ledger "
+        "or start a new --run-id",
     )
 
 
@@ -464,6 +485,8 @@ def _judge_pending_or_defer(res: Resolved) -> int:
     rc = 0
     if pending and ok:
         rc = rb._judge_only_main(res.suite_path, res.tasks, res.run_dir, res.run_id)
+        if rc:
+            print(RERUN_HINT)
     elif pending:
         print_deferred(res, why)
     return rc
@@ -475,6 +498,9 @@ def orchestrate(args) -> int:
     if isinstance(res, int):
         return res
     rc = check_pilot_tier(res)
+    if rc is not None:
+        return rc
+    rc = check_resume_ledger(res)
     if rc is not None:
         return rc
     rows = estimate_rows(res.doc, res.run_dir, res.run_id, res.pilot_tier)
@@ -503,7 +529,7 @@ def orchestrate(args) -> int:
             return 2
         print("prepare: done")
 
-    judge_ok, _why = judge_possible(args)
+    judge_ok, why = judge_possible(args)
     pre = rb._paired_preflight(leg_namespace(res, skip_judge=not judge_ok), res.suite_path, res.doc)
     if isinstance(pre, int):
         return pre
@@ -540,19 +566,25 @@ def orchestrate(args) -> int:
         if rc is not None:
             return rc
 
-    judge_ok, why = judge_possible(args)
+    if in_pilot:
+        # The pilot can take long enough for the daemon to go away, so look again.
+        judge_ok, why = judge_possible(args)
+    judged = False
     if remaining:
         print(f"full: {remaining} sessions")
         rc = rb._paired_main(leg_namespace(res, skip_judge=not judge_ok), res.suite_path, res.doc)
+        judged = judge_ok and rc == 0
     elif pending_rows(res) and judge_ok:
         rc = rb._judge_only_main(res.suite_path, res.tasks, res.run_dir, res.run_id)
+        judged = rc == 0
     else:
         rc = 0
     if rc:
+        # The run is unfinished, so neither a judge status nor the deferred command applies yet.
         print(RERUN_HINT)
-    if pending_rows(res) and not judge_ok:
+    elif pending_rows(res) and not judge_ok:
         print_deferred(res, why)
-    elif judge_ok:
+    elif judged:
         print("judge: ran")
     final_report(res)
     return rc

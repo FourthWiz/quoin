@@ -177,7 +177,7 @@ def _parsed(*argv):
     return tiered_entry.build_parser().parse_args(list(argv))
 
 
-# --- T-03: fake claude knob ----------------------------------------------------------
+# --- fake claude knob ----------------------------------------------------------
 
 def test_denials_knob_reaches_metrics(tw, capsys):
     w = tw
@@ -196,7 +196,7 @@ def test_denials_knob_reaches_metrics(tw, capsys):
     assert plain["permission_denial_count"] == 2 and quoin_m["permission_denial_count"] == 0
 
 
-# --- T-02: tier widening through run_benchmark.main ----------------------------------------
+# --- tier widening through run_benchmark.main ----------------------------------------
 
 def _rb_main(w, *argv, run_id="R"):
     base = ["--suite", str(w["suite"]), "--cells", PAIR, "--run-id", run_id, "--run-dir", str(w["runs"]),
@@ -223,7 +223,7 @@ def test_resume_may_widen_tiers_but_not_narrow_them(tw, capsys):
     assert len(_starts(w)) == 6
 
 
-# --- T-04: resolution and up-front checks --------------------------------------------------
+# --- resolution and up-front checks --------------------------------------------------
 
 def test_resolve_defaults(tw):
     w = tw
@@ -315,7 +315,7 @@ def test_leg_argv_parses_with_the_benchmark_parser(tw):
     assert ns.spend_ledger == res.ledger and ns.run_dir == res.run_dir
 
 
-# --- T-05: parity ----------------------------------------------------------------------
+# --- parity ----------------------------------------------------------------------
 
 def _rows(res, spec):
     """spec maps (task index, arm index) to a count, 'null', 'nometrics', 'respawn' or 'absent'."""
@@ -413,7 +413,7 @@ def test_judge_possible_reports_why_not(tw):
     assert tiered_entry.judge_possible(_parsed())[1].startswith("swebench: ")
 
 
-# --- T-06: the bench group -------------------------------------------------------------
+# --- the bench group -------------------------------------------------------------
 
 @pytest.fixture
 def cli_path(monkeypatch):
@@ -446,7 +446,7 @@ def test_bench_group_help_lists_the_options(cli_path, capsys):
     assert cli.main(["bench", "--help"]) == 0
     out = capsys.readouterr().out
     assert all(flag in out for flag in FLAGS)
-    assert "usage: quoin bench tiered [options]" in out
+    assert out.count("usage: quoin bench tiered") == 1
 
 
 def test_top_level_help_lists_bench(capsys):
@@ -485,7 +485,7 @@ def test_importing_the_cli_does_not_import_the_benchmarks():
     assert out.stdout.strip() == "False", out.stderr
 
 
-# --- T-07: end to end ---------------------------------------------------------------------
+# --- end to end ---------------------------------------------------------------------
 
 def test_fresh_run_goes_prepare_estimate_confirm_pilot_parity_full_judge(tw, capsys):
     w = tw
@@ -644,6 +644,9 @@ def test_interrupt_during_the_pilot_then_rerun_finishes_without_repaying(tw, cap
 def test_interrupt_during_the_full_leg_resumes_without_a_pilot(tw, capsys):
     w = tw
     assert _interrupted(w, 6, 6) == 1
+    out = capsys.readouterr().out
+    assert tiered_entry.RERUN_HINT in out
+    assert "judge: ran" not in out and "judge: deferred" not in out
     w["calls"].clear()
     assert _go(w, "--yes") == 0
     assert [c["tiers"] for c in w["calls"]] == [None]
@@ -777,3 +780,59 @@ def test_a_grown_remainder_in_the_pilot_phase_asks_again(tw, monkeypatch, capsys
     out = capsys.readouterr().out
     assert out.count("Spend up to") == 2 and "declined" in out
     assert [c["tiers"] for c in w["calls"]] == ["easy"]
+
+
+def test_a_spend_stop_in_the_full_leg_does_not_report_judging(tw, monkeypatch, capsys):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    shutil.rmtree(w["runs"] / "R" / "quoin-claude" / "verified_medium_001")
+    capsys.readouterr()
+    monkeypatch.setattr(run_benchmark, "_paired_main", lambda *a, **k: 3)
+    assert _go(w, "--yes") == 3
+    out = capsys.readouterr().out
+    assert tiered_entry.RERUN_HINT in out
+    assert "judge: ran" not in out and "judge: deferred" not in out
+
+
+def test_a_failed_judge_only_pass_does_not_report_judging(tw, monkeypatch, capsys):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    capsys.readouterr()
+    monkeypatch.setattr(run_benchmark, "_judge_only_main", lambda *a, **k: 1)
+    assert _go(w, "--yes") == 1
+    out = capsys.readouterr().out
+    assert tiered_entry.RERUN_HINT in out
+    assert "judge: ran" not in out
+
+
+def test_resume_with_a_different_spend_ledger_is_refused(tw, capsys):
+    w = tw
+    assert _interrupted(w, 2, 2) == 1
+    n = len(_starts(w))
+    capsys.readouterr()
+    assert _go(w, "--yes", **{"--spend-ledger": str(w["tmp"] / "other.jsonl")}) == 2
+    assert "REFUSED: spend-ledger:" in capsys.readouterr().err
+    assert len(_starts(w)) == n
+
+
+def test_malformed_suite_cap_is_refused_not_a_traceback(tw, capsys):
+    w = tw
+    suite = json.loads(w["suite"].read_text())
+    suite["tiered"]["documented_cap_usd"] = "nan"
+    w["suite"].write_text(json.dumps(suite))
+    assert tiered_entry.resolve(_parsed(*_argv(w))) == 2
+    assert "REFUSED:" in capsys.readouterr().err
+
+
+def test_checkout_without_the_entry_script_is_not_a_checkout(cli_path, tmp_path, capsys):
+    bench = tmp_path / "quoin" / "benchmarks"
+    (bench / "scripts").mkdir(parents=True)
+    (bench / "__init__.py").write_text("")
+    (bench / "scripts" / "run_benchmark.py").write_text("")
+    assert cli.main(["bench", "tiered", "--repo-root", str(tmp_path)]) == 2
+    assert "source checkout" in capsys.readouterr().err
+
+
+def test_a_bad_explicit_repo_root_does_not_fall_back(cli_path, tmp_path, capsys):
+    assert cli.main(["bench", "tiered", "--repo-root", str(tmp_path / "nope")]) == 2
+    assert "source checkout" in capsys.readouterr().err
