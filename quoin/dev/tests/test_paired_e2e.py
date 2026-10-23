@@ -255,11 +255,26 @@ def test_a_lingering_child_does_not_stall_the_session(world, variant):
     assert _run(w) == 0
     assert time.monotonic() - started < 40
     assert len(w["judged"]) == 6
+    children = [e["pid"] for e in read_paired_log(w["log"]) if e["event"] == "child"]
+    assert len(children) == 6
+    for pid in children:
+        assert _pid_gone(pid)
     for arm in ARMS:
         for t in w["tasks"]:
             row = w["runs"] / "R" / arm / t["id"]
             assert "edited by" in (row / "diff.patch").read_text()
     _no_leftovers(w)
+
+
+def test_pilot_rows_in_the_ledger_do_not_count_against_the_suite_ceiling(world):
+    from quoin.benchmarks.harness import paired_spend
+
+    w = world
+    for task in ("pilot_a", "pilot_b", "pilot_c"):
+        attempt = paired_spend.reserve(w["ledger"], "R-pilot", task, "simple-claude", 5.5)
+        paired_spend.settle(w["ledger"], attempt, "R-pilot", task, "simple-claude", 5.5, 5.0)
+    assert _run(w, "--skip-judge") == 0
+    assert len(_starts(w)) == 6
 
 
 def test_a_skill_written_into_the_plain_sandbox_aborts_before_the_next_plain_task(world):
@@ -300,6 +315,17 @@ def test_sigint_during_install_exits_cleanly(world):
     _no_leftovers(w)
     assert read_paired_log(w["log"]) == []
     assert not w["ledger"].exists() or _ledger(w) == []
+
+
+def _pid_gone(pid, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.05)
+    return False
 
 
 def _pgid_gone(pgid, timeout=5.0):

@@ -182,10 +182,12 @@ if opts.get("commit"):
 background = opts.get("background")
 if background == "devnull":
     devnull = open(os.devnull, "r+")
-    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], stdin=devnull,
-                     stdout=devnull, stderr=devnull, close_fds=True)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], stdin=devnull,
+                             stdout=devnull, stderr=devnull, close_fds=True)
+    log({"event": "child", "pid": child.pid})
 elif background == "inherit":
-    subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], close_fds=False)
+    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"], close_fds=False)
+    log({"event": "child", "pid": child.pid})
 
 time.sleep(opts.get("delay", 0.05))
 emit({"type": "assistant", "message": {"model": "claude-opus-4-7", "content": [{"type": "text", "text": "done"}]}})
