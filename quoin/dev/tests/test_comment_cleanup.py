@@ -477,7 +477,7 @@ def test_pinned_corpus_docstring_hits_byte_identical():
     exclusion_sc = cc.docstring_exclusion_lines(simple_claude_text)
     exclusion_rb = cc.docstring_exclusion_lines(run_benchmark_text)
     assert 115 in exclusion_sc
-    assert 371 in exclusion_rb
+    assert 374 in exclusion_rb
 
 
 # ---------------------------------------------------------------------------

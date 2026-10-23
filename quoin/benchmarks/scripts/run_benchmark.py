@@ -365,6 +365,9 @@ def _write_manifest(
     wall_clock_seconds: float = 600,
     usd_cap: Optional[float] = None,
     fixture_repo: Optional[Path] = None,
+    *,
+    extra: Optional[dict] = None,
+    started_at: Optional[str] = None,
 ) -> Path:
     """Write run-manifest.yaml at the start of a run.
 
@@ -374,7 +377,7 @@ def _write_manifest(
     """
     manifest = {
         "run_id": run_id,
-        "started_at": datetime.datetime.utcnow().isoformat() + "Z",
+        "started_at": started_at or datetime.datetime.utcnow().isoformat() + "Z",
         "suite_path": str(suite_path),
         "suite_sha": _suite_sha(suite_path),
         "cells": cells,
@@ -394,6 +397,8 @@ def _write_manifest(
         "temperature": "0 for HumanEval+, 0.2 for SWE-bench Lite",
         "gate_auto_approve_env": "QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id>",
     }
+    for key, value in (extra or {}).items():
+        manifest[key] = json.dumps(value, sort_keys=True) if isinstance(value, dict) else value
 
     run_path = run_dir / run_id
     run_path.mkdir(parents=True, exist_ok=True)
@@ -436,7 +441,7 @@ def run_benchmark(
     expected_quoin_commit: Optional[str] = None,
     max_budget_usd_per_task: Optional[float] = None,
     usd_cap: Optional[float] = None,
-    wall_clock_seconds: float = 600,
+    wall_clock_seconds: Optional[float] = None,
 ) -> None:
     """Execute the full benchmark run.
 
@@ -453,6 +458,8 @@ def run_benchmark(
 
     if repo_root is None:
         repo_root = Path(".")
+    if wall_clock_seconds is None:
+        wall_clock_seconds = 600
 
     # Load suite
     suite = json.loads(suite_path.read_text(encoding="utf-8"))["tasks"]
@@ -686,6 +693,437 @@ def _check_flag_conflicts(parser, args) -> None:
                 parser.error(f"{name} cannot be combined with {other}")
 
 
+def _is_paired(doc: dict) -> bool:
+    tiered = doc.get("tiered")
+    return isinstance(tiered, dict) and tiered.get("paired_run") is True
+
+
+def _scoped_tasks(doc: dict, tiers_arg: Optional[str]):
+    """Tasks of a tiered suite limited to --tiers; returns (tasks, tier names) or exits 2."""
+    tiered = doc.get("tiered")
+    if not isinstance(tiered, dict):
+        if tiers_arg:
+            print("ERROR: --tiers needs a suite with a tiered block", file=sys.stderr)
+            sys.exit(2)
+        return doc["tasks"], []
+    known = list((tiered.get("tiers") or {}).keys())
+    if not tiers_arg:
+        return doc["tasks"], sorted(known)
+    wanted = [t.strip() for t in tiers_arg.split(",") if t.strip()]
+    unknown = [t for t in wanted if t not in known]
+    if unknown or not wanted:
+        print(
+            f"ERROR: unknown tier {', '.join(unknown) or tiers_arg!r}; known tiers: "
+            f"{', '.join(known)}",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return [t for t in doc["tasks"] if t.get("tier") in wanted], sorted(set(wanted))
+
+
+def _refuse(clause: str, detail: str) -> int:
+    print(f"REFUSED: {clause}: {detail}", file=sys.stderr)
+    return 2
+
+
+def _git_version_tuple() -> Optional[tuple]:
+    try:
+        proc = subprocess.run(["git", "version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"(\d+)\.(\d+)", proc.stdout or "")
+    return (int(match.group(1)), int(match.group(2))) if proc.returncode == 0 and match else None
+
+
+def _paired_rows_to_spawn(run_dir: Path, run_id: str, tasks: list, cells) -> Optional[int]:
+    """Rows that would spawn on this invocation; None when a foreign row blocks the run."""
+    from quoin.benchmarks.harness import paired_run
+
+    count = 0
+    for task in tasks:
+        for cell in cells:
+            t_dir = run_dir / run_id / cell / task["id"]
+            sup = paired_run._superseded_dir(run_dir, run_id, cell, task["id"])
+            state = paired_run.row_state(t_dir, superseded_dir=sup)
+            if state == "foreign":
+                print(f"REFUSED: run-dir: existing row is not from a paired run: {t_dir}",
+                      file=sys.stderr)
+                return None
+            if state in ("absent", "respawn"):
+                count += 1
+    return count
+
+
+def _check_resume_manifest(run_dir, run_id, suite_path, cap, tier_names) -> Optional[str]:
+    """Reason the stored manifest does not match this invocation, or None."""
+    from quoin.benchmarks.harness.tiered_report import read_manifest
+
+    manifest = read_manifest(run_dir / run_id)
+    if not manifest:
+        return "no readable run-manifest.yaml to resume from"
+    if manifest.get("suite_sha") != _suite_sha(suite_path):
+        return "suite_sha differs from the stored manifest"
+    try:
+        stored_cap = round(float(manifest.get("max_budget_usd_per_task")), 2)
+    except (TypeError, ValueError):
+        return "stored max_budget_usd_per_task is unreadable"
+    if stored_cap != round(float(cap), 2):
+        return f"--max-budget-usd-per-task differs from the stored {manifest.get('max_budget_usd_per_task')}"
+    if sorted(manifest.get("tiers") or []) != sorted(tier_names):
+        return "tiers differ from the stored manifest"
+    if manifest.get("arm_config_mode") != "symmetric":
+        return "arm_config_mode differs from the stored manifest"
+    return None
+
+
+def _paired_dry_run(args, suite_path: Path, doc: dict) -> int:
+    """Print the paired matrix and worst case; starts no process."""
+    from quoin.benchmarks.harness import paired_run, repo_prep
+    from quoin.benchmarks.harness.paired_spend import worst_case as _worst_case
+
+    tasks, _tiers = _scoped_tasks(doc, args.tiers)
+    tiered = doc["tiered"]
+    cap = args.max_budget_usd_per_task
+    target = float(tiered.get("worst_case_target_usd", 100))
+    ceiling = float(tiered.get("worst_case_ceiling_usd", target))
+    arms = list(paired_run.PAIR_ORDER)
+    print(f"DRY RUN — Run ID: {args.run_id}")
+    print(f"Suite: {suite_path} ({len(tasks)} tasks)")
+    print("Paired mode: plain then quoin per task, one session at a time")
+    print()
+    header = f"{'Task ID':<24} {'Tier':<8} {'Arm':<7} {'Cap':<8} Wall clock"
+    print(header)
+    print("-" * len(header))
+    for task in tasks:
+        wall = paired_run.resolve_wall_clock(args.wall_clock_seconds, task)
+        for cell in arms:
+            arm = "plain" if cell == "simple-claude" else "quoin"
+            cap_text = f"${cap:.2f}" if cap is not None else "none"
+            print(f"{task['id']:<24} {task.get('tier', ''):<8} {arm:<7} {cap_text:<8} {wall:.0f}s")
+    print()
+    print("Cost estimates:")
+    for cell, est in _estimate_cost_dry_run(arms, tasks).items():
+        print(f"  {cell}: {est}")
+    print()
+    resolved_model = _probe_claude_model()
+    print(f"Resolved model: {resolved_model}")
+    try:
+        from quoin.benchmarks.harness.cost import load_pricing
+        pricing_models = load_pricing().get("models", {})
+    except Exception:
+        pricing_models = {}
+    print(f"Exact pricing key: {resolved_model in pricing_models}")
+
+    if cap is not None:
+        worst = _worst_case(cap, len(tasks), len(arms))
+        print(f"WORST CASE: ${worst:.2f} (cap x {len(tasks)} tasks x {len(arms)} arms)")
+    else:
+        worst = None
+        print("WORST CASE: UNBOUNDED (no --max-budget-usd-per-task set)")
+    print(f"Target: ${target:.2f}, enforced ceiling: ${ceiling:.2f}")
+
+    print()
+    print("A paid run would check (advisory, nothing is started here):")
+    print(f"  cap: {'set' if cap is not None else 'MISSING (--max-budget-usd-per-task)'}")
+    print(f"  spend ledger: {'set' if args.spend_ledger else 'MISSING (--spend-ledger)'}")
+    print(f"  authorised: {'set' if args.authorised_usd else 'MISSING (--authorised-usd)'}")
+    print(f"  suite ceiling: ${ceiling:.2f}; worst case within it: "
+          f"{'yes' if worst is not None and worst <= ceiling else 'NO'}")
+    auth_set = [k for k in ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY") if os.environ.get(k)]
+    print(f"  auth variable: {'one set' if len(auth_set) == 1 else 'MISSING or ambiguous'}")
+    missing = []
+    for task in tasks:
+        if task.get("source") != "swebench_verified":
+            continue
+        found = repo_prep.pin_ref_status_offline(task)
+        if found != task.get("base_commit"):
+            missing.append(task["id"])
+    print(f"  pin refs: {'all present' if not missing else 'missing for ' + ', '.join(missing)}")
+
+    passed, reason = dry_run_gate_check(
+        max_budget_usd_per_task=cap, worst_case_usd=worst, worst_case_ceiling=ceiling,
+    )
+    if not passed:
+        print(
+            f"GATE-STOP: dry-run precondition failed — {reason}; "
+            "re-authorisation required before any paid arm",
+            file=sys.stderr,
+        )
+        return 2
+    return 0
+
+
+def _paired_final_manifest_checks(outcome) -> str:
+    if outcome.stop_reason == "abort" and outcome.rows:
+        last = outcome.rows[-1]
+        return f"runtime-tripped: {(outcome.abort_detail or ['abort'])[0]} on {last['cell']}/{last['task_id']}"
+    return "static-passed; runtime-passed"
+
+
+def _paired_main(args, suite_path: Path, doc: dict) -> int:
+    """Run the paired benchmark; every refusal exits 2 before any repo prep or session."""
+    import signal
+    import tempfile  # noqa: F401  (sandbox parent resolves through tempfile at call time)
+
+    from quoin.benchmarks.harness import (
+        arm_identity, arm_sandbox, judge, paired_run, paired_spend, repo_prep, runner,
+    )
+    from quoin.benchmarks.harness.aggregate import aggregate_run
+    from quoin.benchmarks.harness.config import BudgetSpec, HarnessConfig
+    from quoin.benchmarks.harness.session_state import is_judge_pending
+    from quoin.benchmarks.scripts import run_three_arm_gate as gate
+    from quoin.benchmarks.scripts.check_invariants import check_invariants
+
+    tasks, tier_names = _scoped_tasks(doc, args.tiers)
+    tiered = doc["tiered"]
+    cap = args.max_budget_usd_per_task
+    run_dir: Path = args.run_dir
+    run_id = args.run_id
+    arms = list(paired_run.PAIR_ORDER)
+
+    cells = [c.strip() for c in args.cells.split(",") if c.strip()]
+    if sorted(cells) != sorted(arms):
+        return _refuse("cells", "paired suites need --cells simple-claude,quoin-claude")
+    if args.fixture_repo is not None:
+        return _refuse("fixture-repo", "paired suites do not take --fixture-repo")
+    if cap is None:
+        return _refuse("cap-set", "--max-budget-usd-per-task is required")
+
+    run_path = run_dir / run_id
+    has_rows = any(
+        (run_path / cell).is_dir() and any(p.is_dir() for p in (run_path / cell).iterdir())
+        for cell in arms
+    )
+    if has_rows and not args.resume:
+        return _refuse("run-dir", f"{run_path} already holds rows; use --resume or a new --run-id")
+    if args.resume and has_rows:
+        why = _check_resume_manifest(run_dir, run_id, suite_path, cap, tier_names)
+        if why:
+            return _refuse("resume", why)
+
+    n_spawns = _paired_rows_to_spawn(run_dir, run_id, tasks, arms)
+    if n_spawns is None:
+        return 2
+    suite_ceiling = float(tiered.get("worst_case_ceiling_usd", 110))
+    for clause, ok, detail in paired_spend.preflight_spend(
+        args.spend_ledger, run_id, cap, n_spawns, args.authorised_usd, suite_ceiling,
+    ):
+        if not ok:
+            return _refuse(clause, detail)
+
+    try:
+        auth = arm_sandbox.select_auth(os.environ)
+    except ValueError as exc:
+        return _refuse("auth", str(exc))
+
+    version = _git_version_tuple()
+    if version is None or version < (2, 42):
+        found = ".".join(map(str, version)) if version else "unknown"
+        return _refuse("git-version", f"git 2.42 or newer is required, found {found}")
+    problems = repo_prep.check_pin_refs(tasks)
+    if problems:
+        return _refuse("pin-refs", "; ".join(problems))
+
+    swebench_version = "skipped"
+    if not args.skip_judge:
+        try:
+            docker = subprocess.run(["docker", "info"], capture_output=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            return _refuse("docker", "docker info did not run; use --skip-judge to defer judging")
+        if docker.returncode != 0:
+            return _refuse("docker", "docker info failed; use --skip-judge to defer judging")
+        python = os.environ.get(judge.SWEBENCH_PYTHON_ENV) or sys.executable
+        try:
+            swebench_version = judge.probe_swebench_version(python) or "not installed"
+        except (OSError, subprocess.SubprocessError):
+            swebench_version = "not installed"
+        if swebench_version != judge.SWEBENCH_PINNED_VERSION:
+            return _refuse(
+                "swebench",
+                f"swebench {judge.SWEBENCH_PINNED_VERSION} is required, found {swebench_version}",
+            )
+
+    arm_root = Path(args.arm_root or args.repo_root).resolve()
+    expected = args.expected_quoin_commit or gate.worktree_head(arm_root)
+    if not expected:
+        return _refuse("arm-tree", f"cannot read HEAD of {arm_root}")
+    tree_problems = arm_sandbox.check_arm_tree(arm_root, expected)
+    if tree_problems:
+        return _refuse("arm-tree", "; ".join(tree_problems))
+
+    gate_state = paired_run.InterruptGate()
+    signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    previous = {sig: signal.signal(sig, gate_state.handler) for sig in signals}
+    sandboxes: list = []
+    try:
+        try:
+            plain = arm_sandbox.create_sandbox("plain")
+            sandboxes.append(plain)
+            quoin_box = arm_sandbox.create_sandbox("quoin")
+            sandboxes.append(quoin_box)
+            install = arm_sandbox.install_quoin(quoin_box, arm_root, expected)
+            if not install.get("ok"):
+                return _refuse("quoin-install", str(install.get("reason")))
+            installer = gate._load_arm_installer(arm_root)
+            canonical = tuple(installer.CANONICAL_SKILLS) if installer is not None else ()
+            plain_problems = arm_identity.check_plain_sandbox(plain.home)
+            if plain_problems:
+                return _refuse(arm_identity.PLAIN_REASON, "; ".join(plain_problems))
+            quoin_problems = arm_identity.check_quoin_sandbox(quoin_box.home, arm_root)
+            if quoin_problems:
+                return _refuse(arm_identity.QUOIN_REASON, "; ".join(quoin_problems))
+
+            mode = "symmetric"
+            distinctive = arm_identity.distinctive_quoin_skills(canonical)
+            identities = {
+                "simple-claude": arm_identity.ArmIdentity(
+                    mode=arm_identity.QUOIN_FREE, config_dir=Path(os.path.realpath(plain.claude_dir)),
+                    canonical=canonical, distinctive=distinctive, arm_config_mode=mode),
+                "quoin-claude": arm_identity.ArmIdentity(
+                    mode=arm_identity.QUOIN_REQUIRED, config_dir=Path(os.path.realpath(quoin_box.claude_dir)),
+                    canonical=canonical, distinctive=distinctive, arm_config_mode=mode),
+            }
+            boxes = {"simple-claude": plain, "quoin-claude": quoin_box}
+            envs = {
+                cell: arm_sandbox.build_session_env(boxes[cell], cell, run_id, auth)
+                for cell in arms
+            }
+            plain_print = arm_sandbox.config_fingerprint(plain.claude_dir)
+            quoin_print = arm_sandbox.config_fingerprint(quoin_box.claude_dir)
+
+            def recheck_plain():
+                out = []
+                if arm_sandbox.config_fingerprint(plain.claude_dir) != plain_print:
+                    out.append("plain config directory changed since the start of the run")
+                if arm_sandbox.installed_plugin_names(plain.claude_dir):
+                    out.append("plain config directory has installed plugins")
+                return out
+
+            def recheck_quoin():
+                if arm_sandbox.config_fingerprint(quoin_box.claude_dir) != quoin_print:
+                    return ["quoin config directory changed since the install"]
+                return []
+
+            configs = {
+                cell: HarnessConfig(
+                    suite_path=suite_path, run_dir=run_dir, cells=[cell], max_parallel=1,
+                    budget=BudgetSpec(wall_clock_seconds=600, max_retries=0),
+                    quoin_install_mode="skip", expected_quoin_commit=expected, arm_root=arm_root,
+                    max_budget_usd=cap, session_env=envs[cell], arm_identity=identities[cell],
+                    defer_judge=True, row_write_hold=gate_state.hold,
+                )
+                for cell in arms
+            }
+            plan = paired_run.PairedPlan(
+                run_id=run_id, run_dir=run_dir, tasks=tasks, cap=cap, ledger=args.spend_ledger,
+                authorised=args.authorised_usd, suite_ceiling=suite_ceiling, usd_cap=args.usd_cap,
+                wall_clock_flag=args.wall_clock_seconds, configs=configs, resume=args.resume,
+                identity_recheck={"simple-claude": recheck_plain, "quoin-claude": recheck_quoin},
+            )
+        except paired_run.PairedInterrupted as exc:
+            print(f"Interrupted by {exc.signal_name} before the run started", file=sys.stderr)
+            return 1
+
+        waits = {t["id"]: paired_run.resolve_wall_clock(args.wall_clock_seconds, t) for t in tasks}
+        by_tier: dict = {}
+        for t in tasks:
+            by_tier[t.get("tier", "")] = max(by_tier.get(t.get("tier", ""), 0), waits[t["id"]])
+        worst = paired_spend.worst_case(cap, len(tasks), len(arms))
+        started_at = datetime.datetime.utcnow().isoformat() + "Z"
+        extra = {
+            "paired_mode": True,
+            "pair_order": arms,
+            "effective_max_parallel": 1,
+            "requested_max_parallel": args.max_parallel,
+            "arm_config_mode": "symmetric",
+            "contamination_checks": "static-passed",
+            "sandbox_static_checks": {"simple-claude": "pass", "quoin-claude": "pass"},
+            "session_env_keys": {c: arm_sandbox.session_env_keys(envs[c]) for c in arms},
+            "auth_env_key": auth[0],
+            "permissions_profile": arm_sandbox.SANDBOX_BASE_PERMISSIONS,
+            "expected_quoin_commit": expected,
+            "repo_cache_checks": "pass",
+            "git_version": ".".join(map(str, version)),
+            "swebench_version": swebench_version,
+            "dataset_revision": tiered.get("dataset_revision"),
+            "judge_phase": "skipped" if args.skip_judge else "deferred",
+            "tiers": tier_names,
+            "max_budget_usd_per_task": cap,
+            "worst_case_usd": worst,
+            "worst_case_target_usd": tiered.get("worst_case_target_usd"),
+            "worst_case_ceiling_usd": suite_ceiling,
+            "authorised_usd": args.authorised_usd,
+            "spend_ledger": str(args.spend_ledger),
+            "wall_clock_budget_seconds": max(waits.values()) if waits else 600,
+            "wall_clock_budget_seconds_by_tier": by_tier,
+            "resume_policy": "session-json",
+            "suite_path_resolved": str(suite_path.resolve()),
+        }
+
+        def write_manifest(**more):
+            return _write_manifest(
+                run_dir, run_id, suite_path, arms, 1, args.resume, args.repo_root,
+                wall_clock_seconds=extra["wall_clock_budget_seconds"], usd_cap=args.usd_cap,
+                extra={**extra, **more}, started_at=started_at,
+            )
+
+        write_manifest()
+        print(f"Max parallel: 1 (paired mode runs one session at a time; --max-parallel "
+              f"{args.max_parallel} ignored)")
+        interrupted = None
+        outcome = paired_run.PairedOutcome()
+        try:
+            outcome = paired_run.run_paired(plan)
+        except paired_run.PairedRefusal as exc:
+            print(f"REFUSED: run-dir: {exc}", file=sys.stderr)
+            return 2
+        except paired_run.PairedInterrupted as exc:
+            interrupted = exc.signal_name
+
+        if interrupted:
+            write_manifest(interrupted=interrupted)
+            print(f"Interrupted by {interrupted}; rerun with --resume to continue", file=sys.stderr)
+            return 1
+
+        if not args.skip_judge and outcome.stop_reason is None:
+            for row in paired_run.judge_phase(plan, doc["tasks"], tiered.get("dataset_revision")):
+                print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
+        write_manifest(contamination_checks=_paired_final_manifest_checks(outcome))
+
+        finished_at = datetime.datetime.utcnow().isoformat() + "Z"
+        aggregate_run(run_dir, run_id, started_at=started_at, finished_at=finished_at,
+                      suite_path=suite_path.resolve())
+        report = check_invariants(run_dir, run_id)
+        (run_path / "invariants-report.md").write_text(report.to_markdown(), encoding="utf-8")
+        print(f"Summary written to: {run_path / 'summary.md'}")
+
+        pending = sum(
+            1 for cell in arms for t in tasks
+            if (run_path / cell / t["id"]).is_dir() and is_judge_pending(run_path / cell / t["id"])
+        )
+        if outcome.stop_reason == "abort":
+            print(f"Run aborted: {'; '.join(outcome.abort_detail or [])}", file=sys.stderr)
+            return 1
+        if outcome.stop_reason is not None:
+            print(f"Run stopped: {outcome.stop_reason}: {'; '.join(outcome.abort_detail or [])}",
+                  file=sys.stderr)
+            return 3
+        if args.skip_judge:
+            print(f"Judging deferred: {pending} rows pending; run --judge-only on a host with Docker")
+            return 0
+        return 0 if pending == 0 else 1
+    except paired_run.PairedInterrupted as exc:
+        print(f"Interrupted by {exc.signal_name}", file=sys.stderr)
+        return 1
+    finally:
+        for box in sandboxes:
+            note = arm_sandbox.remove_sandbox(box)
+            if note:
+                print(note, file=sys.stderr)
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
 def main() -> None:
     from quoin.benchmarks.scripts import spend_ledger
 
@@ -792,8 +1230,9 @@ def main() -> None:
     parser.add_argument(
         "--wall-clock-seconds",
         type=int,
-        default=600,
-        help="Per-task wall-clock budget in seconds (default: 600)",
+        default=None,
+        help="Per-task wall-clock budget in seconds (default: the task's own value"
+             " for tiered suites, else 600)",
     )
     parser.add_argument(
         "--verify-model",
@@ -839,6 +1278,18 @@ def main() -> None:
         help="Harness retries per task. Only 0 is supported in v1; final pass rate"
              " equals first-attempt pass rate.",
     )
+    parser.add_argument(
+        "--tiers",
+        type=str,
+        default=None,
+        help="Comma-separated tier names to run from a tiered suite (default: all tiers)",
+    )
+    parser.add_argument(
+        "--skip-judge",
+        action="store_true",
+        help="Paired suites only: run the sessions and leave every row judge-pending"
+             " for a later --judge-only on a host with Docker.",
+    )
     args = parser.parse_args()
 
     if args.run_id is None and not args.prepare_repos:
@@ -871,12 +1322,24 @@ def main() -> None:
         print(f"ERROR: Suite file not found: {suite_path}", file=sys.stderr)
         sys.exit(1)
 
-    suite = json.loads(suite_path.read_text(encoding="utf-8"))["tasks"]
+    suite_doc = json.loads(suite_path.read_text(encoding="utf-8"))
+    suite = suite_doc["tasks"]
+    paired = _is_paired(suite_doc)
+    if args.skip_judge and not paired:
+        print("ERROR: --skip-judge applies only to paired suites", file=sys.stderr)
+        sys.exit(2)
+    if args.tiers and not isinstance(suite_doc.get("tiered"), dict):
+        print("ERROR: --tiers needs a suite with a tiered block", file=sys.stderr)
+        sys.exit(2)
 
     if args.prepare_repos:
         sys.exit(_prepare_repos_main(suite_path, suite))
     if args.judge_only:
         sys.exit(_judge_only_main(suite_path, suite, args.run_dir, args.run_id))
+
+    if paired:
+        sys.exit(_paired_dry_run(args, suite_path, suite_doc) if args.dry_run
+                 else _paired_main(args, suite_path, suite_doc))
 
     if args.dry_run:
         print(f"DRY RUN — Run ID: {args.run_id}")

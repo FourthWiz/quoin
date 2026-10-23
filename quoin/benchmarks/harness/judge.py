@@ -517,6 +517,17 @@ def _tail(text, limit: int = _LOG_TAIL_CHARS) -> str:
     return (text or "")[-limit:]
 
 
+def probe_swebench_version(python: str, run=subprocess.run) -> Optional[str]:
+    """The swebench version importable by `python`, or None when it is not installed."""
+    probe = run(
+        [python, "-c", "import importlib.metadata as m; print(m.version('swebench'))"],
+        capture_output=True, text=True, timeout=60,
+    )
+    if probe.returncode != 0:
+        return None
+    return (probe.stdout or "").strip()
+
+
 def judge_swebench_verified(
     task_spec: dict,
     patch_path,
@@ -574,14 +585,10 @@ def judge_swebench_verified(
 
     probed = False
     try:
-        probe = run(
-            [python, "-c", "import importlib.metadata as m; print(m.version('swebench'))"],
-            capture_output=True, text=True, timeout=60,
-        )
+        version = probe_swebench_version(python, run)
         probed = True
-        if probe.returncode != 0:
+        if version is None:
             return done("error", "swebench-not-installed", False)
-        version = (probe.stdout or "").strip()
         extra["swebench_version"] = version
         if version != SWEBENCH_PINNED_VERSION:
             return done("error", "swebench-version-mismatch", False)

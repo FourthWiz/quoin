@@ -217,6 +217,37 @@ def check_pin_refs(tasks: list, cache_root=None) -> list:
     return problems
 
 
+def pin_ref_status_offline(task: dict, cache_root=None) -> Optional[str]:
+    """Commit the task's pin ref points at, read straight from the bare mirror's files.
+
+    Looks at the loose ref file first, then packed-refs. Runs no git process.
+    Returns None when the mirror or the ref is missing.
+    """
+    try:
+        repo = validate_repo_name(task["repo"])
+        iid = validate_instance_id(task["source_id"])
+    except (RepoPrepError, KeyError):
+        return None
+    mirror = mirror_path(_resolve_cache_root(cache_root), repo)
+    ref = PIN_REF_PREFIX + iid
+    try:
+        loose = (mirror / ref).read_text(encoding="utf-8").strip()
+        if _SHA40.match(loose):
+            return loose
+    except OSError:
+        pass
+    try:
+        for line in (mirror / "packed-refs").read_text(encoding="utf-8").splitlines():
+            if line.startswith(("#", "^")):
+                continue
+            sha, _, name = line.partition(" ")
+            if name.strip() == ref and _SHA40.match(sha):
+                return sha
+    except OSError:
+        pass
+    return None
+
+
 @dataclass
 class PreparedRepo:
     path: Path
