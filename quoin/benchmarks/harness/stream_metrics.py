@@ -35,15 +35,28 @@ def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def bucket_has_usage(bucket):
+    """True when a per-model bucket reports at least one non-zero token count."""
+    return isinstance(bucket, dict) and any(
+        _is_number(bucket.get(key)) and bucket[key] != 0 for _, key in TOKEN_FIELDS
+    )
+
+
 def sum_model_usage(model_usage):
-    """Sum per-model usage buckets into one totals dict, or None."""
+    """Sum per-model usage buckets into one totals dict, or None.
+
+    Empty and all-zero buckets are skipped; when nothing is left the usage is
+    not priceable and the result is None.
+    """
     if not model_usage or not isinstance(model_usage, dict):
         return None
     totals = {"input": 0, "output": 0, "cache_read": 0, "cache_write": 0}
     cost_total = None
+    used = 0
     for bucket in model_usage.values():
-        if not isinstance(bucket, dict):
+        if not bucket_has_usage(bucket):
             continue
+        used += 1
         for name, key in TOKEN_FIELDS:
             value = bucket.get(key)
             if _is_number(value):
@@ -51,6 +64,8 @@ def sum_model_usage(model_usage):
         cost = bucket.get("costUSD")
         if _is_number(cost):
             cost_total = cost if cost_total is None else cost_total + cost
+    if not used:
+        return None
     totals["cost_usd"] = cost_total
     return totals
 

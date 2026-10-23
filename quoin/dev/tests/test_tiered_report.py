@@ -287,7 +287,7 @@ def test_rows_awaiting_judging_make_results_provisional(tmp_path):
     v = t["validity"]
     assert len(v["judge_pending_rows"]) == 9
     assert v["unreadable_rows"] == [] and v["final"] is False and v["valid"] is True
-    assert v["provisional_reasons"] == ["9 rows await judging (run --judge-only)"]
+    assert v["provisional_reasons"] == ["9 rows await judging (run --judge-only) and count as errors until then"]
     md = (run_path / "summary.md").read_text()
     section = md.split("## Tiered comparison")[1]
     assert section.index("**Results are provisional:**") < section.index("|")
@@ -392,3 +392,195 @@ def test_read_manifest_round_trip(tmp_path):
     assert m["run_id"] == "r-1" and m["n"] == "3" and m["nothing"] is None
     assert m["tiers"] == ["easy", "large"] and m["model"] == OPUS
     assert read_manifest(tmp_path / "missing") == {}
+
+
+# --- follow-ups: guarded section, pending rows, pricing, escaping, caps ------
+
+def test_named_but_missing_suite_is_reported_not_dropped(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    suite_path.unlink()
+    summary = aggregate.aggregate_run(run_dir, run_id)
+    assert summary["tiered"] == {"error": "suite file not found: %s" % suite_path}
+    assert "suite file not found" in (run_dir / run_id / "summary.md").read_text()
+
+
+def test_missing_tiered_import_is_recorded_not_raised(tmp_path, monkeypatch):
+    run_dir, run_id, _ = build_tiered_run(tmp_path)
+    monkeypatch.setattr(tiered_report, "read_manifest", lambda p: (_ for _ in ()).throw(RuntimeError("x" * 500)))
+    summary = aggregate.aggregate_run(run_dir, run_id)
+    assert summary["tiered"]["error"].startswith("RuntimeError: xxx")
+    assert len(summary["tiered"]["error"]) == 200
+
+
+def test_pending_row_counts_as_error_and_the_banner_says_so(tmp_path):
+    run_dir, run_id, _ = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    (run_path / PLAIN_CELL / "e1" / "session.json").write_text(json.dumps({"judge_required": True}))
+    aggregate.aggregate_run(run_dir, run_id)
+    t = json.loads((run_path / "summary.json").read_text())["tiered"]
+    assert t["tiers"]["easy"][PLAIN_CELL]["passes"] == 0
+    assert t["tiers"]["easy"][PLAIN_CELL]["outcomes"]["error"] == 1
+    assert "count as errors until then" in (run_path / "summary.md").read_text()
+
+
+def test_runtime_cost_must_be_a_finite_number(tmp_path):
+    usage = {OPUS: {"inputTokens": 10, "outputTokens": 10}}
+    for bad in (float("nan"), float("inf")):
+        task_dir = write_row(tmp_path, "quoin-claude", "e1", verdict="pass", wall=1,
+                             model_usage=usage, cost=bad)
+        row = load_row(task_dir, OPUS, load_pricing())
+        assert row["usd_source"] == "estimated" and row["usd"] == row["usd"] < float("inf")
+
+
+def test_empty_and_all_zero_usage_buckets_are_not_priceable(tmp_path):
+    from quoin.benchmarks.harness.stream_metrics import sum_model_usage
+
+    zero = {"inputTokens": 0, "outputTokens": 0, "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0}
+    assert sum_model_usage({OPUS: zero, "x": {}}) is None
+    assert sum_model_usage({OPUS: zero, "claude-sonnet-4-5": {"outputTokens": 5}})["output"] == 5
+    task_dir = write_row(tmp_path, "quoin-claude", "e1", verdict="pass", wall=1, model_usage={OPUS: zero})
+    row = load_row(task_dir, OPUS, load_pricing())
+    assert row["usd_source"] == "unavailable" and row["tokens_source"] == "unavailable"
+
+
+def test_unsafe_suite_task_ids_are_skipped_and_listed(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    suite = json.loads(suite_path.read_text())
+    for bad in ("..", "a/b", "x|y"):
+        suite["tasks"].append({"id": bad, "tier": "easy", "source": "swebench_verified"})
+    suite_path.write_text(json.dumps(suite))
+    write_manifest(run_dir / run_id, run_id=run_id, suite_path=suite_path, suite_sha=suite_sha(suite_path),
+                   simple_claude_model=OPUS, quoin_claude_model=OPUS, max_retries=0)
+    aggregate.aggregate_run(run_dir, run_id)
+    t = json.loads((run_dir / run_id / "summary.json").read_text())["tiered"]
+    assert t["validity"]["invalid_task_ids"] == ["..", "a/b", "x|y"]
+    assert t["overall"]["n"] == 5
+    assert "Skipped suite task ids" in (run_dir / run_id / "summary.md").read_text()
+
+
+def test_table_cells_escape_pipes_without_touching_the_shared_helper(tmp_path):
+    run_path, summary, _ = _aggregate(tmp_path)
+    report = summary["tiered"]
+    report["pairs"][0]["task_id"] = "a|b"
+    seen = []
+    tiered_report.render_tiered_markdown(report, lambda rows: seen.extend(rows) or "")
+    cells = [c for row in seen for c in row]
+    assert "a\\|b" in cells and "a|b" not in cells
+    assert aggregate._format_md_table([["a|b"]]) == "| a|b |\n"
+
+
+def test_quoin_contaminated_arm_is_an_identity_trip(tmp_path):
+    run_dir, run_id, _ = build_tiered_run(tmp_path)
+    write_row(run_dir / run_id, QUOIN_CELL, "e1", verdict="error", wall=1,
+              extra={"failure_reason": "quoin-arm-contaminated"})
+    aggregate.aggregate_run(run_dir, run_id)
+    v = json.loads((run_dir / run_id / "summary.json").read_text())["tiered"]["validity"]
+    assert v["valid"] is False and v["identity_trip_rows"] == ["quoin-claude/e1"]
+
+
+def test_overshoot_and_permission_denials_are_summed_per_arm(tmp_path):
+    run_dir, run_id, _ = build_tiered_run(tmp_path)
+    rp = run_dir / run_id
+    write_row(rp, QUOIN_CELL, "e1", verdict="pass", wall=1, cost=6.0,
+              extra={"cap_usd": 5.5, "overshoot_usd": 0.5, "permission_denial_count": 3})
+    write_row(rp, QUOIN_CELL, "e2", verdict="pass", wall=1, cost=5.0,
+              extra={"cap_usd": 5.5, "overshoot_usd": 0.0, "permission_denial_count": 0})
+    write_row(rp, PLAIN_CELL, "e1", verdict="pass", wall=1, cost=1.0,
+              extra={"cap_usd": 5.5, "overshoot_usd": None, "permission_denial_count": 1})
+    aggregate.aggregate_run(run_dir, run_id)
+    t = json.loads((rp / "summary.json").read_text())["tiered"]
+    q = t["overall"][QUOIN_CELL]
+    assert q["cap_usd"] == 5.5 and q["overshoot_usd_sum"] == 0.5 and q["rows_over_cap"] == 1
+    assert t["permission_denials_by_arm"] == {
+        PLAIN_CELL: {"sum": 1, "rows_with_denials": 1},
+        QUOIN_CELL: {"sum": 3, "rows_with_denials": 1},
+    }
+    md = (rp / "summary.md").read_text()
+    assert "Overshoot (quoin-claude): cap $5.50 per task, $0.50 above cap in total, 1 rows over cap" in md
+    assert "Permission denials: simple-claude 1 (in 1 rows); quoin-claude 3 (in 1 rows)" in md
+
+
+def test_asymmetric_extra_skills_reach_the_validity_block(tmp_path):
+    _, summary, md = _aggregate(tmp_path, asymmetric_extra_skills=["context-tracker", "next_steps 2"])
+    assert summary["tiered"]["validity"]["asymmetric_extra_skills"] == ["context-tracker", "next_steps 2"]
+    assert "Asymmetry:" in md and "context-tracker, next_steps 2" in md
+    _, summary, md = _aggregate(tmp_path / "none")
+    assert summary["tiered"]["validity"]["asymmetric_extra_skills"] == [] and "Asymmetry:" not in md
+
+
+@pytest.mark.parametrize("extra", [None, {"tiers": ["easy"], "asymmetric_extra_skills": ["a", "b"]}])
+def test_read_manifest_round_trips_the_real_writer(tmp_path, extra):
+    from quoin.benchmarks.scripts import run_benchmark
+
+    suite = tmp_path / "suite.json"
+    suite.write_text("{}")
+    run_benchmark._write_manifest(tmp_path, "r-1", suite, ["simple-claude", "quoin-claude"], 1, False,
+                                  tmp_path, extra=extra)
+    m = read_manifest(tmp_path / "r-1")
+    assert m["run_id"] == "r-1" and m["cells"] == ["simple-claude", "quoin-claude"]
+    assert m["suite_sha"] and m["max_retries"] == "0"
+    if extra:
+        assert m["tiers"] == ["easy"] and m["asymmetric_extra_skills"] == ["a", "b"]
+
+
+def test_retries_with_judge_only_exits_2(monkeypatch):
+    import sys
+
+    from quoin.benchmarks.scripts import run_benchmark
+
+    monkeypatch.setattr(sys, "argv", ["run_benchmark.py", "--suite", "tiered-small", "--run-id", "R",
+                                      "--retries", "1", "--judge-only"])
+    with pytest.raises(SystemExit) as exc:
+        run_benchmark.main()
+    assert exc.value.code == 2
+
+
+def test_judge_only_passes_the_suite_path_to_the_report(tmp_path, monkeypatch):
+    from quoin.benchmarks.harness import runner
+    from quoin.benchmarks.harness.judge import JudgeResult
+    from quoin.benchmarks.harness.session_state import write_session_json
+    from quoin.benchmarks.scripts import run_benchmark
+
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    (run_path / "run-manifest.yaml").unlink()
+    for arm in (PLAIN_CELL, QUOIN_CELL):
+        for task_id in ("e1", "e2", "m1", "m2", "l1"):
+            task_dir = run_path / arm / task_id
+            if task_dir.is_dir():
+                (task_dir / "judge.json").unlink(missing_ok=True)
+                write_session_json(task_dir, {"judge_required": True, "judge_final": False})
+
+    def stub(task_id, task_dir, run_id, evidence_dir=None, invocation_extra=None,
+             task_spec=None, judge_context=None):
+        return JudgeResult(task_id, "swebench_verified", "pass", "ev", 0.0, extra={"judge_final": True})
+
+    monkeypatch.setattr(runner, "judge_task", stub)
+    suite = json.loads(suite_path.read_text())["tasks"]
+    assert run_benchmark._judge_only_main(suite_path, suite, run_dir, run_id) == 0
+    t = json.loads((run_path / "summary.json").read_text())["tiered"]
+    assert t["overall"][PLAIN_CELL]["passes"] == 5 and t["overall"][QUOIN_CELL]["passes"] == 4
+    assert t["validity"]["final"] is True
+
+
+def test_run_benchmark_passes_the_suite_path_to_aggregate(tmp_path, monkeypatch):
+    from quoin.benchmarks.harness import aggregate as agg
+    from quoin.benchmarks.harness import runner
+    from quoin.benchmarks.scripts import run_benchmark
+
+    run_dir = tmp_path / "runs"
+    suite_path = tmp_path / "suite.json"
+    suite_path.write_text(json.dumps({"tasks": []}))
+    seen = {}
+
+    class _Cell:
+        task_results = []
+        budget_stopped = False
+
+    monkeypatch.setattr(runner, "run_cell", lambda **k: _Cell())
+    monkeypatch.setattr(agg, "aggregate_run", lambda *a, **k: seen.update(k) or {})
+    try:
+        run_benchmark.run_benchmark(suite_path, ["simple-claude"], "R", run_dir, max_parallel=1)
+    except Exception:
+        pass
+    assert seen.get("suite_path") == suite_path

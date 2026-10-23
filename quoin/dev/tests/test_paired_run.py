@@ -313,3 +313,48 @@ def test_judge_phase_uses_runner_attribute(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "judge_task", sentinel)
     pr.judge_phase(_plan(tmp_path), [], "rev")
     assert seen["judge"] is sentinel and seen["snapshot_revision"] == "rev"
+
+
+def _judged(run_path, cells, task_id, verdict="pass"):
+    for cell in cells:
+        (run_path / cell / task_id / "judge.json").write_text(json.dumps({"verdict": verdict}))
+
+
+def test_validity_block_is_valid_after_a_clean_rerun(tmp_path):
+    from quoin.benchmarks.harness import tiered_report
+
+    suite = {"tiered": {"tiers": {"easy": {}}}, "tasks": [{"id": "t1", "tier": "easy"}]}
+    run_path = tmp_path / "runs" / "r1"
+    plan = _plan(tmp_path, n=1)
+    pr.run_paired(plan, run_task=FakeRunTask(tmp_path, reasons={("simple-claude", "t1"): "plain-arm-contaminated"}),
+                  log=lambda *_: None)
+    _judged(run_path, ["simple-claude"], "t1", "error")
+    tripped = tiered_report.build_tiered_report(run_path, suite, {})
+    assert tripped["validity"]["valid"] is False
+
+    pr.run_paired(plan, run_task=FakeRunTask(tmp_path), log=lambda *_: None)
+    _judged(run_path, pr.PAIR_ORDER, "t1")
+    report = tiered_report.build_tiered_report(run_path, suite, {})
+    assert report["validity"]["valid"] is True
+    assert report["validity"]["identity_trip_rows"] == []
+    assert report["validity"]["final"] is True
+
+
+def test_repeated_harness_exception_row_counts_as_error(tmp_path):
+    from quoin.benchmarks.harness import tiered_report
+
+    runs = tmp_path / "runs"
+    _row(runs / ".superseded" / "r1" / "simple-claude" / "t1" / "1",
+         metrics={"failure_reason": "harness-exception-OSError"})
+    kept = _row(runs / "r1" / "simple-claude" / "t1", metrics={"failure_reason": "harness-exception-OSError"})
+    pr.run_paired(_plan(tmp_path, n=1), run_task=FakeRunTask(tmp_path), log=lambda *_: None)
+    row = tiered_report.load_row(kept, None, {})
+    assert row["verdict"] == "error" and row["judge_pending"] is False
+    assert not (kept / "session.json").exists()
+
+
+def test_paired_run_shares_the_report_reason_sets():
+    from quoin.benchmarks.harness import tiered_report
+
+    assert pr.ABORT_REASONS is tiered_report.ABORT_REASONS
+    assert pr.RESPAWN_REASONS is tiered_report.RESPAWN_REASONS

@@ -263,6 +263,9 @@ def aggregate_run(
     return summary
 
 
+_TIERED_ERROR_LIMIT = 200
+
+
 def _build_tiered_section(summary: dict, run_path: Path, suite_path: Optional[Path]) -> str:
     """Add the tiered comparison to `summary` when the run's suite is tiered.
 
@@ -270,21 +273,25 @@ def _build_tiered_section(summary: dict, run_path: Path, suite_path: Optional[Pa
     failure while building, serializing or rendering is recorded in the
     summary instead of raised, so the summary files are always written.
     """
-    from . import tiered_report
-
-    manifest = tiered_report.read_manifest(run_path)
-    suite_file = None
-    if suite_path is not None:
-        suite_file = Path(suite_path)
-    elif manifest.get("suite_path"):
-        suite_file = Path(manifest["suite_path"])
-    if suite_file is None or not suite_file.is_file():
-        return ""
     try:
+        from . import tiered_report
+
+        manifest = tiered_report.read_manifest(run_path)
+        suite_file = None
+        if suite_path is not None:
+            suite_file = Path(suite_path)
+        elif manifest.get("suite_path"):
+            suite_file = Path(manifest["suite_path"])
+        if suite_file is None:
+            return ""
+        if not suite_file.is_file():
+            error = f"suite file not found: {suite_file}"[:_TIERED_ERROR_LIMIT]
+            summary["tiered"] = {"error": error}
+            return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
         raw = suite_file.read_bytes()
         suite = json.loads(raw.decode("utf-8"))
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
         summary["tiered"] = {"error": error}
         return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
     if not isinstance(suite, dict) or not isinstance(suite.get("tiered"), dict):
@@ -295,7 +302,7 @@ def _build_tiered_section(summary: dict, run_path: Path, suite_path: Optional[Pa
         json.dumps(tiered)
         tiered_md = tiered_report.render_tiered_markdown(tiered, _format_md_table)
     except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
         summary["tiered"] = {"error": error}
         return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
     summary["tiered"] = tiered

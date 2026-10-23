@@ -13,20 +13,29 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from decimal import Decimal
 from pathlib import Path
 
 from .cost import estimate_cost, load_pricing
 from .session_state import is_judge_pending
-from .stream_metrics import TOKEN_FIELDS, sum_model_usage
+from .stream_metrics import TOKEN_FIELDS, bucket_has_usage, sum_model_usage
 
 PLAIN_CELL = "simple-claude"
 QUOIN_CELL = "quoin-claude"
 ARMS = (PLAIN_CELL, QUOIN_CELL)
 DEFAULT_TIER_ORDER = ("easy", "medium", "large")
 OUTCOMES = ("pass", "fail", "error", "timeout", "budget_stopped", "not_run")
-IDENTITY_TRIP_REASONS = frozenset({"plain-arm-contaminated", "quoin-arm-missing-quoin"})
+IDENTITY_TRIP_REASONS = frozenset({
+    "plain-arm-contaminated", "quoin-arm-missing-quoin", "quoin-arm-contaminated",
+})
 SYSTEMIC_REASONS = frozenset({"auth-failure", "no-assistant-turn"})
+# Reasons that end a paired run, and reasons whose recorded row is re-spawned
+# on resume; the paired orchestrator and this report must agree on both.
+ABORT_REASONS = IDENTITY_TRIP_REASONS | SYSTEMIC_REASONS | {"budget-cap-unarmed"}
+RESPAWN_REASONS = IDENTITY_TRIP_REASONS | {"budget-cap-unarmed"}
+_PLAIN_COMPONENT = re.compile(r"^[A-Za-z0-9_.-]+$")
+_ERROR_TEXT_LIMIT = 200
 RETRIES_STATEMENT = "Final pass rate equals first-attempt pass rate (retries=0)."
 UNKNOWN_SHA = "unknown"
 
@@ -104,6 +113,12 @@ def _num(value):
     return value
 
 
+def _finite(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        return None
+    return float(value)
+
+
 def _zero_tokens():
     return {name: 0 for name in TOKEN_TYPES}
 
@@ -117,6 +132,8 @@ def _not_run_row():
         "stream_metrics_error": None, "tree_sha": None, "failure_reason": None,
         "session_errored": False, "pre_spawn_error": False, "models": [],
         "attempts": 1, "first_attempt_pass": False, "final_pass": False,
+        "pending_counted_as_error": False, "cap_usd": None, "overshoot_usd": None,
+        "permission_denials": None,
     }
 
 
@@ -124,9 +141,13 @@ def _estimate_usd(model_usage, usage_tokens, manifest_model, pricing):
     """Pricing-card estimate as a float, or None when any part is not priceable."""
     total = Decimal("0")
     if model_usage:
+        priced = 0
         for model, bucket in model_usage.items():
-            if not model or not isinstance(bucket, dict):
+            if not isinstance(bucket, dict) or not bucket_has_usage(bucket):
+                continue
+            if not model:
                 return None
+            priced += 1
             amount = estimate_cost(
                 model,
                 _num(bucket.get("inputTokens")), _num(bucket.get("outputTokens")),
@@ -136,7 +157,7 @@ def _estimate_usd(model_usage, usage_tokens, manifest_model, pricing):
             if amount is None:
                 return None
             total += amount
-        return float(total)
+        return float(total) if priced else None
     if not manifest_model:
         return None
     amount = estimate_cost(
@@ -154,6 +175,7 @@ def load_row(task_dir, manifest_model, pricing):
     row = _not_run_row()
     row["ran"] = True
     row["judge_pending"] = bool(is_judge_pending(task_dir))
+    row["pending_counted_as_error"] = False
 
     judge = _read_json(task_dir / "judge.json")
     verdict = judge.get("verdict") if judge else None
@@ -166,6 +188,9 @@ def load_row(task_dir, manifest_model, pricing):
         row["verdict"] = "error"
         if not row["judge_pending"]:
             row["row_issue"] = "unreadable"
+    if row["judge_pending"]:
+        row["verdict"] = "error"
+        row["pending_counted_as_error"] = True
     row["first_attempt_pass"] = row["final_pass"] = row["verdict"] == "pass"
 
     metrics = _read_json(task_dir / "metrics.json") or {}
@@ -183,8 +208,13 @@ def load_row(task_dir, manifest_model, pricing):
         row["tokens"] = {name: _num(metrics.get(key)) for name, key in _USAGE_KEYS}
         row["tokens_source"] = "usage"
 
-    if cost.get("cost_available") and cost.get("cost_runtime_usd") is not None:
-        row["usd"] = float(_num(cost["cost_runtime_usd"]))
+    runtime_usd = cost.get("cost_runtime_usd")
+    if (
+        cost.get("cost_available")
+        and isinstance(runtime_usd, (int, float)) and not isinstance(runtime_usd, bool)
+        and math.isfinite(runtime_usd)
+    ):
+        row["usd"] = float(runtime_usd)
         row["usd_source"] = "runtime"
     elif row["tokens_source"] != "unavailable":
         estimate = _estimate_usd(
@@ -203,6 +233,12 @@ def load_row(task_dir, manifest_model, pricing):
     row["failure_reason"] = metrics.get("failure_reason")
     row["session_errored"] = metrics.get("session_errored") is True
     row["pre_spawn_error"] = metrics.get("pre_spawn_error") is True
+    row["cap_usd"] = _finite(metrics.get("cap_usd"))
+    row["overshoot_usd"] = _finite(metrics.get("overshoot_usd"))
+    denials = metrics.get("permission_denial_count")
+    row["permission_denials"] = (
+        denials if isinstance(denials, int) and not isinstance(denials, bool) and denials >= 0 else None
+    )
     return row
 
 
@@ -219,9 +255,17 @@ def arm_stats(rows):
     outcomes = {key: 0 for key in OUTCOMES}
     for r in rows:
         outcomes[r["verdict"]] = outcomes.get(r["verdict"], 0) + 1
+    caps = [r["cap_usd"] for r in rows if r["cap_usd"] is not None]
+    overshoots = [r["overshoot_usd"] for r in rows if r["overshoot_usd"] is not None]
+    denials = [r["permission_denials"] for r in rows if r["permission_denials"] is not None]
     return {
         "n": n,
         "passes": passes,
+        "cap_usd": max(caps) if caps else None,
+        "overshoot_usd_sum": sum(o for o in overshoots if o > 0),
+        "rows_over_cap": sum(1 for o in overshoots if o > 0),
+        "permission_denials_sum": sum(denials),
+        "rows_with_denials": sum(1 for d in denials if d > 0),
         "first_attempt_pass_rate": rate,
         "final_pass_rate": rate,
         "wilson_ci_95": [lo, hi],
@@ -322,7 +366,7 @@ def _label(arm, task_id):
     return "%s/%s" % (arm, task_id)
 
 
-def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries):
+def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, invalid_task_ids=()):
     lists = {k: [] for k in (
         "identity_trip_rows", "systemic_error_rows", "session_errored_rows", "pre_spawn_error_rows",
         "judge_pending_rows", "unreadable_rows", "unknown_verdict_rows", "stream_metrics_error_rows",
@@ -373,7 +417,10 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries):
 
     provisional = []
     if lists["judge_pending_rows"]:
-        provisional.append("%d rows await judging (run --judge-only)" % len(lists["judge_pending_rows"]))
+        provisional.append(
+            "%d rows await judging (run --judge-only) and count as errors until then"
+            % len(lists["judge_pending_rows"])
+        )
     if lists["systemic_error_rows"]:
         provisional.append("%d rows hit a systemic error (auth or no assistant turn)" % len(lists["systemic_error_rows"]))
     if lists["unreadable_rows"]:
@@ -407,16 +454,30 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries):
         "tokens_source_counts": source_counts,
     }
     out.update(lists)
+    extra_skills = manifest.get("asymmetric_extra_skills")
+    if isinstance(extra_skills, str):
+        extra_skills = [part.strip() for part in extra_skills.split(",") if part.strip()]
+    out["asymmetric_extra_skills"] = list(extra_skills) if isinstance(extra_skills, list) else []
+    out["invalid_task_ids"] = list(invalid_task_ids)
     out["unexpected_task_dirs"] = unexpected
     out["tree_sha_mismatches"] = mismatches
     return out
+
+
+def _plain_component(task_id):
+    return (
+        isinstance(task_id, str) and task_id not in (".", "..")
+        and bool(_PLAIN_COMPONENT.match(task_id))
+    )
 
 
 def build_tiered_report(run_path, suite, manifest, suite_sha=None):
     """Build the tiered comparison dict stored under `summary["tiered"]`."""
     run_path = Path(run_path)
     pricing = load_pricing()
-    all_tasks = [t for t in suite.get("tasks", []) if isinstance(t, dict) and t.get("id")]
+    candidates = [t for t in suite.get("tasks", []) if isinstance(t, dict) and t.get("id")]
+    all_tasks = [t for t in candidates if _plain_component(t["id"])]
+    invalid_task_ids = [str(t["id"])[:80] for t in candidates if not _plain_component(t["id"])]
     order = _tier_order(suite, all_tasks)
 
     tiers_filter = manifest.get("tiers")
@@ -461,7 +522,15 @@ def build_tiered_report(run_path, suite, manifest, suite_sha=None):
         "pairs": entries,
         "validity": _validity(
             run_path, manifest, suite_sha, {t["id"] for t in all_tasks}, scoped, rows, entries,
+            invalid_task_ids,
         ),
+        "permission_denials_by_arm": {
+            arm: {
+                "sum": overall[arm]["permission_denials_sum"],
+                "rows_with_denials": overall[arm]["rows_with_denials"],
+            }
+            for arm in ARMS
+        },
         "caveat": "Caveat: n=%d tasks (%s) is directional, not statistically significant."
         % (len(scoped), ", ".join(counts)),
     }
@@ -526,6 +595,10 @@ def _group_rows_cost(label, group):
 def render_tiered_markdown(report, format_table):
     """Render the tiered section; `format_table` is the shared Markdown table helper."""
     validity = report["validity"]
+
+    def table_text(rows):
+        return format_table([[str(cell).replace("|", "\\|") for cell in row] for row in rows])
+
     lines = ["", "## Tiered comparison: plain (%s) vs quoin (%s)" % (PLAIN_CELL, QUOIN_CELL), ""]
 
     if not validity["valid"]:
@@ -559,7 +632,7 @@ def render_tiered_markdown(report, format_table):
     table = [header, ["---"] * len(header)]
     for label, group in groups:
         table.extend(_group_rows_outcomes(label, group))
-    lines.append(format_table(table))
+    lines.append(table_text(table))
 
     lines.append("### Cost, tokens and time by tier")
     lines.append("")
@@ -568,8 +641,26 @@ def render_tiered_markdown(report, format_table):
     table = [header, ["---"] * len(header)]
     for label, group in groups:
         table.extend(_group_rows_cost(label, group))
-    lines.append(format_table(table))
+    lines.append(table_text(table))
     lines.append("_Unavailable values count as 0 in sums and means._")
+    lines.append("")
+    for arm in ARMS:
+        stats = report["overall"][arm]
+        cap = "no cap recorded" if stats["cap_usd"] is None else "cap $%.2f per task" % stats["cap_usd"]
+        lines.append(
+            "Overshoot (%s): %s, $%.2f above cap in total, %d rows over cap  "
+            % (arm, cap, stats["overshoot_usd_sum"], stats["rows_over_cap"])
+        )
+    lines.append("")
+    denials = report["permission_denials_by_arm"]
+    lines.append(
+        "Permission denials: "
+        + "; ".join(
+            "%s %d (in %d rows)" % (arm, denials[arm]["sum"], denials[arm]["rows_with_denials"])
+            for arm in ARMS
+        )
+        + "  "
+    )
     lines.append("")
 
     cp = report["complete_pairs"]
@@ -594,7 +685,7 @@ def render_tiered_markdown(report, format_table):
             ["Wall s sum", "%.1f" % p["wall_clock_s_sum"], "%.1f" % q["wall_clock_s_sum"],
              "%+.1f" % d["wall_clock_s_sum"]],
         ]
-        lines.append(format_table(table))
+        lines.append(table_text(table))
 
     lines.append("### Per-task pairs")
     lines.append("")
@@ -624,7 +715,7 @@ def render_tiered_markdown(report, format_table):
             tok(a, "output"), tok(b, "output"), tok(a, "cache_read"), tok(b, "cache_read"),
             "%.1f" % a["wall_clock_s"], "%.1f" % b["wall_clock_s"], err(a), err(b), match,
         ])
-    lines.append(format_table(table))
+    lines.append(table_text(table))
 
     lines.append("### Validity")
     lines.append("")
@@ -642,6 +733,11 @@ def render_tiered_markdown(report, format_table):
            "unknown" if match is None else ("yes" if match else "NO"))
     )
     lines.append("Arm config mode: %s  " % validity["arm_config_mode"])
+    if validity["asymmetric_extra_skills"]:
+        lines.append(
+            "Asymmetry: the operator's home holds skills the quoin arm sees and the plain arm does not: %s  "
+            % ", ".join(validity["asymmetric_extra_skills"])
+        )
     lines.append("Contamination checks: %s  " % validity["contamination_checks"])
     for arm in ARMS:
         lines.append("Models (%s): %s  " % (arm, ", ".join(validity["models"][arm]) or "none recorded"))
@@ -657,5 +753,10 @@ def render_tiered_markdown(report, format_table):
         items = validity[key]
         suffix = ": %s" % ", ".join(items) if items else ""
         lines.append("%s: %d%s  " % (key, len(items), suffix))
+    if validity["invalid_task_ids"]:
+        lines.append(
+            "Skipped suite task ids that are not a single plain path component: %s  "
+            % ", ".join(validity["invalid_task_ids"])
+        )
     lines.append("")
     return "\n".join(lines)

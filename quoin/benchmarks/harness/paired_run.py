@@ -18,14 +18,9 @@ from typing import Callable, Dict, List, Optional
 from . import paired_spend, runner
 from .config import BudgetSpec, HarnessConfig
 from .session_state import read_session_json
-from .tiered_report import IDENTITY_TRIP_REASONS, SYSTEMIC_REASONS
+from .tiered_report import ABORT_REASONS, RESPAWN_REASONS, SYSTEMIC_REASONS
 
 PAIR_ORDER = ("simple-claude", "quoin-claude")
-ABORT_REASONS = IDENTITY_TRIP_REASONS | SYSTEMIC_REASONS | {
-    "budget-cap-unarmed",
-    "quoin-arm-contaminated",
-}
-RESPAWN_REASONS = IDENTITY_TRIP_REASONS | {"budget-cap-unarmed", "quoin-arm-contaminated"}
 DEFAULT_WALL_CLOCK_SECONDS = 600.0
 SUPERSEDED_DIR = ".superseded"
 
