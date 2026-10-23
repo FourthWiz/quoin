@@ -54,6 +54,7 @@ import shutil
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 
 
@@ -902,19 +903,57 @@ def _paired_run_invalid_reason(outcome) -> Optional[str]:
     return f"arm contamination check failed: {_paired_abort_label(outcome)}"
 
 
-def _paired_main(args, suite_path: Path, doc: dict) -> int:
-    """Run the paired benchmark; every refusal exits 2 before any repo prep or session."""
-    import signal
-    import tempfile
+@dataclass
+class PairedPreflight:
+    """Everything a paired run needs from the refusal checks, carried into the run."""
 
-    from quoin.benchmarks.harness import (
-        arm_identity, arm_sandbox, judge, paired_run, paired_spend, repo_prep, runner,
-    )
-    from quoin.benchmarks.harness.aggregate import aggregate_run
-    from quoin.benchmarks.harness.config import BudgetSpec, HarnessConfig
-    from quoin.benchmarks.harness.session_state import is_judge_pending
+    tasks: list
+    tier_names: list
+    tiered: dict
+    cap: float
+    run_dir: Path
+    run_id: str
+    run_path: Path
+    arms: list
+    has_rows: bool
+    n_spawns: int
+    suite_ceiling: float
+    auth: tuple
+    version: tuple
+    swebench_version: str
+    arm_root: Path
+    expected: str
+    carried_invalid: list
+
+
+def _judge_prereqs() -> tuple:
+    """Probe docker and the pinned swebench; returns (ok, clause, detail, swebench_version)."""
+    from quoin.benchmarks.harness import judge
+
+    try:
+        docker = subprocess.run(["docker", "info"], capture_output=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return (False, "docker", "docker info did not run; use --skip-judge to defer judging", "")
+    if docker.returncode != 0:
+        return (False, "docker", "docker info failed; use --skip-judge to defer judging", "")
+    python = os.environ.get(judge.SWEBENCH_PYTHON_ENV) or sys.executable
+    try:
+        swebench_version = judge.probe_swebench_version(python) or "not installed"
+    except (OSError, subprocess.SubprocessError):
+        swebench_version = "not installed"
+    if swebench_version != judge.SWEBENCH_PINNED_VERSION:
+        return (
+            False, "swebench",
+            f"swebench {judge.SWEBENCH_PINNED_VERSION} is required, found {swebench_version}",
+            swebench_version,
+        )
+    return (True, "", "", judge.SWEBENCH_PINNED_VERSION)
+
+
+def _paired_preflight(args, suite_path: Path, doc: dict):
+    """Run every refusal check of a paired run; returns PairedPreflight or an exit code."""
+    from quoin.benchmarks.harness import paired_run, paired_spend, repo_prep, arm_sandbox
     from quoin.benchmarks.scripts import run_three_arm_gate as gate
-    from quoin.benchmarks.scripts.check_invariants import check_invariants
 
     tasks, tier_names = _scoped_tasks(doc, args.tiers)
     tiered = doc["tiered"]
@@ -971,22 +1010,9 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
 
     swebench_version = "skipped"
     if not args.skip_judge:
-        try:
-            docker = subprocess.run(["docker", "info"], capture_output=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            return _refuse("docker", "docker info did not run; use --skip-judge to defer judging")
-        if docker.returncode != 0:
-            return _refuse("docker", "docker info failed; use --skip-judge to defer judging")
-        python = os.environ.get(judge.SWEBENCH_PYTHON_ENV) or sys.executable
-        try:
-            swebench_version = judge.probe_swebench_version(python) or "not installed"
-        except (OSError, subprocess.SubprocessError):
-            swebench_version = "not installed"
-        if swebench_version != judge.SWEBENCH_PINNED_VERSION:
-            return _refuse(
-                "swebench",
-                f"swebench {judge.SWEBENCH_PINNED_VERSION} is required, found {swebench_version}",
-            )
+        ok, clause, detail, swebench_version = _judge_prereqs()
+        if not ok:
+            return _refuse(clause, detail)
 
     arm_root = Path(args.arm_root or args.repo_root).resolve()
     expected = args.expected_quoin_commit or gate.worktree_head(arm_root)
@@ -1002,6 +1028,36 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
             return _refuse("resume", why)
         from quoin.benchmarks.harness.tiered_report import read_manifest
         carried_invalid = list(read_manifest(run_path).get("run_invalid_reasons") or [])
+
+    return PairedPreflight(
+        tasks=tasks, tier_names=tier_names, tiered=tiered, cap=cap, run_dir=run_dir,
+        run_id=run_id, run_path=run_path, arms=arms, has_rows=has_rows, n_spawns=n_spawns,
+        suite_ceiling=suite_ceiling, auth=auth, version=version,
+        swebench_version=swebench_version, arm_root=arm_root, expected=expected,
+        carried_invalid=carried_invalid,
+    )
+
+
+def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hint: bool = False) -> int:
+    """Run the sessions, judge, aggregate and write the manifest for a checked paired run."""
+    import signal
+    import tempfile
+
+    from quoin.benchmarks.harness import (
+        arm_identity, arm_sandbox, judge, paired_run, paired_spend, runner,
+    )
+    from quoin.benchmarks.harness.aggregate import aggregate_run
+    from quoin.benchmarks.harness.config import BudgetSpec, HarnessConfig
+    from quoin.benchmarks.harness.session_state import is_judge_pending
+    from quoin.benchmarks.scripts import run_three_arm_gate as gate
+    from quoin.benchmarks.scripts.check_invariants import check_invariants
+
+    tasks, tier_names, tiered, cap = pre.tasks, pre.tier_names, pre.tiered, pre.cap
+    run_dir, run_id, run_path, arms = pre.run_dir, pre.run_id, pre.run_path, pre.arms
+    suite_ceiling, auth, version = pre.suite_ceiling, pre.auth, pre.version
+    swebench_version, arm_root, expected = pre.swebench_version, pre.arm_root, pre.expected
+    carried_invalid = pre.carried_invalid
+
 
     gate_state = paired_run.InterruptGate()
     signals = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -1184,7 +1240,8 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
                   file=sys.stderr)
             return 3
         if args.skip_judge:
-            print(f"Judging deferred: {pending} rows pending; run --judge-only on a host with Docker")
+            if not quiet_deferred_hint:
+                print(f"Judging deferred: {pending} rows pending; run --judge-only on a host with Docker")
             return 0
         return 0 if pending == 0 else 1
     except paired_run.PairedInterrupted as exc:
@@ -1217,7 +1274,15 @@ def _paired_main(args, suite_path: Path, doc: dict) -> int:
                 signal.signal(sig, handler)
 
 
-def main() -> None:
+def _paired_main(args, suite_path: Path, doc: dict, *, quiet_deferred_hint: bool = False) -> int:
+    """Run the paired benchmark; every refusal exits 2 before any repo prep or session."""
+    pre = _paired_preflight(args, suite_path, doc)
+    if isinstance(pre, int):
+        return pre
+    return _paired_execute(args, suite_path, doc, pre, quiet_deferred_hint=quiet_deferred_hint)
+
+
+def build_parser() -> argparse.ArgumentParser:
     from quoin.benchmarks.scripts import spend_ledger
 
     parser = argparse.ArgumentParser(
@@ -1383,6 +1448,11 @@ def main() -> None:
         help="Paired suites only: run the sessions and leave every row judge-pending"
              " for a later --judge-only on a host with Docker.",
     )
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
 
     if args.run_id is None and not args.prepare_repos:
