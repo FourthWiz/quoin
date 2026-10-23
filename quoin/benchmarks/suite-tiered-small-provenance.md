@@ -114,3 +114,17 @@ on the upstream repositories, and each gold fix is reachable in the upstream
 history after the base commit. This is accepted and documented; a later stage
 handles it through repository preparation. Results should be read as relative
 comparisons between arms on the same tasks, not as absolute scores.
+
+## Untrusted descriptions and agent network access
+
+Task descriptions are the upstream issue text, passed to the agent unchanged.
+They are untrusted input and may contain instructions aimed at the agent. The
+agent runs with broad Bash on the host, and only the web tools and the Bash
+prefixes `curl`, `wget`, `pip`, `pip3` and `claude` are denied, so the network
+remains reachable through other commands in both arms. The sandbox limits what
+the agent can see and keep, not what it can try to do.
+
+## Pair order
+
+Each task is run for the two arms one after the other, plain arm first, then
+quoin, task by task. Sessions never overlap, whatever `--max-parallel` says.
