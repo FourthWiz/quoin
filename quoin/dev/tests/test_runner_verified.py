@@ -287,3 +287,130 @@ def test_capture_failure_reason_is_recorded(env, monkeypatch):
     assert metrics["capture_error"] == "patch-too-large"
     assert metrics["capture_error_detail"] == "diff exceeds 10 bytes"
     assert metrics["failure_reason"] == "patch-capture-failed"
+
+
+class ThreadedAdapter(FakeAdapter):
+    def invoke(self, task_spec, workdir, budget, run_id, run_output_dir=None,
+               session_env=None, arm_identity=None):
+        self.seen = {"session_env": session_env, "arm_identity": arm_identity}
+        return super().invoke(task_spec, workdir, budget, run_id)
+
+
+class _Identity:
+    def __init__(self, mode):
+        self.mode = mode
+
+
+def test_session_env_without_declaring_adapter_raises(env, monkeypatch):
+    env["cfg"].session_env = {"HOME": "/x"}
+    env["cfg"].cells = ["simple-claude"]
+    monkeypatch.setattr(runner, "_load_cell_adapter", lambda c: FakeAdapter())
+    with pytest.raises(runner.ConfigThreadError):
+        runner._check_spend_critical_fields_threadable(env["cfg"])
+
+
+def test_adapter_receives_session_env_and_identity(env):
+    adapter = ThreadedAdapter()
+    env["cfg"].session_env = {"HOME": "/x"}
+    env["cfg"].arm_identity = _Identity("quoin-required")
+    _run(env, adapter, StubJudge())
+    assert adapter.seen["session_env"] == {"HOME": "/x"}
+    assert adapter.seen["arm_identity"] is env["cfg"].arm_identity
+
+
+@pytest.mark.parametrize("mode,reason", [
+    ("quoin-free", "plain-arm-contaminated"),
+    ("quoin-required", "quoin-arm-contaminated"),
+])
+def test_contaminated_work_root_never_spawns(env, mode, reason):
+    (env["work"] / "CLAUDE.md").write_text("rules")
+    env["cfg"].arm_identity = _Identity(mode)
+    adapter = FakeAdapter()
+    res = _run(env, adapter, StubJudge())
+    assert adapter.calls == []
+    assert res.verdict == "error"
+    m = _json(_t_dir(env) / "metrics.json")
+    assert m["failure_reason"] == reason and m["pre_spawn_error"] is True
+    assert m["identity_problems"]
+
+
+def test_defer_judge_leaves_row_pending(env):
+    judge = StubJudge()
+    env["cfg"].defer_judge = True
+    _run(env, FakeAdapter(act=commit_change), judge)
+    t = _t_dir(env)
+    assert judge.calls == []
+    assert (t / "session.json").exists()
+    assert is_judge_pending(t)
+
+
+def test_defer_judge_keeps_terminal_rows_final(env):
+    judge = StubJudge()
+    env["cfg"].defer_judge = True
+    _run(env, FakeAdapter(verdict="budget_stopped"), judge)
+    t = _t_dir(env)
+    assert judge.calls == []
+    assert not is_judge_pending(t)
+    assert _json(t / "judge.json")["judge_final"] is True
+
+
+def test_overshoot_values():
+    assert runner._overshoot(6.0, 5.5) == pytest.approx(0.5)
+    assert runner._overshoot(1.0, 5.5) == 0.0
+    assert runner._overshoot("6", 5.5) is None
+    assert runner._overshoot(6.0, None) is None
+
+
+def test_cap_and_overshoot_reach_metrics(env):
+    env["cfg"].max_budget_usd = 0.25
+    _run(env, FakeAdapter(act=commit_change), StubJudge())
+    m = _json(_t_dir(env) / "metrics.json")
+    assert m["cap_usd"] == 0.25 and m["overshoot_usd"] == pytest.approx(0.25)
+
+
+class _Hold:
+    def __init__(self, t_dir):
+        self.t_dir, self.log = t_dir, []
+
+    def __call__(self):
+        hold = self
+
+        class Ctx:
+            def __enter__(self_):
+                hold.log.append(("enter", (hold.t_dir / "session.json").exists()))
+
+            def __exit__(self_, *exc):
+                hold.log.append(("exit", (hold.t_dir / "metrics.json").exists()))
+                return False
+
+        return Ctx()
+
+
+def test_row_write_hold_spans_session_to_metrics(env):
+    hold = _Hold(_t_dir(env))
+    env["cfg"].row_write_hold = hold
+    _run(env, FakeAdapter(act=commit_change), StubJudge())
+    assert hold.log == [("enter", False), ("exit", True)]
+
+
+def test_row_write_hold_not_entered_when_adapter_fails_early(env):
+    class Boom(FakeAdapter):
+        def invoke(self, **kw):
+            raise OSError("no spawn")
+
+    hold = _Hold(_t_dir(env))
+    env["cfg"].row_write_hold = hold
+    _run(env, Boom(), StubJudge())
+    assert hold.log == []
+
+
+def test_fsmonitor_planted_in_clone_never_fires(env):
+    marker = env["tmp"] / "fsmonitor-fired"
+
+    def act(workdir):
+        git(["config", "core.fsmonitor", f"touch {marker}"], workdir)
+        (workdir / "a.txt").write_text("base\nplanted\n")
+
+    _run(env, FakeAdapter(act=act), StubJudge())
+    assert not marker.exists()
+    assert b"planted" in (_t_dir(env) / "diff.patch").read_bytes()

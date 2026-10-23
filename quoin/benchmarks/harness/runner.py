@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import contextlib
 import inspect
 import json
 import os
@@ -30,6 +31,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
+from . import arm_identity as _arm_identity
 from .config import BudgetSpec, HarnessConfig
 from .isolation import create_task_worktree, cleanup_task_worktree
 from .judge import judge_task
@@ -98,7 +100,12 @@ def _assert_no_remote_in_gate_mode(worktree_path: Path) -> None:
 # None", because several threadable fields (quoin_install_script,
 # quoin_install_mode) default to non-None values that every cell — including
 # ones that declare neither spend-critical field — must keep working with.
-_SPEND_CRITICAL_FIELDS = ("max_budget_usd", "expected_quoin_commit")
+_SPEND_CRITICAL_FIELDS = (
+    "max_budget_usd",
+    "expected_quoin_commit",
+    "session_env",
+    "arm_identity",
+)
 
 
 class SpendTracker:
@@ -144,6 +151,8 @@ _THREADABLE_CONFIG_FIELDS = (
     "quoin_install_mode",
     "arm_root",
     "max_budget_usd",
+    "session_env",
+    "arm_identity",
 )
 
 
@@ -423,6 +432,27 @@ def _verified_result(cell, task_id, run_id, **fields) -> RunResult:
 
 
 def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> RunResult:
+    """Run one Verified task, holding `config.row_write_hold` (when set) from
+    just before session.json is written until the final result files exist."""
+    stack = contextlib.ExitStack()
+    try:
+        return _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stack)
+    finally:
+        stack.close()
+
+
+def _overshoot(cost, cap) -> Optional[float]:
+    numeric = (int, float)
+    if isinstance(cost, bool) or isinstance(cap, bool):
+        return None
+    if not isinstance(cost, numeric) or not isinstance(cap, numeric):
+        return None
+    if cost != cost or cap != cap or cost in (float("inf"), float("-inf")):
+        return None
+    return max(0.0, float(cost) - float(cap))
+
+
+def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stack) -> RunResult:
     task_id = task_spec["id"]
     run_dir = config.run_dir
     budget = config.budget
@@ -445,6 +475,35 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
         )
         write_run_result(result, run_dir)
         return result
+
+    identity = config.arm_identity
+    if identity is not None:
+        problems = _arm_identity.check_workdir(prepared.path)
+        if problems:
+            reason = (
+                _arm_identity.PLAIN_REASON
+                if getattr(identity, "mode", None) == _arm_identity.QUOIN_FREE
+                else "quoin-arm-contaminated"
+            )
+            cleanup_task_repo(prepared.path)
+            result = _verified_result(
+                cell, task_id, run_id,
+                verdict="error",
+                evidence_path=f"arm identity: {reason}",
+                transcript_events=[{
+                    "type": "harness_note",
+                    "note": "no agent session was started",
+                    "reason": reason,
+                }],
+                extra={
+                    "failure_reason": reason,
+                    "pre_spawn_error": True,
+                    "identity_problems": list(problems),
+                },
+                judge_extra={"judge_final": True, "judged": False},
+            )
+            write_run_result(result, run_dir)
+            return result
 
     cleaned = False
     patch = None
@@ -510,6 +569,8 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
         (t_dir).mkdir(parents=True, exist_ok=True)
         (t_dir / "judge.json").unlink(missing_ok=True)
         (t_dir / "diff.patch").write_bytes(patch_bytes)
+        if config.row_write_hold is not None:
+            stack.enter_context(config.row_write_hold())
         write_session_json(t_dir, {
             "task_id": task_id,
             "cell": cell,
@@ -549,8 +610,17 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
         })
         if outcome.failure_reason is not None:
             extra["failure_reason"] = outcome.failure_reason
+        extra["cap_usd"] = config.max_budget_usd
+        extra["overshoot_usd"] = _overshoot(inv.get("cost_runtime_usd"), config.max_budget_usd)
 
-        if outcome.judge_required:
+        if outcome.judge_required and config.defer_judge:
+            verdict, evidence, judge_seconds = "error", "judge-deferred", 0.0
+            judge_extra = {
+                "judge_final": False,
+                "judged": False,
+                "failure_reason": "judge-deferred",
+            }
+        elif outcome.judge_required:
             judged = judge_task(
                 task_id, t_dir, run_id,
                 evidence_dir=t_dir,
@@ -629,6 +699,7 @@ def _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir) -> R
             cleanup_task_repo(prepared.path)
 
     write_run_result(result, run_dir)
+    stack.close()
     return result
 
 

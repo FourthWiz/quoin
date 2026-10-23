@@ -7,7 +7,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Callable, ContextManager, Optional
 
 
 @dataclass
@@ -61,6 +61,22 @@ class HarnessConfig:
     """CLI-enforced per-task spend cap (D-08's primary bound), threaded to
     both Claude cells and passed as `claude --max-budget-usd`. In gate mode
     (`QUOIN_BENCHMARK_GATE=1`) a `None` value refuses to spawn."""
+
+    session_env: Optional[dict] = None
+    """Explicit environment for the spawned session; threaded to adapters that
+    declare a `session_env` parameter."""
+
+    arm_identity: Optional[object] = None
+    """Identity the arm's sandbox must satisfy; threaded to adapters that
+    declare an `arm_identity` parameter and checked against each work root."""
+
+    defer_judge: bool = False
+    """Write the session record and leave the row pending instead of judging
+    inline, so a later pass can judge every pending row."""
+
+    row_write_hold: Optional[Callable[[], ContextManager]] = None
+    """Context-manager factory held from just before session.json is written
+    until the final result files exist. Runner-only: never threaded to adapters."""
 
     cells: list[str] = field(
         default_factory=lambda: [
