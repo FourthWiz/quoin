@@ -186,8 +186,6 @@ implemented in T-19. See `methodology.md` for the auto-mode caveats.
 
 ## Tiered paired benchmark (SWE-bench Verified)
 
-To run it end to end from a source checkout, use `quoin bench tiered` (see `quoin bench tiered --help`); the steps below are the manual path.
-
 `suite-tiered-small.json` holds nine SWE-bench Verified tasks in three
 difficulty tiers (4 easy, 3 medium, 2 large). The paired run gives every task
 to two arms, one after the other: `simple-claude` (Claude Code with no quoin)
@@ -200,6 +198,91 @@ statistically significant result. Provenance and the task list are in
 Nothing here has been run against a real model. The test suite exercises the
 whole path offline with a fake `claude`, so the first paid run is the first
 time the real CLI, the real permission rules and the real judge meet.
+
+### One command: `quoin bench tiered`
+
+From a source checkout of the quoin repo, one command runs the whole benchmark:
+
+```bash
+quoin bench tiered
+```
+
+It needs a source checkout because the benchmark scripts are not installed with
+the package; `--repo-root` points it at a checkout explicitly. In order, it:
+
+1. Prepares the repository mirrors, only when a task's pinned commit is missing
+   from them (this is the only step that needs network access).
+2. Prints a worst-case estimate with the absolute run directory, spend ledger
+   and checkout it will use, then asks once. `--yes` answers for an unattended
+   run; without a terminal and without `--yes` it refuses.
+3. Runs the easy-tier pilot on both arms.
+4. Compares permission denials between the arms over the pilot. It stops with
+   exit 4 when the arms differ by at least `--parity-min-gap` denials (default
+   3) and the larger total is at least `--parity-min-ratio` times the smaller
+   (default 2; a smaller total of 0 always satisfies the ratio). It also stops
+   when a pilot row has no denial count, naming the row and the reason. After
+   reviewing the pilot rows, `--ignore-parity` continues past either stop.
+5. Runs the remaining tiers on the same run id and the same ledger. Pilot
+   sessions already recorded are not paid for again.
+6. Judges the sessions when this host can: Docker running, the pinned
+   `swebench` importable, and either an x86 host, an empty
+   `QUOIN_BENCH_SWEBENCH_NAMESPACE` (build images locally) or
+   `--judge-emulation` (x86 emulation, slow under Rosetta). Otherwise it
+   prints the exact `--judge-only` command to run on a host that can judge;
+   `--skip-judge` defers judging on purpose.
+7. Prints where the summary is, whether results are final or provisional, and
+   the spend recorded for the run.
+
+Exit codes: 0 finished (including judging deferred or nothing left to do); 1
+interrupted, aborted, judging failed or the prompt declined; 2 refused before
+spending anything; 3 a spend guard stopped the run; 4 parity stop.
+
+Defaults:
+
+| Setting | Default |
+|---|---|
+| Suite and run id | `tiered-small` |
+| Run directory | `<checkout>/.workflow_artifacts/quoin-benchmarks/runs` |
+| Spend ledger | `<run-dir>/<run-id>.spend-ledger.jsonl` |
+| Authorised ceiling | the suite's ceiling, $110 |
+| Per-session cap | the suite's documented cap, $5.50 |
+| Worst case of a fresh run | $99.00 (9 tasks x 2 arms x $5.50) |
+
+### Clean
+
+`quoin bench tiered --clean` removes what a run left behind. It takes the same
+`--run-id`, `--run-dir`, `--suite`, `--spend-ledger` and `--repo-root` options
+as a run, lists every path with `delete`, `keep` or `skip` and the reason, asks
+once (`--yes` answers for it; no terminal without `--yes` refuses), then
+deletes. It never starts a process and never touches the network.
+
+It deletes:
+
+- the run directory `<run-dir>/<run-id>` (the `run-manifest.yaml`, the
+  summaries and the arm cells);
+- `<run-dir>/.superseded/<run-id>`;
+- the default spend ledger; its recorded total is shown in the listing before
+  the question, because the record is gone once the file is;
+- `qbench_*`, `qbc_*` and `quoin-benchmarks` directories you own directly
+  under the temp directory and under `/tmp`.
+
+It keeps the repository mirror cache unless `--clean-mirrors` is given, an
+explicit `--spend-ledger` unless `--clean-explicit-ledger` is given, other run
+ids, and always the home directory, `~/.claude`, `~/.config` and the checkout.
+
+Safety rules: a path that contains a kept or protected path is skipped; a
+ledger must be a file, never a directory; a run directory must look like a
+benchmark run (it holds `run-manifest.yaml`, `summary.json`, `summary.md` or an
+arm cell directory); symlinks are removed as links and their targets are left
+alone; traverse-only directories the harness leaves are given back owner
+permissions before removal, without following links. Do not run it while a run
+is active, because it cannot tell. Temp roots of the three-arm gate harness
+(`quoin-gate-raw-config-*`) are not touched. When it removes a
+`quoin-benchmarks` worktree root it prints a reminder to run
+`git worktree prune` in the arm checkout.
+
+Exit codes: 0 deleted or nothing to delete; 1 declined or a deletion failed; 2
+refused.
 
 ### Prerequisites
 
@@ -223,9 +306,9 @@ sandbox profile (`Bash(curl:*)` and the other deny entries in
 documentation. A rule that no longer matches would silently allow what it was
 meant to deny, in both arms.
 
-### Steps
+### Underlying commands
 
-Every command passes `--cells simple-claude,quoin-claude` explicitly. Replace
+`quoin bench tiered` runs these for you. Every command passes `--cells simple-claude,quoin-claude` explicitly. Replace
 `RUN` with a new run id.
 
 1. Prepare the repository mirrors. This is the only step that needs network
@@ -277,6 +360,11 @@ python3 quoin/benchmarks/scripts/run_benchmark.py --suite tiered-small \
 ```
 
 ### Resume and interruption
+
+Re-running the same `quoin bench tiered` command continues an interrupted
+run: sessions already recorded are kept, the pilot is not repeated once the
+full leg has started, and a resume may add tiers to a run but never drop one. The manifest's
+`started_at` reflects the latest leg.
 
 `--resume` never re-pays for a recorded session, including one stopped by the
 budget (`budget_stopped`). A row whose spawn was interrupted or that hit an
@@ -341,7 +429,7 @@ With nine tasks, treat differences as directional.
   persist into the next session of the same arm. Only skills, commands, agents,
   hooks, the rules file and the identity-bearing settings keys are fingerprinted.
 - `--usd-cap` counts spend for the current invocation only, so each `--resume`
-  leg starts again from zero. The suite ceiling and the authorised ceiling are
+  leg starts again from zero (`quoin bench tiered` does not offer it). The suite ceiling and the authorised ceiling are
   read from the spend ledger and hold across legs.
 - Quoin's installer adds its `rm -rf` deny rules to the quoin arm only.
 - New files under a git-ignored path are left out of the patch, as in
@@ -352,5 +440,7 @@ With nine tasks, treat differences as directional.
   though `Bash(claude:*)` is denied.
 - The 4 GiB total snapshot cap is kept on purpose; the per-file cap and the
   directory skip bound it in practice.
-- There is no sweep for capture scratch directories after a SIGKILL of the
-  harness itself.
+- There is no automatic sweep for capture scratch directories after a SIGKILL
+  of the harness itself; `quoin bench tiered --clean` removes the ones under
+  the temp directory.
+- `--clean` does not detect a run in progress.
