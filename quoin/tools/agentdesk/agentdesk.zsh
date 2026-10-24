@@ -68,6 +68,47 @@ _sanitize_session_name() {
   echo "$name"
 }
 
+# Per-session record of the project root, read by `quoin sessions` and
+# `quoin attach` to find a session from its folder. Best effort: any failure is
+# silent and the launch carries on (the lookup then falls back to the session
+# name). The writer never starts python3; its only extra processes are the
+# `$(mktemp ...)` command substitution, `mv`, `rm -f` on the failure path, and
+# `mkdir` the first time, so it adds little to a launch.
+_agentdesk_record_dir() {
+  printf '%s\n' "${HOME:-}/.config/agentdesk/sessions"
+}
+
+# Key hints shown at launch and attach. Must stay byte-identical to
+# KEY_HINTS in src/quoin/agentdesk_sessions.py; a parity test pins the two.
+_agentdesk_key_hints() {
+  printf '%s\n' \
+    'Keys inside an Agent Desk session (need Ghostty macos-option-as-alt):' \
+    '  detach   Alt s, then d' \
+    '  quit     Alt s, then q' \
+    'Ctrl+Q is intentionally unbound. From another terminal, `quoin sessions`' \
+    'lists sessions and `quoin attach` gets you back in.'
+}
+
+_agentdesk_record_session() {
+  local name="$1" root="$2" dir tmp
+
+  case "$name" in ''|.|..|*/*) return 0 ;; esac
+  [ -n "${HOME:-}" ] && [ -n "$root" ] && [ -n "${ZELLIJ_SOCKET_DIR:-}" ] || return 0
+  # Keep in step with _agentdesk_record_dir; assigned inline to skip a subshell.
+  dir="${HOME}/.config/agentdesk/sessions"
+  # -m reaches only the last component; an existing directory keeps its mode.
+  [ -d "$dir" ] || mkdir -p -m 700 "$dir" 2>/dev/null || return 0
+  [ -d "$dir/$name" ] && return 0
+  tmp="$(mktemp "$dir/.agentdesk-record.XXXXXX" 2>/dev/null)" || return 0
+  # >| so an interactive shell with noclobber still writes into the file mktemp made.
+  if printf '%s\n%s' "$root" "$ZELLIJ_SOCKET_DIR" >| "$tmp" 2>/dev/null; then
+    mv -f "$tmp" "$dir/$name" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  else
+    rm -f "$tmp" 2>/dev/null
+  fi
+  return 0
+}
+
 _zellij_session_exists() {
   local session_name="$1"
 
@@ -1939,6 +1980,7 @@ HELP
   echo "Starting agent desk:"
   echo "  PROJECT_ROOT=$PROJECT_ROOT"
   echo "  SESSION=$session_name"
+  _agentdesk_key_hints
   echo "  REPOS:"
   cat "$project_root/.workflow_artifacts/repos.md"
   echo
@@ -2012,6 +2054,8 @@ HELP
       rm -f "$_dash_url_file" ) &  # second rm: timeout path (idempotent; rm -f on missing file is no-op)
   fi
 
+  _agentdesk_record_session "$session_name" "$project_root"
+
   # AGENTDESK_DASHBOARD_URL_FILE is set for this launch only (empty when the
   # dashboard is off, so a stale exported value never reaches pane commands).
   AGENTDESK_DASHBOARD_URL_FILE="$dash_url_file" PROJECT_ROOT="$project_root" zellij --new-session-with-layout "$layout_path" --session "$session_name" options --auto-layout false
@@ -2046,6 +2090,7 @@ HELP
     return 1
   fi
 
+  _agentdesk_key_hints
   zellij attach "$session_name"
 }
 

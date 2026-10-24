@@ -1232,6 +1232,26 @@ def _doctor_auto_resume_cli(
     print()
 
 
+def _safe_getcwd() -> Optional[str]:
+    # The shell's directory may have been removed; listing and killing do not need it.
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
+def _cmd_sessions(args: argparse.Namespace) -> int:
+    from quoin import agentdesk_sessions
+    return agentdesk_sessions.run_sessions(
+        args, environ=os.environ, cwd=_safe_getcwd(), out=sys.stdout, err=sys.stderr)
+
+
+def _cmd_attach(args: argparse.Namespace) -> int:
+    from quoin import agentdesk_sessions
+    return agentdesk_sessions.run_attach(
+        args, environ=os.environ, cwd=_safe_getcwd(), out=sys.stdout, err=sys.stderr)
+
+
 def _cmd_doctor(args: argparse.Namespace) -> int:
     if getattr(args, "json", False) and args.runtime != "opencode":
         _abort("quoin: --json is only valid with --runtime opencode")
@@ -2993,6 +3013,8 @@ def main(argv: list[str] | None = None) -> int:
               quoin install                  Install for Claude Code (prompts for scope)
               quoin install --scope project  Install into ./.claude for this project only
               quoin doctor                   Health-check an existing install (read-only)
+              quoin sessions                 List Agent Desk sessions for the current folder
+              quoin attach                   Attach to an Agent Desk session from any terminal
               quoin dashboard                Open the workflow dashboard in a browser
               quoin router setup             Enable open-model routing (claude-code-router)
               quoin models set opus glm      Map the opus tier to an OpenRouter model
@@ -3688,6 +3710,71 @@ def main(argv: list[str] | None = None) -> int:
              "(quoin bench tiered --help)",
     )
 
+    from quoin import agentdesk_sessions as _ads
+
+    sessions_p = sub.add_parser(
+        "sessions",
+        description=(
+            "List Agent Desk sessions for the current folder (or all of them with --all). "
+            "Works from any shell; no need to have sourced the launcher."
+        ),
+        help="List, kill or prune Agent Desk sessions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_ads.KEY_HINTS,
+    )
+    sessions_p.add_argument("--all", dest="list_all", action="store_true",
+                            help="Show every Agent Desk session, not just those for this folder.")
+    sessions_p.add_argument("--json", dest="list_json", action="store_true",
+                            help="Print the listing as JSON.")
+    sessions_sub = sessions_p.add_subparsers(dest="sessions_command", required=False)
+    sessions_kill_p = sessions_sub.add_parser(
+        "kill",
+        description="Delete one Agent Desk session. A running session needs --force.",
+        help="Delete a session",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_ads.KEY_HINTS,
+    )
+    sessions_kill_p.add_argument("name", help="Session name as shown by `quoin sessions --all`.")
+    sessions_kill_p.add_argument("--force", action="store_true",
+                                 help="Stop the session if it is running, then delete it.")
+    sessions_prune_p = sessions_sub.add_parser(
+        "prune",
+        description=(
+            "Delete EXITED Agent Desk sessions that have a launch record, and the launch records "
+            "left behind. Never touches a running session."
+        ),
+        help="Delete EXITED sessions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "EXITED sessions started before launch records existed are listed as skipped: Zellij\n"
+            "shares its resurrection cache across socket directories, so one may belong to plain\n"
+            "Zellij. Delete them with `quoin sessions kill NAME` or --include-unrecorded.\n\n"
+            "EXITED sessions that are not Agent Desk's (Zellij shares its resurrection cache across\n"
+            "socket directories) are left alone and can still force a _N suffix on a new session;\n"
+            "remove one with `zellij delete-session NAME` in a shell that has not sourced the launcher.\n\n"
+            + _ads.KEY_HINTS
+        ),
+    )
+    sessions_prune_p.add_argument("--dry-run", action="store_true",
+                                  help="Report what would be removed without removing it.")
+    sessions_prune_p.add_argument("--include-unrecorded", dest="prune_unrecorded", action="store_true",
+                                  help="Also delete EXITED sessions that have no launch record "
+                                       "but carry an Agent Desk name.")
+    sessions_prune_p.add_argument("--json", dest="prune_json", action="store_true",
+                                  help="Print the result as JSON.")
+
+    attach_p = sub.add_parser(
+        "attach",
+        description=(
+            "Attach to an Agent Desk session. Without a name, picks the session for the current "
+            "folder, or asks when several match."
+        ),
+        help="Attach to an Agent Desk session",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_ads.KEY_HINTS,
+    )
+    attach_p.add_argument("name", nargs="?", help="Session name; see `quoin sessions --all`.")
+
     router_p = sub.add_parser(
         "router",
         description=(
@@ -3951,6 +4038,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dashboard(args)
     elif args.command == "doctor":
         return _cmd_doctor(args)
+    elif args.command == "sessions":
+        if args.sessions_command and (args.list_all or args.list_json):
+            sessions_p.error("--all and --json belong to the listing and cannot be combined with kill or prune")
+        return _cmd_sessions(args)
+    elif args.command == "attach":
+        return _cmd_attach(args)
     elif args.command == "codex":
         if args.codex_command == "init":
             return _cmd_codex_init(args)

@@ -9,7 +9,6 @@ session. Skipped unless Zellij 0.44.x is installed.
 import contextlib
 import fcntl
 import os
-import pty
 import select
 import shutil
 import signal
@@ -90,6 +89,102 @@ def run_zellij(env, expected_sock, *args, timeout=30):
     )
 
 
+def spawn_on_pty(argv, env, rows, cols):
+    """Start ``argv`` on a fresh pty of ``rows`` x ``cols``; return ``(proc, master_fd)``.
+
+    Uses ``subprocess`` rather than forking the test process itself: forking a
+    process that already runs threads (pytest-timeout's watchdog) is unsafe and
+    Python 3.12+ warns about it. The child gets its own session so the pty becomes its terminal.
+    """
+    exe = shutil.which(argv[0], path=env["PATH"])
+    if not exe:
+        raise AssertionError(f"{argv[0]} not found on the test PATH")
+    master, slave = os.openpty()
+    try:
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+        proc = subprocess.Popen(
+            [exe, *argv[1:]],
+            stdin=slave, stdout=slave, stderr=slave,
+            env=env, start_new_session=True, close_fds=True,
+        )
+    except BaseException:
+        os.close(master)
+        raise
+    finally:
+        os.close(slave)
+    return proc, master
+
+
+def server_pids(sock):
+    """Pids of Zellij servers whose socket lives under the test's own ``sock`` dir.
+
+    The server runs in its own session and process group, so it is found by the
+    socket path on its command line. ``sock`` is a unique per-test /tmp dir, so
+    this can never match a real Agent Desk server.
+    """
+    needles = {f"--server {sock}/", f"--server {os.path.realpath(sock)}/"}
+    done = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=10)
+    pids = []
+    for line in done.stdout.splitlines():
+        pid, _, command = line.strip().partition(" ")
+        if any(n in command for n in needles) and pid.isdigit():
+            pids.append(int(pid))
+    return pids
+
+
+def _drain_fd(fd, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        try:
+            ready, _, _ = select.select([fd], [], [], min(0.2, max(0.0, end - time.time())))
+        except (OSError, ValueError):
+            time.sleep(0.2)
+            continue
+        if ready:
+            try:
+                if not os.read(fd, 65536):
+                    time.sleep(0.2)
+            except OSError:
+                time.sleep(0.2)
+
+
+def _wait_servers_gone(sock, fd, seconds):
+    end = time.time() + seconds
+    while time.time() < end:
+        if not server_pids(sock):
+            return []
+        # Keep reading the pty: a client with unread output can block in exit.
+        _drain_fd(fd, 0.2)
+    return server_pids(sock)
+
+
+def stop_session(env, sock, name, proc, fd):
+    """Stop the test's session, its server and its client; return surviving server pids."""
+    with contextlib.suppress(Exception):
+        run_zellij(env, sock, "kill-session", name, timeout=10)
+    survivors = _wait_servers_gone(sock, fd, 5)
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        if not survivors:
+            break
+        for pid in survivors:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.kill(pid, sig)
+        survivors = _wait_servers_gone(sock, fd, 2)
+    if proc is not None:
+        proc.terminate()
+        try:
+            proc.wait(5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+    with contextlib.suppress(Exception):
+        run_zellij(env, sock, "delete-session", name, "--force", timeout=10)
+    if fd >= 0:
+        with contextlib.suppress(OSError):
+            os.close(fd)
+    return survivors
+
+
 class LiveSession:
     def __init__(self, tmp_path, config):
         self.tmp_path = Path(tmp_path)
@@ -97,7 +192,7 @@ class LiveSession:
         self.sock = tempfile.mkdtemp(dir="/tmp", prefix="adz")
         self.name = "adk" + uuid.uuid4().hex[:8]
         self.env = zellij_env(tmp_path, self.sock)
-        self.pid = 0
+        self.proc = None
         self.fd = -1
 
     def z(self, *args, timeout=30):
@@ -105,15 +200,11 @@ class LiveSession:
 
     def start(self):
         assert str(Path(self.env["HOME"]).resolve()).startswith(str(self.tmp_path.resolve()))
-        self.pid, self.fd = pty.fork()
-        if self.pid == 0:
-            os.execvpe(
-                "zellij",
-                ["zellij", "--config", self.config, "--session", self.name, "options",
-                 "--show-release-notes", "false", "--show-startup-tips", "false"],
-                self.env,
-            )
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", 40, 140, 0, 0))
+        self.proc, self.fd = spawn_on_pty(
+            ["zellij", "--config", self.config, "--session", self.name, "options",
+             "--show-release-notes", "false", "--show-startup-tips", "false"],
+            self.env, 40, 140,
+        )
         self.wait_for(self.alive, 15)
         assert self.alive(), "session did not start"
         self.drain(1.5)
@@ -152,33 +243,10 @@ class LiveSession:
         done = self.z("-s", self.name, "action", "query-tab-names")
         return len([ln for ln in done.stdout.splitlines() if ln.strip()])
 
-    def _reap(self, seconds):
-        end = time.time() + seconds
-        while time.time() < end:
-            done, _ = os.waitpid(self.pid, os.WNOHANG)
-            if done:
-                self.pid = 0
-                return True
-            self.drain(0.2)
-        return False
-
     def close(self):
-        with contextlib.suppress(Exception):
-            self.z("kill-session", self.name)
-        with contextlib.suppress(Exception):
-            self.z("delete-session", self.name, "--force")
-        if self.pid:
-            with contextlib.suppress(Exception):
-                # Keep reading the pty while waiting: a client with unread output
-                # can block in exit.
-                if not self._reap(5):
-                    os.kill(self.pid, signal.SIGKILL)
-                    self._reap(5)
-        if self.fd >= 0:
-            with contextlib.suppress(OSError):
-                os.close(self.fd)
+        stop_session(self.env, self.sock, self.name, self.proc, self.fd)
+        self.proc, self.fd = None, -1
         shutil.rmtree(self.sock, ignore_errors=True)
-
 
 @contextlib.contextmanager
 def live(tmp_path, fixture, tier):

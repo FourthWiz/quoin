@@ -513,3 +513,15 @@ def test_keybind_verify_keeps_old_checks_and_drops_stale_notes() -> None:
     assert "## Layout checks" in doc
     assert "zellij --config ~/.config/zellij/config.kdl setup --check" in doc
     assert "\nzellij setup --check" not in doc
+
+
+def test_keybind_verify_has_stuck_keyboard_recovery_section() -> None:
+    doc = VERIFY_MD.read_text(encoding="utf-8")
+    heading = "## If the keyboard seems stuck"
+    start = doc.find(heading)
+    assert start != -1, "recovery section is missing"
+    end = doc.find("\n## ", start + len(heading))
+    section = doc[start:end] if end != -1 else doc[start:]
+    assert len(section) > 400
+    for needle in ("quoin sessions", "quoin attach", "Alt s", "reset", "--force"):
+        assert needle in section, needle
