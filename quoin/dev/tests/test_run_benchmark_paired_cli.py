@@ -413,3 +413,101 @@ def test_manifest_extra_round_trips(tmp_path, monkeypatch):
     assert json.loads(data["by_tier"]) == {"easy": 1800}
     assert float(data["max_budget_usd_per_task"]) == 5.5 and data["note"] is None
     assert data["started_at"] == "2026-01-01T00:00:00Z"
+
+
+def _run_stub(monkeypatch, behaviour):
+    def fake(argv, *a, **k):
+        if argv and argv[0] == "docker":
+            if isinstance(behaviour, Exception):
+                raise behaviour
+            return subprocess.CompletedProcess(argv, behaviour, b"", b"")
+        raise AssertionError(f"unexpected subprocess {argv}")
+
+    monkeypatch.setattr(subprocess, "run", fake)
+
+
+def test_judge_prereqs_docker_did_not_run(monkeypatch):
+    _run_stub(monkeypatch, OSError("no docker"))
+    assert run_benchmark._judge_prereqs()[:3] == (
+        False, "docker", "docker info did not run; use --skip-judge to defer judging")
+
+
+def test_judge_prereqs_docker_failed(monkeypatch):
+    _run_stub(monkeypatch, 1)
+    assert run_benchmark._judge_prereqs()[:3] == (
+        False, "docker", "docker info failed; use --skip-judge to defer judging")
+
+
+def test_judge_prereqs_wrong_swebench_version(monkeypatch):
+    _run_stub(monkeypatch, 0)
+    monkeypatch.setattr(judge, "probe_swebench_version", lambda *a, **k: "0.0.1")
+    ok, clause, detail, version = run_benchmark._judge_prereqs()
+    assert (ok, clause, version) == (False, "swebench", "0.0.1")
+    assert detail == f"swebench {judge.SWEBENCH_PINNED_VERSION} is required, found 0.0.1"
+
+
+def test_judge_prereqs_success(monkeypatch):
+    _run_stub(monkeypatch, 0)
+    monkeypatch.setattr(judge, "probe_swebench_version", lambda *a, **k: judge.SWEBENCH_PINNED_VERSION)
+    assert run_benchmark._judge_prereqs() == (True, "", "", judge.SWEBENCH_PINNED_VERSION)
+
+
+def test_build_parser_resolves_spend_ledger_to_an_absolute_path():
+    args = run_benchmark.build_parser().parse_args(["--run-id", "R", "--spend-ledger", "rel/ledger.jsonl"])
+    assert args.spend_ledger.is_absolute()
+
+
+def test_quiet_keyword_is_forwarded_to_execute(monkeypatch, tmp_path, arm_repo, auth, standin):
+    seen = {}
+
+    def spy(args, suite_path, doc, pre, *, quiet_deferred_hint=False):
+        seen["quiet"] = quiet_deferred_hint
+        return 0
+
+    monkeypatch.setattr(run_benchmark, "_paired_execute", spy)
+    monkeypatch.setattr(arm_sandbox, "check_arm_tree", lambda *a, **k: [])
+    argv = _args(tmp_path, arm_repo, suite=standin["suite"]) + ["--skip-judge"]
+    args = run_benchmark.build_parser().parse_args(argv)
+    doc = json.loads(standin["suite"].read_text())
+    assert run_benchmark._paired_main(args, standin["suite"], doc, quiet_deferred_hint=True) == 0
+    assert seen["quiet"] is True
+    assert run_benchmark._paired_main(args, standin["suite"], doc) == 0
+    assert seen["quiet"] is False
+
+
+def test_quiet_skip_judge_run_prints_no_deferred_line(monkeypatch, capsys, tmp_path, arm_repo, auth,
+                                                      standin, paired_arm_stubs, sandbox_parent):
+    _complete(monkeypatch)
+    argv = _args(tmp_path, arm_repo, suite=standin["suite"]) + ["--skip-judge"]
+    args = run_benchmark.build_parser().parse_args(argv)
+    doc = json.loads(standin["suite"].read_text())
+    assert run_benchmark._paired_main(args, standin["suite"], doc, quiet_deferred_hint=True) == 0
+    assert "Judging deferred" not in capsys.readouterr().out
+
+
+def _widen_check(tmp_path, monkeypatch, stored, requested):
+    extra = {"max_budget_usd_per_task": 5.5, "arm_config_mode": "symmetric"}
+    if stored is not None:
+        extra["tiers"] = stored
+    _manifest_args(tmp_path, monkeypatch, extra=extra)
+    return run_benchmark._check_resume_manifest(
+        tmp_path / "runs", "R", tmp_path / "suite.json", 5.5, requested)
+
+
+@pytest.mark.parametrize("stored,requested", [
+    (["easy"], ["easy", "medium"]),
+    (["easy", "medium"], ["easy", "medium"]),
+])
+def test_resume_may_add_tiers(tmp_path, monkeypatch, stored, requested):
+    assert _widen_check(tmp_path, monkeypatch, stored, requested) is None
+
+
+@pytest.mark.parametrize("stored,requested", [
+    (["easy", "medium"], ["easy"]),
+    (["easy"], ["medium"]),
+    (None, ["easy"]),
+    ([], ["easy"]),
+])
+def test_resume_may_not_drop_tiers(tmp_path, monkeypatch, stored, requested):
+    why = _widen_check(tmp_path, monkeypatch, stored, requested)
+    assert why and "tiers differ from the stored manifest" in why

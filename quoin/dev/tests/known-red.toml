@@ -30,3 +30,38 @@ owner = "ivgo"
 id = "quoin/dev/tests/test_handoff_measure.py::test_growth_bound_case_u_capped_model_caps_at_deleted_bytes"
 reason = "macOS ENAMETOOLONG in an unrelated long-path fixture; fails at the branch base too"
 added = "2026-09-29"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_two_agents_and_strip_proportions"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_floating_toggle_shows_and_hides_spend"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_new_pane_keeps_the_strip_when_auto_layout_is_off"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_dashboard_tab_has_bars_and_survives_a_swap"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_standard_layout_git_and_status_tabs_stay_alive"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
