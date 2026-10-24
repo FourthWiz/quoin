@@ -7,25 +7,20 @@ Cleanup only ever names the test's own session. Skipped unless Zellij 0.44.x
 is installed.
 """
 import contextlib
-import fcntl
 import json
 import os
-import pty
 import re
 import select
 import shutil
-import signal
-import struct
 import subprocess
 import tempfile
-import termios
 import time
 import uuid
 from pathlib import Path
 
 import pytest
 
-from test_agentdesk_keybinds_live import run_zellij, zellij_env
+from test_agentdesk_keybinds_live import run_zellij, spawn_on_pty, stop_session, zellij_env
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 AGENTDESK_ZSH = REPO_ROOT / "quoin" / "tools" / "agentdesk" / "agentdesk.zsh"
@@ -79,7 +74,7 @@ class LiveLayout:
         self.layout = self.tmp_path / "live-layout.kdl"
         self.layout.write_text((rewrite or _sleep_commands)(layout_text), encoding="utf-8")
         self.auto_layout = auto_layout
-        self.pid = 0
+        self.proc = None
         self.fd = -1
 
     def z(self, *args, timeout=30):
@@ -95,10 +90,7 @@ class LiveLayout:
         argv = ["zellij", "--new-session-with-layout", str(self.layout), "--session", self.name]
         if self.auto_layout is not None:
             argv += ["options", "--auto-layout", self.auto_layout]
-        self.pid, self.fd = pty.fork()
-        if self.pid == 0:
-            os.execvpe("zellij", argv, self.env)
-        fcntl.ioctl(self.fd, termios.TIOCSWINSZ, struct.pack("HHHH", ROWS, COLS, 0, 0))
+        self.proc, self.fd = spawn_on_pty(argv, self.env, ROWS, COLS)
         self.drain(2.0)
 
     def drain(self, seconds):
@@ -125,9 +117,30 @@ class LiveLayout:
             self.drain(0.4)
         return last
 
+    def _query(self, *args, accept, timeout=15):
+        """Run ``zellij action *args`` until it gives an answer ``accept`` takes.
+
+        Zellij 0.44.3 often answers ``dump-layout`` (and sometimes
+        ``list-panes``) with empty output and exit code 0 on a healthy session,
+        so a single call cannot be trusted. Ask again until the answer is real,
+        and fail with the last reply if it never is.
+        """
+        end = time.time() + timeout
+        while True:
+            done = self.z("-s", self.name, "action", *args)
+            if done.returncode == 0 and accept(done.stdout):
+                return done.stdout
+            if time.time() >= end:
+                raise AssertionError(
+                    f"zellij action {' '.join(args)} gave no usable answer in {timeout}s: "
+                    f"exit {done.returncode}, stderr {done.stderr.strip()!r}, "
+                    f"stdout {done.stdout[:200]!r}"
+                )
+            self.drain(0.2)
+
     def panes(self):
-        done = self.z("-s", self.name, "action", "list-panes", "--json")
-        return [p for p in json.loads(done.stdout) if not p["is_plugin"]]
+        out = self._query("list-panes", "--json", accept=_is_pane_list)
+        return [p for p in json.loads(out) if not p["is_plugin"]]
 
     def tiled(self, tab=None):
         return [p for p in self.panes() if not p["is_floating"]
@@ -136,36 +149,46 @@ class LiveLayout:
     def ready(self, count):
         got = self.wait_for(lambda: len(self.panes()) == count and self.panes(), 30)
         assert got, f"expected {count} panes, saw {[p['title'] for p in self.panes()]}"
-        self.drain(1.0)
+        self.settle()
 
     def dump(self):
-        return self.act("dump-layout")
+        return self._query("dump-layout", accept=lambda out: "layout {" in out)
 
-    def settle(self, seconds=1.2):
-        self.drain(seconds)
+    def _snapshot(self):
+        panes = sorted(
+            (p["title"], p["tab_name"], p["is_floating"], p["pane_columns"], p["pane_rows"])
+            for p in self.panes()
+        )
+        return panes, "hide_floating_panes=true" in self.dump()
+
+    def settle(self, timeout=15):
+        """Wait until two snapshots of panes and floating state 0.4 s apart agree.
+
+        Gives up quietly at the deadline; the caller's own assertion then
+        reports the state it actually saw.
+        """
+        end = time.time() + timeout
+        last = self._snapshot()
+        while time.time() < end:
+            self.drain(0.4)
+            now = self._snapshot()
+            if now == last:
+                return
+            last = now
 
     def close(self):
-        with contextlib.suppress(Exception):
-            self.z("kill-session", self.name)
-        with contextlib.suppress(Exception):
-            self.z("delete-session", self.name, "--force")
-        if self.pid:
-            with contextlib.suppress(Exception):
-                end = time.time() + 5
-                while time.time() < end:
-                    done, _ = os.waitpid(self.pid, os.WNOHANG)
-                    if done:
-                        self.pid = 0
-                        break
-                    self.drain(0.2)
-                if self.pid:
-                    os.kill(self.pid, signal.SIGKILL)
-                    os.waitpid(self.pid, 0)
-        if self.fd >= 0:
-            with contextlib.suppress(OSError):
-                os.close(self.fd)
+        survivors = stop_session(self.env, self.sock, self.name, self.proc, self.fd)
+        self.proc, self.fd = None, -1
         shutil.rmtree(self.sock, ignore_errors=True)
+        assert not survivors, f"zellij server(s) {survivors} for {self.sock} survived SIGKILL"
 
+
+def _is_pane_list(out):
+    try:
+        data = json.loads(out)
+    except ValueError:
+        return False
+    return isinstance(data, list) and bool(data)
 
 def generate(tmp_path, tokens, bars=None):
     flag = f"--bars {bars} " if bars else ""
@@ -191,6 +214,11 @@ def live(tmp_path, layout_text, count, auto_layout="false", rewrite=None, prepar
         yield session
     finally:
         session.close()
+
+
+def _floating_line(dump):
+    """The dump lines that carry the floating-pane visibility, for failure messages."""
+    return [ln.strip() for ln in dump.splitlines() if "hide_floating_panes" in ln] or dump[:200]
 
 
 def by_title(panes):
@@ -259,6 +287,7 @@ def test_stream_deck_shape_titles(tmp_path):
 def test_two_agents_and_strip_proportions(tmp_path):
     with live(tmp_path, generate(tmp_path, "claude claude shell"), 4) as s:
         assert "hide_floating_panes=true" in s.dump()
+        s.settle()
         panes = by_title(s.panes())
         agents = panes["Claude · A"]["pane_rows"]
         shell = panes["Shell"]
@@ -300,19 +329,23 @@ def test_swap_layouts_cycle_and_return(tmp_path):
 def test_floating_toggle_shows_and_hides_spend(tmp_path):
     with live(tmp_path, generate(tmp_path, "claude shell"), 3) as s:
         assert "hide_floating_panes=true" in s.dump()
-        s.act("toggle-floating-panes"); s.settle()
-        assert "hide_floating_panes=true" not in s.dump()
-        s.act("toggle-floating-panes"); s.settle()
-        assert "hide_floating_panes=true" in s.dump()
+        s.act("toggle-floating-panes")
+        shown = s.wait_for(lambda: "hide_floating_panes=true" not in s.dump(), 15)
+        assert shown, _floating_line(s.dump())
+        s.act("toggle-floating-panes")
+        hidden = s.wait_for(lambda: "hide_floating_panes=true" in s.dump(), 15)
+        assert hidden, _floating_line(s.dump())
 
 
 @needs_zellij
 def test_new_pane_keeps_the_strip_when_auto_layout_is_off(tmp_path):
     with live(tmp_path, generate(tmp_path, "claude claude shell"), 4) as s:
-        s.act("new-pane"); s.settle(2.0)
+        s.act("new-pane")
+        s.wait_for(lambda: len(s.tiled()) == 4); s.settle()
         assert len(s.tiled()) == 4
         assert by_title(s.panes())["Shell"]["pane_columns"] == COLS
-        s.act("close-pane"); s.settle()
+        s.act("close-pane")
+        s.wait_for(lambda: len(s.tiled()) == 3); s.settle()
         assert len(s.tiled()) == 3
         panes = by_title(s.panes())
         assert panes["Shell"]["pane_columns"] == COLS
@@ -323,7 +356,7 @@ def test_new_pane_keeps_the_strip_when_auto_layout_is_off(tmp_path):
 @pytest.mark.xfail(strict=False, reason="depends on Zellij's default auto-layout rule")
 def test_default_auto_layout_rearranges_on_new_pane(tmp_path):
     with live(tmp_path, generate(tmp_path, "claude claude shell"), 4, auto_layout=None) as s:
-        s.act("new-pane"); s.settle(2.0)
+        s.act("new-pane"); s.settle()
         assert by_title(s.panes())["Shell"]["pane_columns"] != COLS
 
 
@@ -394,7 +427,9 @@ def test_standard_layout_git_and_status_tabs_stay_alive(tmp_path):
 
     with live(tmp_path, generate_standard(tmp_path), 6, rewrite=_sleep_main_tab_only,
               prepare=prepare) as s:
-        s.settle(3.0)
+        # A deliberate fixed wait: the point is that Git and Status are still
+        # running after a while, not that the layout has settled.
+        s.drain(3.0)
         panes = s.panes()
         assert sorted({p["tab_name"] for p in panes}) == ["git", "main", "status"]
         by_name = {p["title"]: p for p in panes}

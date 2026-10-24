@@ -4,6 +4,10 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Fixed
+
+- **The live Zellij layout tests no longer fail at random** (v0.60.1). Zellij 0.44.3 often prints nothing, with exit code 0, for `action dump-layout` and sometimes for `action list-panes --json`, so tests that read one answer saw an empty string, an `IndexError` or a `JSONDecodeError`. The harness now asks again until the answer is usable, with a deadline and an error that shows the last reply, and waits for the pane state a test expects instead of sleeping for a fixed time. The live layout and key map harnesses start Zellij with `subprocess` on a pty instead of `pty.fork()` in a process that already runs pytest-timeout's watchdog thread, so the multi-threaded `forkpty()` warning is gone. Teardown finds the test's own Zellij server by its socket path, stops it (SIGTERM, then SIGKILL) before removing the socket dir, and fails the test if it survives instead of leaving an orphan server behind.
+
 ### Changed
 
 - **`quoin install` offers to update the agentdesk layout on a machine where agentdesk is already set up (v0.58.0).** Before, a user-scope install copied the new agentdesk scripts but left `~/.config/zellij/layouts/agent-desk.kdl` as it was, so `agentdesk` kept opening the old layout unless the full setup was run again with `--setup-agentdesk`. An interactive install now asks whether to update it (Enter means yes) and runs `setup-agentdesk.sh --refresh`, a new option that rewrites only the helper file and the layout (old file backed up; a customised layout is kept and the new one written beside it as `agent-desk.kdl.new`) and skips Homebrew, keybindings and `~/.zshrc`. Answering no, or a non-interactive install, prints the refresh command instead; a failed refresh is a warning. Sessions that already exist keep their layout when you attach to them; start a new one to see the change.
