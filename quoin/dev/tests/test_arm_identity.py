@@ -81,6 +81,35 @@ def test_isolated_plain_passes_even_though_it_lists_run(tmp_path):
     assert check.record()["init_seen"] is True
 
 
+_BUILTIN_PLUGINS = [
+    {"name": "cc-plugin-agents-md", "path": "builtin", "source": "cc-plugin-agents-md@builtin"},
+    {"name": "cc-plugin-telemetry", "path": "builtin", "source": "cc-plugin-telemetry@builtin"},
+]
+
+
+def test_isolated_plain_passes_with_builtin_plugins(tmp_path):
+    events = _load("init_isolated_plain", tmp_path)
+    events[0]["plugins"] = copy.deepcopy(_BUILTIN_PLUGINS)
+    reason, _, check = _feed(_identity(ai.QUOIN_FREE, tmp_path), events)
+    assert reason is None
+    assert check.record()["builtin_plugins"] == ["cc-plugin-agents-md", "cc-plugin-telemetry"]
+
+
+@pytest.mark.parametrize(
+    "plugin",
+    [
+        {"name": "demo", "path": "/home/u/.claude/plugins/cache/demo", "source": "demo@market"},
+        "demo",
+    ],
+)
+def test_isolated_plain_trips_on_installed_plugin(tmp_path, plugin):
+    events = _load("init_isolated_plain", tmp_path)
+    events[0]["plugins"] = copy.deepcopy(_BUILTIN_PLUGINS) + [plugin]
+    reason, _, check = _feed(_identity(ai.QUOIN_FREE, tmp_path), events)
+    assert reason == "plain-arm-contaminated"
+    assert check.record()["failure_detail"] == "plugins-listed:demo"
+
+
 def test_builtin_collisions_cover_isolated_fixture(tmp_path):
     names = set(_load("init_isolated_plain", tmp_path)[0]["skills"])
     collisions = names & set(_canonical())

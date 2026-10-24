@@ -192,6 +192,18 @@ def check_workdir(path: Path) -> List[str]:
     return problems
 
 
+def _plugin_name(plugin) -> str:
+    return str(plugin.get("name") if isinstance(plugin, dict) else plugin)
+
+
+def _is_builtin_plugin(plugin) -> bool:
+    # Claude Code ships plugins inside the binary that load in every session,
+    # even with an empty config dir or --safe-mode, so both arms carry them.
+    if not isinstance(plugin, dict):
+        return False
+    return plugin.get("path") == "builtin" or str(plugin.get("source", "")).endswith("@builtin")
+
+
 class InitIdentityCheck:
     """Reads stream events in order and trips once when the arm is wrong."""
 
@@ -209,6 +221,7 @@ class InitIdentityCheck:
             "apiKeySource": None,
             "mcp_servers": [],
             "plugins": [],
+            "builtin_plugins": [],
             "claude_code_version": None,
             "hook_events": [],
             "failure_detail": None,
@@ -253,7 +266,8 @@ class InitIdentityCheck:
             str(s.get("name") if isinstance(s, dict) else s) for s in servers
         )
         plugins = event.get("plugins") or []
-        rec["plugins"] = [str(p.get("name") if isinstance(p, dict) else p) for p in plugins]
+        rec["plugins"] = [_plugin_name(p) for p in plugins]
+        rec["builtin_plugins"] = [_plugin_name(p) for p in plugins if _is_builtin_plugin(p)]
         memory_paths = event.get("memory_paths")
         rec["memory_paths"] = dict(memory_paths) if isinstance(memory_paths, dict) else {}
         skills = event.get("skills")
@@ -267,8 +281,9 @@ class InitIdentityCheck:
             rec["forbidden_names"] = forbidden
             if forbidden:
                 return self._trip(f"quoin-skills-listed:{','.join(forbidden)}")
-            if rec["plugins"]:
-                return self._trip(f"plugins-listed:{','.join(rec['plugins'])}")
+            installed = [_plugin_name(p) for p in plugins if not _is_builtin_plugin(p)]
+            if installed:
+                return self._trip(f"plugins-listed:{','.join(installed)}")
         else:
             missing = sorted(set(ident.canonical) - names)
             rec["missing_names"] = missing
