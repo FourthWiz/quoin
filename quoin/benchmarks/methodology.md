@@ -26,8 +26,12 @@ For the `quoin-claude` cell, "Quoin" means:
 1. The agent is invoked with `QUOIN_GATE_AUTO_APPROVE=1` AND `QUOIN_BENCHMARK_RUN=1`
    environment variables set; `/gate` honors this pair to auto-emit PASS (see
    [Auto-mode caveats](#auto-mode-caveats) and T-19 gate plumbing).
-2. The agent receives a one-line directive prepending the task: "Use /run
-   end-to-end on this task".
+2. The prompt starts with the slash command `/run --autonomous`, followed by the
+   task text, so the CLI expands the run skill itself. A prose request to "use
+   /run" left a session free to skip the pipeline (the tiered-small run showed
+   it). The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
+   state is picked up. `--autonomous` is needed because a `--print` session
+   cannot answer the run skill's checkpoints.
 3. A clean per-task `.workflow_artifacts/` is initialized from scratch before
    each task.
 
@@ -121,10 +125,50 @@ measured value. The T-15 calibration run will provide empirical variance data.
 
 ## Cost Derivation
 
-Cost estimates below assume the `claude-opus-4-7` model ID. Starting with the
-4.6 generation, this dateless ID is itself the permanent pinned snapshot — no
+Cost estimates below assume the Opus pin in `BENCH_MODELS`
+(`harness/cells/simple_claude.py`, currently `claude-opus-5-5`). Starting with
+the 4.6 generation, the dateless ID is itself the permanent pinned snapshot — no
 separate dated form exists to swap in later. Actual costs are pinned from
 T-15 calibration; these are planning estimates.
+
+### Tiered paired suite
+
+The tiered suites use the same pins for both arms: `claude-opus-5-5` at effort
+`high`, with the sonnet and haiku aliases (and so skill `model:` tiers) resolving
+to `claude-sonnet-5-5` and `claude-haiku-5-5` through the
+`ANTHROPIC_DEFAULT_*_MODEL` variables; `CLAUDE_CODE_SUBAGENT_MODEL` stays unset.
+The pricing table is `harness/pricing.json`, checked against the live pricing
+page on 2026-10-25. Claude models are priced by exact id (after stripping a
+`[1m]` or dated suffix); an id with no entry is an error. Haiku 5.5 bills prompts
+over 100,000 tokens at higher rates, which table estimates do not apply, so a
+Haiku estimate is a lower bound and the runtime-reported cost is authoritative.
+The manifest records which models each arm actually used, and the report lists
+rows outside the pin, so a silently different alias shows up in the first run.
+
+The per-session cap, worst case, ceiling and wall clock are derived in
+`suite-tiered-small-provenance.md` from the repriced cost of comparable
+full-pipeline tasks: cap $90, worst case $1,620 (9 tasks, 2 arms), ceiling
+$1,790, pilot worst case $720, wall clock 19,200 s per session. The $100
+cutoff on source tasks, not the sample, sets the cap. The spend rate behind the
+wall clock comes from direct-fix sessions on Opus, so it is a guard rather than
+a forecast. The cap is not shown to either arm in the prompt, but
+`--max-budget-usd` stays armed and the CLI shows its remaining budget each turn
+(a finding of the first run, only partly addressed by sizing the cap not to
+bind).
+
+**Invalid quoin rows.** A Verified quoin session that ran but left no plan is
+recorded as `invalid` (`no-pipeline-artifacts`, `stopped-before-plan` or
+`no-pipeline-evidence`) and excluded from pass rates, cost, pairs and the
+McNemar test; rows that ended in an error keep their own reason, and a timeout
+or budget stop after a plan exists is counted separately
+(`post_plan_timeout_rows`, `post_plan_budget_stop_rows`) so a binding wall clock
+is visible. `/run` strips a `fast:` token from anywhere in its input, and issue
+bodies can contain one, so the route actually taken (`fast`, `full`, `unknown`)
+is recorded per row and not assumed.
+
+**Judging on arm64.** `--judge-emulation` runs the evaluation through a shim
+that reports x86_64 to swebench and pulls images for `linux/amd64`; on any other
+host it changes nothing.
 
 | Slice | Per-task estimate | N tasks | N cells | Total estimate |
 |---|---|---|---|---|
