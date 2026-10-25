@@ -692,6 +692,7 @@ def orchestrate(args) -> int:
                   f"{', '.join(stopped) or 'a pilot task'}; inspect the row's transcript and "
                   "workflow_artifacts_evidence before spending more; re-running refuses until "
                   "fixed or --accept-invalid-pilot is given (on every re-run)")
+            final_report(res)
             return rc
         if rc:
             print(RERUN_HINT)

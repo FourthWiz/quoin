@@ -147,6 +147,11 @@ pilot worst = cap x 4 easy tasks x 2 arms                 = 720
 | Enforced ceiling | $1,790 |
 | Pilot (easy tier) worst case | $720 |
 
+At 19,200 s per session with no idle timeout, the sequential worst-case
+durations are about 96 h for the full run and about 43 h for the pilot. The
+$170 of ceiling above the worst case is less than two capped sessions, so
+re-spawned rows may need a higher `--authorised-usd`.
+
 The $100 cutoff, not the sample, sets the cap: the cap is about 0.9 of the
 cutoff (and equal to the most expensive repriced source, rounded up), so a
 different cutoff would move it in proportion. The cap is a bound, not a

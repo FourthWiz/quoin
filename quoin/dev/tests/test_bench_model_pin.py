@@ -171,3 +171,20 @@ def test_verify_model_fails_on_one_mismatching_alias(monkeypatch):
 
     monkeypatch.setattr(run_benchmark.subprocess, "run", fake_run)
     assert run_benchmark.verify_model(ledger_path=None, verify_aliases=True) == 1
+
+
+def test_verify_model_with_aliases_refuses_when_headroom_covers_only_one_probe(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        raise AssertionError("no probe may run")
+
+    monkeypatch.setattr(run_benchmark.subprocess, "run", fake_run)
+    ledger = tmp_path / "ledger.jsonl"
+    # Headroom is 2x the probe cap: enough for one probe, not for three.
+    code = run_benchmark.verify_model(
+        ledger_path=ledger, authorised=2.0, max_budget_usd=1.0, verify_aliases=True
+    )
+    assert code == 2
+    assert calls == []

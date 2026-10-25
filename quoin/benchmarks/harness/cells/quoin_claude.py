@@ -287,7 +287,8 @@ def _capture_workflow_artifacts(
     try:
         shutil.copytree(src, dest, dirs_exist_ok=True)
     except Exception:
-        return dict(empty)
+        # Evidence exists but could not be preserved: the plan is unknown, not absent.
+        return {**empty, "copy_failed": True}
 
     # Validate: look for architecture.md and current-plan.md in any subfolder
     has_arch = any(dest.rglob("architecture.md"))
@@ -796,10 +797,12 @@ def invoke(
         # them — T-01/T-02 fix; they were top-level-only before).
         result["workflow_artifacts_captured"] = artifacts_evidence.get("captured", False)
         result["workflow_artifacts_has_arch"] = artifacts_evidence.get("has_architecture_md", False)
-        result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
+        if not artifacts_evidence.get("copy_failed"):
+            result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
         result["extra"]["workflow_artifacts_captured"] = result["workflow_artifacts_captured"]
         result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
-        result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
+        if "workflow_artifacts_has_plan" in result:
+            result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
         result["workflow_artifacts_phase_files"] = artifacts_evidence.get("phase_files", [])
         result["workflow_pipeline_started"] = artifacts_evidence.get("pipeline_started", False)
         result["workflow_route"] = artifacts_evidence.get("workflow_route")

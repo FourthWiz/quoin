@@ -1009,6 +1009,7 @@ def test_first_invalid_quoin_pilot_row_stops_after_one_pair(tw, capsys):
     assert "pilot stopped: the quoin arm did not run /run on" in out
     assert tiered_entry.RERUN_HINT not in out
     assert "full:" not in out
+    assert "recorded spend for run" in out
 
     _scenario(w, {})
     assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
@@ -1116,3 +1117,7 @@ def test_a_fresh_arm64_run_records_the_emulation_decision(tw, monkeypatch):
     monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
     assert _go(w, "--yes", "--judge-emulation") == 0
     assert read_manifest(w["runs"] / "R")["judge_emulation"] == "True"
+
+
+def test_invalid_pilot_exit_code_matches_the_paired_runner():
+    assert tiered_entry.EXIT_INVALID_PILOT == run_benchmark.EXIT_INVALID_QUOIN

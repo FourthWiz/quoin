@@ -130,3 +130,15 @@ def test_diagnostics_land_in_the_cell_result(tmp_path):
     assert result["extra"]["workflow_pipeline_started"] is False
     assert result["extra"]["workflow_route"]["route"] == "unknown"
     assert result["extra"]["workflow_artifacts_phase_files"] == []
+
+
+def test_failed_evidence_copy_is_not_reported_as_a_missing_plan(tmp_path, monkeypatch):
+    work = _tree(tmp_path, {"task/current-plan.md": "plan\n"})
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(quoin_claude.shutil, "copytree", boom)
+    got = quoin_claude._capture_workflow_artifacts(work, tmp_path / "out", "t1")
+    assert got["captured"] is False
+    assert got["copy_failed"] is True

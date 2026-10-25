@@ -310,6 +310,14 @@ derivation. The cap is a bound sized not to bind, not a forecast. It is not
 written into either arm's prompt; `--max-budget-usd` stays armed in both arms.
 The suite changed, so a run started before this change needs a new `--run-id`.
 
+Sequential worst-case durations at 19,200 s per session: about 96 h for a fresh
+run (18 sessions) and about 43 h for the pilot (8 sessions); there is no idle
+timeout. The ceiling leaves $170 above the worst case, less than two capped
+sessions, so re-spawned rows may need a higher `--authorised-usd`. The 5.5 model
+pin and `--effort high` apply to every arm, but the sonnet/haiku alias
+environment is set only for sandboxed paired runs; non-paired v1 and three-arm
+gate runs use the CLI's default aliases.
+
 
 ### Clean
 

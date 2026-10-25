@@ -198,7 +198,9 @@ def verify_model(
             return 2
         resolved_authorised = spend_ledger.resolve_authorised_ceiling(ledger_path, authorised)
         ok, message = spend_ledger.precheck(
-            ledger_path, planned_caps=[max_budget_usd], authorised=resolved_authorised,
+            ledger_path,
+            planned_caps=[max_budget_usd] * (3 if verify_aliases else 1),
+            authorised=resolved_authorised,
         )
         if not ok:
             print(message, file=sys.stderr)
