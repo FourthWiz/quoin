@@ -48,6 +48,7 @@ CHECKOUT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SUITE = "tiered-small"
 PAIR = "simple-claude,quoin-claude"
 EXIT_PARITY = 4
+EXIT_UNPRICED = 6
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 RERUN_HINT = "re-run `quoin bench tiered` with the same options to continue"
 NO_RESULT_REASON = "no result event recorded (for example a wall-clock timeout), so no denial count"
@@ -82,6 +83,7 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
             "  2  refused before spending anything (options, auth, spend ceilings, checkout)\n"
             "  3  a spend guard stopped the run\n"
             "  4  parity stop: the arms differ in permission denials, or denial data is missing\n"
+            "  6  finished, but a model in the run has no pricing entry (results are invalid)\n"
             "\n"
             "with --clean:\n"
             "  0  deleted, or nothing to delete\n"
@@ -481,6 +483,53 @@ def pending_rows(res: Resolved) -> int:
     )
 
 
+def unpriced_from_summary(run_path) -> list:
+    """Models the run's summary lists as unpriced; `[]` when the summary is
+    missing, unreadable, carries no tiered report, or predates the field."""
+    try:
+        summary = json.loads((Path(run_path) / "summary.json").read_text(encoding="utf-8"))
+        models = summary["tiered"]["validity"]["unpriced_models"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(models, list):
+        return []
+    return [m for m in models if isinstance(m, str)]
+
+
+def _refresh_summary(res: Resolved) -> None:
+    """Re-aggregate the recorded rows under the current code and pricing card.
+
+    No judging, no session, no spend: it keeps a judge-only re-run from
+    reporting a summary that older code wrote.
+    """
+    from quoin.benchmarks.harness.aggregate import aggregate_run
+    from quoin.benchmarks.scripts.check_invariants import check_invariants
+
+    started_at = finished_at = None
+    try:
+        previous = json.loads((res.run_path / "summary.json").read_text(encoding="utf-8"))
+        started_at, finished_at = previous.get("started_at"), previous.get("finished_at")
+    except (OSError, ValueError):
+        pass
+    aggregate_run(
+        res.run_dir, res.run_id, started_at=started_at, finished_at=finished_at,
+        suite_path=res.suite_path,
+    )
+    report = check_invariants(res.run_dir, res.run_id)
+    (res.run_path / "invariants-report.md").write_text(report.to_markdown(), encoding="utf-8")
+
+
+def finish(res: Resolved, rc: int) -> int:
+    """Print the final report; a clean run that used an unpriced model exits 6."""
+    final_report(res)
+    unpriced = unpriced_from_summary(res.run_path)
+    if unpriced and rc == 0:
+        print(f"unpriced model in this run: {', '.join(unpriced)}; add it to pricing.json "
+              "and cost_from_jsonl.PRICES, then re-aggregate")
+        return EXIT_UNPRICED
+    return rc
+
+
 def final_report(res: Resolved) -> None:
     from quoin.benchmarks.scripts import spend_ledger
 
@@ -519,6 +568,11 @@ def _judge_pending_or_defer(res: Resolved) -> int:
             print(RERUN_HINT)
     elif pending:
         print_deferred(res, why)
+    if not (pending and ok):
+        try:
+            _refresh_summary(res)
+        except Exception as exc:  # noqa: BLE001 - the stored summary is still reported
+            print(f"summary: could not refresh ({exc})")
     return rc
 
 
@@ -540,8 +594,7 @@ def orchestrate(args) -> int:
 
     if res.run_path.is_dir() and rows_all == 0:
         rc = _judge_pending_or_defer(res)
-        final_report(res)
-        return rc
+        return finish(res, rc)
 
     in_pilot = pilot_phase(res, rows_pilot)
     if not in_pilot and not args.ignore_parity:
@@ -618,8 +671,7 @@ def orchestrate(args) -> int:
         print_deferred(res, why)
     elif judged:
         print("judge: ran")
-    final_report(res)
-    return rc
+    return finish(res, rc)
 
 
 def main(argv=None, prog: str = "quoin bench tiered") -> int:

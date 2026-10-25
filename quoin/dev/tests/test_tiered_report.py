@@ -584,3 +584,88 @@ def test_run_benchmark_passes_the_suite_path_to_aggregate(tmp_path, monkeypatch)
     except Exception:
         pass
     assert seen.get("suite_path") == suite_path
+
+
+# --- model pin, mismatch and unpriced models ---------------------------------
+
+BENCH_MODELS_JSON = json.dumps(
+    {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5"},
+    sort_keys=True,
+)
+
+
+def _validity_of(tmp_path, rows, **manifest):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path, **manifest)
+    run_path = run_dir / run_id
+    for cell, task_id, usage, cost in rows:
+        write_row(run_path, cell, task_id, verdict="pass", wall=1,
+                  model_usage=usage, cost=cost)
+    aggregate.aggregate_run(run_dir, run_id)
+    summary = json.loads((run_path / "summary.json").read_text())
+    return summary["tiered"]["validity"], (run_path / "summary.md").read_text()
+
+
+def test_unpriced_model_invalidates_and_runtime_cost_is_kept(tmp_path):
+    usage = {"claude-opus-9-9": {"inputTokens": 10, "outputTokens": 5}}
+    v, md = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 2.0)])
+    assert v["unpriced_models"] == ["claude-opus-9-9"]
+    assert v["valid"] is False
+    assert "unpriced model: claude-opus-9-9" in v["invalid_reasons"]
+    assert "Valid: NO (unpriced model: claude-opus-9-9)" in md
+    assert "not_available" not in md
+
+
+def test_unpriced_model_is_found_on_estimated_rows_too(tmp_path):
+    usage = {"claude-opus-9-9": {"inputTokens": 10, "outputTokens": 5}}
+    v, _ = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, None)])
+    assert v["unpriced_models"] == ["claude-opus-9-9"]
+
+
+def test_synthetic_bucket_alone_does_not_invalidate(tmp_path):
+    usage = {"<synthetic>": {"inputTokens": 10, "outputTokens": 5}}
+    v, _ = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 2.0)])
+    assert v["unpriced_models"] == [] and v["valid"] is True
+
+
+def test_model_mismatch_rows_use_the_recorded_pin(tmp_path):
+    ok = {"claude-opus-5-5": {"inputTokens": 1}, "claude-sonnet-5-5": {"inputTokens": 1}}
+    stray = {"claude-opus-5-5": {"inputTokens": 1}, "claude-sonnet-4-6": {"inputTokens": 1}}
+    no_top = {"claude-sonnet-5-5": {"inputTokens": 1}}
+    rows = [(QUOIN_CELL, "e1", ok, 1.0), (QUOIN_CELL, "e2", stray, 1.0),
+            (QUOIN_CELL, "m1", no_top, 1.0)]
+    v, md = _validity_of(tmp_path, rows, effort="high", bench_models=BENCH_MODELS_JSON,
+                         model_override=None)
+    assert v["model_mismatch_rows"] == ["quoin-claude/e2", "quoin-claude/m1"]
+    assert v["valid"] is True
+    assert v["effort"] == "high"
+    assert v["bench_models"]["haiku"] == "claude-haiku-5-5"
+    assert "Effort: high" in md
+
+
+def test_model_override_changes_the_effective_top_level_model(tmp_path):
+    usage = {"claude-opus-4-7": {"inputTokens": 1}}
+    v, _ = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 1.0)],
+                        bench_models=BENCH_MODELS_JSON, model_override="claude-opus-4-7")
+    assert v["model_mismatch_rows"] == []
+
+
+def test_manifest_without_a_pin_skips_the_mismatch_check(tmp_path):
+    usage = {"claude-opus-4-7": {"inputTokens": 1}}
+    v, md = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 1.0)])
+    assert v["model_mismatch_rows"] == [] and v["model_mismatch_checked"] is False
+    assert "not recorded" in md
+
+
+def test_haiku_estimates_are_flagged_as_a_lower_bound(tmp_path):
+    usage = {"claude-haiku-5-5": {"inputTokens": 1000, "outputTokens": 10}}
+    v, md = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, None)])
+    assert v["estimate_lower_bound_rows"] == ["quoin-claude/e1"]
+    assert "Haiku 5.5 long-prompt tier not applied to table estimates; runtime cost is authoritative" in md
+
+
+def test_observed_models_are_read_back_from_the_manifest(tmp_path):
+    observed = json.dumps({QUOIN_CELL: ["claude-opus-5-5"], PLAIN_CELL: ["claude-opus-5-5"]},
+                          sort_keys=True)
+    v, md = _validity_of(tmp_path, [], observed_models=observed)
+    assert v["observed_models"][QUOIN_CELL] == ["claude-opus-5-5"]
+    assert "Observed models (quoin-claude): claude-opus-5-5" in md

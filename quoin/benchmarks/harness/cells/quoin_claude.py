@@ -52,7 +52,7 @@ from typing import Optional
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
-from ..cost import estimate_cost, load_pricing
+from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
     _MAX_RETAINED_STDERR_LINES,
@@ -63,6 +63,7 @@ from .simple_claude import (
     _drain_stream,
     _extract_cost_usd,
     _gate_mode,
+    _get_effort,
     _get_model,
     _read_ready_chunk,
     _split_ready_lines,
@@ -403,7 +404,7 @@ def invoke(
         result["extra"].update(refusal_flags)
         return result
 
-    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+    cmd = _build_claude_argv(prompt, model, _get_effort(), max_budget_usd)
     budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
     result["extra"]["budget_cap_armed"] = budget_cap_armed
     result["extra"]["max_budget_usd_applied"] = max_budget_usd
@@ -758,21 +759,24 @@ def invoke(
         if total_cost_usd is not None:
             result["cost_available"] = True
             result["cost_runtime_usd"] = total_cost_usd
+            result["extra"]["unpriced_models"] = []
             try:
                 pricing = load_pricing()
-                estimated = estimate_cost(
-                    model=model,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    cache_write=tokens_cache_write,
-                    cache_read=tokens_cache_read,
-                    pricing=pricing,
+                estimated, unpriced = estimate_session_cost(
+                    model,
+                    stream_metrics.model_usage,
+                    tokens_in,
+                    tokens_out,
+                    tokens_cache_write,
+                    tokens_cache_read,
+                    pricing,
                 )
+                result["extra"]["unpriced_models"] = unpriced
                 if estimated is not None:
                     result["cost_estimated_usd"] = float(estimated)
                     result["cost_delta_usd"] = total_cost_usd - float(estimated)
             except Exception:
-                pass
+                pass  # Estimation failure is non-fatal
         else:
             result["cost_available"] = False
 

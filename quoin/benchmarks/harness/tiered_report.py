@@ -17,7 +17,11 @@ import re
 from decimal import Decimal
 from pathlib import Path
 
-from .cost import estimate_cost, load_pricing
+from .cost import (
+    UnpricedModelError, estimate_cost, estimate_model_usage, is_costable,
+    load_pricing, resolve_model_pricing,
+)
+from .cost import _CODEX_MODEL_PREFIXES as CODEX_MODEL_PREFIXES
 from .session_state import is_judge_pending
 from .stream_metrics import TOKEN_FIELDS, bucket_has_usage, sum_model_usage
 
@@ -137,6 +141,7 @@ def _not_run_row():
         "wall_clock_s": 0.0, "tool_errors": 0, "tool_errors_available": False,
         "stream_metrics_error": None, "tree_sha": None, "failure_reason": None,
         "session_errored": False, "pre_spawn_error": False, "models": [],
+        "unpriced_models": [],
         "attempts": 1, "first_attempt_pass": False, "final_pass": False,
         "pending_counted_as_error": False, "cap_usd": None, "overshoot_usd": None,
         "permission_denials": None,
@@ -144,33 +149,51 @@ def _not_run_row():
 
 
 def _estimate_usd(model_usage, usage_tokens, manifest_model, pricing):
-    """Pricing-card estimate as a float, or None when any part is not priceable."""
-    total = Decimal("0")
+    """Pricing-card estimate as `(usd_or_None, unpriced_models)`.
+
+    The estimate is None when any part is not priceable; `unpriced_models`
+    names the Claude models that have no pricing entry.
+    """
     if model_usage:
-        priced = 0
-        for model, bucket in model_usage.items():
-            if not isinstance(bucket, dict) or not bucket_has_usage(bucket):
-                continue
-            if not model:
-                return None
-            priced += 1
-            amount = estimate_cost(
-                model,
-                _num(bucket.get("inputTokens")), _num(bucket.get("outputTokens")),
-                _num(bucket.get("cacheCreationInputTokens")),
-                _num(bucket.get("cacheReadInputTokens")), pricing,
-            )
-            if amount is None:
-                return None
-            total += amount
-        return float(total) if priced else None
+        used = {
+            m: b for m, b in model_usage.items()
+            if isinstance(b, dict) and bucket_has_usage(b)
+        }
+        if any(not m for m in used):
+            return None, []
+        total, unpriced = estimate_model_usage(used, pricing)
+        if unpriced:
+            return None, unpriced
+        has_costable = any(is_costable(m) for m in used)
+        return (float(total) if has_costable and total is not None else None), []
     if not manifest_model:
-        return None
-    amount = estimate_cost(
-        manifest_model, usage_tokens["input"], usage_tokens["output"],
-        usage_tokens["cache_write"], usage_tokens["cache_read"], pricing,
-    )
-    return None if amount is None else float(amount)
+        return None, []
+    try:
+        amount = estimate_cost(
+            manifest_model, usage_tokens["input"], usage_tokens["output"],
+            usage_tokens["cache_write"], usage_tokens["cache_read"], pricing,
+            strict=False,
+        )
+    except UnpricedModelError as exc:  # pragma: no cover - strict=False never raises
+        return None, [exc.model]
+    return (None if amount is None else float(amount)), []
+
+
+def _unpriced_for_row(row, recorded, pricing):
+    """Claude models this row used that the pricing card cannot price: the
+    estimate's own findings, the cell's record, and every costable model the
+    stream reported (so a row with runtime cost still names them)."""
+    found = set(row.get("unpriced_models") or [])
+    if isinstance(recorded, list):
+        found.update(m for m in recorded if isinstance(m, str) and is_costable(m))
+    for model in row.get("models") or []:
+        if (
+            is_costable(model)
+            and not model.lower().startswith(CODEX_MODEL_PREFIXES)
+            and resolve_model_pricing(model, pricing) is None
+        ):
+            found.add(model)
+    return sorted(found)
 
 
 def load_row(task_dir, manifest_model, pricing):
@@ -223,12 +246,17 @@ def load_row(task_dir, manifest_model, pricing):
         row["usd"] = float(runtime_usd)
         row["usd_source"] = "runtime"
     elif row["tokens_source"] != "unavailable":
-        estimate = _estimate_usd(
+        estimate, unpriced = _estimate_usd(
             model_usage if totals is not None else None, row["tokens"], manifest_model, pricing,
         )
+        row["unpriced_models"] = unpriced
         if estimate is not None:
             row["usd"] = estimate
             row["usd_source"] = "estimated"
+
+    row["unpriced_models"] = _unpriced_for_row(
+        row, metrics.get("unpriced_models"), pricing
+    )
 
     row["wall_clock_s"] = float(_num(metrics.get("wall_clock_seconds")))
     row["tool_errors_available"] = metrics.get("tool_error_count_available") is True
@@ -372,6 +400,48 @@ def _label(arm, task_id):
     return "%s/%s" % (arm, task_id)
 
 
+HAIKU_LONG_PROMPT_NOTE = (
+    "Haiku 5.5 long-prompt tier not applied to table estimates; runtime cost is authoritative"
+)
+
+
+def _manifest_dict(manifest, key):
+    """A dict the manifest writer stored as a JSON string, or None."""
+    value = manifest.get(key)
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
+    return None
+
+
+def _model_mismatch_rows(manifest, scoped, rows):
+    """Rows whose models are not the pinned top-level model plus the bench
+    sonnet and haiku models. Returns None when the manifest has no pin."""
+    bench = _manifest_dict(manifest, "bench_models")
+    if not bench:
+        return None
+    override = manifest.get("model_override")
+    top = override if isinstance(override, str) and override else bench.get("opus")
+    allowed = {top, bench.get("sonnet"), bench.get("haiku")}
+    out = []
+    for task in scoped:
+        for arm in ARMS:
+            r = rows[arm][task["id"]]
+            if not r["ran"]:
+                continue
+            costable = [m for m in r["models"] if is_costable(m)]
+            if not costable:
+                continue
+            if top not in costable or any(m not in allowed for m in costable):
+                out.append(_label(arm, task["id"]))
+    return out
+
+
 def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, invalid_task_ids=()):
     lists = {k: [] for k in (
         "identity_trip_rows", "systemic_error_rows", "session_errored_rows", "pre_spawn_error_rows",
@@ -401,6 +471,16 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
             if r["stream_metrics_error"]:
                 lists["stream_metrics_error_rows"].append(label)
 
+    unpriced = sorted({
+        m for task in scoped for arm in ARMS for m in rows[arm][task["id"]]["unpriced_models"]
+    })
+    lower_bound_rows = [
+        _label(arm, task["id"]) for task in scoped for arm in ARMS
+        if rows[arm][task["id"]]["usd_source"] == "estimated"
+        and "claude-haiku-5-5" in rows[arm][task["id"]]["models"]
+    ]
+    mismatch_rows = _model_mismatch_rows(manifest, scoped, rows)
+
     unexpected = []
     for arm in ARMS:
         arm_dir = Path(run_path) / arm
@@ -422,6 +502,8 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
         invalid.append(reason)
     if sha_match is False:
         invalid.append("suite SHA differs from the one recorded at run start")
+    if unpriced:
+        invalid.append("unpriced model: %s" % ", ".join(unpriced))
 
     provisional = []
     if lists["judge_pending_rows"]:
@@ -460,6 +542,15 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
             QUOIN_CELL: manifest.get("quoin_claude_model"),
         },
         "tokens_source_counts": source_counts,
+        "effort": manifest.get("effort") or "not recorded",
+        "bench_models": _manifest_dict(manifest, "bench_models"),
+        "model_override": manifest.get("model_override"),
+        "observed_models": _manifest_dict(manifest, "observed_models"),
+        "model_mismatch_rows": mismatch_rows if mismatch_rows is not None else [],
+        "model_mismatch_checked": mismatch_rows is not None,
+        "unpriced_models": unpriced,
+        "estimate_lower_bound_rows": lower_bound_rows,
+        "estimate_lower_bound_note": HAIKU_LONG_PROMPT_NOTE,
     }
     out.update(lists)
     extra_skills = manifest.get("asymmetric_extra_skills")
@@ -747,6 +838,19 @@ def render_tiered_markdown(report, format_table):
             % ", ".join(validity["asymmetric_extra_skills"])
         )
     lines.append("Contamination checks: %s  " % validity["contamination_checks"])
+    lines.append("Effort: %s  " % validity["effort"])
+    bench = validity["bench_models"]
+    lines.append(
+        "Bench models: %s  "
+        % (", ".join("%s=%s" % (k, bench[k]) for k in sorted(bench)) if bench else "not recorded")
+    )
+    observed = validity["observed_models"]
+    for arm in ARMS:
+        seen = (observed or {}).get(arm)
+        lines.append(
+            "Observed models (%s): %s  "
+            % (arm, ", ".join(seen) if seen else "not recorded")
+        )
     for arm in ARMS:
         lines.append("Models (%s): %s  " % (arm, ", ".join(validity["models"][arm]) or "none recorded"))
     for arm in ARMS:
@@ -757,10 +861,14 @@ def render_tiered_markdown(report, format_table):
         )
     for key in ("identity_trip_rows", "systemic_error_rows", "session_errored_rows", "pre_spawn_error_rows",
                 "judge_pending_rows", "unreadable_rows", "unknown_verdict_rows", "stream_metrics_error_rows",
-                "unexpected_task_dirs", "tree_sha_mismatches"):
+                "unexpected_task_dirs", "tree_sha_mismatches", "model_mismatch_rows", "unpriced_models",
+                "estimate_lower_bound_rows"):
         items = validity[key]
         suffix = ": %s" % ", ".join(items) if items else ""
         lines.append("%s: %d%s  " % (key, len(items), suffix))
+    if not validity["model_mismatch_checked"]:
+        lines.append("Model mismatch check: not recorded in this run's manifest  ")
+    lines.append("Note: %s  " % validity["estimate_lower_bound_note"])
     if validity["invalid_task_ids"]:
         lines.append(
             "Skipped suite task ids that are not a single plain path component: %s  "

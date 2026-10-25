@@ -108,7 +108,12 @@ def read_log(bin_dir) -> list:
 # the result event; default 0), ``no_result``, ``result_subtype``, ``write_skill`` (a skill directory to create in the
 # config dir), ``commit_in`` (a repository that gets an empty commit), ``commit``, and ``runs``: a map from the 1-based run number to a
 # dict that replaces the keys above for that run only. ``sleep_forever`` makes
-# the run wait until it is signalled.
+# the run wait until it is signalled. ``model`` is the model id echoed when the
+# argv carries no ``--model``; with ``--model`` the argv value is echoed.
+# ``model_usage`` (dict) replaces the single modelUsage bucket, for runs that
+# need several models. ``quoin_plan`` (default true) makes the quoin arm leave a
+# plan file in its working tree; set it false to simulate a run that never
+# reached the planning step.
 
 _PAIRED_SCRIPT = r'''
 import json, os, subprocess, sys, time
@@ -177,6 +182,9 @@ if opts.get("write_skill"):
 
 with open("a.txt", "a") as fh:
     fh.write("edited by %s run %d\n" % (arm, run_no))
+if arm == "quoin" and opts.get("quoin_plan", True):
+    os.makedirs(os.path.join(".workflow_artifacts", "bench-task"), exist_ok=True)
+    open(os.path.join(".workflow_artifacts", "bench-task", "current-plan.md"), "w").write("plan\n")
 if opts.get("commit_in"):
     subprocess.run(["git", "-C", opts["commit_in"], "-c", "user.name=t", "-c", "user.email=t@example.invalid",
                     "commit", "-q", "--allow-empty", "-m", "moved"], check=False)
@@ -195,7 +203,9 @@ elif background == "inherit":
     log({"event": "child", "pid": child.pid})
 
 time.sleep(opts.get("delay", 0.05))
-emit({"type": "assistant", "message": {"model": "claude-opus-4-7", "content": [{"type": "text", "text": "done"}]}})
+argv = sys.argv[1:]
+model = argv[argv.index("--model") + 1] if "--model" in argv else opts.get("model", "claude-opus-4-7")
+emit({"type": "assistant", "message": {"model": model, "content": [{"type": "text", "text": "done"}]}})
 if not opts.get("no_result"):
     cost = (opts.get("cost") or {}).get(arm, 0.25)
     subtype = opts.get("result_subtype", "success")
@@ -204,7 +214,7 @@ if not opts.get("no_result"):
           "total_cost_usd": cost,
           "permission_denials": [{"tool_name": "Bash", "tool_use_id": "fake-%d" % n}
                                  for n in range(int((opts.get("denials") or {}).get(arm, 0)))],
-          "modelUsage": {"claude-opus-4-7": {"inputTokens": 10, "outputTokens": 5,
+          "modelUsage": opts.get("model_usage") or {model: {"inputTokens": 10, "outputTokens": 5,
                                               "cacheReadInputTokens": 0,
                                               "cacheCreationInputTokens": 0, "costUSD": cost}}})
 log({"event": "end", "pid": os.getpid(), "t1": time.monotonic()})

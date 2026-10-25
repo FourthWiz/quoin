@@ -153,9 +153,11 @@ def test_environment_is_the_allowlist_and_stays_in_the_sandbox(world):
         expected = {k for k in arm_sandbox.PASSTHROUGH_KEYS if k in os.environ}
         expected |= {"CLAUDE_CODE_OAUTH_TOKEN", "HOME", "CLAUDE_CONFIG_DIR", "GIT_AUTHOR_NAME",
                      "GIT_COMMITTER_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_EMAIL",
-                     "CLAUDE_CODE_TMPDIR"}
+                     "CLAUDE_CODE_TMPDIR", "ANTHROPIC_DEFAULT_OPUS_MODEL",
+                     "ANTHROPIC_DEFAULT_SONNET_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                     "ANTHROPIC_SMALL_FAST_MODEL"}
         if _arm_of(start) == "quoin-claude":
-            expected |= {"QUOIN_GATE_AUTO_APPROVE", "QUOIN_BENCHMARK_RUN"}
+            expected |= {"QUOIN_GATE_AUTO_APPROVE", "QUOIN_BENCHMARK_RUN", "QUOIN_AUTO_RESUME"}
         assert keys == expected
         parent = os.path.realpath(w["sandbox_parent"])
         assert os.path.realpath(start["home"]).startswith(parent)

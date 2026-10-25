@@ -364,7 +364,19 @@ class TestCostEstimation:
             result = estimate_cost(model=model, tokens_in=1000, tokens_out=500)
             assert result is None, f"Expected None for Codex model {model}, got {result}"
 
-    def test_estimate_cost_unknown_claude_model_returns_none(self):
+    def test_estimate_cost_unknown_claude_model_raises_unpriced(self):
+        from quoin.benchmarks.harness.cost import UnpricedModelError, estimate_cost
+
+        with pytest.raises(UnpricedModelError) as excinfo:
+            estimate_cost(
+                model="claude-nonexistent-9999",
+                tokens_in=1000,
+                tokens_out=500,
+                pricing={"models": {}},
+            )
+        assert excinfo.value.model == "claude-nonexistent-9999"
+
+    def test_estimate_cost_unknown_claude_model_returns_none_when_not_strict(self):
         from quoin.benchmarks.harness.cost import estimate_cost
 
         result = estimate_cost(
@@ -372,6 +384,7 @@ class TestCostEstimation:
             tokens_in=1000,
             tokens_out=500,
             pricing={"models": {}},
+            strict=False,
         )
         assert result is None
 

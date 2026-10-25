@@ -6,17 +6,13 @@ of the fixture repo. No Quoin workflow artifacts; pure Claude Code baseline.
 
 Model snapshot pinning:
     Starting with the 4.6 generation, every Claude model ID is itself a
-    pinned snapshot — including the dateless form (verified against
-    Anthropic's docs, platform.claude.com/docs/en/models/opus-4-7/overview
-    and .../sonnet-4-6/overview: "Every Claude model ID is a pinned
-    snapshot, including the dateless IDs used from the 4.6 generation on").
-    There is no separate dated snapshot to discover for these models — the
-    bare ID below IS the permanent pin, confirmed by a live probe
-    (`claude --print --output-format json --model claude-opus-4-7 ...`
-    returns `canonicalModel: "claude-opus-4-7"` with no date suffix
-    anywhere in the response, and the installed CLI binary's own static
-    model table has no dated string for this alias either). No further
-    pinning action is possible or needed for this model generation.
+    pinned snapshot, including the dateless form (Anthropic's model docs:
+    "Every Claude model ID is a pinned snapshot, including the dateless IDs
+    used from the 4.6 generation on"). There is no separate dated snapshot to
+    discover, so the bare ID in BENCH_MODELS is the pin. Both arms run the
+    same top-level model and effort; the sonnet and haiku entries are what the
+    CLI's aliases (and therefore skill `model:` tiers) resolve to, exported
+    through the ANTHROPIC_DEFAULT_*_MODEL variables.
 
 Rate-limit handling:
     The adapter catches 429 / overloaded responses from the Claude API and
@@ -41,23 +37,30 @@ from typing import Optional
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
-from ..cost import estimate_cost, load_pricing
+from ..cost import estimate_session_cost, load_pricing
 
-# ---------------------------------------------------------------------------
-# This dateless ID IS the permanent pin (D-11) for 4.6+-generation models —
-# see the module docstring. Verified 2026-09-06 against a live probe
-# (canonicalModel: "claude-opus-4-7", no date suffix anywhere in the
-# response) and against Anthropic's docs, which state this explicitly as
-# policy. There is no dated snapshot to swap in later.
-# ---------------------------------------------------------------------------
-PINNED_MODEL: str = "claude-opus-4-7"
+# One table for every model the benchmark touches. The top-level session runs
+# the "opus" entry; the other two are what the CLI aliases resolve to for skill
+# `model:` tiers and subagents. Dateless IDs are the permanent pins for
+# 4.6+-generation models; there is no dated snapshot to swap in later.
+BENCH_MODELS: dict = {
+    "opus": "claude-opus-5-5",
+    "sonnet": "claude-sonnet-5-5",
+    "haiku": "claude-haiku-5-5",
+}
+BENCH_EFFORT: str = "high"
+PINNED_MODEL: str = BENCH_MODELS["opus"]
 
 # Overridable via environment for testing
 _MODEL_ENV_VAR = "QUOIN_BENCH_CLAUDE_MODEL"
 
 
 def _get_model() -> str:
-    return os.environ.get(_MODEL_ENV_VAR, PINNED_MODEL)
+    return os.environ.get(_MODEL_ENV_VAR, BENCH_MODELS["opus"])
+
+
+def _get_effort() -> str:
+    return BENCH_EFFORT
 
 
 # Environment variable that flags a gate invocation (D-08). Read from the
@@ -199,7 +202,9 @@ def _drain_stream(stream, buffer, halt_event: Optional["threading.Event"] = None
         pass
 
 
-def _build_claude_argv(prompt: str, model: str, max_budget_usd: Optional[float]) -> list[str]:
+def _build_claude_argv(
+    prompt: str, model: str, effort: str, max_budget_usd: Optional[float]
+) -> list[str]:
     """Assemble the `claude` argv shared by both Claude cells.
 
     A separate, importable function so the "the assembled argv actually
@@ -215,6 +220,7 @@ def _build_claude_argv(prompt: str, model: str, max_budget_usd: Optional[float])
         "--verbose",
         "--permission-mode", "acceptEdits",
         "--model", model,
+        "--effort", effort,
     ]
     if max_budget_usd is not None:
         argv += ["--max-budget-usd", str(max_budget_usd)]
@@ -347,7 +353,7 @@ def invoke(
         "extra": {},
     }
 
-    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+    cmd = _build_claude_argv(prompt, model, _get_effort(), max_budget_usd)
 
     # Fail closed at the point of spend (D-08's CRIT-2 fix). A cap that is
     # merely threaded is not a bound: this refusal is evaluated on the
@@ -742,16 +748,19 @@ def invoke(
             result["cost_available"] = True
             result["cost_runtime_usd"] = total_cost_usd
             # Also compute estimated value for sanity check
+            result["extra"]["unpriced_models"] = []
             try:
                 pricing = load_pricing()
-                estimated = estimate_cost(
-                    model=model,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    cache_write=tokens_cache_write,
-                    cache_read=tokens_cache_read,
-                    pricing=pricing,
+                estimated, unpriced = estimate_session_cost(
+                    model,
+                    stream_metrics.model_usage,
+                    tokens_in,
+                    tokens_out,
+                    tokens_cache_write,
+                    tokens_cache_read,
+                    pricing,
                 )
+                result["extra"]["unpriced_models"] = unpriced
                 if estimated is not None:
                     result["cost_estimated_usd"] = float(estimated)
                     result["cost_delta_usd"] = total_cost_usd - float(estimated)

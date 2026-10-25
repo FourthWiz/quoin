@@ -915,3 +915,81 @@ def test_judge_only_after_a_pilot_that_finished_every_row(tw, monkeypatch, capsy
     assert "judge: ran" in out
     assert len(w["judged"]) == 4
     assert [c["tiers"] for c in w["calls"]] == ["easy"]
+
+
+# --- model pin in the manifest and unpriced models ---------------------------------
+
+OPUS_5_5 = "claude-opus-5-5"
+SONNET_5_5 = "claude-sonnet-5-5"
+
+
+def _usage(*models):
+    return {m: {"inputTokens": 10, "outputTokens": 5, "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0, "costUSD": 0.1} for m in models}
+
+
+def _manifest_json(path, key):
+    return json.loads(read_manifest(path)[key])
+
+
+def test_manifest_records_the_pin_and_observed_models(tw):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, SONNET_5_5)})
+    assert _go(w, "--yes") == 0
+    manifest = read_manifest(w["runs"] / "R")
+    assert manifest["effort"] == "high"
+    assert _manifest_json(w["runs"] / "R", "bench_models") == {
+        "opus": OPUS_5_5, "sonnet": SONNET_5_5, "haiku": "claude-haiku-5-5"}
+    assert manifest["model_override"] is None
+    observed = _manifest_json(w["runs"] / "R", "observed_models")
+    assert observed == {"simple-claude": [OPUS_5_5, SONNET_5_5],
+                        "quoin-claude": [OPUS_5_5, SONNET_5_5]}
+    validity = json.loads((w["runs"] / "R" / "summary.json").read_text())["tiered"]["validity"]
+    assert validity["model_mismatch_rows"] == []
+
+
+def test_an_interrupted_run_manifest_carries_observed_models(tw, capsys):
+    w = tw
+    assert _interrupted(w, 2, 2) == 1
+    observed = _manifest_json(w["runs"] / "R", "observed_models")
+    assert OPUS_5_5 in observed["simple-claude"]
+
+
+def test_unpriced_model_in_a_spawning_run_exits_six(tw, capsys):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, "claude-opus-9-9")})
+    assert _go(w, "--yes") == tiered_entry.EXIT_UNPRICED
+    out = capsys.readouterr().out
+    assert "unpriced model in this run: claude-opus-9-9" in out
+
+
+def test_judge_only_rerun_refreshes_the_summary_and_exits_six(tw, monkeypatch, capsys):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, SONNET_5_5)})
+    assert _go(w, "--yes") == 0
+    summary = json.loads((w["runs"] / "R" / "summary.json").read_text())
+    assert summary["tiered"]["validity"]["unpriced_models"] == []
+    n = len(_starts(w))
+
+    from quoin.benchmarks.harness import tiered_report
+
+    real = tiered_report.load_pricing
+
+    def trimmed():
+        card = real()
+        return {**card, "models": {k: v for k, v in card["models"].items() if k != SONNET_5_5}}
+
+    monkeypatch.setattr(tiered_report, "load_pricing", trimmed)
+    capsys.readouterr()
+    assert _go(w, "--yes") == tiered_entry.EXIT_UNPRICED
+    assert len(_starts(w)) == n
+    assert "unpriced model in this run: claude-sonnet-5-5" in capsys.readouterr().out
+    assert (w["runs"] / "R" / "invariants-report.md").is_file()
+
+
+@pytest.mark.parametrize("body", [None, "{not json", '{"tiered": {"error": "boom"}}',
+                                  '{"tiered": {"validity": {}}}'])
+def test_unpriced_from_summary_is_empty_for_missing_or_old_summaries(tmp_path, body):
+    if body is not None:
+        (tmp_path / "summary.json").write_text(body)
+    assert tiered_entry.unpriced_from_summary(tmp_path) == []

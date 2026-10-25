@@ -95,9 +95,15 @@ def test_session_env_is_exactly_the_allowlist(tmp_path, cell, with_sandbox):
         assert env["HOME"] == str(box.home)
     else:
         assert env["HOME"] == str(Path.home())
+    expected |= {"ANTHROPIC_DEFAULT_OPUS_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",
+                 "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_SMALL_FAST_MODEL"}
+    assert "CLAUDE_CODE_SUBAGENT_MODEL" not in env
     if cell == "quoin-claude":
-        expected |= {"QUOIN_GATE_AUTO_APPROVE", "QUOIN_BENCHMARK_RUN"}
+        expected |= {"QUOIN_GATE_AUTO_APPROVE", "QUOIN_BENCHMARK_RUN", "QUOIN_AUTO_RESUME"}
         assert env["QUOIN_BENCHMARK_RUN"] == "run1"
+        assert env["QUOIN_AUTO_RESUME"] == "0"
+    else:
+        assert "QUOIN_AUTO_RESUME" not in env
     assert set(env) == expected
     assert sb.session_env_keys(env) == sorted(expected)
 

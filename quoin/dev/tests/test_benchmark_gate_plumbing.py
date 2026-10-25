@@ -610,7 +610,7 @@ class TestQuoinClaudeGateModeGuards:
         monkeypatch.setenv("QUOIN_BENCHMARK_GATE", "1")
         # Stub the argv builder to silently drop --max-budget-usd even
         # though a cap was requested — the exact anti-silent-omission proof.
-        monkeypatch.setattr(quoin_claude, "_build_claude_argv", lambda prompt, model, cap: ["claude", prompt])
+        monkeypatch.setattr(quoin_claude, "_build_claude_argv", lambda prompt, model, effort, cap: ["claude", prompt])
 
         _guard_against_claude_popen(monkeypatch, quoin_claude)
         result = quoin_claude.invoke(
@@ -666,7 +666,7 @@ class TestSimpleClaudeBudgetGuard:
         from quoin.benchmarks.harness.config import BudgetSpec
 
         monkeypatch.setenv("QUOIN_BENCHMARK_GATE", "1")
-        monkeypatch.setattr(simple_claude, "_build_claude_argv", lambda prompt, model, cap: ["claude", prompt])
+        monkeypatch.setattr(simple_claude, "_build_claude_argv", lambda prompt, model, effort, cap: ["claude", prompt])
 
         _guard_against_claude_popen(monkeypatch, simple_claude)
         result = simple_claude.invoke(
@@ -886,10 +886,10 @@ class TestCostFieldName:
     def test_max_budget_usd_reaches_argv_when_set_and_argv_unchanged_when_unset(self):
         from quoin.benchmarks.harness.cells.simple_claude import _build_claude_argv
 
-        with_cap = _build_claude_argv("p", "m", 5.0)
+        with_cap = _build_claude_argv("p", "m", "high", 5.0)
         assert "--max-budget-usd" in with_cap
         assert "5.0" in with_cap
-        without_cap = _build_claude_argv("p", "m", None)
+        without_cap = _build_claude_argv("p", "m", "high", None)
         assert "--max-budget-usd" not in without_cap
 
 
@@ -1116,9 +1116,8 @@ class TestPinnedModelPricingConsistency:
         assert PINNED_MODEL in pricing["models"], (
             f"PINNED_MODEL={PINNED_MODEL!r} is not an exact key of "
             f"pricing.json['models']={list(pricing['models'])!r} — "
-            "cost.estimate_cost's prefix fallback would mask this, but "
-            "run_benchmark._estimate_cost_dry_run does an EXACT lookup and "
-            "silently falls back to hardcoded rates."
+            "the pin must be priced under its exact key so cost "
+            "estimates never depend on a normalised or inferred model id."
         )
 
     def test_pricing_json_has_no_stale_dated_snapshot_keys(self):
@@ -1177,22 +1176,74 @@ class TestPinnedModelPricingConsistency:
                 )
 
 
+    def test_long_prompt_tiers_agree_with_the_authoritative_table(self):
+        import json as _json
+        import sys as _sys
+
+        scripts_dir = str(
+            Path(__file__).resolve().parent.parent.parent / "scripts"
+        )
+        if scripts_dir not in _sys.path:
+            _sys.path.insert(0, scripts_dir)
+        from cost_from_jsonl import LONG_PROMPT_TIERS
+
+        pricing_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "benchmarks" / "harness" / "pricing.json"
+        )
+        pricing = _json.loads(pricing_path.read_text(encoding="utf-8"))
+        rate_keys = {
+            "input_per_1m_usd": "input",
+            "output_per_1m_usd": "output",
+            "cache_write_per_1m_usd": "cache_create",
+            "cache_read_per_1m_usd": "cache_read",
+        }
+        tiered = {
+            m: e["long_prompt_tier"]
+            for m, e in pricing["models"].items()
+            if "long_prompt_tier" in e
+        }
+        assert set(tiered) == set(LONG_PROMPT_TIERS)
+        for model, tier in tiered.items():
+            ref = LONG_PROMPT_TIERS[model]
+            assert tier["threshold_input_tokens"] == ref["threshold_input_tokens"]
+            for harness_key, prices_key in rate_keys.items():
+                assert tier[harness_key] == ref[prices_key], (model, harness_key)
+        for model in LONG_PROMPT_TIERS:
+            assert model in pricing["models"]
+
+    def test_pricing_json_records_source_url_and_check_date(self):
+        import datetime as _dt
+        import json as _json
+
+        pricing_path = (
+            Path(__file__).resolve().parent.parent.parent
+            / "benchmarks" / "harness" / "pricing.json"
+        )
+        pricing = _json.loads(pricing_path.read_text(encoding="utf-8"))
+        assert any(
+            "platform.claude.com/docs/en/about-claude/pricing" in src
+            for src in pricing["_sources"]
+        )
+        _dt.date.fromisoformat(pricing["_last_verified"])
+
+
 class TestVerifyModelPreflight:
     def test_resolve_model_id_reads_model_usage_key_when_no_top_level_model(self):
         from quoin.benchmarks.scripts.run_benchmark import _resolve_model_id_from_probe_response
 
         data = {
             "modelUsage": {
-                "claude-opus-4-7": {"canonicalModel": "claude-opus-4-7", "costUSD": 0.35}
+                "claude-opus-5-5": {"canonicalModel": "claude-opus-5-5", "costUSD": 0.35}
             }
         }
-        assert _resolve_model_id_from_probe_response(data) == "claude-opus-4-7"
+        assert _resolve_model_id_from_probe_response(data) == "claude-opus-5-5"
 
     def test_resolve_model_id_prefers_top_level_model_field(self):
         from quoin.benchmarks.scripts.run_benchmark import _resolve_model_id_from_probe_response
 
-        data = {"model": "claude-opus-4-7", "modelUsage": {"other": {}}}
-        assert _resolve_model_id_from_probe_response(data) == "claude-opus-4-7"
+        data = {"model": "claude-opus-5-5", "modelUsage": {"other": {}}}
+        assert _resolve_model_id_from_probe_response(data) == "claude-opus-5-5"
 
     def test_live_probe_shells_the_pinned_model_constant(self, monkeypatch):
         from quoin.benchmarks.harness.cells import simple_claude
@@ -1232,7 +1283,7 @@ class TestVerifyModelPreflight:
 
         def stub_probe(max_budget_usd):
             return {
-                "modelUsage": {"claude-opus-4-7": {"canonicalModel": "claude-opus-4-7"}},
+                "modelUsage": {"claude-opus-5-5": {"canonicalModel": "claude-opus-5-5"}},
                 "total_cost_usd": 0.35,
             }
 
@@ -1257,7 +1308,7 @@ class TestVerifyModelPreflight:
 
         def stub_probe(max_budget_usd):
             return {
-                "modelUsage": {"claude-opus-4-7": {"canonicalModel": "claude-opus-4-7"}},
+                "modelUsage": {"claude-opus-5-5": {"canonicalModel": "claude-opus-5-5"}},
                 "total_cost_usd": 0.35,
             }
 
@@ -1307,7 +1358,7 @@ class TestVerifyModelPreflight:
 
         def stub_probe(max_budget_usd):
             return {
-                "modelUsage": {"claude-opus-4-7": {"canonicalModel": "claude-opus-4-7"}},
+                "modelUsage": {"claude-opus-5-5": {"canonicalModel": "claude-opus-5-5"}},
                 "total_cost_usd": 0.35,
             }
 

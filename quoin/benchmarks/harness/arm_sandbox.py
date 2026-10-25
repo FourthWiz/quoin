@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Optional, Tuple
 
+from .cells.simple_claude import BENCH_MODELS
 from .repo_prep import BENCH_GIT_IDENTITY
 
 SANDBOX_PREFIX = "qbench_sandbox_"
@@ -180,6 +181,16 @@ def select_auth(environ) -> Tuple[str, str]:
     return present[0], environ[present[0]]
 
 
+def bench_alias_env() -> dict:
+    """The model-alias variables both arms run under."""
+    return {
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": BENCH_MODELS["opus"],
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": BENCH_MODELS["sonnet"],
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": BENCH_MODELS["haiku"],
+        "ANTHROPIC_SMALL_FAST_MODEL": BENCH_MODELS["haiku"],
+    }
+
+
 def build_session_env(sandbox_or_none: Optional[Sandbox], cell: str, run_id: str,
                       auth: Tuple[str, str], environ=None) -> dict:
     """The complete environment for one CLI session: allowlisted names only."""
@@ -200,8 +211,14 @@ def build_session_env(sandbox_or_none: Optional[Sandbox], cell: str, run_id: str
             env["CLAUDE_CODE_TMPDIR"] = str(sandbox_or_none.cli_tmp)
     else:
         env["HOME"] = str(Path.home())
+    # Both arms resolve the CLI's model aliases to the same pinned models. The
+    # subagent override is never set: it would flatten the skill `model:` tiers.
+    env.update(bench_alias_env())
     if cell == "quoin-claude":
+        # Quoin-only keys: gate auto-approval for the unattended run, and no
+        # auto-resume of an earlier pipeline state left in the sandbox.
         env["QUOIN_GATE_AUTO_APPROVE"] = "1"
+        env["QUOIN_AUTO_RESUME"] = "0"
         env["QUOIN_BENCHMARK_RUN"] = run_id
     return env
 
