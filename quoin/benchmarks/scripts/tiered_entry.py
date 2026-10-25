@@ -48,6 +48,8 @@ CHECKOUT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SUITE = "tiered-small"
 PAIR = "simple-claude,quoin-claude"
 EXIT_PARITY = 4
+EXIT_INVALID_PILOT = 5
+EXIT_UNPRICED = 6
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 RERUN_HINT = "re-run `quoin bench tiered` with the same options to continue"
 NO_RESULT_REASON = "no result event recorded (for example a wall-clock timeout), so no denial count"
@@ -82,6 +84,8 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
             "  2  refused before spending anything (options, auth, spend ceilings, checkout)\n"
             "  3  a spend guard stopped the run\n"
             "  4  parity stop: the arms differ in permission denials, or denial data is missing\n"
+            "  5  the quoin arm did not run the pipeline in a pilot row (stopped, or refused on a re-run)\n"
+            "  6  finished, but a model in the run has no pricing entry (results are invalid)\n"
             "\n"
             "with --clean:\n"
             "  0  deleted, or nothing to delete\n"
@@ -118,6 +122,9 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
                         help="Continue past a parity stop or missing denial data after reviewing the pilot")
     parser.add_argument("--judge-emulation", action="store_true",
                         help="Judge on an arm64 host through x86_64 emulation instead of deferring")
+    parser.add_argument("--accept-invalid-pilot", action="store_true",
+                        help="Continue past recorded pilot rows where the quoin arm did not run the "
+                             "pipeline; give it on every re-run, it is not remembered")
     parser.add_argument("--skip-judge", action="store_true",
                         help="Run the sessions and leave judging for later")
     parser.add_argument("--wall-clock-seconds", type=int, default=None,
@@ -141,7 +148,7 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
 RUN_ONLY_OPTIONS = (
     "--ignore-parity", "--judge-emulation", "--parity-min-gap", "--parity-min-ratio",
     "--skip-judge", "--pilot-tier", "--wall-clock-seconds", "--arm-root",
-    "--expected-quoin-commit",
+    "--expected-quoin-commit", "--accept-invalid-pilot",
 )
 
 
@@ -258,7 +265,8 @@ def check_resume_ledger(res: Resolved) -> Optional[int]:
     )
 
 
-def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool) -> list:
+def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool,
+             stop_on_invalid: bool = False) -> list:
     """Arguments for one paired leg, parsed by run_benchmark's own parser."""
     args = res.args
     argv = [
@@ -271,6 +279,10 @@ def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool) ->
         argv += ["--tiers", tiers]
     if skip_judge:
         argv.append("--skip-judge")
+    if stop_on_invalid:
+        argv.append("--stop-on-invalid-quoin")
+    if args.judge_emulation:
+        argv.append("--judge-emulation")
     if args.wall_clock_seconds is not None:
         argv += ["--wall-clock-seconds", str(args.wall_clock_seconds)]
     if args.arm_root is not None:
@@ -282,6 +294,36 @@ def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool) ->
 
 def leg_namespace(res: Resolved, **kw) -> argparse.Namespace:
     return _rb().build_parser().parse_args(leg_argv(res, **kw))
+
+
+def recorded_invalid_pilot_rows(res: Resolved) -> list:
+    """Pilot-tier task ids whose recorded quoin session did not run the pipeline."""
+    from quoin.benchmarks.harness.session_state import INVALID_REASONS, read_session_json
+
+    found = []
+    for task in res.tasks:
+        if task.get("tier") != res.pilot_tier:
+            continue
+        session = read_session_json(res.run_path / "quoin-claude" / task["id"])
+        if session and session.get("failure_reason") in INVALID_REASONS:
+            found.append(task["id"])
+    return found
+
+
+def check_invalid_pilot(res: Resolved) -> Optional[int]:
+    """Refuse to spawn anything while a recorded pilot row is invalid.
+
+    This runs before every spawning leg, not inside the pilot leg: once the last
+    pilot pair is recorded the pilot leg is skipped, and a plain re-run would
+    otherwise spend the full leg on a quoin arm that is known not to work.
+    """
+    ids = recorded_invalid_pilot_rows(res)
+    if not ids or res.args.accept_invalid_pilot:
+        return None
+    print("pilot stopped earlier: the quoin arm did not run /run on "
+          f"{', '.join(ids)}; inspect the rows' transcripts and workflow_artifacts_evidence, "
+          "fix the cause, or re-run with --accept-invalid-pilot (give it on every re-run)")
+    return EXIT_INVALID_PILOT
 
 
 # --- estimate and confirmation ----------------------------------------------
@@ -454,10 +496,13 @@ def judge_possible(args) -> tuple:
 def deferred_command(res: Resolved) -> str:
     rb = _rb()
     suite = res.args.suite if res.alias_used else str(res.suite_path)
-    return shlex.join([
+    argv = [
         "python3", str(Path(rb.__file__).resolve()), "--suite", suite, "--cells", PAIR,
         "--run-dir", str(res.run_dir), "--run-id", res.run_id, "--judge-only",
-    ])
+    ]
+    if res.args.judge_emulation:
+        argv.append("--judge-emulation")
+    return shlex.join(argv)
 
 
 def print_deferred(res: Resolved, why: str) -> None:
@@ -479,6 +524,53 @@ def pending_rows(res: Resolved) -> int:
         if (res.run_path / cell / task["id"]).is_dir()
         and is_judge_pending(res.run_path / cell / task["id"])
     )
+
+
+def unpriced_from_summary(run_path) -> list:
+    """Models the run's summary lists as unpriced; `[]` when the summary is
+    missing, unreadable, carries no tiered report, or predates the field."""
+    try:
+        summary = json.loads((Path(run_path) / "summary.json").read_text(encoding="utf-8"))
+        models = summary["tiered"]["validity"]["unpriced_models"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return []
+    if not isinstance(models, list):
+        return []
+    return [m for m in models if isinstance(m, str)]
+
+
+def _refresh_summary(res: Resolved) -> None:
+    """Re-aggregate the recorded rows under the current code and pricing card.
+
+    No judging, no session, no spend: it keeps a judge-only re-run from
+    reporting a summary that older code wrote.
+    """
+    from quoin.benchmarks.harness.aggregate import aggregate_run
+    from quoin.benchmarks.scripts.check_invariants import check_invariants
+
+    started_at = finished_at = None
+    try:
+        previous = json.loads((res.run_path / "summary.json").read_text(encoding="utf-8"))
+        started_at, finished_at = previous.get("started_at"), previous.get("finished_at")
+    except (OSError, ValueError):
+        pass
+    aggregate_run(
+        res.run_dir, res.run_id, started_at=started_at, finished_at=finished_at,
+        suite_path=res.suite_path,
+    )
+    report = check_invariants(res.run_dir, res.run_id)
+    (res.run_path / "invariants-report.md").write_text(report.to_markdown(), encoding="utf-8")
+
+
+def finish(res: Resolved, rc: int) -> int:
+    """Print the final report; a clean run that used an unpriced model exits 6."""
+    final_report(res)
+    unpriced = unpriced_from_summary(res.run_path)
+    if unpriced and rc == 0:
+        print(f"unpriced model in this run: {', '.join(unpriced)}; add it to pricing.json "
+              "and cost_from_jsonl.PRICES, then re-aggregate")
+        return EXIT_UNPRICED
+    return rc
 
 
 def final_report(res: Resolved) -> None:
@@ -508,17 +600,30 @@ def _mirrors_ready(res: Resolved) -> bool:
     return all(pin_ref_status_offline(t) == t["base_commit"] for t in verified)
 
 
+def _emulate_x86(res: Resolved) -> bool:
+    from quoin.benchmarks.harness import judge
+
+    return judge.emulation_active(res.args.judge_emulation)
+
+
 def _judge_pending_or_defer(res: Resolved) -> int:
     rb = _rb()
     pending = pending_rows(res)
     ok, why = judge_possible(res.args)
     rc = 0
     if pending and ok:
-        rc = rb._judge_only_main(res.suite_path, res.tasks, res.run_dir, res.run_id)
+        rc = rb._judge_only_main(
+            res.suite_path, res.tasks, res.run_dir, res.run_id, emulate_x86=_emulate_x86(res),
+        )
         if rc:
             print(RERUN_HINT)
     elif pending:
         print_deferred(res, why)
+    if not (pending and ok):
+        try:
+            _refresh_summary(res)
+        except Exception as exc:  # noqa: BLE001 - the stored summary is still reported
+            print(f"summary: could not refresh ({exc})")
     return rc
 
 
@@ -540,7 +645,10 @@ def orchestrate(args) -> int:
 
     if res.run_path.is_dir() and rows_all == 0:
         rc = _judge_pending_or_defer(res)
-        final_report(res)
+        return finish(res, rc)
+
+    rc = check_invalid_pilot(res)
+    if rc is not None:
         return rc
 
     in_pilot = pilot_phase(res, rows_pilot)
@@ -575,9 +683,17 @@ def orchestrate(args) -> int:
     if in_pilot:
         print(f"pilot: {res.pilot_tier} tier, {rows_pilot} sessions")
         rc = rb._paired_main(
-            leg_namespace(res, tiers=res.pilot_tier, skip_judge=True),
+            leg_namespace(res, tiers=res.pilot_tier, skip_judge=True, stop_on_invalid=True),
             res.suite_path, res.doc, quiet_deferred_hint=True,
         )
+        if rc == EXIT_INVALID_PILOT:
+            stopped = recorded_invalid_pilot_rows(res)
+            print("pilot stopped: the quoin arm did not run /run on "
+                  f"{', '.join(stopped) or 'a pilot task'}; inspect the row's transcript and "
+                  "workflow_artifacts_evidence before spending more; re-running refuses until "
+                  "fixed or --accept-invalid-pilot is given (on every re-run)")
+            final_report(res)
+            return rc
         if rc:
             print(RERUN_HINT)
             return rc
@@ -607,7 +723,9 @@ def orchestrate(args) -> int:
         rc = rb._paired_main(leg_namespace(res, skip_judge=not judge_ok), res.suite_path, res.doc)
         judged = judge_ok and rc == 0
     elif pending_rows(res) and judge_ok:
-        rc = rb._judge_only_main(res.suite_path, res.tasks, res.run_dir, res.run_id)
+        rc = rb._judge_only_main(
+            res.suite_path, res.tasks, res.run_dir, res.run_id, emulate_x86=_emulate_x86(res),
+        )
         judged = rc == 0
     else:
         rc = 0
@@ -618,8 +736,7 @@ def orchestrate(args) -> int:
         print_deferred(res, why)
     elif judged:
         print("judge: ran")
-    final_report(res)
-    return rc
+    return finish(res, rc)
 
 
 def main(argv=None, prog: str = "quoin bench tiered") -> int:

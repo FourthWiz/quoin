@@ -93,7 +93,8 @@ def test_dispatch_routing(tmp_path, monkeypatch):
                         lambda *a, **k: calls.append((a, k)) or JudgeResult("x", "swebench_verified", "pass", None, 0.0))
     judge_task("verified_easy_000", tmp_path, "r", task_spec=SPEC,
                judge_context={"cell": "quoin-claude", "snapshot_revision": "rev"})
-    assert calls and calls[0][1] == {"cell": "quoin-claude", "snapshot_revision": "rev"}
+    assert calls and calls[0][1] == {"cell": "quoin-claude", "snapshot_revision": "rev",
+                                     "emulate_x86": False}
     out = judge_task("verified_easy_000", tmp_path, "r")
     assert out.verdict == "error" and out.source_benchmark == "unknown"
     assert len(calls) == 1
@@ -237,3 +238,134 @@ def test_raising_delete_of_old_evaluation_dir_is_non_final_error(tmp_path, monke
     monkeypatch.setattr(judge.shutil, "rmtree", lambda *a, **k: (_ for _ in ()).throw(OSError("busy")))
     out = _judge(tmp_path, Runner(report=_report(resolved=[SID])))
     assert out.extra["failure_reason"] == "judge-oserror" and out.extra["judge_final"] is False
+
+
+# --- x86_64 emulation ----------------------------------------------------------------
+
+import textwrap  # noqa: E402
+
+FLAGS = ["--dataset_name", VERIFIED_DATASET, "--split", "test", "--instance_ids", SID,
+         "--predictions_path", "/p.json", "--max_workers", "1", "--timeout", "1800",
+         "--run_id", "rid"]
+
+
+def test_command_without_emulation_is_exactly_today_s():
+    assert build_verified_command("py", SID, "/p.json", "rid") == ["py", "-m", "swebench.harness.run_evaluation", *FLAGS]
+    assert build_verified_command("py", SID, "/p.json", "rid", emulate_x86=False) == \
+        ["py", "-m", "swebench.harness.run_evaluation", *FLAGS]
+
+
+def test_command_with_emulation_runs_the_shim_with_the_same_flags():
+    cmd = build_verified_command("py", SID, "/p.json", "rid", "ns", emulate_x86=True)
+    assert cmd[:2] == ["py", str(judge.SHIM_PATH)]
+    assert judge.SHIM_PATH.name == "swebench_x86_shim.py" and judge.SHIM_PATH.is_file()
+    assert cmd[2:] == [*FLAGS, "--namespace", "ns"]
+
+
+def test_judge_json_extra_records_the_emulation(tmp_path):
+    runner = Runner(report=_report(resolved=[SID]))
+    result = _judge(tmp_path, runner, emulate_x86=True)
+    assert result.verdict == "pass"
+    assert result.extra["emulated"] is True
+    assert result.extra["forced_arch"] == "x86_64" and result.extra["pull_platform"] == "linux/amd64"
+    assert runner.calls[1][0][1] == str(judge.SHIM_PATH)
+    plain = _judge(tmp_path, Runner(report=_report(resolved=[SID])))
+    assert "emulated" not in plain.extra
+
+
+@pytest.mark.parametrize("flag,machine,expected", [
+    (True, "arm64", True), (True, "aarch64", True), (True, "ARM64", True),
+    (False, "arm64", False), (True, "x86_64", False), (True, "AMD64", False),
+])
+def test_emulation_is_decided_in_one_function(flag, machine, expected):
+    assert judge.emulation_active(flag, machine) is expected
+
+
+def test_emulation_reads_the_host_when_no_machine_is_given(monkeypatch):
+    monkeypatch.setattr(judge.platform, "machine", lambda: "arm64")
+    assert judge.emulation_active(True) is True
+    monkeypatch.setattr(judge.platform, "machine", lambda: "x86_64")
+    assert judge.emulation_active(True) is False
+
+
+def _fake_packages(root):
+    files = {
+        "docker/__init__.py": "",
+        "docker/models/__init__.py": "",
+        "docker/models/images.py": """
+            class ImageCollection:
+                def pull(self, repository, tag=None, all_tags=False, **kwargs):
+                    return {"repository": repository, "kwargs": kwargs}
+        """,
+        "swebench/__init__.py": "",
+        "swebench/harness/__init__.py": "",
+        "swebench/harness/run_evaluation.py": """
+            import json, platform, sys
+            from docker.models.images import ImageCollection
+            images = ImageCollection()
+            out = {
+                "machine": platform.machine(),
+                "argv": sys.argv[1:],
+                "sys_path": list(sys.path),
+                "default_pull": images.pull("repo:tag"),
+                "explicit_pull": images.pull("repo:tag", platform="linux/arm64"),
+            }
+            json.dump(out, open("fake-result.json", "w"))
+        """,
+    }
+    for name, body in files.items():
+        path = Path(root) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(textwrap.dedent(body))
+
+
+def test_shim_forces_the_architecture_and_defaults_the_pull_platform(tmp_path):
+    fakes, work = tmp_path / "fakes", tmp_path / "work"
+    work.mkdir()
+    _fake_packages(fakes)
+    proc = subprocess.run(
+        [sys.executable, str(judge.SHIM_PATH), "--run_id", "rid", "--split", "test"],
+        cwd=work, env={"PYTHONPATH": str(fakes), "PATH": "/usr/bin:/bin"},
+        capture_output=True, text=True, timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads((work / "fake-result.json").read_text())
+    assert result["machine"] == "x86_64"
+    assert result["argv"] == ["--run_id", "rid", "--split", "test"]
+    assert result["default_pull"]["kwargs"] == {"platform": "linux/amd64"}
+    assert result["explicit_pull"]["kwargs"] == {"platform": "linux/arm64"}
+    assert str(judge.SHIM_PATH.parent) not in result["sys_path"]
+    record = json.loads((work / "shim-record.json").read_text())
+    assert record == {"forced_arch": "x86_64", "pull_platform": "linux/amd64"}
+
+
+def _pending_run(tmp_path):
+    from quoin.benchmarks.harness.session_state import write_session_json
+
+    t_dir = tmp_path / "runs" / "r1" / "simple-claude" / SPEC["id"]
+    write_session_json(t_dir, {"judge_required": True, "source": "swebench_verified"})
+    (t_dir / "diff.patch").write_bytes(PATCH)
+    return tmp_path / "runs"
+
+
+@pytest.mark.parametrize("flag,machine,expect_shim", [
+    (True, "arm64", True), (False, "arm64", False), (True, "x86_64", False),
+])
+def test_emulation_branches_reach_the_command_through_judge_pending_rows(
+        tmp_path, monkeypatch, flag, machine, expect_shim):
+    from quoin.benchmarks.harness import runner as runner_mod
+
+    stub = Runner(report=_report(resolved=[SID]))
+    original = judge.judge_swebench_verified
+    monkeypatch.setattr(
+        judge, "judge_swebench_verified", lambda *a, **k: original(*a, run=stub, **k)
+    )
+    runs = _pending_run(tmp_path)
+    rows = runner_mod.judge_pending_rows(
+        runs, "r1", [SPEC], emulate_x86=judge.emulation_active(flag, machine),
+    )
+    assert rows and rows[0]["verdict"] == "pass"
+    eval_cmd = stub.calls[1][0]
+    assert (eval_cmd[1] == str(judge.SHIM_PATH)) is expect_shim
+    if not expect_shim:
+        assert eval_cmd[1:3] == ["-m", "swebench.harness.run_evaluation"]

@@ -195,9 +195,35 @@ difference as the headline figure. Nine tasks is a directional signal, not a
 statistically significant result. Provenance and the task list are in
 `suite-tiered-small-provenance.md`.
 
-Nothing here has been run against a real model. The test suite exercises the
-whole path offline with a fake `claude`, so the first paid run is the first
-time the real CLI, the real permission rules and the real judge meet.
+The earlier tiered-small run showed that a quoin session can skip the pipeline
+and fix the issue directly. The harness now starts the quoin arm with the slash
+command `/run --autonomous`, records on-disk evidence that the pipeline ran,
+and treats a quoin session that left no plan as an `invalid` row (see "Invalid
+rows" below). The test suite exercises the whole path offline with a fake
+`claude`, so the first paid run with these changes is the first time the real
+CLI, the real permission rules and the real judge meet in this form.
+
+### Models, effort and aliases
+
+Both arms run `claude-opus-5-5` at `--effort high`. The model table lives in
+one place, `BENCH_MODELS` in `harness/cells/simple_claude.py` (opus, sonnet and
+haiku, all 5.5), and both arms' sandboxes set `ANTHROPIC_DEFAULT_OPUS_MODEL`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` and
+`ANTHROPIC_SMALL_FAST_MODEL` from it, so a skill's `model:` tier resolves to the
+same 5.5 model in both arms. `CLAUDE_CODE_SUBAGENT_MODEL` is never set, because
+it would override the skills' own tiers. Estimates use `harness/pricing.json`
+(checked against the live pricing page on 2026-10-25); a Claude model with no
+entry there is an error, not a guess, and a run that used one is reported as
+`Valid: NO (unpriced model: ...)` and exits 6 after the report is written.
+Haiku 5.5 is priced higher for prompts over 100,000 tokens; table estimates use
+the base rates and are a lower bound, and the runtime-reported cost is the
+authoritative figure. The manifest records the effort, the model table, any
+`QUOIN_BENCH_CLAUDE_MODEL` override and the models each arm actually used, and
+the report lists rows whose models differ from the pin.
+
+`run_benchmark.py --verify-model` makes one capped call for the pin and one per
+alias under the alias environment, and reports MATCH or MISMATCH for each. It
+is user-initiated and spends real money; `quoin bench tiered` never runs it.
 
 ### One command: `quoin bench tiered`
 
@@ -227,7 +253,9 @@ the package; `--repo-root` points it at a checkout explicitly. In order, it:
 6. Judges the sessions when this host can: Docker running, the pinned
    `swebench` importable, and either an x86 host, an empty
    `QUOIN_BENCH_SWEBENCH_NAMESPACE` (build images locally) or
-   `--judge-emulation` (x86 emulation, slow under Rosetta). Otherwise it
+   `--judge-emulation` (on an arm64 host the evaluation runs through a shim
+   that reports x86_64 to swebench and pulls images for `linux/amd64`; slow
+   under Rosetta; no effect on other hosts). Otherwise it
    prints the exact `--judge-only` command to run on a host that can judge;
    `--skip-judge` defers judging on purpose.
 7. Prints where the summary is, whether results are final or provisional, and
@@ -235,7 +263,33 @@ the package; `--repo-root` points it at a checkout explicitly. In order, it:
 
 Exit codes: 0 finished (including judging deferred or nothing left to do); 1
 interrupted, aborted, judging failed or the prompt declined; 2 refused before
-spending anything; 3 a spend guard stopped the run; 4 parity stop.
+spending anything; 3 a spend guard stopped the run; 4 parity stop; 5 the quoin
+arm did not run the pipeline in a pilot row (the pilot stopped, or a re-run was
+refused); 6 the run finished but a model in it has no pricing entry.
+
+### Invalid rows and the pilot gate
+
+A quoin session that ran but left no plan under `.workflow_artifacts/` did not
+run the pipeline, so it is not evidence about the pipeline. The runner records
+it as an `invalid` row with one of three reasons: `no-pipeline-artifacts`,
+`stopped-before-plan` (the session timed out or hit its budget after starting
+the pipeline but before a plan existed) or `no-pipeline-evidence` (the row has
+no capture record). Invalid rows are never judged and never retried, and they
+are left out of pass rates, cost, token and wall-clock figures, pairs and the
+McNemar test; their spend stays visible in the cell's `invalid_total_cost_usd`.
+Rows that ended in an error keep their own reason, so an auth failure still
+stops the run. A timeout or budget stop after a plan exists is not invalid; the
+report counts those separately. The rule applies only to Verified quoin rows.
+The report lists the route (`fast`, `full` or `unknown`) the pipeline took for
+each row, since `/run` strips a `fast:` token from anywhere in its input.
+
+The easy-tier pilot stops after the first pair whose quoin row is invalid (exit
+5), so a broken quoin arm costs one pair. Every later run refuses with exit 5
+while a recorded pilot row is invalid, before preparing or spawning anything.
+Inspect the row's transcript and `workflow_artifacts_evidence`, fix the cause,
+and start a new run id, or continue anyway with `--accept-invalid-pilot`. The
+override is not remembered: give it on every re-run. Invalid rows in the later
+tiers are reported but never stop a run.
 
 Defaults:
 
@@ -244,9 +298,26 @@ Defaults:
 | Suite and run id | `tiered-small` |
 | Run directory | `<checkout>/.workflow_artifacts/quoin-benchmarks/runs` |
 | Spend ledger | `<run-dir>/<run-id>.spend-ledger.jsonl` |
-| Authorised ceiling | the suite's ceiling, $110 |
-| Per-session cap | the suite's documented cap, $5.50 |
-| Worst case of a fresh run | $99.00 (9 tasks x 2 arms x $5.50) |
+| Authorised ceiling | the suite's ceiling, $1,790 |
+| Per-session cap | the suite's documented cap, $90 |
+| Worst case of a fresh run | $1,620 (9 tasks x 2 arms x $90) |
+| Pilot (easy tier) worst case | $720 (4 tasks x 2 arms x $90) |
+| Wall clock per session | 19,200 s, every tier and both arms |
+
+These figures are derived from the cost of comparable full-pipeline tasks, not
+from a single direct fix; `suite-tiered-small-provenance.md` shows the
+derivation. The cap is a bound sized not to bind, not a forecast. It is not
+written into either arm's prompt; `--max-budget-usd` stays armed in both arms.
+The suite changed, so a run started before this change needs a new `--run-id`.
+
+Sequential worst-case durations at 19,200 s per session: about 96 h for a fresh
+run (18 sessions) and about 43 h for the pilot (8 sessions); there is no idle
+timeout. The ceiling leaves $170 above the worst case, less than two capped
+sessions, so re-spawned rows may need a higher `--authorised-usd`. The 5.5 model
+pin and `--effort high` apply to every arm, but the sonnet/haiku alias
+environment is set only for sandboxed paired runs; non-paired v1 and three-arm
+gate runs use the CLI's default aliases.
+
 
 ### Clean
 
@@ -334,21 +405,21 @@ meant to deny, in both arms.
    ```
 
 2. Dry run with the cost cap. It prints the task-by-arm matrix and
-   `WORST CASE: $99.00` (cap $5.50 x 9 tasks x 2 arms); the documented target
-   is $100 and the enforced ceiling $110.
+   `WORST CASE: $1620.00` (cap $90 x 9 tasks x 2 arms); the documented target
+   is $1,620 and the enforced ceiling $1,790.
 
    ```bash
    python3 quoin/benchmarks/scripts/run_benchmark.py --suite tiered-small \
      --cells simple-claude,quoin-claude --run-id RUN --dry-run \
-     --max-budget-usd-per-task 5.5
+     --max-budget-usd-per-task 90
    ```
 
-3. Easy-tier pilot (worst case $44), ledgered:
+3. Easy-tier pilot (worst case $720), ledgered:
 
    ```bash
    python3 quoin/benchmarks/scripts/run_benchmark.py --suite tiered-small \
      --cells simple-claude,quoin-claude --run-id RUN-pilot --tiers easy \
-     --max-budget-usd-per-task 5.5 --spend-ledger ledger.jsonl --authorised-usd 50
+     --max-budget-usd-per-task 90 --spend-ledger ledger.jsonl --authorised-usd 720 --stop-on-invalid-quoin
    ```
 
    Compare `permission_denials_by_arm` in the pilot's `summary.json`. If one
@@ -360,7 +431,7 @@ meant to deny, in both arms.
    ```bash
    python3 quoin/benchmarks/scripts/run_benchmark.py --suite tiered-small \
      --cells simple-claude,quoin-claude --run-id RUN \
-     --max-budget-usd-per-task 5.5 --spend-ledger ledger.jsonl --authorised-usd 110
+     --max-budget-usd-per-task 90 --spend-ledger ledger.jsonl --authorised-usd 1790
    ```
 
 Add `--skip-judge` to run the sessions without Docker. The command exits 0 and

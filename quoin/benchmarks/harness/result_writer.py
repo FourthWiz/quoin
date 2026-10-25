@@ -216,7 +216,7 @@ def is_result_complete(task_dir: Path) -> bool:
     try:
         judge = json.loads((task_dir / "judge.json").read_text(encoding="utf-8"))
         verdict = judge.get("verdict", "")
-        if verdict not in ("pass", "fail", "error", "timeout"):
+        if verdict not in ("pass", "fail", "error", "timeout", "invalid"):
             return False
     except (json.JSONDecodeError, OSError):
         return False

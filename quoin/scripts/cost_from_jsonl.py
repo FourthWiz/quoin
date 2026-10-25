@@ -34,6 +34,8 @@
 #   - claude-sonnet-5's introductory $2.00/$10.00 rate is now the standard,
 #     permanent rate (the previously scheduled increase to $3.00/$15.00 on
 #     2026-09-01 will not occur) — no discount-expiry caveat applies.
+#   - Haiku 5.5's long-prompt rates are held data-only in LONG_PROMPT_TIERS
+#     (below); cost_for_entry and resolve_prices do not read them.
 #   - This table has no long-context dimension, so a 1M-context session is
 #     priced at the base slug's standard rates. claude-haiku-5-5 is the one
 #     model with a prompt-length tier: prompts over 100,000 tokens are billed
@@ -105,6 +107,16 @@ PRICES = {  # USD per 1M tokens
     "claude-haiku-5-5":           {"input":  0.10, "output":  0.50,
                                    "cache_create": 0.125, "cache_read":  0.01,
                                    "src": _PRICING_SRC, "verified": "2026-10-08"},
+}
+
+# Rates for prompts over the threshold, kept next to PRICES but not read by
+# cost_for_entry or resolve_prices. The benchmark harness's pricing.json
+# carries the same tier and a test pins the two together.
+LONG_PROMPT_TIERS = {  # USD per 1M tokens
+    "claude-haiku-5-5":           {"threshold_input_tokens": 100000,
+                                   "input":  0.50, "output":  2.50,
+                                   "cache_create": 0.625, "cache_read":  0.05,
+                                   "src": _PRICING_SRC, "verified": "2026-10-25"},
 }
 
 import argparse

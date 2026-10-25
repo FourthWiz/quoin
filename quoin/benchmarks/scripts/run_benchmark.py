@@ -126,22 +126,27 @@ def _resolve_model_id_from_probe_response(data: dict) -> Optional[str]:
     return None
 
 
-def _run_live_model_probe(max_budget_usd: float) -> dict:
+def _run_live_model_probe(max_budget_usd: float, alias: Optional[str] = None) -> dict:
     """Shell the real `claude` CLI for a one-turn, budget-capped probe.
 
     This is the ONE live, spend-generating call behind `--verify-model`
     (T-04c) — never confused with `--dry-run`, which stays spend-free.
+    With `alias` ("sonnet" or "haiku") the probe asks for that alias under the
+    benchmark's alias environment, so the resolved model shows what a skill
+    `model:` tier would actually run.
     """
+    from quoin.benchmarks.harness.arm_sandbox import bench_alias_env
     from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
 
     result = subprocess.run(
         [
             "claude", "--print", "--output-format", "json",
-            "--model", PINNED_MODEL,
+            "--model", alias if alias else PINNED_MODEL,
             "--max-budget-usd", str(max_budget_usd),
             "reply with the single word ok",
         ],
         capture_output=True, text=True, timeout=120,
+        env={**os.environ, **bench_alias_env()} if alias else None,
     )
     return json.loads(result.stdout)
 
@@ -151,6 +156,7 @@ def verify_model(
     max_budget_usd: float = 1.0,
     run_probe=_run_live_model_probe,
     authorised: Optional[float] = None,
+    verify_aliases: bool = False,
 ) -> int:
     """
     `--verify-model` preflight (T-04c): make ONE live, $1-capped call,
@@ -164,10 +170,14 @@ def verify_model(
     ledger-derived default — the same ceiling the three-arm gate driver
     enforces, so this one live call is checked against it too.
 
+    With `verify_aliases`, one more capped probe per alias (sonnet, haiku) runs
+    under the benchmark's alias environment and is compared against
+    `BENCH_MODELS`; each is ledgered like the pin probe.
+
     Returns the process exit code: 0 on match, 1 on mismatch, 2 if the
     ledger precheck itself fails (no call made).
     """
-    from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
+    from quoin.benchmarks.harness.cells.simple_claude import BENCH_MODELS, PINNED_MODEL
     from quoin.benchmarks.scripts import spend_ledger
 
     if ledger_path is not None:
@@ -188,45 +198,63 @@ def verify_model(
             return 2
         resolved_authorised = spend_ledger.resolve_authorised_ceiling(ledger_path, authorised)
         ok, message = spend_ledger.precheck(
-            ledger_path, planned_caps=[max_budget_usd], authorised=resolved_authorised,
+            ledger_path,
+            planned_caps=[max_budget_usd] * (3 if verify_aliases else 1),
+            authorised=resolved_authorised,
         )
         if not ok:
             print(message, file=sys.stderr)
             return 2
 
-    attempt_id = str(uuid.uuid4())
-    ts = datetime.datetime.utcnow().isoformat() + "Z"
-    if ledger_path is not None:
-        spend_ledger.append(ledger_path, {
-            "ts": ts, "attempt_id": attempt_id, "kind": "reservation",
-            "invocation": "full", "gate_id": "verify-model", "arm": "probe",
-            "cap_usd": max_budget_usd, "actual_usd": None, "run_id": None,
-            "new_ceiling_usd": None, "note": "--verify-model preflight",
-        })
+    def ledgered_probe(arm: str, call) -> Optional[str]:
+        attempt_id = str(uuid.uuid4())
+        ts = datetime.datetime.utcnow().isoformat() + "Z"
+        if ledger_path is not None:
+            spend_ledger.append(ledger_path, {
+                "ts": ts, "attempt_id": attempt_id, "kind": "reservation",
+                "invocation": "full", "gate_id": "verify-model", "arm": arm,
+                "cap_usd": max_budget_usd, "actual_usd": None, "run_id": None,
+                "new_ceiling_usd": None, "note": "--verify-model preflight",
+            })
+        data = call()
+        resolved = _resolve_model_id_from_probe_response(data)
+        actual_usd = data.get("total_cost_usd")
+        if actual_usd is None:
+            actual_usd = data.get("cost_usd")
+        if ledger_path is not None:
+            spend_ledger.append(ledger_path, {
+                "ts": ts, "attempt_id": attempt_id, "kind": "settlement",
+                "invocation": "full", "gate_id": "verify-model", "arm": arm,
+                "cap_usd": max_budget_usd,
+                "actual_usd": float(actual_usd) if actual_usd is not None else None,
+                "run_id": None, "new_ceiling_usd": None,
+                "note": "--verify-model preflight",
+            })
+        return resolved
 
-    data = run_probe(max_budget_usd)
-    resolved_id = _resolve_model_id_from_probe_response(data)
-    actual_usd = data.get("total_cost_usd")
-    if actual_usd is None:
-        actual_usd = data.get("cost_usd")
-
-    if ledger_path is not None:
-        spend_ledger.append(ledger_path, {
-            "ts": ts, "attempt_id": attempt_id, "kind": "settlement",
-            "invocation": "full", "gate_id": "verify-model", "arm": "probe",
-            "cap_usd": max_budget_usd,
-            "actual_usd": float(actual_usd) if actual_usd is not None else None,
-            "run_id": None, "new_ceiling_usd": None,
-            "note": "--verify-model preflight",
-        })
-
+    resolved_id = ledgered_probe("probe", lambda: run_probe(max_budget_usd))
     print(f"Pinned model:   {PINNED_MODEL}")
     print(f"Resolved model: {resolved_id}")
+    exit_code = 0
     if resolved_id == PINNED_MODEL:
         print("--verify-model: MATCH")
-        return 0
-    print("--verify-model: MISMATCH", file=sys.stderr)
-    return 1
+    else:
+        print("--verify-model: MISMATCH", file=sys.stderr)
+        exit_code = 1
+
+    if verify_aliases:
+        for alias in ("sonnet", "haiku"):
+            resolved_alias = ledgered_probe(
+                f"probe-{alias}",
+                lambda alias=alias: run_probe(max_budget_usd, alias=alias),
+            )
+            print(f"Alias {alias}: expected {BENCH_MODELS[alias]}, resolved {resolved_alias}")
+            if resolved_alias == BENCH_MODELS[alias]:
+                print(f"--verify-model alias {alias}: MATCH")
+            else:
+                print(f"--verify-model alias {alias}: MISMATCH", file=sys.stderr)
+                exit_code = 1
+    return exit_code
 
 
 def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str]:
@@ -240,7 +268,7 @@ def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str
     """
     estimates = {}
     try:
-        from quoin.benchmarks.harness.cost import load_pricing
+        from quoin.benchmarks.harness.cost import load_pricing, resolve_model_pricing
         pricing = load_pricing()
     except Exception:
         pricing = None
@@ -252,9 +280,12 @@ def _estimate_cost_dry_run(cells: list[str], suite: list[dict]) -> dict[str, str
         else:
             if pricing:
                 model = _probe_claude_model()
-                model_pricing = pricing.get("models", {}).get(model, {})
-                input_rate = model_pricing.get("input_per_1m_usd", 15.0)
-                output_rate = model_pricing.get("output_per_1m_usd", 75.0)
+                model_pricing = resolve_model_pricing(model, pricing)
+                if model_pricing is None:
+                    estimates[cell] = f"cost: not_available — unpriced model {model}"
+                    continue
+                input_rate = model_pricing.get("input_per_1m_usd", 0.0)
+                output_rate = model_pricing.get("output_per_1m_usd", 0.0)
 
                 total_est = 0.0
                 for task in suite:
@@ -301,7 +332,8 @@ def dry_run_gate_check(
          what per-arm caps 6/16/16 sum to for the gate; the stage total of
          ~41.50 additionally includes the rehearsal and probes, which are
          not arm spend);
-      3. the pinned model has an EXACT pricing key (T-04d);
+      3. the pinned model has an EXACT pricing key and every other benchmark
+         model (sonnet, haiku) resolves to a pricing entry (T-04d);
       4. the live probe equals PINNED_MODEL — WAIVED under `rehearsal`
          mode, where QUOIN_BENCH_CLAUDE_MODEL is set deliberately instead.
 
@@ -318,14 +350,20 @@ def dry_run_gate_check(
             f"${worst_case_ceiling:.0f} gate threshold"
         )
 
-    from quoin.benchmarks.harness.cells.simple_claude import PINNED_MODEL
-    from quoin.benchmarks.harness.cost import load_pricing
+    from quoin.benchmarks.harness.cells.simple_claude import BENCH_MODELS, PINNED_MODEL
+    from quoin.benchmarks.harness.cost import load_pricing, resolve_model_pricing
     try:
         pricing = load_pricing()
     except Exception:
         pricing = {}
     if PINNED_MODEL not in (pricing.get("models") or {}):
         return False, f"PINNED_MODEL {PINNED_MODEL!r} is not an exact key of pricing.json['models']"
+    for name, bench_model in BENCH_MODELS.items():
+        if resolve_model_pricing(bench_model, pricing) is None:
+            return False, (
+                f"bench model {name} ({bench_model!r}) has no pricing entry in "
+                "pricing.json['models']"
+            )
 
     if not rehearsal:
         model_override = os.environ.get("QUOIN_BENCH_CLAUDE_MODEL")
@@ -640,7 +678,9 @@ def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
     return 1 if problems else 0
 
 
-def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) -> int:
+def _judge_only_main(
+    suite_path: Path, tasks: list, run_dir: Path, run_id: str, *, emulate_x86: bool = False,
+) -> int:
     """Re-judge recorded Verified sessions whose verdict is not final; spawns no agent."""
     from quoin.benchmarks.harness import runner
     from quoin.benchmarks.harness.aggregate import aggregate_run
@@ -661,6 +701,7 @@ def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) 
         run_dir, run_id, tasks,
         snapshot_revision=tiered.get("dataset_revision"),
         judge=runner.judge_task,
+        emulate_x86=emulate_x86,
     )
     for row in rows:
         print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
@@ -1042,6 +1083,31 @@ def _paired_preflight(args, suite_path: Path, doc: dict):
     )
 
 
+EXIT_INVALID_QUOIN = 5
+
+
+def _observed_models(run_dir: Path, run_id: str, arms: list) -> dict:
+    """Per cell, the sorted union of costable model ids the recorded rows
+    reported. Unreadable rows are skipped; the manifest is rewritten as rows
+    land, so this is whatever the run directory holds now."""
+    from quoin.benchmarks.harness.cost import is_costable
+
+    observed: dict = {}
+    for cell in arms:
+        seen: set = set()
+        cell_dir = Path(run_dir) / run_id / cell
+        if cell_dir.is_dir():
+            for metrics_path in sorted(cell_dir.glob("*/metrics.json")):
+                try:
+                    usage = json.loads(metrics_path.read_text(encoding="utf-8")).get("model_usage")
+                except (OSError, ValueError, AttributeError):
+                    continue
+                if isinstance(usage, dict):
+                    seen.update(m for m in usage if is_costable(m))
+        observed[cell] = sorted(seen)
+    return observed
+
+
 def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hint: bool = False) -> int:
     """Run the sessions, judge, aggregate and write the manifest for a checked paired run."""
     import signal
@@ -1141,6 +1207,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
                 authorised=args.authorised_usd, suite_ceiling=suite_ceiling, usd_cap=args.usd_cap,
                 wall_clock_flag=args.wall_clock_seconds, configs=configs, resume=args.resume,
                 identity_recheck={"simple-claude": recheck_plain, "quoin-claude": recheck_quoin},
+                stop_on_invalid_quoin=args.stop_on_invalid_quoin,
             )
         except paired_run.PairedInterrupted as exc:
             print(f"Interrupted by {exc.signal_name} before the run started", file=sys.stderr)
@@ -1152,6 +1219,11 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             by_tier[t.get("tier", "")] = max(by_tier.get(t.get("tier", ""), 0), waits[t["id"]])
         worst = paired_spend.worst_case(cap, len(tasks), len(arms))
         started_at = datetime.datetime.utcnow().isoformat() + "Z"
+        from quoin.benchmarks.harness.cells import simple_claude as simple_claude_cell
+        from quoin.benchmarks.harness.judge import emulation_active
+
+        emulate_x86 = emulation_active(args.judge_emulation)
+
         extra = {
             "paired_mode": True,
             "pair_order": arms,
@@ -1180,6 +1252,10 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             "wall_clock_budget_seconds_by_tier": by_tier,
             "resume_policy": "session-json",
             "suite_path_resolved": str(suite_path.resolve()),
+            "effort": simple_claude_cell.BENCH_EFFORT,
+            "bench_models": dict(simple_claude_cell.BENCH_MODELS),
+            "model_override": os.environ.get("QUOIN_BENCH_CLAUDE_MODEL") or None,
+            "judge_emulation": emulate_x86,
         }
 
         invalid_reasons = list(carried_invalid)
@@ -1187,6 +1263,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
         def write_manifest(**more):
             if invalid_reasons:
                 more.setdefault("run_invalid_reasons", list(invalid_reasons))
+            more.setdefault("observed_models", _observed_models(run_dir, run_id, arms))
             return _write_manifest(
                 run_dir, run_id, suite_path, arms, 1, args.resume, args.repo_root,
                 wall_clock_seconds=extra["wall_clock_budget_seconds"], usd_cap=args.usd_cap,
@@ -1218,7 +1295,9 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             return 1
 
         if not args.skip_judge and outcome.stop_reason is None:
-            for row in paired_run.judge_phase(plan, doc["tasks"], tiered.get("dataset_revision")):
+            for row in paired_run.judge_phase(
+                plan, doc["tasks"], tiered.get("dataset_revision"), emulate_x86=emulate_x86,
+            ):
                 print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
         reason = _paired_run_invalid_reason(outcome)
         if reason and reason not in invalid_reasons:
@@ -1239,6 +1318,10 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
         if outcome.stop_reason == "abort":
             print(f"Run aborted: {'; '.join(outcome.abort_detail or [])}", file=sys.stderr)
             return 1
+        if outcome.stop_reason == "invalid-quoin-row":
+            print(f"Run stopped: quoin arm did not run the pipeline on {outcome.abort_task_id}",
+                  file=sys.stderr)
+            return EXIT_INVALID_QUOIN
         if outcome.stop_reason is not None:
             print(f"Run stopped: {outcome.stop_reason}: {'; '.join(outcome.abort_detail or [])}",
                   file=sys.stderr)
@@ -1447,6 +1530,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated tier names to run from a tiered suite (default: all tiers)",
     )
     parser.add_argument(
+        "--judge-emulation",
+        action="store_true",
+        help="Judge through x86_64 emulation on an arm64 host: the evaluation runs with"
+             " x86_64 images pulled for linux/amd64. No effect on other hosts.",
+    )
+    parser.add_argument(
+        "--stop-on-invalid-quoin",
+        action="store_true",
+        help="Paired suites only: stop before the next spawn when a quoin row did not"
+             " run the pipeline. The tiered command sets it for its pilot leg.",
+    )
+    parser.add_argument(
         "--skip-judge",
         action="store_true",
         help="Paired suites only: run the sessions and leave every row judge-pending"
@@ -1480,7 +1575,10 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(2)
-        sys.exit(verify_model(ledger_path=args.spend_ledger, authorised=args.authorised_usd))
+        sys.exit(verify_model(
+            ledger_path=args.spend_ledger, authorised=args.authorised_usd,
+            verify_aliases=True,
+        ))
 
     cells = [c.strip() for c in args.cells.split(",") if c.strip()]
     suite_path = _resolve_suite_arg(args.suite)
@@ -1505,7 +1603,12 @@ def main() -> None:
     if args.prepare_repos:
         sys.exit(_prepare_repos_main(suite_path, suite))
     if args.judge_only:
-        sys.exit(_judge_only_main(suite_path, suite, args.run_dir, args.run_id))
+        from quoin.benchmarks.harness.judge import emulation_active
+
+        sys.exit(_judge_only_main(
+            suite_path, suite, args.run_dir, args.run_id,
+            emulate_x86=emulation_active(args.judge_emulation),
+        ))
 
     if paired:
         sys.exit(_paired_dry_run(args, suite_path, suite_doc) if args.dry_run

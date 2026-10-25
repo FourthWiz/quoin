@@ -45,9 +45,11 @@ from .result_writer import (
     write_run_result,
 )
 from .session_state import (
+    QUOIN_CELL,
     classify_session,
     is_judge_pending,
     iter_transcript_events,
+    pipeline_validity,
     write_session_json,
 )
 from .verified_prompt import VERIFIED_PROMPT_TEMPLATE_VERSION
@@ -570,6 +572,22 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
                 failure_reason=not_judged_reason, judge_required=False,
             )
 
+        if cell == QUOIN_CELL and outcome.terminal_state != "error":
+            # The cells never set terminal_state; the runner learns it from the
+            # classified outcome, so it is passed in explicitly. Error outcomes
+            # keep their own reason so the systemic abort and respawn rules
+            # still see them.
+            pipeline_ok, invalid_reason = pipeline_validity(
+                cell, {**extra, "terminal_state": outcome.terminal_state},
+            )
+            if not pipeline_ok:
+                if outcome.failure_reason:
+                    extra["failure_reason_before_invalid"] = outcome.failure_reason
+                outcome = dataclasses.replace(
+                    outcome, verdict_if_terminal="invalid",
+                    failure_reason=invalid_reason, judge_required=False,
+                )
+
         (t_dir).mkdir(parents=True, exist_ok=True)
         (t_dir / "judge.json").unlink(missing_ok=True)
         (t_dir / "diff.patch").write_bytes(patch_bytes)
@@ -716,6 +734,7 @@ def judge_pending_rows(
     *,
     snapshot_revision: Optional[str] = None,
     judge=None,
+    emulate_x86: bool = False,
 ) -> list:
     """Re-judge Verified rows whose session was recorded but whose verdict is not final."""
     judge = judge if judge is not None else judge_task
@@ -735,7 +754,10 @@ def judge_pending_rows(
                     spec["id"], t_dir, run_id,
                     evidence_dir=t_dir,
                     task_spec=spec,
-                    judge_context={"cell": cell_dir.name, "snapshot_revision": snapshot_revision},
+                    judge_context={
+                        "cell": cell_dir.name, "snapshot_revision": snapshot_revision,
+                        "emulate_x86": emulate_x86,
+                    },
                 )
             except Exception as exc:
                 rows.append({"cell": cell_dir.name, "task_id": spec["id"], "verdict": "error",

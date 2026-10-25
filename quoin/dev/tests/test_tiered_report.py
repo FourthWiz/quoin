@@ -76,9 +76,9 @@ def test_pass_rates_and_outcomes(tmp_path):
             assert group[arm]["first_attempt_pass_rate"] == group[arm]["final_pass_rate"]
 
     plain = t["overall"][PLAIN_CELL]["outcomes"]
-    assert plain == {"pass": 2, "fail": 1, "error": 0, "timeout": 1, "budget_stopped": 1, "not_run": 0}
+    assert plain == {"pass": 2, "fail": 1, "error": 0, "timeout": 1, "budget_stopped": 1, "not_run": 0, "invalid": 0}
     quoin = t["overall"][QUOIN_CELL]["outcomes"]
-    assert quoin == {"pass": 3, "fail": 0, "error": 1, "timeout": 0, "budget_stopped": 0, "not_run": 1}
+    assert quoin == {"pass": 3, "fail": 0, "error": 1, "timeout": 0, "budget_stopped": 0, "not_run": 1, "invalid": 0}
     assert t["tiers"]["large"][PLAIN_CELL]["n"] == 1
     assert t["tiers"]["large"][QUOIN_CELL]["n"] == 1
     assert t["overall"][PLAIN_CELL]["n"] == 5
@@ -170,7 +170,8 @@ def test_markdown_sections(tmp_path):
     complete = md.split("### Complete pairs")[1].split("###")[0]
     assert "$10.00" in complete and "$7.50" in complete and "-2.50" in complete
     assert "Valid: yes\n" in md or "Valid: yes  \n" in md
-    assert "provisional" not in md and "invalid" not in md
+    assert "provisional" not in md
+    assert "Results are invalid" not in md and "Valid: NO" not in md
 
 
 def test_complete_pairs_block_is_absent_when_every_pair_ran(tmp_path):
@@ -584,3 +585,230 @@ def test_run_benchmark_passes_the_suite_path_to_aggregate(tmp_path, monkeypatch)
     except Exception:
         pass
     assert seen.get("suite_path") == suite_path
+
+
+# --- model pin, mismatch and unpriced models ---------------------------------
+
+BENCH_MODELS_JSON = json.dumps(
+    {"opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5", "haiku": "claude-haiku-5-5"},
+    sort_keys=True,
+)
+
+
+def _validity_of(tmp_path, rows, **manifest):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path, **manifest)
+    run_path = run_dir / run_id
+    for cell, task_id, usage, cost in rows:
+        write_row(run_path, cell, task_id, verdict="pass", wall=1,
+                  model_usage=usage, cost=cost)
+    aggregate.aggregate_run(run_dir, run_id)
+    summary = json.loads((run_path / "summary.json").read_text())
+    return summary["tiered"]["validity"], (run_path / "summary.md").read_text()
+
+
+def test_unpriced_model_invalidates_and_runtime_cost_is_kept(tmp_path):
+    usage = {"claude-opus-9-9": {"inputTokens": 10, "outputTokens": 5}}
+    v, md = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 2.0)])
+    assert v["unpriced_models"] == ["claude-opus-9-9"]
+    assert v["valid"] is False
+    assert "unpriced model: claude-opus-9-9" in v["invalid_reasons"]
+    assert "Valid: NO (unpriced model: claude-opus-9-9)" in md
+    assert "not_available" not in md
+
+
+def test_unpriced_model_is_found_on_estimated_rows_too(tmp_path):
+    usage = {"claude-opus-9-9": {"inputTokens": 10, "outputTokens": 5}}
+    v, _ = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, None)])
+    assert v["unpriced_models"] == ["claude-opus-9-9"]
+
+
+def test_synthetic_bucket_alone_does_not_invalidate(tmp_path):
+    usage = {"<synthetic>": {"inputTokens": 10, "outputTokens": 5}}
+    v, _ = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 2.0)])
+    assert v["unpriced_models"] == [] and v["valid"] is True
+
+
+def test_model_mismatch_rows_use_the_recorded_pin(tmp_path):
+    ok = {"claude-opus-5-5": {"inputTokens": 1}, "claude-sonnet-5-5": {"inputTokens": 1}}
+    stray = {"claude-opus-5-5": {"inputTokens": 1}, "claude-sonnet-4-6": {"inputTokens": 1}}
+    no_top = {"claude-sonnet-5-5": {"inputTokens": 1}}
+    rows = [(QUOIN_CELL, "e1", ok, 1.0), (QUOIN_CELL, "e2", stray, 1.0),
+            (QUOIN_CELL, "m1", no_top, 1.0)]
+    v, md = _validity_of(tmp_path, rows, effort="high", bench_models=BENCH_MODELS_JSON,
+                         model_override=None)
+    assert v["model_mismatch_rows"] == ["quoin-claude/e2", "quoin-claude/m1"]
+    assert v["valid"] is True
+    assert v["effort"] == "high"
+    assert v["bench_models"]["haiku"] == "claude-haiku-5-5"
+    assert "Effort: high" in md
+
+
+def test_model_override_changes_the_effective_top_level_model(tmp_path):
+    usage = {"claude-opus-4-7": {"inputTokens": 1}}
+    v, _ = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 1.0)],
+                        bench_models=BENCH_MODELS_JSON, model_override="claude-opus-4-7")
+    assert v["model_mismatch_rows"] == []
+
+
+def test_manifest_without_a_pin_skips_the_mismatch_check(tmp_path):
+    usage = {"claude-opus-4-7": {"inputTokens": 1}}
+    v, md = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, 1.0)])
+    assert v["model_mismatch_rows"] == [] and v["model_mismatch_checked"] is False
+    assert "not recorded" in md
+
+
+def test_haiku_estimates_are_flagged_as_a_lower_bound(tmp_path):
+    usage = {"claude-haiku-5-5": {"inputTokens": 1000, "outputTokens": 10}}
+    v, md = _validity_of(tmp_path, [(QUOIN_CELL, "e1", usage, None)])
+    assert v["estimate_lower_bound_rows"] == ["quoin-claude/e1"]
+    assert "Haiku 5.5 long-prompt tier not applied to table estimates; runtime cost is authoritative" in md
+
+
+def test_observed_models_are_read_back_from_the_manifest(tmp_path):
+    observed = json.dumps({QUOIN_CELL: ["claude-opus-5-5"], PLAIN_CELL: ["claude-opus-5-5"]},
+                          sort_keys=True)
+    v, md = _validity_of(tmp_path, [], observed_models=observed)
+    assert v["observed_models"][QUOIN_CELL] == ["claude-opus-5-5"]
+    assert "Observed models (quoin-claude): claude-opus-5-5" in md
+
+
+# --- the quoin arm did not run the pipeline ----------------------------------------------
+
+import shutil  # noqa: E402
+
+from quoin.benchmarks.harness.session_state import write_session_json  # noqa: E402
+
+
+def _quoin_session(run_path, task_id, *, terminal="completed", source="swebench_verified"):
+    write_session_json(run_path / QUOIN_CELL / task_id, {
+        "task_id": task_id, "source": source, "terminal_state": terminal,
+    })
+
+
+def _quoin_row(run_path, task_id, *, verdict="pass", plan, started=False, terminal="completed",
+               cost=1.0, wall=10, extra=None):
+    write_row(run_path, QUOIN_CELL, task_id, verdict=verdict, wall=wall,
+              tokens={"tokens_out": 100}, cost=cost,
+              extra={"workflow_artifacts_has_plan": plan, "workflow_pipeline_started": started,
+                     "workflow_route": {"route": "full" if plan else "unknown", "profile": None},
+                     **(extra or {})})
+    _quoin_session(run_path, task_id, terminal=terminal)
+
+
+def _ac2_run(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    _quoin_row(run_path, "e1", plan=False, cost=4.0)             # judged pass, no plan
+    _quoin_row(run_path, "e2", plan=True, cost=2.5)
+    _quoin_row(run_path, "m1", verdict="timeout", plan=False, started=True, terminal="timeout")
+    _quoin_row(run_path, "m2", verdict="timeout", plan=True, terminal="timeout")
+    return run_dir, run_id, run_path
+
+
+def test_quoin_rows_without_a_plan_are_invalid_and_excluded(tmp_path):
+    run_dir, run_id, run_path = _ac2_run(tmp_path)
+    aggregate.aggregate_run(run_dir, run_id)
+    summary = json.loads((run_path / "summary.json").read_text())
+    t = summary["tiered"]
+    quoin = t["overall"][QUOIN_CELL]
+    assert quoin["n_suite"] == 5 and quoin["n_invalid"] == 2 and quoin["n"] == 3
+    assert quoin["outcomes"]["invalid"] == 2
+    # pass rate, cost and McNemar leave the excluded rows out
+    assert quoin["passes"] == 1
+    assert summary["cells"][QUOIN_CELL]["n_invalid"] == 2
+    assert summary["cells"][QUOIN_CELL]["n_tasks"] == 2          # m2 and e2 (l1 has no dir)
+    assert summary["cells"][QUOIN_CELL]["invalid_total_cost_usd_or_null"] == pytest.approx(5.0)
+    assert quoin["usd"]["sum"] == pytest.approx(2.5 + 1.0)
+    # pairs, split reasons and the post-plan stop are listed separately
+    cp = t["complete_pairs"]
+    assert cp["pairs_invalid"] == 2
+    v = t["validity"]
+    assert v["valid"] is False
+    assert v["invalid_reasons"][0] == "quoin arm did not run the pipeline in 2/4 sessions"
+    assert v["invalid_quoin_rows"] == ["e1", "m1"]
+    assert v["no_pipeline_artifacts_rows"] == ["e1"]
+    assert v["stopped_before_plan_rows"] == ["m1"]
+    assert v["post_plan_timeout_rows"] == ["m2"]
+    assert v["quoin_route_counts"]["full"] == 2
+    md = (run_path / "summary.md").read_text()
+    assert "Valid: NO (quoin arm did not run the pipeline in 2/4 sessions" in md
+    assert "Effective n after excluding invalid rows: plain 5, quoin 3." in md
+    assert "Quoin route" in md
+
+
+def test_post_plan_stop_alone_is_not_invalid(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    _quoin_row(run_path, "e1", verdict="timeout", plan=True, terminal="timeout")
+    aggregate.aggregate_run(run_dir, run_id)
+    v = json.loads((run_path / "summary.json").read_text())["tiered"]["validity"]
+    assert v["post_plan_timeout_rows"] == ["e1"] and v["invalid_quoin_rows"] == []
+    assert v["valid"] is True
+
+
+def test_runner_written_invalid_rows_are_excluded_from_the_legacy_cell(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    _quoin_row(run_path, "e1", verdict="invalid", plan=False)
+    aggregate.aggregate_run(run_dir, run_id)
+    cell = json.loads((run_path / "summary.json").read_text())["cells"][QUOIN_CELL]
+    assert cell["n_invalid"] == 1
+    assert cell["n_tasks"] == 3
+
+
+def test_rule_does_not_touch_rows_without_a_session_or_with_another_source(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    # no session.json: counted exactly as before
+    write_row(run_path, QUOIN_CELL, "e1", verdict="pass", wall=5, extra={"workflow_artifacts_has_plan": False})
+    # a session from another source: counted as before
+    write_row(run_path, QUOIN_CELL, "e2", verdict="pass", wall=5, extra={"workflow_artifacts_has_plan": False})
+    _quoin_session(run_path, "e2", source="quoin_scenario")
+    aggregate.aggregate_run(run_dir, run_id)
+    summary = json.loads((run_path / "summary.json").read_text())
+    assert "n_invalid" not in summary["cells"][QUOIN_CELL]
+    assert summary["tiered"]["validity"]["invalid_quoin_rows"] == []
+    assert summary["tiered"]["validity"]["valid"] is True
+
+
+def test_v1_scope_guard_keeps_the_golden_bytes(tmp_path, monkeypatch):
+    from aggregate_fixtures import build_v1_run
+
+    monkeypatch.setattr(aggregate, "_wilson_ci", lambda k, n, alpha=0.05: (0.1, 0.9))
+    monkeypatch.setattr(aggregate, "_mcnemar_pvalue", lambda a, b: 0.5)
+    run_dir, run_id, _ = build_v1_run(tmp_path)
+    for task_dir in (run_dir / run_id / QUOIN_CELL).iterdir():
+        (task_dir / "metrics.json").write_text(
+            json.dumps({**json.loads((task_dir / "metrics.json").read_text()),
+                        "workflow_artifacts_has_plan": False})
+        )
+    aggregate.aggregate_run(run_dir, run_id)
+    golden = Path(__file__).parent / "fixtures" / "aggregate_golden" / "v1_summary.json"
+    assert (run_dir / run_id / "summary.json").read_bytes() == golden.read_bytes()
+
+
+TIERED_SMALL = (
+    Path(__file__).resolve().parents[3] / ".workflow_artifacts" / "quoin-benchmarks" / "runs" / "tiered-small"
+)
+
+
+def _snapshot(root):
+    return sorted((str(p.relative_to(root)), p.stat().st_mtime_ns) for p in root.rglob("*"))
+
+
+@pytest.mark.skipif(not TIERED_SMALL.is_dir(), reason="no recorded tiered-small run on this machine")
+def test_tiered_small_reaggregation(tmp_path):
+    before = _snapshot(TIERED_SMALL)
+    copy = tmp_path / "runs" / "tiered-small"
+    shutil.copytree(TIERED_SMALL, copy)
+    quoin_ids = sorted(p.name for p in (copy / QUOIN_CELL).iterdir() if p.is_dir())
+    assert len(quoin_ids) == 9
+    aggregate.aggregate_run(copy.parent, "tiered-small", suite_path=SMALL_SUITE)
+    v = json.loads((copy / "summary.json").read_text())["tiered"]["validity"]
+    assert "quoin arm did not run the pipeline in 9/9 sessions" in v["invalid_reasons"]
+    assert v["invalid_quoin_rows"] == quoin_ids
+    union = sorted(
+        v["no_pipeline_artifacts_rows"] + v["stopped_before_plan_rows"] + v["no_pipeline_evidence_rows"]
+    )
+    assert union == quoin_ids
+    assert _snapshot(TIERED_SMALL) == before

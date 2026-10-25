@@ -73,26 +73,114 @@ PASS_TO_PASS lists. A later stage fetches what it needs for grading itself.
 
 ## Budgets
 
-Per-task wall clock and token figures are advisory estimates fixed before any
-result exists and may be recalibrated later.
+The quoin arm runs the whole `/run` pipeline (every phase the profile triggers,
+including subagents), so the per-session cap, the worst case and the wall clock
+are sized from what comparable full-pipeline tasks cost, not from a single
+direct fix. Token estimates per tier are advisory and fixed before any result
+exists.
 
-| Tier | Wall clock (s) | Estimated tokens in | Estimated tokens out |
-|---|---|---|---|
-| easy | 1800 | 250000 | 12000 |
-| medium | 3600 | 500000 | 25000 |
-| large | 5400 | 900000 | 45000 |
+| Tier | Estimated tokens in | Estimated tokens out |
+|---|---|---|
+| easy | 250000 | 12000 |
+| medium | 500000 | 25000 |
+| large | 900000 | 45000 |
 
-The figures follow from a recorded planning-only gate run that used about 110k
-cache-write and 12k output tokens for one arm; a full run on a real repository
-is several times that. At list rates of $5 and $25 per million tokens the
-existing estimator gives roughly $27 per arm, about $54 for both arms. The
-estimator prices all input at the full input rate, so it overstates cached
-input.
+### Derivation
 
-The documented per-task cap is $5.50. The cap-based worst case is
-$5.50 x 9 tasks x 2 arms = $99.00, a documented target of about $100. The
-enforced ceiling is $110, which leaves headroom above the target for rounding
-and a small number of retried tasks.
+Sources: the finalized task folders of the parent workspace
+(`.workflow_artifacts/finalized/*/cost-summary.json`, task root only; stage
+files are ignored). A task qualifies when its summary has a `run-orchestrator`
+phase (it ran the pipeline) and its total, `resolved_total` when present and
+`task_total` otherwise, is at most $100. That cutoff separates the
+Small and Medium tasks this benchmark resembles from the programme-sized ones.
+The sample is 185 finalized folders, 145 with a cost summary, 40 with a
+`run-orchestrator` phase and 19 under the cutoff.
+
+Repricing. The sources were billed at several price lists, and the benchmark
+runs the 5.5 models, so each per-model bucket is repriced to 5.5 rates only
+when it is known to predate them. An opus bucket is multiplied by 0.8 ($5 to
+$4 input) when the task's last ledger date is before 2026-10-08, the date the
+5.5 prices were recorded; every other bucket is multiplied by 1.0 (a
+Sonnet or Haiku bucket of unknown generation, fable, other and unattributed
+spend), so an unknown generation never lowers the figure and the cap stays an
+upper bound. The per-task transcripts were not re-walked: most ledger rows
+carry inline per-agent costs and the oldest transcript still on disk is from
+2026-09-24, so every row below uses the ratio rule.
+
+| Source task | Total used | Last ledger date | Path | Repriced USD |
+|---|---|---|---|---|
+| ivg-299-quoin-sessions-attach | resolved_total 89.74 | 2026-10-23 | fallback | 89.74 |
+| ivg-255-extra-comments-in-pr | resolved_total 82.98 | 2026-09-10 | fallback | 77.08 |
+| ivg-250-known-red-false-mismatch | resolved_total 90.58 | 2026-08-20 | fallback | 76.66 |
+| ivg-290-real-context-utilization | resolved_total 75.88 | 2026-10-13 | fallback | 75.88 |
+| ivg-254-known-red-selector-shape | resolved_total 74.86 | 2026-08-20 | fallback | 62.27 |
+| ivg-128-parallel-dimension-reviewers | task_total 63.91 | 2026-07-19 | fallback | 59.87 |
+| ivg-119-nested-memory-roots | task_total 66.37 | 2026-07-22 | fallback | 53.10 |
+| ivg-152-prompt-improvement | task_total 37.85 | 2026-07-20 | fallback | 37.85 |
+| ivg-123-preamble-freshness-gate | resolved_total 39.13 | 2026-08-19 | fallback | 33.99 |
+| ivg-263-sleep-cleanup-sonnet-tier | resolved_total 36.14 | 2026-09-25 | fallback | 32.86 |
+| streamdeck-zellij-session-grouping | resolved_total 28.09 | 2026-10-15 | fallback | 28.09 |
+| ivg-271-opencode-runtime-config | resolved_total 31.66 | 2026-09-30 | fallback | 25.33 |
+| ivg-265-pr-no-claude-attribution | resolved_total 27.70 | 2026-09-25 | fallback | 24.34 |
+| session-age-guard-current-session | resolved_total 23.28 | 2026-10-14 | fallback | 23.28 |
+| ivg-118-registration-manifest | task_total 28.17 | 2026-07-22 | fallback | 22.53 |
+| ivg-117-dispatch-guardrail-gaps | task_total 22.80 | 2026-07-21 | fallback | 20.43 |
+| context-tracker-mod | resolved_total 16.85 | 2026-10-03 | fallback | 13.48 |
+| ivg-282-autonomous-child-takeover | resolved_total 12.61 | 2026-09-30 | fallback | 12.61 |
+| workflow-tasks-mod | resolved_total 9.73 | 2026-10-04 | fallback | 9.73 |
+
+Rule applied:
+
+```
+cap         = ceil_to_5(max repriced)                     = 90
+worst case  = cap x 9 tasks x 2 arms                      = 1620
+target      = ceil_to_10(worst case)                      = 1620
+ceiling     = ceil_to_10(target x 1.1)                    = 1790
+pilot worst = cap x 4 easy tasks x 2 arms                 = 720
+```
+
+| Figure | Value |
+|---|---|
+| Per-session cap | $90 |
+| Worst case (9 tasks, 2 arms) | $1,620 |
+| Documented target | $1,620 |
+| Enforced ceiling | $1,790 |
+| Pilot (easy tier) worst case | $720 |
+
+At 19,200 s per session with no idle timeout, the sequential worst-case
+durations are about 96 h for the full run and about 43 h for the pilot. The
+$170 of ceiling above the worst case is less than two capped sessions, so
+re-spawned rows may need a higher `--authorised-usd`.
+
+The $100 cutoff, not the sample, sets the cap: the cap is about 0.9 of the
+cutoff (and equal to the most expensive repriced source, rounded up), so a
+different cutoff would move it in proportion. The cap is a bound, not a
+forecast: it is sized so it does not bind on a full-pipeline run, and the
+ledger settles what was actually spent.
+
+Spend-rate caveat. The wall clock below uses the spend rate of the earlier
+tiered-small run, which was made of direct-fix sessions on Opus only (18
+sessions, $38.81 over 4,373.7 session seconds, about $0.00887 per second,
+scaled by 4.00/5.00 for the lower 5.5 input price). A pipeline run spreads its
+spend over subagents and may spend faster or slower per wall second, so the
+wall clock is a guard, and post-plan timeouts are counted separately in the
+report's Validity section.
+
+### Wall clock
+
+`wall_clock = max(current, ceil_to_300(1.5 x cap / spend_rate))`, with the
+spend rate above: 1.5 x 90 / 0.00710 = 19,015 s, rounded up to **19,200 s**.
+The previous per-tier values (1,800, 3,600 and 5,400 s) are below that, so
+every tier and both arms get 19,200 s from the suite's `wall_clock_seconds`
+field.
+
+### Cap visibility
+
+The cap is not written into either arm's prompt. `--max-budget-usd` stays
+armed in both arms, and the CLI reminds the session of its remaining budget
+each turn, so the cap is hidden from the prompt rather than from the model
+entirely; it is sized to be non-binding instead. Changing the suite changes its
+SHA, so a run started on the old suite needs a new `--run-id`.
 
 ## Reproducing
 

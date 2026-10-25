@@ -128,7 +128,7 @@ REFUSALS = [
     ("cap", {"--max-budget-usd-per-task": None}, "cap-set"),
     ("ledger", {"--spend-ledger": None}, "ledger-set"),
     ("authorised", {"--authorised-usd": None}, "authorised-set"),
-    ("cap-too-high", {"--max-budget-usd-per-task": "6.5"}, "suite-ceiling"),
+    ("cap-too-high", {"--max-budget-usd-per-task": "100"}, "suite-ceiling"),
     ("authorised-low", {"--authorised-usd": "50"}, "authorised-ceiling"),
     ("codex-cell", {"--cells": "simple-claude,quoin-codex"}, "cells"),
     ("default-cells", {"--cells": "simple-claude,quoin-claude,simple-codex,quoin-codex"},
@@ -339,18 +339,19 @@ def _dry(monkeypatch, capsys, *extra, suite="tiered-small"):
 
 
 def test_dry_run_prints_the_paired_matrix(monkeypatch, capsys):
-    code, cap = _dry(monkeypatch, capsys, "--max-budget-usd-per-task", "5.5")
+    code, cap = _dry(monkeypatch, capsys, "--max-budget-usd-per-task", "90")
     assert code == 0
     assert "(9 tasks)" in cap.out
     assert sum(1 for l in cap.out.splitlines() if l.startswith("verified_")) == 18
-    assert "WORST CASE: $99.00" in cap.out and "Target: $100.00, enforced ceiling: $110.00" in cap.out
+    assert "WORST CASE: $1620.00" in cap.out
+    assert "Target: $1620.00, enforced ceiling: $1790.00" in cap.out
 
 
 def test_dry_run_tier_filter(monkeypatch, capsys):
-    code, cap = _dry(monkeypatch, capsys, "--max-budget-usd-per-task", "5.5", "--tiers", "easy")
+    code, cap = _dry(monkeypatch, capsys, "--max-budget-usd-per-task", "90", "--tiers", "easy")
     assert code == 0
     assert sum(1 for l in cap.out.splitlines() if l.startswith("verified_")) == 8
-    assert "WORST CASE: $44.00" in cap.out
+    assert "WORST CASE: $720.00" in cap.out
 
 
 def test_dry_run_without_cap_is_gate_stopped(monkeypatch, capsys):

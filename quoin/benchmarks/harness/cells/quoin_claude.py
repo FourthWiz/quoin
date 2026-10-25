@@ -10,14 +10,15 @@ Key differences from simple_claude.py:
      followed by /init_workflow in non-interactive mode.
   2. Sets QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id> in the
      subprocess environment. Both must be set for /gate to auto-approve.
-  3. Prepends "Use /run --autonomous end-to-end on this task" to the agent
-     prompt (D-18). `/run`'s SKILL.md has no non-interactive path (17
-     `AskUserQuestion` calls, zero `QUOIN_GATE_AUTO_APPROVE` /
-     `QUOIN_BENCHMARK_RUN` references — F-11), so a `--print` session given
-     the plain "/run end-to-end" prompt cannot answer its own checkpoints
-     and either degrades or stalls to the wall clock, burning the
-     authorisation for no evidence. `--autonomous` is present in both arms'
-     `run/SKILL.md` and adds no candidate-only capability.
+  3. Starts the prompt with the slash command `/run --autonomous`, so the CLI
+     expands the run skill itself and the pipeline starts without the model
+     having to decide to invoke it (a prose request to "use /run" left a
+     session free to skip the pipeline and fix the issue directly). `/run`'s
+     SKILL.md has no non-interactive path of its own for gates, so
+     `--autonomous` is required: a `--print` session cannot answer its
+     checkpoints. `--autonomous` is present in both arms' `run/SKILL.md` and
+     adds no candidate-only capability. The session also gets
+     QUOIN_AUTO_RESUME=0 so no earlier pipeline state is picked up.
   4. Post-run: captures .workflow_artifacts/<task-name>/ into the run output
      folder as evidence; validates that architecture.md and current-plan.md
      exist for at least one sampled task.
@@ -38,6 +39,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -52,7 +54,7 @@ from typing import Optional
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
-from ..cost import estimate_cost, load_pricing
+from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
     _MAX_RETAINED_STDERR_LINES,
@@ -63,6 +65,7 @@ from .simple_claude import (
     _drain_stream,
     _extract_cost_usd,
     _gate_mode,
+    _get_effort,
     _get_model,
     _read_ready_chunk,
     _split_ready_lines,
@@ -182,6 +185,72 @@ def _run_install_subprocess(argv: list[str], env: Optional[dict] = None) -> dict
     }
 
 
+PHASE_FILE_PATTERNS = (
+    "spec.md", "architecture.md", "current-plan.md", "triage-decision.md",
+    "review-*.md", "cost-ledger.md",
+)
+_ROUTE_LINE = re.compile(r"^\s*route\s*:\s*(\w+)", re.IGNORECASE | re.MULTILINE)
+_PROFILE_LINE = re.compile(r"Task profile:\**\s*\**\s*([A-Za-z]+)", re.IGNORECASE)
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _pipeline_diagnostics(dest: Path) -> dict:
+    """On-disk evidence that the run pipeline started and the route it took.
+
+    Reads only the captured artifacts directory; a transcript `Skill` call is
+    not evidence, because the slash command expands the skill into the prompt.
+    """
+    phase_files = sorted({
+        str(path.relative_to(dest))
+        for pattern in PHASE_FILE_PATTERNS
+        for path in dest.rglob(pattern)
+        if path.is_file()
+    })
+    orchestrator_row = any(
+        "| run-orchestrator |" in _read_text(ledger) for ledger in dest.rglob("cost-ledger.md")
+    )
+    run_states = [p for p in dest.rglob("run-state-*.json") if p.parent.name == "memory"]
+    started = bool(orchestrator_row or run_states or phase_files)
+
+    route, profile = "unknown", None
+    triage = next(iter(sorted(dest.rglob("triage-decision.md"))), None)
+    plans = sorted(dest.rglob("current-plan.md"))
+    if triage is not None:
+        match = _ROUTE_LINE.search(_read_text(triage))
+        if match and match.group(1).lower() in ("fast", "full"):
+            route = match.group(1).lower()
+    if route == "unknown" and plans:
+        plan_text = _read_text(plans[0])
+        route = "fast" if re.search(r"^provenance:\s*fast-path-triage\s*$", plan_text, re.MULTILINE) else "full"
+    for state_path in run_states:
+        try:
+            value = json.loads(_read_text(state_path)).get("profile")
+        except (ValueError, AttributeError):
+            value = None
+        if isinstance(value, str) and value:
+            profile = value
+            break
+    if profile is None:
+        for candidate in [triage, *plans]:
+            if candidate is None:
+                continue
+            match = _PROFILE_LINE.search(_read_text(candidate))
+            if match:
+                profile = match.group(1)
+                break
+    return {
+        "phase_files": phase_files,
+        "pipeline_started": started,
+        "workflow_route": {"route": route, "profile": profile},
+    }
+
+
 def _capture_workflow_artifacts(
     workdir: Path,
     run_output_dir: Path,
@@ -196,27 +265,30 @@ def _capture_workflow_artifacts(
         "has_architecture_md": bool,
         "has_current_plan_md": bool,
         "artifacts_path": str | None,
+        "phase_files": [str],
+        "pipeline_started": bool,
+        "workflow_route": {"route": "fast" | "full" | "unknown", "profile": str | None},
       }
     """
+    empty = {
+        "captured": False,
+        "has_architecture_md": False,
+        "has_current_plan_md": False,
+        "artifacts_path": None,
+        "phase_files": [],
+        "pipeline_started": False,
+        "workflow_route": {"route": "unknown", "profile": None},
+    }
     src = workdir / ".workflow_artifacts"
     if not src.exists():
-        return {
-            "captured": False,
-            "has_architecture_md": False,
-            "has_current_plan_md": False,
-            "artifacts_path": None,
-        }
+        return dict(empty)
 
     dest = run_output_dir / "workflow_artifacts_evidence"
     try:
         shutil.copytree(src, dest, dirs_exist_ok=True)
     except Exception:
-        return {
-            "captured": False,
-            "has_architecture_md": False,
-            "has_current_plan_md": False,
-            "artifacts_path": None,
-        }
+        # Evidence exists but could not be preserved: the plan is unknown, not absent.
+        return {**empty, "copy_failed": True}
 
     # Validate: look for architecture.md and current-plan.md in any subfolder
     has_arch = any(dest.rglob("architecture.md"))
@@ -227,6 +299,7 @@ def _capture_workflow_artifacts(
         "has_architecture_md": has_arch,
         "has_current_plan_md": has_plan,
         "artifacts_path": str(dest),
+        **_pipeline_diagnostics(dest),
     }
 
 
@@ -297,14 +370,12 @@ def invoke(
     """
     model = _get_model()
     base_prompt = _build_prompt(task_spec)
-    # Prepend the quoin workflow directive with --autonomous (D-18): a
-    # `--print` session cannot answer /run's own interactive checkpoints
-    # (17 AskUserQuestion calls, no QUOIN_GATE_AUTO_APPROVE /
-    # QUOIN_BENCHMARK_RUN awareness — F-11), so the plain form either
-    # degrades or stalls to the wall clock. The fixture clone's remote is
-    # stripped (T-08a) as belt-and-braces containment for the
-    # /implement + /end_of_task capability --autonomous grants.
-    prompt = f"Use /run --autonomous end-to-end on this task\n\n{base_prompt}"
+    # Slash-command dispatch: the CLI expands `/run` into the prompt, so the
+    # pipeline starts regardless of what the model would have chosen. A `--print`
+    # session cannot answer /run's interactive checkpoints, hence --autonomous.
+    # The fixture clone's remote is stripped as belt-and-braces containment for
+    # the /implement + /end_of_task capability --autonomous grants.
+    prompt = f"/run --autonomous {base_prompt}"
 
     result: dict = {
         "prompt": prompt,
@@ -403,7 +474,7 @@ def invoke(
         result["extra"].update(refusal_flags)
         return result
 
-    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+    cmd = _build_claude_argv(prompt, model, _get_effort(), max_budget_usd)
     budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
     result["extra"]["budget_cap_armed"] = budget_cap_armed
     result["extra"]["max_budget_usd_applied"] = max_budget_usd
@@ -726,10 +797,18 @@ def invoke(
         # them — T-01/T-02 fix; they were top-level-only before).
         result["workflow_artifacts_captured"] = artifacts_evidence.get("captured", False)
         result["workflow_artifacts_has_arch"] = artifacts_evidence.get("has_architecture_md", False)
-        result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
+        if not artifacts_evidence.get("copy_failed"):
+            result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
         result["extra"]["workflow_artifacts_captured"] = result["workflow_artifacts_captured"]
         result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
-        result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
+        if "workflow_artifacts_has_plan" in result:
+            result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
+        result["workflow_artifacts_phase_files"] = artifacts_evidence.get("phase_files", [])
+        result["workflow_pipeline_started"] = artifacts_evidence.get("pipeline_started", False)
+        result["workflow_route"] = artifacts_evidence.get("workflow_route")
+        result["extra"]["workflow_artifacts_phase_files"] = result["workflow_artifacts_phase_files"]
+        result["extra"]["workflow_pipeline_started"] = result["workflow_pipeline_started"]
+        result["extra"]["workflow_route"] = result["workflow_route"]
 
         # See simple_claude.invoke — the ring buffer silently drops the
         # OLDEST events once `events_seen` exceeds its cap; record that it
@@ -758,21 +837,24 @@ def invoke(
         if total_cost_usd is not None:
             result["cost_available"] = True
             result["cost_runtime_usd"] = total_cost_usd
+            result["extra"]["unpriced_models"] = []
             try:
                 pricing = load_pricing()
-                estimated = estimate_cost(
-                    model=model,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    cache_write=tokens_cache_write,
-                    cache_read=tokens_cache_read,
-                    pricing=pricing,
+                estimated, unpriced = estimate_session_cost(
+                    model,
+                    stream_metrics.model_usage,
+                    tokens_in,
+                    tokens_out,
+                    tokens_cache_write,
+                    tokens_cache_read,
+                    pricing,
                 )
+                result["extra"]["unpriced_models"] = unpriced
                 if estimated is not None:
                     result["cost_estimated_usd"] = float(estimated)
                     result["cost_delta_usd"] = total_cost_usd - float(estimated)
             except Exception:
-                pass
+                pass  # Estimation failure is non-fatal
         else:
             result["cost_available"] = False
 

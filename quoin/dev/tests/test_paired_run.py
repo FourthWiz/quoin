@@ -439,3 +439,75 @@ def test_paired_run_shares_the_report_reason_sets():
     assert pr.RESPAWN_REASONS is tiered_report.RESPAWN_REASONS
     assert tiered_report.QUOIN_PRE_SPAWN_REASONS <= tiered_report.ABORT_REASONS
     assert tiered_report.QUOIN_PRE_SPAWN_REASONS <= tiered_report.RESPAWN_REASONS
+
+
+# --- invalid quoin rows ---------------------------------------------------------------
+
+def test_invalid_session_rows_are_done_not_respawned(tmp_path):
+    for reason in session_state.INVALID_REASONS:
+        row = _row(tmp_path / reason, session={"failure_reason": reason, "genuine_assistant_turns": 4})
+        assert pr.row_state(row) == "done"
+    assert not set(session_state.INVALID_REASONS) & (pr.RESPAWN_REASONS | pr.ABORT_REASONS)
+
+
+def test_stop_on_invalid_quoin_stops_before_the_next_spawn(tmp_path):
+    fake = FakeRunTask(tmp_path, reasons={("quoin-claude", "t1"): "no-pipeline-artifacts"})
+    out = pr.run_paired(
+        _plan(tmp_path, stop_on_invalid_quoin=True), run_task=fake, log=lambda *_: None,
+    )
+    assert out.stop_reason == "invalid-quoin-row"
+    assert (out.abort_cell, out.abort_task_id, out.abort_kind) == ("quoin-claude", "t1", "row")
+    assert [(c, t) for c, t, *_ in fake.calls] == [("simple-claude", "t1"), ("quoin-claude", "t1")]
+
+
+def test_invalid_quoin_rows_do_not_stop_a_leg_without_the_flag(tmp_path):
+    fake = FakeRunTask(tmp_path, reasons={("quoin-claude", "t1"): "no-pipeline-artifacts"})
+    out = pr.run_paired(_plan(tmp_path, n=2), run_task=fake, log=lambda *_: None)
+    assert out.stop_reason is None and len(fake.calls) == 4
+
+
+def test_a_plain_invalid_looking_reason_does_not_stop_the_pilot(tmp_path):
+    fake = FakeRunTask(tmp_path, reasons={("simple-claude", "t1"): "no-pipeline-artifacts"})
+    out = pr.run_paired(
+        _plan(tmp_path, n=1, stop_on_invalid_quoin=True), run_task=fake, log=lambda *_: None,
+    )
+    assert out.stop_reason is None
+
+
+class _PerCell:
+    def __init__(self, plain, quoin):
+        self.by_cell = {"simple-claude": plain, "quoin-claude": quoin}
+
+    def __call__(self, cell, task, run_id, config):
+        runner._load_cell_adapter = lambda c: self.by_cell[c]
+        return runner.run_one_task(cell, task, run_id, config)
+
+
+def _real_pair_plan(env, tmp_path):
+    env["cfg"].defer_judge = True
+    configs = {c: env["cfg"] for c in pr.PAIR_ORDER}
+    return pr.PairedPlan(
+        run_id="r1", run_dir=env["cfg"].run_dir, tasks=[env["task"]], cap=1.0,
+        ledger=tmp_path / "ledger.jsonl", authorised=100.0, suite_ceiling=100.0, configs=configs,
+    )
+
+
+def test_real_runner_auth_failure_still_aborts_the_pair(env, _restore_runner, tmp_path):
+    from test_runner_verified import QuoinAdapter
+
+    runner.judge_task = StubJudge()
+    run_task = _PerCell(FakeAdapter(act=commit_change), QuoinAdapter(events=_events("auth_failure.jsonl")))
+    out = pr.run_paired(_real_pair_plan(env, tmp_path), run_task=run_task, log=lambda *_: None)
+    assert out.stop_reason == "abort" and out.abort_detail == ["auth-failure"]
+    assert _json(_t_dir(env, "quoin-claude") / "session.json")["failure_reason"] == "auth-failure"
+
+
+def test_real_runner_no_assistant_turn_row_is_respawned(env, _restore_runner, tmp_path):
+    from test_runner_verified import QuoinAdapter
+
+    runner.judge_task = StubJudge()
+    run_task = _PerCell(FakeAdapter(act=commit_change), QuoinAdapter(events=[]))
+    pr.run_paired(_real_pair_plan(env, tmp_path), run_task=run_task, log=lambda *_: None)
+    t = _t_dir(env, "quoin-claude")
+    assert _json(t / "session.json")["failure_reason"] == "no-assistant-turn"
+    assert pr.row_state(t) == "respawn"

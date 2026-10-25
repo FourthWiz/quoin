@@ -150,6 +150,59 @@ def classify_session(
     return outcome("completed", None, None, judge=True)
 
 
+QUOIN_CELL = "quoin-claude"
+INVALID_REASONS = ("no-pipeline-artifacts", "stopped-before-plan", "no-pipeline-evidence")
+
+
+def pipeline_validity(cell: str, metrics: dict) -> "tuple[bool, Optional[str]]":
+    """Whether a quoin row is evidence about the pipeline.
+
+    A quoin session that ran but left no plan on disk did not run the pipeline,
+    so it must not count as a quoin result. Rows that never ran a session or
+    already ended in an error keep their own reason.
+    """
+    if cell != QUOIN_CELL:
+        return True, None
+    metrics = metrics or {}
+    if metrics.get("pre_spawn_error") or metrics.get("terminal_state") == "error":
+        return True, None
+    if metrics.get("workflow_artifacts_has_plan") is True:
+        return True, None
+    if "workflow_artifacts_has_plan" not in metrics:
+        return False, "no-pipeline-evidence"
+    if (
+        metrics.get("terminal_state") in ("timeout", "budget_stopped")
+        and metrics.get("workflow_pipeline_started") is True
+    ):
+        return False, "stopped-before-plan"
+    return False, "no-pipeline-artifacts"
+
+
+def pipeline_rule_applies(cell: str, task_dir) -> bool:
+    """True only for quoin rows the Verified runner wrote a session.json for.
+
+    Everything else (v1 and scenario rows, golden fixtures, rows with no session
+    file) is outside the pipeline rule, so their summaries do not move.
+    """
+    if cell != QUOIN_CELL:
+        return False
+    session = read_session_json(task_dir)
+    return bool(session) and session.get("source") == "swebench_verified"
+
+
+def pipeline_invalid_reason(cell: str, task_dir, metrics: Optional[dict]) -> Optional[str]:
+    """The invalid reason for a row the rule applies to, else None."""
+    if not pipeline_rule_applies(cell, task_dir):
+        return None
+    session = read_session_json(task_dir) or {}
+    merged = dict(metrics or {})
+    state = session.get("terminal_state") or merged.get("terminal_state")
+    if state is not None:
+        merged["terminal_state"] = state
+    ok, reason = pipeline_validity(cell, merged)
+    return None if ok else reason
+
+
 def write_session_json(t_dir, payload: dict) -> Path:
     t_dir = Path(t_dir)
     t_dir.mkdir(parents=True, exist_ok=True)

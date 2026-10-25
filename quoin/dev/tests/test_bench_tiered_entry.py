@@ -299,11 +299,14 @@ def test_confirm_branches():
     assert tiered_entry.confirm(33.0, yes=False, stdin=io.StringIO("y\n"), out=io.StringIO()) == 2
 
 
-def test_real_suite_estimate_is_ninety_nine_dollars(tmp_path):
+def test_real_suite_estimate_follows_the_documented_cap(tmp_path):
     doc = json.loads((REPO / "quoin" / "benchmarks" / "suite-tiered-small.json").read_text())
     rows_all, rows_pilot = tiered_entry.estimate_rows(doc, tmp_path / "runs", "x", "easy")
     assert rows_all == 18 and rows_pilot == 8
-    assert f"${paired_spend.worst_case(5.5, rows_all, 1):.2f}" == "$99.00"
+    cap = doc["tiered"]["documented_cap_usd"]
+    assert f"${paired_spend.worst_case(cap, rows_all, 1):.2f}" == "$1620.00"
+    assert paired_spend.worst_case(cap, rows_all, 1) == doc["tiered"]["worst_case_target_usd"]
+    assert paired_spend.worst_case(cap, rows_pilot, 1) == 720
 
 
 def test_leg_argv_parses_with_the_benchmark_parser(tw):
@@ -915,3 +918,206 @@ def test_judge_only_after_a_pilot_that_finished_every_row(tw, monkeypatch, capsy
     assert "judge: ran" in out
     assert len(w["judged"]) == 4
     assert [c["tiers"] for c in w["calls"]] == ["easy"]
+
+
+# --- model pin in the manifest and unpriced models ---------------------------------
+
+OPUS_5_5 = "claude-opus-5-5"
+SONNET_5_5 = "claude-sonnet-5-5"
+
+
+def _usage(*models):
+    return {m: {"inputTokens": 10, "outputTokens": 5, "cacheReadInputTokens": 0,
+                "cacheCreationInputTokens": 0, "costUSD": 0.1} for m in models}
+
+
+def _manifest_json(path, key):
+    return json.loads(read_manifest(path)[key])
+
+
+def test_manifest_records_the_pin_and_observed_models(tw):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, SONNET_5_5)})
+    assert _go(w, "--yes") == 0
+    manifest = read_manifest(w["runs"] / "R")
+    assert manifest["effort"] == "high"
+    assert _manifest_json(w["runs"] / "R", "bench_models") == {
+        "opus": OPUS_5_5, "sonnet": SONNET_5_5, "haiku": "claude-haiku-5-5"}
+    assert manifest["model_override"] is None
+    observed = _manifest_json(w["runs"] / "R", "observed_models")
+    assert observed == {"simple-claude": [OPUS_5_5, SONNET_5_5],
+                        "quoin-claude": [OPUS_5_5, SONNET_5_5]}
+    validity = json.loads((w["runs"] / "R" / "summary.json").read_text())["tiered"]["validity"]
+    assert validity["model_mismatch_rows"] == []
+
+
+def test_an_interrupted_run_manifest_carries_observed_models(tw, capsys):
+    w = tw
+    assert _interrupted(w, 2, 2) == 1
+    observed = _manifest_json(w["runs"] / "R", "observed_models")
+    assert OPUS_5_5 in observed["simple-claude"]
+
+
+def test_unpriced_model_in_a_spawning_run_exits_six(tw, capsys):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, "claude-opus-9-9")})
+    assert _go(w, "--yes") == tiered_entry.EXIT_UNPRICED
+    out = capsys.readouterr().out
+    assert "unpriced model in this run: claude-opus-9-9" in out
+
+
+def test_judge_only_rerun_refreshes_the_summary_and_exits_six(tw, monkeypatch, capsys):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, SONNET_5_5)})
+    assert _go(w, "--yes") == 0
+    summary = json.loads((w["runs"] / "R" / "summary.json").read_text())
+    assert summary["tiered"]["validity"]["unpriced_models"] == []
+    n = len(_starts(w))
+
+    from quoin.benchmarks.harness import tiered_report
+
+    real = tiered_report.load_pricing
+
+    def trimmed():
+        card = real()
+        return {**card, "models": {k: v for k, v in card["models"].items() if k != SONNET_5_5}}
+
+    monkeypatch.setattr(tiered_report, "load_pricing", trimmed)
+    capsys.readouterr()
+    assert _go(w, "--yes") == tiered_entry.EXIT_UNPRICED
+    assert len(_starts(w)) == n
+    assert "unpriced model in this run: claude-sonnet-5-5" in capsys.readouterr().out
+    assert (w["runs"] / "R" / "invariants-report.md").is_file()
+
+
+@pytest.mark.parametrize("body", [None, "{not json", '{"tiered": {"error": "boom"}}',
+                                  '{"tiered": {"validity": {}}}'])
+def test_unpriced_from_summary_is_empty_for_missing_or_old_summaries(tmp_path, body):
+    if body is not None:
+        (tmp_path / "summary.json").write_text(body)
+    assert tiered_entry.unpriced_from_summary(tmp_path) == []
+
+
+# --- pilot validity gate ----------------------------------------------------------------
+
+def test_first_invalid_quoin_pilot_row_stops_after_one_pair(tw, capsys):
+    w = tw
+    _scenario(w, {"quoin_plan": False})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    out = capsys.readouterr().out
+    assert len(_starts(w)) == 2
+    assert "pilot stopped: the quoin arm did not run /run on" in out
+    assert tiered_entry.RERUN_HINT not in out
+    assert "full:" not in out
+    assert "recorded spend for run" in out
+
+    _scenario(w, {})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    out = capsys.readouterr().out
+    assert len(_starts(w)) == 2
+    assert "pilot stopped earlier" in out and "--accept-invalid-pilot" in out
+    assert "estimate:" not in out and "prepare:" not in out
+
+    assert _go(w, "--yes", "--accept-invalid-pilot") == 0
+    assert len(_starts(w)) == 2 + 4
+
+
+def test_invalid_row_in_the_last_pilot_pair_blocks_the_full_leg_on_rerun(tw, capsys):
+    w = tw
+    _scenario(w, {"runs": {"4": {"quoin_plan": False}}})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    assert len(_starts(w)) == 4
+    capsys.readouterr()
+
+    _scenario(w, {})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    out = capsys.readouterr().out
+    assert len(_starts(w)) == 4
+    assert "parity:" not in out and "prepare:" not in out and "estimate:" not in out
+    assert [c["tiers"] for c in w["calls"]] == ["easy"]
+
+    assert _go(w, "--yes", "--accept-invalid-pilot", "--ignore-parity") == 0
+    assert len(_starts(w)) == 6
+
+
+def test_invalid_full_tier_rows_are_reported_but_never_refuse_a_rerun(tw, capsys):
+    w = tw
+    _scenario(w, {"runs": {"6": {"quoin_plan": False}}})
+    assert _go(w, "--yes") == 0
+    assert len(_starts(w)) == 6
+    validity = json.loads((w["runs"] / "R" / "summary.json").read_text())["tiered"]["validity"]
+    assert validity["invalid_quoin_rows"] and validity["valid"] is False
+    capsys.readouterr()
+    assert _go(w, "--yes") == 0
+    assert len(_starts(w)) == 6
+
+
+def test_check_invalid_pilot_ignores_full_tier_rows(tw):
+    w = tw
+    res = tiered_entry.resolve(tiered_entry.build_parser().parse_args(_argv(w, "--yes")))
+    assert tiered_entry.recorded_invalid_pilot_rows(res) == []
+    assert tiered_entry.check_invalid_pilot(res) is None
+
+
+# --- judge emulation threading ----------------------------------------------------------
+
+def _spy_judge_only(monkeypatch):
+    seen = []
+    original = run_benchmark._judge_only_main
+
+    def spy(*a, **k):
+        seen.append(k.get("emulate_x86"))
+        return original(*a, **k)
+
+    monkeypatch.setattr(run_benchmark, "_judge_only_main", spy)
+    return seen
+
+
+def test_leg_argv_and_deferred_command_carry_the_emulation_flag(tw):
+    w = tw
+    res = tiered_entry.resolve(_parsed(*_argv(w, "--judge-emulation")))
+    argv = tiered_entry.leg_argv(res, tiers="easy", skip_judge=True)
+    assert "--judge-emulation" in argv
+    assert run_benchmark.build_parser().parse_args(argv).judge_emulation is True
+    assert "--judge-emulation" in tiered_entry.deferred_command(res)
+    plain = tiered_entry.resolve(_parsed(*_argv(w)))
+    assert "--judge-emulation" not in tiered_entry.leg_argv(plain, skip_judge=True)
+    assert "--judge-emulation" not in tiered_entry.deferred_command(plain)
+
+
+def test_emulation_reaches_the_judge_on_an_arm64_host_for_a_finished_run(tw, monkeypatch):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    seen = _spy_judge_only(monkeypatch)
+    monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert seen == [True]
+    assert len(w["judged"]) == 6
+
+
+def test_emulation_reaches_the_judge_when_nothing_remains_after_a_leg(tw, monkeypatch):
+    w = tw
+    _pilot_finishes_every_row(w, monkeypatch)
+    seen = _spy_judge_only(monkeypatch)
+    monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert seen == [True]
+
+
+def test_the_flag_alone_does_nothing_on_an_x86_host(tw, monkeypatch):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    seen = _spy_judge_only(monkeypatch)
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert seen == [False]
+
+
+def test_a_fresh_arm64_run_records_the_emulation_decision(tw, monkeypatch):
+    w = tw
+    monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert read_manifest(w["runs"] / "R")["judge_emulation"] == "True"
+
+
+def test_invalid_pilot_exit_code_matches_the_paired_runner():
+    assert tiered_entry.EXIT_INVALID_PILOT == run_benchmark.EXIT_INVALID_QUOIN
