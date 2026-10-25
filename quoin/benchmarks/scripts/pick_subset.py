@@ -199,6 +199,10 @@ KNOWN_VERIFIED_DIFFICULTIES = (
     ">4 hours",
 )
 
+# One wall clock for every tier and both arms: a spend cap of $90 at the
+# observed spend rate, with 1.5x headroom, so the wall clock does not bind first.
+TIERED_SMALL_WALL_CLOCK_SECONDS = 19200
+
 # Estimates are advisory and fixed before any result exists. The ">4 hours"
 # label has no tier and is therefore never selected.
 TIERED_SMALL_SPEC = {
@@ -206,7 +210,7 @@ TIERED_SMALL_SPEC = {
         "label": "<15 min fix",
         "n": 4,
         "sub_seed_offset": 101,
-        "wall_clock_seconds": 1800,
+        "wall_clock_seconds": TIERED_SMALL_WALL_CLOCK_SECONDS,
         "est_tokens_in": 250000,
         "est_tokens_out": 12000,
     },
@@ -214,7 +218,7 @@ TIERED_SMALL_SPEC = {
         "label": "15 min - 1 hour",
         "n": 3,
         "sub_seed_offset": 102,
-        "wall_clock_seconds": 3600,
+        "wall_clock_seconds": TIERED_SMALL_WALL_CLOCK_SECONDS,
         "est_tokens_in": 500000,
         "est_tokens_out": 25000,
     },
@@ -222,17 +226,21 @@ TIERED_SMALL_SPEC = {
         "label": "1-4 hours",
         "n": 2,
         "sub_seed_offset": 103,
-        "wall_clock_seconds": 5400,
+        "wall_clock_seconds": TIERED_SMALL_WALL_CLOCK_SECONDS,
         "est_tokens_in": 900000,
         "est_tokens_out": 45000,
     },
 }
 
+# Derived in suite-tiered-small-provenance.md: the cap is the largest repriced
+# cost of a comparable full-pipeline task under $100, rounded up to $5; the
+# worst case is cap x 9 tasks x 2 arms; the ceiling adds 10% and rounds up.
 TIERED_SMALL_COST = {
-    "worst_case_target_usd": 100,
-    "worst_case_ceiling_usd": 110,
-    "documented_cap_usd": 5.5,
+    "worst_case_target_usd": 1620,
+    "worst_case_ceiling_usd": 1790,
+    "documented_cap_usd": 90,
 }
+
 
 PROMPT_TEMPLATE_VERSION = "verified-v1"
 

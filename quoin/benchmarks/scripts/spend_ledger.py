@@ -5,8 +5,10 @@ benchmark gate (T-17, D-19). Blocks every paid task.
 Nothing else carries spend ACROSS driver invocations, while several
 rollback rows authorise arm re-runs (R-01, R-06, R-07). A candidate
 re-run adds its full per-arm cap on top of whatever the first attempt
-spent; this ledger is what keeps a re-run inside the ~$50 pilot
-authorisation rather than letting it silently exceed it.
+spent; this ledger is what keeps a re-run inside the authorisation it was
+given rather than letting it silently exceed it. The three-arm gate falls
+back to DEFAULT_AUTHORISED_USD when no ceiling is passed; the tiered command
+always passes its own ceiling, taken from the suite.
 
 Storage: JSONL — one JSON object per line, appended with a single
 O_APPEND write. An append-only-list-via-temp-file-and-replace design
@@ -44,7 +46,7 @@ A `reauth-note` row records an explicit operator re-authorisation: it
 carries `cap_usd: 0.0` (so it is never mistaken for spend) and the raised
 ceiling in `new_ceiling_usd`. The plan never raises the ceiling on its
 own — a reauth-note is written only when a human explicitly authorises
-more than the pilot's ~$50.
+more than the ceiling already in force.
 """
 
 from __future__ import annotations
@@ -166,7 +168,7 @@ def resolve_authorised_ceiling(path: Path, authorised: Optional[float]) -> float
     """Resolve the ceiling `precheck` should enforce: `authorised` itself
     when the caller supplied one, otherwise the `new_ceiling_usd` of the
     latest `reauth-note` row in the ledger at `path`, otherwise
-    `DEFAULT_AUTHORISED_USD` (50.0).
+    `DEFAULT_AUTHORISED_USD` (50.0, the three-arm gate's default).
 
     This is a SEPARATE, explicit step from `precheck` itself — the
     "derive a ceiling from the same file whose spend it polices" fallback

@@ -299,11 +299,14 @@ def test_confirm_branches():
     assert tiered_entry.confirm(33.0, yes=False, stdin=io.StringIO("y\n"), out=io.StringIO()) == 2
 
 
-def test_real_suite_estimate_is_ninety_nine_dollars(tmp_path):
+def test_real_suite_estimate_follows_the_documented_cap(tmp_path):
     doc = json.loads((REPO / "quoin" / "benchmarks" / "suite-tiered-small.json").read_text())
     rows_all, rows_pilot = tiered_entry.estimate_rows(doc, tmp_path / "runs", "x", "easy")
     assert rows_all == 18 and rows_pilot == 8
-    assert f"${paired_spend.worst_case(5.5, rows_all, 1):.2f}" == "$99.00"
+    cap = doc["tiered"]["documented_cap_usd"]
+    assert f"${paired_spend.worst_case(cap, rows_all, 1):.2f}" == "$1620.00"
+    assert paired_spend.worst_case(cap, rows_all, 1) == doc["tiered"]["worst_case_target_usd"]
+    assert paired_spend.worst_case(cap, rows_pilot, 1) == 720
 
 
 def test_leg_argv_parses_with_the_benchmark_parser(tw):

@@ -145,7 +145,15 @@ def test_suite_shape():
         if t["tier"] in ("medium", "large"):
             assert t["wall_clock_seconds"] > 600
     assert suite["tiered"]["sub_seeds"] == {"easy": 101, "medium": 102, "large": 103}
-    assert suite["tiered"]["worst_case_ceiling_usd"] == 110
+    cost = pick_subset.TIERED_SMALL_COST
+    assert suite["tiered"]["worst_case_ceiling_usd"] == cost["worst_case_ceiling_usd"] == 1790
+    assert suite["tiered"]["worst_case_target_usd"] == cost["worst_case_target_usd"] == 1620
+    assert suite["tiered"]["documented_cap_usd"] == cost["documented_cap_usd"] == 90
+    # the cap, worst case and ceiling follow from the documented rule
+    assert cost["worst_case_target_usd"] == cost["documented_cap_usd"] * 9 * 2
+    assert cost["worst_case_ceiling_usd"] >= cost["worst_case_target_usd"] * 1.1
+    for tier, spec in pick_subset.TIERED_SMALL_SPEC.items():
+        assert suite["tiered"]["tiers"][tier]["wall_clock_seconds"] == spec["wall_clock_seconds"] == 19200
 
 
 def test_suite_matches_snapshot_and_problems():
@@ -339,7 +347,17 @@ def test_v1_output_unchanged(capsys):
 def test_provenance_mentions_recorded_values():
     prov = PROVENANCE.read_text(encoding="utf-8")
     suite = _suite()
-    needles = [REV, "1729", "101", "102", "103", "$100", "$110", _sha(SNAPSHOT.read_bytes())]
+    cost = pick_subset.TIERED_SMALL_COST
+    wall = pick_subset.TIERED_SMALL_WALL_CLOCK_SECONDS
+    needles = [
+        REV, "1729", "101", "102", "103", _sha(SNAPSHOT.read_bytes()),
+        "$%d" % cost["documented_cap_usd"],
+        "$%s" % format(cost["worst_case_target_usd"], ","),
+        "$%s" % format(cost["worst_case_ceiling_usd"], ","),
+        "%s s" % format(wall, ","),
+        "0.9 of the\ncutoff",
+        "direct-fix sessions",
+    ]
     for t in suite["tasks"]:
         needles += [t["id"], t["source_id"]]
     for n in needles:
@@ -408,3 +426,21 @@ def test_json_data_files_are_byte_pinned_by_gitattributes():
     )
     assert out.returncode == 0
     assert out.stdout.strip().endswith("unset")
+
+
+def test_provenance_figures_equal_the_generator_constants():
+    prov = PROVENANCE.read_text(encoding="utf-8")
+    cost = pick_subset.TIERED_SMALL_COST
+    figures = {
+        "cap": int(re.search(r"Per-session cap \| \$([\d,]+)", prov).group(1).replace(",", "")),
+        "target": int(re.search(r"Documented target \| \$([\d,]+)", prov).group(1).replace(",", "")),
+        "ceiling": int(re.search(r"Enforced ceiling \| \$([\d,]+)", prov).group(1).replace(",", "")),
+        "wall": int(re.search(r"\*\*([\d,]+) s\*\*", prov).group(1).replace(",", "")),
+    }
+    assert figures == {
+        "cap": cost["documented_cap_usd"], "target": cost["worst_case_target_usd"],
+        "ceiling": cost["worst_case_ceiling_usd"],
+        "wall": pick_subset.TIERED_SMALL_WALL_CLOCK_SECONDS,
+    }
+    pilot = int(re.search(r"Pilot \(easy tier\) worst case \| \$([\d,]+)", prov).group(1).replace(",", ""))
+    assert pilot == cost["documented_cap_usd"] * pick_subset.TIERED_SMALL_SPEC["easy"]["n"] * 2
