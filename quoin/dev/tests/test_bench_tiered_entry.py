@@ -1053,3 +1053,63 @@ def test_check_invalid_pilot_ignores_full_tier_rows(tw):
     res = tiered_entry.resolve(tiered_entry.build_parser().parse_args(_argv(w, "--yes")))
     assert tiered_entry.recorded_invalid_pilot_rows(res) == []
     assert tiered_entry.check_invalid_pilot(res) is None
+
+
+# --- judge emulation threading ----------------------------------------------------------
+
+def _spy_judge_only(monkeypatch):
+    seen = []
+    original = run_benchmark._judge_only_main
+
+    def spy(*a, **k):
+        seen.append(k.get("emulate_x86"))
+        return original(*a, **k)
+
+    monkeypatch.setattr(run_benchmark, "_judge_only_main", spy)
+    return seen
+
+
+def test_leg_argv_and_deferred_command_carry_the_emulation_flag(tw):
+    w = tw
+    res = tiered_entry.resolve(_parsed(*_argv(w, "--judge-emulation")))
+    argv = tiered_entry.leg_argv(res, tiers="easy", skip_judge=True)
+    assert "--judge-emulation" in argv
+    assert run_benchmark.build_parser().parse_args(argv).judge_emulation is True
+    assert "--judge-emulation" in tiered_entry.deferred_command(res)
+    plain = tiered_entry.resolve(_parsed(*_argv(w)))
+    assert "--judge-emulation" not in tiered_entry.leg_argv(plain, skip_judge=True)
+    assert "--judge-emulation" not in tiered_entry.deferred_command(plain)
+
+
+def test_emulation_reaches_the_judge_on_an_arm64_host_for_a_finished_run(tw, monkeypatch):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    seen = _spy_judge_only(monkeypatch)
+    monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert seen == [True]
+    assert len(w["judged"]) == 6
+
+
+def test_emulation_reaches_the_judge_when_nothing_remains_after_a_leg(tw, monkeypatch):
+    w = tw
+    _pilot_finishes_every_row(w, monkeypatch)
+    seen = _spy_judge_only(monkeypatch)
+    monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert seen == [True]
+
+
+def test_the_flag_alone_does_nothing_on_an_x86_host(tw, monkeypatch):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    seen = _spy_judge_only(monkeypatch)
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert seen == [False]
+
+
+def test_a_fresh_arm64_run_records_the_emulation_decision(tw, monkeypatch):
+    w = tw
+    monkeypatch.setattr(tiered_entry.platform, "machine", lambda: "arm64")
+    assert _go(w, "--yes", "--judge-emulation") == 0
+    assert read_manifest(w["runs"] / "R")["judge_emulation"] == "True"

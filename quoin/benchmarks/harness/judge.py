@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -441,15 +442,27 @@ _VERIFIED_JUDGE_LOCK = threading.Lock()
 _LOG_TAIL_CHARS = 8000
 
 
+SHIM_PATH = Path(__file__).resolve().with_name("swebench_x86_shim.py")
+ARM_MACHINES = frozenset({"arm64", "aarch64"})
+
+
+def emulation_active(flag: bool, machine: Optional[str] = None) -> bool:
+    """x86_64 emulation applies only when asked for and the host is arm64."""
+    return bool(flag) and (machine or platform.machine()).lower() in ARM_MACHINES
+
+
 def build_verified_command(
     python: str,
     source_id: str,
     predictions_path,
     judge_run_id: str,
     namespace: Optional[str] = None,
+    emulate_x86: bool = False,
 ) -> list:
     cmd = [
-        python, "-m", "swebench.harness.run_evaluation",
+        python, *(
+            [str(SHIM_PATH)] if emulate_x86 else ["-m", "swebench.harness.run_evaluation"]
+        ),
         "--dataset_name", VERIFIED_DATASET,
         "--split", "test",
         "--instance_ids", source_id,
@@ -539,12 +552,19 @@ def judge_swebench_verified(
     run=subprocess.run,
     python: Optional[str] = None,
     timeout: int = 3600,
+    emulate_x86: bool = False,
 ) -> JudgeResult:
-    """Judge a Verified patch with the pinned swebench harness; never raises for valid arguments."""
+    """Judge a Verified patch with the pinned swebench harness; never raises for valid arguments.
+
+    With `emulate_x86` the evaluation runs through the x86_64 shim so an arm64
+    host judges against x86_64 images (the caller decides when that applies).
+    """
     start = time.monotonic()
     task_id = task_spec["id"]
     source_id = task_spec.get("source_id", "")
     extra: dict = {"dataset": VERIFIED_DATASET}
+    if emulate_x86:
+        extra.update(emulated=True, forced_arch="x86_64", pull_platform="linux/amd64")
 
     def done(verdict, reason, final, evidence=None):
         extra["judge_final"] = final
@@ -611,7 +631,9 @@ def judge_swebench_verified(
             }]),
             encoding="utf-8",
         )
-        cmd = build_verified_command(python, source_id, predictions.resolve(), judge_run_id, namespace)
+        cmd = build_verified_command(
+            python, source_id, predictions.resolve(), judge_run_id, namespace, emulate_x86=emulate_x86,
+        )
         with _VERIFIED_JUDGE_LOCK:
             proc = run(cmd, cwd=str(eval_dir), capture_output=True, text=True, timeout=timeout)
         (eval_dir / "judge-stdout.txt").write_text(_tail(getattr(proc, "stdout", "")), encoding="utf-8")
@@ -667,6 +689,7 @@ def judge_task(
         return judge_swebench_verified(
             task_spec, Path(task_dir) / "diff.patch", run_id, evidence_dir or task_dir,
             cell=ctx.get("cell"), snapshot_revision=ctx.get("snapshot_revision"),
+            emulate_x86=bool(ctx.get("emulate_x86", False)),
         )
 
     source = _infer_source(task_id)

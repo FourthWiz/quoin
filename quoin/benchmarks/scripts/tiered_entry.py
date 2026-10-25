@@ -281,6 +281,8 @@ def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool,
         argv.append("--skip-judge")
     if stop_on_invalid:
         argv.append("--stop-on-invalid-quoin")
+    if args.judge_emulation:
+        argv.append("--judge-emulation")
     if args.wall_clock_seconds is not None:
         argv += ["--wall-clock-seconds", str(args.wall_clock_seconds)]
     if args.arm_root is not None:
@@ -494,10 +496,13 @@ def judge_possible(args) -> tuple:
 def deferred_command(res: Resolved) -> str:
     rb = _rb()
     suite = res.args.suite if res.alias_used else str(res.suite_path)
-    return shlex.join([
+    argv = [
         "python3", str(Path(rb.__file__).resolve()), "--suite", suite, "--cells", PAIR,
         "--run-dir", str(res.run_dir), "--run-id", res.run_id, "--judge-only",
-    ])
+    ]
+    if res.args.judge_emulation:
+        argv.append("--judge-emulation")
+    return shlex.join(argv)
 
 
 def print_deferred(res: Resolved, why: str) -> None:
@@ -595,13 +600,21 @@ def _mirrors_ready(res: Resolved) -> bool:
     return all(pin_ref_status_offline(t) == t["base_commit"] for t in verified)
 
 
+def _emulate_x86(res: Resolved) -> bool:
+    from quoin.benchmarks.harness import judge
+
+    return judge.emulation_active(res.args.judge_emulation)
+
+
 def _judge_pending_or_defer(res: Resolved) -> int:
     rb = _rb()
     pending = pending_rows(res)
     ok, why = judge_possible(res.args)
     rc = 0
     if pending and ok:
-        rc = rb._judge_only_main(res.suite_path, res.tasks, res.run_dir, res.run_id)
+        rc = rb._judge_only_main(
+            res.suite_path, res.tasks, res.run_dir, res.run_id, emulate_x86=_emulate_x86(res),
+        )
         if rc:
             print(RERUN_HINT)
     elif pending:
@@ -709,7 +722,9 @@ def orchestrate(args) -> int:
         rc = rb._paired_main(leg_namespace(res, skip_judge=not judge_ok), res.suite_path, res.doc)
         judged = judge_ok and rc == 0
     elif pending_rows(res) and judge_ok:
-        rc = rb._judge_only_main(res.suite_path, res.tasks, res.run_dir, res.run_id)
+        rc = rb._judge_only_main(
+            res.suite_path, res.tasks, res.run_dir, res.run_id, emulate_x86=_emulate_x86(res),
+        )
         judged = rc == 0
     else:
         rc = 0

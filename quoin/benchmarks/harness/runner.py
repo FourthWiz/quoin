@@ -734,6 +734,7 @@ def judge_pending_rows(
     *,
     snapshot_revision: Optional[str] = None,
     judge=None,
+    emulate_x86: bool = False,
 ) -> list:
     """Re-judge Verified rows whose session was recorded but whose verdict is not final."""
     judge = judge if judge is not None else judge_task
@@ -753,7 +754,10 @@ def judge_pending_rows(
                     spec["id"], t_dir, run_id,
                     evidence_dir=t_dir,
                     task_spec=spec,
-                    judge_context={"cell": cell_dir.name, "snapshot_revision": snapshot_revision},
+                    judge_context={
+                        "cell": cell_dir.name, "snapshot_revision": snapshot_revision,
+                        "emulate_x86": emulate_x86,
+                    },
                 )
             except Exception as exc:
                 rows.append({"cell": cell_dir.name, "task_id": spec["id"], "verdict": "error",

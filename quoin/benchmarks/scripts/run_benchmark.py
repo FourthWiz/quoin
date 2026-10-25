@@ -676,7 +676,9 @@ def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
     return 1 if problems else 0
 
 
-def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) -> int:
+def _judge_only_main(
+    suite_path: Path, tasks: list, run_dir: Path, run_id: str, *, emulate_x86: bool = False,
+) -> int:
     """Re-judge recorded Verified sessions whose verdict is not final; spawns no agent."""
     from quoin.benchmarks.harness import runner
     from quoin.benchmarks.harness.aggregate import aggregate_run
@@ -697,6 +699,7 @@ def _judge_only_main(suite_path: Path, tasks: list, run_dir: Path, run_id: str) 
         run_dir, run_id, tasks,
         snapshot_revision=tiered.get("dataset_revision"),
         judge=runner.judge_task,
+        emulate_x86=emulate_x86,
     )
     for row in rows:
         print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
@@ -1215,6 +1218,9 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
         worst = paired_spend.worst_case(cap, len(tasks), len(arms))
         started_at = datetime.datetime.utcnow().isoformat() + "Z"
         from quoin.benchmarks.harness.cells import simple_claude as simple_claude_cell
+        from quoin.benchmarks.harness.judge import emulation_active
+
+        emulate_x86 = emulation_active(args.judge_emulation)
 
         extra = {
             "paired_mode": True,
@@ -1247,6 +1253,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             "effort": simple_claude_cell.BENCH_EFFORT,
             "bench_models": dict(simple_claude_cell.BENCH_MODELS),
             "model_override": os.environ.get("QUOIN_BENCH_CLAUDE_MODEL") or None,
+            "judge_emulation": emulate_x86,
         }
 
         invalid_reasons = list(carried_invalid)
@@ -1286,7 +1293,9 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             return 1
 
         if not args.skip_judge and outcome.stop_reason is None:
-            for row in paired_run.judge_phase(plan, doc["tasks"], tiered.get("dataset_revision")):
+            for row in paired_run.judge_phase(
+                plan, doc["tasks"], tiered.get("dataset_revision"), emulate_x86=emulate_x86,
+            ):
                 print(f"{row['cell']} {row['task_id']} {row['verdict']} final={row['judge_final']}")
         reason = _paired_run_invalid_reason(outcome)
         if reason and reason not in invalid_reasons:
@@ -1519,6 +1528,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated tier names to run from a tiered suite (default: all tiers)",
     )
     parser.add_argument(
+        "--judge-emulation",
+        action="store_true",
+        help="Judge through x86_64 emulation on an arm64 host: the evaluation runs with"
+             " x86_64 images pulled for linux/amd64. No effect on other hosts.",
+    )
+    parser.add_argument(
         "--stop-on-invalid-quoin",
         action="store_true",
         help="Paired suites only: stop before the next spawn when a quoin row did not"
@@ -1586,7 +1601,12 @@ def main() -> None:
     if args.prepare_repos:
         sys.exit(_prepare_repos_main(suite_path, suite))
     if args.judge_only:
-        sys.exit(_judge_only_main(suite_path, suite, args.run_dir, args.run_id))
+        from quoin.benchmarks.harness.judge import emulation_active
+
+        sys.exit(_judge_only_main(
+            suite_path, suite, args.run_dir, args.run_id,
+            emulate_x86=emulation_active(args.judge_emulation),
+        ))
 
     if paired:
         sys.exit(_paired_dry_run(args, suite_path, suite_doc) if args.dry_run

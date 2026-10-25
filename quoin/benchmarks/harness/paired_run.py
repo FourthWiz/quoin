@@ -330,11 +330,14 @@ def _run_pairs(plan: PairedPlan, *, run_task, log) -> PairedOutcome:
     return outcome
 
 
-def judge_phase(plan: PairedPlan, suite_tasks, snapshot_revision, judge=None) -> list:
+def judge_phase(
+    plan: PairedPlan, suite_tasks, snapshot_revision, judge=None, emulate_x86: bool = False,
+) -> list:
     return runner.judge_pending_rows(
         plan.run_dir,
         plan.run_id,
         suite_tasks,
         snapshot_revision=snapshot_revision,
         judge=judge or runner.judge_task,
+        emulate_x86=emulate_x86,
     )
