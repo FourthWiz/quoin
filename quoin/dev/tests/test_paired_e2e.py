@@ -530,3 +530,21 @@ def test_sigterm_stops_cleanly_and_resume_finishes(world):
         _no_leftovers(w)
     finally:
         signal.signal(signal.SIGTERM, previous)
+
+
+def test_quoin_rows_without_a_plan_are_invalid_and_never_judged(world, capsys):
+    w = world
+    _scenario(w, {"quoin_plan": False})
+    assert _run(w) == 0
+    assert len(_starts(w)) == 6
+    for t in w["tasks"]:
+        quoin_row = w["runs"] / "R" / "quoin-claude" / t["id"]
+        session = json.loads((quoin_row / "session.json").read_text())
+        assert session["failure_reason"] == "no-pipeline-artifacts"
+        assert json.loads((quoin_row / "judge.json").read_text())["verdict"] == "invalid"
+        assert not is_judge_pending(quoin_row)
+    assert sorted(w["judged"]) == sorted(("simple-claude", t["id"]) for t in w["tasks"])
+    validity = _summary(w)["tiered"]["validity"]
+    assert validity["valid"] is False
+    assert "quoin arm did not run the pipeline in 3/3 sessions" in validity["invalid_reasons"]
+    _no_leftovers(w)

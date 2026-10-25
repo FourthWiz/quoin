@@ -1472,11 +1472,11 @@ class TestScenarioPromptBranch:
         prompt = _build_prompt(task)
         assert task["target_subsystem"] in prompt
 
-    def test_quoin_cell_prompt_is_identical_apart_from_run_prepend(self, monkeypatch, arm_git_repo, tmp_path):
+    def test_quoin_cell_prompt_is_identical_apart_from_run_prefix(self, monkeypatch, arm_git_repo, tmp_path):
         """Verified against the REAL quoin_claude.invoke() prompt
         construction (not a re-derived literal) so a prepend edit there
-        can't silently drift from this test (D-18: the prepend is
-        `/run --autonomous`, not plain `/run`, per F-11)."""
+        can't silently drift from this test (the prefix is
+        the slash command `/run --autonomous`, not plain `/run`)."""
         from quoin.benchmarks.harness.cells import quoin_claude
         from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
         from quoin.benchmarks.harness.config import BudgetSpec
@@ -1500,7 +1500,7 @@ class TestScenarioPromptBranch:
             quoin_install_script=root / "quoin" / "install.sh", quoin_install_mode="skip",
             arm_root=root, expected_quoin_commit=sha,
         )
-        assert captured["prompt"] == f"Use /run --autonomous end-to-end on this task\n\n{base_prompt}"
+        assert captured["prompt"] == f"/run --autonomous {base_prompt}"
         assert captured["prompt"].endswith(base_prompt)
 
     def test_description_present_but_omitting_subsystem_raises_and_never_spawns(self):

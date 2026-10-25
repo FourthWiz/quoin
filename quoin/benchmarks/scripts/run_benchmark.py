@@ -1078,6 +1078,9 @@ def _paired_preflight(args, suite_path: Path, doc: dict):
     )
 
 
+EXIT_INVALID_QUOIN = 5
+
+
 def _observed_models(run_dir: Path, run_id: str, arms: list) -> dict:
     """Per cell, the sorted union of costable model ids the recorded rows
     reported. Unreadable rows are skipped; the manifest is rewritten as rows
@@ -1199,6 +1202,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
                 authorised=args.authorised_usd, suite_ceiling=suite_ceiling, usd_cap=args.usd_cap,
                 wall_clock_flag=args.wall_clock_seconds, configs=configs, resume=args.resume,
                 identity_recheck={"simple-claude": recheck_plain, "quoin-claude": recheck_quoin},
+                stop_on_invalid_quoin=args.stop_on_invalid_quoin,
             )
         except paired_run.PairedInterrupted as exc:
             print(f"Interrupted by {exc.signal_name} before the run started", file=sys.stderr)
@@ -1303,6 +1307,10 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
         if outcome.stop_reason == "abort":
             print(f"Run aborted: {'; '.join(outcome.abort_detail or [])}", file=sys.stderr)
             return 1
+        if outcome.stop_reason == "invalid-quoin-row":
+            print(f"Run stopped: quoin arm did not run the pipeline on {outcome.abort_task_id}",
+                  file=sys.stderr)
+            return EXIT_INVALID_QUOIN
         if outcome.stop_reason is not None:
             print(f"Run stopped: {outcome.stop_reason}: {'; '.join(outcome.abort_detail or [])}",
                   file=sys.stderr)
@@ -1509,6 +1517,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Comma-separated tier names to run from a tiered suite (default: all tiers)",
+    )
+    parser.add_argument(
+        "--stop-on-invalid-quoin",
+        action="store_true",
+        help="Paired suites only: stop before the next spawn when a quoin row did not"
+             " run the pipeline. The tiered command sets it for its pilot leg.",
     )
     parser.add_argument(
         "--skip-judge",

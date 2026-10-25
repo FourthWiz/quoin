@@ -48,6 +48,7 @@ CHECKOUT_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SUITE = "tiered-small"
 PAIR = "simple-claude,quoin-claude"
 EXIT_PARITY = 4
+EXIT_INVALID_PILOT = 5
 EXIT_UNPRICED = 6
 RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 RERUN_HINT = "re-run `quoin bench tiered` with the same options to continue"
@@ -83,6 +84,7 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
             "  2  refused before spending anything (options, auth, spend ceilings, checkout)\n"
             "  3  a spend guard stopped the run\n"
             "  4  parity stop: the arms differ in permission denials, or denial data is missing\n"
+            "  5  the quoin arm did not run the pipeline in a pilot row (stopped, or refused on a re-run)\n"
             "  6  finished, but a model in the run has no pricing entry (results are invalid)\n"
             "\n"
             "with --clean:\n"
@@ -120,6 +122,9 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
                         help="Continue past a parity stop or missing denial data after reviewing the pilot")
     parser.add_argument("--judge-emulation", action="store_true",
                         help="Judge on an arm64 host through x86_64 emulation instead of deferring")
+    parser.add_argument("--accept-invalid-pilot", action="store_true",
+                        help="Continue past recorded pilot rows where the quoin arm did not run the "
+                             "pipeline; give it on every re-run, it is not remembered")
     parser.add_argument("--skip-judge", action="store_true",
                         help="Run the sessions and leave judging for later")
     parser.add_argument("--wall-clock-seconds", type=int, default=None,
@@ -143,7 +148,7 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
 RUN_ONLY_OPTIONS = (
     "--ignore-parity", "--judge-emulation", "--parity-min-gap", "--parity-min-ratio",
     "--skip-judge", "--pilot-tier", "--wall-clock-seconds", "--arm-root",
-    "--expected-quoin-commit",
+    "--expected-quoin-commit", "--accept-invalid-pilot",
 )
 
 
@@ -260,7 +265,8 @@ def check_resume_ledger(res: Resolved) -> Optional[int]:
     )
 
 
-def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool) -> list:
+def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool,
+             stop_on_invalid: bool = False) -> list:
     """Arguments for one paired leg, parsed by run_benchmark's own parser."""
     args = res.args
     argv = [
@@ -273,6 +279,8 @@ def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool) ->
         argv += ["--tiers", tiers]
     if skip_judge:
         argv.append("--skip-judge")
+    if stop_on_invalid:
+        argv.append("--stop-on-invalid-quoin")
     if args.wall_clock_seconds is not None:
         argv += ["--wall-clock-seconds", str(args.wall_clock_seconds)]
     if args.arm_root is not None:
@@ -284,6 +292,36 @@ def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool) ->
 
 def leg_namespace(res: Resolved, **kw) -> argparse.Namespace:
     return _rb().build_parser().parse_args(leg_argv(res, **kw))
+
+
+def recorded_invalid_pilot_rows(res: Resolved) -> list:
+    """Pilot-tier task ids whose recorded quoin session did not run the pipeline."""
+    from quoin.benchmarks.harness.session_state import INVALID_REASONS, read_session_json
+
+    found = []
+    for task in res.tasks:
+        if task.get("tier") != res.pilot_tier:
+            continue
+        session = read_session_json(res.run_path / "quoin-claude" / task["id"])
+        if session and session.get("failure_reason") in INVALID_REASONS:
+            found.append(task["id"])
+    return found
+
+
+def check_invalid_pilot(res: Resolved) -> Optional[int]:
+    """Refuse to spawn anything while a recorded pilot row is invalid.
+
+    This runs before every spawning leg, not inside the pilot leg: once the last
+    pilot pair is recorded the pilot leg is skipped, and a plain re-run would
+    otherwise spend the full leg on a quoin arm that is known not to work.
+    """
+    ids = recorded_invalid_pilot_rows(res)
+    if not ids or res.args.accept_invalid_pilot:
+        return None
+    print("pilot stopped earlier: the quoin arm did not run /run on "
+          f"{', '.join(ids)}; inspect the rows' transcripts and workflow_artifacts_evidence, "
+          "fix the cause, or re-run with --accept-invalid-pilot (give it on every re-run)")
+    return EXIT_INVALID_PILOT
 
 
 # --- estimate and confirmation ----------------------------------------------
@@ -596,6 +634,10 @@ def orchestrate(args) -> int:
         rc = _judge_pending_or_defer(res)
         return finish(res, rc)
 
+    rc = check_invalid_pilot(res)
+    if rc is not None:
+        return rc
+
     in_pilot = pilot_phase(res, rows_pilot)
     if not in_pilot and not args.ignore_parity:
         verdict = report_parity(res)
@@ -628,9 +670,16 @@ def orchestrate(args) -> int:
     if in_pilot:
         print(f"pilot: {res.pilot_tier} tier, {rows_pilot} sessions")
         rc = rb._paired_main(
-            leg_namespace(res, tiers=res.pilot_tier, skip_judge=True),
+            leg_namespace(res, tiers=res.pilot_tier, skip_judge=True, stop_on_invalid=True),
             res.suite_path, res.doc, quiet_deferred_hint=True,
         )
+        if rc == EXIT_INVALID_PILOT:
+            stopped = recorded_invalid_pilot_rows(res)
+            print("pilot stopped: the quoin arm did not run /run on "
+                  f"{', '.join(stopped) or 'a pilot task'}; inspect the row's transcript and "
+                  "workflow_artifacts_evidence before spending more; re-running refuses until "
+                  "fixed or --accept-invalid-pilot is given (on every re-run)")
+            return rc
         if rc:
             print(RERUN_HINT)
             return rc

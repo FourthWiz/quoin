@@ -414,3 +414,102 @@ def test_fsmonitor_planted_in_clone_never_fires(env):
     _run(env, FakeAdapter(act=act), StubJudge())
     assert not marker.exists()
     assert b"planted" in (_t_dir(env) / "diff.patch").read_bytes()
+
+
+# --- the quoin arm must have run the pipeline -----------------------------------------
+
+class QuoinAdapter(FakeAdapter):
+    """A quoin-cell stand-in that reports the capture fields a real cell sets."""
+
+    def __init__(self, capture=None, cell_extra=None, **kw):
+        super().__init__(**kw)
+        self.capture, self.cell_extra = capture, cell_extra or {}
+
+    def invoke(self, **kw):
+        out = super().invoke(**kw)
+        out["extra"] = {**self.cell_extra, **(self.capture if self.capture is not None else {})}
+        return out
+
+
+NO_PLAN = {"workflow_artifacts_has_plan": False, "workflow_pipeline_started": False}
+WITH_PLAN = {"workflow_artifacts_has_plan": True, "workflow_pipeline_started": True}
+
+
+def test_quoin_row_without_a_plan_is_invalid_and_never_judged(env):
+    judge = StubJudge()
+    res = _run(env, QuoinAdapter(capture=NO_PLAN, act=commit_change), judge, cell="quoin-claude")
+    t = _t_dir(env, "quoin-claude")
+    assert judge.calls == []
+    assert res.verdict == "invalid"
+    session = _json(t / "session.json")
+    assert session["judge_required"] is False
+    assert session["failure_reason"] == "no-pipeline-artifacts"
+    assert session["terminal_state"] == "completed"
+    verdict = _json(t / "judge.json")
+    assert verdict["verdict"] == "invalid"
+    assert verdict["judge_final"] is True and verdict["judged"] is False
+    assert not is_judge_pending(t)
+
+
+def test_quoin_row_with_a_plan_is_judged_as_before(env):
+    judge = StubJudge()
+    res = _run(env, QuoinAdapter(capture=WITH_PLAN, act=commit_change), judge, cell="quoin-claude")
+    assert res.verdict == "pass" and len(judge.calls) == 1
+
+
+def test_quoin_row_without_capture_fields_has_no_pipeline_evidence(env):
+    judge = StubJudge()
+    res = _run(env, QuoinAdapter(capture={}, act=commit_change), judge, cell="quoin-claude")
+    assert res.verdict == "invalid" and judge.calls == []
+    assert _json(_t_dir(env, "quoin-claude") / "session.json")["failure_reason"] == "no-pipeline-evidence"
+
+
+def test_timeout_without_a_plan_keeps_its_reason_and_names_the_stage(env):
+    adapter = QuoinAdapter(
+        capture={**NO_PLAN, "workflow_pipeline_started": True},
+        cell_extra={"failure_reason": "wall-clock-timeout"}, verdict="timeout",
+    )
+    res = _run(env, adapter, StubJudge(), cell="quoin-claude")
+    metrics = _json(_t_dir(env, "quoin-claude") / "metrics.json")
+    assert res.verdict == "invalid"
+    assert metrics["failure_reason"] == "stopped-before-plan"
+    assert metrics["failure_reason_before_invalid"] == "wall-clock-timeout"
+    assert metrics["terminal_state"] == "timeout"
+
+
+def test_budget_halt_without_any_pipeline_trace_is_no_pipeline_artifacts(env):
+    adapter = QuoinAdapter(capture=NO_PLAN, events=_events("budget_halt.jsonl"))
+    res = _run(env, adapter, StubJudge(), cell="quoin-claude")
+    assert res.verdict == "invalid"
+    assert _json(_t_dir(env, "quoin-claude") / "metrics.json")["failure_reason"] == "no-pipeline-artifacts"
+
+
+def test_plain_row_without_the_field_stays_valid(env):
+    judge = StubJudge()
+    res = _run(env, FakeAdapter(act=commit_change), judge)
+    assert res.verdict == "pass" and len(judge.calls) == 1
+
+
+def test_auth_failure_on_the_quoin_arm_is_not_relabelled(env):
+    adapter = QuoinAdapter(events=_events("auth_failure.jsonl"))
+    res = _run(env, adapter, StubJudge(), cell="quoin-claude")
+    session = _json(_t_dir(env, "quoin-claude") / "session.json")
+    assert res.verdict == "error"
+    assert session["failure_reason"] == "auth-failure" and session["terminal_state"] == "error"
+
+
+def test_a_cell_error_verdict_keeps_its_own_reason(env):
+    adapter = QuoinAdapter(cell_extra={"failure_reason": "install-failed"}, verdict="error")
+    res = _run(env, adapter, StubJudge(), cell="quoin-claude")
+    assert res.verdict == "error"
+    assert _json(_t_dir(env, "quoin-claude") / "session.json")["failure_reason"] == "install-failed"
+
+
+def test_a_failed_patch_capture_is_not_relabelled(env, monkeypatch):
+    def too_big(*a, **k):
+        raise repo_prep.RepoPrepError("patch-too-large", "diff exceeds 10 bytes")
+
+    monkeypatch.setattr(runner, "capture_patch", too_big)
+    res = _run(env, QuoinAdapter(capture=NO_PLAN, act=commit_change), StubJudge(), cell="quoin-claude")
+    assert res.verdict == "error"
+    assert _json(_t_dir(env, "quoin-claude") / "metrics.json")["failure_reason"] == "patch-capture-failed"

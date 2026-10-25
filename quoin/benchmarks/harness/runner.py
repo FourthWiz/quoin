@@ -45,9 +45,11 @@ from .result_writer import (
     write_run_result,
 )
 from .session_state import (
+    QUOIN_CELL,
     classify_session,
     is_judge_pending,
     iter_transcript_events,
+    pipeline_validity,
     write_session_json,
 )
 from .verified_prompt import VERIFIED_PROMPT_TEMPLATE_VERSION
@@ -569,6 +571,22 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
                 outcome, terminal_state="error", verdict_if_terminal="error",
                 failure_reason=not_judged_reason, judge_required=False,
             )
+
+        if cell == QUOIN_CELL and outcome.terminal_state != "error":
+            # The cells never set terminal_state; the runner learns it from the
+            # classified outcome, so it is passed in explicitly. Error outcomes
+            # keep their own reason so the systemic abort and respawn rules
+            # still see them.
+            pipeline_ok, invalid_reason = pipeline_validity(
+                cell, {**extra, "terminal_state": outcome.terminal_state},
+            )
+            if not pipeline_ok:
+                if outcome.failure_reason:
+                    extra["failure_reason_before_invalid"] = outcome.failure_reason
+                outcome = dataclasses.replace(
+                    outcome, verdict_if_terminal="invalid",
+                    failure_reason=invalid_reason, judge_required=False,
+                )
 
         (t_dir).mkdir(parents=True, exist_ok=True)
         (t_dir / "judge.json").unlink(missing_ok=True)

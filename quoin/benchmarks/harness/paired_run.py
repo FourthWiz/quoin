@@ -17,7 +17,7 @@ from typing import Callable, Dict, List, Optional
 
 from . import paired_spend, runner
 from .config import BudgetSpec, HarnessConfig
-from .session_state import read_session_json
+from .session_state import INVALID_REASONS, QUOIN_CELL, read_session_json
 from .tiered_report import ABORT_REASONS, RESPAWN_REASONS, SYSTEMIC_REASONS
 
 PAIR_ORDER = ("simple-claude", "quoin-claude")
@@ -85,6 +85,8 @@ class PairedPlan:
     configs: Dict[str, HarnessConfig] = field(default_factory=dict)
     resume: bool = False
     identity_recheck: Dict[str, Callable[[], List[str]]] = field(default_factory=dict)
+    # Stop before the next spawn when a quoin row did not run the pipeline.
+    stop_on_invalid_quoin: bool = False
 
 
 @dataclass
@@ -309,6 +311,13 @@ def _run_pairs(plan: PairedPlan, *, run_task, log) -> PairedOutcome:
             })
             if reason in ABORT_REASONS:
                 outcome.stop_reason = "abort"
+                outcome.abort_detail = [reason]
+                outcome.abort_cell = cell
+                outcome.abort_task_id = task_id
+                outcome.abort_kind = "row"
+                return outcome
+            if plan.stop_on_invalid_quoin and cell == QUOIN_CELL and reason in INVALID_REASONS:
+                outcome.stop_reason = "invalid-quoin-row"
                 outcome.abort_detail = [reason]
                 outcome.abort_cell = cell
                 outcome.abort_task_id = task_id

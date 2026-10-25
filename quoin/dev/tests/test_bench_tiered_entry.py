@@ -993,3 +993,63 @@ def test_unpriced_from_summary_is_empty_for_missing_or_old_summaries(tmp_path, b
     if body is not None:
         (tmp_path / "summary.json").write_text(body)
     assert tiered_entry.unpriced_from_summary(tmp_path) == []
+
+
+# --- pilot validity gate ----------------------------------------------------------------
+
+def test_first_invalid_quoin_pilot_row_stops_after_one_pair(tw, capsys):
+    w = tw
+    _scenario(w, {"quoin_plan": False})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    out = capsys.readouterr().out
+    assert len(_starts(w)) == 2
+    assert "pilot stopped: the quoin arm did not run /run on" in out
+    assert tiered_entry.RERUN_HINT not in out
+    assert "full:" not in out
+
+    _scenario(w, {})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    out = capsys.readouterr().out
+    assert len(_starts(w)) == 2
+    assert "pilot stopped earlier" in out and "--accept-invalid-pilot" in out
+    assert "estimate:" not in out and "prepare:" not in out
+
+    assert _go(w, "--yes", "--accept-invalid-pilot") == 0
+    assert len(_starts(w)) == 2 + 4
+
+
+def test_invalid_row_in_the_last_pilot_pair_blocks_the_full_leg_on_rerun(tw, capsys):
+    w = tw
+    _scenario(w, {"runs": {"4": {"quoin_plan": False}}})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    assert len(_starts(w)) == 4
+    capsys.readouterr()
+
+    _scenario(w, {})
+    assert _go(w, "--yes") == tiered_entry.EXIT_INVALID_PILOT
+    out = capsys.readouterr().out
+    assert len(_starts(w)) == 4
+    assert "parity:" not in out and "prepare:" not in out and "estimate:" not in out
+    assert [c["tiers"] for c in w["calls"]] == ["easy"]
+
+    assert _go(w, "--yes", "--accept-invalid-pilot", "--ignore-parity") == 0
+    assert len(_starts(w)) == 6
+
+
+def test_invalid_full_tier_rows_are_reported_but_never_refuse_a_rerun(tw, capsys):
+    w = tw
+    _scenario(w, {"runs": {"6": {"quoin_plan": False}}})
+    assert _go(w, "--yes") == 0
+    assert len(_starts(w)) == 6
+    validity = json.loads((w["runs"] / "R" / "summary.json").read_text())["tiered"]["validity"]
+    assert validity["invalid_quoin_rows"] and validity["valid"] is False
+    capsys.readouterr()
+    assert _go(w, "--yes") == 0
+    assert len(_starts(w)) == 6
+
+
+def test_check_invalid_pilot_ignores_full_tier_rows(tw):
+    w = tw
+    res = tiered_entry.resolve(tiered_entry.build_parser().parse_args(_argv(w, "--yes")))
+    assert tiered_entry.recorded_invalid_pilot_rows(res) == []
+    assert tiered_entry.check_invalid_pilot(res) is None

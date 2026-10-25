@@ -99,3 +99,45 @@ def test_judge_pending_table(tmp_path):
     assert is_judge_pending(d) is False
     assert read_session_json(d)["schema_version"] == 1
     assert not (d / "session.json.tmp").exists()
+
+
+# --- pipeline validity ---------------------------------------------------------
+
+from quoin.benchmarks.harness.session_state import (  # noqa: E402
+    INVALID_REASONS, pipeline_invalid_reason, pipeline_rule_applies, pipeline_validity,
+)
+
+
+@pytest.mark.parametrize("cell,metrics,expected", [
+    ("simple-claude", {}, (True, None)),
+    ("quoin-claude", {"pre_spawn_error": True}, (True, None)),
+    ("quoin-claude", {"terminal_state": "error"}, (True, None)),
+    ("quoin-claude", {"workflow_artifacts_has_plan": True, "terminal_state": "completed"}, (True, None)),
+    ("quoin-claude", {"workflow_artifacts_has_plan": True, "terminal_state": "timeout"}, (True, None)),
+    ("quoin-claude", {"terminal_state": "completed"}, (False, "no-pipeline-evidence")),
+    ("quoin-claude", {"workflow_artifacts_has_plan": False, "terminal_state": "completed"},
+     (False, "no-pipeline-artifacts")),
+    ("quoin-claude", {"workflow_artifacts_has_plan": False, "terminal_state": "timeout",
+                      "workflow_pipeline_started": True}, (False, "stopped-before-plan")),
+    ("quoin-claude", {"workflow_artifacts_has_plan": False, "terminal_state": "budget_stopped",
+                      "workflow_pipeline_started": True}, (False, "stopped-before-plan")),
+    ("quoin-claude", {"workflow_artifacts_has_plan": False, "terminal_state": "timeout",
+                      "workflow_pipeline_started": False}, (False, "no-pipeline-artifacts")),
+])
+def test_pipeline_validity_truth_table(cell, metrics, expected):
+    assert pipeline_validity(cell, metrics) == expected
+    assert expected[1] is None or expected[1] in INVALID_REASONS
+
+
+def test_rule_applies_only_to_verified_quoin_rows_with_a_session(tmp_path):
+    quoin_dir, plain_dir, other_dir, bare_dir = (tmp_path / n for n in ("q", "p", "o", "b"))
+    write_session_json(quoin_dir, {"source": "swebench_verified", "terminal_state": "completed"})
+    write_session_json(plain_dir, {"source": "swebench_verified"})
+    write_session_json(other_dir, {"source": "quoin_scenario"})
+    bare_dir.mkdir()
+    assert pipeline_rule_applies("quoin-claude", quoin_dir) is True
+    assert pipeline_rule_applies("simple-claude", plain_dir) is False
+    assert pipeline_rule_applies("quoin-claude", other_dir) is False
+    assert pipeline_rule_applies("quoin-claude", bare_dir) is False
+    assert pipeline_invalid_reason("quoin-claude", quoin_dir, {}) == "no-pipeline-evidence"
+    assert pipeline_invalid_reason("quoin-claude", other_dir, {}) is None

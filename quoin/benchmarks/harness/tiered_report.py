@@ -22,14 +22,16 @@ from .cost import (
     load_pricing, resolve_model_pricing,
 )
 from .cost import _CODEX_MODEL_PREFIXES as CODEX_MODEL_PREFIXES
-from .session_state import is_judge_pending
+from .session_state import (
+    INVALID_REASONS, is_judge_pending, pipeline_invalid_reason,
+)
 from .stream_metrics import TOKEN_FIELDS, bucket_has_usage, sum_model_usage
 
 PLAIN_CELL = "simple-claude"
 QUOIN_CELL = "quoin-claude"
 ARMS = (PLAIN_CELL, QUOIN_CELL)
 DEFAULT_TIER_ORDER = ("easy", "medium", "large")
-OUTCOMES = ("pass", "fail", "error", "timeout", "budget_stopped", "not_run")
+OUTCOMES = ("pass", "fail", "error", "timeout", "budget_stopped", "not_run", "invalid")
 IDENTITY_TRIP_REASONS = frozenset({
     "plain-arm-contaminated", "quoin-arm-missing-quoin", "quoin-arm-contaminated",
 })
@@ -141,7 +143,8 @@ def _not_run_row():
         "wall_clock_s": 0.0, "tool_errors": 0, "tool_errors_available": False,
         "stream_metrics_error": None, "tree_sha": None, "failure_reason": None,
         "session_errored": False, "pre_spawn_error": False, "models": [],
-        "unpriced_models": [],
+        "unpriced_models": [], "invalid_reason": None, "post_plan_stop": False,
+        "workflow_route": None,
         "attempts": 1, "first_attempt_pass": False, "final_pass": False,
         "pending_counted_as_error": False, "cap_usd": None, "overshoot_usd": None,
         "permission_denials": None,
@@ -196,8 +199,12 @@ def _unpriced_for_row(row, recorded, pricing):
     return sorted(found)
 
 
-def load_row(task_dir, manifest_model, pricing):
-    """One task-arm row; a missing directory is a `not_run` row."""
+def load_row(task_dir, manifest_model, pricing, cell=None):
+    """One task-arm row; a missing directory is a `not_run` row.
+
+    With `cell`, a quoin row from the Verified runner whose session did not run
+    the pipeline becomes an `invalid` row whatever its judge file says.
+    """
     if task_dir is None or not Path(task_dir).is_dir():
         return _not_run_row()
     task_dir = Path(task_dir)
@@ -273,6 +280,22 @@ def load_row(task_dir, manifest_model, pricing):
     row["permission_denials"] = (
         denials if isinstance(denials, int) and not isinstance(denials, bool) and denials >= 0 else None
     )
+    route = metrics.get("workflow_route")
+    row["workflow_route"] = route if isinstance(route, dict) else None
+    session = _read_json(task_dir / "session.json") or {}
+    terminal = session.get("terminal_state") or metrics.get("terminal_state")
+    row["post_plan_stop"] = (
+        terminal in ("timeout", "budget_stopped")
+        and metrics.get("workflow_artifacts_has_plan") is True
+    )
+    invalid_reason = pipeline_invalid_reason(cell, task_dir, metrics) if cell else None
+    if invalid_reason is not None:
+        row["verdict"] = "invalid"
+        row["invalid_reason"] = invalid_reason
+        row["row_issue"] = None
+        row["judge_pending"] = False
+        row["pending_counted_as_error"] = False
+        row["first_attempt_pass"] = row["final_pass"] = False
     return row
 
 
@@ -280,20 +303,28 @@ def _sum_mean(total, n):
     return {"sum": total, "mean": (total / n) if n else 0.0}
 
 
-def arm_stats(rows):
-    """Statistics over the rows that make up the suite denominator for one arm."""
+def arm_stats(all_rows):
+    """Statistics over the rows that make up the suite denominator for one arm.
+
+    Rows where the quoin arm did not run the pipeline are not evidence, so they
+    are left out of every figure but the outcome counts, which are taken from
+    all of them (`n_suite` is the full count, `n_invalid` the excluded part).
+    """
+    rows = [r for r in all_rows if r["verdict"] != "invalid"]
     n = len(rows)
     passes = sum(1 for r in rows if r["verdict"] == "pass")
     rate = passes / n if n else 0.0
     lo, hi = wilson_interval(passes, n)
     outcomes = {key: 0 for key in OUTCOMES}
-    for r in rows:
+    for r in all_rows:
         outcomes[r["verdict"]] = outcomes.get(r["verdict"], 0) + 1
     caps = [r["cap_usd"] for r in rows if r["cap_usd"] is not None]
     overshoots = [r["overshoot_usd"] for r in rows if r["overshoot_usd"] is not None]
     denials = [r["permission_denials"] for r in rows if r["permission_denials"] is not None]
     return {
         "n": n,
+        "n_suite": len(all_rows),
+        "n_invalid": len(all_rows) - n,
         "passes": passes,
         "cap_usd": max(caps) if caps else None,
         "overshoot_usd_sum": sum(o for o in overshoots if o > 0),
@@ -367,6 +398,8 @@ def _pair_entry(task, rows):
             "tokens": dict(r["tokens"]), "tokens_source": r["tokens_source"],
             "wall_clock_s": r["wall_clock_s"], "tool_errors": r["tool_errors"],
             "tool_errors_available": r["tool_errors_available"], "tree_sha": r["tree_sha"],
+            "invalid_reason": r["invalid_reason"], "post_plan_stop": r["post_plan_stop"],
+            "workflow_route": r["workflow_route"],
         }
     a, b = rows[PLAIN_CELL]["tree_sha"], rows[QUOIN_CELL]["tree_sha"]
     entry["tree_sha_match"] = (a == b) if (a and b) else None
@@ -374,9 +407,14 @@ def _pair_entry(task, rows):
 
 
 def _complete_pairs(entries):
-    done = [e for e in entries if e[PLAIN_CELL]["verdict"] != "not_run" and e[QUOIN_CELL]["verdict"] != "not_run"]
+    invalid = [e for e in entries if "invalid" in (e[PLAIN_CELL]["verdict"], e[QUOIN_CELL]["verdict"])]
+    done = [
+        e for e in entries
+        if e not in invalid
+        and e[PLAIN_CELL]["verdict"] != "not_run" and e[QUOIN_CELL]["verdict"] != "not_run"
+    ]
     n = len(done)
-    out = {"n_pairs": n, "pairs_not_run": len(entries) - n}
+    out = {"n_pairs": n, "pairs_not_run": len(entries) - n - len(invalid), "pairs_invalid": len(invalid)}
     for arm in ARMS:
         passes = sum(1 for e in done if e[arm]["verdict"] == "pass")
         out[arm] = {
@@ -481,6 +519,28 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
     ]
     mismatch_rows = _model_mismatch_rows(manifest, scoped, rows)
 
+    quoin_rows = [(task, rows[QUOIN_CELL][task["id"]]) for task in scoped]
+    split = {reason: [] for reason in INVALID_REASONS}
+    for task, r in quoin_rows:
+        if r["verdict"] == "invalid" and r["invalid_reason"] in split:
+            split[r["invalid_reason"]].append(task["id"])
+    invalid_quoin = sorted(i for ids in split.values() for i in ids)
+    ran_quoin = [task["id"] for task, r in quoin_rows if r["ran"]]
+    post_plan_timeout = [
+        t["id"] for t, r in quoin_rows
+        if r["post_plan_stop"] and r["failure_reason"] != "budget-halt-detected"
+        and r["verdict"] == "timeout"
+    ]
+    post_plan_budget = [
+        t["id"] for t, r in quoin_rows if r["post_plan_stop"] and r["verdict"] == "budget_stopped"
+    ]
+    route_counts = {"fast": 0, "full": 0, "unknown": 0}
+    for _task, r in quoin_rows:
+        if not r["ran"]:
+            continue
+        route = (r["workflow_route"] or {}).get("route")
+        route_counts[route if route in ("fast", "full") else "unknown"] += 1
+
     unexpected = []
     for arm in ARMS:
         arm_dir = Path(run_path) / arm
@@ -496,6 +556,11 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
         sha_match = manifest_sha == suite_sha
 
     invalid = []
+    if invalid_quoin:
+        invalid.append(
+            "quoin arm did not run the pipeline in %d/%d sessions"
+            % (len(invalid_quoin), len(ran_quoin))
+        )
     if lists["identity_trip_rows"]:
         invalid.append("arm identity check failed for %s" % ", ".join(lists["identity_trip_rows"]))
     for reason in manifest.get("run_invalid_reasons") or []:
@@ -548,6 +613,13 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
         "observed_models": _manifest_dict(manifest, "observed_models"),
         "model_mismatch_rows": mismatch_rows if mismatch_rows is not None else [],
         "model_mismatch_checked": mismatch_rows is not None,
+        "invalid_quoin_rows": invalid_quoin,
+        "no_pipeline_artifacts_rows": sorted(split["no-pipeline-artifacts"]),
+        "stopped_before_plan_rows": sorted(split["stopped-before-plan"]),
+        "no_pipeline_evidence_rows": sorted(split["no-pipeline-evidence"]),
+        "post_plan_timeout_rows": sorted(post_plan_timeout),
+        "post_plan_budget_stop_rows": sorted(post_plan_budget),
+        "quoin_route_counts": route_counts,
         "unpriced_models": unpriced,
         "estimate_lower_bound_rows": lower_bound_rows,
         "estimate_lower_bound_note": HAIKU_LONG_PROMPT_NOTE,
@@ -589,7 +661,9 @@ def build_tiered_report(run_path, suite, manifest, suite_sha=None):
     for task in scoped:
         for arm in ARMS:
             task_dir = run_path / arm / task["id"]
-            rows[arm][task["id"]] = load_row(task_dir if task_dir.is_dir() else None, models[arm], pricing)
+            rows[arm][task["id"]] = load_row(
+                task_dir if task_dir.is_dir() else None, models[arm], pricing, cell=arm,
+            )
 
     tiers = {}
     counts = []
@@ -630,10 +704,18 @@ def build_tiered_report(run_path, suite, manifest, suite_sha=None):
             }
             for arm in ARMS
         },
-        "caveat": "Caveat: n=%d tasks (%s) is directional, not statistically significant."
-        % (len(scoped), ", ".join(counts)),
+        "caveat": _caveat(len(scoped), counts, overall),
     }
     return report
+
+
+def _caveat(n_tasks, counts, overall):
+    text = "Caveat: n=%d tasks (%s) is directional, not statistically significant." % (
+        n_tasks, ", ".join(counts))
+    if any(overall[arm]["n_invalid"] for arm in ARMS):
+        text += " Effective n after excluding invalid rows: plain %d, quoin %d." % (
+            overall[PLAIN_CELL]["n"], overall[QUOIN_CELL]["n"])
+    return text
 
 
 def _pct(rate):
@@ -662,11 +744,12 @@ def _group_rows_outcomes(label, group):
             label, arm, str(s["n"]), str(s["passes"]), _pct(s["first_attempt_pass_rate"]),
             _pct(s["final_pass_rate"]), "[%.3f, %.3f]" % (lo, hi),
             str(o["fail"]), str(o["error"]), str(o["timeout"]), str(o["budget_stopped"]), str(o["not_run"]),
+            str(o["invalid"]),
         ])
     d = group["delta"]
     rows.append([
         label, "delta", "", "%+d" % (group[QUOIN_CELL]["passes"] - group[PLAIN_CELL]["passes"]),
-        _pp(d["first_attempt_pass_rate_pp"]), _pp(d["final_pass_rate_pp"]), "", "", "", "", "", "",
+        _pp(d["first_attempt_pass_rate_pp"]), _pp(d["final_pass_rate_pp"]), "", "", "", "", "", "", "",
     ])
     return rows
 
@@ -689,6 +772,13 @@ def _group_rows_cost(label, group):
         "%+d" % d["tool_errors_sum"],
     ])
     return rows
+
+
+def _route_text(quoin_entry):
+    route = quoin_entry.get("workflow_route")
+    if not isinstance(route, dict) or not route.get("route"):
+        return "n/a"
+    return route["route"] + (" (%s)" % route["profile"] if route.get("profile") else "")
 
 
 def render_tiered_markdown(report, format_table):
@@ -727,7 +817,7 @@ def render_tiered_markdown(report, format_table):
     lines.append("### Outcomes by tier")
     lines.append("")
     header = ["Tier", "Arm", "N", "Passes", "First-attempt rate", "Final rate", "95% CI",
-              "fail", "error", "timeout", "budget_stopped", "not_run"]
+              "fail", "error", "timeout", "budget_stopped", "not_run", "invalid"]
     table = [header, ["---"] * len(header)]
     for label, group in groups:
         table.extend(_group_rows_outcomes(label, group))
@@ -763,13 +853,14 @@ def render_tiered_markdown(report, format_table):
     lines.append("")
 
     cp = report["complete_pairs"]
-    if cp["pairs_not_run"] > 0:
+    if cp["pairs_not_run"] > 0 or cp["pairs_invalid"] > 0:
         p, q, d = cp[PLAIN_CELL], cp[QUOIN_CELL], cp["delta"]
         lines.append("### Complete pairs")
         lines.append("")
         lines.append(
-            "Only tasks where both arms ran (%d pairs; %d suite tasks have a missing arm)."
-            % (cp["n_pairs"], cp["pairs_not_run"])
+            "Only tasks where both arms ran (%d pairs; %d suite tasks have a missing arm%s)."
+            % (cp["n_pairs"], cp["pairs_not_run"],
+               ", %d have an invalid quoin row" % cp["pairs_invalid"] if cp["pairs_invalid"] else "")
         )
         lines.append("")
         header = ["Measure", PLAIN_CELL, QUOIN_CELL, "delta"]
@@ -794,7 +885,7 @@ def render_tiered_markdown(report, format_table):
     lines.append("")
     header = ["Task", "Tier", "Plain", "Quoin", "Plain USD", "Quoin USD", "Plain out tok", "Quoin out tok",
               "Plain cache read", "Quoin cache read", "Plain wall s", "Quoin wall s",
-              "Plain tool err", "Quoin tool err", "Tree match"]
+              "Plain tool err", "Quoin tool err", "Tree match", "Quoin route"]
     table = [header, ["---"] * len(header)]
     for e in report["pairs"]:
         a, b = e[PLAIN_CELL], e[QUOIN_CELL]
@@ -813,6 +904,7 @@ def render_tiered_markdown(report, format_table):
             e["task_id"], e["tier"], a["verdict"], b["verdict"], usd(a), usd(b),
             tok(a, "output"), tok(b, "output"), tok(a, "cache_read"), tok(b, "cache_read"),
             "%.1f" % a["wall_clock_s"], "%.1f" % b["wall_clock_s"], err(a), err(b), match,
+            _route_text(b),
         ])
     lines.append(table_text(table))
 
@@ -862,10 +954,14 @@ def render_tiered_markdown(report, format_table):
     for key in ("identity_trip_rows", "systemic_error_rows", "session_errored_rows", "pre_spawn_error_rows",
                 "judge_pending_rows", "unreadable_rows", "unknown_verdict_rows", "stream_metrics_error_rows",
                 "unexpected_task_dirs", "tree_sha_mismatches", "model_mismatch_rows", "unpriced_models",
-                "estimate_lower_bound_rows"):
+                "estimate_lower_bound_rows", "invalid_quoin_rows", "no_pipeline_artifacts_rows",
+                "stopped_before_plan_rows", "no_pipeline_evidence_rows", "post_plan_timeout_rows",
+                "post_plan_budget_stop_rows"):
         items = validity[key]
         suffix = ": %s" % ", ".join(items) if items else ""
         lines.append("%s: %d%s  " % (key, len(items), suffix))
+    rc = validity["quoin_route_counts"]
+    lines.append("Quoin routes: fast %d, full %d, unknown %d  " % (rc["fast"], rc["full"], rc["unknown"]))
     if not validity["model_mismatch_checked"]:
         lines.append("Model mismatch check: not recorded in this run's manifest  ")
     lines.append("Note: %s  " % validity["estimate_lower_bound_note"])
