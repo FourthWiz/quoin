@@ -22,6 +22,7 @@ from .cost import (
     load_pricing, resolve_model_pricing,
 )
 from .cost import _CODEX_MODEL_PREFIXES as CODEX_MODEL_PREFIXES
+from . import patch_size as _patch_size
 from .session_state import (
     INVALID_REASONS, is_judge_pending, pipeline_invalid_reason,
 )
@@ -148,6 +149,7 @@ def _not_run_row():
         "attempts": 1, "first_attempt_pass": False, "final_pass": False,
         "pending_counted_as_error": False, "cap_usd": None, "overshoot_usd": None,
         "permission_denials": None,
+        "patch_size": _patch_size.measure_patch(None),
     }
 
 
@@ -199,6 +201,16 @@ def _unpriced_for_row(row, recorded, pricing):
     return sorted(found)
 
 
+def _patch_size_of(task_dir):
+    try:
+        data = (Path(task_dir) / "diff.patch").read_bytes()
+    except FileNotFoundError:
+        data = None
+    except OSError:
+        return _patch_size._empty("unreadable")
+    return _patch_size.measure_patch(data)
+
+
 def load_row(task_dir, manifest_model, pricing, cell=None):
     """One task-arm row; a missing directory is a `not_run` row.
 
@@ -212,6 +224,7 @@ def load_row(task_dir, manifest_model, pricing, cell=None):
     row["ran"] = True
     row["judge_pending"] = bool(is_judge_pending(task_dir))
     row["pending_counted_as_error"] = False
+    row["patch_size"] = _patch_size_of(task_dir)
 
     judge = _read_json(task_dir / "judge.json")
     verdict = judge.get("verdict") if judge else None
@@ -303,6 +316,42 @@ def _sum_mean(total, n):
     return {"sum": total, "mean": (total / n) if n else 0.0}
 
 
+def _patch_size_stats(rows):
+    """Patch-size sums and means over the given (non-invalid) rows."""
+    sizes = [r["patch_size"] for r in rows]
+    measured = [p for p in sizes if p["status"] in ("ok", "empty")]
+    n = len(measured)
+
+    def total(group, key):
+        return sum(p[group][key] for p in measured)
+
+    return {
+        "n_measured": n,
+        "non_test": {k: total("non_test", k) for k in ("added", "removed", "files")},
+        "test": {k: total("test", k) for k in ("added", "removed", "files")},
+        "binary_files": sum(p["binary_files"] for p in measured),
+        "mean_lines_changed": (sum(p["lines_changed"] for p in measured) / n) if n else None,
+        "mean_non_test_added": (total("non_test", "added") / n) if n else None,
+        "mean_test_added": (total("test", "added") / n) if n else None,
+        "n_empty": sum(1 for p in sizes if p["status"] == "empty"),
+        "n_missing": sum(1 for p in sizes if p["status"] == "missing"),
+        "n_unreadable": sum(1 for p in sizes if p["status"] == "unreadable"),
+    }
+
+
+def _patch_size_delta(plain, quoin):
+    def sub(a, b):
+        return None if a is None or b is None else a - b
+
+    return {
+        "non_test": {k: quoin["non_test"][k] - plain["non_test"][k] for k in ("added", "removed", "files")},
+        "test": {k: quoin["test"][k] - plain["test"][k] for k in ("added", "removed", "files")},
+        "mean_lines_changed": sub(quoin["mean_lines_changed"], plain["mean_lines_changed"]),
+        "mean_non_test_added": sub(quoin["mean_non_test_added"], plain["mean_non_test_added"]),
+        "mean_test_added": sub(quoin["mean_test_added"], plain["mean_test_added"]),
+    }
+
+
 def arm_stats(all_rows):
     """Statistics over the rows that make up the suite denominator for one arm.
 
@@ -344,6 +393,7 @@ def arm_stats(all_rows):
             "sum": sum(r["tool_errors"] for r in rows),
             "available_n": sum(1 for r in rows if r["tool_errors_available"]),
         },
+        "patch_size": _patch_size_stats(rows),
     }
 
 
@@ -368,6 +418,7 @@ def delta(plain, quoin):
             "mean": quoin["wall_clock_s"]["mean"] - plain["wall_clock_s"]["mean"],
         },
         "tool_errors_sum": quoin["tool_errors"]["sum"] - plain["tool_errors"]["sum"],
+        "patch_size": _patch_size_delta(plain["patch_size"], quoin["patch_size"]),
     }
 
 
@@ -400,6 +451,7 @@ def _pair_entry(task, rows):
             "tool_errors_available": r["tool_errors_available"], "tree_sha": r["tree_sha"],
             "invalid_reason": r["invalid_reason"], "post_plan_stop": r["post_plan_stop"],
             "workflow_route": r["workflow_route"],
+            "patch_size": r["patch_size"],
         }
     a, b = rows[PLAIN_CELL]["tree_sha"], rows[QUOIN_CELL]["tree_sha"]
     entry["tree_sha_match"] = (a == b) if (a and b) else None
@@ -774,6 +826,12 @@ def _group_rows_cost(label, group):
     return rows
 
 
+def _mean_text(value, signed=False):
+    if value is None:
+        return "n/a"
+    return ("%+.1f" if signed else "%.1f") % value
+
+
 def _route_text(quoin_entry):
     route = quoin_entry.get("workflow_route")
     if not isinstance(route, dict) or not route.get("route"):
@@ -905,6 +963,49 @@ def render_tiered_markdown(report, format_table):
             tok(a, "output"), tok(b, "output"), tok(a, "cache_read"), tok(b, "cache_read"),
             "%.1f" % a["wall_clock_s"], "%.1f" % b["wall_clock_s"], err(a), err(b), match,
             _route_text(b),
+        ])
+    lines.append(table_text(table))
+
+    lines.append("### Patch size by tier")
+    lines.append("")
+    header = ["Tier", "Arm", "N measured", "Non-test +", "Non-test -", "Non-test files",
+              "Test +", "Test -", "Test files", "Mean lines changed", "Empty", "Missing"]
+    table = [header, ["---"] * len(header)]
+    for label, group in groups:
+        for arm in ARMS:
+            ps = group[arm]["patch_size"]
+            table.append([
+                label, arm, str(ps["n_measured"]),
+                str(ps["non_test"]["added"]), str(ps["non_test"]["removed"]), str(ps["non_test"]["files"]),
+                str(ps["test"]["added"]), str(ps["test"]["removed"]), str(ps["test"]["files"]),
+                _mean_text(ps["mean_lines_changed"]), str(ps["n_empty"]), str(ps["n_missing"]),
+            ])
+        d = group["delta"]["patch_size"]
+        table.append([
+            label, "delta", "",
+            _sint(d["non_test"]["added"]), _sint(d["non_test"]["removed"]), _sint(d["non_test"]["files"]),
+            _sint(d["test"]["added"]), _sint(d["test"]["removed"]), _sint(d["test"]["files"]),
+            _mean_text(d["mean_lines_changed"], signed=True), "", "",
+        ])
+    lines.append(table_text(table))
+    lines.append("_%s Patches that are empty or missing are counted separately; an empty patch counts as 0 lines._"
+                 % _patch_size.TEST_FILE_RULE)
+    lines.append("")
+
+    lines.append("### Patch size per task")
+    lines.append("")
+    header = ["Task", "Tier", "Plain non-test +/-", "Quoin non-test +/-", "Plain test +/-",
+              "Quoin test +/-", "Plain files", "Quoin files", "Plain status", "Quoin status"]
+    table = [header, ["---"] * len(header)]
+    for e in report["pairs"]:
+        a, b = e[PLAIN_CELL]["patch_size"], e[QUOIN_CELL]["patch_size"]
+        table.append([
+            e["task_id"], e["tier"],
+            "+%d/-%d" % (a["non_test"]["added"], a["non_test"]["removed"]),
+            "+%d/-%d" % (b["non_test"]["added"], b["non_test"]["removed"]),
+            "+%d/-%d" % (a["test"]["added"], a["test"]["removed"]),
+            "+%d/-%d" % (b["test"]["added"], b["test"]["removed"]),
+            str(a["files"]), str(b["files"]), a["status"], b["status"],
         ])
     lines.append(table_text(table))
 
