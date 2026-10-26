@@ -197,7 +197,9 @@ statistically significant result. Provenance and the task list are in
 
 The earlier tiered-small run showed that a quoin session can skip the pipeline
 and fix the issue directly. The harness now starts the quoin arm with the slash
-command `/run --autonomous`, records on-disk evidence that the pipeline ran,
+command `/run --autonomous small:` and a line saying the pipeline is required
+(a pilot with the bare slash command still saw a session call an easy issue a
+one-line fix and skip the pipeline), records on-disk evidence that the pipeline ran,
 and treats a quoin session that left no plan as an `invalid` row (see "Invalid
 rows" below). The test suite exercises the whole path offline with a fake
 `claude`, so the first paid run with these changes is the first time the real

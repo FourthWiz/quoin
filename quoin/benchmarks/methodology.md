@@ -26,10 +26,15 @@ For the `quoin-claude` cell, "Quoin" means:
 1. The agent is invoked with `QUOIN_GATE_AUTO_APPROVE=1` AND `QUOIN_BENCHMARK_RUN=1`
    environment variables set; `/gate` honors this pair to auto-emit PASS (see
    [Auto-mode caveats](#auto-mode-caveats) and T-19 gate plumbing).
-2. The prompt starts with the slash command `/run --autonomous`, followed by the
-   task text, so the CLI expands the run skill itself. A prose request to "use
-   /run" left a session free to skip the pipeline (the tiered-small run showed
-   it). The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
+2. The prompt starts with the slash command `/run --autonomous small:`, then one
+   line saying the session benchmarks the quoin workflow so the pipeline is
+   required even for a trivial fix, then the task text, so the CLI expands the
+   run skill itself. A prose request to "use /run" left a session free to skip
+   the pipeline (the tiered-small run showed it), and the bare slash command
+   still let a pilot session decide an easy issue was a one-line fix and skip
+   it. `small:` selects /run's single-pass path (plan, implement, review) for
+   every tier, since each task is one SWE-bench issue; the plain arm's prompt is
+   unchanged. The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
    state is picked up. `--autonomous` is needed because a `--print` session
    cannot answer the run skill's checkpoints.
 3. A clean per-task `.workflow_artifacts/` is initialized from scratch before

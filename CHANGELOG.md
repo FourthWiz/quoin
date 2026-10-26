@@ -6,6 +6,8 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- **The tiered benchmark's quoin arm states that the pipeline is required** (v0.62.1). A pilot showed a quoin session that started with `/run --autonomous` still call an easy issue a one-line fix and solve it directly, without a plan or subagents. The quoin prompt now starts with `/run --autonomous small:` and one line saying the session benchmarks the quoin workflow, so the pipeline runs even when the fix looks trivial. `small:` selects /run's plan, implement and review path for every tier. The plain arm's prompt is unchanged, and a quoin session that still leaves no plan stays an `invalid` row.
+
 - **The live Zellij layout tests no longer fail at random** (v0.60.1). Zellij 0.44.3 often prints nothing, with exit code 0, for `action dump-layout` and sometimes for `action list-panes --json`, so tests that read one answer saw an empty string, an `IndexError` or a `JSONDecodeError`. The harness now asks again until the answer is usable, with a deadline and an error that shows the last reply, and waits for the pane state a test expects instead of sleeping for a fixed time. The live layout and key map harnesses start Zellij with `subprocess` on a pty instead of `pty.fork()` in a process that already runs pytest-timeout's watchdog thread, so the multi-threaded `forkpty()` warning is gone. Teardown finds the test's own Zellij server by its socket path, stops it (SIGTERM, then SIGKILL) before removing the socket dir, and fails the test if it survives instead of leaving an orphan server behind.
 
 ### Changed

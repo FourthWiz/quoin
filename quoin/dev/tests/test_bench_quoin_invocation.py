@@ -37,9 +37,19 @@ def _argv_of(cell, tmp_path, cap):
 def test_quoin_prompt_is_the_run_slash_command_plus_the_base_prompt(tmp_path):
     argv = _argv_of(quoin_claude, tmp_path, 5.5)
     base = _build_prompt(TASK)
-    assert argv[-1] == "/run --autonomous " + base
-    assert argv[-1].startswith("/run --autonomous Resolve the following GitHub issue")
+    assert argv[-1] == quoin_claude.QUOIN_RUN_PREFIX + base
+    assert argv[-1].startswith("/run --autonomous small: ")
+    assert "the /run pipeline is required" in argv[-1]
+    assert "do not fix the issue directly" in argv[-1]
+    assert argv[-1].endswith(base)
     assert "Use /run --autonomous end-to-end" not in argv[-1]
+
+
+def test_quoin_prefix_carries_no_run_control_tokens_beyond_the_profile():
+    # /run strips these from anywhere in its input; the prefix must not add any.
+    body = quoin_claude.QUOIN_RUN_PREFIX[len("/run --autonomous small: "):]
+    for token in ("fast:", "strict:", "medium:", "large:", "max_rounds:", "--resume", "["):
+        assert token not in body
 
 
 def test_plain_prompt_is_unchanged(tmp_path):
