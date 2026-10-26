@@ -140,3 +140,42 @@ def test_pair_precheck_authorised_ceiling_counts_other_runs(tmp_path):
     assert not ok and "authorised-ceiling" in message
     assert ps.spawn_precheck(ledger, 5.5, 66.0)[0]
     assert not ps.spawn_precheck(ledger, 5.5, 65.0)[0]
+
+
+def _read(ledger):
+    return [json.loads(l) for l in ledger.read_text().splitlines()]
+
+
+def test_default_rows_keep_the_paired_shape(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    att = ps.reserve(ledger, "R", "t1", "quoin-claude", 5.0)
+    ps.settle(ledger, att, "R", "t1", "quoin-claude", 5.0, 1.25)
+    for row in _read(ledger):
+        assert row["invocation"] == "paired" and row["gate_id"] == "tiered-paired"
+        assert row["arm"] == "quoin" and row["attempt_id"] == att
+    assert att.startswith("R#quoin-claude#t1#")
+
+
+def test_review_overrides_produce_review_rows(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    kw = dict(invocation="pairwise-review", gate_id="tiered-pairwise-review", arm="review")
+    att = ps.reserve(ledger, "R", "t1", "pairwise-review", 2.0, **kw)
+    ps.settle(ledger, att, "R", "t1", "pairwise-review", 2.0, 0.3, **kw)
+    rows = _read(ledger)
+    assert all(r["arm"] == "review" and r["invocation"] == "pairwise-review"
+               and r["gate_id"] == "tiered-pairwise-review" for r in rows)
+    assert att.startswith("R#pairwise-review#t1#")
+
+
+def test_invocation_filter_folds_only_matching_rows(tmp_path):
+    ledger = tmp_path / "l.jsonl"
+    _write(ledger, "R", "p1", 5.0)
+    _write(ledger, "R", "p1", 5.0, actual=4.0, kind="settlement")
+    kw = dict(invocation="pairwise-review", gate_id="g", arm="review")
+    a1 = ps.reserve(ledger, "R", "t1", "pairwise-review", 2.0, **kw)
+    ps.settle(ledger, a1, "R", "t1", "pairwise-review", 2.0, 0.5, **kw)
+    ps.reserve(ledger, "R", "t2", "pairwise-review", 2.0, **kw)
+    assert spend_ledger.recorded_total(ledger, "R", invocation="pairwise-review") == pytest.approx(2.5)
+    assert spend_ledger.recorded_total(ledger, "R", invocation="paired") == pytest.approx(4.0)
+    assert spend_ledger.recorded_total(ledger, "R") == pytest.approx(6.5)
+    assert spend_ledger.recorded_total(ledger) == pytest.approx(6.5)
