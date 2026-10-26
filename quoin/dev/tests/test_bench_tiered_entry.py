@@ -236,6 +236,16 @@ def test_resolve_defaults(tw):
     assert res.pilot_tier == "easy" and res.tier_names == ["easy", "medium"]
 
 
+def test_resolve_reads_the_balanced_suite_cap_and_ceiling(tw):
+    w = tw
+    res = tiered_entry.resolve(
+        _parsed("--suite", "tiered-balanced", "--repo-root", str(w["checkout"]))
+    )
+    assert res.cap == 35.0 and res.authorised == 3170.0
+    assert res.tier_names == ["easy", "medium", "large"]
+    assert res.suite_path.name == "suite-tiered-balanced.json"
+
+
 def test_relative_explicit_suite_is_made_absolute(tw, monkeypatch):
     w = tw
     monkeypatch.chdir(w["suite"].parent)

@@ -195,6 +195,11 @@ difference as the headline figure. Nine tasks is a directional signal, not a
 statistically significant result. Provenance and the task list are in
 `suite-tiered-small-provenance.md`.
 
+`suite-tiered-balanced.json` is the larger suite: 40 tasks (10 easy, 15 medium,
+15 large) from the same seed and sub-seeds, so it contains every tiered-small
+instance. Select it with `--suite tiered-balanced`. Provenance, the task list
+and the budget derivation are in `suite-tiered-balanced-provenance.md`.
+
 The earlier tiered-small run showed that a quoin session can skip the pipeline
 and fix the issue directly. The harness now starts the quoin arm with the slash
 command `/run --autonomous small:` and a line saying the pipeline is required

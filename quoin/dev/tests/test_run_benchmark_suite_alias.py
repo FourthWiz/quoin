@@ -19,6 +19,13 @@ def test_alias_resolves_to_benchmarks_dir_regardless_of_cwd(tmp_path, monkeypatc
     assert run_benchmark._resolve_suite_arg("tiered-small") == BENCH / "suite-tiered-small.json"
 
 
+def test_balanced_alias_resolves_to_the_committed_suite(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    path = run_benchmark._resolve_suite_arg("tiered-balanced")
+    assert path == BENCH / "suite-tiered-balanced.json"
+    assert path.is_file()
+
+
 @pytest.mark.parametrize(
     "value",
     ["quoin/benchmarks/suite-v1.json", "./x", "suite-v1.json", "/abs/path/suite.json"],

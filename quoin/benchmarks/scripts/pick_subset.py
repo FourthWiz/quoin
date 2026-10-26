@@ -242,11 +242,80 @@ TIERED_SMALL_COST = {
 }
 
 
+# tiered-balanced: 40 tasks (10 easy, 15 medium, 15 large). The token estimates
+# are reused from tiered-small per tier. They are advisory only; the quoin cell
+# budgets on wall_clock_seconds, so a new figure would have no consumer.
+# The wall clock keeps the 1.5x headroom rule over the observed spend rate at the
+# $35 per-session cap.
+TIERED_BALANCED_WALL_CLOCK_SECONDS = 17400
+
+TIERED_BALANCED_SPEC = {
+    "easy": {
+        "label": "<15 min fix",
+        "n": 10,
+        "sub_seed_offset": 101,
+        "wall_clock_seconds": TIERED_BALANCED_WALL_CLOCK_SECONDS,
+        "est_tokens_in": TIERED_SMALL_SPEC["easy"]["est_tokens_in"],
+        "est_tokens_out": TIERED_SMALL_SPEC["easy"]["est_tokens_out"],
+    },
+    "medium": {
+        "label": "15 min - 1 hour",
+        "n": 15,
+        "sub_seed_offset": 102,
+        "wall_clock_seconds": TIERED_BALANCED_WALL_CLOCK_SECONDS,
+        "est_tokens_in": TIERED_SMALL_SPEC["medium"]["est_tokens_in"],
+        "est_tokens_out": TIERED_SMALL_SPEC["medium"]["est_tokens_out"],
+    },
+    "large": {
+        "label": "1-4 hours",
+        "n": 15,
+        "sub_seed_offset": 103,
+        "wall_clock_seconds": TIERED_BALANCED_WALL_CLOCK_SECONDS,
+        "est_tokens_in": TIERED_SMALL_SPEC["large"]["est_tokens_in"],
+        "est_tokens_out": TIERED_SMALL_SPEC["large"]["est_tokens_out"],
+    },
+}
+
+# Cap $35 per session x 40 tasks x 2 arms = $2800 worst case; the ceiling adds
+# 10% and rounds up to a multiple of $10.
+TIERED_BALANCED_COST = {
+    "worst_case_target_usd": 2800,
+    "worst_case_ceiling_usd": 3170,
+    "documented_cap_usd": 35,
+}
+
+TIERED_BALANCED_REVIEW = {
+    "pairwise_review_cap_usd": 2,
+    "pairwise_review_total_cap_usd": 80,
+}
+
+
 PROMPT_TEMPLATE_VERSION = "verified-v1"
 
 _DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 DEFAULT_SNAPSHOT_PATH = _DATA_DIR / "swebench-verified-snapshot.json"
 DEFAULT_PROBLEMS_PATH = _DATA_DIR / "swebench-verified-problems.json"
+DEFAULT_PROBLEMS_PATH_BALANCED = _DATA_DIR / "swebench-verified-problems-tiered-balanced.json"
+
+# The tiered-small entry holds the module dicts themselves, so edits made to
+# them in place stay visible through the registry.
+TIERED_SUITES = {
+    "tiered-small": {
+        "tiers": TIERED_SMALL_SPEC,
+        "cost": TIERED_SMALL_COST,
+        "provenance_file": "quoin/benchmarks/suite-tiered-small-provenance.md",
+        "problems_path": DEFAULT_PROBLEMS_PATH,
+        "extra_tiered_fields": {},
+    },
+    "tiered-balanced": {
+        "tiers": TIERED_BALANCED_SPEC,
+        "cost": TIERED_BALANCED_COST,
+        "provenance_file": "quoin/benchmarks/suite-tiered-balanced-provenance.md",
+        "problems_path": DEFAULT_PROBLEMS_PATH_BALANCED,
+        "extra_tiered_fields": dict(TIERED_BALANCED_REVIEW),
+        "records_problems_file": True,
+    },
+}
 
 SNAPSHOT_FIELDS = ["instance_id", "repo", "base_commit", "difficulty"]
 VERIFIED_SOURCE_FILE = "data/test-00000-of-00001.parquet"
@@ -338,31 +407,36 @@ def load_verified_problems(path, revision: str) -> dict:
     return problems
 
 
-def select_tiered(rows, seed: int) -> dict:
+def select_tiered(rows, seed: int, spec=None) -> dict:
+    if spec is None:
+        spec = TIERED_SMALL_SPEC
     by_label = collections.defaultdict(list)
     for r in rows:
         if r["difficulty"] not in KNOWN_VERIFIED_DIFFICULTIES:
             raise TieredSuiteError(f"unknown difficulty label {r['difficulty']!r}")
         by_label[r["difficulty"]].append(r["instance_id"])
     chosen = {}
-    for tier, spec in TIERED_SMALL_SPEC.items():
-        pool = sorted(by_label.get(spec["label"], []))
-        if len(pool) < spec["n"]:
+    for tier, tier_spec in spec.items():
+        pool = sorted(by_label.get(tier_spec["label"], []))
+        if len(pool) < tier_spec["n"]:
             raise TieredSuiteError(
-                f"tier {tier} needs {spec['n']} instances but only {len(pool)} have label {spec['label']!r}"
+                f"tier {tier} needs {tier_spec['n']} instances but only {len(pool)} have label {tier_spec['label']!r}"
             )
-        rng = random.Random(seed + spec["sub_seed_offset"])
+        rng = random.Random(seed + tier_spec["sub_seed_offset"])
         shuffled = list(pool)
         rng.shuffle(shuffled)
-        chosen[tier] = sorted(shuffled[: spec["n"]])
+        chosen[tier] = sorted(shuffled[: tier_spec["n"]])
     return chosen
 
 
-def build_tiered_suite(snapshot_path, problems_path, seed: int) -> dict:
+def build_tiered_suite(snapshot_path, problems_path, seed: int, suite: str = "tiered-small") -> dict:
+    entry = TIERED_SUITES[suite]
+    spec_map = entry["tiers"]
+    cost = entry["cost"]
     snapshot_path = Path(snapshot_path)
     snap = load_verified_snapshot(snapshot_path)
     problems = load_verified_problems(problems_path, snap["revision"])
-    chosen = select_tiered(snap["rows"], seed)
+    chosen = select_tiered(snap["rows"], seed, spec_map)
     selected = set()
     for ids in chosen.values():
         selected.update(ids)
@@ -375,7 +449,7 @@ def build_tiered_suite(snapshot_path, problems_path, seed: int) -> dict:
         )
     by_id = {r["instance_id"]: r for r in snap["rows"]}
     tasks = []
-    for tier, spec in TIERED_SMALL_SPEC.items():
+    for tier, spec in spec_map.items():
         for rank, iid in enumerate(chosen[tier]):
             row = by_id[iid]
             tasks.append(
@@ -401,11 +475,11 @@ def build_tiered_suite(snapshot_path, problems_path, seed: int) -> dict:
         "snapshot_file": "quoin/benchmarks/data/swebench-verified-snapshot.json",
         "snapshot_sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
         "seed": seed,
-        "sub_seeds": {t: s["sub_seed_offset"] for t, s in TIERED_SMALL_SPEC.items()},
+        "sub_seeds": {t: s["sub_seed_offset"] for t, s in spec_map.items()},
         "prompt_template_version": PROMPT_TEMPLATE_VERSION,
-        "worst_case_target_usd": TIERED_SMALL_COST["worst_case_target_usd"],
-        "worst_case_ceiling_usd": TIERED_SMALL_COST["worst_case_ceiling_usd"],
-        "documented_cap_usd": TIERED_SMALL_COST["documented_cap_usd"],
+        "worst_case_target_usd": cost["worst_case_target_usd"],
+        "worst_case_ceiling_usd": cost["worst_case_ceiling_usd"],
+        "documented_cap_usd": cost["documented_cap_usd"],
         "requires_budget_cap": True,
         "paired_run": True,
         "tiers": {
@@ -416,21 +490,27 @@ def build_tiered_suite(snapshot_path, problems_path, seed: int) -> dict:
                 "est_tokens_in": s["est_tokens_in"],
                 "est_tokens_out": s["est_tokens_out"],
             }
-            for t, s in TIERED_SMALL_SPEC.items()
+            for t, s in spec_map.items()
         },
     }
+    for key, value in entry["extra_tiered_fields"].items():
+        tiered[key] = value
+    if entry.get("records_problems_file"):
+        problems_file = Path(problems_path)
+        tiered["problems_file"] = "quoin/benchmarks/data/" + problems_file.name
+        tiered["problems_sha256"] = hashlib.sha256(problems_file.read_bytes()).hexdigest()
     return {
         "schema_version": 2,
         "description": (
-            f"Quoin benchmark tiered-small task suite: {n_total} SWE-bench Verified"
+            f"Quoin benchmark {suite} task suite: {n_total} SWE-bench Verified"
             " instances stratified by upstream difficulty label (easy, medium, large)."
-            f" Generated deterministically via pick_subset.py --suite tiered-small --seed {seed}"
+            f" Generated deterministically via pick_subset.py --suite {suite} --seed {seed}"
             " from a vendored snapshot."
             " Do not edit manually; regenerate from pick_subset.py."
         ),
         "generated_by": "quoin/benchmarks/scripts/pick_subset.py",
         "seed": seed,
-        "provenance_file": "quoin/benchmarks/suite-tiered-small-provenance.md",
+        "provenance_file": entry["provenance_file"],
         "tiered": tiered,
         "tasks": tasks,
     }
@@ -485,14 +565,15 @@ def problems_from_rows(rows, selected_ids, *, revision) -> dict:
     }
 
 
-def refresh_verified_snapshot(parquet_file, revision, fetched_on, seed, snapshot_path, problems_path) -> None:
+def _read_parquet_rows(parquet_file):
+    """Return (rows, raw_bytes) for the vendored columns plus problem_statement."""
     try:
         import pyarrow.parquet as pq
     except ImportError:
         print(
             "ERROR: --refresh-verified-snapshot needs pyarrow. Install it in a throwaway"
             " environment, for example: uv venv <dir> --python 3.12 &&"
-            " uv pip install --python <dir>/bin/python pyarrow==18.1.0",
+            " uv pip install --python <dir>/bin/python pyarrow",
             file=sys.stderr,
         )
         sys.exit(2)
@@ -505,6 +586,15 @@ def refresh_verified_snapshot(parquet_file, revision, fetched_on, seed, snapshot
         raise TieredSuiteError(f"cannot read required columns from {parquet_file}: {exc}")
     data = table.to_pydict()
     rows = [dict(zip(columns, vals)) for vals in zip(*(data[c] for c in columns))]
+    return rows, raw
+
+
+def refresh_verified_snapshot(parquet_file, revision, fetched_on, seed, snapshot_path, problems_paths) -> None:
+    """Rewrite the snapshot, then every registered suite's problems file.
+
+    problems_paths maps suite name to the file written for it.
+    """
+    rows, raw = _read_parquet_rows(parquet_file)
     snap = snapshot_from_rows(
         rows,
         revision=revision,
@@ -513,15 +603,42 @@ def refresh_verified_snapshot(parquet_file, revision, fetched_on, seed, snapshot
         source_size=len(raw),
         fetched_on=fetched_on,
     )
-    chosen = select_tiered(snap["rows"], seed)
+    outputs = []
+    for name, entry in TIERED_SUITES.items():
+        chosen = select_tiered(snap["rows"], seed, entry["tiers"])
+        selected = [iid for ids in chosen.values() for iid in ids]
+        problems = problems_from_rows(rows, selected, revision=revision)
+        outputs.append((problems_paths[name], problems, len(selected)))
+    _write_text(snapshot_path, render_suite(snap))
+    print(f"Wrote {snapshot_path} ({snap['row_count']} rows)")
+    for path, problems, count in outputs:
+        _write_text(path, render_suite(problems))
+        print(f"Wrote {path} ({count} problems)")
+
+
+def refresh_problems_only(parquet_file, revision, seed, suite, snapshot_path, problems_path) -> None:
+    """Write one suite's problems file without touching the snapshot.
+
+    Refuses unless the parquet bytes and revision match the committed snapshot,
+    so a different upstream release cannot slip in statements that disagree
+    with the committed selection.
+    """
+    snap = load_verified_snapshot(snapshot_path)
+    rows, raw = _read_parquet_rows(parquet_file)
+    digest = hashlib.sha256(raw).hexdigest()
+    if digest != snap.get("source_file_sha256"):
+        raise TieredSuiteError(
+            f"parquet sha256 {digest} does not match the snapshot's source_file_sha256"
+        )
+    if revision != snap["revision"]:
+        raise TieredSuiteError(
+            f"--revision {revision} does not match the snapshot revision {snap['revision']}"
+        )
+    chosen = select_tiered(snap["rows"], seed, TIERED_SUITES[suite]["tiers"])
     selected = [iid for ids in chosen.values() for iid in ids]
     problems = problems_from_rows(rows, selected, revision=revision)
-    _write_text(snapshot_path, render_suite(snap))
     _write_text(problems_path, render_suite(problems))
-    print(
-        f"Wrote {snapshot_path} ({snap['row_count']} rows) and {problems_path}"
-        f" ({len(selected)} problems)"
-    )
+    print(f"Wrote {problems_path} ({len(selected)} problems)")
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -560,7 +677,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--suite",
-        choices=["tiered-small"],
+        choices=sorted(TIERED_SUITES),
         default=None,
         help="Generate a tiered suite from the vendored SWE-bench Verified snapshot (default: v1)",
     )
@@ -573,18 +690,27 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--problems",
         type=Path,
-        default=DEFAULT_PROBLEMS_PATH,
-        help="Vendored problem statements path",
+        default=None,
+        help="Vendored problem statements path (default: the suite's own file)",
     )
     parser.add_argument(
         "--refresh-verified-snapshot",
         action="store_true",
         help="Maintainer mode: rebuild the vendored files from a downloaded parquet file",
     )
+    parser.add_argument(
+        "--problems-only",
+        action="store_true",
+        help="With --refresh-verified-snapshot and --suite: rewrite only that suite's problems file",
+    )
     parser.add_argument("--parquet-file", type=Path, default=None)
     parser.add_argument("--revision", default=None)
     parser.add_argument("--fetched-on", default=None, help="YYYY-MM-DD (default: today, UTC)")
     args = parser.parse_args(argv)
+
+    if args.problems_only and not args.refresh_verified_snapshot:
+        print("ERROR: --problems-only requires --refresh-verified-snapshot", file=sys.stderr)
+        sys.exit(2)
 
     if args.refresh_verified_snapshot:
         if args.parquet_file is None or args.revision is None:
@@ -593,23 +719,48 @@ def main(argv: list[str] | None = None) -> None:
         if not _SHA40.match(args.revision):
             print("ERROR: --revision must be a full 40-character commit SHA", file=sys.stderr)
             sys.exit(2)
+        if args.suite is not None and not args.problems_only:
+            print(
+                "ERROR: --refresh-verified-snapshot with --suite needs --problems-only;"
+                " omit --suite to refresh the snapshot and every suite's problems file",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        if args.suite is None and args.problems is not None:
+            print(
+                "ERROR: --problems names one file; a full refresh writes one per suite."
+                " Use --suite with --problems-only to choose the output path",
+                file=sys.stderr,
+            )
+            sys.exit(2)
         fetched_on = args.fetched_on or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         try:
-            refresh_verified_snapshot(
-                args.parquet_file, args.revision, fetched_on, args.seed,
-                args.snapshot, args.problems,
-            )
+            if args.problems_only:
+                refresh_problems_only(
+                    args.parquet_file, args.revision, args.seed, args.suite, args.snapshot,
+                    args.problems or TIERED_SUITES[args.suite]["problems_path"],
+                )
+            else:
+                refresh_verified_snapshot(
+                    args.parquet_file, args.revision, fetched_on, args.seed, args.snapshot,
+                    {name: e["problems_path"] for name, e in TIERED_SUITES.items()},
+                )
         except (TieredSuiteError, OSError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(2)
         return
 
-    if args.suite == "tiered-small":
+    if args.suite in TIERED_SUITES:
         if args.n_humaneval is not None or args.n_swebench is not None:
-            print("ERROR: --n-humaneval and --n-swebench are not valid with --suite tiered-small", file=sys.stderr)
+            print(f"ERROR: --n-humaneval and --n-swebench are not valid with --suite {args.suite}", file=sys.stderr)
             sys.exit(2)
         try:
-            suite = build_tiered_suite(args.snapshot, args.problems, args.seed)
+            suite = build_tiered_suite(
+                args.snapshot,
+                args.problems or TIERED_SUITES[args.suite]["problems_path"],
+                args.seed,
+                args.suite,
+            )
         except TieredSuiteError as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(2)
