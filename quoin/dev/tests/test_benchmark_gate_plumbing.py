@@ -1476,7 +1476,8 @@ class TestScenarioPromptBranch:
         """Verified against the REAL quoin_claude.invoke() prompt
         construction (not a re-derived literal) so a prepend edit there
         can't silently drift from this test (the prefix is
-        the slash command `/run --autonomous`, not plain `/run`)."""
+        the slash command `/run --autonomous small:` plus a line saying the
+        pipeline is required, not plain `/run`)."""
         from quoin.benchmarks.harness.cells import quoin_claude
         from quoin.benchmarks.harness.cells.simple_claude import _build_prompt
         from quoin.benchmarks.harness.config import BudgetSpec
@@ -1500,7 +1501,8 @@ class TestScenarioPromptBranch:
             quoin_install_script=root / "quoin" / "install.sh", quoin_install_mode="skip",
             arm_root=root, expected_quoin_commit=sha,
         )
-        assert captured["prompt"] == f"/run --autonomous {base_prompt}"
+        assert captured["prompt"] == f"{quoin_claude.QUOIN_RUN_PREFIX}{base_prompt}"
+        assert captured["prompt"].startswith("/run --autonomous small: ")
         assert captured["prompt"].endswith(base_prompt)
 
     def test_description_present_but_omitting_subsystem_raises_and_never_spawns(self):

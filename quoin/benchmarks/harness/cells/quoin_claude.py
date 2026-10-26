@@ -10,10 +10,11 @@ Key differences from simple_claude.py:
      followed by /init_workflow in non-interactive mode.
   2. Sets QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id> in the
      subprocess environment. Both must be set for /gate to auto-approve.
-  3. Starts the prompt with the slash command `/run --autonomous`, so the CLI
-     expands the run skill itself and the pipeline starts without the model
-     having to decide to invoke it (a prose request to "use /run" left a
-     session free to skip the pipeline and fix the issue directly). `/run`'s
+  3. Starts the prompt with the slash command `/run --autonomous small:` and a
+     line saying the pipeline is required, so the CLI expands the run skill
+     itself (a prose request to "use /run" left a session free to skip the
+     pipeline, and the bare slash command still let a session decide an easy
+     issue was too small for it and fix it directly). `/run`'s
      SKILL.md has no non-interactive path of its own for gates, so
      `--autonomous` is required: a `--print` session cannot answer its
      checkpoints. `--autonomous` is present in both arms' `run/SKILL.md` and
@@ -80,6 +81,17 @@ from .simple_claude import (
 
 ENV_GATE_AUTO_APPROVE = "QUOIN_GATE_AUTO_APPROVE"
 ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
+
+# The slash command alone still let a session judge an easy issue too small for
+# the pipeline and fix it directly, so the arm also states that the pipeline is
+# the thing under test. `small:` picks /run's own path for a single-issue fix
+# (plan, implement, review) instead of leaving the profile to triage.
+QUOIN_RUN_PREFIX = (
+    "/run --autonomous small: "
+    "This session benchmarks the quoin workflow, so the /run pipeline is required: "
+    "run its phases (plan, implement, review) even if the fix looks trivial, and "
+    "do not fix the issue directly outside the pipeline.\n\n"
+)
 
 
 _INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
@@ -370,12 +382,11 @@ def invoke(
     """
     model = _get_model()
     base_prompt = _build_prompt(task_spec)
-    # Slash-command dispatch: the CLI expands `/run` into the prompt, so the
-    # pipeline starts regardless of what the model would have chosen. A `--print`
+    # Slash-command dispatch: the CLI expands `/run` into the prompt. A `--print`
     # session cannot answer /run's interactive checkpoints, hence --autonomous.
     # The fixture clone's remote is stripped as belt-and-braces containment for
     # the /implement + /end_of_task capability --autonomous grants.
-    prompt = f"/run --autonomous {base_prompt}"
+    prompt = f"{QUOIN_RUN_PREFIX}{base_prompt}"
 
     result: dict = {
         "prompt": prompt,
