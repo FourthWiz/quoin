@@ -442,3 +442,57 @@ def test_report_counts_invalid_separately_and_markdown_text(tmp_path):
     assert "## Blind pairwise review (secondary measure)" in md
     assert "never affects `resolved`" in md and "invalid replies are final" in md
     assert "1 is lowest risk" in md
+
+
+# --- aggregation: the review is its own section and never moves resolved -----------------
+
+def _tiered_with_patches(tmp_path):
+    from aggregate_fixtures import build_tiered_run
+
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run = run_dir / run_id
+    for task in ("e1", "e2", "m1"):
+        for cell, n in (("simple-claude", 2), ("quoin-claude", 4)):
+            (run / cell / task / "diff.patch").write_text(patch_for(f"src/{task}.py", n))
+    suite = json.loads(Path(suite_path).read_text())
+    return run_dir, run_id, run, suite_path, suite
+
+
+def test_review_section_and_summary_key_appear_only_with_the_file(tmp_path):
+    from quoin.benchmarks.harness import aggregate
+
+    run_dir, run_id, run, suite_path, suite = _tiered_with_patches(tmp_path)
+    plain = aggregate.aggregate_run(run_dir, run_id, suite_path=suite_path)
+    assert "pairwise_review" not in plain
+    assert "Blind pairwise review" not in (run / "summary.md").read_text()
+    rc, _ = go(run, suite, tmp_path / "led.jsonl", FakeReviewer())
+    assert rc == 0
+    with_review = aggregate.aggregate_run(run_dir, run_id, suite_path=suite_path)
+    assert with_review["pairwise_review"]["counts"]["quoin_preferred"] + \
+        with_review["pairwise_review"]["counts"]["plain_preferred"] == 3
+    assert "## Blind pairwise review (secondary measure)" in (run / "summary.md").read_text()
+
+
+def test_resolved_figures_are_invariant_to_the_review_file(tmp_path):
+    from quoin.benchmarks.harness import aggregate
+
+    run_dir, run_id, run, suite_path, suite = _tiered_with_patches(tmp_path)
+    base = aggregate.aggregate_run(run_dir, run_id, suite_path=suite_path)["tiered"]
+    go(run, suite, tmp_path / "led.jsonl", FakeReviewer())
+    with_file = aggregate.aggregate_run(run_dir, run_id, suite_path=suite_path)["tiered"]
+    state = json.loads((run / pr.STATE_FILE).read_text())
+    for rec in state["tasks"].values():
+        if rec.get("reply"):
+            rec["reply"]["preference"] = "B" if rec["reply"]["preference"] == "A" else "A"
+    (run / pr.STATE_FILE).write_text(json.dumps(state))
+    altered = aggregate.aggregate_run(run_dir, run_id, suite_path=suite_path)["tiered"]
+    assert base == with_file == altered
+
+
+def test_a_broken_review_file_is_recorded_not_raised(tmp_path):
+    from quoin.benchmarks.harness import aggregate
+
+    run_dir, run_id, run, suite_path, suite = _tiered_with_patches(tmp_path)
+    (run / pr.STATE_FILE).write_text(json.dumps({"tasks": {"e1": {"status": "reviewed", "reply": "bad"}}}))
+    summary = aggregate.aggregate_run(run_dir, run_id, suite_path=suite_path)
+    assert "tiered" in summary and "pairwise_review" in summary

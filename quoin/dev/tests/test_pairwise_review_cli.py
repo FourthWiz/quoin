@@ -223,3 +223,33 @@ def test_run_refreshes_the_summary(env, monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "_refresh_summary", lambda *a: calls.append(a))
     assert cli.main(args(env, "--yes")) == 0 and len(calls) == 1
+
+
+def test_summary_files_gain_the_review_after_a_run(tmp_path, monkeypatch):
+    from aggregate_fixtures import build_tiered_run, write_manifest, suite_sha
+
+    monkeypatch.setattr(cli, "make_reviewer", lambda effort, run_id: Fake())
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run = run_dir / run_id
+    for cell, n in (("simple-claude", 1), ("quoin-claude", 3)):
+        (run / cell / "e1" / "diff.patch").write_text(
+            f"diff --git a/s.py b/s.py\n--- a/s.py\n+++ b/s.py\n@@ -0,0 +1,{n} @@\n" + "+x\n" * n
+        )
+    for cell in ("simple-claude", "quoin-claude"):
+        for task in ("e2", "m1", "m2", "l1"):
+            d = run / cell / task
+            if d.is_dir():
+                (d / "session.json").write_text('{"schema_version": 1}')
+        (run / cell / "e1" / "session.json").write_text('{"schema_version": 1}')
+    suite = json.loads(Path(suite_path).read_text())
+    suite["tasks"] = [t for t in suite["tasks"] if t["id"] == "e1"]
+    Path(suite_path).write_text(json.dumps(suite))
+    write_manifest(run, run_id=run_id, suite_path=suite_path, suite_sha=suite_sha(suite_path),
+                   simple_claude_model="opus-x", effort="high", spend_ledger=tmp_path / "l.jsonl")
+    rc = cli.main(["--run-id", run_id, "--run-dir", str(run_dir), "--yes",
+                   "--max-review-usd", "2", "--max-review-total-usd", "10", "--authorised-usd", "100"])
+    assert rc == 0
+    summary = json.loads((run / "summary.json").read_text())
+    assert summary["pairwise_review"]["counts"]["quoin_preferred"] + \
+        summary["pairwise_review"]["counts"]["plain_preferred"] == 1
+    assert "## Blind pairwise review (secondary measure)" in (run / "summary.md").read_text()

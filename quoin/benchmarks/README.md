@@ -210,6 +210,49 @@ rows" below). The test suite exercises the whole path offline with a fake
 `claude`, so the first paid run with these changes is the first time the real
 CLI, the real permission rules and the real judge meet in this form.
 
+### Secondary measures: patch size and blind pairwise review
+
+The primary metric stays SWE-bench Verified `resolved`. Two secondary measures
+sit beside it and never change it.
+
+Patch size. Each row's `diff.patch` is measured for added and removed lines
+and touched files, split into test and non-test files, and shown per arm, per
+tier and per task in the tiered report and `summary.json`. A file counts as a
+test file when a directory in its path is named `tests`, `test` or `testing`,
+or its name starts with `test_`, ends with `_test.py`, equals or ends with
+`tests.py`, or is `conftest.py`. Empty and missing patches are counted
+separately.
+
+Blind pairwise review. After a run is finished and judged, a reviewer sees the
+issue text and both arms' patches in a seeded A/B order with the arm hidden. It
+rates each patch from 1 to 5 on correctness risk (1 lowest risk), minimality
+(5 most minimal) and test quality (5 best), and picks a preference or a tie.
+Run it only after judging:
+
+```bash
+python3 quoin/benchmarks/scripts/pairwise_review.py --run-id <run-id>
+```
+
+`quoin bench tiered` prints this command after a clean, fully judged finish.
+Notes:
+
+- Spend goes through the run's spend ledger. The per-review cap and the review
+  total cap come from the suite (`$2` and `$80` for tiered-balanced) or from
+  `--max-review-usd` and `--max-review-total-usd`. The run-level ceiling is
+  `--authorised-usd`, else the manifest's `authorised_usd`, else the suite
+  ceiling. A run started with a higher cap needs the matching ceiling.
+- The reviewer model defaults to the run's plain-arm model; `--effort` falls
+  back to the manifest's effort, and the command refuses when neither exists.
+- The review is written to `pairwise-review.json` in the run directory and
+  resumes: finished reviews are not sent again. Replies that do not fit the
+  schema are recorded as invalid; invalid replies are final and are not
+  retried (a retry flag is a possible later addition).
+- A lock file `pairwise-review.lock` prevents two reviews at once. If a review
+  process died, remove the file by hand once no review process is alive.
+- Style or size can still reveal the arm to the reviewer, and a reviewer can
+  favour the first or second position. The report counts both preferences by
+  position so a bias is visible; the review is supporting evidence only.
+
 ### Models, effort and aliases
 
 Both arms run `claude-opus-5-5` at `--effort high`. The model table lives in

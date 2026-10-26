@@ -283,6 +283,7 @@ def aggregate_run(
     }
 
     tiered_md = _build_tiered_section(summary, run_path, suite_path)
+    review_md = _build_review_section(summary, run_path, suite_path)
 
     # Write summary.json
     summary_json_path = run_path / "summary.json"
@@ -295,6 +296,8 @@ def aggregate_run(
     summary_md = _render_markdown_report(summary, cells_data, run_id)
     if tiered_md:
         summary_md = summary_md + tiered_md
+    if review_md:
+        summary_md = summary_md + review_md
     summary_md_path = run_path / "summary.md"
     summary_md_path.write_text(summary_md, encoding="utf-8")
 
@@ -345,6 +348,36 @@ def _build_tiered_section(summary: dict, run_path: Path, suite_path: Optional[Pa
         return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
     summary["tiered"] = tiered
     return tiered_md
+
+
+def _build_review_section(summary: dict, run_path: Path, suite_path: Optional[Path]) -> str:
+    """Add the pairwise review to `summary` when the run has a review file.
+
+    Kept apart from the tiered report on purpose: nothing here is read by
+    `build_tiered_report`, so the review cannot move a pass count. Any failure
+    is recorded under `summary["pairwise_review"]` and never raised.
+    """
+    try:
+        from . import pairwise_review, tiered_report
+
+        if not (Path(run_path) / pairwise_review.STATE_FILE).is_file():
+            return ""
+        manifest = tiered_report.read_manifest(run_path)
+        suite_file = Path(suite_path) if suite_path is not None else (
+            Path(manifest["suite_path"]) if manifest.get("suite_path") else None
+        )
+        suite = json.loads(suite_file.read_text(encoding="utf-8")) if suite_file else {"tasks": []}
+        report = pairwise_review.build_review_report(run_path, suite)
+        if report is None:
+            return ""
+        json.dumps(report)
+        review_md = pairwise_review.render_review_markdown(report, _format_md_table)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
+        summary["pairwise_review"] = {"error": error}
+        return f"\n## Blind pairwise review (secondary measure)\n\n_Review report unavailable: {error}_\n"
+    summary["pairwise_review"] = report
+    return review_md
 
 
 def _render_markdown_report(
