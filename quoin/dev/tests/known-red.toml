@@ -65,3 +65,17 @@ reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process
 added = "2026-10-23"
 issue = "IVG-300"
 owner = "ivgo"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_stream_deck_shape_titles"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-27"
+issue = "IVG-300"
+owner = "ivgo"
+
+[[entry]]
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_swap_layouts_cycle_and_return"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-27"
+issue = "IVG-300"
+owner = "ivgo"
