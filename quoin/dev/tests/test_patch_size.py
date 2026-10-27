@@ -154,3 +154,10 @@ def test_test_path_classification(path, expected):
 
 def test_rule_sentence_names_the_conventions():
     assert "conftest.py" in patch_size.TEST_FILE_RULE
+
+
+def test_out_of_range_octal_escape_is_unreadable():
+    with pytest.raises(patch_size._Unreadable):
+        patch_size._unquote('"\\777.py"')
+    patch = 'diff --git "a/\\777.py" "b/\\777.py"\n--- "a/\\777.py"\n+++ "b/\\777.py"\n@@ -1 +1 @@\n-a\n+b\n'
+    assert patch_size.measure_patch(patch.encode())["status"] == "unreadable"

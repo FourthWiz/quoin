@@ -3751,7 +3751,7 @@ def main(argv: list[str] | None = None) -> int:
     # Every selected test failed to collect, none ran, and the same tests fail
     # to collect without the change: the interpreter or runner cannot load this
     # project, so the result says nothing about the change. A change that
-    # breaks collection still collects at the baseline and stays RED (R-06).
+    # breaks collection still collects at the baseline and stays RED.
     if (
         code == 1
         and junit_dir is not None

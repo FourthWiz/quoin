@@ -711,6 +711,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.problems_only and not args.refresh_verified_snapshot:
         print("ERROR: --problems-only requires --refresh-verified-snapshot", file=sys.stderr)
         sys.exit(2)
+    if args.problems_only and args.suite is None:
+        print("ERROR: --problems-only needs --suite to name the problems file to refresh", file=sys.stderr)
+        sys.exit(2)
 
     if args.refresh_verified_snapshot:
         if args.parquet_file is None or args.revision is None:

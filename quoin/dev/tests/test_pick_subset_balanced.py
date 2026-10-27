@@ -313,3 +313,15 @@ def test_full_refresh_rejects_a_problems_override(refresh_env):
             "--problems", str(refresh_env["tmp"] / "p.json"),
         ])
     assert exc.value.code == 2
+
+
+def test_problems_only_without_suite_is_refused(refresh_env, capsys):
+    with pytest.raises(SystemExit) as exc:
+        pick_subset.main([
+            "--refresh-verified-snapshot", "--problems-only",
+            "--parquet-file", str(refresh_env["parquet"]), "--revision", REV,
+            "--snapshot", str(refresh_env["snapshot"]),
+        ])
+    assert exc.value.code == 2
+    assert "--suite" in capsys.readouterr().err
+    assert not refresh_env["snapshot"].exists()
