@@ -236,6 +236,16 @@ def test_resolve_defaults(tw):
     assert res.pilot_tier == "easy" and res.tier_names == ["easy", "medium"]
 
 
+def test_resolve_reads_the_balanced_suite_cap_and_ceiling(tw):
+    w = tw
+    res = tiered_entry.resolve(
+        _parsed("--suite", "tiered-balanced", "--repo-root", str(w["checkout"]))
+    )
+    assert res.cap == 35.0 and res.authorised == 3170.0
+    assert res.tier_names == ["easy", "medium", "large"]
+    assert res.suite_path.name == "suite-tiered-balanced.json"
+
+
 def test_relative_explicit_suite_is_made_absolute(tw, monkeypatch):
     w = tw
     monkeypatch.chdir(w["suite"].parent)
@@ -1121,3 +1131,72 @@ def test_a_fresh_arm64_run_records_the_emulation_decision(tw, monkeypatch):
 
 def test_invalid_pilot_exit_code_matches_the_paired_runner():
     assert tiered_entry.EXIT_INVALID_PILOT == run_benchmark.EXIT_INVALID_QUOIN
+
+
+# --- review hint ---------------------------------------------------------------------
+
+HINT = "pairwise_review.py"
+
+
+def test_review_hint_follows_a_clean_full_run(tw, capsys):
+    w = tw
+    assert _go(w, "--yes") == 0
+    out = capsys.readouterr().out
+    assert HINT in out and "--run-id R" in out
+    assert out.index("results: final") < out.index(HINT)
+    assert "--run-dir" in out
+
+
+def test_review_hint_follows_a_judge_only_rerun_and_the_early_branch(tw, capsys):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    out = capsys.readouterr().out
+    assert HINT not in out
+    assert _go(w, "--yes") == 0
+    assert HINT in capsys.readouterr().out
+    assert _go(w, "--yes") == 0
+    assert HINT in capsys.readouterr().out
+
+
+def test_review_hint_is_absent_on_a_spend_stop_and_a_failed_judge_pass(tw, monkeypatch, capsys):
+    w = tw
+    assert _go(w, "--yes", "--skip-judge") == 0
+    shutil.rmtree(w["runs"] / "R" / "quoin-claude" / "verified_medium_001")
+    capsys.readouterr()
+    monkeypatch.setattr(run_benchmark, "_paired_main", lambda *a, **k: 3)
+    assert _go(w, "--yes") == 3
+    assert HINT not in capsys.readouterr().out
+
+
+def test_review_hint_is_absent_after_an_interrupt(tw, capsys):
+    w = tw
+    assert _interrupted(w, 2, 2) == 1
+    assert HINT not in capsys.readouterr().out
+
+
+def test_review_hint_is_absent_while_judging_is_pending(tw, capsys):
+    w = tw
+    w["monkeypatch"].setattr(tiered_entry, "judge_possible", lambda args: (False, "no docker"))
+    assert _go(w, "--yes") == 0
+    out = capsys.readouterr().out
+    assert "judge: deferred" in out and HINT not in out
+
+
+def test_review_hint_is_printed_for_an_unpriced_model_exit(tw, capsys):
+    w = tw
+    _scenario(w, {"model_usage": _usage(OPUS_5_5, "claude-opus-9-9")})
+    assert _go(w, "--yes") == tiered_entry.EXIT_UNPRICED
+    assert HINT in capsys.readouterr().out
+
+
+def test_review_hint_skips_a_foreign_row_without_a_second_refusal(tw, capsys):
+    w = tw
+    assert _go(w, "--yes") == 0
+    capsys.readouterr()
+    res = tiered_entry.resolve(_parsed(*_argv(w)))
+    row = w["runs"] / "R" / "quoin-claude" / "verified_medium_001"
+    (row / "session.json").unlink()
+    (row / "metrics.json").write_text('{"task_id": "x"}')
+    tiered_entry.print_review_hint(res, 0)
+    captured = capsys.readouterr()
+    assert HINT not in captured.out and "REFUSED" not in captured.err

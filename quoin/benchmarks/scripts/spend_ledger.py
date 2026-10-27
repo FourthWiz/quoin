@@ -91,12 +91,13 @@ def positive_finite_float(raw: str) -> float:
     return value
 
 
-def recorded_total(path: Path, run_id: Optional[str] = None) -> float:
+def recorded_total(path: Path, run_id: Optional[str] = None, invocation: Optional[str] = None) -> float:
     """Sum of all recorded spend, folded per `attempt_id`.
 
     With `run_id` given, only rows carrying that exact `run_id` are folded
     (same rules, same validation); rows of other runs, probes included, are
-    ignored. Without it every row counts.
+    ignored. Without it every row counts. With `invocation` given, only rows
+    carrying that exact `invocation` are folded, with the same validation.
 
     Each `attempt_id` group contributes its settlement's `actual_usd` when
     a settlement exists for it, and its reservation's `cap_usd` otherwise
@@ -114,6 +115,8 @@ def recorded_total(path: Path, run_id: Optional[str] = None) -> float:
         if not attempt_id:
             continue
         if run_id is not None and row.get("run_id") != run_id:
+            continue
+        if invocation is not None and row.get("invocation") != invocation:
             continue
         group = groups.setdefault(attempt_id, {"reservation": None, "settlement": None})
         if row.get("kind") == "settlement":

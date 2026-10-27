@@ -812,3 +812,90 @@ def test_tiered_small_reaggregation(tmp_path):
     )
     assert union == quoin_ids
     assert _snapshot(TIERED_SMALL) == before
+
+
+# --- patch size ------------------------------------------------------------
+
+def _patch_text(path, removed, added):
+    body = "".join(f"-o{i}\n" for i in range(removed)) + "".join(f"+n{i}\n" for i in range(added))
+    return (
+        f"diff --git a/{path} b/{path}\nindex 1..2 100644\n--- a/{path}\n+++ b/{path}\n"
+        f"@@ -1,{removed} +1,{added} @@\n{body}"
+    )
+
+
+def _patch_run(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    (run_path / "simple-claude" / "e1" / "diff.patch").write_text(
+        _patch_text("src/a.py", 2, 5) + _patch_text("tests/test_a.py", 0, 12)
+    )
+    (run_path / "simple-claude" / "e2" / "diff.patch").write_bytes(b"")
+    (run_path / "quoin-claude" / "e1" / "diff.patch").write_text(
+        _patch_text("src/a.py", 1, 3) + _patch_text("tests/test_a.py", 0, 20) + _patch_text("docs/x.md", 0, 4)
+    )
+    aggregate.aggregate_run(run_dir, run_id)
+    summary = json.loads((run_path / "summary.json").read_text())
+    return run_path, summary, (run_path / "summary.md").read_text()
+
+
+def test_patch_size_json_per_row_arm_tier_overall_and_delta(tmp_path):
+    _, summary, _ = _patch_run(tmp_path)
+    t = summary["tiered"]
+    e1 = next(p for p in t["pairs"] if p["task_id"] == "e1")
+    assert e1[PLAIN_CELL]["patch_size"]["non_test"] == {"added": 5, "removed": 2, "files": 1}
+    assert e1[PLAIN_CELL]["patch_size"]["test"] == {"added": 12, "removed": 0, "files": 1}
+    assert e1[QUOIN_CELL]["patch_size"]["non_test"] == {"added": 7, "removed": 1, "files": 2}
+
+    easy = t["tiers"]["easy"]
+    ps, qs = easy[PLAIN_CELL]["patch_size"], easy[QUOIN_CELL]["patch_size"]
+    assert ps["n_measured"] == 2 and ps["n_empty"] == 1 and ps["n_missing"] == 0
+    assert ps["non_test"] == {"added": 5, "removed": 2, "files": 1}
+    assert ps["mean_lines_changed"] == pytest.approx(19 / 2)
+    assert ps["mean_non_test_added"] == pytest.approx(2.5) and ps["mean_test_added"] == pytest.approx(6.0)
+    assert qs["n_measured"] == 1 and qs["n_missing"] == 1
+    assert qs["test"] == {"added": 20, "removed": 0, "files": 1}
+    d = easy["delta"]["patch_size"]
+    assert d["non_test"] == {"added": 2, "removed": -1, "files": 1}
+    assert d["test"]["added"] == 8
+    assert d["mean_lines_changed"] == pytest.approx(28 - 9.5)
+
+    overall = t["overall"]
+    assert overall[PLAIN_CELL]["patch_size"]["n_missing"] == 3
+    assert overall[QUOIN_CELL]["patch_size"]["n_missing"] == 4
+
+
+def test_patch_size_none_means_when_nothing_is_measured(tmp_path):
+    _, summary, _ = _aggregate(tmp_path)
+    large = summary["tiered"]["tiers"]["large"]
+    assert large[PLAIN_CELL]["patch_size"]["mean_lines_changed"] is None
+    assert large["delta"]["patch_size"]["mean_lines_changed"] is None
+    assert large[PLAIN_CELL]["patch_size"]["n_missing"] == 1
+
+
+def test_patch_size_markdown_tables_and_rule(tmp_path):
+    _, _, md = _patch_run(tmp_path)
+    assert "### Patch size by tier" in md and "### Patch size per task" in md
+    assert "A file counts as a test file when" in md
+    assert "Mean lines changed" in md
+
+
+def test_existing_headings_are_unchanged_by_patch_size(tmp_path):
+    _, summary, md = _aggregate(tmp_path)
+    for heading in ("### Outcomes by tier", "### Cost, tokens and time by tier", "### Per-task pairs", "### Validity"):
+        assert heading in md
+    assert "pass_rate" not in json.dumps({k: v for k, v in summary["tiered"].items() if k == "retries"})
+
+
+def test_unmodified_v3_evidence_copy_renders_patch_tables(tmp_path):
+    src = Path(__file__).resolve().parents[3] / ".workflow_artifacts" / "quoin-benchmarks" / "runs" / "tiered-small-v3"
+    if not src.is_dir():
+        pytest.skip("tiered-small-v3 evidence is not present (gitignored)")
+    import shutil
+
+    dest_dir = tmp_path / "runs"
+    dest_dir.mkdir()
+    shutil.copytree(src, dest_dir / "tiered-small-v3")
+    aggregate.aggregate_run(dest_dir, "tiered-small-v3")
+    md = (dest_dir / "tiered-small-v3" / "summary.md").read_text()
+    assert "### Patch size by tier" in md and "### Patch size per task" in md

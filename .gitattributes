@@ -1,2 +1,3 @@
 quoin/benchmarks/data/*.json -text
 quoin/benchmarks/suite-tiered-small.json -text
+quoin/benchmarks/suite-tiered-balanced.json -text

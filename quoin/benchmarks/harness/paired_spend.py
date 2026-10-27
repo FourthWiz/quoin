@@ -127,14 +127,15 @@ def _now() -> str:
     return datetime.datetime.utcnow().isoformat() + "Z"
 
 
-def _row(kind, attempt_id, run_id, task_id, cell, cap, actual, note=""):
+def _row(kind, attempt_id, run_id, task_id, cell, cap, actual, note="", *,
+         invocation="paired", gate_id=LEDGER_GATE_ID, arm=None):
     return {
         "ts": _now(),
         "attempt_id": attempt_id,
         "kind": kind,
-        "invocation": "paired",
-        "gate_id": LEDGER_GATE_ID,
-        "arm": ARM_LABELS.get(cell, cell),
+        "invocation": invocation,
+        "gate_id": gate_id,
+        "arm": arm if arm is not None else ARM_LABELS.get(cell, cell),
         "cap_usd": float(cap),
         "actual_usd": actual,
         "run_id": run_id,
@@ -144,18 +145,26 @@ def _row(kind, attempt_id, run_id, task_id, cell, cap, actual, note=""):
     }
 
 
-def reserve(ledger, run_id, task_id, cell, cap) -> str:
+def reserve(ledger, run_id, task_id, cell, cap, *, invocation="paired",
+            gate_id=LEDGER_GATE_ID, arm=None) -> str:
     attempt_id = f"{run_id}#{cell}#{task_id}#{uuid.uuid4()}"
-    _spend_ledger().append(Path(ledger), _row("reservation", attempt_id, run_id, task_id, cell, cap, None))
+    _spend_ledger().append(Path(ledger), _row(
+        "reservation", attempt_id, run_id, task_id, cell, cap, None,
+        invocation=invocation, gate_id=gate_id, arm=arm,
+    ))
     return attempt_id
 
 
-def settle(ledger, attempt_id, run_id, task_id, cell, cap, actual) -> None:
+def settle(ledger, attempt_id, run_id, task_id, cell, cap, actual, *, invocation="paired",
+           gate_id=LEDGER_GATE_ID, arm=None) -> None:
     """Record the outcome. An actual that is not a finite non-negative number
     is stored as null, which the ledger fold charges at the cap."""
     value = float(actual) if _finite_nonneg(actual) else None
     _spend_ledger().append(
-        Path(ledger), _row("settlement", attempt_id, run_id, task_id, cell, cap, value)
+        Path(ledger), _row(
+            "settlement", attempt_id, run_id, task_id, cell, cap, value,
+            invocation=invocation, gate_id=gate_id, arm=arm,
+        )
     )
 
 

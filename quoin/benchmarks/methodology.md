@@ -191,6 +191,19 @@ individual task) to avoid systematically killing only quoin cells.
 Sources: Aider polyglot leaderboard [4] for SWE-bench cost baseline; T-15
 calibration for observed per-task cost before T-17 full run.
 
+### Secondary measures
+
+Beside the primary `resolved` metric, the tiered report carries two secondary
+measures. Patch size (added and removed lines and files, split by test and
+non-test paths) is computed from each row's `diff.patch`. A blind pairwise
+review rates both arms' patches with the arm hidden and the A/B order seeded;
+it is stored and reported separately and never feeds the pass counts or the
+paired test. Both are read as supporting evidence, with the review's position
+counts shown so that position bias is visible. Patch content is untrusted
+input to the reviewer: section tags inside it are escaped, oversized prompts
+are skipped rather than sent, the reviewer runs with no tools, and its reply
+must match a strict schema.
+
 ## Naming: Relationship to Phase 29 Scaffold
 
 The cell names `simple-claude`, `quoin-claude`, `simple-codex`, and `quoin-codex`

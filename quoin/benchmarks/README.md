@@ -195,6 +195,11 @@ difference as the headline figure. Nine tasks is a directional signal, not a
 statistically significant result. Provenance and the task list are in
 `suite-tiered-small-provenance.md`.
 
+`suite-tiered-balanced.json` is the larger suite: 40 tasks (10 easy, 15 medium,
+15 large) from the same seed and sub-seeds, so it contains every tiered-small
+instance. Select it with `--suite tiered-balanced`. Provenance, the task list
+and the budget derivation are in `suite-tiered-balanced-provenance.md`.
+
 The earlier tiered-small run showed that a quoin session can skip the pipeline
 and fix the issue directly. The harness now starts the quoin arm with the slash
 command `/run --autonomous small:` and a line saying the pipeline is required
@@ -204,6 +209,57 @@ and treats a quoin session that left no plan as an `invalid` row (see "Invalid
 rows" below). The test suite exercises the whole path offline with a fake
 `claude`, so the first paid run with these changes is the first time the real
 CLI, the real permission rules and the real judge meet in this form.
+
+### Secondary measures: patch size and blind pairwise review
+
+The primary metric stays SWE-bench Verified `resolved`. Two secondary measures
+sit beside it and never change it.
+
+Patch size. Each row's `diff.patch` is measured for added and removed lines
+and touched files, split into test and non-test files, and shown per arm, per
+tier and per task in the tiered report and `summary.json`. A file counts as a
+test file when a directory in its path is named `tests`, `test` or `testing`,
+or its name starts with `test_`, ends with `_test.py`, equals or ends with
+`tests.py`, or is `conftest.py`. Empty and missing patches are counted
+separately.
+
+Blind pairwise review. After a run is finished and judged, a reviewer sees the
+issue text and both arms' patches in a seeded A/B order with the arm hidden. It
+rates each patch from 1 to 5 on correctness risk (1 lowest risk), minimality
+(5 most minimal) and test quality (5 best), and picks a preference or a tie.
+Run it only after judging:
+
+```bash
+python3 quoin/benchmarks/scripts/pairwise_review.py --run-id <run-id>
+```
+
+`quoin bench tiered` prints this command after a clean, fully judged finish.
+Notes:
+
+- Spend goes through the run's spend ledger. The per-review cap and the review
+  total cap come from the suite (`$2` and `$80` for tiered-balanced) or from
+  `--max-review-usd` and `--max-review-total-usd`. The run-level ceiling is
+  `--authorised-usd`, else the manifest's `authorised_usd`, else the suite
+  ceiling. A run started with a higher cap needs the matching ceiling.
+- Review spend is recorded in the same ledger as the arms' sessions, so it
+  reduces the run's remaining authorised ceiling. A later resume of the
+  benchmark run has that much less headroom.
+- A task whose prompt (issue text plus both patches) is over 400,000
+  characters is skipped with reason `patch-too-large` before any spend is
+  reserved, so one large patch cannot overshoot the per-review cap.
+- Patch and issue text are untrusted. Text that reads as one of the prompt's
+  section tags is escaped, and binary changes are replaced by a one-line note.
+- The reviewer model defaults to the run's plain-arm model; `--effort` falls
+  back to the manifest's effort, and the command refuses when neither exists.
+- The review is written to `pairwise-review.json` in the run directory and
+  resumes: finished reviews are not sent again. Replies that do not fit the
+  schema are recorded as invalid; invalid replies are final and are not
+  retried (a retry flag is a possible later addition).
+- A lock file `pairwise-review.lock` prevents two reviews at once. If a review
+  process died, remove the file by hand once no review process is alive.
+- Style or size can still reveal the arm to the reviewer, and a reviewer can
+  favour the first or second position. The report counts both preferences by
+  position so a bias is visible; the review is supporting evidence only.
 
 ### Models, effort and aliases
 

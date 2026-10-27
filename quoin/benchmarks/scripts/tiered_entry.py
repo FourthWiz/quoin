@@ -562,9 +562,42 @@ def _refresh_summary(res: Resolved) -> None:
     (res.run_path / "invariants-report.md").write_text(report.to_markdown(), encoding="utf-8")
 
 
+def review_command(res: Resolved) -> str:
+    script = Path(__file__).resolve().with_name("pairwise_review.py")
+    argv = ["python3", str(script), "--run-id", res.run_id]
+    default_dir = (res.repo_root / ".workflow_artifacts" / "quoin-benchmarks" / "runs").resolve()
+    if res.run_dir != default_dir:
+        argv += ["--run-dir", str(res.run_dir)]
+    if res.ledger != (res.run_dir / f"{res.run_id}.spend-ledger.jsonl").resolve():
+        argv += ["--spend-ledger", str(res.ledger)]
+    return shlex.join(argv)
+
+
+def print_review_hint(res: Resolved, rc: int) -> None:
+    """Print the review command once the run finished cleanly and is fully judged.
+
+    The counts are taken fresh here, so the hint never rests on a stale
+    remaining-session figure. The recount runs with stderr captured: a foreign
+    row has already been reported once and must not be reported again.
+    """
+    import contextlib
+    import io
+
+    if rc != 0:
+        return
+    with contextlib.redirect_stderr(io.StringIO()):
+        remaining = _rb()._paired_rows_to_spawn(res.run_dir, res.run_id, res.tasks, res.arms)
+    if remaining is None or remaining > 0 or pending_rows(res) > 0:
+        return
+    print("review: optional blind pairwise review of the patches (a secondary measure, never "
+          "changes `resolved`; it spends model budget under its own caps):")
+    print(review_command(res))
+
+
 def finish(res: Resolved, rc: int) -> int:
     """Print the final report; a clean run that used an unpriced model exits 6."""
     final_report(res)
+    print_review_hint(res, rc)
     unpriced = unpriced_from_summary(res.run_path)
     if unpriced and rc == 0:
         print(f"unpriced model in this run: {', '.join(unpriced)}; add it to pricing.json "
