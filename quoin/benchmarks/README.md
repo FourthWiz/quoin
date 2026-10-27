@@ -241,6 +241,14 @@ Notes:
   `--max-review-usd` and `--max-review-total-usd`. The run-level ceiling is
   `--authorised-usd`, else the manifest's `authorised_usd`, else the suite
   ceiling. A run started with a higher cap needs the matching ceiling.
+- Review spend is recorded in the same ledger as the arms' sessions, so it
+  reduces the run's remaining authorised ceiling. A later resume of the
+  benchmark run has that much less headroom.
+- A task whose prompt (issue text plus both patches) is over 400,000
+  characters is skipped with reason `patch-too-large` before any spend is
+  reserved, so one large patch cannot overshoot the per-review cap.
+- Patch and issue text are untrusted. Text that reads as one of the prompt's
+  section tags is escaped, and binary changes are replaced by a one-line note.
 - The reviewer model defaults to the run's plain-arm model; `--effort` falls
   back to the manifest's effort, and the command refuses when neither exists.
 - The review is written to `pairwise-review.json` in the run directory and

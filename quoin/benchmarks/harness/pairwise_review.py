@@ -34,6 +34,9 @@ LOCK_FILE = "pairwise-review.lock"
 BLINDING_MARKERS = (".workflow_artifacts", ".claude/", "CLAUDE.md", "AGENTS.md", "quoin")
 RATIONALE_LIMIT = 4000
 RAW_LIMIT = 20000
+# About 100k tokens: well inside the reviewer's context window and the
+# per-review cap, so one call cannot overshoot its reservation by much.
+MAX_PROMPT_CHARS = 400_000
 DEFAULT_REVIEW_TIMEOUT_S = 600
 REVIEW_CELL = "pairwise-review"
 REVIEW_INVOCATION = "pairwise-review"
@@ -76,6 +79,19 @@ Reply with one JSON object in a fenced json block and nothing after it, using ex
 """
 
 
+_DELIMITER = re.compile(r"<(\s*/?\s*(?:issue|patch_a|patch_b)\b)", re.IGNORECASE)
+_CONTROL = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def neutralise_delimiters(text: str) -> str:
+    """Escape anything that reads as one of the prompt's section tags.
+
+    Patch and issue text are untrusted; an unescaped `</patch_a>` inside a
+    patch would end its section early.
+    """
+    return _DELIMITER.sub(r"&lt;\1", text)
+
+
 def quoin_is_a(seed: int, task_id: str) -> bool:
     """Whether the quoin patch is shown as patch A for this task."""
     digest = hashlib.sha256(f"{seed}:{task_id}".encode("utf-8")).hexdigest()
@@ -98,7 +114,8 @@ def blind_patch(text: str) -> str:
             header = lines[section_start] if lines[section_start].startswith("diff --git ") else ""
             try:
                 path = patch_size._section_path(header[len("diff --git "):], lines[section_start + 1:i + 1])
-            except patch_size._Unreadable:
+                path = _CONTROL.sub("?", path) if path else "unknown file"
+            except Exception:  # noqa: BLE001 - any unreadable header still gets the note
                 path = "unknown file"
             out.append(f"[binary change to {path} omitted]")
             i += 1
@@ -120,7 +137,11 @@ def marker_hit(text: str) -> Optional[str]:
 
 
 def build_prompt(description: str, patch_a: str, patch_b: str) -> str:
-    return PROMPT_TEMPLATE.format(issue=description, patch_a=patch_a, patch_b=patch_b)
+    return PROMPT_TEMPLATE.format(
+        issue=neutralise_delimiters(description),
+        patch_a=neutralise_delimiters(patch_a),
+        patch_b=neutralise_delimiters(patch_b),
+    )
 
 
 _FENCE = re.compile(r"```json\s*(.*?)```", re.DOTALL)
@@ -240,6 +261,10 @@ class ClaudeCliReviewer:
             except subprocess.TimeoutExpired:
                 proc_group.kill_and_reap(proc, proc.pid, True)
                 return ReviewReply("", None, "timeout")
+            except BaseException:
+                # Ctrl-C or any other failure must not leave the reviewer running.
+                proc_group.kill_and_reap(proc, proc.pid, True)
+                raise
             return _reply_from_output(proc.returncode, stdout, stderr)
         finally:
             if sandbox is not None:
@@ -385,19 +410,23 @@ def _run_locked(run_path, suite, reviewer, ledger, run_id, seed, model, effort, 
         quoin_text = blind_patch(quoin_bytes.decode("utf-8", errors="replace"))
         plain_text = blind_patch(plain_bytes.decode("utf-8", errors="replace"))
         base = {"quoin_is_a": is_a, "patch_sha256": hashes}
+        hit = marker_hit(quoin_text) or marker_hit(plain_text)
+        if hit is not None:
+            records[task_id] = dict(base, status="skipped", reason="blinding-marker", marker=hit)
+            _write_state(run_path, state)
+            continue
+        patch_a, patch_b = (quoin_text, plain_text) if is_a else (plain_text, quoin_text)
+        prompt = build_prompt(task.get("description") or "", patch_a, patch_b)
+        if len(prompt) > MAX_PROMPT_CHARS:
+            records[task_id] = dict(base, status="skipped", reason="patch-too-large", prompt_chars=len(prompt))
+            _write_state(run_path, state)
+            continue
         if stop_clause is None:
-            hit = marker_hit(quoin_text) or marker_hit(plain_text)
-            if hit is not None:
-                records[task_id] = dict(base, status="skipped", reason="blinding-marker", marker=hit)
-                _write_state(run_path, state)
-                continue
             stop_clause = _spend_stop(spend_ledger, ledger, run_id, cap, total_cap, authorised)
         if stop_clause is not None:
             records[task_id] = dict(base, status="not_reviewed", reason=stop_clause)
             _write_state(run_path, state)
             continue
-        patch_a, patch_b = (quoin_text, plain_text) if is_a else (plain_text, quoin_text)
-        prompt = build_prompt(task.get("description") or "", patch_a, patch_b)
         att = paired_spend.reserve(
             ledger, run_id, task_id, REVIEW_CELL, cap,
             invocation=REVIEW_INVOCATION, gate_id=REVIEW_GATE_ID, arm=REVIEW_ARM,

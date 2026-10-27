@@ -71,7 +71,10 @@ def _unquote(token: str) -> str:
         if ch == b"\\" and i + 1 < len(raw):
             octal = _OCTAL.match(raw, i)
             if octal:
-                out.append(int(octal.group(1), 8))
+                value = int(octal.group(1), 8)
+                if value > 0xFF:
+                    raise _Unreadable(f"octal escape out of range in {token}")
+                out.append(value)
                 i += 4
                 continue
             esc = _SIMPLE_ESCAPES.get(raw[i + 1:i + 2])
