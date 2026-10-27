@@ -29,7 +29,12 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
        broken (dangling link, missing, or not runnable) and no healthy venv
        with pytest was found
        (`exit_reason="venv-interpreter-broken"`, details in
-       `interpreter_problems`).  Treat as "cannot confirm green → do NOT auto-approve."
+       `interpreter_problems`), or every selected test failed to collect and
+       none ran, and the same tests also fail to collect at the baseline
+       revision (`exit_reason="test-environment-unusable"`: the interpreter or
+       runner cannot load the project, so the run says nothing about the
+       change; a change that breaks collection collects at the baseline and
+       stays exit 1).  Treat as "cannot confirm green → do NOT auto-approve."
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
        disabling detection must not silently green-light an APPROVE — this
        is the OPPOSITE of branch_hygiene's env opt-out which exits 0.
@@ -2786,6 +2791,100 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
 
 
 # ---------------------------------------------------------------------------
+# Test-environment check (collection fails with or without the change)
+# ---------------------------------------------------------------------------
+
+def _junit_only_collection_errors(junit_path: Path) -> bool:
+    """True when the report holds collection errors and no test that ran."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.parse(str(junit_path)).getroot()
+    except (OSError, ET.ParseError):
+        return False
+    collection_errors = 0
+    ran = 0
+    for case in root.iter("testcase"):
+        error = case.find("error")
+        if error is not None and "collection failure" in (error.get("message") or ""):
+            collection_errors += 1
+        else:
+            ran += 1
+    return collection_errors > 0 and ran == 0
+
+
+def _baseline_rev(repo_str: str) -> str:
+    """The revision the change is measured against: the same merge base the
+    diff-basis chain uses, or HEAD when the change is only in the worktree."""
+    ups, _, ups_rc = _run(
+        ["git", "-C", repo_str, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+    )
+    refs = [ups] if ups_rc == 0 and ups else []
+    base_ref = _resolve_base_branch(repo_str)
+    if base_ref is not None:
+        refs.append(base_ref)
+    for ref in refs:
+        mb, _, mb_rc = _run(["git", "-C", repo_str, "merge-base", ref, "HEAD"])
+        if mb_rc == 0 and mb.strip():
+            head, _, _ = _run(["git", "-C", repo_str, "rev-parse", "HEAD"])
+            if mb.strip() != head.strip():
+                return mb.strip()
+    return "HEAD"
+
+
+_COLLECTED_RE = re.compile(r"(\d+) tests? collected")
+_ERRORS_RE = re.compile(r"\d+ errors?\b")
+
+
+def _baseline_collects_nothing(
+    repo_root: Path, interp: str, selectors: list[str], timeout: int
+) -> bool:
+    """True when the selected tests also fail to collect at the baseline revision.
+
+    That separates an interpreter or runner that cannot load this project at
+    all from a change that broke collection: only the first is reported as
+    undeterminable. Any doubt (no worktree, no selector present at the
+    baseline, a timeout) returns False so the run stays RED.
+    """
+    import shutil
+    import tempfile
+
+    repo_str = str(repo_root.resolve())
+    rev = _baseline_rev(repo_str)
+    tmp = Path(tempfile.mkdtemp(prefix="quoin-affected-base-"))
+    tree = tmp / "tree"
+    try:
+        _, _, rc = _run(["git", "-C", repo_str, "worktree", "add", "--detach", str(tree), rev])
+        if rc != 0:
+            return False
+        present = []
+        for sel in selectors:
+            path = Path(sel.split("::", 1)[0])
+            try:
+                rel = path.resolve().relative_to(Path(repo_str)) if path.is_absolute() else path
+            except ValueError:
+                continue
+            if (tree / rel).exists():
+                present.append(str(rel) + (sel[len(sel.split("::", 1)[0]):]))
+        if not present:
+            return False
+        try:
+            proc = subprocess.run(
+                [interp, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *present],
+                cwd=str(tree), capture_output=True, text=True, timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        out = (proc.stdout or "") + (proc.stderr or "")
+        collected = _COLLECTED_RE.search(out)
+        nothing = collected is None or int(collected.group(1)) == 0
+        return proc.returncode != 0 and nothing and bool(_ERRORS_RE.search(out))
+    finally:
+        _run(["git", "-C", repo_str, "worktree", "remove", "--force", str(tree)])
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
 # Detection algorithm
 # ---------------------------------------------------------------------------
 
@@ -3563,9 +3662,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(sel.to_dict(), indent=2))
         return 3
 
+    import tempfile
+
+    junit_dir = None
+    junit_args: list[str] = []
+    if not any(str(a).startswith("--junitxml") or str(a).startswith("--junit-xml")
+               for a in args.pytest_args):
+        import atexit
+        import shutil
+
+        junit_dir = Path(tempfile.mkdtemp(prefix="quoin-affected-junit-"))
+        atexit.register(shutil.rmtree, str(junit_dir), True)
+        junit_args = [f"--junitxml={junit_dir / 'affected.xml'}"]
     try:
         proc = subprocess.run(
-            [interp, "-m", "pytest", *selectors, *args.pytest_args],
+            [interp, "-m", "pytest", *selectors, *args.pytest_args, *junit_args],
             cwd=str(repo_root),
             timeout=pytest_bound,
         )
@@ -3636,6 +3747,25 @@ def main(argv: list[str] | None = None) -> int:
     else:
         exit_reason = "affected-red"
         code = 1
+    remedy = ""
+    # Every selected test failed to collect, none ran, and the same tests fail
+    # to collect without the change: the interpreter or runner cannot load this
+    # project, so the result says nothing about the change. A change that
+    # breaks collection still collects at the baseline and stays RED (R-06).
+    if (
+        code == 1
+        and junit_dir is not None
+        and _junit_only_collection_errors(junit_dir / "affected.xml")
+        and _baseline_collects_nothing(repo_root, interp, selectors, pytest_bound)
+    ):
+        exit_reason = "test-environment-unusable"
+        code = 3
+        remedy = (
+            f"pytest under {interp} cannot collect these tests even without the change "
+            "(wrong Python version or a project that uses its own test runner). Run the "
+            "project's own test command on the change and record it, or point QUOIN_PYTHON "
+            "at an interpreter that can import the project."
+        )
     sel = Selection(
         changed=changed,
         selectors=selectors,
@@ -3651,6 +3781,7 @@ def main(argv: list[str] | None = None) -> int:
         interpreter_reason=interp_reason,
         interpreter_problems=interp_problems,
         **bound_kw,
+        remedy=remedy,
     )
     if fmt == "text":
         print(_format_text(sel))

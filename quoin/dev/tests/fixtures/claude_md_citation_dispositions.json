@@ -645,6 +645,14 @@
       "heading_disposition": "non-citation",
       "path_form": "none",
       "note": "resolution-sentence text in the generator; names the citation form generically, no heading cited."
+    },
+    {
+      "file": "quoin/adapters/claude/skills/run/SKILL.md",
+      "line_hash": "2e744820792bd068ac0fb407e45275ebd5aa8793b0d8028f848d96d081037bca",
+      "heading_disposition": "resolves",
+      "path_form": "repo_source",
+      "note": "names 'the model table in CLAUDE.md'; kept verbatim under 'Model assignments' in the workflow catalog.",
+      "cited_heading": "## Model assignments"
     }
   ]
 }
