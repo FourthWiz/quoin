@@ -48,12 +48,12 @@ class TestSkillOverridesInstall:
     def test_user_changed_canonical_overrides_reset_to_canonical(self, tmp_path):
         dest = tmp_path / ".claude"
         dest.mkdir()
-        existing = {"skillOverrides": {"thorough_plan": "off", "plan": "name-only", "end_of_day": "on"}}
+        existing = {"skillOverrides": {"thorough_plan": "off", "run": "name-only", "end_of_day": "on"}}
         (dest / "settings.json").write_text(json.dumps(existing))
         deploy_hooks(QUOIN_SRC, dest)
         overrides = json.loads((dest / "settings.json").read_text()).get("skillOverrides", {})
-        assert overrides["thorough_plan"] == "on"
-        assert overrides["plan"] == "on"
+        assert overrides["thorough_plan"] == "name-only"
+        assert overrides["run"] == "on"
         assert overrides["end_of_day"] == "name-only"
 
     def test_merge_skill_overrides_returns_changed_count(self):

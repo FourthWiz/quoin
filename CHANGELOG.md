@@ -6,9 +6,15 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Changed
 
+- **Skill listing and `/triage` point at the light `/run`** (v0.64.1). `thorough_plan`, `plan`, `critic`, `implement`, `gate` and `triage` are now name-only in the skill listing, so they no longer appear in every session's auto-suggest; `run`, `specify`, `enrich` and `review` keep full descriptions. `/triage` proposes `/run` for implementation requests and reserves `/thorough_plan` for explicit requests for a reviewed plan. Re-run the installer to apply the listing change.
+
 - **`/run` is now a light, single-session pipeline; the old pipeline moves to `/run hard:`** (v0.64.0). On 40 SWE-bench Verified tasks the full pipeline, even on its `small:` route, cost about 10× and took about 8× longer than a plain Claude Code session, for a resolved gain that was not significant (34/40 vs 32/40, p = 0.48). `/run` now writes a short task brief (asking only when the request is unclear in a way that changes the work), runs `/discover` in a subagent only when discovery memory is missing or older than 7 days, gathers a context pack in a read-only subagent, implements in the same session with proportionate tests, runs the affected tests once, gets one Opus review in a subagent and commits locally. It writes no plan file, cost ledger or run-state record and never pushes. The previous orchestrator is unchanged as `/run_hard`, reached with `/run hard: <task>` (or `strict:`), and `/run --resume` of a task it started still lands there. In OpenCode, `run` keeps the heavy pipeline's contract, because open models still need its planning and review scaffolding. The tiered benchmark's quoin arm uses the light route by default; `QUOIN_BENCH_QUOIN_ROUTE=hard` restores the old prompt.
 
 ### Fixed
+
+- **The benchmark run manifest is valid YAML again** (v0.64.1). Values such as the JSON-encoded sandbox checks were wrapped in quotes without escaping, so a strict YAML parse failed and the invariants report showed every manifest check as WARN with "run-manifest.yaml not found". Quoted values are now JSON-escaped, and the invariants report reads older manifests the way the tiered report does.
+
+- **A pairwise review reply that leaves out only the rationale still counts** (v0.64.1). The ratings and preference are what is scored; such a reply is recorded with `rationale_missing` instead of being dropped as invalid.
 
 - **The tiered benchmark counts a light-route brief as the quoin arm's plan** (v0.64.1). A quoin row is invalid when the session leaves no plan on disk. The light `/run` plans in `brief.md` instead of `current-plan.md`, so its rows were marked invalid; either file now counts.
 

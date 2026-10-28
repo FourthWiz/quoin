@@ -241,9 +241,9 @@ All 20 user-facing routable skills. `/revise-fast` is excluded (internal, not us
 | `/review` | review, verify, check implementation, code review, does this look right | "review my changes", "check the implementation", "verify implementation", "does this look right", "code review" | Plan + recent commits + no review file (+2), active in_progress session (+1) | No recent commits + no plan (−2) | Runs after `/implement`, before `/end_of_task` |
 | `/revise` | revise, fix the plan, address feedback, update the plan | "fix the plan", "address the critic's comments", "update the plan based on feedback", "revise the plan" | `critic-response-*.md` exists (+2) | No critic-response exists (−2) | Used after `/critic`; Opus model |
 | `/rollback` | rollback, undo, revert, go back, undo task | "undo the implementation", "revert the last changes", "go back to before implement", "undo task N", "reset to pre-implementation" | Uncommitted/recent commits exist (+1) | On main/clean (−1) | **High-impact.** Destructive — reverts commits |
-| `/run` | run, full pipeline, everything, end to end, full workflow | "run the full workflow", "end to end", "do everything", "full pipeline" | On main/clean (+1) | Any uncommitted work (−1), no plan (−1) | **High-impact.** Full pipeline from discover to end_of_task |
+| `/run` | run, do this, fix, build, add, implement, end to end | "do this task", "fix this bug", "implement X", "run the workflow", "end to end" | On main/clean (+1), no plan exists (+1) | Any uncommitted work (−1) | **Default for any task.** Light pipeline: brief, context pack, implement, one review, local commit. `/run hard:` runs the full heavy pipeline. |
 | `/start_of_day` | start of day, SOD, morning, resume, what was I working on | "what was I working on", "resume", "pick up where I left off", "morning standup", "start of day", "SOD" | No daily cache today + no session file today (+2) | Today's daily cache exists (−1) | Morning context restore |
-| `/thorough_plan` | plan, thorough plan, plan thoroughly, planning cycle | "plan this thoroughly", "detailed plan with review", "plan and critique", "full planning cycle", "plan this" | No plan exists (+1), on main/clean (+1) | Plan already found (−1) | Standard planning entry point; auto-triages Small/Medium/Large |
+| `/thorough_plan` | thorough plan, plan thoroughly, planning cycle | "plan this thoroughly", "detailed plan with review", "plan and critique", "full planning cycle" | No plan exists (+1) | Plan already found (−1) | Heavy pipeline only: use when the user explicitly wants a reviewed plan, or the light `/run` has failed |
 | `/weekly_review` | weekly, week, recap, friday, weekly summary, week review | "weekly summary", "what did I do this week", "week recap", "friday review", "weekly standup", "weekly report" | It's Friday (+1) | Recent commits today only (−1 — likely mid-task) | Run on Fridays or for a week-level summary |
 
 ---
@@ -256,10 +256,10 @@ When keyword collisions produce a tie, use state signals to break it. These rule
 |-----------|-----------------|---------------|
 | "plan", "break down" | `/plan`, `/thorough_plan`, `/revise`, `/critic` | No plan exists → boost `/thorough_plan` +1, suppress `/revise` −2, suppress `/critic` −2. Plan exists → suppress `/thorough_plan` −1; boost `/revise` +1 if `critic-response-*.md` exists. |
 | "review", "check", "look at" | `/review`, `/critic`, `/weekly_review` | Plan + recent commits → boost `/review` +2, suppress `/critic` −2, suppress `/weekly_review` −2. No recent commits, no plan → boost `/critic` +1. Day is Friday → boost `/weekly_review` +1. |
-| "implement", "code", "write" | `/implement`, `/run` | No plan found → suppress `/implement` −2, boost `/thorough_plan` +1. Plan found + no review → boost `/implement` +1. |
+| "implement", "code", "write" | `/implement`, `/run` | No plan found → suppress `/implement` −2, boost `/run` +2. Plan found + no review → boost `/implement` +1. |
 | "commit", "ship", "push", "done", "finish" | `/end_of_task`, `/implement` | APPROVED review found → boost `/end_of_task` +2, suppress `/implement` −1. No review yet → suppress `/end_of_task` −2, boost `/implement` +1. |
 | "start", "begin", "morning", "resume" | `/start_of_day`, `/thorough_plan`, `/init_workflow` | No daily cache today → boost `/start_of_day` +2. Task folder exists → suppress `/init_workflow` −2. |
-| "run", "everything", "full pipeline" | `/run`, `/thorough_plan` | Any uncommitted work or no plan → suppress `/run` −1. User says "full" or "end to end" → boost `/run` +1. |
+| "run", "everything", "full pipeline" | `/run`, `/thorough_plan` | Any uncommitted work → suppress `/run` −1. User says "full" or "end to end" → boost `/run` +1; user says "thorough" or "hard" → propose `/run hard:`. |
 
 ---
 
@@ -289,7 +289,7 @@ When keyword collisions produce a tie, use state signals to break it. These rule
 | `/review` | Medium | Universal propose-only. |
 | `/revise` | Medium | Universal propose-only. |
 | `/rollback` | **High** | Destructive — reverts commits. Universal policy reinforces safety. |
-| `/run` | **High** | Full pipeline; huge scope. Universal policy reinforces deliberate invocation. |
+| `/run` | Medium | Default task pipeline; commits locally, never pushes. Universal propose-only policy still applies. |
 | `/start_of_day` | Low | Universal propose-only. |
 | `/thorough_plan` | Medium | Universal propose-only. Standard planning entry point. |
 | `/weekly_review` | Low | Universal propose-only. |

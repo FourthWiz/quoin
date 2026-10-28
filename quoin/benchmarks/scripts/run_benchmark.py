@@ -458,8 +458,10 @@ def _write_manifest(
                 lines.append(f"  - {item}")
         else:
             v_str = str(v)
-            if any(c in v_str for c in (":", "#", "&", "*", "?", "|", "-", "<", ">", "=", "!", "'")):
-                v_str = f'"{v_str}"'
+            if any(c in v_str for c in (":", "#", "&", "*", "?", "|", "-", "<", ">", "=", "!", "'", '"', "\\")):
+                # JSON string quoting is a valid YAML double-quoted scalar, so
+                # embedded quotes (as in JSON-encoded dict values) stay parseable.
+                v_str = json.dumps(v_str)
             lines.append(f"{k}: {v_str}")
 
     manifest_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -77,7 +77,15 @@ def wilson_interval(k, n, z=1.959963984540054):
 
 def _unquote(text):
     text = text.strip()
-    if len(text) >= 2 and text[0] == text[-1] and text[0] in ("'", '"'):
+    if len(text) >= 2 and text[0] == text[-1] == '"':
+        # Current manifests quote with JSON escaping; older ones wrapped the
+        # raw text, which may not decode, so fall back to stripping.
+        try:
+            value = json.loads(text)
+        except ValueError:
+            return text[1:-1]
+        return value if isinstance(value, str) else text[1:-1]
+    if len(text) >= 2 and text[0] == text[-1] == "'":
         return text[1:-1]
     return text
 
