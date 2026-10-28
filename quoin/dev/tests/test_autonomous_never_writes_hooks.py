@@ -25,9 +25,9 @@ REPO_ROOT = PKG_DIR.parent  # quoin/ (git root)
 HOOKS_DIR = PKG_DIR / "hooks"
 SUPERVISOR_MODULE = REPO_ROOT / "src" / "quoin" / "supervisor.py"
 CLI_MODULE = REPO_ROOT / "src" / "quoin" / "cli.py"
-RUN_SKILL = PKG_DIR / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = PKG_DIR / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 END_OF_TASK_SKILL = PKG_DIR / "adapters" / "claude" / "skills" / "end_of_task" / "SKILL.md"
-RUN_CORE_DOC = PKG_DIR / "core" / "skills" / "run.md"
+RUN_CORE_DOC = PKG_DIR / "core" / "skills" / "run_hard.md"
 
 # Files this guard scans for hook-write / threshold-reassignment patterns.
 # Python modules that implement the supervisor + CLI, and the two SKILL.md /

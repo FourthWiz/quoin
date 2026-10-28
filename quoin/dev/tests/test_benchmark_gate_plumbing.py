@@ -1502,7 +1502,7 @@ class TestScenarioPromptBranch:
             arm_root=root, expected_quoin_commit=sha,
         )
         assert captured["prompt"] == f"{quoin_claude.QUOIN_RUN_PREFIX}{base_prompt}"
-        assert captured["prompt"].startswith("/run --autonomous small: ")
+        assert captured["prompt"].startswith("/run --autonomous ")
         assert captured["prompt"].endswith(base_prompt)
 
     def test_description_present_but_omitting_subsystem_raises_and_never_spawns(self):

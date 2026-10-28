@@ -124,7 +124,7 @@ def test_orchestrators_are_exactly_the_scoped_four():
     self_writers/onbehalf_skip is intentional: the asserts operate on independent
     tokens (D-9)."""
     orchestrators = _census(SKILLS_DIR, lambda t: ORCH_TOKEN in t)
-    assert orchestrators == {"architect", "thorough_plan", "review", "run"}
+    assert orchestrators == {"architect", "thorough_plan", "review", "run_hard"}
     for name in orchestrators:
         text = (SKILLS_DIR / name / "SKILL.md").read_text(encoding="utf-8")
         assert "QUOIN_INLINE_COST_CAPTURE" in text, f"{name}: missing flag gate"

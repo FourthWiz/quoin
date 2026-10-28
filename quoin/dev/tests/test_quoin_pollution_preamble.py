@@ -56,7 +56,7 @@ CHEAP_TIER_SKILLS = [
 ]
 
 # Orchestrators — must NOT carry §0'.
-ORCHESTRATOR_SKILLS = ["run", "thorough_plan"]
+ORCHESTRATOR_SKILLS = ["run", "run_hard", "thorough_plan"]
 
 # Required structural tokens in every §0' block.
 REQUIRED_TOKENS = [

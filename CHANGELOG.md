@@ -4,7 +4,13 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ## [Unreleased]
 
+### Changed
+
+- **`/run` is now a light, single-session pipeline; the old pipeline moves to `/run hard:`** (v0.64.0). On 40 SWE-bench Verified tasks the full pipeline, even on its `small:` route, cost about 10× and took about 8× longer than a plain Claude Code session, for a resolved gain that was not significant (34/40 vs 32/40, p = 0.48). `/run` now writes a short task brief (asking only when the request is unclear in a way that changes the work), runs `/discover` in a subagent only when discovery memory is missing or older than 7 days, gathers a context pack in a read-only subagent, implements in the same session with proportionate tests, runs the affected tests once, gets one Opus review in a subagent and commits locally. It writes no plan file, cost ledger or run-state record and never pushes. The previous orchestrator is unchanged as `/run_hard`, reached with `/run hard: <task>` (or `strict:`), and `/run --resume` of a task it started still lands there. In OpenCode, `run` keeps the heavy pipeline's contract, because open models still need its planning and review scaffolding. The tiered benchmark's quoin arm uses the light route by default; `QUOIN_BENCH_QUOIN_ROUTE=hard` restores the old prompt.
+
 ### Fixed
+
+- **The gate no longer writes quoin's own known-red file into other projects** (v0.64.0). Without a manifest, `known_red.py` defaulted to `quoin/dev/tests/known-red.toml`, quoin's own repository layout, and a benchmark session created that file inside matplotlib, where it ended up in the patch. Outside the quoin repo the default is now `.workflow_artifacts/known-red.toml`.
 
 - **The blind pairwise review treats patch text as untrusted and bounds each call** (v0.63.1). Text in a patch or issue that reads as one of the prompt's section tags is escaped, control characters are removed from the binary-change note, and a task whose prompt is over 400,000 characters is skipped as `patch-too-large` before any spend is reserved. A quoted path with an out-of-range octal escape no longer crashes the review. Ctrl-C or an unexpected error during a review kills the reviewer process instead of leaving it running. A task with a blinding marker is skipped even after a spend stop, so a stopped and a resumed run agree. `pick_subset.py --problems-only` without `--suite` now exits 2 with a message instead of a traceback.
 

@@ -1,6 +1,6 @@
 ---
 name: run
-description: "End-to-end orchestrator chaining every phase, pausing at each gate. Use for: /run, 'run the full workflow', 'do everything'. Tags: small:/medium:/large:/strict:, max_rounds: N."
+description: "Default pipeline: brief, context pack, inline implement, one review, local commit. Use for: /run, 'do this task'. Tags: hard: (full pipeline), --autonomous."
 model: opus
 ---
 

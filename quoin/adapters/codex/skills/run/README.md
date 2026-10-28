@@ -18,7 +18,7 @@ Follow the runtime-neutral contract in `quoin/core/skills/run.md`. Preserve Quoi
 semantics under the project-root `.workflow_artifacts/` directory:
 
 - phase: `orchestration`
-- effort: `max`
+- effort: `high`
 - user-facing: `yes`
 
 Use `quoin/core/workflow/` for shared task layout, session state, cost-ledger,

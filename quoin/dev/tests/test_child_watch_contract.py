@@ -6,9 +6,9 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 AUTO_MODE = REPO_ROOT / "quoin" / "memory" / "autonomous-mode.md"
-RUN_CORE = REPO_ROOT / "quoin" / "core" / "skills" / "run.md"
+RUN_CORE = REPO_ROOT / "quoin" / "core" / "skills" / "run_hard.md"
 SCRIPT = REPO_ROOT / "quoin" / "core" / "scripts" / "child_watch.py"
 
 HEADING = re.compile(r"(?m)^#{1,6} ")

@@ -6,7 +6,7 @@ import pathlib
 REPO = pathlib.Path(__file__).resolve().parents[3]
 SKILLS = REPO / "quoin" / "adapters" / "claude" / "skills"
 EOT = (SKILLS / "end_of_task" / "SKILL.md").read_text(encoding="utf-8")
-RUN = (SKILLS / "run" / "SKILL.md").read_text(encoding="utf-8")
+RUN = (SKILLS / "run_hard" / "SKILL.md").read_text(encoding="utf-8")
 FORMAT = (REPO / "quoin" / "memory" / "cost-ledger-format.md").read_text(encoding="utf-8")
 
 

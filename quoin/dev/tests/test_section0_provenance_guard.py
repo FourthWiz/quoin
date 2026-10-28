@@ -548,6 +548,7 @@ SHARE_CEILINGS: dict[str, float] = {
     "revise-fast": 48.0052,
     "rollback": 54.2857,
     "run": 0.0,
+    "run_hard": 0.0,
     "security_review": 46.0714,
     "sleep": 36.9231,  # re-seeded (IVG-263): tier move to Sonnet adds the
                        # §0‴ Minimum-tier guard block, raising the
@@ -590,11 +591,11 @@ def test_share_ceilings_key_set_matches_adapter_skills():
         f"skills {sorted(discovered)} "
         f"(sym-diff {sorted(set(SHARE_CEILINGS) ^ discovered)})"
     )
-    assert len(SHARE_CEILINGS) == 31
+    assert len(SHARE_CEILINGS) == 32
 
 
 def test_zero_share_carve_out_is_exact():
-    for skill in ("run", "thorough_plan"):
+    for skill in ("run", "run_hard", "thorough_plan"):
         assert _measured_share(skill) == 0.0, (
             f"{skill} is expected to carry zero §0-family lines; measured "
             f"{_measured_share(skill)}%"
@@ -671,6 +672,7 @@ DENSITY_CEILINGS: dict[str, int] = {
     "gate": 34,
     "review": 19,
     "run": 18,
+    "run_hard": 18,
     "critic": 14,
     "thorough_plan": 10,
     "architect": 8,
@@ -738,8 +740,8 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
         f"(sym-diff {sorted(covered ^ set(MANIFEST))}) — every adapter skill and CLAUDE.md "
         "must be named in exactly one of the two sets, never silently absent."
     )
-    assert len(DENSITY_CEILINGS) == 14, (
-        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 14. If a "
+    assert len(DENSITY_CEILINGS) == 15, (
+        f"DENSITY_CEILINGS has {len(DENSITY_CEILINGS)} entries, expected 15. If a "
         "skill's in-domain caps count crossed DENSITY_MATERIALITY_FLOOR, move it "
         "between DENSITY_CEILINGS and DENSITY_EXCLUDED_BELOW_FLOOR and update both "
         "this count and the one below to match."
@@ -750,9 +752,9 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
         "this count and the one above to match."
     )
-    assert sum(DENSITY_CEILINGS.values()) == 154, (
+    assert sum(DENSITY_CEILINGS.values()) == 172, (
         f"sum(DENSITY_CEILINGS.values())={sum(DENSITY_CEILINGS.values())}, expected "
-        "154. A per-file ceiling was re-seeded without updating this checksum — "
+        "172. A per-file ceiling was re-seeded without updating this checksum — "
         "re-sum DENSITY_CEILINGS.values() and update this constant in the same "
         "hunk as the ceiling change."
     )

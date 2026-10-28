@@ -10,7 +10,8 @@ Key differences from simple_claude.py:
      followed by /init_workflow in non-interactive mode.
   2. Sets QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id> in the
      subprocess environment. Both must be set for /gate to auto-approve.
-  3. Starts the prompt with the slash command `/run --autonomous small:` and a
+  3. Starts the prompt with the slash command `/run --autonomous` (or
+     `/run --autonomous hard: small:` under QUOIN_BENCH_QUOIN_ROUTE=hard) and a
      line saying the pipeline is required, so the CLI expands the run skill
      itself (a prose request to "use /run" left a session free to skip the
      pipeline, and the bare slash command still let a session decide an easy
@@ -84,14 +85,27 @@ ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 
 # The slash command alone still let a session judge an easy issue too small for
 # the pipeline and fix it directly, so the arm also states that the pipeline is
-# the thing under test. `small:` picks /run's own path for a single-issue fix
-# (plan, implement, review) instead of leaving the profile to triage.
+# the thing under test. The default is the light /run route; setting
+# QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
+# `small:` (one plan pass, implement, review), as the earlier suites did.
 QUOIN_RUN_PREFIX = (
-    "/run --autonomous small: "
+    "/run --autonomous "
+    "This session benchmarks the quoin workflow, so the /run pipeline is required: "
+    "follow its steps (brief, context, implement, review) even if the fix looks "
+    "trivial, and do not fix the issue directly outside the pipeline.\n\n"
+)
+QUOIN_HARD_RUN_PREFIX = (
+    "/run --autonomous hard: small: "
     "This session benchmarks the quoin workflow, so the /run pipeline is required: "
     "run its phases (plan, implement, review) even if the fix looks trivial, and "
     "do not fix the issue directly outside the pipeline.\n\n"
 )
+ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
+
+
+def _run_prefix() -> str:
+    route = os.environ.get(ENV_BENCH_ROUTE, "").strip().lower()
+    return QUOIN_HARD_RUN_PREFIX if route == "hard" else QUOIN_RUN_PREFIX
 
 
 _INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
@@ -199,7 +213,7 @@ def _run_install_subprocess(argv: list[str], env: Optional[dict] = None) -> dict
 
 PHASE_FILE_PATTERNS = (
     "spec.md", "architecture.md", "current-plan.md", "triage-decision.md",
-    "review-*.md", "cost-ledger.md",
+    "review-*.md", "cost-ledger.md", "brief.md", "context.md", "review.md",
 )
 _ROUTE_LINE = re.compile(r"^\s*route\s*:\s*(\w+)", re.IGNORECASE | re.MULTILINE)
 _PROFILE_LINE = re.compile(r"Task profile:\**\s*\**\s*([A-Za-z]+)", re.IGNORECASE)
@@ -237,6 +251,8 @@ def _pipeline_diagnostics(dest: Path) -> dict:
         match = _ROUTE_LINE.search(_read_text(triage))
         if match and match.group(1).lower() in ("fast", "full"):
             route = match.group(1).lower()
+    if route == "unknown" and not plans and any(dest.rglob("brief.md")):
+        route = "light"
     if route == "unknown" and plans:
         plan_text = _read_text(plans[0])
         route = "fast" if re.search(r"^provenance:\s*fast-path-triage\s*$", plan_text, re.MULTILINE) else "full"
@@ -279,7 +295,7 @@ def _capture_workflow_artifacts(
         "artifacts_path": str | None,
         "phase_files": [str],
         "pipeline_started": bool,
-        "workflow_route": {"route": "fast" | "full" | "unknown", "profile": str | None},
+        "workflow_route": {"route": "light" | "fast" | "full" | "unknown", "profile": str | None},
       }
     """
     empty = {
@@ -386,7 +402,7 @@ def invoke(
     # session cannot answer /run's interactive checkpoints, hence --autonomous.
     # The fixture clone's remote is stripped as belt-and-braces containment for
     # the /implement + /end_of_task capability --autonomous grants.
-    prompt = f"{QUOIN_RUN_PREFIX}{base_prompt}"
+    prompt = f"{_run_prefix()}{base_prompt}"
 
     result: dict = {
         "prompt": prompt,

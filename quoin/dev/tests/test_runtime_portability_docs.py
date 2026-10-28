@@ -77,7 +77,7 @@ def test_runtime_parity_matrix_covers_major_semantics_and_all_migrated_skills():
     manifest = json.loads(read_rel("quoin/core/workflow/skills.json"))
     skill_names = [skill["name"] for skill in manifest["skills"]]
 
-    assert len(skill_names) == 32
+    assert len(skill_names) == 33
     for name in skill_names:
         assert f"`{name}`" in matrix
         assert f"quoin/core/skills/{name}.md" in matrix

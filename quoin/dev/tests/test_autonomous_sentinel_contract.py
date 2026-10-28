@@ -3,7 +3,7 @@
 Covers:
 - The four sentinel path templates (marker, per-phase completion, done,
   halt) are documented in the runtime-neutral core doc
-  (`quoin/core/skills/run.md`) and the Tier-1 memory doc
+  (`quoin/core/skills/run_hard.md`) and the Tier-1 memory doc
   (`quoin/memory/autonomous-mode.md`), and all resolve under
   `.workflow_artifacts/memory/` — never inside the task-scoped folder.
 - `quoin.supervisor`'s path constants byte-match the templates named in
@@ -28,9 +28,9 @@ from pathlib import Path
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/
 _SOURCE_ROOT = _REPO_ROOT / "quoin"
 
-_RUN_CORE_DOC = _SOURCE_ROOT / "core" / "skills" / "run.md"
+_RUN_CORE_DOC = _SOURCE_ROOT / "core" / "skills" / "run_hard.md"
 _AUTONOMOUS_MEMORY_DOC = _SOURCE_ROOT / "memory" / "autonomous-mode.md"
-_RUN_ADAPTER_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+_RUN_ADAPTER_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 _SUPERVISOR_MODULE = _REPO_ROOT / "src" / "quoin" / "supervisor.py"
 
 _SENTINEL_ROOT = ".workflow_artifacts/memory"

@@ -464,7 +464,7 @@ def _class_from_manifest(manifest_skills: list, predicate) -> set:
 def _opus_leaf_class(manifest_skills: list) -> set:
     return _class_from_manifest(
         manifest_skills,
-        lambda r: r.get("section_0") is False and r["name"] not in {"run", "thorough_plan"},
+        lambda r: r.get("section_0") is False and r["name"] not in {"run", "run_hard", "thorough_plan"},
     )
 
 
@@ -712,7 +712,7 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     # ORCHESTRATOR_SKILLS: 2-member {run, thorough_plan} exclusion list, no
     # skills.json field distinguishes "orchestrator" — editorial, single concept
     # duplicated verbatim in the two §0' pollution-dispatch test files.
-    "ORCHESTRATOR_SKILLS": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated (not independently authored, no drift risk)",
+    "ORCHESTRATOR_SKILLS": "editorial 3-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated (not independently authored, no drift risk)",
     # CLASS_B_WRITERS: 6-member "Class B pattern writer" grouping, editorial
     # (per Stage 4 D-04-rev2 criterion), no skills.json field, single-file.
     "CLASS_B_WRITERS@test_tmp_cleanup_contract.py": "editorial Class-B-writer grouping (Stage 4 D-04-rev2 criterion), no skills.json field, single-file",
@@ -732,8 +732,8 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     # rather than silently passing.
     "PHASE_SKILLS@test_opencode_overlay_rewrites.py": "editorial list of the phase skills whose OpenCode overlays are rewritten, single-file, no skills.json field",
     "NON_INTERACTIVE_ENTRIES@test_opencode_overlay_rewrites.py": "editorial list of overlay entries carrying the non-interactive note, single-file, no skills.json field",
-    "ORCHESTRATOR_SKILLS@test_quoin_pollution_preamble.py": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
-    "ORCHESTRATOR_SKILLS@test_inject_pollution_dispatch.py": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
+    "ORCHESTRATOR_SKILLS@test_quoin_pollution_preamble.py": "editorial 3-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
+    "ORCHESTRATOR_SKILLS@test_inject_pollution_dispatch.py": "editorial 3-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
 
     # PRIOR_PHASE_SKILLS: a cumulative "skills that existed at rollout phase N"
     # snapshot, DIFFERENT per adapter-pilot smoke-test file by design (each

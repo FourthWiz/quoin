@@ -14,7 +14,7 @@ import pytest
 
 TESTS_DIR = Path(__file__).resolve().parent
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
-RUN_SKILL = PKG_DIR / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = PKG_DIR / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 
 SLICE_START = "## Hook cooperation (autonomous)"
 SLICE_END = "## Gate boundaries reference"

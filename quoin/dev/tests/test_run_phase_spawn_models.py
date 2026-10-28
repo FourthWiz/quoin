@@ -9,7 +9,7 @@ import pathlib
 import re
 
 HERE = pathlib.Path(__file__).resolve().parent
-RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 
 
 def _text():

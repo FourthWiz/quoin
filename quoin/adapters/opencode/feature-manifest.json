@@ -594,6 +594,20 @@
       "notes": "The TUI command only names the next step; the headless coordinator is `quoin run --runtime opencode --workflow`."
     },
     {
+      "id": "run_hard",
+      "status": "documentation-only",
+      "reason": "In OpenCode, run already follows the heavy pipeline contract, because open models still need its planning and review scaffolding.",
+      "target_milestone": "release-hardening",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
       "id": "security_review",
       "status": "documentation-only",
       "reason": "This is a read-only review variant that will reuse the reviewer role in a later milestone.",

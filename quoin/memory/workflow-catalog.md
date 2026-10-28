@@ -94,27 +94,27 @@ Skills resolve the artifact path via `quoin/scripts/path_resolve.py`. Resolution
 
 ## Workflow sequence
 
-The intended flow depends on the task profile (Small / Medium / Large). `/thorough_plan` is the universal entry point — it triages and routes automatically.
+**Default: light `/run`.** Most tasks use `/run`: one session that writes a short brief (asking only when the request is unclear), refreshes discovery only when stale, gathers a context pack in a subagent, implements inline with proportionate tests, gets one Opus review in a subagent, and commits locally. The heavy pipeline below runs only via `/run hard:` (`/run_hard`), when the light route has failed or the task needs multi-round planning.
 
 ### Canonical flow
+
+The heavy flow depends on the task profile (Small / Medium / Large). `/thorough_plan` triages and routes automatically.
 
 ```
 /discover → /specify → GATE → /architect → GATE → /thorough_plan → GATE → /implement → GATE → /review → GATE → /end_of_task
 ```
 
-Variations: (a) Small tasks skip `/architect` and the critic loop — `/thorough_plan` auto-routes to a single `/plan` pass. (b) `/run` chains every phase automatically, each phase in its own subagent session, pausing at each GATE for confirmation; accepts the same profile tags as `/thorough_plan`. (c) Discover is skipped if a recent (<7 days) discovery file exists. (d) Small tasks may skip `/specify`, mirroring the `/architect` skip; `/specify` is advisory when no task spec exists. (e) `/enrich` sits upstream of `/specify`, sharpening the raw task prompt before intent elicitation begins; it is default-on/prompted (not a hard gate) and never invokes `/specify` itself. (f) `/run` also supports a `fast:` tag: on an eligible task it skips `/architect` and `/thorough_plan` entirely and dispatches `/implement` directly against a mechanically-derived plan stub, confirmed at a checkpoint before it takes effect.
+Variations: (a) Small tasks skip `/architect` and the critic loop — `/thorough_plan` auto-routes to a single `/plan` pass. (b) `/run hard:` (`/run_hard`) chains every phase automatically, each phase in its own subagent session, pausing at each GATE for confirmation; accepts the same profile tags as `/thorough_plan`. (c) Discover is skipped if a recent (<7 days) discovery file exists. (d) Small tasks may skip `/specify`, mirroring the `/architect` skip; `/specify` is advisory when no task spec exists. (e) `/enrich` sits upstream of `/specify`, sharpening the raw task prompt before intent elicitation begins; it is default-on/prompted (not a hard gate) and never invokes `/specify` itself. (f) `/run_hard` also supports a `fast:` tag: on an eligible task it skips `/architect` and `/thorough_plan` entirely and dispatches `/implement` directly against a mechanically-derived plan stub, confirmed at a checkpoint before it takes effect.
 
 **Discovery/Serena refresh policy:** The `<7 days` skip threshold mirrors the `QUOIN_DISCOVERY_STALE_DAYS` default (7). Session-start staleness is surfaced via the `S-5` hook banner in `sessionstart.sh` and `/start_of_day` Step 1c. Automated weekly refresh: `discovery-refresh-routine.md` documents the `/schedule` cron recipe. Environment knobs: `QUOIN_DISCOVERY_STALE_DAYS` (default 7), `QUOIN_SERENA_STALE_DAYS` (default 30), `QUOIN_DISCOVERY_AUTOREFRESH` (auto-run /discover on SOD, off by default), `QUOIN_DISCOVERY_REFRESH_DISABLE` (master off switch), `QUOIN_DISCOVERY_REFRESH_CRON` (cron schedule, default `0 6 * * 1`).
 
 **Note on `/architect`:** Phase 4 critic loop is INTERNAL to `/architect` — the canonical flow string above is unchanged. `/architect` internally runs a critic loop (max 2 rounds default, max 4 in strict mode) before returning `architecture.md` as final. This does not add a visible step to the flow.
 
-**Note on the fast route:** the canonical flow string above is unchanged by variation (f) — the fast route is a conditional variation, not a change to the canonical string, exactly like the `/architect` critic-loop note above. The same canonical-flow string also lives at `quoin/core/workflow/rules.md:18` and `gate/SKILL.md:243`; both stay unchanged for the same reason.
-
 ### Explicit-command rule
 
 **CRITICAL RULE: `/implement` and `/end_of_task` require explicit user commands.** No skill may auto-invoke either. After `/thorough_plan` converges, the workflow STOPS and waits for `/implement`. After `/review` approves and the gate passes, the workflow STOPS and waits for `/end_of_task`. The user must consciously decide to start writing code AND to ship it.
 
-**Exception: `/run` (incl. `--autonomous`).** May invoke `/implement`/`/end_of_task` for the user — see `autonomous-mode.md`. Stage 2 adds a `quoin run --autonomous <task>` supervisor that relaunches fresh sessions across context windows.
+**Exception: `/run_hard` (incl. `--autonomous`).** May invoke `/implement`/`/end_of_task` for the user. Light `/run` implements and commits locally itself and never pushes — see `autonomous-mode.md`. Stage 2 adds a `quoin run --autonomous <task>` supervisor that relaunches fresh sessions across context windows.
 
 **Gate invocation modes:** Post-implement and post-review gates run **inline** by default (same session, no subagent spawn — preserves the parent session's prompt cache). Post-architect and post-plan gates spawn **subagent** by default (different context shape after those phases). There is no `/gate` after `/discover`. Audit-log persistence (`gate-{phase}-{date}.md`) is mandatory regardless of mode — see `/gate/SKILL.md`.
 
@@ -148,7 +148,7 @@ Each stage feeds into the next, with `/gate` checkpoints requiring explicit huma
   - **Medium:** runs the plan→critic→revise convergence loop (Opus plan, Sonnet revise, Opus critic, max 4 rounds)
   - **Large:** runs the convergence loop in strict mode (all Opus, max 5 rounds)
   - Override with `max_rounds: N` for any profile (ignored for Small)
-- `/run` chains the entire workflow end-to-end: discover (if stale) → specify (if not Small and no task spec) → architect (if not Small) → thorough_plan → implement → review → end_of_task. Pauses at each gate for user confirmation. Accepts same profile tags as `/thorough_plan`. Use when you want the full pipeline in one command. Add `--autonomous` for a zero-prompt span through `/end_of_task` once formulation clears the quality bar.
+- `/run hard:` (`/run_hard`) chains the entire workflow end-to-end: discover (if stale) → specify (if not Small and no task spec) → architect (if not Small) → thorough_plan → implement → review → end_of_task. Pauses at each gate for user confirmation. Accepts same profile tags as `/thorough_plan`. Use when you want the full pipeline in one command. Add `--autonomous` for a zero-prompt span through `/end_of_task` once formulation clears the quality bar.
 - **GATE** — automated checks (plan completeness, risk coverage), user reviews plan, explicitly approves
 - `/implement` executes tasks from the converged plan, writing code and tests
 - **GATE** — automated checks (scope depends on task profile — Standard for Small/Medium, Full for Large)
@@ -337,7 +337,8 @@ The full catalog of always-English Tier-1 files (hand-edited, contract-approval,
 | /revise | Opus | Addressing critic feedback requires strong reasoning (used in strict mode) |
 | /revise-fast | Sonnet | Cost-efficient revision (used by /thorough_plan in normal mode, rounds 2+) |
 | /thorough_plan | Opus | Orchestrates task triage and plan→critic→revise loop. Routes Small tasks to single-pass /plan; Medium uses Sonnet /revise-fast; Large/strict: uses all-Opus. Critic always Opus. |
-| /run | Opus | End-to-end orchestrator managing phase transitions, user checkpoints, and subagent dispatch. Needs strong reasoning for conditional logic and error recovery. |
+| /run | Opus | Default light pipeline: implements inline, so it needs the strongest model; delegates discovery, the context pack (Sonnet) and one review (Opus) to subagents. |
+| /run_hard | Opus | Heavy end-to-end orchestrator managing phase transitions, user checkpoints, and subagent dispatch. Explicit opt-in only. |
 | /implement | Sonnet | Efficient code generation, plan already defines what to do |
 | /review | Opus | Thorough analysis, integration safety, risk assessment |
 | /security_review | Opus | Standalone OWASP-style security pass; auto-included in Large /review fan-out |

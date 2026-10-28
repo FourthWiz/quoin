@@ -169,7 +169,7 @@ def test_bundle_membership_and_counts():
     assert by_status["supported"] == supported
     assert by_status["unsupported"] == unsupported
     assert len(by_status["supported"]) == 12
-    assert len(by_status.get("documentation-only", set())) == 15
+    assert len(by_status.get("documentation-only", set())) == 16
     assert len(by_status["unsupported"]) == 5
     assert all(row["live_runtime_evidence"] is False for row in rows)
 
@@ -458,7 +458,7 @@ def test_non_utf8_compat_file_raises_manifest_load_error_not_traceback(tmp_path)
 def test_cli_real_tree_exits_0_from_repo_root():
     result = _run_check_manifest_cli("--source-dir", "quoin")
     assert result.returncode == 0, result.stderr
-    assert "32" in result.stdout
+    assert "33" in result.stdout
 
 
 def test_cli_broken_temp_copy_exits_1_with_offender_id_on_stderr(tmp_path):
@@ -481,7 +481,7 @@ def test_cli_missing_directory_exits_2():
 def test_cli_omitted_source_dir_exits_0_via_default_resolution():
     result = _run_check_manifest_cli()
     assert result.returncode == 0, result.stderr
-    assert "32" in result.stdout
+    assert "33" in result.stdout
 
 
 def test_main_in_process_returns_0_1_2_for_the_three_cases(tmp_path):

@@ -266,7 +266,7 @@ _named_steps = {
     "end_of_day": ("### Step 1: Save current session state", r"^### Step "),
     "end_of_task": ("3. Update", r"^\s+3a\. "),
     "rollback": ("### Step 5: Update session state", r"^### "),
-    "run": ("## Session state tracking", r"^## "),
+    "run_hard": ("## Session state tracking", r"^## "),
 }
 
 
@@ -296,8 +296,8 @@ def test_pr_and_workspace_session_lines_point_at_schema(name):
 
 def test_file_wide_absences():
     assert "After each task (or at natural stopping points)" not in _skill("implement")
-    assert "Record `autonomous: true` in the session-state file" not in _skill("run")
-    assert "[autonomous]" in _skill("run")  # the cost-ledger NOTE tag stays
+    assert "Record `autonomous: true` in the session-state file" not in _skill("run_hard")
+    assert "[autonomous]" in _skill("run_hard")  # the cost-ledger NOTE tag stays
     for skill_dir in SKILLS.iterdir():
         md = skill_dir / "SKILL.md"
         if md.is_file():

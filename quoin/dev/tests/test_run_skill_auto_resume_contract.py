@@ -29,7 +29,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 AUTONOMOUS_MODE = REPO_ROOT / "quoin" / "memory" / "autonomous-mode.md"
 USERPROMPTSUBMIT_SH = REPO_ROOT / "quoin" / "hooks" / "userpromptsubmit.sh"
 
