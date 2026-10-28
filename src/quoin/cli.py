@@ -2733,6 +2733,27 @@ def _strip_handoff_pythonpath() -> None:
         del os.environ["PYTHONPATH"]
 
 
+def _light_task_refusal(project_root: pathlib.Path, task: str, memory_dir: pathlib.Path) -> Optional[str]:
+    """Why the supervisor must not drive `task`, or None.
+
+    The supervisor relaunches `/run --resume`, which only the heavy pipeline
+    can continue. A task the light `/run` started (a brief, but no heavy
+    run-state record or autonomous marker) would never write a done sentinel,
+    so each relaunch would be a wasted full session until the no-progress abort.
+    """
+    brief = project_root / ".workflow_artifacts" / task / "brief.md"
+    heavy = (memory_dir / f"run-state-{task}.json").exists() or (
+        memory_dir / f"autonomous-run-{task}.marker"
+    ).exists()
+    if brief.exists() and not heavy:
+        return (
+            f"quoin run: REFUSED: '{task}' was started by the light /run, which runs in one "
+            "session and cannot be relaunched; continue it with `/run --resume "
+            f"{task}` in Claude Code, or restart it with `/run hard: ...` for the supervised pipeline."
+        )
+    return None
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """`quoin run --autonomous <task>` — external supervisor entrypoint (T-08).
 
@@ -2761,6 +2782,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         from quoin import takeover as _takeover  # noqa: PLC0415
 
         return _takeover.run_takeover(args.task, project_root)
+
+    refusal = _light_task_refusal(project_root, args.task, paths["memory_dir"])
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     # Strips an auto-resume hand-off's PYTHONPATH prepend before any launch
     # so the relaunched `claude` subprocess (which inherits os.environ) sees

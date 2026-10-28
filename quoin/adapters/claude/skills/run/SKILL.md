@@ -19,12 +19,15 @@ behalf. It never pushes and never opens a PR.
 
 ## Step 0 — Route
 
-Scan the input before anything else:
+Scan the input before anything else. The task name is the first token that is
+not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `hard:`, `strict:`,
+`small:` and the like); when handing off to `run_hard`, always pass the original
+input unchanged apart from removing `hard:`.
 
 1. **`hard:`** or **`strict:`** anywhere in the input → this task wants the full
    heavy pipeline. Invoke the `run_hard` skill with the input unchanged (keep
    `strict:`, strip only `hard:`) and stop; `run_hard` owns everything from there.
-2. **`--resume <task>`** → if `.workflow_artifacts/memory/run-state-<task>.json` or
+2. **`--resume`** (task name as above) → if `.workflow_artifacts/memory/run-state-<task>.json` or
    `.workflow_artifacts/memory/autonomous-run-<task>.marker` exists, the task was
    started by the heavy pipeline: invoke `run_hard` with the input unchanged and
    stop. Otherwise resume the light run: read `.workflow_artifacts/<task>/brief.md`,
@@ -56,13 +59,15 @@ Discovery memory is refreshed when it is missing or older than 7 days
 (`QUOIN_DISCOVERY_STALE_DAYS`):
 
 ```bash
-find .workflow_artifacts/cache/_staleness.md -mtime -7 2>/dev/null || find .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null
+find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1
 ```
 
-- Recent (or `repos-inventory.md` present and recent) → skip and say so in one line.
-- Missing or older than 7 days → spawn a subagent that runs `/discover` for the
-  project root. Wait for it; its output files are the project memory the next
-  steps read.
+- Non-empty output (recent) → skip and say so in one line.
+- Empty output (missing or older than 7 days) → spawn one subagent on **opus**
+  whose prompt starts with `[no-redispatch]` and runs `/discover` for the project
+  root (the prefix stops `/discover` from re-dispatching itself into a second
+  subagent). Wait for it; its output files are the project memory the next steps
+  read.
 
 ## Step 3 — Frame (inline)
 
@@ -122,13 +127,16 @@ duplicate coverage across files, and do not build fixtures larger than the chang
 
 ## Step 6 — Verify (inline)
 
-Run the affected tests once:
+Run the tests that cover the change once, using the test command from the
+context pack. For a Python project you may instead use the affected-test helper:
 
 ```bash
 python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$(pwd)" --format text
 ```
 
-or the test command from the context pack. Fix real failures and re-run.
+It only understands pytest: if it reports `ran_pytest=false`, no tests ran, so
+do not record a green result; use the context-pack command instead. Fix real
+failures and re-run.
 
 If the test environment cannot be built (missing dependencies, sandbox denies
 installs, no interpreter), say so in one line, record it in the brief under
@@ -137,8 +145,11 @@ outside the project, or install packages globally.
 
 ## Step 7 — Review (subagent, one pass)
 
-Spawn one general-purpose review subagent on **opus**. Give it only the brief, the output of
-`git diff <base>...HEAD` (plus uncommitted changes), and the verification result.
+Spawn one general-purpose review subagent on **opus**. Give it only the brief, the
+full diff of the task against its base, and the verification result. The work is
+not committed yet, so first mark new files with `git add -N <new files>` and pass
+`git diff <base>` (base = the commit the task branch started from); a plain
+`git diff` leaves out new files.
 Do not pass your reasoning or the context pack, so its read is not anchored on
 yours. Ask it for at most about 10 findings, each with `path:line`, severity
 (blocker / should-fix / nit) and a concrete fix. Ask it to check correctness
