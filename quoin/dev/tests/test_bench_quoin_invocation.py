@@ -125,6 +125,13 @@ def test_orchestrator_ledger_row_alone_marks_the_pipeline_started(tmp_path):
     assert got["workflow_route"]["route"] == "unknown"
 
 
+def test_light_brief_counts_as_the_plan(tmp_path):
+    got = _capture(tmp_path, {"task/brief.md": "# task\n## Goal\nfix it\n"})
+    assert got["has_current_plan_md"] is True
+    assert got["pipeline_started"] is True
+    assert got["workflow_route"]["route"] == "light"
+
+
 def test_fast_stub_plan_is_the_fast_route(tmp_path):
     got = _capture(tmp_path, {"task/current-plan.md": "---\nprovenance: fast-path-triage\n---\nplan\n"})
     assert got["workflow_route"]["route"] == "fast"

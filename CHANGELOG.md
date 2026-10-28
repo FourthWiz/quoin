@@ -10,6 +10,8 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Fixed
 
+- **The tiered benchmark counts a light-route brief as the quoin arm's plan** (v0.64.1). A quoin row is invalid when the session leaves no plan on disk. The light `/run` plans in `brief.md` instead of `current-plan.md`, so its rows were marked invalid; either file now counts.
+
 - **The gate no longer writes quoin's own known-red file into other projects** (v0.64.0). Without a manifest, `known_red.py` defaulted to `quoin/dev/tests/known-red.toml`, quoin's own repository layout, and a benchmark session created that file inside matplotlib, where it ended up in the patch. Outside the quoin repo the default is now `.workflow_artifacts/known-red.toml`.
 
 - **The blind pairwise review treats patch text as untrusted and bounds each call** (v0.63.1). Text in a patch or issue that reads as one of the prompt's section tags is escaped, control characters are removed from the binary-change note, and a task whose prompt is over 400,000 characters is skipped as `patch-too-large` before any spend is reserved. A quoted path with an out-of-range octal escape no longer crashes the review. Ctrl-C or an unexpected error during a review kills the reviewer process instead of leaving it running. A task with a blinding marker is skipped even after a spend stop, so a stopped and a resumed run agree. `pick_subset.py --problems-only` without `--suite` now exits 2 with a message instead of a traceback.

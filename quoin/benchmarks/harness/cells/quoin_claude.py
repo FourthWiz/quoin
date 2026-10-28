@@ -318,9 +318,10 @@ def _capture_workflow_artifacts(
         # Evidence exists but could not be preserved: the plan is unknown, not absent.
         return {**empty, "copy_failed": True}
 
-    # Validate: look for architecture.md and current-plan.md in any subfolder
+    # Validate: look for architecture.md and a plan in any subfolder. The light
+    # /run route plans in its brief instead of writing current-plan.md.
     has_arch = any(dest.rglob("architecture.md"))
-    has_plan = any(dest.rglob("current-plan.md"))
+    has_plan = any(dest.rglob("current-plan.md")) or any(dest.rglob("brief.md"))
 
     return {
         "captured": True,
