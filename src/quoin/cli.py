@@ -569,6 +569,11 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
 
     runtime_record.remove_existing_record(dest_root)
 
+    # Every file deployed from here to deploy_hooks is recorded, so files the
+    # previous install deployed and this one did not can be pruned below.
+    previous_manifest = installer.read_deploy_manifest(dest_root)
+    installer.start_deploy_record()
+
     # T-04
     installer.deploy_memory(source_dir, dest_root)
     installer.deploy_quickstart(source_dir, dest_root)
@@ -606,6 +611,26 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         autocompact_window=autocompact_window,
         clear_autocompact_env=clear_autocompact_env,
     )
+
+    deployed = installer.take_deploy_record()
+    manifest = dict(deployed)
+    if getattr(args, "no_prune", False):
+        # Keep the stale entries so a later install can still prune them.
+        for rel, digest in (previous_manifest or {}).items():
+            manifest.setdefault(rel, digest)
+    elif previous_manifest is None:
+        installer.remove_pre_manifest_files(dest_root)
+    else:
+        foreign_mods = tuple(
+            f"skills/{mod.name}/"
+            for mod in installer.OPT_IN_MODS
+            if installer.mod_state(mod, dest_root) == "foreign"
+        )
+        _, retry = installer.prune_stale_deploys(
+            dest_root, previous_manifest, deployed, protected=foreign_mods
+        )
+        manifest.update(retry)
+    installer.write_deploy_manifest(dest_root, manifest)
 
     # agentdesk tool — user-mode only (user-level ~/.config/agentdesk/ location)
     if not is_project_mode:
@@ -3142,6 +3167,11 @@ def main(argv: list[str] | None = None) -> int:
         "--force-merge",
         action="store_true",
         help="Keep first DEV WORKFLOW marker pair; remove extra pairs",
+    )
+    install_p.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Keep files a previous install deployed that this version no longer ships",
     )
     install_p.add_argument(
         "--scope", default=None, metavar="SCOPE",

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -293,6 +294,171 @@ def _copy_with_substitution(
         dst.write_bytes(new_bytes)
     if src.suffix in (".py", ".sh"):
         os.chmod(dst, 0o755)
+    if _deploy_record is not None:
+        try:
+            rel = dst.relative_to(dest_root).as_posix()
+        except ValueError:
+            return
+        _deploy_record[rel] = hashlib.sha256(new_bytes).hexdigest()
+
+
+# ── Deploy manifest and stale-file pruning ───────────────────────────────────
+
+# Every file the install writes into dest_root, with the sha256 of the bytes
+# written. The next install deletes the files it no longer ships, but only
+# while they still hold exactly what quoin wrote.
+MANIFEST_FILENAME = "quoin-manifest.json"
+MANIFEST_SCHEMA = 1
+
+# Files removed from quoin before the manifest existed. An install that finds
+# no previous manifest deletes these instead of pruning (relative to dest_root).
+PRE_MANIFEST_REMOVED_FILES = (
+    "scripts/backfill_cost_attribution.py",
+    "scripts/handoff_measure.py",
+    "scripts/find_drive_conflicts.py",
+    "core/scripts/find_drive_conflicts.py",
+)
+
+# Collects {relative path: sha256} while an install is recording; None otherwise.
+_deploy_record: Optional[dict[str, str]] = None
+
+
+def start_deploy_record() -> None:
+    """Start collecting every file _copy_with_substitution writes."""
+    global _deploy_record
+    _deploy_record = {}
+
+
+def take_deploy_record() -> dict[str, str]:
+    """Stop collecting and return what was recorded since start_deploy_record."""
+    global _deploy_record
+    record, _deploy_record = _deploy_record or {}, None
+    return record
+
+
+def _sha256_file(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_deploy_manifest(dest_root: pathlib.Path) -> Optional[dict[str, str]]:
+    """Return the previous install's {relative path: sha256}, or None.
+
+    None means there is no usable manifest (first install with pruning, or an
+    unreadable file); the caller then prunes nothing.
+    """
+    path = dest_root / MANIFEST_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        data = None
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, dict) or data.get("schema") != MANIFEST_SCHEMA:
+        print(f"quoin: warning: ignoring unreadable deploy manifest {path}", file=sys.stderr)
+        return None
+    return {k: v for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def write_deploy_manifest(dest_root: pathlib.Path, files: dict[str, str]) -> Optional[pathlib.Path]:
+    """Atomically write the manifest; returns its path, or None after a warning."""
+    path = dest_root / MANIFEST_FILENAME
+    tmp = path.with_name(path.name + ".tmp")
+    payload = {"schema": MANIFEST_SCHEMA, "files": dict(sorted(files.items()))}
+    try:
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"quoin: warning: could not write deploy manifest {path}: {exc}", file=sys.stderr)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return None
+    return path
+
+
+def _prunable_path(dest_root: pathlib.Path, rel: str) -> Optional[pathlib.Path]:
+    """Map a manifest entry to a path under a quoin deploy subdirectory, or None."""
+    pure = pathlib.PurePosixPath(rel)
+    parts = pure.parts
+    if pure.as_posix() != rel or pure.is_absolute() or ".." in parts:
+        return None
+    if len(parts) < 2 or parts[0] not in _QUOIN_DEPLOYED_SUBDIRS:
+        return None
+    return dest_root.joinpath(*parts)
+
+
+def remove_pre_manifest_files(dest_root: pathlib.Path) -> None:
+    """Delete PRE_MANIFEST_REMOVED_FILES; used only when no manifest exists yet."""
+    for rel in PRE_MANIFEST_REMOVED_FILES:
+        target = dest_root / rel
+        if target.is_file() and not target.is_symlink():
+            target.unlink()
+            print(f"Removed {target} (no longer shipped)")
+
+
+def prune_stale_deploys(
+    dest_root: pathlib.Path,
+    previous: dict[str, str],
+    current: dict[str, str],
+    protected: tuple[str, ...] = (),
+) -> tuple[list[str], dict[str, str]]:
+    """Delete files the previous install deployed that this install did not.
+
+    A file is deleted only while its sha256 still matches the previous
+    manifest; an edited file is kept with a warning. Only paths under the
+    quoin deploy subdirectories are considered, so settings.json, CLAUDE.md
+    and anything quoin never recorded are never touched. Directories left
+    empty by a deletion are removed up to (not including) the subdirectory.
+
+    Entries under a `protected` prefix (a mod folder quoin treats as foreign)
+    are left alone.
+
+    Returns (pruned relative paths, retry entries). An edited file leaves the
+    manifest, so it is reported once and is the user's from then on; a
+    protected entry, or a file that could not be read or deleted, is returned
+    for the next install to retry.
+    """
+    pruned: list[str] = []
+    kept: dict[str, str] = {}
+    for rel in sorted(set(previous) - set(current)):
+        if protected and rel.startswith(protected):
+            kept[rel] = previous[rel]
+            continue
+        target = _prunable_path(dest_root, rel)
+        if target is None or target.is_symlink() or not target.is_file():
+            continue
+        try:
+            unchanged = _sha256_file(target) == previous[rel]
+        except OSError as exc:
+            print(f"quoin: warning: could not check {target}: {exc}", file=sys.stderr)
+            kept[rel] = previous[rel]
+            continue
+        if not unchanged:
+            print(
+                f"quoin: warning: keeping {target}: quoin no longer ships it, "
+                "but it was changed after install",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            target.unlink()
+        except OSError as exc:
+            print(f"quoin: warning: could not remove {target}: {exc}", file=sys.stderr)
+            kept[rel] = previous[rel]
+            continue
+        pruned.append(rel)
+        print(f"Removed {target} (no longer shipped)")
+        top = dest_root / pathlib.PurePosixPath(rel).parts[0]
+        parent = target.parent
+        while parent != top and parent != dest_root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    return pruned, kept
 
 
 # ── T-13: home hook conflict detection ───────────────────────────────────────

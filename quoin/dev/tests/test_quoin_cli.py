@@ -505,6 +505,10 @@ def test_installer_byte_identical_to_install_sh():
                         f"quoin-runtime.json non-volatile field mismatch: {stable_a} != {stable_b}"
                     )
                     continue
+                if rel.name == "quoin-manifest.json":
+                    # Hashes cover path-substituted bytes; the deployed paths must match.
+                    assert sorted(_json.loads(ta)["files"]) == sorted(_json.loads(tb)["files"])
+                    continue
                 assert ta == tb, f"file content mismatch after home-normalization: {rel}"
             except UnicodeDecodeError:
                 # Genuine binary file — compare raw bytes (no home-prefix substitution possible)

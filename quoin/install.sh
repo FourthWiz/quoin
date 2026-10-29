@@ -31,6 +31,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # ── Argument parsing ──────────────────────────────────────────────────────────
 DEV_FLAG=""
 FORCE_MERGE_FLAG=""
+NO_PRUNE_FLAG=""
 SCOPE_FLAG=""
 CLAUDE_MD_VARIANT_FLAG=""
 ALLOW_HOOK_MERGE_FLAG=""
@@ -60,6 +61,7 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
     --use-pip)      USE_PIP=1 ;;
     --print-python) PRINT_PYTHON=1 ;;
     --force-merge)  FORCE_MERGE_FLAG="--force-merge" ;;
+    --no-prune)     NO_PRUNE_FLAG="--no-prune" ;;
     --allow-hook-merge) ALLOW_HOOK_MERGE_FLAG="--allow-hook-merge" ;;
     --clear-autocompact-env) CLEAR_AUTOCOMPACT_ENV_FLAG="--clear-autocompact-env" ;;
     --with-context-tracker) WITH_CONTEXT_TRACKER_FLAG="--with-context-tracker" ;;
@@ -136,7 +138,7 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       fi
       ;;
     -h|--help)
-      echo "Usage: bash install.sh [--dev] [--upgrade] [--use-pip] [--force-merge]"
+      echo "Usage: bash install.sh [--dev] [--upgrade] [--use-pip] [--force-merge] [--no-prune]"
       echo "                       [--scope user|project[:DIR]] [--claude-md-variant full|slim]"
       echo "                       [--allow-hook-merge] [--autocompact-pct N]"
       echo "                       [--autocompact-window TOKENS] [--clear-autocompact-env]"
@@ -151,6 +153,8 @@ while [[ $i -lt ${#ARGS[@]} ]]; do
       echo "  --print-python       Print the Python interpreter the installer would use, then exit."
       echo "                       Set QUOIN_PYTHON=/path/to/python to choose one explicitly."
       echo "  --force-merge        Keep first DEV WORKFLOW marker pair; remove extras"
+      echo "  --no-prune           Keep files an earlier install deployed that this version no"
+      echo "                       longer ships (by default they are removed unless edited)"
       echo "  --scope user         Install globally under ~/.claude/"
       echo "  --scope project      Install under <CWD>/.claude/ instead of ~/.claude/."
       echo "                       All skills, scripts, hooks, and CLAUDE.md will be"
@@ -512,6 +516,7 @@ fi
 INSTALL_ARGS=("install" "--source-dir" "$SCRIPT_DIR")
 [[ -n "$DEV_FLAG" ]]              && INSTALL_ARGS+=("$DEV_FLAG")
 [[ -n "$FORCE_MERGE_FLAG" ]]      && INSTALL_ARGS+=("$FORCE_MERGE_FLAG")
+[[ -n "$NO_PRUNE_FLAG" ]]         && INSTALL_ARGS+=("$NO_PRUNE_FLAG")
 # Forward --scope flag (stored as "--scope value" string; split into two tokens)
 if [[ -n "$SCOPE_FLAG" ]]; then
   # Split "--scope value" into separate array elements (handles project:/path with colon)
