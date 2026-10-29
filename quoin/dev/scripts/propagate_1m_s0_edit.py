@@ -34,7 +34,6 @@ THIS_FILE = Path(__file__).resolve()
 DEV_DIR = THIS_FILE.parent.parent          # quoin/quoin/dev/
 PKG_DIR = DEV_DIR.parent                   # quoin/quoin/
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
-LEGACY_SKILLS_DIR = PKG_DIR / "skills"
 
 # ---------------------------------------------------------------------------
 # Target file list (18 remaining after gate pilot)
@@ -56,9 +55,7 @@ LEGACY_TARGETS: list[str] = [
 
 
 def skill_md_path(skill_name: str) -> Path:
-    if skill_name in MIGRATED_TO_ADAPTER:
-        return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
-    return LEGACY_SKILLS_DIR / skill_name / "SKILL.md"
+    return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
 
 
 ALL_TARGETS: list[str] = sorted(MIGRATED_TO_ADAPTER) + LEGACY_TARGETS

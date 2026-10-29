@@ -2,8 +2,7 @@
 
 Cheap literal-token asserts (mirroring test_gate_affected_area_tokens.py /
 test_gate_ci_mirror_tokens.py) that verify the known-red manifest wiring
-landed in the ACTIVE adapter files and NOT in the deprecated 24/19-line stubs
-(R-05, lessons 2026-07-16 #6). Also guards:
+landed in the active adapter files (R-05, lessons 2026-07-16 #6). Also guards:
   - the MAJ-3 no-self-run invariant at the adapter-text level (no `subprocess`
     self-run string paired with known_red.py; an explicit MAJ-3 marker present);
   - that the known-red wiring does NOT introduce a new drift-guarded named-check
@@ -18,10 +17,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 ADAPTERS = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills"
 GATE_SKILL = ADAPTERS / "gate" / "SKILL.md"
 REVIEW_SKILL = ADAPTERS / "review" / "SKILL.md"
-
-STUBS = REPO_ROOT / "quoin" / "skills"
-GATE_STUB = STUBS / "gate" / "SKILL.md"
-REVIEW_STUB = STUBS / "review" / "SKILL.md"
 
 # Tokens the full-suite gate wiring introduces (identity/count/staleness).
 GATE_TOKENS = (
@@ -53,13 +48,6 @@ def test_review_adapter_contains_known_red_tokens():
     text = REVIEW_SKILL.read_text(encoding="utf-8")
     for tok in REVIEW_TOKENS:
         assert tok in text, f"review SKILL.md missing known-red wiring token {tok!r}"
-
-
-def test_deprecated_stubs_untouched():
-    for stub in (GATE_STUB, REVIEW_STUB):
-        text = stub.read_text(encoding="utf-8")
-        assert "known_red.py" not in text, f"{stub} (deprecated stub) must not carry wiring"
-        assert "known-baseline" not in text, f"{stub} (deprecated stub) must not carry wiring"
 
 
 def test_no_self_run_string_in_adapters():

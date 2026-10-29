@@ -57,13 +57,12 @@ def _build_trees(installer, tmp_path, monkeypatch):
     # memory (tier-1)
     (src / "memory").mkdir(parents=True)
     (src / "memory" / "m1.md").write_text("mem body\n", encoding="utf-8")
-    # skills: one with an adapter SKILL.md, one stub-only + a preamble
-    (src / "skills" / "alpha").mkdir(parents=True)
-    (src / "skills" / "alpha" / "SKILL.md").write_text("alpha stub\n", encoding="utf-8")
-    (src / "skills" / "alpha" / "preamble.md").write_text("alpha preamble\n", encoding="utf-8")
+    # skills: one adapter skill folder with SKILL.md + a preamble
     (src / "adapters" / "claude" / "skills" / "alpha").mkdir(parents=True)
     (src / "adapters" / "claude" / "skills" / "alpha" / "SKILL.md").write_text(
         "alpha ADAPTER body\n", encoding="utf-8")
+    (src / "adapters" / "claude" / "skills" / "alpha" / "preamble.md").write_text(
+        "alpha preamble\n", encoding="utf-8")
     # scripts
     (src / "scripts").mkdir(parents=True)
     (src / "scripts" / "s1.py").write_text("print('s1')\n", encoding="utf-8")
@@ -86,10 +85,10 @@ def _build_trees(installer, tmp_path, monkeypatch):
         dest_path.write_bytes(installer.expected_deployed_content(src_path, dest))
 
     _deploy(src / "memory" / "m1.md", dest / "memory" / "m1.md")
-    # skills: adapter-preferred SKILL.md is the source of record
+    # skills: the adapter skill folder is the source of record
     _deploy(src / "adapters" / "claude" / "skills" / "alpha" / "SKILL.md",
             dest / "skills" / "alpha" / "SKILL.md")
-    _deploy(src / "skills" / "alpha" / "preamble.md",
+    _deploy(src / "adapters" / "claude" / "skills" / "alpha" / "preamble.md",
             dest / "skills" / "alpha" / "preamble.md")
     _deploy(src / "scripts" / "s1.py", dest / "scripts" / "s1.py")
     _deploy(src / "core" / "scripts" / "c1.py", dest / "core" / "scripts" / "c1.py")
@@ -116,26 +115,6 @@ def test_expected_deployed_content_bytecopy_nontext(installer, tmp_path):
     src.write_bytes(b"\x89PNG__QUOIN_HOME__")  # placeholder must NOT be substituted
     out = installer.expected_deployed_content(src, tmp_path / "dest")
     assert out == b"\x89PNG__QUOIN_HOME__"
-
-
-def test_resolve_skill_source_md_adapter_preferred(installer, tmp_path):
-    src_skills = tmp_path / "skills"
-    src_adapter = tmp_path / "adapters" / "claude" / "skills"
-    (src_skills / "alpha").mkdir(parents=True)
-    (src_skills / "alpha" / "SKILL.md").write_text("stub", encoding="utf-8")
-    (src_adapter / "alpha").mkdir(parents=True)
-    (src_adapter / "alpha" / "SKILL.md").write_text("adapter", encoding="utf-8")
-    resolved = installer.resolve_skill_source_md(src_skills, src_adapter, "alpha")
-    assert resolved == src_adapter / "alpha" / "SKILL.md"
-
-
-def test_resolve_skill_source_md_stub_fallback(installer, tmp_path):
-    src_skills = tmp_path / "skills"
-    src_adapter = tmp_path / "adapters" / "claude" / "skills"
-    (src_skills / "beta").mkdir(parents=True)
-    (src_skills / "beta" / "SKILL.md").write_text("stub", encoding="utf-8")
-    resolved = installer.resolve_skill_source_md(src_skills, src_adapter, "beta")
-    assert resolved == src_skills / "beta" / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------
@@ -181,13 +160,16 @@ def test_compute_drift_c_substitution_parity(installer, tmp_path, monkeypatch):
         "substituted deployed copy must NOT be flagged as drift")
 
 
-def test_compute_drift_d_adapter_not_stub(installer, tmp_path, monkeypatch):
+def test_compute_drift_d_stale_preamble(installer, tmp_path, monkeypatch):
     src, dest = _build_trees(installer, tmp_path, monkeypatch)
-    # Deployed copy matches the ADAPTER body (source of record). Mutating the stub
-    # must NOT create drift because the adapter file is what is compared.
-    (src / "skills" / "alpha" / "SKILL.md").write_text("stub CHANGED\n", encoding="utf-8")
+    # The preamble.md next to the adapter SKILL.md is compared too.
+    (src / "adapters" / "claude" / "skills" / "alpha" / "preamble.md").write_text(
+        "preamble CHANGED\n", encoding="utf-8")
     drift = installer.compute_drift(src, dest)
-    assert not any(d.category == "skills" and "SKILL.md" in d.deployed_path for d in drift)
+    assert any(
+        d.reason == "stale" and d.category == "skills" and d.deployed_path.endswith("preamble.md")
+        for d in drift
+    )
 
 
 def test_compute_drift_e_untracked_memory_file_ignored(installer, tmp_path, monkeypatch):

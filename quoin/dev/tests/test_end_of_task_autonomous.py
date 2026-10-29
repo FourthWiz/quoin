@@ -19,8 +19,6 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 END_OF_TASK_SKILL = (
     REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "end_of_task" / "SKILL.md"
 )
-# The deprecated frontmatter-only stub must NOT be touched by this task.
-END_OF_TASK_STUB = REPO_ROOT / "quoin" / "skills" / "end_of_task" / "SKILL.md"
 
 
 @pytest.fixture(scope="module")
@@ -132,12 +130,3 @@ def test_normal_path_askuserquestion_still_documented(eot_skill_text: str) -> No
     assert 'question="Task complete. Anything that surprised you' in text
     assert "question=\"Is the feature '<task-name>' fully complete" in text
 
-
-def test_stub_not_edited() -> None:
-    """The deprecated stub end_of_task/SKILL.md is frontmatter-only and must not gain
-    a body from this task."""
-    if not END_OF_TASK_STUB.exists():
-        pytest.skip("legacy end_of_task stub not present in this checkout")
-    stub_text = END_OF_TASK_STUB.read_text(encoding="utf-8")
-    assert "Autonomous mode bootstrap" not in stub_text
-    assert "_AUTONOMOUS" not in stub_text

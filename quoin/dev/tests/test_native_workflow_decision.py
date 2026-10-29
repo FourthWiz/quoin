@@ -25,7 +25,6 @@ REQUIRED_SECTIONS = (
 # Trees that ship to users; a workflow script here would mean adoption.
 GUARDED_TREES = (
     REPO_ROOT / "quoin" / "adapters" / "claude",
-    REPO_ROOT / "quoin" / "skills",
     REPO_ROOT / "src" / "quoin",
 )
 

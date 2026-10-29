@@ -29,7 +29,6 @@ THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
-LEGACY_SKILLS_DIR = PKG_DIR / "skills"
 
 # ---------------------------------------------------------------------------
 # Path resolver (self-contained copy — do NOT import from test_1m_context_precheck)
@@ -68,9 +67,7 @@ SECTION0_SKILLS: list[str] = [t[0] for t in SECTION0_TARGETS]
 
 def skill_md_path(skill_name: str) -> Path:
     """Return the canonical SKILL.md path for a given skill."""
-    if skill_name in MIGRATED_TO_ADAPTER:
-        return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
-    return LEGACY_SKILLS_DIR / skill_name / "SKILL.md"
+    return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------

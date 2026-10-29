@@ -50,7 +50,7 @@ The script is the recommended path — it handles idempotent updates and edge ca
 ### 1. Install skills (user-level, once)
 ```bash
 mkdir -p ~/.claude/skills
-for skill in /path/to/quoin/skills/*/; do
+for skill in /path/to/quoin/adapters/claude/skills/*/; do
   name=$(basename "$skill")
   cp -r "$skill" ~/.claude/skills/$name
 done

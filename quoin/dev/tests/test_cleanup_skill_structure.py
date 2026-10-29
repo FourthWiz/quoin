@@ -1,5 +1,5 @@
 """
-Structural invariant tests for quoin/skills/cleanup/SKILL.md.
+Structural invariant tests for quoin/adapters/claude/skills/cleanup/SKILL.md.
 
 Tests verifying that the /cleanup SKILL.md satisfies the structural
 contracts: Sonnet tier declaration, §0/§0‴ preamble presence and
@@ -199,7 +199,7 @@ def test_no_literal_tilde_claude():
 # ── 14. Deployed copy sync (requires install.sh to have run) ──────────────────
 
 def test_deployed_copy_sync():
-    print("  SKIP  test_deployed_copy_sync — requires install.sh to have run; verify via: diff quoin/skills/cleanup/SKILL.md ~/.claude/skills/cleanup/SKILL.md")
+    print("  SKIP  test_deployed_copy_sync — requires install.sh to have run; verify via: diff quoin/adapters/claude/skills/cleanup/SKILL.md ~/.claude/skills/cleanup/SKILL.md")
 
 
 # ── 15. IVG-137 T-06: session temp-file sweep (sessions/*.body.tmp, *.tmp) ────

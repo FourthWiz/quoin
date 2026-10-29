@@ -14,10 +14,9 @@ Status: installable.
 - `bash quoin/install.sh` remains the supported install command.
 - Active Claude rules remain in `quoin/CLAUDE.md`.
 - Every Claude skill, including `run_hard`, installs from
-  `quoin/adapters/claude/skills/<name>/SKILL.md`. The installer walks
-  `quoin/skills/<name>/` and falls back to its `SKILL.md` only when no
-  adapter copy exists; skills were migrated to the adapter path across
-  Phases 6–21 and later.
+  `quoin/adapters/claude/skills/<name>/SKILL.md`, the only Claude skill
+  source tree; skills were migrated to the adapter path across Phases 6–21
+  and later, and the old `quoin/skills/` stub tree has been removed.
 - Portable intent docs live at `quoin/core/skills/<name>.md`, among them
   `quoin/core/skills/capture_insight.md`,
   `quoin/core/skills/triage.md`,

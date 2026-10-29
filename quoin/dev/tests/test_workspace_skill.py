@@ -1,7 +1,7 @@
 """
 Structural validation tests for the /workspace skill.
 
-Verifies that the adapter SKILL.md, stub SKILL.md, core doc, and installer.py
+Verifies that the adapter SKILL.md, core doc, and installer.py
 are all consistently configured for the new /workspace skill (IVG-158 S-06).
 
 Per Stage 1 plan D-03: no live LLM calls — deterministic pathlib + string + YAML parsing only.
@@ -17,13 +17,11 @@ TESTS_DIR = Path(__file__).parent
 QUOIN_DIR = TESTS_DIR.parent.parent
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ADAPTER_SKILLS_DIR = QUOIN_DIR / "adapters" / "claude" / "skills"
-STUB_SKILLS_DIR = QUOIN_DIR / "skills"
 CORE_SKILLS_DIR = QUOIN_DIR / "core" / "skills"
 CLAUDE_MD = QUOIN_DIR / "CLAUDE.md"
 INSTALLER_PY = REPO_ROOT / "src" / "quoin" / "installer.py"
 
 WORKSPACE_ADAPTER_SKILL = ADAPTER_SKILLS_DIR / "workspace" / "SKILL.md"
-WORKSPACE_STUB_SKILL = STUB_SKILLS_DIR / "workspace" / "SKILL.md"
 WORKSPACE_CORE_DOC = CORE_SKILLS_DIR / "workspace.md"
 
 
@@ -40,13 +38,6 @@ def _frontmatter(path: Path) -> dict:
         return {}
     end = text.index("---", 3)
     return yaml.safe_load(text[3:end])
-
-
-def _frontmatter_block(path: Path) -> str:
-    """Extract the raw YAML frontmatter block (including --- delimiters)."""
-    text = _read(path)
-    end = text.index("---", 3)
-    return text[: end + 3] + "\n"
 
 
 # ── T-01: Core skill doc ─────────────────────────────────────────────────────
@@ -66,26 +57,6 @@ def test_core_doc_has_contract_section():
 
 
 # ── T-02: Stub SKILL.md ───────────────────────────────────────────────────────
-
-def test_stub_exists():
-    assert WORKSPACE_STUB_SKILL.exists(), "quoin/skills/workspace/SKILL.md must exist"
-
-
-def test_stub_frontmatter_name():
-    fm = _frontmatter(WORKSPACE_STUB_SKILL)
-    assert fm.get("name") == "workspace", "stub frontmatter must have name: workspace"
-
-
-def test_stub_frontmatter_model():
-    fm = _frontmatter(WORKSPACE_STUB_SKILL)
-    assert fm.get("model") == "sonnet", "stub frontmatter must have model: sonnet"
-
-
-def test_stub_no_deprecated_markers():
-    text = _read(WORKSPACE_STUB_SKILL)
-    assert "DEPRECATED LOCATION" not in text, "stub must not contain 'DEPRECATED LOCATION'"
-    assert "deprecated stub" not in text, "stub must not contain 'deprecated stub'"
-
 
 # ── T-03: Adapter SKILL.md ───────────────────────────────────────────────────
 
@@ -194,17 +165,6 @@ def test_adapter_fail_closed_noninteractive_wording():
 def test_adapter_mechanism_script_reference():
     text = _read(WORKSPACE_ADAPTER_SKILL)
     assert "workspace.py" in text, "adapter must reference the portable workspace.py mechanism"
-
-
-# ── AD-FB: stub/adapter frontmatter byte-equality (round-2 MIN-1 hardening) ──
-
-def test_stub_and_adapter_frontmatter_byte_equal():
-    stub_fm = _frontmatter_block(WORKSPACE_STUB_SKILL)
-    adapter_fm = _frontmatter_block(WORKSPACE_ADAPTER_SKILL)
-    assert stub_fm == adapter_fm, (
-        "stub and adapter frontmatter blocks must be byte-identical (AD-FB) — "
-        "the description: line must be authored once and pasted verbatim into both files"
-    )
 
 
 # ── T-05: installer.py registration ─────────────────────────────────────────

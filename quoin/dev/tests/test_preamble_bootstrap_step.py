@@ -49,7 +49,7 @@ MIGRATED_SKILLS_DIR_OVERRIDES = {
 
 
 def _skill_md(skill: str) -> pathlib.Path:
-    base = MIGRATED_SKILLS_DIR_OVERRIDES.get(skill, QUOIN_DIR / "skills")
+    base = MIGRATED_SKILLS_DIR_OVERRIDES.get(skill, ADAPTER_SKILLS_DIR)
     return base / skill / "SKILL.md"
 
 

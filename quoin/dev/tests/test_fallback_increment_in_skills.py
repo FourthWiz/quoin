@@ -21,7 +21,6 @@ from pathlib import Path
 
 
 QUOIN_DIR = Path(__file__).parent.parent.parent  # quoin/ directory (3 levels up from test file)
-SKILLS_DIR = QUOIN_DIR / "skills"
 ADAPTER_SKILLS_DIR = QUOIN_DIR / "adapters" / "claude" / "skills"
 MIGRATED_SKILLS_DIR_OVERRIDES = {
     "architect": ADAPTER_SKILLS_DIR,
@@ -61,7 +60,7 @@ STEP2_ANCHORS = {
 
 
 def skill_path(name: str) -> Path:
-    base = MIGRATED_SKILLS_DIR_OVERRIDES.get(name, SKILLS_DIR)
+    base = MIGRATED_SKILLS_DIR_OVERRIDES.get(name, ADAPTER_SKILLS_DIR)
     return base / name / "SKILL.md"
 
 

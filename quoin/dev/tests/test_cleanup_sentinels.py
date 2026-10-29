@@ -5,7 +5,7 @@ test_cleanup_sentinels.py — contract tests for /cleanup sentinel allow-list.
 Two-layer test (per plan T-08 / D-04 / D-06):
 
 Layer 1 — SKILL.md contract (scope-bounded grep, section-extracted):
-  Open quoin/skills/cleanup/SKILL.md. Extract the
+  Open quoin/adapters/claude/skills/cleanup/SKILL.md. Extract the
   '## Hardcoded sentinel allow-list' section. Assert:
     (a) Both sentinel-family literals appear in the extracted section.
     (b) 'hardcoded' allow-list language is present in the section.

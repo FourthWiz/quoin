@@ -5,7 +5,7 @@ test_sleep_purge_sentinels.py — regression tests for /sleep --purge --sentinel
 Two-layer test (per plan T-05c / D-04 / MAJ-1):
 
 Layer 1 — SKILL.md contract (scope-bounded grep):
-  Open quoin/skills/sleep/SKILL.md. Assert:
+  Open quoin/adapters/claude/skills/sleep/SKILL.md. Assert:
     (a) The literal string '--sentinels' appears inside the '## --purge' H2 section.
     (b) Both sentinel-family literals appear inside the '## --purge' H2 section:
         pending-restore-*.txt, pending-prompt-*.txt, compact-happened-*.txt,

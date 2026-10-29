@@ -1,5 +1,5 @@
 """
-Structural invariant tests for quoin/skills/sleep/SKILL.md.
+Structural invariant tests for quoin/adapters/claude/skills/sleep/SKILL.md.
 
 Ten tests verifying that the /sleep SKILL.md satisfies the Stage 3
 structural contracts: Sonnet tier declaration, §0/§0‴ preamble
@@ -100,7 +100,7 @@ def test_dry_run_no_write():
 # ── 9. Deployed copy sync (requires install.sh to have run) ──────────────────
 
 def test_deployed_copy_sync():
-    print("  SKIP  test_deployed_copy_sync — requires install.sh to have run; verify via: diff quoin/skills/sleep/SKILL.md ~/.claude/skills/sleep/SKILL.md")
+    print("  SKIP  test_deployed_copy_sync — requires install.sh to have run; verify via: diff quoin/adapters/claude/skills/sleep/SKILL.md ~/.claude/skills/sleep/SKILL.md")
 
 
 def run_tests():
