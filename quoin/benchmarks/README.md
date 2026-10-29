@@ -202,9 +202,12 @@ and the budget derivation are in `suite-tiered-balanced-provenance.md`.
 
 The earlier tiered-small run showed that a quoin session can skip the pipeline
 and fix the issue directly. The harness now starts the quoin arm with the slash
-command `/run --autonomous small:` and a line saying the pipeline is required
-(a pilot with the bare slash command still saw a session call an easy issue a
-one-line fix and skip the pipeline), records on-disk evidence that the pipeline ran,
+command `/run --autonomous` (the light route) and a line saying the pipeline is
+required (a pilot with the bare slash command still saw a session call an easy
+issue a one-line fix and skip the pipeline). `QUOIN_BENCH_QUOIN_ROUTE=hard`
+restores the earlier `/run --autonomous hard: small:` prompt, which runs the
+heavy pipeline's single-pass path; `small:` has no effect on the light route. The
+harness records on-disk evidence that the pipeline ran,
 and treats a quoin session that left no plan as an `invalid` row (see "Invalid
 rows" below). The test suite exercises the whole path offline with a fake
 `claude`, so the first paid run with these changes is the first time the real
@@ -338,8 +341,9 @@ McNemar test; their spend stays visible in the cell's `invalid_total_cost_usd`.
 Rows that ended in an error keep their own reason, so an auth failure still
 stops the run. A timeout or budget stop after a plan exists is not invalid; the
 report counts those separately. The rule applies only to Verified quoin rows.
-The report lists the route (`fast`, `full` or `unknown`) the pipeline took for
-each row, since `/run` strips a `fast:` token from anywhere in its input.
+The report lists the route (`light`, `fast`, `full` or `unknown`) the pipeline
+took for each row, since on the hard route `run_hard` strips a `fast:` token from
+anywhere in its input and issue bodies can contain one.
 
 The easy-tier pilot stops after the first pair whose quoin row is invalid (exit
 5), so a broken quoin arm costs one pair. Every later run refuses with exit 5

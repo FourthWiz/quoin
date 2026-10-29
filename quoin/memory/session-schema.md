@@ -92,7 +92,7 @@ Post-finalize rule: `/pr` (or any skill) that writes the same-day file after `/e
 
 ## Timing
 
-One write per skill run, at the skill's exit: complete, partial, blocked or needs-decision. `/run` writes at each phase end. In-place field updates (the `fallback_fires` increment, the `/end_of_day` flip, the finalize flip) are not session writes and may happen at any time.
+One write per skill run, at the skill's exit: complete, partial, blocked or needs-decision. `run_hard` (`/run hard:`) writes at each phase end. In-place field updates (the `fallback_fires` increment, the `/end_of_day` flip, the finalize flip) are not session writes and may happen at any time.
 
 Trade-off: a run killed mid-way (context exhaustion, crash) leaves no session file for that run. Resume then rests on the plan's task glyphs and the run-state record, and the next run that exits writes the file.
 

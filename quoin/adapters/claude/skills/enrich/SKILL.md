@@ -152,7 +152,7 @@ Analyze the raw prompt against the grounding context gathered above (real repo s
 - **Interactive session:** fold the user's answers into the enriched prompt directly.
 - **Non-interactive dispatch (no way to ask):** produce a best-effort rewrite of the prompt, explicitly flag every assumption you made to fill a gap, and list the exact questions you would have asked as a "questions I would have asked" section — never silently guess without flagging it.
 - **Under `[autonomous]`:** parse and strip the `[autonomous]` sentinel at bootstrap into a local
-  `_AUTONOMOUS` state (mirrors `/run`'s "Autonomous propagation" sentinel — present when this
+  `_AUTONOMOUS` state (mirrors `run_hard`'s "Autonomous propagation" sentinel — present when this
   skill is spawned from an autonomous session, or passed directly on a standalone invocation).
   When `_AUTONOMOUS=true`, treat this exactly as the non-interactive dispatch path above even in
   an otherwise-interactive session: skip `AskUserQuestion`, never block waiting for a round-trip,
@@ -178,8 +178,8 @@ well-grounded the enriched prompt is given the raw input and the grounding conte
 bootstrap. Lower confidence when the raw prompt was thin and required several flagged
 assumptions; higher confidence when it was already clear or grounding context resolved the gaps
 cleanly. This gives the Small-path Formulation bar a second input alongside the single-pass
-`/plan` confidence — `/run`'s bar takes the **minimum** of the two when both are present (see
-`run/SKILL.md` "Formulation quality bar"). Omit this line in the non-autonomous path — it is
+`/plan` confidence — `run_hard`'s bar takes the **minimum** of the two when both are present (see
+`run_hard/SKILL.md` "Formulation quality bar"). Omit this line in the non-autonomous path — it is
 specific to `[autonomous]` runs.
 
 After writing, echo the full enriched prompt in chat so the user sees it immediately without needing to open the file.

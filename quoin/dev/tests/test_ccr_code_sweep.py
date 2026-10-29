@@ -223,15 +223,17 @@ def test_pinned_changelog_entry_occurs_exactly_once_byte_identical(anchor: str) 
 
 def test_v3_entry_exists_under_unreleased_added_naming_config_sqlite() -> None:
     section_lines, _ = _changelog_unreleased_section()
-    added_idx = next(i for i, ln in enumerate(section_lines) if ln.strip() == "### Added")
-    # Bounded at the next "### " subsection header, not the end of the whole
-    # Unreleased section — which holds several unrelated "### Added"/"###
-    # Fixed" blocks below this one, any of which could contain the literal
-    # string and make the assertion pass regardless of what this specific
-    # entry says.
-    added_end = next(
-        (i for i in range(added_idx + 1, len(section_lines)) if section_lines[i].startswith("### ")),
-        len(section_lines),
-    )
-    added_block = "".join(section_lines[added_idx:added_end])
-    assert "config.sqlite" in added_block
+    # Each "### Added" block is bounded at the next "### " subsection header,
+    # so a mention under "### Fixed" or "### Changed" cannot satisfy this.
+    # Later entries may land above this one, so any Added block counts.
+    added_blocks = []
+    for idx, ln in enumerate(section_lines):
+        if ln.strip() != "### Added":
+            continue
+        end = next(
+            (i for i in range(idx + 1, len(section_lines)) if section_lines[i].startswith("### ")),
+            len(section_lines),
+        )
+        added_blocks.append("".join(section_lines[idx:end]))
+    assert added_blocks, "no ### Added block under Unreleased"
+    assert any("config.sqlite" in block for block in added_blocks)

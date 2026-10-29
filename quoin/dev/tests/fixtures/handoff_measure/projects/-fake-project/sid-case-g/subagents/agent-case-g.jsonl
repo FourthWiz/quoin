@@ -1,3 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /implement skill (use the Skill tool)."}}
-{not valid json,,,
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Done despite one bad line."}], "usage": {"output_tokens": 6}, "stop_reason": "end_turn"}}

@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /implement skill (use the Skill tool)."}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "thinking", "thinking": "internal reasoning not counted"}, {"type": "text", "text": "Only this text counts."}], "usage": {"output_tokens": 8, "output_tokens_details": {"thinking_tokens": 20}}, "stop_reason": "end_turn"}}

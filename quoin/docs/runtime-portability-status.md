@@ -13,13 +13,12 @@ Status: installable.
 
 - `bash quoin/install.sh` remains the supported install command.
 - Active Claude rules remain in `quoin/CLAUDE.md`.
-- Active Claude skills remain in `quoin/skills/`, EXCEPT the twenty-one skills
-  migrated across Phases 6–21 (`capture_insight`, `triage`, `start_of_day`,
-  `review`, `plan`, `critic`, `revise`, `revise-fast`, `architect`,
-  `thorough_plan`, `gate`, `implement`, `rollback`, `end_of_task`, `run`,
-  `end_of_day`, `weekly_review`, `cost_snapshot`, `expand`, `discover`, `init_workflow`), which install from
-  `quoin/adapters/claude/skills/<name>/SKILL.md`.
-- Portable intent docs for the migrated skills live at
+- Every Claude skill, including `run_hard`, installs from
+  `quoin/adapters/claude/skills/<name>/SKILL.md`. The installer walks
+  `quoin/skills/<name>/` and falls back to its `SKILL.md` only when no
+  adapter copy exists; skills were migrated to the adapter path across
+  Phases 6–21 and later.
+- Portable intent docs live at `quoin/core/skills/<name>.md`, among them
   `quoin/core/skills/capture_insight.md`,
   `quoin/core/skills/triage.md`,
   `quoin/core/skills/start_of_day.md`,
@@ -35,6 +34,7 @@ Status: installable.
   `quoin/core/skills/rollback.md`,
   `quoin/core/skills/end_of_task.md`,
   `quoin/core/skills/run.md`,
+  `quoin/core/skills/run_hard.md`,
   `quoin/core/skills/end_of_day.md`,
   `quoin/core/skills/weekly_review.md`,
   `quoin/core/skills/cost_snapshot.md`,

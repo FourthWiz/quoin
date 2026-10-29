@@ -14,7 +14,13 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 - **`/run` is now a light, single-session pipeline; the old pipeline moves to `/run hard:`** (v0.64.0). On 40 SWE-bench Verified tasks the full pipeline, even on its `small:` route, cost about 10× and took about 8× longer than a plain Claude Code session, for a resolved gain that was not significant (34/40 vs 32/40, p = 0.48). `/run` now writes a short task brief (asking only when the request is unclear in a way that changes the work), runs `/discover` in a subagent only when discovery memory is missing or older than 7 days, gathers a context pack in a read-only subagent, implements in the same session with proportionate tests, runs the affected tests once, gets one Opus review in a subagent and commits locally. It writes no plan file, cost ledger or run-state record and never pushes. The previous orchestrator is unchanged as `/run_hard`, reached with `/run hard: <task>` (or `strict:`), and `/run --resume` of a task it started still lands there. In OpenCode, `run` keeps the heavy pipeline's contract, because open models still need its planning and review scaffolding. The tiered benchmark's quoin arm uses the light route by default; `QUOIN_BENCH_QUOIN_ROUTE=hard` restores the old prompt.
 
+### Removed
+
+- **Unused scripts, spikes and their tests** (v0.64.1). `backfill_cost_attribution.py` (a one-off historical ledger backfill), `handoff_measure.py` (a finished measurement instrument) and `find_drive_conflicts.py` were deployed but nothing ran them; they, their tests and fixtures are gone, along with three dev spikes, a dev driver, an undeployed byte-identical copy of `worktreecreate.sh` under the Claude adapter, and a spike pointer doc. Re-run the installer to drop them from `~/.claude/`.
+
 ### Fixed
+
+- **`/discover` finds its discovery-map validator after install** (v0.64.1). `generate_discovery_map.py` validates its output by default with `validate_discovery_map.py` from its own directory, but the installer never deployed the validator to `core/scripts/`, so an installed `/discover` could not load it. The validator is now deployed alongside the generator.
 
 - **The full test suite runs under `pytest -n auto`** (v0.64.0). One test was parametrized from a set, so its order changed with the hash seed and pytest-xdist workers refused to run on mismatched collections. The suite now takes about four minutes in parallel instead of about 35 serially.
 

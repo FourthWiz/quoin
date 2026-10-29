@@ -243,7 +243,7 @@ The guard's exit-code contract is UNCHANGED (still exit 1 only on `OVER`, exit
 1. **`[no-session-age-guard]` present** → strip + BYPASS the guard entirely (UNCHANGED
    power-user path); continue to `## When to use`.
 2. **`_AUTONOMOUS`** → preserve the current autonomous behavior: STOP on `OVER` with the
-   verbatim message below. Autonomous `/end_of_task` is not bypassed (`/run` injects
+   verbatim message below. Autonomous `/end_of_task` is not bypassed (`run_hard` injects
    `[autonomous]`, never `[no-session-age-guard]`).
 3. **`[no-interactive]` / non-interactive (and NOT `_AUTONOMOUS`)** → FAIL CLOSED: a human
    cannot pick a session-age option in a background context, so run
@@ -272,11 +272,11 @@ If the helper is missing OR exits with a non-0/1 code: emit the warning
 ## Autonomous mode bootstrap
 
 Parse the incoming prompt for the `[autonomous]` sentinel (may stack after `[no-redispatch]`,
-e.g. `[no-redispatch] [autonomous]`; `/run` prefixes it onto the Phase-6 spawn). If present, set
+e.g. `[no-redispatch] [autonomous]`; `run_hard` prefixes it onto the Phase-6 spawn). If present, set
 `_AUTONOMOUS=true` for the rest of the run and strip the sentinel. Default `_AUTONOMOUS=false`.
 
 Also parse the `[no-interactive]` sentinel the same way. If present, set `_INTERACTIVE=false`;
-default `_INTERACTIVE=true`. `/run` injects it onto every non-autonomous phase-subagent spawn so
+default `_INTERACTIVE=true`. `run_hard` injects it onto every non-autonomous phase-subagent spawn so
 a background decision gate FAILS CLOSED instead of silently proceeding — see
 `__QUOIN_HOME__/memory/decision-gate-guard.md`. The two sentinels are mutually exclusive per
 spawn (autonomous carries pre-authorized answers; no-interactive has none).
@@ -287,7 +287,7 @@ gate) of the 8 sequential steps. **The "never auto-create a
 PR" invariant is unchanged in every mode, including autonomous — `/end_of_task` never
 creates a PR, autonomous or not.**
 
-`[quoin-onbehalf]` handling: `/run` prepends this marker to the Phase 6 spawn. Strip it at bootstrap (per-spawn, non-inherited — never propagate it to a `§0` dispatch child). This skill writes no session-start ledger row; the orchestrator writes the `end-of-task` row on its behalf.
+`[quoin-onbehalf]` handling: `run_hard` prepends this marker to the Phase 6 spawn. Strip it at bootstrap (per-spawn, non-inherited — never propagate it to a `§0` dispatch child). This skill writes no session-start ledger row; the orchestrator writes the `end-of-task` row on its behalf.
 
 ## When to use
 
@@ -298,7 +298,7 @@ Only after:
 
 This skill is never auto-invoked. The user must consciously accept the work.
 
-**Exception: `/run` orchestrator.** When spawned by `/run` as a subagent, the user has already confirmed finalization at Checkpoint D ("yes, finalize and push"), which counts as explicit acceptance. All preconditions (APPROVED review, passed gate) are still enforced; proceed through all 8 steps.
+**Exception: `run_hard` orchestrator.** When spawned by `run_hard` (`/run hard:`) as a subagent, the user has already confirmed finalization at Checkpoint D ("yes, finalize and push"), which counts as explicit acceptance. All preconditions (APPROVED review, passed gate) are still enforced; proceed through all 8 steps.
 
 ## Process
 

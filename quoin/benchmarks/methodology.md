@@ -26,15 +26,18 @@ For the `quoin-claude` cell, "Quoin" means:
 1. The agent is invoked with `QUOIN_GATE_AUTO_APPROVE=1` AND `QUOIN_BENCHMARK_RUN=1`
    environment variables set; `/gate` honors this pair to auto-emit PASS (see
    [Auto-mode caveats](#auto-mode-caveats) and T-19 gate plumbing).
-2. The prompt starts with the slash command `/run --autonomous small:`, then one
+2. The prompt starts with the slash command `/run --autonomous`, then one
    line saying the session benchmarks the quoin workflow so the pipeline is
    required even for a trivial fix, then the task text, so the CLI expands the
    run skill itself. A prose request to "use /run" left a session free to skip
    the pipeline (the tiered-small run showed it), and the bare slash command
    still let a pilot session decide an easy issue was a one-line fix and skip
-   it. `small:` selects /run's single-pass path (plan, implement, review) for
-   every tier, since each task is one SWE-bench issue; the plain arm's prompt is
-   unchanged. The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
+   it. By default this is the light `/run` (brief, context pack, implement,
+   one review). `QUOIN_BENCH_QUOIN_ROUTE=hard` restores the earlier
+   `/run --autonomous hard: small:` prompt, where `small:` selects the heavy
+   pipeline's single-pass path (plan, implement, review) for every tier, since
+   each task is one SWE-bench issue; `small:` does nothing on the light route.
+   The plain arm's prompt is unchanged. The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
    state is picked up. `--autonomous` is needed because a `--print` session
    cannot answer the run skill's checkpoints.
 3. A clean per-task `.workflow_artifacts/` is initialized from scratch before
@@ -167,9 +170,9 @@ recorded as `invalid` (`no-pipeline-artifacts`, `stopped-before-plan` or
 McNemar test; rows that ended in an error keep their own reason, and a timeout
 or budget stop after a plan exists is counted separately
 (`post_plan_timeout_rows`, `post_plan_budget_stop_rows`) so a binding wall clock
-is visible. `/run` strips a `fast:` token from anywhere in its input, and issue
-bodies can contain one, so the route actually taken (`fast`, `full`, `unknown`)
-is recorded per row and not assumed.
+is visible. On the hard route `run_hard` strips a `fast:` token from anywhere
+in its input, and issue bodies can contain one, so the route actually taken
+(`light`, `fast`, `full`, `unknown`) is recorded per row and not assumed.
 
 **Judging on arm64.** `--judge-emulation` runs the evaluation through a shim
 that reports x86_64 to swebench and pulls images for `linux/amd64`; on any other

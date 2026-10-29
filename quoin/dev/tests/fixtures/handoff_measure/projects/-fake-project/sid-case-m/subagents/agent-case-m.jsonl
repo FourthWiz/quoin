@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /implement skill (use the Skill tool)."}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Calling a tool before finishing the turn."}, {"type": "tool_use", "id": "tu-m1", "name": "Bash", "input": {"command": "ls"}}], "usage": {"output_tokens": 6}, "stop_reason": "tool_use"}}

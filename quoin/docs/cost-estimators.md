@@ -37,12 +37,12 @@ Consumer classes: on-behalf (a per-subagent row written right after a managed sp
 | `CHANGELOG.md` | docs and history | - | - | no edit |
 | `docs/architecture-diagram/data/graph.json` | docs and history | - | - | no edit |
 | `docs/architecture-diagram/data/graph.json.js` | docs and history | - | - | no edit |
-| `quoin/adapters/claude/skills/architect/SKILL.md` | on-behalf (and finalize fallback in run) | whole-run cost of one subagent by agent id | none reachable | keep |
+| `quoin/adapters/claude/skills/architect/SKILL.md` | on-behalf (and finalize fallback in run_hard) | whole-run cost of one subagent by agent id | none reachable | keep |
 | `quoin/adapters/claude/skills/cost_snapshot/SKILL.md` | reporting | many sessions aggregated by day or task | none (interactive /usage only) | no edit |
 | `quoin/adapters/claude/skills/end_of_task/SKILL.md` | finalize | past sessions cost by id | cost-state row (partial, see spike) | keep |
-| `quoin/adapters/claude/skills/review/SKILL.md` | on-behalf (and finalize fallback in run) | whole-run cost of one subagent by agent id | none reachable | keep |
-| `quoin/adapters/claude/skills/run/SKILL.md` | on-behalf (and finalize fallback in run) | whole-run cost of one subagent by agent id | none reachable | keep |
-| `quoin/adapters/claude/skills/thorough_plan/SKILL.md` | on-behalf (and finalize fallback in run) | whole-run cost of one subagent by agent id | none reachable | keep |
+| `quoin/adapters/claude/skills/review/SKILL.md` | on-behalf (and finalize fallback in run_hard) | whole-run cost of one subagent by agent id | none reachable | keep |
+| `quoin/adapters/claude/skills/run_hard/SKILL.md` | on-behalf (and finalize fallback in run_hard) | whole-run cost of one subagent by agent id | none reachable | keep |
+| `quoin/adapters/claude/skills/thorough_plan/SKILL.md` | on-behalf (and finalize fallback in run_hard) | whole-run cost of one subagent by agent id | none reachable | keep |
 | `quoin/benchmarks/harness/pricing.json` | benchmark | cross-checked against the price table by a test; harness already reads native total_cost_usd | used already | no edit |
 | `quoin/core/scripts/affected_tests.py` | test selection map | - | - | no edit |
 | `quoin/core/scripts/cost_summary.py` | reporting | many sessions aggregated by day or task | none (interactive /usage only) | no edit |
@@ -57,7 +57,6 @@ Consumer classes: on-behalf (a per-subagent row written right after a managed sp
 | `quoin/dev/tests/test_affected_tests.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_agent_transcript_cost_warning.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_agent_transcript_cost.py` | test or fixture | - | - | no edit |
-| `quoin/dev/tests/test_backfill_cost_attribution.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_benchmark_gate_plumbing.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_codex_cost_event.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_cost_core_no_claude_terms.py` | test or fixture | - | - | no edit |
@@ -69,7 +68,6 @@ Consumer classes: on-behalf (a per-subagent row written right after a managed sp
 | `quoin/dev/tests/test_cost_summary.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_dashboard_cost.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_get_session_uuid.py` | test or fixture | - | - | no edit |
-| `quoin/dev/tests/test_handoff_measure.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_onbehalf_default_on.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_onbehalf_writer_predicate.py` | test or fixture | - | - | no edit |
 | `quoin/dev/tests/test_price_resolver_four_sites.py` | test or fixture | - | - | no edit |
@@ -80,14 +78,12 @@ Consumer classes: on-behalf (a per-subagent row written right after a managed sp
 | `quoin/docs/runtime-parity-matrix.md` | docs and history | - | - | no edit |
 | `quoin/docs/runtime-portability-status.md` | docs and history | - | - | no edit |
 | `quoin/docs/runtime-portability.md` | docs and history | - | - | no edit |
-| `quoin/memory/cost-ledger-format.md` | on-behalf (and finalize fallback in run) | whole-run cost of one subagent by agent id | none reachable | keep |
+| `quoin/memory/cost-ledger-format.md` | on-behalf (and finalize fallback in run_hard) | whole-run cost of one subagent by agent id | none reachable | keep |
 | `quoin/scripts/agent_transcript_cost.py` | the estimators themselves | - | - | keep |
 | `quoin/scripts/analyze_cost_ledger.py` | reporting | many sessions aggregated by day or task | none (interactive /usage only) | no edit |
-| `quoin/scripts/backfill_cost_attribution.py` | reporting | many sessions aggregated by day or task | none (interactive /usage only) | no edit |
 | `quoin/scripts/cost_from_jsonl.py` | the estimators themselves | - | - | keep |
 | `quoin/scripts/cost_ledger_summary.py` | the estimators themselves | - | - | keep |
 | `quoin/scripts/dashboard_cost.py` | reporting | many sessions aggregated by day or task | none (interactive /usage only) | no edit |
-| `quoin/scripts/handoff_measure.py` | reporting | many sessions aggregated by day or task | none (interactive /usage only) | no edit |
 | `src/quoin/installer.py` | roster (DEPLOYED_SCRIPTS) | - | - | no edit |
 | `quoin/core/scripts/validate_adapter_drift.py` | adapter drift check | - | - | no edit |
 | `quoin/dev/tests/test_agentdesk_layout.py` | live-spend (and its second-hop consumers) | today's spend across sessions | none | no edit |
@@ -136,7 +132,7 @@ quoin prices at list price from its table (`LAST_UPDATED` in `cost_from_jsonl.py
 
 - The Agent tool result or a hook input gains a whole-run cost or token total per subagent.
 - A documented local, file-based telemetry sink appears that a skill can read, or OTel `api_request` events gain a unique agent id outside beta traces.
-- quoin's supervisor or `/run` moves phases to `claude -p` or the Agent SDK, where `total_cost_usd` per run is native.
+- quoin's supervisor or `run_hard` moves phases to `claude -p` or the Agent SDK, where `total_cost_usd` per run is native.
 - `--budget` gets implemented: then read `total_cost_usd` from `--output-format json` per relaunch instead of re-pricing transcripts, and consider native `--max-budget-usd`.
 - Claude Code transcripts stop carrying per-message `usage`; that would break the estimators and force a change.
 - The transcript `cost-state` record becomes documented (schema, behaviour on crash, subagent split): re-run the part B comparison like-for-like, handle the on-behalf double-count by skipping or subtracting the session's agent-id rows, and reconsider preferring it for finalize and reporting.

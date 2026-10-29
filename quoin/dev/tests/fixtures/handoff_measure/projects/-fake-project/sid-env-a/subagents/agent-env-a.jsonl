@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /implement skill.\n\n[quoin-handoff/1.0 dispatch]\nskill: implement\ntask: env-a\ntask_dir: /tmp/env-a\nproject_root: /tmp\nprofile: medium\ninputs: plan.md\nreturn: envelope\nspec: handoff-format.md\n[/quoin-handoff]"}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Implemented env-a."}], "usage": {"output_tokens": 8}, "stop_reason": "end_turn"}}

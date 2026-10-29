@@ -128,7 +128,7 @@ description wording for every branch below: memory/dispatch-guide.md §0″ verb
 ## Autonomous mode bootstrap
 
 Parse the incoming prompt for the `[autonomous]` sentinel (may stack after `[no-redispatch]`,
-e.g. `[no-redispatch] [autonomous]`, since `/run` prefixes it onto this skill's spawn prompt).
+e.g. `[no-redispatch] [autonomous]`, since `run_hard` prefixes it onto this skill's spawn prompt).
 If present, set internal state `_AUTONOMOUS=true` for the remainder of this skill's execution;
 strip the sentinel before further parsing. Default `_AUTONOMOUS=false` (opt-in only).
 `_AUTONOMOUS` gates ONLY the repo main spec offer below (see "Repo main spec (optional offer)").
