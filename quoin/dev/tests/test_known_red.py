@@ -936,14 +936,16 @@ class TestManifestResolution:
         nested = sub / "quoin" / "dev" / "tests" / "known-red.toml"
         nested.parent.mkdir(parents=True)
         nested.write_text("", encoding="utf-8")
-        direct = tmp_path / "quoin" / "dev" / "tests" / "known-red.toml"
-        assert kr._default_manifest(tmp_path) == direct
-        assert not direct.exists()
+        fallback = tmp_path / ".workflow_artifacts" / "known-red.toml"
+        assert kr._default_manifest(tmp_path) == fallback
+        assert not fallback.exists()
 
-    def test_absent_everywhere_returns_direct_path(self, tmp_path):
-        direct = tmp_path / "quoin" / "dev" / "tests" / "known-red.toml"
-        assert kr._default_manifest(tmp_path) == direct
-        assert not direct.exists()
+    def test_absent_everywhere_returns_workflow_artifacts_path(self, tmp_path):
+        # never default to quoin's own repo layout inside another project
+        fallback = tmp_path / ".workflow_artifacts" / "known-red.toml"
+        assert kr._default_manifest(tmp_path) == fallback
+        assert not fallback.exists()
+        assert not (tmp_path / "quoin").exists()
 
     def test_deterministic_sorted_first_hit_wins(self, tmp_path):
         for name in ("repo-b", "repo-a"):
@@ -967,8 +969,8 @@ class TestManifestResolution:
         nested.write_text("", encoding="utf-8")
         assert kr._default_manifest(tmp_path) == nested
 
-    def test_oserror_from_iterdir_falls_back_to_direct(self, tmp_path, monkeypatch):
-        direct = tmp_path / "quoin" / "dev" / "tests" / "known-red.toml"
+    def test_oserror_from_iterdir_falls_back_to_workflow_artifacts(self, tmp_path, monkeypatch):
+        fallback = tmp_path / ".workflow_artifacts" / "known-red.toml"
         real_iterdir = Path.iterdir
 
         def _boom(self):
@@ -977,7 +979,7 @@ class TestManifestResolution:
             return real_iterdir(self)
 
         monkeypatch.setattr(Path, "iterdir", _boom)
-        assert kr._default_manifest(tmp_path) == direct
+        assert kr._default_manifest(tmp_path) == fallback
 
     @pytest.mark.skipif(
         not (_LIVE_PROJECT_ROOT / "quoin" / ".git").exists(),

@@ -1,5 +1,5 @@
-- **Flow:** `/discover → /specify → GATE → /architect → GATE → /thorough_plan → GATE → /implement → GATE → /review → GATE → /end_of_task`. `/thorough_plan` triages Small/Medium/Large; Small skips `/specify` and `/architect`. `/run` chains the phases and pauses at each gate.
-- **Explicit commands:** no skill auto-invokes `/implement` or `/end_of_task`; stop after a converged plan and after an approved review. Only `/run` may invoke them (`autonomous-mode.md`). `/pr` is always a separate user action.
+- **Flow:** `/run` (default): brief → context pack → implement → one review → local commit. Heavy pipeline, only via `/run hard:`: `/discover → /specify → GATE → /architect → GATE → /thorough_plan → GATE → /implement → GATE → /review → GATE → /end_of_task`.
+- **Explicit commands:** no skill auto-invokes `/implement` or `/end_of_task`; only `/run_hard` may (`autonomous-mode.md`). Light `/run` commits locally, never pushes. `/pr` is always a separate user action.
 - **Git:** commit locally only; push happens in `/end_of_task`, PRs only via `/pr`. Start each task on a fresh branch from an up-to-date main; never land task commits on main/master. Conventional commit messages (`type(scope): summary`, body says why).
 - **Artifacts:** one `.workflow_artifacts/` root per project; task files live in `.workflow_artifacts/<task-name>/` (`stage-N/` for multi-stage tasks). Never move anything into `finalized/` except through `/end_of_task`.
 - **Sessions:** each skill bootstraps from files, never from a previous chat; artifacts are the shared memory.

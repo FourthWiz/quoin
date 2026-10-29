@@ -44,7 +44,7 @@ def test_worktree_run_emits_labelled_json(tmp_path):
     assert data["footprints"]["claude_md"]["label"] in LABELS
     ss = data["skill_sources"]
     assert ss["label"] == "on-demand" and ss["label"] in LABELS
-    assert ss["files"] == 31 and len(ss["skills"]) == 31
+    assert ss["files"] == 32 and len(ss["skills"]) == 32
     assert data["skill_listing"]["label"] in LABELS
     assert data["skill_listing"]["name_only_skills"] == 1
     assert data["settings_hooks"][0]["per_prompt"] is True

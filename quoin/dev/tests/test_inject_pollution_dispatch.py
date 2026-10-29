@@ -54,7 +54,7 @@ CHEAP_TIER_SKILLS = [
 ]
 
 # Orchestrators — must NOT carry §0'.
-ORCHESTRATOR_SKILLS = ["run", "thorough_plan"]
+ORCHESTRATOR_SKILLS = ["run", "run_hard", "thorough_plan"]
 
 # All 14 exclusion adapters
 EXCLUSION_SKILLS = CHEAP_TIER_SKILLS + ORCHESTRATOR_SKILLS

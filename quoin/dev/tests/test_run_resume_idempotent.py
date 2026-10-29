@@ -34,8 +34,8 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/
 _SOURCE_ROOT = _REPO_ROOT / "quoin"
-_RUN_ADAPTER_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
-_RUN_CORE_DOC = _SOURCE_ROOT / "core" / "skills" / "run.md"
+_RUN_ADAPTER_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
+_RUN_CORE_DOC = _SOURCE_ROOT / "core" / "skills" / "run_hard.md"
 
 # Phase name -> the "## Phase N —" heading prefix that opens its section in
 # run/SKILL.md. Used only to slice each phase's own section for the

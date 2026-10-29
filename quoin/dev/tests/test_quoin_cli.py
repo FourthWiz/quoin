@@ -1294,3 +1294,25 @@ def test_canonical_skills_matches_filesystem():
         f"  In constant but not on disk: {in_constant - on_disk}\n"
         f"  On disk but not in constant: {on_disk - in_constant}"
     )
+
+
+def test_supervisor_refuses_a_light_run_task(tmp_path):
+    from quoin import cli
+
+    memory = tmp_path / ".workflow_artifacts" / "memory"
+    memory.mkdir(parents=True)
+    (tmp_path / ".workflow_artifacts" / "fix-x").mkdir()
+    (tmp_path / ".workflow_artifacts" / "fix-x" / "brief.md").write_text("# fix-x\n", encoding="utf-8")
+    refusal = cli._light_task_refusal(tmp_path, "fix-x", memory)
+    assert refusal and "light /run" in refusal
+
+    (memory / "autonomous-run-fix-x.marker").write_text("task: fix-x\n", encoding="utf-8")
+    assert cli._light_task_refusal(tmp_path, "fix-x", memory) is None
+
+
+def test_supervisor_allows_a_task_without_a_brief(tmp_path):
+    from quoin import cli
+
+    memory = tmp_path / ".workflow_artifacts" / "memory"
+    memory.mkdir(parents=True)
+    assert cli._light_task_refusal(tmp_path, "heavy-task", memory) is None

@@ -899,3 +899,37 @@ def test_unmodified_v3_evidence_copy_renders_patch_tables(tmp_path):
     aggregate.aggregate_run(dest_dir, "tiered-small-v3")
     md = (dest_dir / "tiered-small-v3" / "summary.md").read_text()
     assert "### Patch size by tier" in md and "### Patch size per task" in md
+
+
+def test_written_manifest_with_json_dict_value_is_strict_yaml(tmp_path, monkeypatch):
+    yaml = pytest.importorskip("yaml")
+    from quoin.benchmarks.scripts import check_invariants, run_benchmark as rb
+
+    monkeypatch.setattr(rb, "_probe_claude_model", lambda: OPUS)
+    monkeypatch.setattr(rb, "_probe_codex_model", lambda: "codex-model")
+    monkeypatch.setattr(rb, "_git_sha", lambda root: "abc123")
+    suite = tmp_path / "suite.json"
+    suite.write_text("{}", encoding="utf-8")
+    checks = {"quoin-claude": "pass", "simple-claude": "pass"}
+    path = rb._write_manifest(
+        tmp_path, "r-1", suite, ["simple-claude", "quoin-claude"], 1, False, tmp_path,
+        extra={"sandbox_static_checks": checks},
+    )
+    strict = yaml.safe_load(path.read_text(encoding="utf-8"))
+    assert json.loads(strict["sandbox_static_checks"]) == checks
+    assert strict["quoin_claude_model"] == OPUS
+    assert json.loads(read_manifest(tmp_path / "r-1")["sandbox_static_checks"]) == checks
+    assert check_invariants._load_manifest(tmp_path / "r-1")["quoin_claude_model"] == OPUS
+
+
+def test_invariants_read_a_legacy_manifest_that_is_not_strict_yaml(tmp_path):
+    from quoin.benchmarks.scripts import check_invariants
+
+    (tmp_path / "run-manifest.yaml").write_text(
+        'run_id: "r-1"\n'
+        f"quoin_claude_model: {OPUS}\n"
+        'sandbox_static_checks: "{"quoin-claude": "pass"}"\n',
+        encoding="utf-8",
+    )
+    manifest = check_invariants._load_manifest(tmp_path)
+    assert manifest["run_id"] == "r-1" and manifest["quoin_claude_model"] == OPUS

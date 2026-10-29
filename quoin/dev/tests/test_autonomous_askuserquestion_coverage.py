@@ -36,7 +36,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILLS_DIR = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills"
 
-SEED_SKILL = "run"
+SEED_SKILL = "run_hard"
 
 # ---------------------------------------------------------------------------
 # Part 1: live spawn-edge parsing + transitive closure
@@ -229,12 +229,12 @@ def test_guard_catches_injected_fake_spawn_edge():
     text must make the derived closure gain `foo`, which cannot be covered (no such
     skill exists) -- `closure - propagation` becomes non-empty. Purely in-memory via a
     custom loader; no real SKILL.md is read from or written to."""
-    real_run_text = load_skill_text("run")
+    real_run_text = load_skill_text("run_hard")
     assert real_run_text is not None
     tampered_run_text = real_run_text + "\n\nSpawn `/foo` as a subagent for a fabricated phase.\n"
 
     def tampered_loader(name: str) -> str | None:
-        if name == "run":
+        if name == "run_hard":
             return tampered_run_text
         return load_skill_text(name)
 
@@ -420,7 +420,7 @@ def test_end_of_task_commit_selects_commit_not_abort():
 # are expected to be >= these numbers as the corpus grows. Never treat this dict as the
 # source of truth for closure membership -- that is exclusively `build_spawn_closure()`.
 _FLOOR_COUNTS = {
-    "run": 2,
+    "run_hard": 2,
     "discover": 6,
     "enrich": 5,
     "specify": 6,

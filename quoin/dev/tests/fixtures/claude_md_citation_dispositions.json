@@ -232,7 +232,7 @@
       "cited_heading": "### Session state tracking"
     },
     {
-      "file": "quoin/adapters/claude/skills/run/SKILL.md",
+      "file": "quoin/adapters/claude/skills/run_hard/SKILL.md",
       "line_hash": "5a8b3581310b50c3d914101b7df70b48e9e9735992d194229cd171e3df7db4c0",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
@@ -240,14 +240,14 @@
       "cited_heading": "### Explicit-command rule"
     },
     {
-      "file": "quoin/adapters/claude/skills/run/SKILL.md",
+      "file": "quoin/adapters/claude/skills/run_hard/SKILL.md",
       "line_hash": "b7c92d88864fb5acbc12e1e1d8b6a43ed58b9635ee6c9ca4bee0e23c3752dd7c",
       "heading_disposition": "non-citation",
       "path_form": "repo_source",
       "note": "generic 'Read CLAUDE.md for shared workflow rules' — whole-file instruction, valid under either variant."
     },
     {
-      "file": "quoin/adapters/claude/skills/run/SKILL.md",
+      "file": "quoin/adapters/claude/skills/run_hard/SKILL.md",
       "line_hash": "362647eec2531e255b0305bf945fd71d060c92317fba33c8bec528fd0dc95cd9",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
@@ -255,7 +255,7 @@
       "cited_heading": "### Cost tracking"
     },
     {
-      "file": "quoin/adapters/claude/skills/run/SKILL.md",
+      "file": "quoin/adapters/claude/skills/run_hard/SKILL.md",
       "line_hash": "142923d22bc567d29f15320ab53389cf773c7ee2e4b15cab806b0a8beae9e0df",
       "heading_disposition": "resolves",
       "path_form": "repo_source",
@@ -647,7 +647,7 @@
       "note": "resolution-sentence text in the generator; names the citation form generically, no heading cited."
     },
     {
-      "file": "quoin/adapters/claude/skills/run/SKILL.md",
+      "file": "quoin/adapters/claude/skills/run_hard/SKILL.md",
       "line_hash": "2e744820792bd068ac0fb407e45275ebd5aa8793b0d8028f848d96d081037bca",
       "heading_disposition": "resolves",
       "path_form": "repo_source",

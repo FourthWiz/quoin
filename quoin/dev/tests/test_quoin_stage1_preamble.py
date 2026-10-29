@@ -108,6 +108,7 @@ OPUS_TIER_SKILLS = [
     "revise",
     "thorough_plan",
     "run",
+    "run_hard",
     "init_workflow",
     "discover",
     "review",

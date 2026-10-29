@@ -3,7 +3,7 @@
 # Deployed to ~/.claude/hooks/ by bash install.sh
 #
 # Run continuation sentinels only: a typed prompt takes control back by
-# removing the session's run-continue arm file, and a typed /run records
+# removing the session's run-continue arm file, and a typed /run or /run_hard records
 # consent when a run-state record exists. The decision logic that reads these
 # sentinels lives in scripts/auto_resume.py; this hook only maintains them.
 #
@@ -168,7 +168,7 @@ mem="$root/.workflow_artifacts/memory"
 [ -e "$mem/run-continue-arm-$sid.txt" ] && rm -f "$mem/run-continue-arm-$sid.txt"
 
 case "$ptxt" in
-  '/run'[[:space:]]*|'/run\'*|'/run"'*)
+  '/run'[[:space:]]*|'/run\'*|'/run"'*|'/run_hard'*)
     for _f in "$mem"/run-state-*.json; do
       if [ -e "$_f" ]; then touch "$mem/run-continue-consent-$sid.txt"; fi
       break

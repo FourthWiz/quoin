@@ -31,7 +31,8 @@ mechanics.
 | [`revise`](revise/README.md) | planning | high | yes |
 | [`revise-fast`](revise-fast/README.md) | planning | medium | no |
 | [`rollback`](rollback/README.md) | rollback | medium | yes |
-| [`run`](run/README.md) | orchestration | max | yes |
+| [`run`](run/README.md) | orchestration | high | yes |
+| [`run_hard`](run_hard/README.md) | orchestration | max | yes |
 | [`security_review`](security_review/README.md) | security_review | high | yes |
 | [`sleep`](sleep/README.md) | sleep | low | yes |
 | [`start_of_day`](start_of_day/README.md) | session-lifecycle | low | yes |

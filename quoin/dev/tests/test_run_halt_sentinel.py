@@ -5,7 +5,7 @@ Text-level guard asserting: (1) all six hard-stop sites in `run/SKILL.md`
 document a halt-sentinel write with a reason before exit, plus the
 never-auto-PR restatement; (2) the halt-sentinel schema (five fields) and
 the stable outside-task-folder location statement appear in both
-`core/skills/run.md` and `memory/autonomous-mode.md`. Mirrors the repo's
+`core/skills/run_hard.md` and `memory/autonomous-mode.md`. Mirrors the repo's
 existing SKILL.md-lint style (see test_run_autonomous_depth.py,
 test_run_core_autonomous.py).
 """
@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
-CORE_DOC = REPO_ROOT / "quoin" / "core" / "skills" / "run.md"
+RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
+CORE_DOC = REPO_ROOT / "quoin" / "core" / "skills" / "run_hard.md"
 AUTONOMOUS_MODE_DOC = REPO_ROOT / "quoin" / "memory" / "autonomous-mode.md"
 
 SCHEMA_FIELDS = ("task", "phase", "reason", "timestamp", "resume_hint")
@@ -38,7 +38,7 @@ def run_skill_text() -> str:
 
 @pytest.fixture(scope="module")
 def core_doc_text() -> str:
-    assert CORE_DOC.exists(), f"core/skills/run.md not found at {CORE_DOC}"
+    assert CORE_DOC.exists(), f"core/skills/run_hard.md not found at {CORE_DOC}"
     return CORE_DOC.read_text(encoding="utf-8")
 
 
@@ -87,7 +87,7 @@ def test_each_hard_stop_site_references_the_sentinel_section(run_skill_text: str
 
 def test_core_doc_has_halt_sentinel_schema(core_doc_text: str) -> None:
     missing = [f for f in SCHEMA_FIELDS if f"`{f}`" not in core_doc_text]
-    assert not missing, f"core/skills/run.md missing schema fields: {missing}"
+    assert not missing, f"core/skills/run_hard.md missing schema fields: {missing}"
 
 
 def test_core_doc_has_stable_outside_task_folder_location(core_doc_text: str) -> None:
@@ -98,12 +98,12 @@ def test_core_doc_has_stable_outside_task_folder_location(core_doc_text: str) ->
 
 def test_halt_sentinel_schema() -> None:
     """T-15: all 5 schema fields + the stable-location-outside-task-folder
-    statement must appear in BOTH core/skills/run.md and autonomous-mode.md.
+    statement must appear in BOTH core/skills/run_hard.md and autonomous-mode.md.
     """
     core_text = CORE_DOC.read_text(encoding="utf-8")
     memory_text = AUTONOMOUS_MODE_DOC.read_text(encoding="utf-8")
 
-    for doc_name, text in (("core/skills/run.md", core_text), ("autonomous-mode.md", memory_text)):
+    for doc_name, text in (("core/skills/run_hard.md", core_text), ("autonomous-mode.md", memory_text)):
         missing = [f for f in SCHEMA_FIELDS if f"`{f}`" not in text]
         assert not missing, f"{doc_name} missing schema fields: {missing}"
 
@@ -118,4 +118,4 @@ def test_core_doc_stays_token_clean_with_new_content(core_doc_text: str) -> None
     # schema bullet doesn't reintroduce a runtime-specific token.
     forbidden = ("~/.claude", "Haiku", "Sonnet", "Opus", "Agent", "gh CLI")
     hits = [t for t in forbidden if t in core_doc_text]
-    assert not hits, f"core/skills/run.md contains forbidden tokens: {hits}"
+    assert not hits, f"core/skills/run_hard.md contains forbidden tokens: {hits}"

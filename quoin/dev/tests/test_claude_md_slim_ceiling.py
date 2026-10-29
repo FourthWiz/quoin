@@ -48,7 +48,7 @@ assert len(PROJECT_STANDIN) == 104, len(PROJECT_STANDIN)
 # calibrated for a different destination (the user's ~/.claude/CLAUDE.md).
 PROJECT_PRE_MARKER_BUDGET = 6_144
 DEPLOYED_CEILING = 40_000
-SLIM_BYTES = 2_328
+SLIM_BYTES = 2_298
 
 
 def test_slim_source_marker_block_below_ceiling():

@@ -90,7 +90,7 @@ def test_glossary_reference_intact(skill):
     )
 
 
-@pytest.mark.parametrize("skill", list(SKILLS_WITH_WRITE_SITE))
+@pytest.mark.parametrize("skill", sorted(SKILLS_WITH_WRITE_SITE))
 def test_write_site_reference_intact(skill):
     """(d) Write-site format-kit reference still present for the 6 non-gate skills."""
     content = _skill_md(skill).read_text(encoding="utf-8")

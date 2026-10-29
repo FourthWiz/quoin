@@ -14,7 +14,7 @@ import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/
 _SOURCE_ROOT = _REPO_ROOT / "quoin"
-_RUN_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+_RUN_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 _REVIEW_SKILL = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "review" / "SKILL.md"
 
 

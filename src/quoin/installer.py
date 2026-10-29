@@ -83,6 +83,7 @@ CANONICAL_SKILLS = (
     "revise-fast",
     "rollback",
     "run",
+    "run_hard",
     "security_review",
     "sleep",
     "specify",
@@ -184,16 +185,19 @@ OBSOLETE_TESTS = ("test_summarize_for_human.py", "test_with_env_sh.py")
 # "on" = full description in every session; "name-only" = invocable via /name, no auto-suggest description.
 # Only keys in this dict are touched; user-added keys for other skills are preserved.
 SKILL_OVERRIDES: dict[str, str] = {
-    # Core workflow skills — always show full description
-    "thorough_plan": "on",
-    "plan": "on",
-    "critic": "on",
-    "review": "on",
-    "implement": "on",
-    "gate": "on",
-    "triage": "on",
+    # Light-path entry points — always show full description
+    "run": "on",
     "specify": "on",
     "enrich": "on",
+    "review": "on",
+    # Heavy-pipeline phases — reached through /run hard:, so name-only keeps
+    # them out of auto-suggest and off every session's skill listing
+    "thorough_plan": "name-only",
+    "plan": "name-only",
+    "critic": "name-only",
+    "implement": "name-only",
+    "gate": "name-only",
+    "triage": "name-only",
     # Lifecycle / one-shot skills — invocable by name, no description in auto-suggest
     "pr": "name-only",
     "init_workflow": "name-only",
@@ -208,7 +212,7 @@ SKILL_OVERRIDES: dict[str, str] = {
     "cost_snapshot": "name-only",
     "status": "name-only",
     "rollback": "name-only",
-    "run": "name-only",
+    "run_hard": "name-only",
     "weekly_review": "name-only",
     "next_steps": "name-only",
     "continue_work": "name-only",

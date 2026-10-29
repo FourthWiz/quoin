@@ -164,6 +164,12 @@ def parse_reply(text: str) -> Tuple[Optional[dict], Optional[str]]:
     if not isinstance(data, dict):
         return None, "reply is not a JSON object"
     keys = set(data)
+    # The ratings and the preference are what is scored; a reply that only
+    # omits the free-text rationale is still a valid verdict.
+    rationale_missing = "rationale" not in keys
+    if rationale_missing:
+        keys = keys | {"rationale"}
+        data = {**data, "rationale": ""}
     if keys != REPLY_KEYS:
         missing = sorted(REPLY_KEYS - keys)
         extra = sorted(keys - REPLY_KEYS)
@@ -174,9 +180,10 @@ def parse_reply(text: str) -> Tuple[Optional[dict], Optional[str]]:
     if data["preference"] not in PREFERENCES:
         return None, "preference must be A, B or tie"
     rationale = data["rationale"]
-    if not isinstance(rationale, str) or not rationale.strip():
+    if not isinstance(rationale, str) or (not rationale_missing and not rationale.strip()):
         return None, "rationale must be a non-empty string"
     parsed = dict(data)
+    parsed["rationale_missing"] = rationale_missing
     parsed["rationale_truncated"] = False
     if len(rationale) > RATIONALE_LIMIT:
         parsed["rationale"] = rationale[:RATIONALE_LIMIT]

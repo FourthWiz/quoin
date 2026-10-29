@@ -484,6 +484,9 @@ EXIT_USAGE = 64
 
 
 _MANIFEST_REL = Path("quoin") / "dev" / "tests" / "known-red.toml"
+# Any project other than quoin itself keeps its manifest with the rest of the
+# workflow state, so it can never leak into that project's commits.
+_PROJECT_MANIFEST_REL = Path(".workflow_artifacts") / "known-red.toml"
 
 
 def _default_manifest(project_root) -> Path:
@@ -494,23 +497,26 @@ def _default_manifest(project_root) -> Path:
     immediate subdirectories that look like a git checkout — a `.git` ENTRY, not
     necessarily a directory, since a worktree's `.git` is a file — in sorted order
     for determinism, and return the first one whose manifest path exists. Absent
-    everywhere → the direct (non-existent) path, so `load_manifest` returns `[]`
-    and the fail-closed spine holds.
+    everywhere → `<project_root>/.workflow_artifacts/known-red.toml` (the
+    quoin-repo layout path is never used as a default in other projects), and
+    `load_manifest` returns `[]` when that file does not exist either, so the
+    fail-closed spine holds.
     """
     root = Path(project_root) if project_root is not None else Path.cwd()
     direct = root / _MANIFEST_REL
     if direct.exists():
         return direct
+    fallback = root / _PROJECT_MANIFEST_REL
     try:
         candidates = sorted(p for p in root.iterdir() if p.is_dir())
     except OSError:
-        return direct
+        return fallback
     for sub in candidates:
         if (sub / ".git").exists():
             candidate = sub / _MANIFEST_REL
             if candidate.exists():
                 return candidate
-    return direct
+    return fallback
 
 
 def drop_phantom_failures(observed_rc, failed_or_error, junit_count):

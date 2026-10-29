@@ -27,7 +27,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 ADAPTER_SKILLS = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills"
-RUN_SKILL_MD = ADAPTER_SKILLS / "run" / "SKILL.md"
+RUN_SKILL_MD = ADAPTER_SKILLS / "run_hard" / "SKILL.md"
 GATE_SKILL_MD = ADAPTER_SKILLS / "gate" / "SKILL.md"
 ARCHITECT_SKILL_MD = ADAPTER_SKILLS / "architect" / "SKILL.md"
 THOROUGH_PLAN_SKILL_MD = ADAPTER_SKILLS / "thorough_plan" / "SKILL.md"

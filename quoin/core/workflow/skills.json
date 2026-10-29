@@ -194,6 +194,15 @@
     {
       "name": "run",
       "phase": "orchestration",
+      "effort": "high",
+      "user_facing": true,
+      "claude_model": "opus",
+      "section_0": false,
+      "spawn_target": false
+    },
+    {
+      "name": "run_hard",
+      "phase": "orchestration",
       "effort": "max",
       "user_facing": true,
       "claude_model": "opus",

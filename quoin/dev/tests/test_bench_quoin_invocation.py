@@ -38,18 +38,35 @@ def test_quoin_prompt_is_the_run_slash_command_plus_the_base_prompt(tmp_path):
     argv = _argv_of(quoin_claude, tmp_path, 5.5)
     base = _build_prompt(TASK)
     assert argv[-1] == quoin_claude.QUOIN_RUN_PREFIX + base
-    assert argv[-1].startswith("/run --autonomous small: ")
+    assert argv[-1].startswith("/run --autonomous This session")
     assert "the /run pipeline is required" in argv[-1]
     assert "do not fix the issue directly" in argv[-1]
     assert argv[-1].endswith(base)
     assert "Use /run --autonomous end-to-end" not in argv[-1]
 
 
-def test_quoin_prefix_carries_no_run_control_tokens_beyond_the_profile():
+def test_quoin_prefix_carries_no_run_control_tokens():
     # /run strips these from anywhere in its input; the prefix must not add any.
-    body = quoin_claude.QUOIN_RUN_PREFIX[len("/run --autonomous small: "):]
-    for token in ("fast:", "strict:", "medium:", "large:", "max_rounds:", "--resume", "["):
+    body = quoin_claude.QUOIN_RUN_PREFIX[len("/run --autonomous "):]
+    for token in ("hard:", "small:", "fast:", "strict:", "medium:", "large:", "max_rounds:", "--resume", "["):
         assert token not in body
+
+
+def test_route_env_selects_heavy_pipeline_prefix(monkeypatch):
+    monkeypatch.delenv(quoin_claude.ENV_BENCH_ROUTE, raising=False)
+    assert quoin_claude._run_prefix() == quoin_claude.QUOIN_RUN_PREFIX
+    monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, "hard")
+    assert quoin_claude._run_prefix() == quoin_claude.QUOIN_HARD_RUN_PREFIX
+    assert quoin_claude._run_prefix().startswith("/run --autonomous hard: small: ")
+
+
+def test_light_route_detected_from_brief(tmp_path):
+    task = tmp_path / "fix-thing"
+    task.mkdir()
+    (task / "brief.md").write_text("# fix-thing\n", encoding="utf-8")
+    got = quoin_claude._pipeline_diagnostics(tmp_path)
+    assert got["pipeline_started"] is True
+    assert got["workflow_route"]["route"] == "light"
 
 
 def test_plain_prompt_is_unchanged(tmp_path):
@@ -106,6 +123,13 @@ def test_orchestrator_ledger_row_alone_marks_the_pipeline_started(tmp_path):
     assert got["has_current_plan_md"] is False
     assert got["phase_files"] == ["task/cost-ledger.md"]
     assert got["workflow_route"]["route"] == "unknown"
+
+
+def test_light_brief_counts_as_the_plan(tmp_path):
+    got = _capture(tmp_path, {"task/brief.md": "# task\n## Goal\nfix it\n"})
+    assert got["has_current_plan_md"] is True
+    assert got["pipeline_started"] is True
+    assert got["workflow_route"]["route"] == "light"
 
 
 def test_fast_stub_plan_is_the_fast_route(tmp_path):

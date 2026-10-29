@@ -101,11 +101,20 @@ def test_parse_reply_accepts_the_schema_and_uses_the_last_fence():
     "no json here", "", "[1, 2]", reply_text(minimality_a=0), reply_text(minimality_a=6),
     reply_text(minimality_a=True), reply_text(minimality_a=2.5), reply_text(preference="C"),
     reply_text(preference="a"), reply_text(rationale=""), reply_text(rationale=5),
-    reply_text(extra=1), "```json\n" + json.dumps({k: v for k, v in GOOD.items() if k != "rationale"}) + "\n```",
+    reply_text(extra=1),
+    "```json\n" + json.dumps({k: v for k, v in GOOD.items() if k not in ("rationale", "preference")}) + "\n```",
 ])
 def test_parse_reply_rejects_without_coercion(text):
     parsed, why = pr.parse_reply(text)
     assert parsed is None and why
+
+
+def test_missing_rationale_is_valid_and_flagged():
+    text = "```json\n" + json.dumps({k: v for k, v in GOOD.items() if k != "rationale"}) + "\n```"
+    parsed, why = pr.parse_reply(text)
+    assert why is None
+    assert parsed["preference"] == GOOD["preference"]
+    assert parsed["rationale"] == "" and parsed["rationale_missing"] is True
 
 
 def test_long_rationale_is_truncated_not_invalid():

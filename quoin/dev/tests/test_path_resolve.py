@@ -686,3 +686,15 @@ def test_cli_print_project_root_from_workspace(tmp_path):
     lines = [ln for ln in result.stdout.splitlines() if ln.strip()]
     assert len(lines) == 1
     assert Path(lines[0]) == rootB.resolve()
+
+
+def test_light_run_stage_template_resolves_by_name():
+    """The architecture.md template in the light /run skill must stay parseable."""
+    skill = (Path(__file__).parent.parent.parent / "adapters" / "claude" / "skills"
+             / "run" / "SKILL.md").read_text(encoding="utf-8")
+    blocks = re.findall(r"```markdown\n(.*?)```", skill, re.DOTALL)
+    template = next(b for b in blocks if "## Stage decomposition" in b)
+    names = iter(["add billing schema", "wire billing api"])
+    arch = re.sub(r"<short stage name>", lambda _m: next(names), template)
+    assert _lookup_stage_by_name(arch, "billing schema") == 1
+    assert _lookup_stage_by_name(arch, "wire-billing") == 2
