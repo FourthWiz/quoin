@@ -99,7 +99,7 @@ Claude-specific behavior includes:
 - Claude session JSONL lookup.
 - `ccusage` integration and the fallback cost parser.
 - `cost_from_jsonl.py` is Claude-specific because it reads Claude Code session logs and Claude model pricing. Despite living at `quoin/scripts/` (alongside portable wrappers), its adapter scope is declared by a CLAUDE-ADAPTER-OWNED banner at the top of the file. The portable cost-event schema belongs in `quoin/core/scripts/cost_event.py`; runtime-specific cost collection stays here.
-- **IVG-111 cost-attribution surface (nested-transcript resolver/pricer + backfill).** `agent_transcript_cost.py` (`resolve_by_agent_id`/`resolve_by_tooluse`/`price_agent_jsonl`/`resolve_attribution`) and `backfill_cost_attribution.py` are Claude-adapter-owned: both read `~/.claude` session JSONL transcripts and the Claude `PRICES` table to resolve a subagent's per-tool-use cost and to backfill historical col-8 attribution. `analyze_cost_ledger.py`/`dashboard_cost.py` (the readers that apply the resolved-vs-unresolvable reader-precedence rule over col-8) are likewise Claude-adapter-owned, because they call the adapter pricer/resolver on the legacy (no-col-8) path; the pure col-8-only consumption path (`spend_monitor.py`, `dashboard_model.py`) stays in `quoin/core/scripts/` since it never resolves a UUID to a JSONL-priced cost itself. `cost_ledger_summary.py` (finalize-time ledger re-pricing, token-mix estimates) is likewise Claude-adapter-owned: it reads the same transcripts and price table and writes `cost-summary.json`, which core consumes only through the portable `cost_summary.py` normalizer. Core never imports any of `cost_from_jsonl` / `agent_transcript_cost` / `backfill_cost_attribution` / `cost_ledger_summary` (architecture `D-04`/`R-05`).
+- **IVG-111 cost-attribution surface (nested-transcript resolver/pricer).** `agent_transcript_cost.py` (`resolve_by_agent_id`/`resolve_by_tooluse`/`price_agent_jsonl`/`resolve_attribution`) is Claude-adapter-owned: it reads `~/.claude` session JSONL transcripts and the Claude `PRICES` table to resolve a subagent's per-tool-use cost. `analyze_cost_ledger.py`/`dashboard_cost.py` (the readers that apply the resolved-vs-unresolvable reader-precedence rule over col-8) are likewise Claude-adapter-owned, because they call the adapter pricer/resolver on the legacy (no-col-8) path; the pure col-8-only consumption path (`spend_monitor.py`, `dashboard_model.py`) stays in `quoin/core/scripts/` since it never resolves a UUID to a JSONL-priced cost itself. `cost_ledger_summary.py` (finalize-time ledger re-pricing, token-mix estimates) is likewise Claude-adapter-owned: it reads the same transcripts and price table and writes `cost-summary.json`, which core consumes only through the portable `cost_summary.py` normalizer. Core never imports any of `cost_from_jsonl` / `agent_transcript_cost` / `cost_ledger_summary` (architecture `D-04`/`R-05`).
 - `session_age_guard.py` is Claude-specific because it inspects Claude Code session files. A CLAUDE-ADAPTER-OWNED banner at the top of the file declares this scope explicitly.
 - `pollution_guard.py` is Claude-specific because it scores Claude Code session transcripts. It carries the same CLAUDE-ADAPTER-OWNED banner.
 - `measure_revise_crossover_cost.py` is Claude-specific because it imports `cost_from_jsonl` and references Claude model names. A CLAUDE-ADAPTER-OWNED banner at the top of the file declares this scope explicitly.
@@ -280,10 +280,12 @@ The first implementation pass established the boundary and guard tests. Portable
 
 ### Migrated skills (Phases 6–21)
 
-Twenty-one skills now install from the Claude adapter path
+Every Claude skill now installs from the Claude adapter path
 (`quoin/adapters/claude/skills/<name>/SKILL.md`); the runtime-neutral
-intents live at `quoin/core/skills/<name>.md`. All other skills still
-install from `quoin/skills/<name>/SKILL.md`.
+intents live at `quoin/core/skills/<name>.md`. The installer falls back
+to `quoin/skills/<name>/SKILL.md` only for a skill with no adapter copy.
+The phases below migrated the first twenty-one; the rest, including
+`run_hard`, followed later.
 
 - `capture_insight` shipped in Phase 6 as the pilot.
 - `triage` and `start_of_day` followed in Phase 7.

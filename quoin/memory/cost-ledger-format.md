@@ -16,7 +16,7 @@ Substitute the bareword placeholders `PHASE`, `MODEL`, `NOTE`, `FALLBACK_FIRES` 
 
 **Empty-UUID guard:** all three self-write one-liners (7-, 8-, and 6-column forms above and below) assign `uuid` first, then apply `uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)}` as its own statement — never spliced into the original `uuid=$(...) && printf` chain, since a guard clause there would short-circuit and suppress `printf` on the normal (non-empty) path. This is cheap defense-in-depth against an empty-but-successful `get_session_uuid.py` stdout read. The first column is always `UUID`: a row whose first field parses as a date (rather than a UUID) indicates a column transposition — a transcription slip, not necessarily an empty-`$uuid` write — and stays in place under the append-only invariant once observed (e.g. this task's own ledger).
 
-**8-column form** (adds the optional `attribution` column — written by the on-behalf orchestrator path (stage 3: `/architect`, `/thorough_plan`, `/run`, flag-gated by `QUOIN_INLINE_COST_CAPTURE`, default ON since IVG-249 S-02); session-start one-liner writers keep emitting 6/7-col):
+**8-column form** (adds the optional `attribution` column — written by the on-behalf orchestrator path (stage 3: `/architect`, `/thorough_plan`, `run_hard`, flag-gated by `QUOIN_INLINE_COST_CAPTURE`, default ON since IVG-249 S-02); session-start one-liner writers keep emitting 6/7-col):
 
 ```bash
 uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)" --phase "PHASE" 2>/dev/null || echo "unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)"); uuid=${uuid:-unknown-PHASE-$(date -u +%Y%m%dT%H%M%SZ)} && printf '%s | %s | %s | %s | task | %s | %s | %s\n' \
@@ -24,7 +24,7 @@ uuid=$(python3 __QUOIN_HOME__/scripts/get_session_uuid.py --project-path "$(pwd)
   >> "$LEDGER"
 ```
 
-**On-behalf write (stage 3)** — a cost-aware orchestrator (`/architect`, `/thorough_plan`, `/run`) writes this row itself, on behalf of a managed child it spawned, instead of the child self-writing. Gated by `QUOIN_INLINE_COST_CAPTURE` (default ON since IVG-249 S-02 — opt out with `=0`; see the rollout note below). `AID` is the child's `agentId` (model-transcribed from the Agent tool result, or a unique fallback UUID on capture failure); `ATTR` is the T-01 CLI's col-8 micro-map output:
+**On-behalf write (stage 3)** — a cost-aware orchestrator (`/architect`, `/thorough_plan`, `run_hard`) writes this row itself, on behalf of a managed child it spawned, instead of the child self-writing. Gated by `QUOIN_INLINE_COST_CAPTURE` (default ON since IVG-249 S-02 — opt out with `=0`; see the rollout note below). `AID` is the child's `agentId` (model-transcribed from the Agent tool result, or a unique fallback UUID on capture failure); `ATTR` is the T-01 CLI's col-8 micro-map output:
 
 ```bash
 if [ "${QUOIN_INLINE_COST_CAPTURE:-1}" != "0" ]; then
@@ -49,7 +49,7 @@ if [ "${QUOIN_INLINE_COST_CAPTURE:-1}" != "0" ]; then
 fi
 ```
 
-**Rollout note (stage 3 → stage 4):** col-8-aware readers HAVE shipped (`cost_event.parse_row` tolerates 6/7/8 and reads col 8; `analyze_cost_ledger`, `dashboard_cost`, core `spend_monitor`, and `end_of_task` Sub-phase B all apply col-8 precedence). As of IVG-249 S-02 the flag is default ON — unset means capture is enabled. Opt out with `QUOIN_INLINE_COST_CAPTURE=0`; any other value (incl. unset) enables capture. Under opt-out, managed-phase rows revert to child self-writes sharing the parent session UUID, cohort-bucketed by `cohort_attribution` — per-phase attribution is unavailable. `/run` warns at Setup when the opt-out is explicit.
+**Rollout note (stage 3 → stage 4):** col-8-aware readers HAVE shipped (`cost_event.parse_row` tolerates 6/7/8 and reads col 8; `analyze_cost_ledger`, `dashboard_cost`, core `spend_monitor`, and `end_of_task` Sub-phase B all apply col-8 precedence). As of IVG-249 S-02 the flag is default ON — unset means capture is enabled. Opt out with `QUOIN_INLINE_COST_CAPTURE=0`; any other value (incl. unset) enables capture. Under opt-out, managed-phase rows revert to child self-writes sharing the parent session UUID, cohort-bucketed by `cohort_attribution` — per-phase attribution is unavailable. `run_hard` warns at Setup when the opt-out is explicit. The light `/run` writes no cost-ledger rows.
 
 **6-column form** (for Conditional skills `/discover`, `/triage` that omit `fallback_fires`):
 

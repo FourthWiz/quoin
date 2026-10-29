@@ -5,7 +5,7 @@ Two-tier structure:
 1. Tier 1 (CI-safe, no `claude`):
    Import installer.py via importlib and assert "memory_check.py"
    is present in BOTH DEPLOYED_SCRIPTS and CORE_SCRIPTS. Also asserts both
-   source files exist in the repo. Mirrors test_find_drive_conflicts.py.
+   source files exist in the repo.
 
 2. Behavior tests (tmp_path, no external deps):
    Build fixture memory dirs, call the core check() API directly.

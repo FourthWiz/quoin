@@ -8,12 +8,18 @@
 > `decision-gate-guard.md` (IVG-150).
 
 
-Verbose Tier-1 reference for the opt-in `--autonomous` span on `/run`
+Verbose Tier-1 reference for the opt-in `--autonomous` span on the heavy
+pipeline, `run_hard` (reached via `/run hard:`, a manually invoked exception)
 (IVG-153, `autonomous-run-mode` Stage 1). This file holds the full
 auto-resolution table, the sentinel/propagation rule, the Formulation
-quality bar, and the halt-sentinel contract. `run/SKILL.md` and the
+quality bar, and the halt-sentinel contract. `run_hard/SKILL.md` and the
 per-skill `SKILL.md` bodies carry the operative branches; this file is
 the single place that documents the whole surface in one pass.
+
+The default light `/run` also accepts `--autonomous`, but there it only means
+"never ask the user; record assumptions in the brief". It writes no marker,
+arm, progress or done sentinel, has no supervisor and no Stop-hook
+continuation, so everything below describes `run_hard`.
 
 ## The `[autonomous]` sentinel and propagation
 
@@ -23,7 +29,7 @@ and `[no-redispatch]` sentinel conventions — rather than an env var, so
 it stays greppable and deterministic. Leading sentinels stack (e.g.
 `[no-redispatch] [autonomous]`).
 
-- `run` prefixes `[autonomous]` directly onto every sub-phase spawn it
+- `run_hard` prefixes `[autonomous]` directly onto every sub-phase spawn it
   issues: discover, enrich, specify, architect, thorough_plan,
   implement, review, **`end_of_task`** (the terminal Phase-6 spawn),
   and every subagent-mode `gate` boundary. This is the SPAWNED-phase
@@ -40,7 +46,7 @@ it stays greppable and deterministic. Leading sentinels stack (e.g.
 - For **inline** gates (post-implement, post-review) there is no spawn
   prompt to carry a sentinel — the orchestrator applies autonomous gate
   behavior directly from its own `AUTONOMOUS` state.
-- The run→`end_of_task` edge is a direct edge, not a deeper one: `run`
+- The run_hard→`end_of_task` edge is a direct edge, not a deeper one: `run_hard`
   spawns `end_of_task` itself as the terminal Execution phase, so the
   sentinel is prefixed onto that spawn exactly like any other direct
   sub-phase.
@@ -190,17 +196,17 @@ member of both classes, not only the reachable ones, so the
 byte-identity contracts stay green; on non-reachable skills the clause
 is simply inert (conditional on the absent sentinel).
 
-## Relocated: Exception: `/run` orchestrator
+## Relocated: Exception: `run_hard` orchestrator (`/run hard:`)
 
 Moved here verbatim from `CLAUDE.md`'s "Workflow sequence" section
 (IVG-153 T-17). `CLAUDE.md` now carries only a short pointer back to
 this section, to stay under its size ceiling.
 
-**Exception: `/run` orchestrator.** When the user invokes `/run`, they
-have explicitly requested the full end-to-end pipeline. `/run` may
+**Exception: `run_hard` orchestrator.** When the user invokes `/run hard:`, they
+have explicitly requested the full end-to-end pipeline. `run_hard` may
 invoke `/implement` and `/end_of_task` on the user's behalf, but still
 pauses at each gate checkpoint for confirmation before proceeding. The
-user's `/run` invocation constitutes the conscious decision;
+user's `/run hard:` invocation constitutes the conscious decision;
 the gate confirmations provide the safety checkpoints.
 
 Under `--autonomous`, this reliance extends one step further: once the
@@ -219,7 +225,8 @@ the quality bar, and the halt-sentinel *write* side. Stage 2 adds an
 external local supervisor — `quoin run --autonomous <task>` — that can
 relaunch fresh `claude -p "/run --resume --autonomous <task>"` sessions
 to carry a Large task across context windows a single session cannot
-fit in. The supervisor is pure orchestration outside the session; it
+fit in. A `/run --resume` of a task with a marker or run-state record
+routes to `run_hard`, so the relaunch always continues the heavy pipeline. The supervisor is pure orchestration outside the session; it
 never edits skill content and reads the sentinel contract below to
 decide whether to relaunch.
 
@@ -230,14 +237,14 @@ each survives `/end_of_task`'s later move of that folder into
 
 - **Marker** — `autonomous-run-{task}.marker` (single line: task,
   timestamp, `autonomous: true`). Written once at autonomous-span
-  entry, in `/run`'s Setup, right after `AUTONOMOUS=true` is set.
-  `/run --resume` reads it FIRST, before its own first decision point,
+  entry, in `run_hard`'s Setup, right after `AUTONOMOUS=true` is set.
+  `run_hard`'s resume reads it FIRST, before its own first decision point,
   to re-establish autonomous mode — so a headless resume never reverts
   to interactive and stalls. Re-writing the marker is a no-op-equivalent
-  overwrite; plain (non-autonomous) `/run` never writes it.
+  overwrite; plain (non-autonomous) `run_hard` and the light `/run` never write it.
 - **Per-phase completion sentinels** —
   `autonomous-progress-{task}/{phase}.done`, one file per completed
-  phase, for the FULL resumable `/run` phase roster (`run/SKILL.md`
+  phase, for the FULL resumable `run_hard` phase roster (`run_hard/SKILL.md`
   `## Phase sequence`): `discover, enrich, specify, fast_path_triage,
   architect, thorough_plan, implement, review, end_of_task` — 9 phases.
   `enrich` (Phase 1.4), `specify` (Phase 1.5), and `fast_path_triage`
@@ -307,7 +314,7 @@ combined with `--autonomous`.
 
 **Sub-phase-granular idempotent resume.** Each fresh relaunch is a
 `/run --resume --autonomous <task>` that MUST land at the correct phase
-with no re-work and no skipped work. `/run --resume` reads the marker
+with no re-work and no skipped work. `run_hard`'s resume reads the marker
 FIRST (re-establishing `AUTONOMOUS` before any decision point), then
 derives the next phase from the `{phase}.done` completion sentinels
 rather than from session-state prose alone: a phase whose `{phase}.done`
@@ -350,9 +357,9 @@ that notices an interrupted span and nudges the same session to keep
 going, escalating to a detached hand-off only once the in-session budget
 for that is spent.
 
-**Arm / disarm — a consent model, not a lock.** `/run`'s Setup arms the
+**Arm / disarm — a consent model, not a lock.** `run_hard`'s Setup arms the
 owning session (`--entry fresh`) right after the autonomous-span marker
-is written; `/run --resume` re-arms it (`--entry resume`) at its own
+is written; `run_hard`'s resume re-arms it (`--entry resume`) at its own
 Step 0. The arm is a file, `run-continue-arm-<sid>.txt`, named after the
 session that holds it. Any human-typed prompt in that session disarms it
 immediately — `userpromptsubmit.sh` removes the arm on every
@@ -533,7 +540,7 @@ attempts, including one skipped because a halt appeared first.
 
 Every hand-off above that starts a detached supervisor — the Stop hook's
 escalation, the SessionStart hand-off for a run whose owner is gone, and
-`/run`'s own `handoff` subcommand — needs to run the `quoin` CLI as a
+`run_hard`'s own `handoff` subcommand — needs to run the `quoin` CLI as a
 real subprocess, without knowing in advance how it was
 installed (a plain venv, `pip install --user -e`, `uv tool install`,
 `pipx`, or a bare source checkout on `PYTHONPATH`). It does this by reading

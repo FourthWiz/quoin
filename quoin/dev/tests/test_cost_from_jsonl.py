@@ -434,8 +434,7 @@ def test_live_non_anthropic_slug_is_never_priceable(tmp_path):
 
 
 def test_one_rewrite_away_slug_stays_unpriced():
-    """claude-opus-4-5-legacy (the fixture at
-    test_backfill_cost_attribution.py:109) sits exactly one banned rewrite
+    """claude-opus-4-5-legacy sits exactly one banned rewrite
     away from the newly-added claude-opus-4-5 key. Under the two-rule
     resolver (trailing [1m], trailing -DDDDDDDD) it stays a miss — neither
     rule matches "-legacy"."""

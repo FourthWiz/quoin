@@ -55,10 +55,10 @@ colon-delimited form is safe).
 Setup §1b scans `checkpoints/thorough-plan-progress-*.md` directly, matches by `## Active task`,
 applies a 7-day age bound, and offers Resume/Start-fresh via `AskUserQuestion`. Same-session guard: if the checkpoint SID (extracted from the filename `thorough-plan-progress-{SID}.md`) matches the current session UUID, §1b adds a third AskUserQuestion option (`(c) Resume in a new session`) and warns that continuing here dispatches subagents into an already-used context window.
 
-**`/run` transitive coverage:** When `/run` dispatches `/thorough_plan` as a subagent, the
+**`run_hard` transitive coverage:** When `run_hard` (`/run hard:`) dispatches `/thorough_plan` as a subagent, the
 phase-boundary checkpoints fire inside that subagent (SKILL.md edit runs). The planning kill-gap is
-covered transitively. The deferred `/run` follow-up (IVG-98 D-06) concerns only the
-implement→review inter-phase gap, not planning. Under `/run`, the checkpoint carries the `/thorough_plan` subagent's SID, so a
+covered transitively. The deferred `run_hard` follow-up (IVG-98 D-06) concerns only the
+implement→review inter-phase gap, not planning. Under `run_hard`, the checkpoint carries the `/thorough_plan` subagent's SID, so a
 re-invocation of `/thorough_plan` re-enters the loop mid-way.
 
 ## Memory layout
@@ -77,7 +77,7 @@ Directory tree and `forgotten/<date>.md` entry format:
 │   └── <YYYY-MM-DD>/  ←   dated subdirs, one per trash day
 ├── telemetry/         ← compaction-event sink (precompact.sh appends a "pre" line, postcompact.sh appends the paired "post" line, per auto-compaction)
 │   └── compaction-events.jsonl[.1]  ← rotated at QUOIN_TELEMETRY_MAX_BYTES (two-file, bounded footprint); still outside both depth-1 sweeps — schema and reader: hooks-table.md, "Compaction telemetry sink"
-├── run-state-<task>.json   ← task-keyed resume record (/run writes, /thorough_plan refines)
+├── run-state-<task>.json   ← task-keyed resume record (run_hard writes, /thorough_plan refines)
 ├── run-notes-<task>.md[.1] ← its append-only notes log, rotated at QUOIN_RUN_NOTES_MAX_BYTES
 └── lessons-learned.md ← long-term institutional memory
 ```
@@ -94,10 +94,10 @@ record's Python writer).
 `### Workflow memory layers` table, IVG-258 `S-7`, to stay under that file's character
 ceiling).** The run-state record's `phase`/`next_action`/`step` fields double as the
 session-id anchor the compaction hook matches on. That anchor is adopted onto the
-*resuming* session only at `/run`'s own Resume entry point, after its freshness-gated
+*resuming* session only at `run_hard`'s own Resume entry point, after its freshness-gated
 reads — never as a side effect of a refresh write. A refresh write (e.g. `/thorough_plan`
 updating `phase` mid-round) never re-anchors the record to the writing session; only
-`/run`'s Resume path performs the adoption.
+`run_hard`'s Resume path performs the adoption.
 
 Note: `trash/` accumulates sentinel files moved by `trash_move()` (in `_lib.sh`) instead of hard-deleted. The `/sleep --purge --older-than 90d` scope does not yet include `trash/` — this is a known gap (R-7); a follow-up task will extend `/sleep --purge` to cover `trash/`.
 

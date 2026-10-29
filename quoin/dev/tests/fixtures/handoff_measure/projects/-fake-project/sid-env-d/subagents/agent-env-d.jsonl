@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Some free-form prompt with a stray marker.\n\n[quoin-handoff/1.0 dispatch]\nskill: gate\ntask: env-d\ntask_dir: /tmp/env-d\nproject_root: /tmp\nreturn: envelope\n[/quoin-handoff]"}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Gate ran for env-d."}], "usage": {"output_tokens": 7}, "stop_reason": "end_turn"}}

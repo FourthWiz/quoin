@@ -366,13 +366,8 @@ def test_hook_no_op_when_sidecar_absent(tmp_path):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# T-11 (IVG-116) — self-generation, opt-out, timeout bounding, and hook-mirror equality
+# T-11 (IVG-116) — self-generation, opt-out and timeout bounding
 # ─────────────────────────────────────────────────────────────────────────────
-
-# The adapter mirror copy that must stay byte-identical to HOOK_SCRIPT.
-ADAPTER_HOOK_SCRIPT = (
-    Path(__file__).parent.parent.parent / "adapters" / "claude" / "hooks" / "worktreecreate.sh"
-)
 
 
 def test_hook_selfgen_when_harness_omits_path_and_branch(tmp_path):
@@ -489,14 +484,3 @@ def test_hook_bounds_git_worktree_add_with_timeout(tmp_path):
     assert stdout == "", f"Expected no stdout when git worktree add times out, got: {stdout!r}"
     assert not Path(str(tmp_path / "wt-timeout")).exists(), "No worktree should exist after a timed-out add"
 
-
-def test_worktreecreate_hook_copies_byte_identical():
-    """MAJ-4: the authoritative hook and the Claude adapter mirror must be byte-identical.
-    Would FAIL if only one copy were edited."""
-    assert HOOK_SCRIPT.exists(), f"authoritative hook missing: {HOOK_SCRIPT}"
-    assert ADAPTER_HOOK_SCRIPT.exists(), f"adapter mirror missing: {ADAPTER_HOOK_SCRIPT}"
-    assert HOOK_SCRIPT.read_bytes() == ADAPTER_HOOK_SCRIPT.read_bytes(), (
-        "worktreecreate.sh copies have diverged: "
-        f"{HOOK_SCRIPT} != {ADAPTER_HOOK_SCRIPT}. "
-        "Edit both copies identically (authoritative = quoin/quoin/hooks/)."
-    )

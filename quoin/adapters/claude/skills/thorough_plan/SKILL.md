@@ -24,8 +24,8 @@ On start:
 ### 0. Parse autonomous sentinel
 
 Before anything else, check whether the invocation prompt carries the `[autonomous]` sentinel
-(prefixed by `/run` per its "Autonomous propagation" rule when this skill is spawned from an
-autonomous `/run`, or passed directly on a standalone invocation). Parse and strip it at
+(prefixed by `run_hard` per its "Autonomous propagation" rule when this skill is spawned from an
+autonomous `run_hard` (`/run hard:`), or passed directly on a standalone invocation). Parse and strip it at
 bootstrap into an internal state flag `_AUTONOMOUS`:
 
 - If present: strip `[autonomous]` from the prompt text — leading sentinels stack (e.g.
@@ -236,7 +236,7 @@ Before the spec pre-flight below, offer via `AskUserQuestion` to run `/enrich` o
 
 This is default-on but NON-BLOCKING — the loop proceeds regardless of the answer. If run: unless `QUOIN_INLINE_COST_CAPTURE=0`, the cost row is the on-behalf write described in "Invoking each agent" → "On-behalf cost capture" below (phase=enrich, model=opus) FIRST; either way, THEN append a best-effort cost-ledger row for the `enrich` phase if no row is found: `unknown-enrich-<timestamp> | <date> | enrich | opus | task | /thorough_plan subagent (on-behalf write failed, if capture was ON — else no UUID recorded)` — this fallback now runs regardless of flag state (mirrors the `run/SKILL.md` T-02 CRIT-2 fix), not only under opt-out. No `/gate` runs after enrich.
 
-**Under `[autonomous]`:** skip the `AskUserQuestion` — do not wait for a choice. When `/thorough_plan` was itself spawned with `[autonomous]` from `/run`, enrichment has typically already run at `/run` Phase 1.4 — skip re-running it here. When `/thorough_plan` is invoked standalone under `[autonomous]` (no upstream enrich), run `/enrich` best-effort without blocking; if it is unavailable, errors, or times out, proceed directly to the spec pre-flight below without waiting. Either way this stays non-blocking, exactly as the non-autonomous default already is.
+**Under `[autonomous]`:** skip the `AskUserQuestion` — do not wait for a choice. When `/thorough_plan` was itself spawned with `[autonomous]` from `run_hard`, enrichment has typically already run at `run_hard` Phase 1.4 — skip re-running it here. When `/thorough_plan` is invoked standalone under `[autonomous]` (no upstream enrich), run `/enrich` best-effort without blocking; if it is unavailable, errors, or times out, proceed directly to the spec pre-flight below without waiting. Either way this stays non-blocking, exactly as the non-autonomous default already is.
 
 ### 3c. Spec pre-flight (advisory, non-blocking)
 
@@ -310,7 +310,7 @@ and `/revise-fast` spawns, and the post-plan `/gate` subagent spawn — so the s
 those leaf skills' own `[autonomous]` / §0' / §0″ branches. Sentinels stack with any existing
 prefix (e.g. `[no-redispatch] [autonomous] <spawn instructions>`); each leaf skill parses and
 strips its own copy independently at its own bootstrap. This is the deeper-spawn re-prefix rule
-referenced by `/run`'s "Transitive propagation rule" (`D-07`).
+referenced by `run_hard`'s "Transitive propagation rule" (`D-07`).
 
 **On-behalf cost capture (`QUOIN_INLINE_COST_CAPTURE`, default-ON, opt-out via =0, D-1/D-2/D-3, IVG-111 stage 3):**
 Unless `QUOIN_INLINE_COST_CAPTURE=0`, this applies to EVERY managed spawn below — `/plan` (round 1),
@@ -562,8 +562,8 @@ non-blocking check (it never prompts).
 
 **Round-boundary run-state refresh (third call in this boundary block, AFTER the
 `thorough_plan_checkpoint.py` invocation and the budget guard above).** `/thorough_plan`
-is a first-class standalone entry point, not only a `/run` subagent, so this call carries
-`--require-existing`: it refines a record `/run` already created and is a silent no-op
+is a first-class standalone entry point, not only a `run_hard` subagent, so this call carries
+`--require-existing`: it refines a record `run_hard` already created and is a silent no-op
 (no file, no directory, no notes append) when there is none — a standalone `/thorough_plan`
 run therefore leaves no run-state trace of its own. The call passes NO `--session-id`:
 the record keeps its creator's stored id (the writer preserves a non-empty stored id on

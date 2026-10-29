@@ -231,11 +231,11 @@ work in this dispatch. If the plan you've been given requires more:
   2. Mark remaining tasks as `⏳` in current-plan.md with a note
      `[continue in fresh /implement dispatch]`.
   3. Tell the orchestrator (or the user, if standalone) that you've
-     hit the soft cap and that /thorough_plan or /run should
+     hit the soft cap and that /thorough_plan or run_hard should
      re-dispatch a fresh narrow child for the remaining work.
   4. Commit any in-progress files first so nothing is lost.
 
-NOTE: If you are running standalone (not via /run or /thorough_plan),
+NOTE: If you are running standalone (not via run_hard or /thorough_plan),
 there is NO automatic retry on stream-idle timeout. Make sure to commit
 all in-progress work before reaching the cap — the user will need to
 re-invoke manually.
@@ -348,12 +348,12 @@ Parse the JSON output. The check uses `repos[]` from the JSON and filters on `on
 
 This skill MUST be explicitly invoked by the user typing `/implement`. No other skill may auto-invoke it. If you are an orchestrator or another skill and you think implementation should start — STOP and tell the user to run `/implement` themselves. This is a hard rule.
 
-**Exception: `/run` orchestrator.** When this skill is spawned by `/run` as a subagent, the user has already confirmed the implementation checkpoint ("yes, continue to implementation"). This constitutes explicit user invocation — the user consciously chose to run the full pipeline. If you see evidence that you were spawned by `/run` (e.g., the task description or session context mentions `/run`), proceed normally.
+**Exception: `run_hard` orchestrator.** When this skill is spawned by `run_hard` (`/run hard:`) as a subagent, the user has already confirmed the implementation checkpoint ("yes, continue to implementation"). This constitutes explicit user invocation — the user consciously chose to run the full pipeline. If you see evidence that you were spawned by `run_hard` (e.g., the task description or session context mentions `run_hard` or `/run hard:`), proceed normally.
 
 ## Session bootstrap
 
 This skill typically runs in a fresh session (clean context is a feature, not a bug — implementation doesn't need planning back-and-forth). On start:
-0. Parse the `[autonomous]` sentinel from the incoming prompt (parsed independently of `[no-redispatch]`; leading sentinels stack, e.g. `[no-redispatch] [autonomous]`). Store as `_AUTONOMOUS` state for this session. Used below in §0b (branch-hygiene auto-create) and step 4 (auto-select all pending tasks). ALSO parse the `[no-interactive]` sentinel (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`); `/run` injects it onto non-autonomous phase-subagent spawns so the §0b branch-hygiene decision FAILS CLOSED instead of silently proceeding when no human is reachable — mutually exclusive with `[autonomous]` per spawn. See `__QUOIN_HOME__/memory/decision-gate-guard.md`.
+0. Parse the `[autonomous]` sentinel from the incoming prompt (parsed independently of `[no-redispatch]`; leading sentinels stack, e.g. `[no-redispatch] [autonomous]`). Store as `_AUTONOMOUS` state for this session. Used below in §0b (branch-hygiene auto-create) and step 4 (auto-select all pending tasks). ALSO parse the `[no-interactive]` sentinel (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`); `run_hard` injects it onto non-autonomous phase-subagent spawns so the §0b branch-hygiene decision FAILS CLOSED instead of silently proceeding when no human is reachable — mutually exclusive with `[autonomous]` per spawn. See `__QUOIN_HOME__/memory/decision-gate-guard.md`.
 1. Run `python3 __QUOIN_HOME__/scripts/memory_select.py --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is derived from `current-plan.md`'s `## For human` summary block (read at bootstrap step 3). If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback).
 2. Read `.workflow_artifacts/memory/sessions/` for active session state (which tasks are done, where to resume)
 3. Read `<task_dir>/current-plan.md` — this is your specification. Resolve `<task_dir>` via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.

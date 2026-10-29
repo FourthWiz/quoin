@@ -41,11 +41,9 @@ IMPORT_BLACKLIST = [
     "cost_from_jsonl",
     "session_age_guard",
     "pollution_guard",
-    # IVG-111 stage 6 (T-07): the nested-transcript resolver/pricer and the
-    # historical backfill script are Claude-adapter-owned (D-04/R-05) — core
-    # must never import either.
+    # IVG-111 stage 6 (T-07): the nested-transcript resolver/pricer is
+    # Claude-adapter-owned (D-04/R-05) — core must never import it.
     "agent_transcript_cost",
-    "backfill_cost_attribution",
     # The finalize-time ledger summary reads Claude transcripts and prices; core
     # may call neither it nor its helpers.
     "cost_ledger_summary",
@@ -210,8 +208,7 @@ def test_dashboard_model_py_has_no_adapter_imports():
 # T-07 (stage 6): directory-wide core-purity guard for the IVG-111
 # cost-attribution surface. Walks EVERY file in quoin/core/scripts/ (not just
 # the three files targeted above) and asserts no actual import statement
-# names the adapter-only resolver/pricer (`agent_transcript_cost`) or the
-# historical backfill script (`backfill_cost_attribution`) — the invariant
+# names the adapter-only resolver/pricer (`agent_transcript_cost`) — the invariant
 # stated in architecture D-04/R-05 and documented in runtime-portability.md.
 # Anchored to real import/from lines only, mirroring
 # test_dashboard_model_py_has_no_adapter_imports's anchoring discipline (a
@@ -219,7 +216,7 @@ def test_dashboard_model_py_has_no_adapter_imports():
 # elsewhere in the suite, and any future doc comment inside a core script).
 # ---------------------------------------------------------------------------
 
-_COST_ATTRIBUTION_TERMS = ["agent_transcript_cost", "backfill_cost_attribution", "cost_ledger_summary"]
+_COST_ATTRIBUTION_TERMS = ["agent_transcript_cost", "cost_ledger_summary"]
 
 
 def test_core_scripts_directory_never_imports_cost_attribution_adapter_modules():

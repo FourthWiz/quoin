@@ -116,7 +116,6 @@ DEPLOYED_SCRIPTS = (
     "inject_pollution_dispatch.py",  # IVG-69 Stage A: §0' Pollution dispatch generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS needed)
     "spend_monitor.py",              # IVG-62: realtime token-spend monitor wrapper
     "get_session_uuid.py",           # IVG-74: reliable session-UUID capture for cost ledger
-    "find_drive_conflicts.py",       # IVG-75: Drive sync-conflict sweep wrapper
     "memory_check.py",               # IVG-50: auto-memory referential-integrity checker wrapper
     "memory_select.py",              # IVG-50 S-1: selective lessons retrieval wrapper
     "dispatch_config.py",            # IVG-90: 1M-dispatch config+cache reader/writer wrapper
@@ -141,7 +140,6 @@ DEPLOYED_SCRIPTS = (
     "compaction_telemetry.py",       # IVG-258 stage 5: compaction-telemetry sink reader wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "agent_transcript_cost.py",      # IVG-111 S-2: nested subagent-transcript resolver + pricer (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors cost_from_jsonl.py)
     "cost_ledger_summary.py",        # finalize-time ledger re-pricing + token-mix estimates (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors agent_transcript_cost.py)
-    "backfill_cost_attribution.py",  # IVG-111 S-5: historical col-8 backfill (adapter-only, DEPLOYED-only — no CORE twin, mirrors cost_from_jsonl.py / agent_transcript_cost.py)
     "known_red.py",  # IVG-144: known-red manifest reader/matcher (wrapped portable-core — also in CORE_SCRIPTS)
     "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper
     "plan_path_lint.py",  # IVG-143: cited-path resolver/linter wrapper (wrapped portable-core — also in CORE_SCRIPTS)
@@ -150,7 +148,6 @@ DEPLOYED_SCRIPTS = (
     "build_claude_slim.py",  # IVG-164 stage 1 T-04: slim CLAUDE.md variant generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors build_preambles.py)
     "context_bundle.py",  # IVG-164 stage 2 T-02: context bundle helper for orchestrator spawn-prompt construction (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors build_claude_slim.py)
     "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
-    "handoff_measure.py",  # IVG-248: agent-handoff payload-size instrument (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors footprint_report.py)
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
     "continuation_handoff.py",  # continuation handoff helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
@@ -506,12 +503,12 @@ CORE_SCRIPTS = (
     "affected_tests.py",          # IVG-71: wrapped impl; required by ~/.claude/scripts/affected_tests.py parents[1] loader
     "spend_monitor.py",           # IVG-62: realtime token-spend monitor core impl
     "get_session_uuid.py",        # IVG-74: reliable session-UUID capture for cost ledger
-    "find_drive_conflicts.py",    # IVG-75: Drive sync-conflict sweep core impl
     "memory_check.py",            # IVG-50: auto-memory referential-integrity checker core impl
     "memory_select.py",           # IVG-50 S-1: selective lessons retrieval core impl
     "dispatch_config.py",         # IVG-90: 1M-dispatch config+cache reader core impl; required by ~/.claude/scripts/dispatch_config.py parents[1] loader
     "worktree_isolation.py",      # IVG-116: worktree-dispatch decider+probe core impl; required by ~/.claude/scripts/worktree_isolation.py parents[1] loader
     "generate_discovery_map.py",  # /discover optional hook — builds discovery-map.json post-scan
+    "validate_discovery_map.py",  # loaded by generate_discovery_map.py --validate (on by default)
     "select_unprocessed_sessions.py",  # session-selection helper for end_of_day/weekly_review
     "thorough_plan_checkpoint.py",  # IVG-98: phase-boundary checkpoint core impl for /thorough_plan
     "cost_summary.py",              # IVG-96: portable cost-summary.json normalizer core impl

@@ -27,11 +27,6 @@ issue = "IVG-116"
 owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_handoff_measure.py::test_growth_bound_case_u_capped_model_caps_at_deleted_bytes"
-reason = "macOS ENAMETOOLONG in an unrelated long-path fixture; fails at the branch base too"
-added = "2026-09-29"
-
-[[entry]]
 id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_two_agents_and_strip_proportions"
 reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
 added = "2026-10-23"

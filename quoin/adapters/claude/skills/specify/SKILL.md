@@ -144,7 +144,7 @@ This skill may run in a fresh chat session with no prior context. On start:
 7. Then proceed with the work below.
 
 **Autonomous sentinel:** check whether the invocation prompt carries the `[autonomous]` sentinel
-(prefixed by `/run`, `/thorough_plan`, or `/architect` per their "Autonomous propagation" /
+(prefixed by `run_hard`, `/thorough_plan`, or `/architect` per their "Autonomous propagation" /
 re-prefix rules when this skill is spawned from an autonomous session, or passed directly on a
 standalone invocation). Parse and strip it at bootstrap into a local state flag `_AUTONOMOUS`:
 present → strip it (sentinels stack, e.g. `[no-redispatch] [autonomous] <task>` — strip each
@@ -191,8 +191,8 @@ already on hand:
    Lower confidence when inputs were sparse (no enriched prompt, no architecture, no prior spec)
    or when several assumptions had to be made; higher confidence when the raw prompt was already
    detailed and/or a rich `enriched-prompt.md`/`architecture.md` was available. This is the
-   Small-path Formulation-bar signal `/run`'s autonomous quality gate reads (alongside the
-   single-pass `/plan` confidence — see `run/SKILL.md` "Formulation quality bar").
+   Small-path Formulation-bar signal `run_hard`'s autonomous quality gate reads (alongside the
+   single-pass `/plan` confidence — see `run_hard/SKILL.md` "Formulation quality bar").
 
 The `§0'`/`§0″` dispatch-failure `AskUserQuestion` sites elsewhere in this file are a separate,
 generator-owned mechanism (see the `<!-- §0doubleprime-begin/end -->` block above) — their

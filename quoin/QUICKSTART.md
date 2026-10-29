@@ -37,11 +37,11 @@
 
 ## Typical flows
 
-**Large feature:**
-`/discover` → `/architect` → `/thorough_plan` → `/implement` → `/review` → `/end_of_task`
+**Bug fix or feature (default):**
+`/run <task>` → brief → context pack → implement → one review → local commit; then `/pr` when ready
 
-**Bug fix:**
-`/plan` → `/implement` → `/review` → `/end_of_task`
+**Work that needs the full plan/critic/gate chain (manual exception):**
+`/run hard: <task>`
 
 **Starting your day:**
 `/start_of_day`

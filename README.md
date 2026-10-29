@@ -222,13 +222,12 @@ After installing the Claude adapter:
 
 ```text
 /init_workflow   one-time project bootstrap
-/architect       design the solution
-/thorough_plan   converge on a plan with critic review
-/implement       write code from the plan
-/review          verify implementation against the plan
-/gate            stop for an explicit quality checkpoint
-/end_of_task     finalize, push, and capture lessons
+/run <task>      brief, context pack, implement, one review, local commit
+/pr              push the branch and open a pull request
 ```
+
+`/run hard: <task>` runs the full discover/specify/architect/plan/critic/gate
+chain instead; use it only for work that really needs that rigor.
 
 Claude-specific command behavior, model assignments, hook behavior, and
 cost-capture plumbing are documented in `quoin/CLAUDE.md`; the installed `~/.claude/CLAUDE.md` carries only the short core rules, with every section kept in `~/.claude/memory/workflow-catalog.md`.

@@ -4,9 +4,9 @@ Decided 2026-10-21 against Claude Code 2.1.306. This is a maintainer note, not d
 
 ## Decision
 
-Reject native Claude Code Workflows for `/run` stages. `/run` stays a skill-driven stage machine backed by `run_state.py` and boundary checkpoints, with `/gate` stops between phases and the `quoin run --autonomous` supervisor for unattended runs. Nothing in `/run` changes, and no follow-up work is scoped.
+Reject native Claude Code Workflows for the heavy pipeline's stages (`run_hard`, reached via `/run hard:`; it was `/run` when this was decided). `run_hard` stays a skill-driven stage machine backed by `run_state.py` and boundary checkpoints, with `/gate` stops between phases and the `quoin run --autonomous` supervisor for unattended runs. Nothing in `run_hard` changes, and no follow-up work is scoped. The light `/run`, now the default, runs in one session with no gates, run-state record or supervisor, so this record does not concern it.
 
-Three documented properties of Workflows conflict with what `/run` relies on. A workflow run takes no mid-run input, so a human gate between phases would have to become a separate workflow per phase. A run resumes only within the same session (or one reopened with `claude --resume`, a backgrounded session, or a cloud session); a fresh session starts it over, while `/run --resume` and the supervisor deliberately continue from new sessions. Under `claude -p`, which the supervisor uses, a run does not pause at a usage limit; the affected agent fails instead.
+Three documented properties of Workflows conflict with what `run_hard` relies on. A workflow run takes no mid-run input, so a human gate between phases would have to become a separate workflow per phase. A run resumes only within the same session (or one reopened with `claude --resume`, a backgrounded session, or a cloud session); a fresh session starts it over, while `run_hard`'s resume and the supervisor deliberately continue from new sessions. Under `claude -p`, which the supervisor uses, a run does not pause at a usage limit; the affected agent fails instead.
 
 ## Native behaviour checked
 
@@ -27,11 +27,11 @@ Three documented properties of Workflows conflict with what `/run` relies on. A 
 
 | Need | Where it lives | What Workflows offer | Verdict |
 |---|---|---|---|
-| Cross-session resume | `/run --resume` in `quoin/adapters/claude/skills/run/SKILL.md`; `quoin/core/scripts/run_state.py`; `quoin/core/scripts/boundary_checkpoint.py` | Same-session resume, or replay in a session reopened with `claude --resume`; a fresh session starts over | not met |
+| Cross-session resume | `/run --resume` of a heavy task, in `quoin/adapters/claude/skills/run_hard/SKILL.md`; `quoin/core/scripts/run_state.py`; `quoin/core/scripts/boundary_checkpoint.py` | Same-session resume, or replay in a session reopened with `claude --resume`; a fresh session starts over | not met |
 | Overnight supervisor | `src/quoin/supervisor.py` relaunches fresh `claude -p` children | Launch under `-p` works only with a pre-approval rule; resume does not carry across fresh children | not met |
 | Human gates | `quoin/adapters/claude/skills/gate/SKILL.md` ("The workflow never auto-advances") | No mid-run input; one workflow per stage suggested for sign-off | not met |
-| Nested dispatch | `/run` phases spawn critics, reviewers and §0 model dispatches (`quoin/adapters/claude/skills/thorough_plan/SKILL.md`) | Workflow agents are subagents; nesting depth is capped at three layers by default and `AskUserQuestion` is removed. Whether a workflow agent can run a full phase with its own dispatches is not documented. | unknown |
-| Cost attribution | On-behalf ledger rows keyed by the Agent tool's `agentId` (`/run` SKILL.md, "On-behalf cost capture") | Per-agent token usage visible in `/workflows`; no documented export | not met |
+| Nested dispatch | `run_hard` phases spawn critics, reviewers and §0 model dispatches (`quoin/adapters/claude/skills/thorough_plan/SKILL.md`) | Workflow agents are subagents; nesting depth is capped at three layers by default and `AskUserQuestion` is removed. Whether a workflow agent can run a full phase with its own dispatches is not documented. | unknown |
+| Cost attribution | On-behalf ledger rows keyed by the Agent tool's `agentId` (`run_hard` SKILL.md, "On-behalf cost capture") | Per-agent token usage visible in `/workflows`; no documented export | not met |
 | Usage-limit survival | Supervisor relaunch loop plus `quoin/hooks/stop.sh` and `quoin/core/scripts/auto_resume.py` | Pause at a usage limit only in interactive subscription sessions; under `claude -p` the agent fails | not met |
 
 ## Partial adoption considered
