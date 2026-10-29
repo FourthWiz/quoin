@@ -11,7 +11,7 @@ The test_sleep_write_boundary.py Layer 1 test runs:
 
 And asserts that NO output line contains any path matching ~/.claude/projects/ or /Users/*/.claude/projects/.
 
-The test also verifies (Layer 2) that quoin/skills/sleep/SKILL.md contains the literal string "ONLY writes to".
+The test also verifies (Layer 2) that quoin/adapters/claude/skills/sleep/SKILL.md contains the literal string "ONLY writes to".
 
 Format note: the insights files here use the legacy "### Insight N:" entry-heading format, kept to
 exercise that parsing path. The format writers produce today is "## <HH:MM> — <context>"; see

@@ -282,8 +282,8 @@ The first implementation pass established the boundary and guard tests. Portable
 
 Every Claude skill now installs from the Claude adapter path
 (`quoin/adapters/claude/skills/<name>/SKILL.md`); the runtime-neutral
-intents live at `quoin/core/skills/<name>.md`. The installer falls back
-to `quoin/skills/<name>/SKILL.md` only for a skill with no adapter copy.
+intents live at `quoin/core/skills/<name>.md`. The old `quoin/skills/`
+stub tree has been removed.
 The phases below migrated the first twenty-one; the rest, including
 `run_hard`, followed later.
 

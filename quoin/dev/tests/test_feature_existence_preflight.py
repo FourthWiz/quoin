@@ -8,7 +8,6 @@ from pathlib import Path
 QUOIN_DIR = Path(__file__).parent.parent.parent  # quoin/quoin/ package dir
 ADAPTER_SKILLS = QUOIN_DIR / "adapters" / "claude" / "skills"
 CORE_SKILLS = QUOIN_DIR / "core" / "skills"
-LEGACY_SKILLS = QUOIN_DIR / "skills"  # deprecated stubs
 
 
 def _read(path: Path) -> str:
@@ -36,12 +35,6 @@ class TestArchitectPreflightPhrases:
     def test_confirm_existence(self):
         assert "confirm the feature doesn't already exist" in _read(self.ARCHITECT_SKILL)
 
-    def test_deprecated_stub_clean(self):
-        stub = LEGACY_SKILLS / "architect" / "SKILL.md"
-        if stub.exists():
-            assert "Feature-existence pre-flight" not in _read(stub)
-
-
 class TestPlanPreflightPhrases:
     PLAN_SKILL = ADAPTER_SKILLS / "plan" / "SKILL.md"
 
@@ -56,12 +49,6 @@ class TestPlanPreflightPhrases:
 
     def test_conventions_real_files(self):
         assert "conventions against real files" in _read(self.PLAN_SKILL)
-
-    def test_deprecated_stub_clean(self):
-        stub = LEGACY_SKILLS / "plan" / "SKILL.md"
-        if stub.exists():
-            assert "Feature-existence pre-flight" not in _read(stub)
-
 
 class TestCoreContractPhrases:
     ARCHITECT_CORE = CORE_SKILLS / "architect.md"

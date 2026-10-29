@@ -5,16 +5,12 @@ Coverage:
 - test_validator_passes_on_minimal_repo        positive minimal synthetic
 - test_drift_co_detected                       AD-CO  core doc missing
 - test_drift_ad_detected                       AD-AD  adapter SKILL.md missing
-- test_drift_ls_detected                       AD-LS  legacy stub missing
 - test_drift_fn_detected                       AD-FN  frontmatter name wrong
 - test_drift_fm_detected                       AD-FM  frontmatter model mismatch
 - test_drift_pt_detected                       AD-PT  pointer text missing
-- test_drift_fb_detected                       AD-FB  frontmatter not byte-equal
-- test_drift_ss_detected                       AD-SS  stub not shorter than adapter
 - test_drift_s0p_detected                      AD-S0P section_0=true but block absent
 - test_drift_s0a_detected                      AD-S0A section_0=false but block present
 - test_drift_pe_detected                       AD-PE  spawn_target preamble missing
-- test_drift_pa_detected                       AD-PA  spawn_target preamble in adapter dir
 - test_drift_px_detected                       AD-PX  non-spawn has preamble
 - test_drift_iv_detected                       AD-IV  ADAPTER_FOO_SRC= missing
 - test_drift_ie_detected                       AD-IE  if/elif branch missing
@@ -71,14 +67,9 @@ _ADAPTER_FRONTMATTER = "\nname: foo\nmodel: opus\n"
 _ADAPTER_BODY = (
     "*Portable intent doc: `quoin/core/skills/foo.md`*\n\n"
     "# Foo skill\n\n"
-    "This is the adapter implementation. It is longer than the stub.\n"
-    "More content here to ensure stub-shorter invariant is satisfied.\n"
-    "Even more content to make this definitely longer than the stub.\n"
+    "This is the adapter implementation.\n"
 )
 _ADAPTER_FULL = f"---{_ADAPTER_FRONTMATTER}---\n{_ADAPTER_BODY}"
-
-# Minimal legacy stub — same frontmatter, shorter body
-_STUB_FULL = f"---{_ADAPTER_FRONTMATTER}---\n*See adapter for full implementation.*\n"
 
 # Minimal install.sh — ADAPTER_FOO_SRC= before the for-loop, with elif branch inside
 _INSTALL_SH = (
@@ -107,7 +98,6 @@ def _make_minimal_repo(tmp_path: Path) -> Path:
     Directory tree:
         <tmp>/quoin/core/skills/foo.md
         <tmp>/quoin/adapters/claude/skills/foo/SKILL.md
-        <tmp>/quoin/skills/foo/SKILL.md
         <tmp>/quoin/core/workflow/skills.json
         <tmp>/quoin/install.sh
     """
@@ -123,11 +113,6 @@ def _make_minimal_repo(tmp_path: Path) -> Path:
     adapter_dir = tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo"
     adapter_dir.mkdir(parents=True)
     (adapter_dir / "SKILL.md").write_text(_ADAPTER_FULL, encoding="utf-8")
-
-    # Legacy stub SKILL.md
-    stub_dir = tmp_path / "quoin" / "skills" / "foo"
-    stub_dir.mkdir(parents=True)
-    (stub_dir / "SKILL.md").write_text(_STUB_FULL, encoding="utf-8")
 
     # Manifest
     manifest_dir = tmp_path / "quoin" / "core" / "workflow"
@@ -214,13 +199,12 @@ def _flag_foo_without_claude_adapter(tmp_path):
     manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def test_claude_adapter_false_passes_when_adapter_and_stub_absent(tmp_path):
+def test_claude_adapter_false_passes_when_adapter_absent(tmp_path):
     """claude_adapter=false: only AD-CO/AD-CX run; absent Claude files are fine."""
     import shutil
     _make_minimal_repo(tmp_path)
     _flag_foo_without_claude_adapter(tmp_path)
     shutil.rmtree(tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo")
-    shutil.rmtree(tmp_path / "quoin" / "skills" / "foo")
     result = _run(tmp_path)
     assert result.returncode == 0, result.stderr
 
@@ -245,22 +229,12 @@ def test_missing_claude_adapter_key_keeps_full_checks(tmp_path):
     assert "missing quoin/adapters/claude/skills/foo/SKILL.md" in result.stderr
 
 
-def test_drift_ls_detected(tmp_path):
-    """AD-LS: missing legacy stub is detected."""
-    _make_minimal_repo(tmp_path)
-    (tmp_path / "quoin" / "skills" / "foo" / "SKILL.md").unlink()
-    result = _run(tmp_path)
-    assert result.returncode == 2
-    assert "DRIFT AD-LS foo:" in result.stderr
-
-
 def test_drift_fn_detected(tmp_path):
     """AD-FN: adapter frontmatter name mismatch is detected."""
     _make_minimal_repo(tmp_path)
     adapter_path = tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo" / "SKILL.md"
     content = adapter_path.read_text(encoding="utf-8")
-    # Change name field to wrong value — stub still has original so FB will also fire
-    # but we assert AD-FN specifically
+    # Change name field to wrong value
     adapter_path.write_text(content.replace("name: foo", "name: wrong"), encoding="utf-8")
     result = _run(tmp_path)
     assert result.returncode == 2
@@ -294,35 +268,6 @@ def test_drift_pt_detected(tmp_path):
     assert "DRIFT AD-PT foo:" in result.stderr
 
 
-def test_drift_fb_detected(tmp_path):
-    """AD-FB: stub frontmatter not byte-equal to adapter frontmatter is detected."""
-    _make_minimal_repo(tmp_path)
-    stub_path = tmp_path / "quoin" / "skills" / "foo" / "SKILL.md"
-    # Change stub frontmatter so it no longer byte-equals adapter frontmatter
-    stub_path.write_text(
-        f"---\nname: foo\nmodel: opus\nextra_field: added\n---\n"
-        "*See adapter for full implementation.*\n",
-        encoding="utf-8",
-    )
-    result = _run(tmp_path)
-    assert result.returncode == 2
-    assert "DRIFT AD-FB foo:" in result.stderr
-
-
-def test_drift_ss_detected(tmp_path):
-    """AD-SS: stub longer than adapter is detected."""
-    _make_minimal_repo(tmp_path)
-    stub_path = tmp_path / "quoin" / "skills" / "foo" / "SKILL.md"
-    adapter_path = tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo" / "SKILL.md"
-    adapter_size = len(adapter_path.read_text(encoding="utf-8"))
-    # Write a stub that is larger than the adapter
-    big_stub = _STUB_FULL + ("x" * (adapter_size + 100))
-    stub_path.write_text(big_stub, encoding="utf-8")
-    result = _run(tmp_path)
-    assert result.returncode == 2
-    assert "DRIFT AD-SS foo:" in result.stderr
-
-
 def test_drift_s0p_detected(tmp_path):
     """AD-S0P: manifest declares section_0=true but adapter lacks §0 block."""
     _make_minimal_repo(tmp_path)
@@ -353,45 +298,38 @@ def test_drift_s0a_detected(tmp_path):
 
 
 def test_drift_pe_detected(tmp_path):
-    """AD-PE: spawn_target=true but no preamble.md in legacy stub dir."""
+    """AD-PE: spawn_target=true but no preamble.md in the adapter skill dir."""
     _make_minimal_repo(tmp_path)
     # Mark foo as spawn_target=true in manifest
     manifest_path = tmp_path / "quoin" / "core" / "workflow" / "skills.json"
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     data["skills"][0]["spawn_target"] = True
     manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    # No preamble.md in stub dir
+    # No preamble.md in the adapter skill dir
     result = _run(tmp_path)
     assert result.returncode == 2
     assert "DRIFT AD-PE foo:" in result.stderr
 
 
-def test_drift_pa_detected(tmp_path):
-    """AD-PA: spawn_target=true and preamble.md also in adapter folder."""
+def test_spawn_target_with_adapter_preamble_passes(tmp_path):
+    """AD-PE is satisfied by a preamble.md next to the adapter SKILL.md."""
     _make_minimal_repo(tmp_path)
-    # Mark foo as spawn_target=true
     manifest_path = tmp_path / "quoin" / "core" / "workflow" / "skills.json"
     data = json.loads(manifest_path.read_text(encoding="utf-8"))
     data["skills"][0]["spawn_target"] = True
     manifest_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
-    # Put preamble.md in stub dir (so AD-PE passes)
-    (tmp_path / "quoin" / "skills" / "foo" / "preamble.md").write_text(
-        "# preamble\n", encoding="utf-8"
-    )
-    # Also put preamble.md in adapter dir (violates AD-PA)
     (tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo" / "preamble.md").write_text(
         "# preamble\n", encoding="utf-8"
     )
     result = _run(tmp_path)
-    assert result.returncode == 2
-    assert "DRIFT AD-PA foo:" in result.stderr
+    assert result.returncode == 0, result.stderr
 
 
 def test_drift_px_detected(tmp_path):
-    """AD-PX: spawn_target=false but preamble.md exists in legacy stub dir."""
+    """AD-PX: spawn_target=false but preamble.md exists in the adapter skill dir."""
     _make_minimal_repo(tmp_path)
-    # foo is spawn_target=false (default); add preamble.md in stub dir anyway
-    (tmp_path / "quoin" / "skills" / "foo" / "preamble.md").write_text(
+    # foo is spawn_target=false (default); add preamble.md anyway
+    (tmp_path / "quoin" / "adapters" / "claude" / "skills" / "foo" / "preamble.md").write_text(
         "# preamble\n", encoding="utf-8"
     )
     result = _run(tmp_path)
@@ -648,7 +586,6 @@ def test_drift_pk_detected(tmp_path):
     pyproject_content = (
         "[tool.hatch.build.targets.wheel.force-include]\n"
         '"quoin/scripts" = "src/quoin/data/scripts"\n'
-        '"quoin/skills" = "src/quoin/data/skills"\n'
         '"quoin/adapters/claude" = "src/quoin/data/adapters/claude"\n'
         '"quoin/adapters/codex" = "src/quoin/data/adapters/codex"\n'
         '"quoin/hooks" = "src/quoin/data/hooks"\n'

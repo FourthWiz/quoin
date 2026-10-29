@@ -238,26 +238,3 @@ def test_claude_md_has_zero_yaml_fences():
     claude_md_text = (_SOURCE_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     assert "```yaml" not in claude_md_text
 
-
-def test_stub_skills_tree_excluded_from_sweep_corpora():
-    """review-1.md MINOR 8: quoin/skills/ (the non-deployed compatibility stub
-    tree) is deliberately out of scope for the sweep, not an omission bug.
-
-    The sweep's live in-scope corpora are quoin/adapters/claude/skills/*/SKILL.md
-    (deployed), quoin/memory/*.md, and quoin/scripts/*.py — never quoin/skills/.
-    That stub tree still carries a live CLAUDE.md mention (init_workflow/SKILL.md);
-    this asserts _enumerate_live_mentions() never picks it up.
-    """
-    stub_tree = _SOURCE_ROOT / "skills"
-    stub_mentions = [
-        fp for fp in sorted(stub_tree.glob("*/SKILL.md"))
-        if _MENTION_RE.search(fp.read_text(encoding="utf-8"))
-    ]
-    assert stub_mentions, "expected the stub tree to still carry a live CLAUDE.md mention"
-
-    live_files = {file for file, _hash in _enumerate_live_mentions().keys()}
-    stub_relpaths = {_relpath(fp) for fp in stub_mentions}
-    assert not (stub_relpaths & live_files), (
-        "quoin/skills/ stub tree must stay out of _enumerate_live_mentions() corpora: "
-        f"{stub_relpaths & live_files}"
-    )

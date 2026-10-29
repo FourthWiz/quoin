@@ -256,7 +256,7 @@ def test_unusable_source_dir_is_a_json_refusal(fx, capsys, tmp_path):
 
 def test_unloadable_core_script_is_a_json_refusal(fx, capsys, tmp_path):
     fx.record("plan")
-    (tmp_path / "skills").mkdir()
+    (tmp_path / "adapters" / "claude" / "skills").mkdir(parents=True)
     code, data = run(capsys, "gate", fx, "--source-dir", str(tmp_path))
     assert code == 2 and data["refusal"]["code"] == "source-unavailable"
 

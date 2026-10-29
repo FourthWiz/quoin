@@ -955,7 +955,7 @@ def test_wheel_data_dir_layout_default_install_resolves_slim_without_warning(tmp
     data_dir = tmp_path / "site-packages" / "quoin" / "data"
     (data_dir / "scripts").mkdir(parents=True)
     (data_dir / "memory").mkdir()
-    (data_dir / "skills").mkdir()
+    (data_dir / "adapters" / "claude" / "skills").mkdir(parents=True)
     shutil.copy(QUOIN_SRC / "scripts" / "build_claude_slim.py", data_dir / "scripts" / "build_claude_slim.py")
     for name in ("CLAUDE.md", "CLAUDE.slim.md", "CLAUDE.core.md"):
         shutil.copy(QUOIN_SRC / name, data_dir / name)
@@ -1106,12 +1106,13 @@ def test_install_sh_forwards_claude_md_variant(tmp_path):
 def _copy_slim_source_tree(tmp_path: Path) -> Path:
     """Scratch copy of the pieces installer.check_slim_outputs_fresh() reads:
     scripts/build_claude_slim.py, CLAUDE.md, CLAUDE.slim.md, memory/workflow-
-    catalog.md, plus an empty skills/ dir so _resolve_source_dir accepts it."""
+    catalog.md, plus an empty adapters/claude/skills/ dir so _resolve_source_dir
+    accepts it."""
     import shutil
 
     scratch = tmp_path / "src_copy"
     (scratch / "scripts").mkdir(parents=True)
-    (scratch / "skills").mkdir()
+    (scratch / "adapters" / "claude" / "skills").mkdir(parents=True)
     (scratch / "memory").mkdir()
     shutil.copy(
         QUOIN_SRC / "scripts" / "build_claude_slim.py",

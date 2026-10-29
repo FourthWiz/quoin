@@ -17,10 +17,8 @@ def test_no_lowercase_dev_workflow_in_quoin_dir():
     """grep for 'dev-workflow' in quoin/, excluding v2-historical fixture and legitimate refs.
 
     Legitimate exceptions (allowlisted):
-      - quoin/skills/init_workflow/SKILL.md — legacy stub (post-Phase-21 no longer
-        contains dev-workflow; entry retained as a no-op for historical reference).
       - quoin/adapters/claude/skills/init_workflow/SKILL.md — Claude adapter
-        byte-copies the legacy body which intentionally references the old
+        body, which intentionally references the old
         (project)/dev-workflow/QUICKSTART.md path (Phase 21 migration).
       - quoin/core/skills/init_workflow.md — portable intent doc documents legacy
         layout detection of dev-workflow/QUICKSTART.md as part of the migration
@@ -33,7 +31,6 @@ def test_no_lowercase_dev_workflow_in_quoin_dir():
         the adapter preserves the dev-workflow behavior anchor (Phase 21 migration).
     """
     allowlist_files = {
-        "quoin/skills/init_workflow/SKILL.md",
         "quoin/adapters/claude/skills/init_workflow/SKILL.md",
         "quoin/core/skills/init_workflow.md",
         "quoin/dev/tests/test_quoin_rebrand_no_residuals.py",
@@ -78,7 +75,7 @@ def test_no_quoin_foundation_stage_prose_in_skills():
         [
             "grep", "-rn",
             "Quoin foundation Stage",
-            str(QUOIN_DIR / "skills"),
+            str(QUOIN_DIR / "adapters" / "claude" / "skills"),
             str(QUOIN_DIR / "CLAUDE.md"),
             str(QUOIN_DIR / "CLAUDE.slim.md"),
             str(QUOIN_DIR / "CLAUDE.core.md"),

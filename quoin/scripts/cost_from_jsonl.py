@@ -315,7 +315,7 @@ def parse_session(path: pathlib.Path) -> dict:
     row that has a 'message' with 'usage' — this matches ccusage v18.0.11's
     behavior exactly (verified 2026-04-27 by parity testing against 3 real sessions).
     Do NOT deduplicate by message.id — ccusage does not deduplicate either.
-    See also: quoin/skills/cost_snapshot/SKILL.md (Pricing parity note);
+    See also: quoin/adapters/claude/skills/cost_snapshot/SKILL.md (Pricing parity note);
     quoin/scripts/tests/test_cost_parity_with_ccusage.py (regression test)."""
     session_id = path.stem  # UUID from filename
     per_model_cost = {}    # model -> float

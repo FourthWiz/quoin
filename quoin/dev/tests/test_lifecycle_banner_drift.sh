@@ -27,7 +27,7 @@ echo "Test 1: no banner surface contains '/end_of_day before'"
 
 grep -rn '/end_of_day before' \
   "$REPO_ROOT/quoin/hooks/" \
-  "$REPO_ROOT/quoin/skills/start_of_day/SKILL.md" \
+  "$REPO_ROOT/quoin/adapters/claude/skills/start_of_day/SKILL.md" \
   "$REPO_ROOT/quoin/CLAUDE.md" \
   > "$TMPFILE" 2>/dev/null
 GREP_EXIT=$?

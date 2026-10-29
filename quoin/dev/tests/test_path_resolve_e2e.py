@@ -30,7 +30,6 @@ import pytest
 # ---------------------------------------------------------------------------
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]  # .../Claude_workflow
-SKILLS_GLOB = str(PROJECT_ROOT / "quoin" / "skills" / "*" / "SKILL.md")
 ADAPTER_SKILLS_DIR = PROJECT_ROOT / "quoin" / "adapters" / "claude" / "skills"
 CLAUDE_MD = PROJECT_ROOT / "quoin" / "CLAUDE.md"
 INSTALL_SH = PROJECT_ROOT / "quoin" / "install.sh"
@@ -107,8 +106,7 @@ def test_skill_files_reference_resolver_dynamic_glob_plus_form_b_c_allow_list():
     also reference path_resolve.py. Plus explicit Form-B/C allow-list.
     (round-3 MAJ-B dynamic-glob; round-5 CRIT-1 Form-B/C extension)
     """
-    skill_files = sorted(glob.glob(SKILLS_GLOB)
-                         + glob.glob(str(ADAPTER_SKILLS_DIR / "*" / "SKILL.md")))
+    skill_files = sorted(glob.glob(str(ADAPTER_SKILLS_DIR / "*" / "SKILL.md")))
     assert len(skill_files) >= 11, (
         f"glob returned {len(skill_files)} SKILL.md files; expected >= 11 "
         f"(informational lower bound dated 2026-04-26 per D-07; actual count "
@@ -131,7 +129,7 @@ def test_skill_files_reference_resolver_dynamic_glob_plus_form_b_c_allow_list():
     # Form-B/C explicit allow-list assertion (D-09b / round-5 CRIT-1)
     for path in EXPLICIT_FORM_B_C_FILES:
         assert path in skill_files, (
-            f"D-09b allow-list entry {path} is not in the quoin/skills/*/SKILL.md "
+            f"D-09b allow-list entry {path} is not in the quoin/adapters/claude/skills/*/SKILL.md "
             f"glob result. Either the file was removed (update D-09b) or PROJECT_ROOT "
             f"is wrong: {PROJECT_ROOT}"
         )
@@ -157,11 +155,11 @@ GATE_LEGACY_RE = re.compile(r"task subfolder for artifacts")
 
 # Per-file Form-B/C residual-prose canaries (D-09b / round-5 CRIT-1)
 FORM_B_C_RESIDUAL_CANARIES = {
-    str(PROJECT_ROOT / "quoin" / "skills" / "plan" / "SKILL.md"):
+    str(ADAPTER_SKILLS_DIR / "plan" / "SKILL.md"):
         "any prior `current-plan.md`, `critic-response-*.md`",
     str(ADAPTER_SKILLS_DIR / "gate" / "SKILL.md"):
         "task subfolder for artifacts",
-    str(PROJECT_ROOT / "quoin" / "skills" / "architect" / "SKILL.md"):
+    str(ADAPTER_SKILLS_DIR / "architect" / "SKILL.md"):
         "Read the task subfolder if it exists (prior `architecture.md`, `current-plan.md`)",
 }
 
@@ -172,8 +170,7 @@ def test_skill_files_have_no_residual_hardcoded_path_dynamic_glob_plus_form_b_c(
     planning-artifact paths.
     (round-3 MAJ-B dynamic-glob; round-5 CRIT-1 Form-B/C residual-prose check)
     """
-    skill_files = sorted(glob.glob(SKILLS_GLOB)
-                         + glob.glob(str(ADAPTER_SKILLS_DIR / "*" / "SKILL.md")))
+    skill_files = sorted(glob.glob(str(ADAPTER_SKILLS_DIR / "*" / "SKILL.md")))
     assert len(skill_files) >= 11, (
         f"glob returned {len(skill_files)} SKILL.md files; expected >= 11. "
         f"Check PROJECT_ROOT: {PROJECT_ROOT}"

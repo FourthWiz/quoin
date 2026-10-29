@@ -42,7 +42,6 @@ THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
-LEGACY_SKILLS_DIR = PKG_DIR / "skills"
 
 # ---------------------------------------------------------------------------
 # Path resolver (mirrors skill_md_path() in test_quoin_stage1_preamble.py)
@@ -55,7 +54,7 @@ LEGACY_SKILLS_DIR = PKG_DIR / "skills"
 # 31 skills have an authoritative adapter SKILL.md; see D-02/D-03 in
 # .workflow_artifacts/ivg-118-registration-manifest/current-plan.md), so a
 # hardcoded subset silently drifts under-count. Matches
-# installer.resolve_skill_source_md's adapter-preferred resolution exactly.
+# the installer's adapter skill tree exactly.
 MIGRATED_TO_ADAPTER: frozenset[str] = frozenset(
     p.name for p in ADAPTER_SKILLS_DIR.iterdir() if (p / "SKILL.md").is_file()
 )
@@ -63,9 +62,7 @@ MIGRATED_TO_ADAPTER: frozenset[str] = frozenset(
 
 def skill_md_path(skill_name: str) -> Path:
     """Return the canonical SKILL.md path for a given skill."""
-    if skill_name in MIGRATED_TO_ADAPTER:
-        return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
-    return LEGACY_SKILLS_DIR / skill_name / "SKILL.md"
+    return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------

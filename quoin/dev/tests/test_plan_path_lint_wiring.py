@@ -1,8 +1,7 @@
 """IVG-143 T-08: plan_path_lint.py must be wired into the ACTIVE adapter bodies.
 
 Cheap silent-wrong-file guard (R-05): asserts the literal token `plan_path_lint.py`
-appears in the active `adapters/claude/skills/{plan,revise,gate}/SKILL.md` bodies —
-NOT the deprecated `quoin/skills/*` stubs, which have zero runtime effect. Mirrors
+appears in the active `adapters/claude/skills/{plan,revise,gate}/SKILL.md` bodies. Mirrors
 the general "wiring lands in the correct file" discipline used by other IVG-143
 sibling integration tests in this repo.
 """
@@ -30,6 +29,5 @@ def test_token_present_in_each_active_adapter_body():
         body = path.read_text(encoding="utf-8")
         assert _TOKEN in body, (
             f"{_TOKEN!r} not found in active adapter body {path} — the {name!r} "
-            f"wiring for IVG-143 (I-1/I-2/I-3) must land here, not in the "
-            f"deprecated quoin/skills/{name}/SKILL.md stub."
+            f"wiring for IVG-143 (I-1/I-2/I-3) must land here."
         )

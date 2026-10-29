@@ -16,6 +16,8 @@ All notable changes to Quoin are documented here. Format follows [Keep a Changel
 
 ### Removed
 
+- **The `quoin/skills/` stub tree** (v0.64.2). Every Claude skill has lived in `quoin/adapters/claude/skills/<name>/SKILL.md` since the runtime-portability migration; the 32 frontmatter-only stubs under `quoin/skills/` stayed only so older glob-based tests and the stub-fallback branch in the installer would still find a file there. The stubs are gone and the nine generated subagent `preamble.md` files moved next to their adapter `SKILL.md`. The installer, preamble builder, adapter drift validator, registration checker, affected-test map, benchmark drift fingerprint and wheel manifest read only the adapter tree, and the source-tree checks in `quoin install --source-dir` now look for `adapters/claude/skills/`. The drift validator drops the stub-only invariants AD-LS, AD-FB, AD-SS and AD-PA. Deployed paths under `~/.claude/skills/` do not change.
+
 - **Unused scripts, spikes and their tests** (v0.64.1). `backfill_cost_attribution.py` (a one-off historical ledger backfill), `handoff_measure.py` (a finished measurement instrument) and `find_drive_conflicts.py` were deployed but nothing ran them; they, their tests and fixtures are gone, along with three dev spikes, a dev driver, an undeployed byte-identical copy of `worktreecreate.sh` under the Claude adapter, and a spike pointer doc. Re-run the installer to drop them from `~/.claude/`.
 
 ### Fixed

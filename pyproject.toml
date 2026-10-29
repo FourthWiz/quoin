@@ -51,7 +51,6 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
-"quoin/skills" = "src/quoin/data/skills"
 "quoin/scripts" = "src/quoin/data/scripts"
 "quoin/hooks" = "src/quoin/data/hooks"
 "quoin/core" = "src/quoin/data/core"

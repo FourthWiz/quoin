@@ -93,11 +93,10 @@ def test_slices_are_disjoint():
 
 def test_repo_has_no_other_full_suite_bare_copy():
     skip_parts = {"tests", ".venv", "node_modules"}
-    stub = REPO_ROOT / "quoin" / "skills" / "gate" / "SKILL.md"
     offenders = []
     for path in (REPO_ROOT / "quoin").rglob("*.md"):
         rel = path.relative_to(REPO_ROOT / "quoin")
-        if skip_parts & set(rel.parts) or path == stub:
+        if skip_parts & set(rel.parts):
             continue
         if "python3 -m pytest -rA" in path.read_text(encoding="utf-8", errors="ignore"):
             offenders.append(str(rel))

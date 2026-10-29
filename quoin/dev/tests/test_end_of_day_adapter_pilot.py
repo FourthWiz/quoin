@@ -61,12 +61,6 @@ def _adapter_skill(skill_name: str) -> Path:
     return PKG_DIR / "adapters" / "claude" / "skills" / skill_name / "SKILL.md"
 
 
-def _legacy_stub(skill_name: str) -> Path:
-    return PKG_DIR / "skills" / skill_name / "SKILL.md"
-
-
-
-
 # ── Parametrized tests (run over the end_of_day skill) ────────────────────
 
 
@@ -138,34 +132,6 @@ def test_install_sh_has_adapter_override(skill_name, expected_model, has_section
     _adapter_pilot_helpers.assert_installer_selects_adapter(skill_name)
 
 
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_legacy_stub_differs_from_adapter(skill_name, expected_model, has_section_0):
-    """Adapter must contain full body; legacy is a short stub."""
-    legacy_bytes = _legacy_stub(skill_name).read_bytes()
-    adapter_bytes = _adapter_skill(skill_name).read_bytes()
-    assert legacy_bytes != adapter_bytes, (
-        f"Legacy stub and adapter SKILL.md for {skill_name} must differ — "
-        "the legacy file should be a short deprecated pointer"
-    )
-    assert len(legacy_bytes) < len(adapter_bytes), (
-        f"Legacy stub for {skill_name} should be shorter than the full adapter SKILL.md"
-    )
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_legacy_stub_frontmatter_byte_equals_adapter(skill_name, expected_model, has_section_0):
-    """Stub frontmatter MUST byte-equal adapter frontmatter."""
-    legacy_text = _legacy_stub(skill_name).read_text(encoding="utf-8")
-    adapter_text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    legacy_fm = legacy_text.split("---", 2)[1]
-    adapter_fm = adapter_text.split("---", 2)[1]
-    assert legacy_fm == adapter_fm, (
-        f"Legacy stub frontmatter for {skill_name} must byte-equal adapter frontmatter. "
-        "Drift here causes silent runtime divergence."
-    )
-
-
 @pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
 def test_adapter_skill_md_has_or_lacks_section_0(skill_name, expected_model, has_section_0):
     text = _adapter_skill(skill_name).read_text(encoding="utf-8")
@@ -193,13 +159,8 @@ def test_end_of_day_has_no_preamble_md():
     end_of_day is excluded — `build_preambles.py` does not generate one.
     Asserting absence prevents accidental preamble leak.
     """
-    legacy_preamble = PKG_DIR / "skills" / "end_of_day" / "preamble.md"
     adapter_preamble = (
         PKG_DIR / "adapters" / "claude" / "skills" / "end_of_day" / "preamble.md"
-    )
-    assert not legacy_preamble.exists(), (
-        f"CONSTRAINT VIOLATION: {legacy_preamble} unexpectedly exists. "
-        "end_of_day is NOT a spawn-target; build_preambles.py must not generate one."
     )
     assert not adapter_preamble.exists(), (
         f"CONSTRAINT VIOLATION: {adapter_preamble} unexpectedly exists. "
@@ -265,10 +226,7 @@ def test_adapter_step_6_invokes_sleep():
     """Regression guard: adapter Step 6 must chain into /sleep after the Step 5 report.
 
     Guards against Step 6 being dropped again during a future edit. The adapter
-    file at quoin/adapters/claude/skills/end_of_day/SKILL.md is the active one;
-    the legacy stub under quoin/skills/end_of_day/ is not read at runtime, so a
-    change made only there would not take effect and Step 6 could silently go
-    missing from the file that actually runs.
+    file at quoin/adapters/claude/skills/end_of_day/SKILL.md is the one that runs.
     """
     text = _adapter_skill("end_of_day").read_text(encoding="utf-8")
 

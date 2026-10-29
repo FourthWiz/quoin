@@ -8,7 +8,6 @@ import pytest
 
 _ROOT = Path(__file__).resolve().parents[2]
 ADAPTER = _ROOT / "adapters" / "claude" / "skills"
-STUBS = _ROOT / "skills"
 
 PER_SKILL_BYTES = 200
 TOTAL_BYTES = 5200
@@ -35,7 +34,6 @@ def test_description_within_budget_and_names_its_command(name):
     assert len(desc.encode("utf-8")) <= PER_SKILL_BYTES
     invocation = "/next-steps" if name == "next_steps" else "/" + name
     assert invocation in desc
-    assert _description(STUBS / name / "SKILL.md") == desc
 
 
 def test_total_description_bytes_within_budget():

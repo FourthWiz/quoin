@@ -126,7 +126,7 @@ def test_lock_held_refuses_without_writing(fx, capsys):
 
 def test_source_dir_without_the_core_script(fx, capsys, tmp_path):
     bare = tmp_path / "bare"
-    (bare / "skills").mkdir(parents=True)
+    (bare / "adapters" / "claude" / "skills").mkdir(parents=True)
     for extra in (str(bare), str(tmp_path / "missing")):
         code, data = call(capsys, "write", fx, "--source-dir", extra)
         assert code == 2 and refusal(data)["code"] == "source-unavailable"

@@ -1,7 +1,7 @@
 """
 Structural validation tests for the /pr skill.
 
-Verifies that the adapter SKILL.md, stub SKILL.md, and installer.py are
+Verifies that the adapter SKILL.md and installer.py are
 all consistently configured for the new /pr skill (IVG-53).
 
 Per Stage 1 plan D-03: no live LLM calls — deterministic pathlib + string + YAML parsing only.
@@ -17,13 +17,11 @@ TESTS_DIR = Path(__file__).parent
 QUOIN_DIR = TESTS_DIR.parent.parent
 REPO_ROOT = Path(__file__).resolve().parents[3]
 ADAPTER_SKILLS_DIR = QUOIN_DIR / "adapters" / "claude" / "skills"
-STUB_SKILLS_DIR = QUOIN_DIR / "skills"
 CORE_SKILLS_DIR = QUOIN_DIR / "core" / "skills"
 CLAUDE_MD = QUOIN_DIR / "CLAUDE.md"
 INSTALLER_PY = REPO_ROOT / "src" / "quoin" / "installer.py"
 
 PR_ADAPTER_SKILL = ADAPTER_SKILLS_DIR / "pr" / "SKILL.md"
-PR_STUB_SKILL = STUB_SKILLS_DIR / "pr" / "SKILL.md"
 PR_CORE_DOC = CORE_SKILLS_DIR / "pr.md"
 
 
@@ -59,26 +57,6 @@ def test_core_doc_has_contract_section():
 
 
 # ── T-02: Stub SKILL.md ───────────────────────────────────────────────────────
-
-def test_stub_exists():
-    assert PR_STUB_SKILL.exists(), "quoin/skills/pr/SKILL.md must exist"
-
-
-def test_stub_frontmatter_name():
-    fm = _frontmatter(PR_STUB_SKILL)
-    assert fm.get("name") == "pr", "stub frontmatter must have name: pr"
-
-
-def test_stub_frontmatter_model():
-    fm = _frontmatter(PR_STUB_SKILL)
-    assert fm.get("model") == "sonnet", "stub frontmatter must have model: sonnet"
-
-
-def test_stub_no_deprecated_markers():
-    text = _read(PR_STUB_SKILL)
-    assert "DEPRECATED LOCATION" not in text, "stub must not contain 'DEPRECATED LOCATION'"
-    assert "deprecated stub" not in text, "stub must not contain 'deprecated stub'"
-
 
 # ── T-03: Adapter SKILL.md ───────────────────────────────────────────────────
 

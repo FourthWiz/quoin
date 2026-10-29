@@ -546,7 +546,6 @@ def test_wheel_install_and_quoin_install(built_wheel):
 
     from quoin.installer import (  # noqa: PLC0415
         CANONICAL_SKILLS,
-        DEPRECATED_SKILL_MARKERS,
         TIER1_MEMORY_FILES,
     )
 
@@ -599,9 +598,17 @@ def test_wheel_install_and_quoin_install(built_wheel):
             assert skill_md.exists(), (
                 f"Missing skill: {skill}"
             )
-            content = skill_md.read_text(encoding="utf-8")
-            for marker in DEPRECATED_SKILL_MARKERS:
-                assert marker not in content, f"Deprecated marker in deployed {skill}"
+
+        # Spawn-target preambles ship in the wheel and deploy next to SKILL.md
+        source_preambles = sorted(
+            p.parent.name
+            for p in (QUOIN_SRC / "adapters" / "claude" / "skills").glob("*/preamble.md")
+        )
+        assert source_preambles, "expected spawn-target preamble.md files in the source tree"
+        for skill in source_preambles:
+            assert (claude_dir / "skills" / skill / "preamble.md").is_file(), (
+                f"Missing deployed preamble.md for {skill}"
+            )
 
         migrated = "plan"
         deployed_plan = claude_dir / "skills" / migrated / "SKILL.md"

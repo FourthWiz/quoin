@@ -6,7 +6,6 @@ TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent              # quoin/quoin/
 CORE_SKILL_DOC = PKG_DIR / "core" / "skills" / "capture_insight.md"
 ADAPTER_SKILL_MD = PKG_DIR / "adapters" / "claude" / "skills" / "capture_insight" / "SKILL.md"
-LEGACY_SKILL_MD = PKG_DIR / "skills" / "capture_insight" / "SKILL.md"
 
 FORBIDDEN_TOKENS = ("~/.claude", "/capture_insight", "Haiku", "Sonnet", "Opus", "Agent")
 REQUIRED_MENTION = ".workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md"
@@ -60,15 +59,3 @@ def test_install_sh_has_capture_insight_override():
     # Assert the equivalent contract against installer.py logic instead.
     _adapter_pilot_helpers.assert_installer_selects_adapter("capture_insight")
 
-
-def test_legacy_and_adapter_skill_md_differ():
-    """Adapter must contain full body (incl. §0); legacy is a short stub."""
-    legacy_bytes = LEGACY_SKILL_MD.read_bytes()
-    adapter_bytes = ADAPTER_SKILL_MD.read_bytes()
-    assert legacy_bytes != adapter_bytes, (
-        "Legacy stub and adapter SKILL.md must differ — "
-        "the legacy file should be a short deprecated pointer"
-    )
-    assert len(legacy_bytes) < len(adapter_bytes), (
-        "Legacy stub should be shorter than the full adapter SKILL.md"
-    )
