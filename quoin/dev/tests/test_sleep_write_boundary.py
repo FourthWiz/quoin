@@ -13,7 +13,7 @@ Layer 1 — module purity:
   check that scoring output never leaks auto-memory paths.
 
 Layer 2 — SKILL.md body text grep:
-  Open quoin/skills/sleep/SKILL.md and assert:
+  Open quoin/adapters/claude/skills/sleep/SKILL.md and assert:
     (a) The literal string "ONLY writes to" appears (write-target restriction statement).
 
 Both layers must pass. Exit 0 on success, non-zero on failure.
@@ -105,7 +105,7 @@ def test_layer2_skill_md_text() -> None:
     print("\n--- Layer 2: SKILL.md body text grep ---")
 
     if not _SKILL_MD.exists():
-        _fail(f"quoin/skills/sleep/SKILL.md not found at {_SKILL_MD}")
+        _fail(f"quoin/adapters/claude/skills/sleep/SKILL.md not found at {_SKILL_MD}")
 
     content = _SKILL_MD.read_text(encoding="utf-8")
 

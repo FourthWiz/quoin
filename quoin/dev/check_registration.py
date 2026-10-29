@@ -288,14 +288,14 @@ def rg_canon(fs_names: set, canonical_set: set, findings: list) -> None:
             "rule": RG_CANON,
             "roster": "CANONICAL_SKILLS",
             "entry": name,
-            "detail": f"quoin/skills/{name}/ exists on disk but is not registered in CANONICAL_SKILLS",
+            "detail": f"quoin/adapters/claude/skills/{name}/ exists on disk but is not registered in CANONICAL_SKILLS",
         })
     for name in sorted(canonical_set - fs_names):
         findings.append({
             "rule": RG_CANON,
-            "roster": "quoin/skills/",
+            "roster": "quoin/adapters/claude/skills/",
             "entry": name,
-            "detail": f"CANONICAL_SKILLS lists {name!r} but quoin/skills/{name}/ directory is missing",
+            "detail": f"CANONICAL_SKILLS lists {name!r} but quoin/adapters/claude/skills/{name}/ directory is missing",
         })
 
 
@@ -311,7 +311,7 @@ def rg_manifest(fs_names: set, canonical_set: set, manifest_names: set, findings
     for name in sorted(all_names):
         missing_from = []
         if name not in fs_names:
-            missing_from.append("filesystem (quoin/skills/)")
+            missing_from.append("filesystem (quoin/adapters/claude/skills/)")
         if name not in canonical_set:
             missing_from.append("CANONICAL_SKILLS")
         if name not in manifest_names:
@@ -996,7 +996,6 @@ def main(argv: Optional[list] = None) -> int:
     repo_pkg: Path = args.repo_root if args.repo_root is not None else _default_repo_pkg()
     manifest_path: Path = args.manifest if args.manifest is not None else _default_manifest(repo_pkg)
 
-    skills_dir = repo_pkg / "skills"
     adapter_skills_dir = repo_pkg / "adapters" / "claude" / "skills"
     scripts_dir = repo_pkg / "scripts"
     core_scripts_dir = repo_pkg / "core" / "scripts"
@@ -1012,7 +1011,11 @@ def main(argv: Optional[list] = None) -> int:
     deployed_set = set(deployed_scripts)
     core_scripts_set = set(core_scripts)
 
-    fs_names = {d.name for d in skills_dir.iterdir() if d.is_dir()} if skills_dir.is_dir() else set()
+    fs_names = (
+        {d.name for d in adapter_skills_dir.iterdir() if d.is_dir()}
+        if adapter_skills_dir.is_dir()
+        else set()
+    )
 
     findings: list = []
 

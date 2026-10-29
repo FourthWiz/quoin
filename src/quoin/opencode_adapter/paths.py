@@ -109,12 +109,12 @@ def _source_root() -> Optional[Path]:
             data_ref = importlib.resources.files("quoin") / "data"
             with importlib.resources.as_file(data_ref) as data_path:
                 data_path = Path(data_path)
-                if (data_path / "skills").is_dir():
+                if (data_path / "adapters" / "claude" / "skills").is_dir():
                     return data_path
         except (TypeError, AttributeError, FileNotFoundError):
             pass
     candidate = (pkg_file.parent / ".." / ".." / "quoin").resolve()
-    if (candidate / "skills").is_dir():
+    if (candidate / "adapters" / "claude" / "skills").is_dir():
         return candidate
     return None
 

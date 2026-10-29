@@ -116,7 +116,7 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
     """Resolve the quoin data source directory (proc:T-03).
 
     Resolution order:
-    1. Explicit --source-dir flag (always trusted if it has skills/).
+    1. Explicit --source-dir flag (always trusted if it has adapters/claude/skills/).
     2. Editable-install detection: if __file__ is under src/quoin/, skip
        importlib.resources and jump straight to Tier 2.
     3. Tier 1 (wheel install): importlib.resources.files('quoin') / 'data'.
@@ -125,9 +125,9 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
     """
     if explicit is not None:
         candidate = pathlib.Path(explicit).resolve()
-        if not (candidate / "skills").is_dir():
+        if not (candidate / "adapters" / "claude" / "skills").is_dir():
             print(
-                f"quoin: --source-dir {explicit!r} has no skills/ subdirectory",
+                f"quoin: --source-dir {explicit!r} has no adapters/claude/skills/ subdirectory",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -149,7 +149,7 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
             # Convert to a concrete path for is_dir() checks
             with importlib.resources.as_file(data_ref) as data_path:  # type: ignore[attr-defined]
                 data_path = pathlib.Path(data_path)
-                if (data_path / "skills").is_dir():
+                if (data_path / "adapters" / "claude" / "skills").is_dir():
                     return data_path
         except (TypeError, AttributeError, FileNotFoundError):
             pass
@@ -157,7 +157,7 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
     # Tier 2: editable or importlib fallback — walk from src/quoin/ up to repo/
     # pkg_file.parent = src/quoin/; two ".." reaches project root; then "quoin/"
     candidate = (pkg_file.parent / ".." / ".." / "quoin").resolve()
-    if (candidate / "skills").is_dir():
+    if (candidate / "adapters" / "claude" / "skills").is_dir():
         return candidate
 
     # Tier 3: abort
@@ -175,7 +175,7 @@ def _derive_allow_writes(source_dir: pathlib.Path, source_dir_explicit: bool) ->
     True iff ALL of:
     (a) --source-dir was explicitly passed
     (b) os.access(source_dir, os.W_OK) is True
-    (c) (source_dir / "skills").is_dir() is True
+    (c) (source_dir / "adapters" / "claude" / "skills").is_dir() is True
     (d) source_dir.parent has .git/ OR pyproject.toml
     (e) source_dir.resolve() is NOT a descendant of the package directory
     """
@@ -187,7 +187,7 @@ def _derive_allow_writes(source_dir: pathlib.Path, source_dir_explicit: bool) ->
         return False
 
     # (c)
-    if not (source_dir / "skills").is_dir():
+    if not (source_dir / "adapters" / "claude" / "skills").is_dir():
         return False
 
     # (d)

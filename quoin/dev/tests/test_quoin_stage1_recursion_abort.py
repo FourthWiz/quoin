@@ -21,7 +21,6 @@ from pathlib import Path
 import pytest
 
 TESTS_DIR = Path(__file__).parent
-SKILLS_DIR = TESTS_DIR.parent.parent / "skills"
 ADAPTER_SKILLS_DIR = TESTS_DIR.parent.parent / "adapters" / "claude" / "skills"
 
 
@@ -45,9 +44,7 @@ def skill_md_path(skill_name: str) -> Path:
     Claude adapter path, so their authoritative SKILL.md lives under
     adapters/claude/skills/. All other skills still live under skills/.
     """
-    if skill_name in MIGRATED_TO_ADAPTER:
-        return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
-    return SKILLS_DIR / skill_name / "SKILL.md"
+    return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
 
 SO_HEADING = "## §0 Model dispatch (FIRST STEP — execute before anything else)"
 

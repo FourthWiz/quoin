@@ -2,13 +2,13 @@
 """Adapter drift validator — Phase 22 runtime-portability work.
 
 Reads quoin/core/workflow/skills.json and asserts per-skill structural
-invariants across core/, adapters/claude/, and legacy skills/ trees.
+invariants across the core/ and adapters/claude/ trees.
 Also validates that quoin/scripts/ has a wrapper for every core script
 (AD-WR), that wrappers are delegation-only shims (AD-WD), that pyproject
 force-include ships all required core asset dirs (AD-PK), and that the
 Codex adapter surface is complete (AD-CX). A manifest entry with
 "claude_adapter": false is checked for AD-CO and AD-CX only, and AD-AD fires if
-a Claude adapter or stub exists for it.
+a Claude adapter exists for it.
 
 Lives in core/scripts/ because the manifest and the artifact-path
 conventions are runtime-neutral; references to ## §0 dispatch and
@@ -25,8 +25,7 @@ Normalizing to elif would break bash control flow.
 Newer installer wrappers may delegate skill deployment to `quoin install`
 instead of carrying per-skill shell branches. In that shape, AD-IV/AD-IE/AD-IO
 are satisfied when install.sh delegates to the Python installer and
-src/quoin/installer.py prefers adapters/claude/skills/<name>/SKILL.md over the
-legacy stub.
+src/quoin/installer.py deploys skills from adapters/claude/skills/<name>/SKILL.md.
 
 Usage:
     python3 validate_adapter_drift.py [--manifest PATH] [--repo-root PATH] [--json]
@@ -52,16 +51,12 @@ from typing import Any, Dict, List, Optional, Tuple
 # Violations are emitted as one of the following prefixes:
 # DRIFT AD-CO  (core-doc-exists)
 # DRIFT AD-AD  (adapter-doc-exists)
-# DRIFT AD-LS  (legacy-stub-exists)
 # DRIFT AD-FN  (frontmatter-name)
 # DRIFT AD-FM  (frontmatter-model)
 # DRIFT AD-PT  (pointer-text)
-# DRIFT AD-FB  (frontmatter-byte-equal)
-# DRIFT AD-SS  (stub-shorter)
 # DRIFT AD-S0P (section-0-present)
 # DRIFT AD-S0A (section-0-absent)
 # DRIFT AD-PE  (preamble-present)
-# DRIFT AD-PA  (preamble-absent-elsewhere)
 # DRIFT AD-PX  (preamble-not-present-for-non-spawn)
 # DRIFT AD-IV  (install.sh-variable)
 # DRIFT AD-IE  (install.sh-branch)
@@ -73,16 +68,12 @@ from typing import Any, Dict, List, Optional, Tuple
 # ---------------------------------------------------------------------------
 AD_CO = "AD-CO"   # core-doc-exists
 AD_AD = "AD-AD"   # adapter-doc-exists
-AD_LS = "AD-LS"   # legacy-stub-exists
 AD_FN = "AD-FN"   # frontmatter-name
 AD_FM = "AD-FM"   # frontmatter-model
 AD_PT = "AD-PT"   # pointer-text (Phase 21 substring contract)
-AD_FB = "AD-FB"   # frontmatter-byte-equal
-AD_SS = "AD-SS"   # stub-shorter
 AD_S0P = "AD-S0P" # section-0-present
 AD_S0A = "AD-S0A" # section-0-absent
 AD_PE = "AD-PE"   # preamble-present (spawn targets)
-AD_PA = "AD-PA"   # preamble-absent-elsewhere (spawn targets: no preamble in adapter folder)
 AD_PX = "AD-PX"   # preamble-not-present-for-non-spawn
 AD_IV = "AD-IV"   # install.sh-variable
 AD_IE = "AD-IE"   # install.sh-branch
@@ -156,18 +147,16 @@ def check_files_exist(
     name: str,
     repo_root: Path,
     violations: List[Dict[str, str]],
-) -> Tuple[bool, bool, bool]:
-    """AD-CO, AD-AD, AD-LS: verify all three files exist.
+) -> Tuple[bool, bool]:
+    """AD-CO, AD-AD: verify the core doc and the Claude adapter SKILL.md exist.
 
-    Returns (core_ok, adapter_ok, stub_ok) so callers can skip dependent checks.
+    Returns (core_ok, adapter_ok) so callers can skip dependent checks.
     """
     core_path = repo_root / "quoin" / "core" / "skills" / f"{name}.md"
     adapter_path = repo_root / "quoin" / "adapters" / "claude" / "skills" / name / "SKILL.md"
-    stub_path = repo_root / "quoin" / "skills" / name / "SKILL.md"
 
     core_ok = core_path.is_file()
     adapter_ok = adapter_path.is_file()
-    stub_ok = stub_path.is_file()
 
     if not core_ok:
         violations.append({
@@ -181,14 +170,8 @@ def check_files_exist(
             "skill": name,
             "detail": f"missing quoin/adapters/claude/skills/{name}/SKILL.md",
         })
-    if not stub_ok:
-        violations.append({
-            "invariant": AD_LS,
-            "skill": name,
-            "detail": f"missing quoin/skills/{name}/SKILL.md",
-        })
 
-    return core_ok, adapter_ok, stub_ok
+    return core_ok, adapter_ok
 
 
 def check_no_claude_surface(
@@ -205,12 +188,11 @@ def check_no_claude_surface(
             "detail": f"missing quoin/core/skills/{name}.md",
         })
     adapter_dir = repo_root / "quoin" / "adapters" / "claude" / "skills" / name
-    stub_dir = repo_root / "quoin" / "skills" / name
-    if adapter_dir.exists() or stub_dir.exists():
+    if adapter_dir.exists():
         violations.append({
             "invariant": AD_AD,
             "skill": name,
-            "detail": "claude_adapter=false but a Claude adapter or stub is present",
+            "detail": "claude_adapter=false but a Claude adapter is present",
         })
 
 
@@ -271,45 +253,6 @@ def check_pointer(
         })
 
 
-def check_stub_relationship(
-    name: str,
-    repo_root: Path,
-    violations: List[Dict[str, str]],
-) -> None:
-    """AD-FB, AD-SS: stub frontmatter byte-equals adapter; stub is shorter than adapter."""
-    adapter_path = repo_root / "quoin" / "adapters" / "claude" / "skills" / name / "SKILL.md"
-    stub_path = repo_root / "quoin" / "skills" / name / "SKILL.md"
-
-    adapter_text = adapter_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-    stub_text = stub_path.read_text(encoding="utf-8").replace("\r\n", "\n")
-
-    adapter_fm = _extract_frontmatter(adapter_text)
-    stub_fm = _extract_frontmatter(stub_text)
-
-    if adapter_fm is None or stub_fm is None:
-        violations.append({
-            "invariant": AD_FB,
-            "skill": name,
-            "detail": "could not extract frontmatter from adapter or stub",
-        })
-    elif adapter_fm != stub_fm:
-        violations.append({
-            "invariant": AD_FB,
-            "skill": name,
-            "detail": "legacy stub frontmatter does not byte-equal adapter frontmatter",
-        })
-
-    if len(stub_text) >= len(adapter_text):
-        violations.append({
-            "invariant": AD_SS,
-            "skill": name,
-            "detail": (
-                f"stub ({len(stub_text)} bytes) is not shorter than "
-                f"adapter ({len(adapter_text)} bytes)"
-            ),
-        })
-
-
 def check_section_0(
     name: str,
     section_0: bool,
@@ -347,48 +290,30 @@ def check_preamble(
     repo_root: Path,
     violations: List[Dict[str, str]],
 ) -> None:
-    """AD-PE, AD-PA, AD-PX: preamble presence matches spawn_target declaration."""
-    stub_preamble = repo_root / "quoin" / "skills" / name / "preamble.md"
+    """AD-PE, AD-PX: preamble presence matches spawn_target declaration."""
     adapter_preamble = repo_root / "quoin" / "adapters" / "claude" / "skills" / name / "preamble.md"
 
     if spawn_target:
-        # AD-PE: preamble.md must exist in the legacy stub dir (install.sh copies from there)
-        if not stub_preamble.is_file():
+        # AD-PE: the installer copies preamble.md from the adapter skill folder
+        if not adapter_preamble.is_file():
             violations.append({
                 "invariant": AD_PE,
                 "skill": name,
-                "detail": f"spawn_target=true but missing quoin/skills/{name}/preamble.md",
-            })
-        # AD-PA: preamble.md must NOT exist in the adapter folder (would be a confusing duplicate)
-        if adapter_preamble.is_file():
-            violations.append({
-                "invariant": AD_PA,
-                "skill": name,
                 "detail": (
-                    f"spawn_target=true and preamble.md also exists at "
-                    f"quoin/adapters/claude/skills/{name}/preamble.md (must not be there)"
-                ),
-            })
-    else:
-        # AD-PX: neither location should have a preamble.md
-        if stub_preamble.is_file():
-            violations.append({
-                "invariant": AD_PX,
-                "skill": name,
-                "detail": (
-                    f"spawn_target=false but preamble.md exists at "
-                    f"quoin/skills/{name}/preamble.md"
-                ),
-            })
-        if adapter_preamble.is_file():
-            violations.append({
-                "invariant": AD_PX,
-                "skill": name,
-                "detail": (
-                    f"spawn_target=false but preamble.md exists at "
+                    f"spawn_target=true but missing "
                     f"quoin/adapters/claude/skills/{name}/preamble.md"
                 ),
             })
+    elif adapter_preamble.is_file():
+        # AD-PX: non-spawn skills must not carry a preamble.md
+        violations.append({
+            "invariant": AD_PX,
+            "skill": name,
+            "detail": (
+                f"spawn_target=false but preamble.md exists at "
+                f"quoin/adapters/claude/skills/{name}/preamble.md"
+            ),
+        })
 
 
 # ---------------------------------------------------------------------------
@@ -490,20 +415,10 @@ def _install_sh_delegates_to_python_installer(install_sh_content: str) -> bool:
 
 
 def _python_installer_prefers_claude_adapter(repo_root: Path) -> bool:
-    """Return True when src/quoin/installer.py owns adapter-path skill routing.
+    """Return True when src/quoin/installer.py deploys skills from the Claude adapter tree.
 
-    Two accepted forms for the skill_md selection line inside deploy_skills:
-
-    1. Legacy inline form: an inline ternary
-       `skill_md = adapter_md if adapter_md.exists() else skill_dir / "SKILL.md"`.
-    2. Delegation form (post-T-01 refactor, IVG-136 review round 5): deploy_skills
-       calls `resolve_skill_source_md(...)` instead of inlining the ternary. In
-       this form we don't just trust the call-site text — we also read the body
-       of resolve_skill_source_md itself and confirm it still implements the
-       adapter-preferred `.exists()` branch. That keeps the heuristic honest: a
-       future change that silently broke adapter preference *inside*
-       resolve_skill_source_md would still be caught here, even though the call
-       site text at the deploy_skills call would look unchanged.
+    deploy_skills must enumerate source_dir/adapters/claude/skills/ and copy each
+    skill folder's SKILL.md from there.
     """
     installer_path = repo_root / "src" / "quoin" / "installer.py"
     try:
@@ -511,33 +426,18 @@ def _python_installer_prefers_claude_adapter(repo_root: Path) -> bool:
     except OSError:
         return False
 
-    base_tokens = [
-        'source_dir / "adapters" / "claude" / "skills"',
-        'adapter_md = src_adapter / skill_name / "SKILL.md"',
-    ]
-    if not all(token in content for token in base_tokens):
-        return False
-
-    inline_token = "skill_md = adapter_md if adapter_md.exists() else skill_dir / \"SKILL.md\""
-    if inline_token in content:
-        return True
-
-    delegation_call = "skill_md = resolve_skill_source_md(src_skills, src_adapter, skill_name)"
-    if delegation_call not in content:
-        return False
-
-    func_start = content.find("def resolve_skill_source_md(")
+    func_start = content.find("def deploy_skills(")
     if func_start == -1:
         return False
     next_def = content.find("\ndef ", func_start + 1)
     func_body = content[func_start:next_def] if next_def != -1 else content[func_start:]
 
-    callee_tokens = [
-        'adapter_md = src_adapter / name / "SKILL.md"',
-        "if adapter_md.exists():",
-        "return adapter_md",
+    required_tokens = [
+        'src_adapter = source_dir / "adapters" / "claude" / "skills"',
+        "for skill_dir in sorted(src_adapter.iterdir()):",
+        'skill_md = skill_dir / "SKILL.md"',
     ]
-    return all(token in func_body for token in callee_tokens)
+    return all(token in func_body for token in required_tokens)
 
 
 # ---------------------------------------------------------------------------
@@ -621,7 +521,6 @@ def check_core_wrapper_parity(
 _REQUIRED_FORCE_INCLUDE_KEYS = {
     "quoin/scripts",
     "quoin/core",
-    "quoin/skills",
     "quoin/adapters/claude",
     "quoin/adapters/codex",
     "quoin/hooks",
@@ -829,15 +728,12 @@ def main(argv: Optional[List[str]] = None) -> int:
         section_0: bool = bool(skill.get("section_0", False))
         spawn_target: bool = bool(skill.get("spawn_target", False))
 
-        core_ok, adapter_ok, stub_ok = check_files_exist(name, repo_root, violations)
+        core_ok, adapter_ok = check_files_exist(name, repo_root, violations)
 
         if adapter_ok:
             check_frontmatter(name, claude_model, repo_root, violations)
             check_pointer(name, repo_root, violations)
             check_section_0(name, section_0, repo_root, violations)
-
-        if adapter_ok and stub_ok:
-            check_stub_relationship(name, repo_root, violations)
 
         check_preamble(name, spawn_target, repo_root, violations)
 

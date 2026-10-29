@@ -240,10 +240,12 @@ def test_skill_manifest_matches_current_claude_frontmatter():
         entry["name"]: entry for entry in entries if entry.get("claude_adapter", True)
     }
 
-    skill_paths = sorted((REPO_ROOT / "quoin" / "skills").glob("*/SKILL.md"))
+    skill_paths = sorted(
+        (REPO_ROOT / "quoin" / "adapters" / "claude" / "skills").glob("*/SKILL.md")
+    )
     skill_paths_by_name = {path.parent.name: path for path in skill_paths}
-    missing_stubs = set(by_name) - set(skill_paths_by_name)
-    assert not missing_stubs
+    missing_skills = set(by_name) - set(skill_paths_by_name)
+    assert not missing_skills
 
     allowed_effort = {"low", "medium", "high", "max"}
     for name, entry in by_name.items():

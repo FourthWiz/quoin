@@ -464,7 +464,7 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_authored_content_lint_wiring.py",
     ),
     # IVG-123: each of the 9 spawn-target skills' generated preamble.md
-    # (quoin/skills/<skill>/preamble.md — see build_preambles.py's
+    # (quoin/adapters/claude/skills/<skill>/preamble.md — see build_preambles.py's
     # SPAWN_TARGETS) selects test_preamble_freshness.py directly. Per-file
     # rows, not a directory-prefix rule (D-04): a prefix rule would widen
     # matching semantics for every existing row above. Duplicate-key-safe
@@ -472,39 +472,39 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # first rows for these specific paths, so no existing selector is
     # widened or displaced.
     (
-        "quoin/skills/critic/preamble.md",
+        "quoin/adapters/claude/skills/critic/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/revise/preamble.md",
+        "quoin/adapters/claude/skills/revise/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/revise-fast/preamble.md",
+        "quoin/adapters/claude/skills/revise-fast/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/plan/preamble.md",
+        "quoin/adapters/claude/skills/plan/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/review/preamble.md",
+        "quoin/adapters/claude/skills/review/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/architect/preamble.md",
+        "quoin/adapters/claude/skills/architect/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/gate/preamble.md",
+        "quoin/adapters/claude/skills/gate/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/specify/preamble.md",
+        "quoin/adapters/claude/skills/specify/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/enrich/preamble.md",
+        "quoin/adapters/claude/skills/enrich/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     # IVG-248 stage 2 T-14: a doc-only edit to the inter-agent handoff spec
@@ -1940,7 +1940,7 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
 # later its citation coverage, changed.
 #
 # Orthogonal addition (IVG-123): the 9 spawn-target preamble.md files
-# (quoin/skills/<skill>/preamble.md) are now covered per-file above, selecting
+# (quoin/adapters/claude/skills/<skill>/preamble.md) are now covered per-file above, selecting
 # test_preamble_freshness.py. This is unrelated to the SKILL.md citation-sweep
 # gap described above — preamble.md and SKILL.md are different files in the
 # same skill directory, and the citation-sweep gap for the remaining 30 adapter

@@ -18,17 +18,14 @@ token (including its two `"` delimiters) must be exactly 2 bytes longer than
 the parsed value — any other delta means an escape sequence or block-scalar
 switch crept in, and the census fails loudly (exit 3).
 
-Both-tree agreement: with `--tree both` (the default), the adapter tree
-(`quoin/adapters/claude/skills/`) and the stub tree (`quoin/skills/`) must
-agree per-skill byte-for-byte on the description value; any divergence is
-printed and the script exits 2 (census-side mirror of the AD-FB validator).
+The census reads the Claude adapter tree (`quoin/adapters/claude/skills/`).
 
 NOTE (phrase parsing): trigger phrases inside descriptions may contain
 internal apostrophes (8 of 32 skills do). NO code in this script or its
 tests may extract phrases with quote-delimiter parsing; use frozen literals
 or `', '`-boundary splits instead.
 
-Exit codes: 0 ok; 2 both-tree divergence; 3 quoting-hazard guard tripped.
+Exit codes: 0 ok; 3 quoting-hazard guard tripped.
 
 Dev tooling only — NOT deployed (lives under quoin/dev/scripts/, outside
 the DEPLOYED_SCRIPTS roster by design; see plan D-01).
@@ -46,11 +43,10 @@ from pathlib import Path
 import yaml
 
 # Source root: this file lives at <git-root>/quoin/dev/scripts/, so the
-# source package root (containing adapters/ and skills/) is parents[2].
+# source package root (containing adapters/) is parents[2].
 SRC_ROOT = Path(__file__).resolve().parents[2]
 TREES = {
     "adapter": SRC_ROOT / "adapters" / "claude" / "skills",
-    "stub": SRC_ROOT / "skills",
 }
 
 
@@ -107,36 +103,9 @@ def mean_half_up(total: int, n: int) -> int:
     return math.floor(total / n + 0.5)
 
 
-def run_census(tree: str, adapter_root: Path, stub_root: Path) -> dict[str, int]:
-    if tree == "adapter":
-        return census_tree(adapter_root)
-    if tree == "stub":
-        return census_tree(stub_root)
-    adapter = census_tree(adapter_root)
-    stub = census_tree(stub_root)
-    diverged = [
-        k
-        for k in sorted(set(adapter) | set(stub))
-        if adapter.get(k) != stub.get(k)
-    ]
-    if diverged:
-        for k in diverged:
-            print(
-                f"census: tree divergence for {k}: "
-                f"adapter={adapter.get(k)} stub={stub.get(k)}",
-                file=sys.stderr,
-            )
-        raise SystemExit(2)
-    return adapter
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
-    )
-    parser.add_argument(
-        "--tree", choices=("adapter", "stub", "both"), default="both",
-        help="which tree(s) to census; 'both' asserts per-skill agreement (exit 2 on divergence)",
     )
     parser.add_argument("--json", metavar="PATH", help="write census JSON to PATH")
     parser.add_argument(
@@ -153,12 +122,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--adapter-root", default=str(TREES["adapter"]), help=argparse.SUPPRESS
     )
-    parser.add_argument(
-        "--stub-root", default=str(TREES["stub"]), help=argparse.SUPPRESS
-    )
     args = parser.parse_args(argv)
 
-    sizes = run_census(args.tree, Path(args.adapter_root), Path(args.stub_root))
+    sizes = census_tree(Path(args.adapter_root))
     total = sum(sizes.values())
     n = len(sizes)
     mean = mean_half_up(total, n)
@@ -167,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "metric": "unquoted description value bytes, UTF-8",
         "generated": datetime.datetime.now().isoformat(timespec="seconds"),
-        "tree": args.tree,
+        "tree": "adapter",
         "total": total,
         "skills": n,
         "mean": mean,

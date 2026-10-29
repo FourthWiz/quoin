@@ -399,53 +399,26 @@ def test_installer_idempotent():
         assert first == second, "deploy functions are not idempotent"
 
 
-def test_deploy_skills_rejects_deprecated_stub_without_adapter(capsys):
-    from quoin import installer  # noqa: PLC0415
-
-    with tempfile.TemporaryDirectory() as tmp:
-        root = Path(tmp)
-        src = root / "source"
-        skill_dir = src / "skills" / "plan"
-        skill_dir.mkdir(parents=True)
-        (skill_dir / "SKILL.md").write_text(
-            "# Plan (deprecated stub)\n\n"
-            "> **DEPRECATED LOCATION.** Active content moved.\n",
-            encoding="utf-8",
-        )
-
-        with pytest.raises(SystemExit) as exc_info:
-            installer.deploy_skills(src, root / ".claude")
-
-        assert exc_info.value.code == 1
-        assert "Refusing to deploy deprecated Claude skill stub" in capsys.readouterr().err
-
-
-def test_deploy_skills_from_wheel_style_data_prefers_claude_adapter():
+def test_deploy_skills_from_wheel_style_data_uses_claude_adapter():
     from quoin import installer  # noqa: PLC0415
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         source = root / "data"
-        stub_dir = source / "skills" / "plan"
         adapter_dir = source / "adapters" / "claude" / "skills" / "plan"
-        stub_dir.mkdir(parents=True)
         adapter_dir.mkdir(parents=True)
 
-        (stub_dir / "SKILL.md").write_text(
-            "# Plan (deprecated stub)\n\n"
-            "> **DEPRECATED LOCATION.** Active content moved.\n",
-            encoding="utf-8",
-        )
         active = "# Plan\n\nActive Claude adapter skill.\n"
         (adapter_dir / "SKILL.md").write_text(active, encoding="utf-8")
+        preamble = "preamble body\n"
+        (adapter_dir / "preamble.md").write_text(preamble, encoding="utf-8")
 
         dest = root / ".claude"
         assert installer.deploy_skills(source, dest) == 1
 
         deployed = (dest / "skills" / "plan" / "SKILL.md").read_text(encoding="utf-8")
         assert deployed == active
-        for marker in installer.DEPRECATED_SKILL_MARKERS:
-            assert marker not in deployed
+        assert (dest / "skills" / "plan" / "preamble.md").read_text(encoding="utf-8") == preamble
 
 
 # ── Byte-identical transport comparison ───────────────────────────────────────
@@ -888,11 +861,12 @@ def test_regen_no_op_in_wheel_mode(tmp_path, capsys):
 
 
 def _make_source_tree(tmp_path):
-    """tmp_path/repo/quoin looks like a real quoin source-tree clone: quoin/skills/
-    exists and the parent (tmp_path/repo) carries pyproject.toml."""
+    """tmp_path/repo/quoin looks like a real quoin source-tree clone:
+    quoin/adapters/claude/skills/ exists and the parent (tmp_path/repo) carries
+    pyproject.toml."""
     repo = tmp_path / "repo"
     source_dir = repo / "quoin"
-    (source_dir / "skills").mkdir(parents=True)
+    (source_dir / "adapters" / "claude" / "skills").mkdir(parents=True)
     (repo / "pyproject.toml").write_text("")
     (source_dir / "scripts").mkdir()
     return source_dir
@@ -970,7 +944,7 @@ def test_advise_preamble_freshness_skips_without_pyyaml(tmp_path, capsys, monkey
 
 
 def test_advise_preamble_freshness_skips_outside_source_tree(tmp_path, capsys):
-    """case d: source_dir without skills/ or a source-tree marker -> silent skip."""
+    """case d: source_dir without adapters/claude/skills/ or a source-tree marker -> silent skip."""
     from quoin import installer  # noqa: PLC0415
 
     bare_dir = tmp_path / "site-packages" / "quoin"
@@ -1023,9 +997,9 @@ def test_editable_bare_install_no_source_dir():
     from quoin.cli import _resolve_source_dir  # noqa: PLC0415
 
     result = _resolve_source_dir(None)
-    # Must resolve to something with a skills/ subdir
-    assert (result / "skills").is_dir(), (
-        f"_resolve_source_dir() returned {result} which has no skills/ dir"
+    # Must resolve to something with an adapters/claude/skills/ subdir
+    assert (result / "adapters" / "claude" / "skills").is_dir(), (
+        f"_resolve_source_dir() returned {result} which has no adapters/claude/skills/ dir"
     )
     # Must NOT be src/quoin itself (that would be the data tree, not the source tree)
     assert result.name == "quoin", (
@@ -1285,7 +1259,7 @@ class TestDoctorCcrParity:
 def test_canonical_skills_matches_filesystem():
     from quoin import installer  # noqa: PLC0415
 
-    skills_dir = QUOIN_SRC / "skills"
+    skills_dir = QUOIN_SRC / "adapters" / "claude" / "skills"
     on_disk = {p.name for p in skills_dir.iterdir() if p.is_dir()}
     in_constant = set(installer.CANONICAL_SKILLS)
 

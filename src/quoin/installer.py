@@ -59,7 +59,7 @@ TIER1_MEMORY_FILES = (
     "cleanup-task-bookkeeping.md",
 )
 
-# T-05: canonical skill list — must match quoin/skills/ on disk exactly
+# T-05: canonical skill list — must match quoin/adapters/claude/skills/ on disk exactly
 CANONICAL_SKILLS = (
     "architect",
     "capture_insight",
@@ -221,7 +221,6 @@ SKILL_OVERRIDES: dict[str, str] = {
 
 _MARKER_START = "# === DEV WORKFLOW START ==="
 _MARKER_END = "# === DEV WORKFLOW END ==="
-DEPRECATED_SKILL_MARKERS = ("DEPRECATED LOCATION", "deprecated stub")
 
 # ── T-06: deploy-time path substitution ──────────────────────────────────────
 
@@ -415,72 +414,30 @@ def deploy_quickstart(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None
 
 # ── T-05 ──────────────────────────────────────────────────────────────────────
 
-def _assert_not_deprecated_skill(skill_name: str, skill_md: pathlib.Path) -> None:
-    content = skill_md.read_text(encoding="utf-8")
-    for marker in DEPRECATED_SKILL_MARKERS:
-        if marker in content:
-            print(
-                f"quoin: Refusing to deploy deprecated Claude skill stub for "
-                f"{skill_name}: {skill_md}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-
-def resolve_skill_source_md(
-    src_skills: pathlib.Path,
-    src_adapter: pathlib.Path,
-    name: str,
-) -> pathlib.Path:
-    """Return the SKILL.md source path for skill `name`: adapter-preferred, else stub.
-
-    Encodes the single source-selection rule shared by deploy_skills (T-01) and
-    compute_drift (T-02): the Claude adapter SKILL.md at
-    src_adapter/<name>/SKILL.md wins when it exists; otherwise fall back to the
-    legacy stub at src_skills/<name>/SKILL.md. Returning the stub path even when
-    it does not exist on disk is intentional — callers decide how to handle a
-    missing source (deploy_skills aborts; compute_drift skips, never raises).
-    """
-    adapter_md = src_adapter / name / "SKILL.md"
-    if adapter_md.exists():
-        return adapter_md
-    return src_skills / name / "SKILL.md"
-
-
 def deploy_skills(source_dir: pathlib.Path, dest_root: pathlib.Path) -> int:
-    """Copy skills from source_dir/skills/ to dest_root/skills/. Returns count copied.
+    """Copy Claude skills to dest_root/skills/. Returns count copied.
 
-    When a Claude adapter SKILL.md exists at
-    source_dir/adapters/claude/skills/<name>/SKILL.md, it takes precedence over
-    the legacy stub at source_dir/skills/<name>/SKILL.md. This supports the
-    runtime-portability migration where real skill content moves to the adapter
-    path and the skills/ entry becomes a thin stub.
+    Skill sources live at source_dir/adapters/claude/skills/<name>/: SKILL.md is
+    required, and preamble.md is copied alongside it when present (subagent
+    spawn targets only).
     """
-    src_skills = source_dir / "skills"
     src_adapter = source_dir / "adapters" / "claude" / "skills"
     dst_skills = dest_root / "skills"
     count = 0
-    for skill_dir in sorted(src_skills.iterdir()):
+    for skill_dir in sorted(src_adapter.iterdir()):
         if not skill_dir.is_dir():
             continue
         skill_name = skill_dir.name
         # Skip directories not in CANONICAL_SKILLS (e.g. Drive sync artifacts like "next_steps 2")
         if skill_name not in CANONICAL_SKILLS:
             continue
-        dst_skill = dst_skills / skill_name
-        dst_skill.mkdir(parents=True, exist_ok=True)
-        # Prefer Claude adapter path when available (runtime-portability migration).
-        # T-01: source-selection rule lives in resolve_skill_source_md so deploy
-        # and drift-detection share ONE rule.
-        adapter_md = src_adapter / skill_name / "SKILL.md"
-        skill_md = resolve_skill_source_md(src_skills, src_adapter, skill_name)
+        skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             print(f"quoin: Expected SKILL.md at {skill_md} but not found", file=sys.stderr)
             sys.exit(1)
-        _assert_not_deprecated_skill(skill_name, skill_md)
+        dst_skill = dst_skills / skill_name
+        dst_skill.mkdir(parents=True, exist_ok=True)
         _copy_with_substitution(skill_md, dst_skill / "SKILL.md", dest_root)
-        if adapter_md.exists():
-            print(f"Deploying {skill_name} from Claude adapter path")
         preamble = skill_dir / "preamble.md"
         if preamble.exists():
             _copy_with_substitution(preamble, dst_skill / "preamble.md", dest_root)
@@ -937,7 +894,7 @@ def compute_drift(
     """Return the list of deployed files that drifted from source_dir (T-02).
 
     Iterates the SAME manifest tuples the deploy functions use — TIER1_MEMORY_FILES,
-    CANONICAL_SKILLS (via resolve_skill_source_md, + preamble.md when the source stub
+    CANONICAL_SKILLS (adapter SKILL.md, + preamble.md when the adapter skill folder
     carries one), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
     context-tracker mod is installed) CONTEXT_TRACKER_FILES — and compares each deployed file
     under dest_root against expected_deployed_content(src, dest_root). Per file:
@@ -984,13 +941,11 @@ def compute_drift(
             _check("memory", src_mem / fname, dst_mem / fname)
 
     if "skills" in selected:
-        src_skills = source_dir / "skills"
         src_adapter = source_dir / "adapters" / "claude" / "skills"
         dst_skills = dest_root / "skills"
         for name in CANONICAL_SKILLS:
-            skill_md = resolve_skill_source_md(src_skills, src_adapter, name)
-            _check("skills", skill_md, dst_skills / name / "SKILL.md")
-            preamble = src_skills / name / "preamble.md"
+            _check("skills", src_adapter / name / "SKILL.md", dst_skills / name / "SKILL.md")
+            preamble = src_adapter / name / "preamble.md"
             if preamble.exists():
                 _check("skills", preamble, dst_skills / name / "preamble.md")
 
@@ -1577,7 +1532,7 @@ def _looks_like_source_tree(source_dir: pathlib.Path) -> bool:
     Mirrors conjuncts (c) and (d) of cli.py's _derive_allow_writes — copied,
     not imported, because installer.py must not import cli.py.
     """
-    if not (source_dir / "skills").is_dir():
+    if not (source_dir / "adapters" / "claude" / "skills").is_dir():
         return False
     parent = source_dir.parent
     return (parent / ".git").is_dir() or (parent / "pyproject.toml").is_file()
@@ -1631,7 +1586,7 @@ def _advise_preamble_freshness(source_dir: pathlib.Path) -> None:
             "[warn] preambles are stale relative to quoin/memory/format-kit.md and "
             "glossary.md. Regenerate and commit:\n"
             "  python3 quoin/scripts/build_preambles.py  (or bash install.sh --dev)\n"
-            "then commit quoin/skills/*/preamble.md",
+            "then commit quoin/adapters/claude/skills/*/preamble.md",
             file=sys.stderr,
         )
         for line in result.stderr.splitlines():
@@ -1662,7 +1617,7 @@ def regenerate_preambles(source_dir: pathlib.Path, *, allow_writes: bool) -> Non
             raise
     finally:
         sys.argv = old_argv
-    print(f"Regenerated subagent preambles in {source_dir}/skills/*/preamble.md")
+    print(f"Regenerated subagent preambles in {source_dir}/adapters/claude/skills/*/preamble.md")
 
 
 def regenerate_pollution_dispatch(source_dir: pathlib.Path, *, allow_writes: bool) -> None:

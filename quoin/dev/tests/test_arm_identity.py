@@ -260,7 +260,11 @@ def test_quoin_sandbox_extras_exact_vs_subset(tmp_path):
 
 
 def test_expected_set_is_the_constant_not_the_source_tree():
-    on_disk = {p.name for p in (REPO_ROOT / "quoin" / "skills").iterdir() if p.is_dir()}
+    on_disk = {
+        p.name
+        for p in (REPO_ROOT / "quoin" / "adapters" / "claude" / "skills").iterdir()
+        if p.is_dir()
+    }
     stray = on_disk - set(_canonical())
     # A stray source directory (a sync-conflict copy) does not change what is expected.
     assert set(_canonical()) <= on_disk | set(_canonical())

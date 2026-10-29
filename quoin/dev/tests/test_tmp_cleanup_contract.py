@@ -20,7 +20,6 @@ import pathlib
 import re
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parent.parent.parent.parent
-SKILLS_DIR = PROJECT_ROOT / "quoin" / "skills"
 ADAPTER_SKILLS_DIR = PROJECT_ROOT / "quoin" / "adapters" / "claude" / "skills"
 MIGRATED_SKILLS_DIR_OVERRIDES = {
     "architect": ADAPTER_SKILLS_DIR,
@@ -34,7 +33,7 @@ MIGRATED_SKILLS_DIR_OVERRIDES = {
 CLASS_B_WRITERS = ["plan", "architect", "review", "revise", "revise-fast", "security_review"]
 
 SKILL_PATHS = {
-    name: MIGRATED_SKILLS_DIR_OVERRIDES.get(name, SKILLS_DIR) / name / "SKILL.md"
+    name: MIGRATED_SKILLS_DIR_OVERRIDES.get(name, ADAPTER_SKILLS_DIR) / name / "SKILL.md"
     for name in CLASS_B_WRITERS
 }
 

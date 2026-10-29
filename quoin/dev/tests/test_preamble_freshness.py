@@ -2,7 +2,7 @@
 T-02 CI gate: Preamble freshness tests.
 
 Parametrized over the 9 spawn targets:
-  - Presence test: quoin/skills/<skill>/preamble.md exists.
+  - Presence test: quoin/adapters/claude/skills/<skill>/preamble.md exists.
   - Freshness test: source_hashes in frontmatter match current git hash-object of each source.
   - Size-budget test: each preamble is < 6144 bytes.
   - Frontmatter sanity: each preamble starts with '---\\n'.
@@ -31,7 +31,7 @@ PREAMBLE_SIZE_BUDGET = 6144
 
 
 def _preamble_path(skill: str) -> pathlib.Path:
-    return QUOIN_DIR / "skills" / skill / "preamble.md"
+    return QUOIN_DIR / "adapters" / "claude" / "skills" / skill / "preamble.md"
 
 
 def _git_hash_object(path: pathlib.Path) -> str:
@@ -100,7 +100,7 @@ class TestFreshness:
                 f"Preamble for {skill} is stale: source {rel_path} changed "
                 f"(preamble has {expected_sha}, current is {current_sha}). "
                 f"Run: python3 quoin/scripts/build_preambles.py (or bash install.sh --dev), "
-                f"then commit the regenerated quoin/skills/*/preamble.md"
+                f"then commit the regenerated quoin/adapters/claude/skills/*/preamble.md"
             )
 
 
