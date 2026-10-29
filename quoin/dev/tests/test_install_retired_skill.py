@@ -129,3 +129,106 @@ def test_cli_runs_the_obsolete_cleanups_after_the_deploys():
     deploys = cli_text.index("installer.deploy_dashboard_assets(")
     for call in ("cleanup_obsolete_scripts", "cleanup_obsolete_skills", "cleanup_obsolete_memory"):
         assert cli_text.index(f"installer.{call}(dest_root)") > deploys
+
+
+def test_files_removed_before_the_manifest_existed_are_deleted(tmp_path):
+    core = tmp_path / "core" / "scripts"
+    core.mkdir(parents=True)
+    (core / "find_drive_conflicts.py").write_text("old\n", encoding="utf-8")
+    (core / "path_resolve.py").write_text("keep\n", encoding="utf-8")
+    installer.remove_pre_manifest_files(tmp_path)
+    assert not (core / "find_drive_conflicts.py").exists()
+    assert (core / "path_resolve.py").read_text(encoding="utf-8") == "keep\n"
+
+
+# ── manifest-based pruning ───────────────────────────────────────────────────
+
+def _deploy(dest, rel, text):
+    path = dest / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return rel, installer._sha256_file(path)
+
+
+def test_prune_removes_unchanged_files_and_keeps_edited_ones(tmp_path, capsys):
+    previous = dict([
+        _deploy(tmp_path, "scripts/gone.py", "old\n"),
+        _deploy(tmp_path, "scripts/edited.py", "old\n"),
+        _deploy(tmp_path, "skills/retired/SKILL.md", "quoin skill\n"),
+        _deploy(tmp_path, "scripts/kept.py", "current\n"),
+    ])
+    (tmp_path / "scripts" / "edited.py").write_text("mine\n", encoding="utf-8")
+    current = {"scripts/kept.py": previous["scripts/kept.py"]}
+
+    pruned, retry = installer.prune_stale_deploys(tmp_path, previous, current)
+
+    assert pruned == ["scripts/gone.py", "skills/retired/SKILL.md"]
+    assert retry == {}
+    assert not (tmp_path / "scripts" / "gone.py").exists()
+    assert not (tmp_path / "skills" / "retired").exists()
+    assert (tmp_path / "skills").is_dir()
+    assert (tmp_path / "scripts" / "edited.py").read_text(encoding="utf-8") == "mine\n"
+    assert (tmp_path / "scripts" / "kept.py").exists()
+    assert "keeping" in capsys.readouterr().err
+
+
+def test_prune_never_touches_paths_outside_quoin_subdirs(tmp_path):
+    previous = dict([
+        _deploy(tmp_path, "settings.json", "{}\n"),
+        _deploy(tmp_path, "CLAUDE.md", "rules\n"),
+        _deploy(tmp_path, "QUICKSTART.md", "card\n"),
+        _deploy(tmp_path, "projects/x/notes.md", "n\n"),
+    ])
+    previous["../outside.txt"] = "0" * 64
+    previous.update([_deploy(tmp_path, "skills/context-tracker/hooks.json", "{}\n")])
+    before = _tree(tmp_path)
+    pruned, retry = installer.prune_stale_deploys(
+        tmp_path, previous, {}, protected=("skills/context-tracker/",))
+    assert pruned == []
+    assert list(retry) == ["skills/context-tracker/hooks.json"]
+    assert _tree(tmp_path) == before
+
+
+def _project_install(project, *, no_prune=False):
+    import argparse
+    import unittest.mock
+
+    from quoin import cli
+
+    args = argparse.Namespace(
+        runtime="claude", scope=f"project:{project}", allow_hook_merge=True, check=False,
+        source_dir=str(QUOIN_SRC), force_merge=False, dev=False, use_pip=False,
+        no_prune=no_prune,
+    )
+    with unittest.mock.patch.object(installer, "check_prerequisites", lambda: []), \
+            unittest.mock.patch("time.sleep"), \
+            unittest.mock.patch("shutil.which", lambda *a, **k: None):
+        assert cli._cmd_install(args) == 0
+    return project / ".claude"
+
+
+def test_reinstall_prunes_a_script_dropped_from_the_deploy_list(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", lambda: home)
+    project = tmp_path / "project"
+    project.mkdir()
+    dest = _project_install(project)
+    manifest = installer.read_deploy_manifest(dest)
+    assert manifest["scripts/validate_artifact.py"] == installer._sha256_file(
+        dest / "scripts" / "validate_artifact.py")
+    (dest / "skills" / "synced").mkdir()
+    (dest / "skills" / "synced" / "SKILL.md").write_text("not quoin\n", encoding="utf-8")
+
+    dropped = installer.DEPLOYED_SCRIPTS[0]
+    monkeypatch.setattr(installer, "DEPLOYED_SCRIPTS", installer.DEPLOYED_SCRIPTS[1:])
+    _project_install(project, no_prune=True)
+    assert (dest / "scripts" / dropped).exists()
+    assert f"scripts/{dropped}" in installer.read_deploy_manifest(dest)
+
+    _project_install(project)
+    assert not (dest / "scripts" / dropped).exists()
+    assert f"scripts/{dropped}" not in installer.read_deploy_manifest(dest)
+    assert (dest / "skills" / "synced" / "SKILL.md").read_text(encoding="utf-8") == "not quoin\n"
+    assert (dest / "settings.json").exists()
