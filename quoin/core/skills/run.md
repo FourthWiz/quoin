@@ -21,11 +21,21 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
 3. Discover, delegated, only when discovery memory is missing or older
    than the staleness threshold (7 days by default).
 4. Frame, inline: write `brief.md` (goal, acceptance criteria,
-   non-goals, assumptions). Ask the user when the request is unclear in
-   a way that changes the work; never ask in autonomous mode.
+   non-goals, assumptions, shape). Ask the user when the request is
+   unclear in a way that changes the work; never ask in autonomous mode.
+   Shape is `single` by default and `staged` when the change spans
+   several repositories, has parts that must land in order, or will not
+   fit one coherent diff.
 5. Context pack, delegated to a read-only helper: likely files and
    symbols, covering tests and how to run them, conventions, relevant
    lessons. Written to `context.md`.
+5b. Staged tasks only: write a short `architecture.md` whose
+   `## Stage decomposition` section lists two to five stages (one repo
+   each, with scope, dependencies and acceptance), confirm it with the
+   user unless autonomous, then run steps 6–9 once per stage with a
+   stage brief under `stage-N/`, one review and one commit per stage,
+   marking each stage done in `architecture.md`. `--resume` continues at
+   the first unfinished stage.
 6. Implement, inline, with no plan file. Tests are proportionate: about
    one regression test per behaviour change, extending existing files.
 7. Verify, inline: run affected tests once; if the environment cannot
@@ -37,10 +47,14 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
 ## Escalation
 
 Recommend `run_hard` when the review finds a design-level problem, two
-implementation attempts fail for unclear reasons, or the task spans
-several repositories. Never switch automatically.
+implementation attempts fail for unclear reasons, or the task needs more
+than five stages or a stage needs its own design work. Spanning several
+repositories alone is handled by the staged path. Never switch
+automatically.
 
 ## Artifacts
 
-`.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`. No
+`.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`.
+Staged tasks add `architecture.md` at the task root and `brief.md`,
+`review.md` (and `context.md` when needed) under each `stage-N/`. No
 cost ledger, run-state record, checkpoints or progress sentinels.

@@ -94,7 +94,7 @@ Skills resolve the artifact path via `quoin/scripts/path_resolve.py`. Resolution
 
 ## Workflow sequence
 
-**Default: light `/run`.** Most tasks use `/run`: one session that writes a short brief (asking only when the request is unclear), refreshes discovery only when stale, gathers a context pack in a subagent, implements inline with proportionate tests, gets one Opus review in a subagent, and commits locally. The heavy pipeline below runs only via `/run hard:` (`/run_hard`), when the light route has failed or the task needs multi-round planning.
+**Default: light `/run`.** Most tasks use `/run`: one session that writes a short brief (asking only when the request is unclear), refreshes discovery only when stale, gathers a context pack in a subagent, implements inline with proportionate tests, gets one Opus review in a subagent, and commits locally. A task that spans several repos or must land in order is split into two to five stages in a short `architecture.md` (the standard `## Stage decomposition` layout), and each stage runs through the same light steps with its own review and commit. The heavy pipeline below runs only via `/run hard:` (`/run_hard`), when the light route has failed or the task needs multi-round planning.
 
 ### Canonical flow
 

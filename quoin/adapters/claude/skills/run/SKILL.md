@@ -32,7 +32,10 @@ input unchanged apart from removing `hard:`.
    started by the heavy pipeline: invoke `run_hard` with the input unchanged and
    stop. Otherwise resume the light run: read `.workflow_artifacts/<task>/brief.md`,
    check `git status`/`git log` on the task branch, and continue from the first
-   step whose output is missing.
+   step whose output is missing. If `.workflow_artifacts/<task>/architecture.md`
+   exists, the task is staged: continue at the first stage still marked ⏳, from
+   the first step of that stage whose output under `stage-N/` is missing.
+   **`stage N of <task>`** works the same way but runs only stage N.
 3. **`--autonomous`** (or an `[autonomous]` sentinel from a parent session) →
    strip it and set `AUTONOMOUS=true`: never ask the user anything; record
    assumptions in the brief instead.
@@ -49,7 +52,9 @@ input unchanged apart from removing `hard:`.
    alone and work on top of them (autonomous). Then create a fresh task branch,
    never committing to main/master: from an up-to-date default branch when a
    remote exists, otherwise from the current HEAD (for example a benchmark
-   fixture with no remote).
+   fixture with no remote). In a multi-repo project, do this in the repo the
+   change lands in; a staged task creates the branch in each repo when its first
+   stage there starts (Step 4b).
 3. Read `.workflow_artifacts/memory/lessons-learned.md` if present, keeping only
    entries relevant to this task.
 
@@ -85,10 +90,24 @@ Write `.workflow_artifacts/<task>/brief.md`, at most about 40 lines:
 - <each one you made because the request did not say>
 ## Open questions
 - <none, or the questions asked and their answers>
+## Shape
+<single | staged> — <one-line reason>
 ```
 
 This replaces `/enrich` and `/specify` on the light path. Restate the request
 precisely; do not invent requirements.
+
+**Shape.** Decide whether the task is one change or several. Choose **staged**
+when any of these hold:
+
+- the change lands in more than one repository;
+- parts must land in order and each deserves its own review (a schema or API
+  change before its consumers, a shared library before its callers);
+- it clearly will not fit one coherent diff (roughly more than three subsystems
+  or fifteen files).
+
+Otherwise, and whenever you are unsure, choose **single**. A single task goes
+straight on to Step 4; a staged one goes through Step 4 and then Step 4b.
 
 **Clarification.** If the request is unclear in a way that changes what you would
 build — two plausible readings, a missing target, conflicting constraints — ask
@@ -113,6 +132,60 @@ most about 60 lines), which you then save as `.workflow_artifacts/<task>/context
 Tell the subagent to prefer Serena symbol tools when available, to read excerpts
 rather than whole files, and to report conclusions, not file dumps. You keep only
 its summary in context.
+
+## Step 4b — Decompose (staged tasks only, inline)
+
+Using the brief and the context pack, write `.workflow_artifacts/<task>/architecture.md`
+(at most about 60 lines). Keep the stage rows in exactly this form, which the
+stage resolver parses:
+
+```markdown
+# <task name> — stages
+## Overview
+<two to four lines: why the task is staged and the order the stages land in>
+## Stage decomposition
+1. ⏳ S-01: <short stage name>
+   - Repo: <repo path; one repo per stage>
+   - Scope: <what this stage changes>
+   - Depends on: <none | S-0N>
+   - Acceptance: <observable checks for this stage>
+2. ⏳ S-02: <short stage name>
+   ...
+## Interfaces between stages
+- <each contract a later stage relies on: function signature, API shape, schema>
+```
+
+Two to five stages. Each stage must leave every repo it touches building and
+passing its tests on its own. If the task needs more than five stages, or a
+stage needs its own design work (a data migration strategy, a new public API
+with several consumers), stop and escalate instead (see Escalation).
+
+**Confirm.** Interactive: show the stage list and ask once (`AskUserQuestion`):
+proceed with these stages, run it as a single change instead, or switch to
+`/run hard:`. Apply edits the user asks for. Under `AUTONOMOUS`, proceed and
+note the decomposition under Assumptions in the brief.
+
+**Then run Steps 5–8 once per stage, in order.** For stage N:
+
+1. Write `.workflow_artifacts/<task>/stage-N/brief.md` from the stage entry: goal,
+   acceptance criteria, non-goals (the other stages' scope), and the interfaces
+   it must provide or may rely on.
+2. In the stage's repo, make sure the task branch exists (the same branch name in
+   every repo, created as in Step 1 the first time a stage touches that repo).
+3. If the stage's repo or area is not covered by the task's context pack, run
+   Step 4 for the stage brief and save it to `stage-N/context.md`.
+4. Steps 5–8 as written, with the stage brief in place of the task brief: the
+   review gets the stage brief, the `## Interfaces between stages` section and
+   the stage's diff only (base = the commit the stage started from), and its
+   notes go to `stage-N/review.md`. One commit per stage.
+5. Mark the stage ✅ in `architecture.md` (replace ⏳). If the stage showed the
+   decomposition was wrong, update the later stages and add a one-line note to
+   the Overview saying why, rather than forcing the old plan.
+
+Continue to the next stage without asking unless an escalation condition hits.
+If this session's context is getting heavy after a few stages, stop after a
+completed stage and tell the user to continue with `/run --resume <task>` in a
+fresh session; resume starts at the first ⏳ stage.
 
 ## Step 5 — Implement (inline)
 
@@ -171,7 +244,9 @@ re-run Step 6 once if code changed. Do not spawn a second review. Write a short
 3. If the task surfaced a reusable gotcha, append one entry to
    `.workflow_artifacts/memory/lessons-learned.md`.
 4. Report in two or three sentences: what changed, test status, and the next step
-   (`/pr` pushes the branch and opens a PR).
+   (`/pr` pushes the branch and opens a PR). For a staged task, report once after
+   the last stage: one line per stage (repo, what changed, tests), and name every
+   repo whose branch needs a PR.
 
 ## Escalation
 
@@ -180,7 +255,11 @@ recommendation in the final report (autonomous), when:
 
 - the review returns a blocker that is a design problem, not a local fix;
 - two implementation attempts fail verification for reasons you do not understand;
-- the task turns out to span several repos or needs stage decomposition.
+- the task needs more than five stages, or a stage needs its own design work
+  (a data migration strategy, a new public API with several consumers).
+
+A task that spans several repos or needs a few stages is not by itself a reason
+to escalate: the staged path in Step 4b handles it.
 
 Never switch to the heavy pipeline on your own.
 

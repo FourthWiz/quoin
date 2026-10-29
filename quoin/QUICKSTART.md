@@ -27,7 +27,7 @@
 | `/sleep` | Memory consolidation; promotes insights to lessons-learned, archives stale entries |
 | `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs after /end_of_day (`--no-cleanup` to skip) |
 | `/next-steps` | Append-only queue for future work items (`add` / `list` / `done N`) |
-| `/run` | Default pipeline: brief → context pack → implement → one review → local commit (discover only when stale) |
+| `/run` | Default pipeline: brief → context pack → implement → one review → local commit (discover only when stale). Multi-repo or ordered work is split into 2–5 stages in a short `architecture.md`, each run the same way |
 | `/run hard:` | Full heavy pipeline (`/run_hard`): discover → specify → architect → plan with critic rounds → implement → gate → review → end_of_task |
 | `quoin run --takeover <task>` | Shell command: stops an autonomous run's supervisor and headless child, then prints the `claude --resume` command to continue that session yourself |
 | `/cost_snapshot` | Shows today's cost, project lifetime cost, and per-task breakdown |
