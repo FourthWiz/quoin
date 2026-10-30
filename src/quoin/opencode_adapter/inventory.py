@@ -482,7 +482,7 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
     whatever shape their value has."""
     unknown: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
     clean: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
-    if text.startswith("﻿"):
+    if text.startswith("\ufeff"):
         text = text[1:]
     if not text.startswith("---"):
         head = re.split(r"\r\n|\r|\n", text, maxsplit=3)[:3]
@@ -498,6 +498,10 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
         return unknown  # gray-matter would read the whole file as frontmatter
     body = rest[newline + 1:close] if close > newline else ""
     if _FRONTMATTER_CHARS.search(rest[:close]):
+        return unknown
+    if any("\r" in raw and raw.count(":") > 1 for raw in re.split(r"\r?\n", body)):
+        # OpenCode's retry sanitizer splits lines on LF and CRLF only, so a
+        # bare CR can fold the next key into a model value it then keeps raw.
         return unknown
     block = re.split(r"\r\n|\r|\n", body)  # js-yaml breaks lines on a bare CR too
     for position, line in enumerate(block):
@@ -552,6 +556,11 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
                 return unknown
             text_value, quoted = _unquote(value)
             if quoted and value[0] == '"' and "\\" in text_value:
+                return unknown
+            if not quoted and ":" in value:
+                # OpenCode parses again after a parse error, rewriting an
+                # unquoted `key: value` that holds a colon into a block scalar
+                # that keeps the raw value, comment included.
                 return unknown
             if not quoted:
                 text_value = "" if text_value.startswith("#") else _COMMENT.split(text_value, 1)[0].rstrip(_WS)
@@ -775,7 +784,9 @@ def _lock_covers(directory: Path) -> bool:
 def _walk_markdown(directory: Path, problems: List[str]):
     """Yield `(path, is_symlinked_dir)` for every markdown file under
     `directory`, and for every symlinked subdirectory (not descended into, so
-    the caller can record it). Appends `"unreadable"` to `problems` for a
+    the caller can record it). A directory that crosses the entry bound yields
+    nothing from that listing (the source is marked truncated, so it still fails
+    closed). Appends `"unreadable"` to `problems` for a
     directory that cannot be listed and `"truncated"` when the walk stops at
     the entry bound. Each listing is read one entry at a time, so a single huge
     directory is never read past the bound."""
@@ -785,6 +796,7 @@ def _walk_markdown(directory: Path, problems: List[str]):
         current = pending.pop()
         subdirs: List[str] = []
         files: List[str] = []
+        links: List[str] = []
         try:
             with os.scandir(current) as listing:
                 for item in listing:
@@ -794,19 +806,21 @@ def _walk_markdown(directory: Path, problems: List[str]):
                         return
                     try:
                         is_dir = item.is_dir()
+                        is_link = is_dir and item.is_symlink()
                     except OSError:
-                        is_dir = False
-                    (subdirs if is_dir else files).append(item.name)
+                        is_dir = is_link = False
+                    if is_link:
+                        links.append(item.name)
+                    elif is_dir:
+                        subdirs.append(item.name)
+                    else:
+                        files.append(item.name)
         except OSError:
             problems.append("unreadable")
             continue
-        descend = []
-        for name in sorted(subdirs):
-            path = os.path.join(current, name)
-            if os.path.islink(path):
-                yield Path(path), True
-            else:
-                descend.append(path)
+        descend = [os.path.join(current, name) for name in sorted(subdirs)]
+        for name in sorted(links):
+            yield Path(os.path.join(current, name)), True
         for name in sorted(files):
             if name.endswith(".md"):
                 yield Path(current) / name, False

@@ -1,5 +1,11 @@
 """The frontmatter scanner compared with the loader OpenCode uses (gray-matter).
 
+The oracle copies `parse` and `sanitize` from OpenCode 1.18.32,
+packages/core/src/config/markdown.ts: parse with gray-matter, and when that
+throws, parse again after `sanitize` rewrites each unindented, unquoted
+`key: value` whose value contains a colon into a `key: |-` block scalar.
+A case is skipped only when both parses throw.
+
 Runs only when `node` is on PATH and the `gray-matter` package resolves,
 either from Node's default lookup or from the `node_modules` directory named by
 QUOIN_GRAY_MATTER_NODE_PATH. The cases are fixed; there is no random input.
@@ -23,13 +29,32 @@ import test_opencode_inventory_hardening as hardening
 
 ORACLE = r"""
 const matter = require('gray-matter');
+// Copied from OpenCode 1.18.32 packages/core/src/config/markdown.ts.
+function sanitize(content) {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match) return content;
+  const frontmatter = match[1];
+  const result = frontmatter.split(/\r?\n/).flatMap((line) => {
+    if (line.trim().startsWith("#") || line.trim() === "" || /^\s+/.test(line)) return [line];
+    const entry = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:\s*(.*)$/);
+    if (!entry) return [line];
+    const value = entry[2].trim();
+    if (value === "" || value === ">" || value === "|" || value.startsWith('"') || value.startsWith("'")) return [line];
+    if (!value.includes(":")) return [line];
+    return [`${entry[1]}: |-`, `  ${value}`];
+  });
+  return content.replace(frontmatter, () => result.join("\n"));
+}
+function parse(text) {
+  try { matter.clearCache(); return matter(text); }
+  catch (e) { matter.clearCache(); return matter(sanitize(text)); }
+}
 let input = '';
 process.stdin.on('data', d => input += d);
 process.stdin.on('end', () => {
   const out = JSON.parse(input).map(text => {
     try {
-      matter.clearCache();
-      const data = matter(text).data;
+      const data = parse(text).data;
       if (data === null || typeof data !== 'object' || Array.isArray(data)) return {ok: true, keys: false};
       const has = k => Object.prototype.hasOwnProperty.call(data, k);
       const m = data.model;
@@ -67,6 +92,7 @@ _SKIP = _oracle_available()
 pytestmark = pytest.mark.skipif(_SKIP is not None, reason=_SKIP or "")
 
 PIECES = [
+    "description: a: b", "model: a/b # n: x", "model: # p/m: x", "model: a/b\t# n: x",
     "model: a/b", "model:", "model: ''", "model: # c", "model: a/b\t# c", "model: a/b # c", "model: a/b#c",
     "model: 'x''y'", "model: \"a/b\" # c", "model: ~", "model: true", "model: 12", "  evil/x", "  - evil/x",
     "  a: b", "  # c", "# c", "", "permission: {bash: allow}", "permission:", "  bash: allow", "tools: {bash: true}",
@@ -89,6 +115,7 @@ def _cases():
             second = PIECES[(index * 7 + 3) % len(PIECES)]
             third = PIECES[(index * 11 + 5) % len(PIECES)]
             cases.append("---\n%s%s%s%s%s\n---\n" % (first, sep, second, sep, third))
+    cases.extend(hardening.RETRY_PROBES)
     cases.extend(text for text, _ in hardening.ORDINARY)
     for model_line in ("model:", "model: ''", "model: # c"):
         for gap in hardening.GAPS:

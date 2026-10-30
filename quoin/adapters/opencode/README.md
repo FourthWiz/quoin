@@ -503,9 +503,12 @@ outside its grammar: an indented root mapping, escaped or non-identifier keys,
 a key whose colon is not followed by a space, a language-tagged `---yaml`
 fence, a `...` document end followed by anything but blank or comment lines,
 a quoted or flow value that does not close on its own line or has text glued
-after it, block, flow, anchor or tag values on `model`, a `model` that YAML
-reads as null, a boolean, a number or a date, and an empty `model` followed
-(after any blank or comment lines) by an indented value. An unknown file is
+after it, block, flow, anchor or tag values on `model`, a `model` that is
+`~` or `null`, a boolean, a number or a date, and an empty `model` followed
+(after any blank or comment lines) by an indented value, a bare carriage
+return on a line with a second colon, and an unquoted
+`model` value containing a colon (OpenCode reparses such a file after a parse
+error and keeps the raw value, comment included). An unknown file is
 refused for work with `inventory-agent-unreadable` and recorded for personal.
 Ordinary files (one `key: value` per line, comments, blank lines, CRLF line
 ends, block-scalar descriptions, nested `permission` and `tools` blocks) read

@@ -32,6 +32,27 @@ WATCHED_VALUES = [
 ]
 
 
+RETRY_PROBES = [
+    "---\nmodel: anthropic/claude-sonnet-4-5 # note: x\ndescription: a: b\n---\n",
+    "---\nmodel: # p/m: x\ndescription: a: b\n---\n",
+    "---\nmodel: anthropic/claude-sonnet-4-5\t# note: x\ndescription: a: b\n---\n",
+]
+
+
+@pytest.mark.parametrize("text", RETRY_PROBES)
+def test_an_unquoted_model_with_a_colon_is_unknown(text):
+    # OpenCode reparses after a parse error and keeps the raw value, comment included.
+    assert _scan(text)["unknown"] is True
+
+
+@pytest.mark.parametrize("text", [
+    "---\nmodel: 'a/b: x'\ndescription: ok\n---\n",
+    "---\nmodel: a/b\ndescription: Note: fine\n---\n",
+])
+def test_a_quoted_model_or_a_colon_elsewhere_stays_known(text):
+    assert _scan(text)["unknown"] is False
+
+
 @pytest.mark.parametrize("key,flag", [("permission", "has_permission"), ("tools", "has_tools")])
 @pytest.mark.parametrize("value", WATCHED_VALUES)
 def test_a_watched_key_is_noticed_whatever_shape_its_value_has(key, flag, value):
@@ -287,11 +308,17 @@ def test_a_multiline_quoted_value_is_unknown_so_an_inner_model_line_hides_nothin
 @pytest.mark.parametrize("key,flag", [("permission", "has_permission"), ("tools", "has_tools")])
 def test_a_bare_carriage_return_is_a_line_break(key, flag):
     got = _scan("---\ndescription: x\r%s: {edit: allow}\n---\n" % key)
-    assert got[flag] is True, got
+    assert got[flag] is True or got["unknown"] is True, got
 
 
 def test_a_bare_carriage_return_before_a_model_is_read():
-    assert _scan("---\ndescription: x\rmodel: evil/model\n---\n")["model"] == "evil/model"
+    got = _scan("---\ndescription: x\rmodel: evil/model\n---\n")
+    assert got["model"] == "evil/model" or got["unknown"] is True, got
+
+
+def test_a_bare_carriage_return_on_a_line_with_a_second_colon_is_unknown():
+    # OpenCode's retry sanitizer does not split on a bare CR.
+    assert _scan("---\nmodel:\rdescription: a: b\n---\n")["unknown"] is True
 
 
 @pytest.mark.parametrize("key", ["permission", "tools", "model"])
@@ -331,6 +358,9 @@ def test_an_empty_model_with_an_indented_value_after_blank_or_comment_lines_is_u
 @pytest.mark.parametrize("gap", GAPS)
 def test_an_empty_model_followed_by_another_key_stays_known(gap):
     got = _scan("---\nmodel:%sname: x\n---\n" % gap)
+    if gap in ("\r", "\r\r", "\r# c\r"):  # a bare CR plus a second colon: the retry path may fold the lines
+        assert got["unknown"] is True
+        return
     assert got == {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
 
 
