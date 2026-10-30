@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from _opencode_merge_helpers import NOW
 from test_opencode_driver_workspace import Setup
 from quoin.opencode_adapter import driver, launch_codes, launch_env, paths, profile_dirs, runstore
 from quoin.opencode_adapter import secrets as credential_refs
@@ -222,7 +223,7 @@ def test_a_classification_change_is_refused(env):
     drv = driver.OpenCodeDriver(
         env.root, env=dict(env.world.env, PATH=os.environ.get("PATH", "")), home=env.world.home,
         which=lambda name: str(env.shim), version_runner=lambda path: "1.18.32",
-        resolver_factory=lambda environ, platform: _Resolver2(),
+        resolver_factory=lambda environ, platform: _Resolver2(), clock=lambda: NOW.timestamp(),
         session=session,
     )
     with pytest.raises(driver.PrepareRefused) as info:
@@ -254,7 +255,7 @@ def test_a_launcher_built_driver_compiles_beside_the_profile_not_inside_it(env):
     )
     drv = driver.OpenCodeDriver(
         env.root, env=nested, home=env.world.home, which=lambda name: str(env.shim),
-        version_runner=lambda path: "1.18.32", resolver_factory=lambda environ, platform: _Resolver2(),
+        version_runner=lambda path: "1.18.32", resolver_factory=lambda environ, platform: _Resolver2(), clock=lambda: NOW.timestamp(),
     )
     prepared = drv.prepare(env.request())
     assert prepared.config_path.parent == root / paths.project_key(env.root)
@@ -422,7 +423,7 @@ def test_a_latched_session_refuses_a_profile_switch_before_looking_for_the_binar
     drv = driver.OpenCodeDriver(
         env.root, env=dict(env.world.env, PATH=os.environ.get("PATH", "")), home=env.world.home,
         which=lambda name: None, version_runner=lambda path: None,
-        resolver_factory=lambda environ, platform: _Resolver2(),
+        resolver_factory=lambda environ, platform: _Resolver2(), clock=lambda: NOW.timestamp(),
         session=profile_dirs.LaunchSession(("work", "work")),
     )
     with pytest.raises(driver.PrepareRefused) as info:
