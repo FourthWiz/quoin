@@ -466,7 +466,15 @@ def _blank_or_comment(line: str) -> bool:
     return not stripped or stripped.startswith("#")
 
 
-def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict grammar, read top to bottom
+def scan_frontmatter(text: str) -> Dict[str, Any]:
+    """`_scan_frontmatter` with the candidate-model list left out when empty."""
+    facts = _scan_frontmatter(text)
+    if not facts.get("model_readings"):
+        facts.pop("model_readings", None)
+    return facts
+
+
+def _scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict grammar, read top to bottom
     """Read the top-level `model`, `permission` and `tools` keys of a markdown
     file's YAML frontmatter without a YAML parser.
 
@@ -478,8 +486,9 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
     duplicate keys, a missing closing fence, an indented root mapping, escaped
     or non-identifier keys, a language-tagged opening fence, content after a
     `...` document end) is reported as `unknown`, which the work profile
-    refuses. The `permission` and `tools` keys are noted from the key alone,
-    whatever shape their value has."""
+    refuses. An unquoted `model` that holds a colon stays known but carries
+    `model_readings`, every string OpenCode might load for it. The `permission` and
+    `tools` keys are noted from the key alone, whatever shape their value has."""
     unknown: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": True}
     clean: Dict[str, Any] = {"model": None, "has_permission": False, "has_tools": False, "unknown": False}
     if text.startswith("\ufeff"):
@@ -499,7 +508,14 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
     body = rest[newline + 1:close] if close > newline else ""
     if _FRONTMATTER_CHARS.search(rest[:close]):
         return unknown
-    if any("\r" in raw and raw.count(":") > 1 for raw in re.split(r"\r?\n", body)):
+    if body.endswith("\r"):
+        body = body[:-1]  # the closing fence's own CRLF, not a bare CR
+    if "\r" in body and any(
+        "\r" in raw and (raw.count(":") > 1 or raw.lstrip(_WS).startswith("#"))
+        for raw in re.split(r"\r?\n", body)
+    ):
+        # A comment line holding a bare CR is read differently by js-yaml and
+        # gray-matter, which can drop the keys after it.
         # OpenCode's retry sanitizer splits lines on LF and CRLF only, so a
         # bare CR can fold the next key into a model value it then keeps raw.
         return unknown
@@ -511,6 +527,7 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
             block = block[:position]
             break
     facts = dict(clean)
+    unknown["model_readings"] = readings = []  # shared with every early `unknown` return below
     seen = set()
     first = next((line for line in block if not _blank_or_comment(line)), None)
     if first is not None and first[0] in _WS:
@@ -560,8 +577,24 @@ def scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict gr
             if not quoted and ":" in value:
                 # OpenCode parses again after a parse error, rewriting an
                 # unquoted `key: value` that holds a colon into a block scalar
-                # that keeps the raw value, comment included.
-                return unknown
+                # that keeps the raw value, comment included, and any indented
+                # comment lines after it. Which reading it loads depends on
+                # whether the rest of the file parses, so report every one
+                # and let the policy check each against the allow-list.
+                stripped_value = "" if value.startswith("#") else _COMMENT.split(value, 1)[0].rstrip(_WS)
+                tail = []
+                for following in block[index + 1:]:
+                    if following and following[0] in " \t" or not following.strip(_WS):
+                        tail.append(following.strip(_WS))
+                    else:
+                        break
+                while tail and not tail[-1]:
+                    tail.pop()
+                found = [stripped_value, value]
+                for count in range(1, len(tail) + 1):
+                    found.append("\n".join([value] + tail[:count]))
+                readings.extend(r for r in found if r and r not in readings)
+                facts["model_readings"] = readings
             if not quoted:
                 text_value = "" if text_value.startswith("#") else _COMMENT.split(text_value, 1)[0].rstrip(_WS)
             later = next((ln for ln in block[index + 1:] if not _blank_or_comment(ln)), None)
@@ -1094,7 +1127,7 @@ REFUSAL_TEXT: Dict[str, str] = {
     "inventory-lsp": "a language server entry is configured outside the compiled configuration",
     "inventory-formatter": "a formatter entry is configured outside the compiled configuration",
     "inventory-agent-permission": "an agent defines its own permission or tool rules",
-    "inventory-agent-unreadable": "an agent or command definition could not be read completely, so its model and rules are unknown",
+    "inventory-agent-unreadable": "an agent or command definition could not be read completely, so its model and rules are unknown (quote a model value that contains a colon)",
     "inventory-config-permission": "a top-level permission block is configured outside the compiled configuration",
     "inventory-remote-config": "remote or account configuration is present for this profile",
     "inventory-account-busy": "the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry",
@@ -1231,6 +1264,8 @@ def _judge(entry: Entry, expected: Expected) -> Tuple[str, Optional[str]]:  # no
         code = "agent-model-outside-allowlist" if kind == "agent" else "command-model-outside-allowlist"
         model = facts.get("model")
         if model is not None and model not in expected.model_allowlist:
+            return "refused", code
+        if any(reading not in expected.model_allowlist for reading in facts.get("model_readings") or ()):
             return "refused", code
         if facts.get("unknown"):
             return work_refuses("inventory-agent-unreadable")

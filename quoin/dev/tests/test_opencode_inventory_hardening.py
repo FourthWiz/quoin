@@ -1,6 +1,7 @@
 """Regression cases for scanner bypasses, hidden tools and agents, MCP redefinition and read hardening."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import pathlib
@@ -39,10 +40,81 @@ RETRY_PROBES = [
 ]
 
 
+BEDROCK = "amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0"
+OLLAMA = "ollama/llama3:8b"
+
+COLON_MODEL_CASES = [
+    "---\nmodel: %s\ndescription: ok\n---\n" % BEDROCK,
+    "---\nmodel: %s\ndescription: a: b\n---\n" % OLLAMA,
+    "---\nmodel: '%s'\ndescription: a: b\n---\n" % OLLAMA,
+    '---\nmodel: "%s"\ndescription: a: b\n---\n' % BEDROCK,
+    "---\nmodel: %s\n  # c\ndescription: a: b\n---\n" % OLLAMA,
+    "---\n# c\rmodel: a/b\n---\n",
+    "---\r\nmodel: a/b\r\ndescription: Note: fine\r\n---\r\n",
+]
+
+
 @pytest.mark.parametrize("text", RETRY_PROBES)
-def test_an_unquoted_model_with_a_colon_is_unknown(text):
+def test_an_unquoted_model_with_a_colon_lists_the_raw_reading(text):
     # OpenCode reparses after a parse error and keeps the raw value, comment included.
-    assert _scan(text)["unknown"] is True
+    got = _scan(text)
+    assert got["unknown"] is True or any("#" in reading for reading in got["model_readings"])
+
+
+@pytest.mark.parametrize("model", [BEDROCK, OLLAMA])
+def test_a_plain_colon_model_id_stays_known_with_one_reading(model):
+    got = _scan("---\nmodel: %s\ndescription: a: b\n---\n" % model)
+    assert got["unknown"] is False and got["model"] == model and got["model_readings"] == [model]
+
+
+def test_a_following_indented_comment_line_adds_a_reading():
+    got = _scan("---\nmodel: %s\n  # c\ndescription: a: b\n---\n" % OLLAMA)
+    assert got["unknown"] is False
+    assert OLLAMA + "\n# c" in got["model_readings"] and OLLAMA in got["model_readings"]
+
+
+@pytest.mark.parametrize("model", [BEDROCK, OLLAMA])
+def test_a_quoted_colon_model_id_has_no_extra_readings(model):
+    for quote in ("'", '"'):
+        got = _scan("---\nmodel: %s%s%s\ndescription: a: b\n---\n" % (quote, model, quote))
+        assert got["unknown"] is False and got["model"] == model and "model_readings" not in got
+
+
+def _agent_verdicts(tmp_path, front, classification, allowlist=()):
+    world = World(tmp_path)
+    world.write(world.project / ".opencode" / "agent" / "x.md", "---\n%s\n---\nbody" % front)
+    inv = world.collect(compiled_doc=COMPILED)
+    expected = _expected(classification)
+    expected = dataclasses.replace(expected, model_allowlist=frozenset(allowlist))
+    return [v for v in inventory.evaluate(inv, expected) if v.verdict == "refused"]
+
+
+@pytest.mark.parametrize("classification", ["personal", "work"])
+@pytest.mark.parametrize("front", [
+    "model: evil/x:1",
+    "model: %s # note: x" % OLLAMA,
+    "model: %s\n  # c\ndescription: a: b" % OLLAMA,
+])
+def test_an_off_allowlist_colon_model_is_refused_under_both_profiles(tmp_path, classification, front):
+    refused = _agent_verdicts(tmp_path, front, classification, allowlist=[BEDROCK, OLLAMA])
+    assert {v.code for v in refused} == {"agent-model-outside-allowlist"}
+
+
+@pytest.mark.parametrize("classification", ["personal", "work"])
+@pytest.mark.parametrize("model", [BEDROCK, OLLAMA])
+def test_an_allow_listed_colon_model_is_accepted_under_both_profiles(tmp_path, classification, model):
+    assert _agent_verdicts(tmp_path, "model: %s\ndescription: a: b" % model, classification,
+                           allowlist=[BEDROCK, OLLAMA]) == []
+
+
+def test_a_comment_line_holding_a_bare_carriage_return_is_unknown():
+    # gray-matter drops the keys after it while js-yaml would read them.
+    assert _scan("---\n# c\rmodel: a/b\n---\n")["unknown"] is True
+
+
+def test_a_crlf_file_whose_last_line_has_two_colons_stays_known():
+    got = _scan("---\r\nmodel: a/b\r\ndescription: Note: fine\r\n---\r\nbody")
+    assert got == {"model": "a/b", "has_permission": False, "has_tools": False, "unknown": False}
 
 
 @pytest.mark.parametrize("text", [

@@ -99,6 +99,8 @@ PIECES = [
     "...", "... # c", "... ", "...\u0085", "... ", "...　", "name: [a,", "name: {a: 1,", "]", "}",
     "description: |", "description: >", "  text", "tools: {}model: evil/x", "model:evil/x", "\tmodel: a/b",
     "'model': a/b", "description: café",
+    "model: amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", "model: ollama/llama3:8b",
+    "model: 'ollama/llama3:8b'", "model: \"amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0\"",
 ]
 SEPARATORS = ["\n", "\r\n", "\r", "\n\n"]
 
@@ -116,6 +118,7 @@ def _cases():
             third = PIECES[(index * 11 + 5) % len(PIECES)]
             cases.append("---\n%s%s%s%s%s\n---\n" % (first, sep, second, sep, third))
     cases.extend(hardening.RETRY_PROBES)
+    cases.extend(hardening.COLON_MODEL_CASES)
     cases.extend(text for text, _ in hardening.ORDINARY)
     for model_line in ("model:", "model: ''", "model: # c"):
         for gap in hardening.GAPS:
@@ -135,7 +138,12 @@ def _disagreement(text, oracle):
     model = oracle["model"]
     if isinstance(model, dict):
         return "a non-string model was read as known"
-    if model and model != got["model"]:
+    readings = got.get("model_readings")
+    if readings:
+        # An unquoted model with a colon: the scanner lists every reading OpenCode might load.
+        if model and model not in readings:
+            return "model %r is not among the readings %r" % (model, readings)
+    elif (model or None) != got["model"]:
         return "model %r read as %r" % (model, got["model"])
     if oracle["permission"] and not got["has_permission"]:
         return "permission hidden"
