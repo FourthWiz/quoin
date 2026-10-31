@@ -242,3 +242,47 @@ def test_the_accept_flag_never_accepts_a_run_record_for_another_profile(fx):
         assert exc.code == "scope-unverifiable"
         assert "different profile" in exc.message and "prepared before this version" not in exc.message
         assert "--accept-unverified-policy" not in exc.message
+
+
+# --------------------------------------- filled isolation, network and enforcement sections
+
+FILLED = {
+    "isolation": {"status": "verified", "environment": "container", "evidence": ["attestation-current"], "missing": [],
+                  "boundary": None, "issuer": "h-1", "approved_egress_hosts": 0},
+    "network": {"status": "planned", "identity_check": "required", "destinations": [], "proxies": []},
+    "enforcement": [{"control": "shell-egress", "layer": "managed-boundary", "status": "delegated-verified"}],
+    "pending_sections": [],
+}
+
+
+def _seed_filled(fx, recorded=BASE, **sections):
+    (item,) = completed(fx)
+    directory = fx.directory()
+    record = runstore.load_record(directory, item["run_id"])
+    record.setdefault("prepared", {})["effective_config"] = {
+        "profile": "personal", "policy": recorded, **{**FILLED, **sections},
+    }
+    runstore.write_record(directory, record)
+
+
+def test_a_run_prepared_with_filled_sections_continues_with_the_same_policy(fx):
+    _seed_filled(fx)
+    assert load(fx, policy())["task"] == "t1"
+
+
+def test_a_widened_identity_check_is_refused_whatever_the_sections_say(fx):
+    _seed_filled(fx)
+    exc = refused(fx, policy(**{"network.identity_check": "off"}))
+    assert exc.code == "policy-widened" and exc.reasons == ("effective_config.network.identity_check",)
+
+
+def test_a_record_with_pending_sections_still_compares_on_the_policy_section_only(fx):
+    _seed_filled(fx, isolation={"status": "pending", "evidence": [], "missing": []}, pending_sections=["isolation"])
+    assert load(fx, policy())["task"] == "t1"
+
+
+def test_an_unverified_environment_after_a_verified_record_is_not_a_comparison_failure(fx):
+    """The managed requirement refuses at prepare; the comparison reads policy only, so a
+    convenience policy continues even when the environment changed."""
+    _seed_filled(fx, recorded=policy(isolation="convenience"))
+    assert load(fx, policy(isolation="convenience"))["task"] == "t1"

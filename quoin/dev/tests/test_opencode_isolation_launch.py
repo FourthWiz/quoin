@@ -389,3 +389,127 @@ def test_only_a_directory_directly_under_this_projects_snapshot_key_is_exempt(tm
     link = tmp_path / "link"
     link.symlink_to(real)
     ws_env.refused("workspace-invalid", ws_env.request(workspace=link))
+
+
+# ------------------------------------------------------------ explain, scan
+
+
+def _activate(env, monkeypatch, **kw):
+    ambient = dict(env.driver()._env)  # noqa: SLF001
+    monkeypatch.setattr(os, "environ", ambient)
+    monkeypatch.setattr(cli, "datetime", type("F", (__import__("datetime").datetime,), {"now": classmethod(lambda c, tz=None: NOW)}))
+    monkeypatch.setattr(cli, "_make_opencode_driver", lambda root: env.driver(env=ambient, **kw))
+    return ambient
+
+
+def _explain(capsys, env, *extra):
+    code = cli.main(["opencode", "config", "explain", "--profile", "work", "--project-root", str(env.root), *extra])
+    out = capsys.readouterr()
+    return code, out.out
+
+
+def test_explain_shows_the_launch_refusal_and_keeps_its_exit_code(env, monkeypatch, capsys):
+    """A launchable managed work world under unverified roots: exit 0 plus the refusal line."""
+    _activate(env, monkeypatch, isolation_roots=iso.unverified_roots(env.tmp / "empty"))
+    code, text = _explain(capsys, env)
+    assert code == 0
+    assert "launch policy refusal: isolation-required-unverified" in text
+    assert "isolation: unverified (evidence: " in text and "missing: attestation-missing" in text
+    assert re.search(r"^enforcement shell-egress managed-boundary delegated-unverified$", text, flags=re.M)
+    code, blob = _explain(capsys, env, "--json")
+    section = json.loads(blob)["effective_config"]
+    assert code == 0 and section["launch_refusal"] == {"code": "isolation-required-unverified", "detail": "attestation-missing"}
+
+
+def test_explain_shows_none_for_a_clean_world_and_the_destination_code_for_the_headline_world(env, monkeypatch, capsys):
+    _activate(env, monkeypatch)
+    assert "launch policy refusal: none" in _explain(capsys, env)[1]
+    _policy(env, allowed_hosts=[GW_B])
+    _activate(env, monkeypatch)
+    code, text = _explain(capsys, env)
+    assert "launch policy refusal: destination-not-approved" in text and code == 1  # compile blocker, as before
+
+
+def test_a_failing_offline_check_is_shown_as_unavailable(env, monkeypatch, capsys):
+    _activate(env, monkeypatch)
+    monkeypatch.setattr(driver.OpenCodeDriver, "offline_launch_refusal", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    code, text = _explain(capsys, env)
+    assert code == 0 and "launch policy refusal: unavailable" in text
+    assert json.loads(_explain(capsys, env, "--json")[1])["effective_config"]["launch_refusal"] == {"code": "unavailable"}
+
+
+def test_explain_never_tracebacks_when_the_preview_fails(env, monkeypatch, capsys):
+    _activate(env, monkeypatch)
+    monkeypatch.setattr(driver.OpenCodeDriver, "effective_preview", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("x")))
+    code, text = _explain(capsys, env)
+    assert "Traceback" not in text and code in (0, 1)
+
+
+def test_a_work_world_whose_census_fails_shows_the_unavailable_network_line(env, monkeypatch, capsys):
+    _activate(env, monkeypatch)
+    monkeypatch.setattr(netpolicy, "census", lambda **k: (_ for _ in ()).throw(RuntimeError("x")))
+    code, text = _explain(capsys, env)
+    assert "network: unavailable (destination checks could not be evaluated; no destination control enforced)" in text
+    assert "launch policy refusal: destination-not-approved" in text
+
+
+# --------------------------------------------------------------- secret scan
+
+SEED = "SEEDEDGATEWAYSECRET99"
+
+
+def test_seeded_secrets_never_reach_the_new_surfaces(env, monkeypatch, capsys, tmp_path):
+    roots = iso.fixture_roots(env.tmp / "seeded", attestation={"issuer": "issuer-" + SEED})
+    env.world.profile["policy"]["allowed_hosts"] = [GW, GW_B, "proxy.invalid"]
+    env.world.write()
+    proxy = "http://user:%s@proxy.invalid:8080" % SEED
+    ambient = dict(env.world.env, PATH=os.environ.get("PATH", ""), HTTPS_PROXY=proxy)
+    drv = _drv(env, env=ambient, isolation_roots=roots)
+    prepared = drv.prepare(env.request())
+    blob = json.dumps(_prepared_record(env, prepared))
+    refusal_blobs = []
+    for kw in (
+        dict(isolation_roots=iso.unverified_roots(env.tmp / "empty")),
+        dict(identity_checker=iso.FakeIdentity({GW: netpolicy.IdentityResult("mismatch", "tls", "name-mismatch")})),
+    ):
+        with pytest.raises(driver.PrepareRefused) as info:
+            _drv(env, env=ambient, **{"isolation_roots": roots, **kw}).prepare(env.request())
+        refusal_blobs.append(info.value.message + str(info.value.detail))
+    _activate(env, monkeypatch, isolation_roots=roots)
+    os.environ["HTTPS_PROXY"] = proxy
+    outputs = [_explain(capsys, env, *extra)[1] for extra in ((), ("--json",), ("--redact",))]
+    findings = doctor_text(env, ambient, roots)
+    for text in [blob, *refusal_blobs, *outputs, findings]:
+        assert SEED not in text
+
+
+def doctor_text(env, ambient, roots):
+    from quoin.opencode_adapter import doctor
+
+    cfg = {k: ambient[k] for k in ("XDG_CONFIG_HOME", "XDG_STATE_HOME") if k in ambient}
+    found = doctor._profile_findings(env.root, "work", cfg, env.world.home, NOW, ambient_env=ambient, isolation_roots=roots)  # noqa: SLF001
+    return " ".join(f.message + (f.remediation or "") for f in found)
+
+
+# ------------------------------------------------------------- static pins
+
+
+def test_no_module_builds_trusted_roots_or_a_checker_outside_the_allow_list():
+    import ast
+    from pathlib import Path
+
+    src = Path(driver.__file__).resolve().parents[1]
+    allowed_kw = {("doctor.py", "isolation_roots"), ("driver.py", "isolation_roots"), ("driver.py", "identity_checker")}
+    offenders = []
+    for path in src.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            name = node.func.attr if isinstance(node.func, ast.Attribute) else getattr(node.func, "id", "")
+            if name == "TrustedRoots" and (node.args or node.keywords) and path.name != "isolation.py":
+                offenders.append((path.name, "TrustedRoots("))
+            for kw in node.keywords:
+                if kw.arg in ("isolation_roots", "identity_checker") and (path.name, kw.arg) not in allowed_kw:
+                    offenders.append((path.name, kw.arg))
+    assert not offenders, offenders
