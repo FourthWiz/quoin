@@ -29,6 +29,7 @@ from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
+from quoin.opencode_adapter import errors as _errors
 from quoin.opencode_adapter.retry import FAILURE_KINDS, Usage
 
 SCHEMA_VERSION = 1
@@ -633,6 +634,41 @@ def _bound(text: object, redact: Callable[[str], str], limit: int) -> Optional[s
     return "%s…[truncated %d bytes]" % (head, dropped)
 
 
+CONTENT_MODES = ("summary", "metadata")
+METADATA_PREFIX = "[metadata]"
+_METADATA_RE = re.compile(r"^\[metadata\] length=(\d{1,12}) sha256=([0-9a-f]{12})$")
+
+
+def metadata_summary(text: object, redact: Callable[[str], str]) -> Optional[str]:
+    """Length and a short digest of the redacted text, never the text itself.
+
+    The digest covers the redacted text, so a stored digest cannot confirm a
+    guessed registered secret. It is unkeyed: a short or low-entropy text that
+    redaction does not know can still be confirmed offline by guessing.
+    """
+    if not isinstance(text, str):
+        return None
+    data = _scrub(redact(_scrub(text))).encode("utf-8")
+    return "%s length=%d sha256=%s" % (
+        METADATA_PREFIX, len(data), hashlib.sha256(data).hexdigest()[:12]
+    )
+
+
+def parse_metadata_summary(value: object) -> Optional[Tuple[int, str]]:
+    """Strict reader for `metadata_summary` output; None for any other string."""
+    if not isinstance(value, str):
+        return None
+    match = _METADATA_RE.match(value)
+    return (int(match.group(1)), match.group(2)) if match else None
+
+
+def _shape(text: object, redact: Callable[[str], str], limit: int, content: str) -> Optional[str]:
+    """Bounded text under `summary`; length and digest under any other mode."""
+    if content == "summary":
+        return _bound(text, redact, limit)
+    return metadata_summary(text, redact)
+
+
 def _safe_ident(value: object, redact: Callable[[str], str]) -> Optional[str]:
     """An identifier as-is when well formed and untouched by redaction, else a digest.
 
@@ -674,6 +710,7 @@ def map_native_error(
     *,
     redact: Callable[[str], str] = _identity,
     summary_limit: int = 2048,
+    content: str = "summary",
 ) -> ErrorPayload:
     """Map a native error object to an error payload. Never ``policy``."""
     err = _mapping(err)
@@ -682,7 +719,7 @@ def map_native_error(
     message = data.get("message") if isinstance(data.get("message"), str) else err.get("message")
     if not isinstance(message, str):
         message = name
-    message = _bound(message, redact, summary_limit) or ""
+    message = _shape(message, redact, summary_limit, content) or ""
     status = data.get("statusCode")
     status = status if _is_int(status) and status >= 0 else None
     metadata = _mapping(data.get("metadata"))
@@ -754,12 +791,21 @@ def parse_stderr_line(line: str) -> Optional[StderrSignal]:
     return None
 
 
+def _approval_permission(name: object, redact, limit: int, content: str) -> Optional[str]:
+    if content == "summary":
+        return _bound(name, redact, limit)
+    if isinstance(name, str) and _errors.is_plain_token(name) and redact(name) == name:
+        return name
+    return _safe_ident(name, redact)
+
+
 def approval_from_stderr(
     signal: StderrSignal,
     *,
     redact: Callable[[str], str] = _identity,
     limit: int = 256,
     max_patterns: int = 16,
+    content: str = "summary",
 ) -> ApprovalRequiredPayload:
     """Bounded, redacted approval payload for a permission notice on stderr.
 
@@ -768,7 +814,7 @@ def approval_from_stderr(
     ``"…[N more]"`` entry says how many were dropped.
     """
     kept = [
-        _bound(pattern, redact, limit) or ""
+        _shape(pattern, redact, limit, content) or ""
         for pattern in signal.patterns[:max_patterns]
     ]
     dropped = len(signal.patterns) - len(kept)
@@ -776,7 +822,7 @@ def approval_from_stderr(
         kept.append("…[%d more]" % dropped)
     return ApprovalRequiredPayload(
         evidence_source="stderr_notice",
-        permission=_bound(signal.name, redact, limit),
+        permission=_approval_permission(signal.name, redact, limit, content),
         patterns=tuple(kept),
     )
 
@@ -833,6 +879,7 @@ def translate(
     observed_at: str,
     redact: Callable[[str], str] = _identity,
     summary_limit: int = 2048,
+    content: str = "summary",
 ) -> Tuple[RuntimeEvent, ...]:
     """Translate one native object into unstamped events (``sequence`` 0).
 
@@ -840,7 +887,8 @@ def translate(
     permission sentence is classified before any error mapping runs.
     """
     try:
-        return _translate(obj, run_id, attempt, observed_at, redact, summary_limit)
+        mode = content if content in CONTENT_MODES else "metadata"
+        return _translate(obj, run_id, attempt, observed_at, redact, summary_limit, mode)
     except Exception:  # noqa: BLE001 - translation must not raise
         return (_fallback_event(obj, run_id, attempt, observed_at, redact),)
 
@@ -907,7 +955,7 @@ def _native_type(obj: Mapping[str, Any], redact: Callable[[str], str]) -> str:
     return _safe_ident(obj.get("type"), redact) or "unknown"
 
 
-def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[RuntimeEvent, ...]:
+def _translate(obj, run_id, attempt, observed_at, redact, limit, content="summary") -> Tuple[RuntimeEvent, ...]:
     raw_type = obj.get("type")
     part = _mapping(obj.get("part"))
     part_id = _safe_ident(part.get("id"), redact)
@@ -929,7 +977,7 @@ def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[Runtim
         return progress(kind="step_start")
 
     if raw_type in ("text", "reasoning"):
-        return progress(kind=raw_type, summary=_bound(part.get("text"), redact, limit))
+        return progress(kind=raw_type, summary=_shape(part.get("text"), redact, limit, content))
 
     if raw_type == "step_finish":
         tokens = _mapping(part.get("tokens"))
@@ -949,7 +997,7 @@ def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[Runtim
         )
 
     if raw_type == "tool_use":
-        return _translate_tool(part, make, redact, limit)
+        return _translate_tool(part, make, redact, limit, content)
 
     if raw_type == "error":
         err = _mapping(obj.get("error"))
@@ -969,13 +1017,14 @@ def _translate(obj, run_id, attempt, observed_at, redact, limit) -> Tuple[Runtim
         if outcome == "denied":
             return progress(kind="halted", permission_outcome="denied")
         return make(
-            EventType.ERROR, map_native_error(err, redact=redact, summary_limit=limit)
+            EventType.ERROR,
+            map_native_error(err, redact=redact, summary_limit=limit, content=content),
         )
 
     return progress(kind="unknown")
 
 
-def _translate_tool(part, make, redact, limit) -> Tuple[RuntimeEvent, ...]:
+def _translate_tool(part, make, redact, limit, content="summary") -> Tuple[RuntimeEvent, ...]:
     raw_tool = part.get("tool")
     is_task = raw_tool == "task"
     tool = _bound(raw_tool, redact, 256)
@@ -994,13 +1043,13 @@ def _translate_tool(part, make, redact, limit) -> Tuple[RuntimeEvent, ...]:
             )
         return progress(
             kind="tool", tool=tool, status="completed",
-            summary=_bound(state.get("title"), redact, limit),
+            summary=_shape(state.get("title"), redact, limit, content),
         )
 
     if status == "error":
         text = state.get("error")
         outcome = classify_permission_error(text) if isinstance(text, str) else None
-        summary = _bound(text, redact, limit)
+        summary = _shape(text, redact, limit, content)
         if outcome == "rejected":
             return make(
                 EventType.APPROVAL_REQUIRED,
@@ -1145,6 +1194,7 @@ class EventPipeline:
         deduper: Optional[Deduper] = None,
         summary_limit: int = 2048,
         max_line_bytes: int = 1_048_576,
+        content: str = "summary",
     ) -> None:
         # Validated here so a bad argument fails at construction instead of on
         # the first stdout line, inside the reader loop.
@@ -1154,6 +1204,9 @@ class EventPipeline:
             raise ValueError("attempt must be a positive integer")
         if not _is_int(start_sequence) or start_sequence < 0:
             raise ValueError("start_sequence must be a non-negative integer")
+        if content not in CONTENT_MODES:
+            raise ValueError("content must be one of %s" % ", ".join(CONTENT_MODES))
+        self._content = content
         self.run_id = run_id
         self.attempt = attempt
         self._redact = redact
@@ -1200,7 +1253,7 @@ class EventPipeline:
         out: List[RuntimeEvent] = []
         for event in translate(
             obj, run_id=self.run_id, attempt=self.attempt, observed_at=observed,
-            redact=self._redact, summary_limit=self._limit,
+            redact=self._redact, summary_limit=self._limit, content=self._content,
         ):
             native = replace(event.native, revision=revision, content_sha256=digest)
             out.append(self._stamp(replace(event, native=native, revision=revision)))
