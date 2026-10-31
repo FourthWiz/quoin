@@ -244,13 +244,15 @@ def host_key(host: str) -> str:
 def url_is_unambiguous(url: Any) -> bool:
     """True when every URL parser reads the same host from `url`: printable
     ASCII only, no whitespace, no backslash (a JavaScript parser reads it as a
-    path separator) and no percent-escape in the authority."""
+    path separator) and no percent-escape in the host and port. Userinfo may
+    carry percent-escapes (an encoded proxy password is the normal form); no
+    parser reads it as the host."""
     if not isinstance(url, str) or not url:
         return False
     if any(ord(c) <= 32 or ord(c) > 126 for c in url) or "\\" in url:
         return False
     try:
-        return "%" not in urlsplit(url).netloc
+        return "%" not in urlsplit(url).netloc.rpartition("@")[2]
     except ValueError:
         return False
 

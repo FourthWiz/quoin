@@ -397,14 +397,14 @@ class _Hidden(str):
 
 def _url_is_unambiguous(url: str) -> bool:
     """Printable ASCII without whitespace or a backslash (a JavaScript URL
-    parser reads it as a path separator) and no percent-escape in the
-    authority, so every parser reads the same host. Mirrors
-    `config.url_is_unambiguous`; this module imports nothing from the adapter
-    beyond errors and jsonio."""
+    parser reads it as a path separator) and no percent-escape in the host
+    and port, so every parser reads the same host; userinfo may be
+    percent-encoded. Mirrors `config.url_is_unambiguous`; this module imports
+    nothing from the adapter beyond errors and jsonio."""
     if not url or any(ord(c) <= 32 or ord(c) > 126 for c in url) or "\\" in url:
         return False
     try:
-        return "%" not in urlsplit(url).netloc
+        return "%" not in urlsplit(url).netloc.rpartition("@")[2]
     except ValueError:
         return False
 

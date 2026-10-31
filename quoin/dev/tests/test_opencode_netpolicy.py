@@ -453,3 +453,74 @@ def test_an_oversized_npmrc_is_unknown(tmp_path):
     rc.write_text("registry=https://npm.example.com/\n" + "#" * 70000 + "\n")
     census = _census(_install_allowed(allowed=("gw.example.com", "npm.example.com")), npm=rc)
     assert census.package_registry[0].kind == "unparseable"
+
+
+ENCODED_PASSWORD_PROXY = "http://user:p%40ss@proxy.corp:8080"
+
+
+def test_an_approved_proxy_with_an_encoded_password_is_accepted():
+    assert netpolicy._parse_endpoint(ENCODED_PASSWORD_PROXY)[0] == "proxy.corp"
+    effective = _effective(providers={"gw": _view(proxy=True)}, allowed=("gw.example.com", "proxy.corp"))
+    census = _census(effective, ambient={"HTTPS_PROXY": ENCODED_PASSWORD_PROXY})
+    assert netpolicy.approve(census, _policy(effective), "work") is None
+    assert "p%40ss" not in repr(census) and "p@ss" not in repr(census)
+
+
+def test_a_percent_escape_in_the_proxy_host_is_still_unparseable():
+    effective = _effective(providers={"gw": _view(proxy=True)}, allowed=("gw.example.com", "proxy.corp"))
+    for url in ("http://proxy%2Ecorp:8080", "http://user:p%40ss@proxy%2Ecorp:8080"):
+        refusal = _approve(effective, ambient={"HTTPS_PROXY": url})
+        assert refusal.code == "proxy-route-not-approved" and refusal.detail == "host-unparseable", url
+
+
+def test_a_backslash_before_at_with_an_encoded_password_is_still_refused():
+    url = "http://user:p%40ss@evil.example\\@proxy.corp:8080"
+    effective = _effective(providers={"gw": _view(proxy=True)}, allowed=("gw.example.com", "proxy.corp"))
+    refusal = _approve(effective, ambient={"HTTPS_PROXY": url})
+    assert refusal.code == "proxy-route-not-approved" and refusal.detail == "host-unparseable"
+
+
+SCREEN_PARITY_URLS = (
+    "https://api.example.com/v1",
+    "http://user:p%40ss@proxy.corp:8080",
+    "http://user:pass@proxy.corp:8080",
+    "https://api%2Eexample.com/",
+    "http://user:p%40ss@proxy%2Ecorp:8080",
+    "https://[::1%25eth0]:443/",
+    BACKSLASH_URL,
+    "http://user:p%40ss@evil.example\\@proxy.corp:8080",
+    "https://evil.example/\\@api.allowed.example",
+    "https://a.example@b.example@c.example/",
+    "https://api.example.com/?q=%40",
+    "https://api.example.com/#%40",
+    "https://api.example .com/",
+    "https://api.example.com/\t",
+    "https://аpi.example.com/",
+    "https://[::1/",
+    "",
+    "not a url",
+)
+
+
+@pytest.mark.parametrize("url", SCREEN_PARITY_URLS)
+def test_the_two_url_screens_agree(url):
+    from quoin.opencode_adapter import config
+    assert config.url_is_unambiguous(url) is inventory._url_is_unambiguous(url)
+
+
+def test_a_fifo_named_npmrc_is_unknown_without_blocking(tmp_path):
+    import os
+
+    rc = tmp_path / "npmrc"
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no FIFO support")
+    os.mkfifo(rc)
+    census = _census(_install_allowed(allowed=("gw.example.com", "npm.example.com")), npm=rc)
+    assert census.package_registry[0].kind == "unparseable"
+
+
+def test_a_directory_named_npmrc_is_unknown(tmp_path):
+    rc = tmp_path / "npmrc"
+    rc.mkdir()
+    census = _census(_install_allowed(allowed=("gw.example.com", "npm.example.com")), npm=rc)
+    assert census.package_registry[0].kind == "unparseable"
