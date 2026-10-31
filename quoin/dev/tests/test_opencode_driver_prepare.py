@@ -43,9 +43,9 @@ def env(tmp_path, monkeypatch):
 
 
 class Setup:
-    def __init__(self, tmp_path, monkeypatch, root=None, git=True):
+    def __init__(self, tmp_path, monkeypatch, root=None, git=True, **world_kw):
         self.tmp = tmp_path
-        self.world = World(tmp_path, agents=False, root=root)
+        self.world = World(tmp_path, agents=False, root=root, **world_kw)
         self.root = self.world.root
         if git:
             (self.root / ".git").mkdir(exist_ok=True)
