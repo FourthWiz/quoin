@@ -582,18 +582,20 @@ def _scan_frontmatter(text: str) -> Dict[str, Any]:  # noqa: C901 - one strict g
                 # whether the rest of the file parses, so report every one
                 # and let the policy check each against the allow-list.
                 stripped_value = "" if value.startswith("#") else _COMMENT.split(value, 1)[0].rstrip(_WS)
-                tail = []
+                # Any later line that could join the scalar (indented, comment or
+                # whitespace-only) is kept by js-yaml with its whitespace, so one
+                # reading holding a newline stands for all of them; no allowed
+                # model contains a newline. Only the first such line is looked at.
+                found = {stripped_value, value}
                 for following in block[index + 1:]:
-                    if following and following[0] in " \t" or not following.strip(_WS):
-                        tail.append(following.strip(_WS))
-                    else:
+                    if following and following[0] not in " \t":
                         break
-                while tail and not tail[-1]:
-                    tail.pop()
-                found = [stripped_value, value]
-                for count in range(1, len(tail) + 1):
-                    found.append("\n".join([value] + tail[:count]))
-                readings.extend(r for r in found if r and r not in readings)
+                    if following:
+                        found.add(value + "\n")
+                        break
+                for reading in sorted(found):
+                    if reading and reading not in readings:
+                        readings.append(reading)
                 facts["model_readings"] = readings
             if not quoted:
                 text_value = "" if text_value.startswith("#") else _COMMENT.split(text_value, 1)[0].rstrip(_WS)
@@ -1127,15 +1129,15 @@ REFUSAL_TEXT: Dict[str, str] = {
     "inventory-lsp": "a language server entry is configured outside the compiled configuration",
     "inventory-formatter": "a formatter entry is configured outside the compiled configuration",
     "inventory-agent-permission": "an agent defines its own permission or tool rules",
-    "inventory-agent-unreadable": "an agent or command definition could not be read completely, so its model and rules are unknown (quote a model value that contains a colon)",
+    "inventory-agent-unreadable": "an agent or command definition could not be read completely, so its model and rules are unknown",
     "inventory-config-permission": "a top-level permission block is configured outside the compiled configuration",
     "inventory-remote-config": "remote or account configuration is present for this profile",
     "inventory-account-busy": "the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry",
     "inventory-remote-instructions": "instructions or skills are loaded from a URL",
     "inventory-unknown-key": "a configuration key the adapter does not recognise is set",
     "inventory-legacy-config": "a legacy TOML configuration file is present",
-    "agent-model-outside-allowlist": "an agent selects a model that is not in the profile's allowed models",
-    "command-model-outside-allowlist": "a command selects a model that is not in the profile's allowed models",
+    "agent-model-outside-allowlist": "an agent selects a model that is not in the profile's allowed models (if the value contains a colon, quote it)",
+    "command-model-outside-allowlist": "a command selects a model that is not in the profile's allowed models (if the value contains a colon, quote it)",
     "config-env-opencode-config": "OPENCODE_CONFIG points at a configuration file other than the compiled one",
     "config-env-opencode-config-dir": "OPENCODE_CONFIG_DIR adds a configuration directory",
     "config-env-opencode-config-content": "OPENCODE_CONFIG_CONTENT injects configuration",

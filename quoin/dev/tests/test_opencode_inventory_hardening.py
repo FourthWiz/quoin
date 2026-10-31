@@ -70,7 +70,7 @@ def test_a_plain_colon_model_id_stays_known_with_one_reading(model):
 def test_a_following_indented_comment_line_adds_a_reading():
     got = _scan("---\nmodel: %s\n  # c\ndescription: a: b\n---\n" % OLLAMA)
     assert got["unknown"] is False
-    assert OLLAMA + "\n# c" in got["model_readings"] and OLLAMA in got["model_readings"]
+    assert OLLAMA in got["model_readings"] and OLLAMA + "\n" in got["model_readings"]
 
 
 @pytest.mark.parametrize("model", [BEDROCK, OLLAMA])
@@ -94,6 +94,7 @@ def _agent_verdicts(tmp_path, front, classification, allowlist=()):
     "model: evil/x:1",
     "model: %s # note: x" % OLLAMA,
     "model: %s\n  # c\ndescription: a: b" % OLLAMA,
+    "model: %s\n   \ndescription: Reviews code: carefully" % OLLAMA,
 ])
 def test_an_off_allowlist_colon_model_is_refused_under_both_profiles(tmp_path, classification, front):
     refused = _agent_verdicts(tmp_path, front, classification, allowlist=[BEDROCK, OLLAMA])
@@ -662,3 +663,21 @@ def test_a_stored_record_with_no_policy_keeps_the_older_version_message(monkeypa
 @pytest.mark.parametrize("accept", [True, "r1"])
 def test_the_accept_flag_admits_a_profile_less_record_as_unverified(monkeypatch, accept):
     assert _policy_check(monkeypatch, {"policy": {"classification": "work"}}, accept) == {"unverified_accepted": "r1"}
+
+
+@pytest.mark.parametrize("line", ["   ", "    ", "\t", "  \t", "  # c ", "    # c", " a"])
+def test_a_continuation_line_with_whitespace_adds_the_unallowable_reading(line):
+    got = _scan("---\nmodel: %s\n%s\ndescription: a: b\n---\n" % (OLLAMA, line))
+    readings = got["model_readings"]
+    assert OLLAMA in readings and any("\n" in reading for reading in readings)
+    assert len(readings) <= 3
+
+
+def test_scanning_a_megabyte_of_continuation_lines_is_fast():
+    import time
+    body = "\t#\n" * (256 * 1024)
+    text = "---\nmodel: a:b\n%sdescription: a: b\n---\n" % body
+    start = time.monotonic()
+    got = _scan(text)
+    assert time.monotonic() - start < 5
+    assert len(got["model_readings"]) <= 3

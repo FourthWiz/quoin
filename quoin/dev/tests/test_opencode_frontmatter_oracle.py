@@ -100,6 +100,7 @@ PIECES = [
     "description: |", "description: >", "  text", "tools: {}model: evil/x", "model:evil/x", "\tmodel: a/b",
     "'model': a/b", "description: café",
     "model: amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0", "model: ollama/llama3:8b",
+    "   ", "    ", " ", "\t", "  \t", "    # c", "  # c ", "  \t# c",
     "model: 'ollama/llama3:8b'", "model: \"amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0\"",
 ]
 SEPARATORS = ["\n", "\r\n", "\r", "\n\n"]
@@ -141,7 +142,9 @@ def _disagreement(text, oracle):
     readings = got.get("model_readings")
     if readings:
         # An unquoted model with a colon: the scanner lists every reading OpenCode might load.
-        if model and model not in readings:
+        # A reading that holds a newline stands for every longer string that starts with it.
+        if model and model not in readings and not any(
+                "\n" in reading and model.startswith(reading) for reading in readings):
             return "model %r is not among the readings %r" % (model, readings)
     elif (model or None) != got["model"]:
         return "model %r read as %r" % (model, got["model"])

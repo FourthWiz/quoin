@@ -508,15 +508,20 @@ after it, block, flow, anchor or tag values on `model`, a `model` that is
 (after any blank or comment lines) by an indented value, a bare carriage
 return on a line with a second colon, and a comment line holding a bare
 carriage return. An unquoted `model` value containing a colon (a Bedrock id
-ending `-v2:0`, a local-server id such as `name:8b`) stays known, but OpenCode
-reparses such a file after a parse error and keeps the raw value, comment
-included, and any indented comment lines after it. The scanner therefore
-reports every reading OpenCode might load, and the file is refused with the
-model code under both profiles unless every reading is an allowed model.
-Quote a `model` value that contains a colon to give it a single reading.
-An unknown file is refused for work with `inventory-agent-unreadable` (quote
-a model value that contains a colon, then check the rest of the file) and
-recorded for personal. OpenCode's loader (gray-matter 4.0.3) caches by file
+ending `-v2:0`, a local-server id such as `name:8b`) does not make the file
+unknown by itself, but OpenCode reparses such a file after a parse error and
+keeps the raw value, comment included, and any indented, comment or
+whitespace-only line after it, with its whitespace. The scanner therefore
+reports the value, the value without its comment and, when such a following
+line exists, one more reading that can never be an allowed model, and the
+file is refused with the model code under both profiles unless every reading
+is an allowed model. Quote a `model` value that contains a colon to give it a
+single reading; the model refusal text repeats this. These readings are
+checked even when the file is otherwise unknown, so an unknown file can still
+be refused with the model code under personal; the readings of an unknown
+file are best effort, because its later lines may not be read the way OpenCode
+reads them. Any other unknown file is refused for work with
+`inventory-agent-unreadable` and recorded for personal. OpenCode's loader (gray-matter 4.0.3) caches by file
 content, so a second load of identical content that failed the first time can
 return empty data without a retry; the scanner over-reports in that case and
 policy never relies on an agent's own `permission: deny` narrowing.
@@ -550,15 +555,15 @@ docs test compares it with the code.
 | `inventory-lsp` | refused | recorded | a language server entry is configured outside the compiled configuration |
 | `inventory-formatter` | refused | recorded | a formatter entry is configured outside the compiled configuration |
 | `inventory-agent-permission` | refused | recorded | an agent defines its own permission or tool rules |
-| `inventory-agent-unreadable` | refused | recorded | an agent or command definition could not be read completely, so its model and rules are unknown (quote a model value that contains a colon) |
+| `inventory-agent-unreadable` | refused | recorded | an agent or command definition could not be read completely, so its model and rules are unknown |
 | `inventory-config-permission` | refused | recorded | a top-level permission block is configured outside the compiled configuration |
 | `inventory-remote-config` | refused | recorded | remote or account configuration is present for this profile |
 | `inventory-account-busy` | refused | recorded | the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry |
 | `inventory-remote-instructions` | refused | recorded | instructions or skills are loaded from a URL |
 | `inventory-unknown-key` | refused | recorded | a configuration key the adapter does not recognise is set |
 | `inventory-legacy-config` | refused | refused | a legacy TOML configuration file is present |
-| `agent-model-outside-allowlist` | refused | refused | an agent selects a model that is not in the profile's allowed models |
-| `command-model-outside-allowlist` | refused | refused | a command selects a model that is not in the profile's allowed models |
+| `agent-model-outside-allowlist` | refused | refused | an agent selects a model that is not in the profile's allowed models (if the value contains a colon, quote it) |
+| `command-model-outside-allowlist` | refused | refused | a command selects a model that is not in the profile's allowed models (if the value contains a colon, quote it) |
 | `config-env-opencode-config` | refused | stripped | OPENCODE_CONFIG points at a configuration file other than the compiled one |
 | `config-env-opencode-config-dir` | refused | stripped | OPENCODE_CONFIG_DIR adds a configuration directory |
 | `config-env-opencode-config-content` | refused | stripped | OPENCODE_CONFIG_CONTENT injects configuration |
