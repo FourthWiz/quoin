@@ -99,8 +99,10 @@ def test_other_exclusion_reasons_are_not_destination_refusals():
 
 
 def test_provider_ids_never_approve_a_host():
-    effective = _effective(allowed=("other.example.com",), providers={"gw.example.com": _view("gw.example.com", "gw.example.com")})
-    refusal = _approve(effective, doc=_compiled(("gw.example.com", "gw.example.com")))
+    effective = _effective(
+        allowed=("approved.example.com",), providers={"approved.example.com": _view("approved.example.com", "elsewhere.example.com")},
+    )
+    refusal = _approve(effective, doc=_compiled(("approved.example.com", "elsewhere.example.com")))
     assert refusal == netpolicy.NetRefusal("destination-not-approved", "host-not-allowed")
 
 
