@@ -299,6 +299,7 @@ def test_registry_is_read_only_and_groups_do_not_conflict():
         launch_codes.CONFIG_DERIVED_CODES,
         launch_codes.COMPILED_REASON_CODES,
         launch_codes.INVENTORY_CODES,
+        launch_codes.RETENTION_CODES,
         launch_codes.PLANNED_CODES,
     )
     for first in groups:
@@ -328,7 +329,7 @@ def test_inventory_codes_match_the_refusal_text_table():
 
 def test_planned_codes_are_the_declared_set():
     # The isolation and network codes moved into their own group; later-stage codes stay planned.
-    assert len(launch_codes.PLANNED_CODES) == 3
+    assert len(launch_codes.PLANNED_CODES) == 2
     for moved in ("env-path-outside-profile", "profile-dir-unsafe", "profile-switch-in-process", "profile-stamp-mismatch"):
         assert moved not in launch_codes.PLANNED_CODES
     assert launch_codes.category("allowed-hosts-unset") == "policy-denial"

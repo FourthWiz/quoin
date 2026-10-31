@@ -420,6 +420,7 @@ class RunFacts:
     profile: Optional[str]
     active: bool
     empty_orphan: bool
+    reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -623,6 +624,7 @@ def _attribute_runs(directory: str, uid: int, table, budget: Budget, now: float)
                  and "jsonl" in parts and parts["jsonl"].st_size == 0)
         profile: Optional[str] = None
         active = False
+        reason: Optional[str] = None
         if "run.json" in parts:
             if not budget.take():
                 break
@@ -633,8 +635,9 @@ def _attribute_runs(directory: str, uid: int, table, budget: Budget, now: float)
                 if isinstance(value, str) and install.PROFILE_RE.fullmatch(value):
                     profile = value
                     newest = max(i.st_mtime for i in parts.values())
-                    active = run_active(record, table, now, newest)
-        out[run_id] = RunFacts(profile, active, empty)
+                    reason = run_activity(record, table, now, newest)
+                    active = reason is not None
+        out[run_id] = RunFacts(profile, active, empty, reason)
     return out
 
 
@@ -997,3 +1000,145 @@ def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
     except Exception:  # noqa: BLE001 - a sweep never refuses a launch
         return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
                 "failed": 0, "truncated": False}
+
+
+# ---------------------------------------------------------------------------
+# purge
+# ---------------------------------------------------------------------------
+
+PURGE_MESSAGES = {
+    "purge-inside-launch": "purge cannot run inside a launched OpenCode session",
+    "purge-profile-invalid": "the profile name is not valid",
+    "purge-profile-unsafe": "the profile storage directory is not a private directory owned by this user",
+    "purge-run-active": "a run of this profile is active; stop it before purging",
+    "purge-confirm-required": "purge deletes data; re-run with --yes to delete, or --dry-run to preview",
+}
+KEPT_TOP_LEVEL = {
+    profile_dirs.STAMP_NAME: "profile-stamp",
+    profile_dirs.INDEX_NAME: "project-index",
+    profile_dirs.INDEX_NAME + ".lock": "project-index",
+}
+CREDENTIAL_EXCLUDES = {
+    "data": ("opencode/auth.json", "opencode/mcp-auth.json"),
+    "state": ("npmrc",),
+}
+_TOP_CLASS = {
+    "data": "profile-data", "state": "profile-state", "cache": "cache", "tmp": "tmp",
+    "tests": "tests", "workflow": "workflow", "snapshots": "snapshots", "records": "records",
+    "exports": "exports",
+}
+
+
+@dataclass(frozen=True)
+class Blocker:
+    run_id_or_task: str
+    project: str
+    reason: str
+    pid_file: Optional[str] = None
+
+
+class PurgeRefused(Exception):
+    def __init__(self, code: str, blocking: Sequence[Blocker] = ()) -> None:
+        super().__init__(PURGE_MESSAGES.get(code, code))
+        self.code = code
+        self.message = PURGE_MESSAGES.get(code, code)
+        self.blocking: Tuple[Blocker, ...] = tuple(blocking)
+
+
+def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[str, str],
+               uid: int, table, now: float) -> Plan:
+    """Everything a purge of `profile` would remove, or a refusal."""
+    if paths.ENV_STATE_DIR in env:
+        raise PurgeRefused("purge-inside-launch")
+    if (not isinstance(profile, str) or not install.PROFILE_RE.fullmatch(profile)
+            or profile in profile_dirs.RESERVED_NAMES):
+        raise PurgeRefused("purge-profile-invalid")
+    root = str(profile_dirs.profile_root(adapter_root, profile))
+    if not os.path.lexists(root):
+        return Plan(profile, "purge")
+    try:
+        os.close(_open_root(root, uid))
+    except RootUnsafe:
+        raise PurgeRefused("purge-profile-unsafe") from None
+    dirs = profile_dirs.ProfileDirs.at(root)
+    try:
+        indexed = profile_dirs.read_index(dirs)
+    except profile_dirs.ProfileDirUnsafe:
+        raise PurgeRefused("purge-profile-unsafe") from None
+
+    stores: List[str] = []
+    for item in list(indexed) + ([os.path.realpath(str(extra_project))] if extra_project else []):
+        real = os.path.realpath(item)
+        if real not in stores:
+            stores.append(real)
+
+    budget = Budget()
+    not_visited: List[Dict[str, str]] = []
+    visited: List[Tuple[str, ProjectEvidence]] = []
+    blockers: List[Blocker] = []
+    for project in stores:
+        ev = ProjectEvidence.load(project, uid=uid, attribute=True, table=table, budget=budget, now=now)
+        if budget.truncated:
+            not_visited.append({"project": project, "reason": "walk-truncated"})
+            continue
+        if not ev.readable:
+            if ev.reason != "missing":
+                not_visited.append({"project": project, "reason": ev.reason or "unreadable"})
+            continue
+        visited.append((project, ev))
+        mine = {rid for rid, f in ev.runs.items() if f.profile == profile}
+        for run_id in sorted(mine):
+            reason = ev.runs[run_id].reason
+            if reason is not None:
+                blockers.append(Blocker(run_id, project, reason))
+        for task in sorted(ev.live_lock_tasks):
+            if any(ev.referenced.get(rid, (None,))[0] == task for rid in mine):
+                blockers.append(Blocker(task, project, "live-lock",
+                                        ".workflow_artifacts/memory/run-supervisor-%s.pid" % task))
+    if blockers:
+        raise PurgeRefused("purge-run-active", blockers)
+
+    remove: List[Item] = []
+    keep: List[Kept] = []
+    referenced: List[Dict[str, str]] = []
+    root_fd = _open_root(root, uid)
+    try:
+        names = sorted(e.name for e in os.scandir(root_fd))
+    finally:
+        os.close(root_fd)
+    for name in names:
+        if name in KEPT_TOP_LEVEL:
+            keep.append(Kept(name, KEPT_TOP_LEVEL[name]))
+            continue
+        excludes = CREDENTIAL_EXCLUDES.get(name, ())
+        root_fd = _open_root(root, uid)
+        try:
+            item, why = unit_item(root_fd, root, (), name, cls=_TOP_CLASS.get(name, "compiled" if re.fullmatch(r"[0-9a-f]{16}", name) else "other"),
+                                  uid=uid, budget=budget, exclude=excludes)
+        finally:
+            os.close(root_fd)
+        if item is not None:
+            remove.append(item)
+        if why is not None:
+            keep.append(why)
+        for rel in excludes:
+            if os.path.lexists(os.path.join(root, name, *rel.split("/"))):
+                keep.append(Kept("%s/%s" % (name, rel), "credential"))
+
+    for project, ev in visited:
+        items, kept = plan_store_runs(project, uid=uid, budget=budget)
+        keep.extend(kept)
+        for item in items:
+            facts = ev.runs.get(item.unit)
+            if facts is None or (facts.profile is None):
+                keep.append(Kept(item.display, "unattributable"))
+                continue
+            if facts.profile != profile:
+                continue
+            remove.append(item)
+            ref = ev.referenced.get(item.unit)
+            if ref is not None:
+                referenced.append({"run_id": item.unit, "task": ref[0], "project": project,
+                                   "referenced_by": ref[1]})
+    return Plan(profile, "purge", tuple(remove), tuple(keep), tuple(referenced),
+                tuple(not_visited), budget.truncated)

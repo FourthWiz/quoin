@@ -134,14 +134,26 @@ ISOLATION_NETWORK_CODES: Dict[str, str] = {
 
 # Codes a later stage introduces.
 PLANNED_CODES: Dict[str, str] = {}
-for _code in ("profile-selection-unverified", "profile-unknown", "purge-run-active"):
+for _code in ("profile-selection-unverified", "profile-unknown"):
     PLANNED_CODES[_code] = "workflow-validation"
 del _code
 
 
+RETENTION_CODES: Dict[str, str] = {
+    code: "workflow-validation"
+    for code in (
+        "purge-run-active",
+        "purge-inside-launch",
+        "purge-profile-invalid",
+        "purge-profile-unsafe",
+        "purge-confirm-required",
+    )
+}
+
+
 def _build() -> Mapping[str, str]:
     merged: Dict[str, str] = {}
-    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, ISOLATION_NETWORK_CODES, PLANNED_CODES):
+    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, ISOLATION_NETWORK_CODES, RETENTION_CODES, PLANNED_CODES):
         for code, category in group.items():
             if code in merged and merged[code] != category:
                 raise AssertionError("launch code registered under two categories")
