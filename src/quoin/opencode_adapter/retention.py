@@ -7,13 +7,16 @@ owned by another user are never entered or removed.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import stat
+import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from pathlib import Path
+from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple
 
-from . import runstore
+from . import boundaries, handoff, install, jsonio, paths, profile_dirs, runstore
 
 CLASSES = (
     "runs", "tests", "workflow", "snapshots", "records", "cache", "tmp", "logs",
@@ -393,3 +396,258 @@ def execute(plan: Plan, *, uid: int) -> Result:
         else:
             failed.append((item.display, reason))
     return Result(tuple(removed), tuple(failed), ())
+
+
+# ---------------------------------------------------------------------------
+# evidence index
+# ---------------------------------------------------------------------------
+
+LIVENESS_GRACE_S = 3600.0
+PREPARE_WINDOW_S = 900.0
+FINALIZED_DEPTH = 3
+ACTIVITY_REASONS = ("live-driver", "live-child", "liveness-unknown", "prepare-in-progress")
+EVIDENCE_REASONS = ("missing", "unreadable", "unsafe")
+REF_SOURCES = ("workflow-state", "continuation", "pointer")
+
+_RUN_TOKEN_RE = re.compile(runstore.RUN_ID_RE.pattern.strip("^$"))
+_WORKFLOW_FILE_RE = re.compile(r"^workflow-(.+)\.json$")
+_POINTER_FILE_RE = re.compile(r"^task-(.+)\.json$")
+
+
+@dataclass(frozen=True)
+class RunFacts:
+    profile: Optional[str]
+    active: bool
+    empty_orphan: bool
+
+
+@dataclass(frozen=True)
+class ProjectEvidence:
+    readable: bool
+    reason: Optional[str] = None
+    referenced: Mapping[str, Tuple[str, str]] = field(default_factory=dict)
+    unfinished_tasks: FrozenSet[str] = frozenset()
+    live_lock_tasks: FrozenSet[str] = frozenset()
+    runs: Mapping[str, RunFacts] = field(default_factory=dict)
+
+    @classmethod
+    def load(cls, project_root, *, uid: int, attribute: bool, table, budget: Budget,
+             now: Optional[float] = None) -> "ProjectEvidence":
+        return _load_evidence(project_root, uid, attribute, table, budget,
+                              time.time() if now is None else now)
+
+
+def _age(now: float, mtime: float) -> float:
+    return max(0.0, now - mtime)
+
+
+def _positive(value) -> Optional[float]:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value) if value > 0 else None
+
+
+def stale_window(record: Mapping) -> float:
+    """How long a run whose liveness cannot be decided stays protected: its own
+    deadline (at least the default) plus a grace hour."""
+    from . import driver  # noqa: PLC0415 - driver imports this module
+
+    request = record.get("request")
+    limits = record.get("limits")
+    values = [driver.DEFAULT_TIMEOUT_S]
+    if isinstance(request, Mapping):
+        values.append(_positive(request.get("timeout_s")))
+    if isinstance(limits, Mapping):
+        values.append(_positive(limits.get("max_run_seconds")))
+    return max(v for v in values if v is not None) + LIVENESS_GRACE_S
+
+
+def run_activity(record: Mapping, table, now: float, newest_mtime: float) -> Optional[str]:
+    """`None` when the run is terminal, else the closed reason it must be kept.
+    Uses the process table taken once per invocation and never signals."""
+    state = record.get("state")
+    age = _age(now, newest_mtime)
+    if state == "prepared":
+        if record.get("refusal") is not None:
+            return None
+        return "prepare-in-progress" if age <= PREPARE_WINDOW_S else None
+    if state != "running":
+        return None
+    if runstore.live_identities(record, table):
+        return "live-child"
+    attempts = record.get("attempts") or []
+    last = attempts[-1] if attempts else None
+    if (isinstance(last, Mapping) and last.get("driver_pid") is not None
+            and last.get("driver_start") is not None and table is not None):
+        return None if runstore.orphan_state(record, table) == "driver-lost" else "live-driver"
+    return "liveness-unknown" if age <= stale_window(record) else None
+
+
+def run_active(record: Mapping, table, now: float, newest_mtime: float) -> bool:
+    return run_activity(record, table, now, newest_mtime) is not None
+
+
+def _finalized_dirs(artifacts: str, budget: Budget) -> Dict[str, float]:
+    """Task name -> mtime of a directory of that name directly inside a
+    `finalized` directory, searching a few levels, never following links."""
+    found: Dict[str, float] = {}
+    stack = [(artifacts, 0)]
+    while stack:
+        path, depth = stack.pop()
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            continue
+        for entry in entries:
+            if not budget.take():
+                return found
+            try:
+                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                    continue
+            except OSError:
+                continue
+            if entry.name == "finalized":
+                try:
+                    for child in os.scandir(entry.path):
+                        if child.is_dir(follow_symlinks=False) and not child.is_symlink():
+                            mtime = child.stat(follow_symlinks=False).st_mtime
+                            found[child.name] = max(found.get(child.name, 0.0), mtime)
+                except OSError:
+                    pass
+            elif depth + 1 < FINALIZED_DEPTH and entry.name not in ("memory", "cache"):
+                stack.append((entry.path, depth + 1))
+    return found
+
+
+def _read_text(path, budget: Budget) -> Optional[str]:
+    if not budget.take():
+        return None
+    got = jsonio.read_regular_bytes(path, max_bytes=runstore.MAX_RECORD_BYTES)
+    if got is None:
+        return None
+    return got[0].decode("utf-8", "replace")
+
+
+def _load_evidence(project_root, uid, attribute, table, budget, now) -> ProjectEvidence:
+    try:
+        directory = runstore.inspect_store(project_root)
+    except runstore.RunStoreError:
+        return ProjectEvidence(False, "unsafe")
+    except OSError:
+        return ProjectEvidence(False, "unreadable")
+    if directory is None:
+        return ProjectEvidence(False, "missing")
+    try:
+        names_ = sorted(e.name for e in os.scandir(str(directory)))
+    except OSError:
+        return ProjectEvidence(False, "unreadable")
+
+    state_files: List[Tuple[str, str, str]] = []  # task, source, path
+    for name in names_:
+        for regex, source in ((_WORKFLOW_FILE_RE, "workflow-state"), (_POINTER_FILE_RE, "pointer")):
+            match = regex.match(name)
+            if match and runstore.TASK_RE.match(match.group(1)):
+                state_files.append((match.group(1), source, os.path.join(str(directory), name)))
+    try:
+        cdir = handoff.continuation_dir(project_root)
+    except handoff.HandoffRefused:
+        return ProjectEvidence(False, "unsafe")
+    try:
+        cnames = sorted(n for n in os.listdir(str(cdir)) if n.endswith(".json"))
+    except FileNotFoundError:
+        cnames = []
+    except OSError:
+        return ProjectEvidence(False, "unreadable")
+    for name in cnames:
+        task = name[:-len(".json")]
+        if runstore.TASK_RE.match(task):
+            state_files.append((task, "continuation", os.path.join(str(cdir), name)))
+
+    refs: List[Tuple[str, str, str]] = []  # run id, task, source
+    task_mtime: Dict[str, float] = {}
+    for task, source, path in state_files:
+        text = _read_text(path, budget)
+        if text is None:
+            return ProjectEvidence(False, "unreadable")
+        try:
+            task_mtime[task] = max(task_mtime.get(task, 0.0), os.lstat(path).st_mtime)
+        except OSError:
+            return ProjectEvidence(False, "unreadable")
+        for run_id in sorted(set(_RUN_TOKEN_RE.findall(text))):
+            refs.append((run_id, task, source))
+
+    artifacts = os.path.join(str(project_root), ".workflow_artifacts")
+    finalized = _finalized_dirs(artifacts, budget)
+    unfinished = set()
+    for task, mtime in task_mtime.items():
+        done = (not os.path.lexists(os.path.join(artifacts, task))
+                and task in finalized and mtime <= finalized[task])
+        if not done:
+            unfinished.add(task)
+
+    referenced: Dict[str, Tuple[str, str]] = {}
+    for run_id, task, source in refs:
+        if run_id not in referenced or (task in unfinished and referenced[run_id][0] not in unfinished):
+            referenced[run_id] = (task, source)
+
+    try:
+        locks = boundaries.live_task_locks(project_root, strict=True)
+    except OSError:
+        return ProjectEvidence(False, "unreadable")
+
+    runs: Dict[str, RunFacts] = {}
+    if attribute:
+        runs = _attribute_runs(str(directory), uid, table, budget, now)
+    return ProjectEvidence(True, None, referenced, frozenset(unfinished), frozenset(locks), runs)
+
+
+def _attribute_runs(directory: str, uid: int, table, budget: Budget, now: float) -> Dict[str, RunFacts]:
+    try:
+        entries = sorted(os.scandir(directory), key=lambda e: e.name)
+    except OSError:
+        return {}
+    by_run: Dict[str, Dict[str, os.stat_result]] = {}
+    for entry in entries:
+        match = SIDECAR_RE.match(entry.name)
+        if not match:
+            continue
+        try:
+            by_run.setdefault(match.group(1), {})[match.group(2)] = os.lstat(entry.path)
+        except OSError:
+            continue
+    out: Dict[str, RunFacts] = {}
+    for run_id in sorted(by_run):
+        parts = by_run[run_id]
+        empty = ("run.json" not in parts and "checkpoint.json" not in parts
+                 and "jsonl" in parts and parts["jsonl"].st_size == 0)
+        profile: Optional[str] = None
+        active = False
+        if "run.json" in parts:
+            if not budget.take():
+                break
+            record = _read_record(os.path.join(directory, run_id + ".run.json"))
+            if record is not None:
+                request = record.get("request")
+                value = request.get("profile") if isinstance(request, Mapping) else None
+                if isinstance(value, str) and install.PROFILE_RE.fullmatch(value):
+                    profile = value
+                    newest = max(i.st_mtime for i in parts.values())
+                    active = run_active(record, table, now, newest)
+        out[run_id] = RunFacts(profile, active, empty)
+    return out
+
+
+def _read_record(path: str) -> Optional[Mapping]:
+    got = jsonio.read_regular_bytes(path, max_bytes=runstore.MAX_RECORD_BYTES)
+    if got is None:
+        return None
+    try:
+        data = json.loads(got[0].decode("utf-8"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def project_keys(dirs) -> Dict[str, str]:
+    """Project key -> realpath for every project the profile's index lists."""
+    return {paths.project_key(Path(p)): p for p in profile_dirs.read_index(dirs)}

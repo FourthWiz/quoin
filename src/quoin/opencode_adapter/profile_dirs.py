@@ -20,7 +20,7 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 from . import jsonio, paths
 from .install import PROFILE_RE
@@ -323,6 +323,24 @@ def prepare(adapter_root_path, profile: str, classification: str) -> ProfileDirs
     return dirs
 
 
+def read_index(dirs: ProfileDirs) -> List[str]:
+    """The project realpaths listed in the profile's index; an absent index is
+    empty and a malformed one refuses with `index-unwritable`."""
+    if not os.path.lexists(str(dirs.index)):
+        return []
+    got = jsonio.read_regular_bytes(dirs.index, max_bytes=MAX_INDEX_BYTES)
+    data = _parse_object(got[0]) if got is not None else None
+    if (
+        data is None
+        or set(data) != {"index_format", "projects"}
+        or data["index_format"] != INDEX_FORMAT
+        or not isinstance(data["projects"], list)
+        or not all(isinstance(p, str) for p in data["projects"])
+    ):
+        raise ProfileDirUnsafe("index-unwritable")
+    return list(data["projects"])
+
+
 def record_project(dirs: ProfileDirs, project_root) -> None:
     lock_path = dirs.root / (INDEX_NAME + ".lock")
     flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
@@ -333,19 +351,7 @@ def record_project(dirs: ProfileDirs, project_root) -> None:
     try:
         with os.fdopen(fd, "r+b") as lock:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            projects = []
-            if os.path.lexists(str(dirs.index)):
-                got = jsonio.read_regular_bytes(dirs.index, max_bytes=MAX_INDEX_BYTES)
-                data = _parse_object(got[0]) if got is not None else None
-                if (
-                    data is None
-                    or set(data) != {"index_format", "projects"}
-                    or data["index_format"] != INDEX_FORMAT
-                    or not isinstance(data["projects"], list)
-                    or not all(isinstance(p, str) for p in data["projects"])
-                ):
-                    raise ProfileDirUnsafe("index-unwritable")
-                projects = list(data["projects"])
+            projects = read_index(dirs)
             entry = os.path.realpath(str(project_root))
             if entry in projects:
                 return
