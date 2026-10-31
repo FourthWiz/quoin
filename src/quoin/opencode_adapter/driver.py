@@ -1043,7 +1043,8 @@ class OpenCodeDriver:
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(request.profile, cfg_env, base_redact)
-        verdict = self._launch_policy(evaluation, root, run_cwd)
+        # Only a workspace the caller supplied is checked beside the project root.
+        verdict = self._launch_policy(evaluation, root, workspace)
         dirs = self._claim_profile_dirs(evaluation)
         try:
             profile_dirs.record_project(dirs, root)
@@ -1784,7 +1785,7 @@ class OpenCodeDriver:
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(profile, cfg_env, base_redact)
-        verdict = self._launch_policy(evaluation, root, root)
+        verdict = self._launch_policy(evaluation, root, None)
         dirs = self._claim_profile_dirs(evaluation)
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
         config_path = compiled_dir / compiler.NATIVE_FILE
