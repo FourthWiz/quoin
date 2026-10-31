@@ -152,7 +152,13 @@ def build(
     policy: Mapping[str, Any],
     stripped_other_count: int = 0,
     redactor: Optional[Callable[[Any], str]] = None,
+    isolation: Optional[Mapping[str, Any]] = None,
+    network: Optional[Mapping[str, Any]] = None,
+    enforcement: Optional[Sequence[Mapping[str, Any]]] = None,
 ) -> Dict[str, Any]:
+    """The record. When all of `isolation`, `network` and `enforcement` are
+    given the three sections are filled and none is pending; otherwise each
+    missing section keeps its pending placeholder."""
     inv = inventory
     entries = entries_for(inv, verdicts, redactor)
     sources = _sources_for(inv)
@@ -172,10 +178,16 @@ def build(
             "stripped_other_count": int(stripped_other_count),
         },
         "dirs": dict(dirs_display),
-        "isolation": {"status": "pending", "evidence": [], "missing": []},
-        "network": {"status": "pending", "destinations": [], "identity_check": policy.get("network.identity_check")},
-        "enforcement": [],
-        "pending_sections": list(PENDING_SECTIONS),
+        "isolation": dict(isolation) if isolation is not None else {"status": "pending", "evidence": [], "missing": []},
+        "network": (
+            dict(network) if network is not None
+            else {"status": "pending", "destinations": [], "identity_check": policy.get("network.identity_check")}
+        ),
+        "enforcement": [dict(r) for r in enforcement] if enforcement is not None else [],
+        "pending_sections": [
+            name for name, given in (("enforcement", enforcement), ("isolation", isolation), ("network", network))
+            if given is None
+        ],
         "credentials": [dict(c) for c in credentials],
         "static_key_in_use": any(c.get("kind") == "static-api-key" for c in credentials),
         "logging": {"content": policy.get("logging.content")},
@@ -213,8 +225,13 @@ _RETENTION_FIELDS = profile_policy.RETENTION_FIELDS
 def widened(recorded: Mapping[str, Any], requested: Mapping[str, Any]) -> List[str]:
     """Field names where the requested policy is wider than the recorded one.
     A field missing from the recorded policy cannot be compared and is
-    skipped. Network and isolation sections join the comparison in a later
-    stage, when they stop being pending."""
+    skipped. Only the policy section is compared: every network policy field
+    (allowed hosts, allowed providers, the identity check, address ranges,
+    pins) is in it, destination approval is a pure function of those, and the
+    isolation verdict is an observation of the machine re-evaluated at every
+    launch, where a managed requirement already refuses when it is
+    unverified. Comparing the observed sections would add instability and no
+    protection."""
     out: List[str] = []
     for field_name, order in _ENUMS.items():
         if field_name not in recorded or field_name not in requested:

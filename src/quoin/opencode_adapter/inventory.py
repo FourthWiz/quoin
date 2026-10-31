@@ -15,6 +15,7 @@ import re
 import sqlite3
 import stat
 import time
+from urllib.parse import urlsplit
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
@@ -386,6 +387,29 @@ def value_digest(value: Any) -> Optional[str]:
         return None
 
 
+class _Hidden(str):
+    """A fact value that never shows in a repr, so a host named by a URL in a
+    configuration cannot reach a log through the entry's fact mapping."""
+
+    def __repr__(self) -> str:
+        return "'<hidden>'"
+
+
+def url_facts(url: Any) -> Dict[str, Any]:
+    """The scheme and host of a URL, for the network census. The host is the
+    parser's own reading, unnormalised: the census validates and normalises it
+    before any comparison, and a URL the parser cannot read gives None."""
+    if not isinstance(url, str):
+        return {"url_host": None, "url_scheme": None}
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname
+        scheme = parts.scheme.lower() or None
+    except ValueError:
+        return {"url_host": None, "url_scheme": None}
+    return {"url_host": _Hidden(host) if host else None, "url_scheme": scheme}
+
+
 def name_digest(text: str) -> str:
     return "h-" + sha256_hex(text.encode("utf-8", "surrogatepass"))[:32]
 
@@ -714,7 +738,10 @@ def _document_entries(builder: _Builder, index: int, doc: Mapping[str, Any], com
         elif key == "disabled_providers":
             builder.entry(index, "disabled-providers", key, key, value)
         elif key == "mcp":
-            named(mcp_kind, key, value, lambda sub: {"enabled": sub.get("enabled") if isinstance(sub, dict) else None})
+            named(mcp_kind, key, value, lambda sub: {
+                "enabled": sub.get("enabled") if isinstance(sub, dict) else None,
+                **url_facts(sub.get("url") if isinstance(sub, dict) else None),
+            })
         elif key == "lsp":
             named("lsp", key, value)
         elif key == "formatter":
@@ -733,13 +760,13 @@ def _document_entries(builder: _Builder, index: int, doc: Mapping[str, Any], com
         elif key == "instructions":
             for item in value if isinstance(value, list) else [value]:
                 url = isinstance(item, str) and item.startswith(("http://", "https://"))
-                builder.entry(index, "instruction", key, name_digest(str(item)), item, facts={"url": url})
+                builder.entry(index, "instruction", key, name_digest(str(item)), item, facts={"url": url, **(url_facts(item) if url else {})})
         elif key == "skills":
             if isinstance(value, dict):
                 for sub_key, items in value.items():
                     for item in items if isinstance(items, list) else [items]:
                         url = sub_key == "urls" or (isinstance(item, str) and item.startswith(("http://", "https://")))
-                        builder.entry(index, "skill", "skills.%s" % sub_key, name_digest(str(item)), item, facts={"url": bool(url)})
+                        builder.entry(index, "skill", "skills.%s" % sub_key, name_digest(str(item)), item, facts={"url": bool(url), **(url_facts(item) if url else {})})
             else:
                 builder.entry(index, "skill", key, key, value)
         elif key in COMPILED_KEYS:

@@ -308,6 +308,15 @@ def test_registry_is_read_only_and_groups_do_not_conflict():
         assert not set(launch_codes.INVENTORY_CODES) & set(other)
 
 
+def test_isolation_network_codes_match_the_refusal_texts():
+    from quoin.opencode_adapter import isolation, netpolicy
+
+    expected = set(netpolicy.REFUSAL_TEXT) | set(isolation.REFUSAL_TEXT)
+    assert set(launch_codes.ISOLATION_NETWORK_CODES) == expected
+    for code in expected:
+        assert launch_codes.category(code) == "policy-denial"
+
+
 def test_inventory_codes_match_the_refusal_text_table():
     from quoin.opencode_adapter import inventory
 
@@ -317,8 +326,8 @@ def test_inventory_codes_match_the_refusal_text_table():
 
 
 def test_planned_codes_are_the_declared_set():
-    # 35 planned codes before the inventory group; 21 of them moved into INVENTORY_CODES.
-    assert len(launch_codes.PLANNED_CODES) == 14
+    # The isolation and network codes moved into their own group; later-stage codes stay planned.
+    assert len(launch_codes.PLANNED_CODES) == 3
     for moved in ("env-path-outside-profile", "profile-dir-unsafe", "profile-switch-in-process", "profile-stamp-mismatch"):
         assert moved not in launch_codes.PLANNED_CODES
     assert launch_codes.category("allowed-hosts-unset") == "policy-denial"

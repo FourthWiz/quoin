@@ -2,7 +2,7 @@
 
 A launch refusal is a `PrepareRefused` or `LaunchRefused` carrying a stable
 machine code and one of the shared problem categories. This module lists every
-code the adapter can raise today, plus the codes that later isolation work will
+code the adapter can raise today, plus the codes that later work will
 introduce, so a code is declared here before any raise site uses it. Tests scan
 the launch modules and fail on a code that is missing from the registry or
 registered under a different category.
@@ -113,22 +113,27 @@ INVENTORY_CODES: Dict[str, str] = {
     "inventory-unknown-key": "policy-denial",
 }
 
-# Codes the profile-isolation work introduces in later stages.
+# Refusals from the managed-isolation, repository and network checks. All are
+# policy denials: the profile or the trusted managed policy did not approve.
+ISOLATION_NETWORK_CODES: Dict[str, str] = {
+    code: "policy-denial"
+    for code in (
+        "repository-not-approved",
+        "approved-repositories-unset",
+        "isolation-required-unverified",
+        "allowed-hosts-unset",
+        "destination-not-approved",
+        "web-tools-denied",
+        "mcp-remote-denied",
+        "proxy-route-not-approved",
+        "destination-identity-mismatch",
+        "destination-unverifiable",
+        "destination-plaintext",
+    )
+}
+
+# Codes a later stage introduces.
 PLANNED_CODES: Dict[str, str] = {}
-for _code in (
-    "repository-not-approved",
-    "approved-repositories-unset",
-    "isolation-required-unverified",
-    "allowed-hosts-unset",
-    "destination-not-approved",
-    "web-tools-denied",
-    "mcp-remote-denied",
-    "proxy-route-not-approved",
-    "destination-identity-mismatch",
-    "destination-unverifiable",
-    "destination-plaintext",
-):
-    PLANNED_CODES[_code] = "policy-denial"
 for _code in ("profile-selection-unverified", "profile-unknown", "purge-run-active"):
     PLANNED_CODES[_code] = "workflow-validation"
 del _code
@@ -136,7 +141,7 @@ del _code
 
 def _build() -> Mapping[str, str]:
     merged: Dict[str, str] = {}
-    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, PLANNED_CODES):
+    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, ISOLATION_NETWORK_CODES, PLANNED_CODES):
         for code, category in group.items():
             if code in merged and merged[code] != category:
                 raise AssertionError("launch code registered under two categories")

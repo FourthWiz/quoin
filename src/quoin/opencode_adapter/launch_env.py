@@ -572,7 +572,9 @@ def _managed_defaults(env: Mapping[str, str]) -> Tuple[Path, List[Path]]:
 class Refusal:
     """The first reason a launch would be refused. ``layer`` is a closed
     token; ``token`` is the entry name passed through the token rule (empty
-    for a legacy refusal, whose ``message`` already carries its own text)."""
+    for a legacy refusal, whose ``message`` already carries its own text).
+    ``launch-policy`` is the layer of a refusal from the isolation, repository
+    and destination checks; its ``token`` is the refusal detail."""
 
     code: str
     category: str
@@ -586,6 +588,10 @@ class LayerCheck:
     inventory: inventory.Inventory
     verdicts: List[inventory.Verdict]
     refusal: Optional[Refusal]
+    # The first refusal the launch-policy checks (evaluation, repositories,
+    # isolation, destination approval) would raise offline; the inventory
+    # refusal stays in `refusal`.
+    launch_refusal: Optional[Refusal] = None
 
 
 def _inventory_category(code: str) -> str:

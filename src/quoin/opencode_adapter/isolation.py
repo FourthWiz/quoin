@@ -84,6 +84,12 @@ EVIDENCE_TOKENS = (
     "opposite-profile-absent",
 )
 
+REFUSAL_TEXT: Dict[str, str] = {
+    "isolation-required-unverified": "the profile requires managed isolation, which no root-owned declaration attests",
+    "repository-not-approved": "the project is not under a repository root the profile approves",
+    "approved-repositories-unset": "managed isolation needs the profile to approve the repository roots it may work in",
+}
+
 _CONTAINER_CGROUP_MARKERS = ("docker", "kubepods", "containerd", "libpod", "lxc")
 _VM_VENDORS = (
     "QEMU", "KVM", "VMware", "VirtualBox", "innotek", "Xen", "Amazon EC2",
