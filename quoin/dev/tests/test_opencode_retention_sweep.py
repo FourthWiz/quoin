@@ -618,3 +618,15 @@ def test_start_sweep_is_best_effort(tmp_path, monkeypatch):
     monkeypatch.setattr(rt, "sweep", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
     cli._opencode_start_sweep(launch, tmp_path)
     cli._opencode_start_sweep(SimpleNamespace(retention=None, profile_root=None, profile="w"), tmp_path)
+
+
+def test_task_folder_still_present_is_unfinished_even_with_a_finalized_copy(tmp_path):
+    root = tmp_path / "p"
+    (root / ".workflow_artifacts").mkdir(parents=True)
+    store = _store(root)
+    _touch(store / "workflow-t1.json", age=40 * DAY, text="{}")
+    (root / ".workflow_artifacts" / "t1").mkdir(parents=True)
+    _dir_aged(root / ".workflow_artifacts" / "finalized" / "t1", 1 * DAY)
+    assert "t1" in _load(root).unfinished_tasks
+    (root / ".workflow_artifacts" / "t1").rmdir()
+    assert "t1" not in _load(root).unfinished_tasks

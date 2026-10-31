@@ -169,3 +169,20 @@ def test_store_runs_use_strict_sidecar_names(tmp_path):
     result = rt.execute(_plan(store, items), uid=UID)
     assert not result.failed
     assert sorted(p.name for p in store.iterdir()) == ["notes.txt", "workflow-task.json"]
+
+
+def test_executor_rechecks_owner_at_removal(tmp_path, monkeypatch):
+    victim = tmp_path / "root" / "unit"
+    victim.parent.mkdir(parents=True)
+    victim.write_text("x")
+    uid = os.getuid()
+    item = rt.Item("cache", "unit", "unit", ("unit",), "file", 1, 1, 0.0, (), str(tmp_path / "root"))
+    real_open_root = rt._open_root
+
+    def trusting_root(path, _uid):
+        return real_open_root(path, uid)
+
+    monkeypatch.setattr(rt, "_open_root", trusting_root)
+    result = rt.execute(rt.Plan("p", "sweep", (item,)), uid=uid + 1)
+    assert result.failed and result.failed[0][1] == "foreign-owner"
+    assert victim.exists()
