@@ -1751,10 +1751,14 @@ class OpenCodeDriver:
             return {"status": "skipped", "reason": "already-swept"}
         self._swept.add(evaluation.profile)
         try:
+            policy = retention.RetentionPolicy.from_effective(evaluation.effective)
+            if policy.empty:
+                return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
+                        "failed": 0, "truncated": False}
             return retention.sweep(
                 dirs=dirs, project_root=root, now=self._clock(), uid=os.getuid(),
-                policy=retention.RetentionPolicy.from_effective(evaluation.effective),
-                profile=evaluation.profile, table=self._proc.snapshot(), current_run=run_id,
+                policy=policy, profile=evaluation.profile, table=self._proc.snapshot(),
+                current_run=run_id,
             )
         except Exception:  # noqa: BLE001 - the sweep must not refuse a launch
             return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,

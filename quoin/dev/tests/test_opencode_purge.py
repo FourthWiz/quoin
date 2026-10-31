@@ -323,6 +323,102 @@ def test_purge_refuses_inside_launch_and_with_lock(tmp_path, monkeypatch, capsys
     assert _tree_hash(adapter) == before
 
 
+# ---- completeness ------------------------------------------------------------------
+
+
+def test_a_large_cache_does_not_keep_data(tmp_path, monkeypatch):
+    adapter, dirs, project, store = _world(tmp_path)
+    for i in range(80):
+        _touch(dirs.cache / "opencode" / "node_modules" / ("f%d" % i))
+    original = rt.Budget
+    monkeypatch.setattr(rt, "Budget", lambda limit=25: original(limit))
+    plan = _plan(adapter)
+    assert {"cache", "data", "state"} <= _removed(plan)
+    assert plan.truncated
+    assert not rt.purge_incomplete(plan)
+    rt.execute(plan, uid=UID)
+    assert not (dirs.cache / "opencode").exists()
+    assert not (dirs.data / "opencode" / "opencode.db").exists()
+    assert (dirs.data / "opencode" / "auth.json").exists()
+
+
+def _alien_lstat(monkeypatch, name):
+    real = os.lstat
+
+    def fake(path, *args, **kwargs):
+        info = real(path, *args, **kwargs)
+        if path == name:
+            fields = list(info)
+            fields[4] = info.st_uid + 1
+            return os.stat_result(fields)
+        return info
+
+    monkeypatch.setattr(os, "lstat", fake)
+
+
+def test_a_foreign_entry_inside_data_keeps_only_that_entry(tmp_path, monkeypatch):
+    adapter, dirs, project, store = _world(tmp_path)
+    _touch(dirs.data / "opencode" / "alien", text="theirs")
+    _alien_lstat(monkeypatch, "alien")
+    plan = _plan(adapter)
+    data = next(i for i in plan.remove if i.display == "data")
+    assert "opencode/alien" in data.exclude
+    assert ("data/opencode/alien", "foreign-owner") in {(k.display, k.reason) for k in plan.keep}
+    assert rt.purge_incomplete(plan)
+    result = rt.execute(plan, uid=UID)
+    assert not result.failed
+    assert (dirs.data / "opencode" / "alien").exists()
+    assert not (dirs.data / "opencode" / "opencode.db").exists()
+
+
+@pytest.mark.skipif(UID == 0, reason="root reads every directory")
+def test_an_unreadable_directory_inside_data_is_reported_as_unreadable(tmp_path):
+    adapter, dirs, project, store = _world(tmp_path)
+    locked = dirs.data / "opencode" / "locked"
+    _touch(locked / "x")
+    os.chmod(str(locked), 0)
+    try:
+        plan = _plan(adapter)
+        assert ("data/opencode/locked", "unreadable") in {(k.display, k.reason) for k in plan.keep}
+        assert "data" in _removed(plan) and rt.purge_incomplete(plan)
+        assert not rt.execute(plan, uid=UID).failed
+        assert not (dirs.data / "opencode" / "opencode.db").exists()
+    finally:
+        os.chmod(str(locked), 0o700)
+
+
+def test_purge_exits_nonzero_when_something_was_left_behind(tmp_path, monkeypatch, capsys):
+    adapter, dirs, project, store = _cli_world(tmp_path, monkeypatch)
+    _touch(dirs.data / "opencode" / "alien", text="theirs")
+    _alien_lstat(monkeypatch, "alien")
+    code, out, _ = _run_cli(capsys, "--yes", "--json")
+    body = json.loads(out)
+    assert code == 1 and body["outcome"] == "partial"
+    assert {"path": "PROFILE/data/opencode/alien", "reason": "foreign-owner"} in body["keep"]
+    assert not (dirs.data / "opencode" / "opencode.db").exists()
+
+
+def test_purge_text_escapes_control_characters_in_names(tmp_path, monkeypatch, capsys):
+    adapter, dirs, project, store = _cli_world(tmp_path, monkeypatch)
+    _touch(dirs.root / "bad\x1b[2Jname")
+    code, out, _ = _run_cli(capsys, "--dry-run")
+    assert "\x1b" not in out and "bad\\x1b[2Jname" in out
+
+
+def test_a_swapped_root_is_not_followed_at_removal(tmp_path):
+    adapter, dirs, project, store = _world(tmp_path)
+    _touch(dirs.exports / "e")
+    plan = _plan(adapter)
+    moved = tmp_path / "moved"
+    os.rename(str(dirs.root), str(moved))
+    dirs.root.mkdir(mode=0o700)
+    (dirs.root / "exports").mkdir()
+    _touch(dirs.root / "exports" / "e")
+    result = rt.execute(plan, uid=UID)
+    assert (dirs.root / "exports" / "e").exists()
+    assert result.failed and all(reason == "changed-since-plan" for _, reason in result.failed)
+
+
 # ---- documentation -----------------------------------------------------------------
 
 def test_readme_documents_logging_retention_and_purge():

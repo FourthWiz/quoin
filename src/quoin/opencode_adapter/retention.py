@@ -27,11 +27,14 @@ KINDS = ("file", "tree", "run")
 KEPT_REASONS = (
     "credential", "profile-stamp", "project-index", "unattributable", "foreign-owner",
     "evidence-referenced", "task-unfinished", "run-active", "live-lock", "store-unavailable",
-    "walk-truncated", "not-aged", "never-swept", "profile-in-use",
+    "walk-truncated", "not-aged", "never-swept", "profile-in-use", "unreadable",
 )
+# Reasons that mean a purge left behind something it should have deleted.
+PURGE_INCOMPLETE_REASONS = ("foreign-owner", "unreadable", "walk-truncated")
 FAILED_REASONS = ("changed-since-plan", "foreign-owner", "os-error")
 
 WALK_BUDGET = 50000
+MAX_WALK_DEPTH = 64
 SIDECAR_RE = re.compile(r"^(oc-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8})\.(jsonl|run\.json|checkpoint\.json)$")
 SIDECAR_SUFFIXES = (".jsonl", ".run.json", ".checkpoint.json")
 
@@ -54,6 +57,8 @@ class Item:
     newest_mtime: float = 0.0
     exclude: Tuple[str, ...] = ()
     root: str = ""
+    root_id: Tuple[int, int] = ()
+    skipped: Tuple[Tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -81,18 +86,29 @@ class Result:
 
 
 class Budget:
-    """Entry budget shared by every walk of one plan."""
+    """Entry budget for a group of walks; `None` means unbounded."""
 
-    def __init__(self, limit: int = WALK_BUDGET) -> None:
+    def __init__(self, limit: Optional[int] = WALK_BUDGET) -> None:
         self.left = limit
         self.truncated = False
 
     def take(self) -> bool:
+        if self.left is None:
+            return True
         if self.left <= 0:
             self.truncated = True
             return False
         self.left -= 1
         return True
+
+
+def _root_id(fd: int) -> Tuple[int, int]:
+    info = os.fstat(fd)
+    return (info.st_dev, info.st_ino)
+
+
+def _is_foreign(exc: BaseException) -> bool:
+    return isinstance(exc, PermissionError) and str(exc) == "foreign-owner"
 
 
 def _open_root(path, uid: int) -> int:
@@ -137,40 +153,52 @@ class _Measure:
     files: int = 0
     bytes: int = 0
     newest: float = 0.0
-    foreign: bool = False
+    foreign: List[Tuple[str, ...]] = field(default_factory=list)
+    unreadable: List[Tuple[str, ...]] = field(default_factory=list)
+    young: bool = False
 
 
 def _measure(dir_fd: int, rel: Tuple[str, ...], uid: int, budget: Budget,
-             excl: Set[Tuple[str, ...]], out: _Measure) -> None:
-    """Count files, bytes and the newest mtime over files and directories."""
+             excl: Set[Tuple[str, ...]], out: _Measure, young_after: Optional[float] = None) -> None:
+    """Count files, bytes and the newest mtime over files and directories. With
+    `young_after`, stop as soon as one entry is at least that new: the unit is
+    then known not to be aged and its totals are partial."""
+    if len(rel) >= MAX_WALK_DEPTH:
+        budget.truncated = True
+        return
     try:
         entries = sorted(os.scandir(dir_fd), key=lambda e: e.name)
     except OSError:
-        out.foreign = True
+        out.unreadable.append(rel)
         return
     for entry in entries:
+        if out.young:
+            return
         if not budget.take():
             return
         try:
             info = os.lstat(entry.name, dir_fd=dir_fd)
         except OSError:
             continue
-        if info.st_uid != uid:
-            out.foreign = True
-            continue
         child = rel + (entry.name,)
+        if info.st_uid != uid:
+            out.foreign.append(child)
+            continue
         exact, ancestor = _is_excluded_or_ancestor(child, excl)
         if exact:
             continue
         out.newest = max(out.newest, info.st_mtime)
+        if young_after is not None and out.newest >= young_after:
+            out.young = True
+            return
         if stat.S_ISDIR(info.st_mode):
             try:
                 sub = _open_child(dir_fd, entry.name, uid)
-            except OSError:
-                out.foreign = True
+            except OSError as exc:
+                (out.foreign if _is_foreign(exc) else out.unreadable).append(child)
                 continue
             try:
-                _measure(sub, child, uid, budget, excl, out)
+                _measure(sub, child, uid, budget, excl, out, young_after)
             finally:
                 os.close(sub)
         else:
@@ -194,14 +222,21 @@ def _chain_fd(root_fd: int, parts: Sequence[str], uid: int) -> int:
 
 def unit_item(root_fd: int, root: str, parent_parts: Tuple[str, ...], name: str, *, cls: str,
               uid: int, budget: Budget, display: Optional[str] = None,
-              exclude: Sequence[str] = ()) -> Tuple[Optional[Item], Optional[Kept]]:
+              exclude: Sequence[str] = (), young_after: Optional[float] = None,
+              skip_foreign: bool = False,
+              measure_only: bool = False) -> Tuple[Optional[Item], Optional[Kept]]:
     """Describe one entry under `root/parent_parts` as a removable unit, or say why
-    it is kept. Links, FIFOs, sockets and devices are file units and never opened."""
+    it is kept. Links, FIFOs, sockets and devices are file units and never opened.
+
+    A foreign-owned or unreadable entry inside a tree keeps the whole unit, unless
+    `skip_foreign` is set: then it is excluded from removal and listed on the item.
+    With `measure_only`, running out of budget only makes the totals a lower bound."""
     shown = display or "/".join(parent_parts + (name,))
     try:
         parent = _chain_fd(root_fd, parent_parts, uid)
     except OSError:
         return None, Kept(shown, "foreign-owner")
+    rid = _root_id(root_fd)
     try:
         try:
             info = os.lstat(name, dir_fd=parent)
@@ -211,30 +246,39 @@ def unit_item(root_fd: int, root: str, parent_parts: Tuple[str, ...], name: str,
             return None, Kept(shown, "foreign-owner")
         if not stat.S_ISDIR(info.st_mode):
             return Item(cls, name, shown, parent_parts + (name,), "file", 1, info.st_size,
-                        info.st_mtime, (), root), None
+                        info.st_mtime, (), root, rid), None
         excl = _excl_parts(exclude)
         measure = _Measure(newest=info.st_mtime)
+        if young_after is not None and info.st_mtime >= young_after:
+            measure.young = True
         try:
             sub = _open_child(parent, name, uid)
-        except OSError:
-            return None, Kept(shown, "foreign-owner")
+        except OSError as exc:
+            return None, Kept(shown, "foreign-owner" if _is_foreign(exc) else "unreadable")
         try:
-            _measure(sub, (), uid, budget, excl, measure)
+            if not measure.young:
+                _measure(sub, (), uid, budget, excl, measure, young_after)
         finally:
             os.close(sub)
-        if measure.foreign:
-            return None, Kept(shown, "foreign-owner")
-        if budget.truncated:
+        skipped: List[Tuple[str, str]] = []
+        extra: List[str] = []
+        for rels, reason in ((measure.foreign, "foreign-owner"), (measure.unreadable, "unreadable")):
+            for rel in rels:
+                if not skip_foreign or not rel:
+                    return None, Kept(shown, reason)
+                extra.append("/".join(rel))
+                skipped.append(("/".join(parent_parts + (name,) + rel), reason))
+        if budget.truncated and not measure_only:
             return None, Kept(shown, "walk-truncated")
         return Item(cls, name, shown, parent_parts + (name,), "tree", measure.files, measure.bytes,
-                    measure.newest, tuple(exclude), root), None
+                    measure.newest, tuple(exclude) + tuple(extra), root, rid, tuple(skipped)), None
     finally:
         os.close(parent)
 
 
 def plan_entries(root: str, parent_parts: Tuple[str, ...], *, cls: str, uid: int, budget: Budget,
                  excludes: Optional[Dict[str, Sequence[str]]] = None,
-                 skip: Sequence[str] = ()) -> Tuple[List[Item], List[Kept]]:
+                 skip: Sequence[str] = (), young_after: Optional[float] = None) -> Tuple[List[Item], List[Kept]]:
     """Units for every immediate child of `root/parent_parts`, sorted by name.
     Children after the budget runs out are kept as `walk-truncated`."""
     root_fd = _open_root(root, uid)
@@ -257,7 +301,7 @@ def plan_entries(root: str, parent_parts: Tuple[str, ...], *, cls: str, uid: int
                 kept.append(Kept(shown, "walk-truncated"))
                 continue
             item, why = unit_item(root_fd, root, parent_parts, name, cls=cls, uid=uid, budget=budget,
-                                  exclude=(excludes or {}).get(name, ()))
+                                  exclude=(excludes or {}).get(name, ()), young_after=young_after)
             if item is not None:
                 items.append(item)
             if why is not None:
@@ -296,7 +340,7 @@ def plan_store_runs(project_root, *, uid: int, budget: Budget) -> Tuple[List[Ite
                 kept.append(Kept(run_id, "foreign-owner"))
                 continue
             items.append(Item("runs", run_id, run_id, (), "run", len(infos),
-                              sum(i.st_size for i in infos), max(i.st_mtime for i in infos), (), root))
+                              sum(i.st_size for i in infos), max(i.st_mtime for i in infos), (), root, _root_id(root_fd)))
         if budget.truncated:
             kept.append(Kept("run-store", "walk-truncated"))
         return items, kept
@@ -341,6 +385,8 @@ def _execute_item(item: Item, uid: int) -> Optional[str]:
     except RootUnsafe:
         return "changed-since-plan"
     try:
+        if item.root_id and _root_id(root_fd) != item.root_id:
+            return "changed-since-plan"
         if item.kind == "run":
             for suffix in SIDECAR_SUFFIXES:
                 name = item.unit + suffix
@@ -455,12 +501,9 @@ def stale_window(record: Mapping) -> float:
     from . import driver  # noqa: PLC0415 - driver imports this module
 
     request = record.get("request")
-    limits = record.get("limits")
     values = [driver.DEFAULT_TIMEOUT_S]
     if isinstance(request, Mapping):
         values.append(_positive(request.get("timeout_s")))
-    if isinstance(limits, Mapping):
-        values.append(_positive(limits.get("max_run_seconds")))
     return max(v for v in values if v is not None) + LIVENESS_GRACE_S
 
 
@@ -489,6 +532,12 @@ def run_active(record: Mapping, table, now: float, newest_mtime: float) -> bool:
     return run_activity(record, table, now, newest_mtime) is not None
 
 
+def _moved_time(info: os.stat_result) -> float:
+    """When a directory arrived where it is: a rename keeps its mtime but updates
+    its ctime."""
+    return max(info.st_mtime, info.st_ctime)
+
+
 def _finalized_dirs(artifacts: str, budget: Budget) -> Dict[str, float]:
     """Task name -> mtime of a directory of that name directly inside a
     `finalized` directory, searching a few levels, never following links."""
@@ -512,8 +561,8 @@ def _finalized_dirs(artifacts: str, budget: Budget) -> Dict[str, float]:
                 try:
                     for child in os.scandir(entry.path):
                         if child.is_dir(follow_symlinks=False) and not child.is_symlink():
-                            mtime = child.stat(follow_symlinks=False).st_mtime
-                            found[child.name] = max(found.get(child.name, 0.0), mtime)
+                            moved = _moved_time(child.stat(follow_symlinks=False))
+                            found[child.name] = max(found.get(child.name, 0.0), moved)
                 except OSError:
                     pass
             elif depth + 1 < FINALIZED_DEPTH and entry.name not in ("memory", "cache"):
@@ -737,8 +786,12 @@ def _tmp_files(root: str, uid: int, budget: Budget) -> Tuple[List[Item], List[Ke
         root_fd = _open_root(root, uid)
     except RootUnsafe:
         return items, kept
+    rid = _root_id(root_fd)
 
     def walk(fd: int, parts: Tuple[str, ...], dir_mtime: float) -> None:
+        if len(parts) > MAX_WALK_DEPTH:
+            kept.append(Kept("/".join(parts), "walk-truncated"))
+            return
         try:
             entries = sorted(os.scandir(fd), key=lambda e: e.name)
         except OSError:
@@ -767,7 +820,7 @@ def _tmp_files(root: str, uid: int, budget: Budget) -> Tuple[List[Item], List[Ke
                     os.close(sub)
             else:
                 items.append(Item("tmp", entry.name, shown, parts + (entry.name,), "file", 1,
-                                  info.st_size, max(info.st_mtime, dir_mtime), (), root))
+                                  info.st_size, max(info.st_mtime, dir_mtime), (), root, rid))
 
     try:
         top = os.fstat(root_fd).st_mtime
@@ -784,19 +837,25 @@ def _tmp_files(root: str, uid: int, budget: Budget) -> Tuple[List[Item], List[Ke
     return items, kept
 
 
-def _prune_empty_dirs(root: str, uid: int, cutoff_days: int, now: float) -> None:
+def _prune_empty_dirs(root: str, uid: int, cutoff_days: int, now: float,
+                      budget: Optional[Budget] = None) -> None:
     """Remove emptied, aged directories below `tmp/`, deepest first."""
+    budget = budget or Budget()
     try:
         root_fd = _open_root(root, uid)
     except RootUnsafe:
         return
 
-    def prune(fd: int) -> None:
+    def prune(fd: int, depth: int = 0) -> None:
+        if depth >= MAX_WALK_DEPTH:
+            return
         try:
             names = sorted(e.name for e in os.scandir(fd))
         except OSError:
             return
         for name in names:
+            if not budget.take():
+                return
             try:
                 info = os.lstat(name, dir_fd=fd)
                 if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
@@ -805,7 +864,7 @@ def _prune_empty_dirs(root: str, uid: int, cutoff_days: int, now: float) -> None
             except OSError:
                 continue
             try:
-                prune(sub)
+                prune(sub, depth + 1)
             finally:
                 os.close(sub)
             try:
@@ -836,9 +895,17 @@ def _stores(dirs, project_root) -> Tuple[str, Dict[str, str]]:
 
 
 def _profile_in_use(mapping: Mapping[str, str], current_key: str, profile: str, uid: int, table,
-                    budget: Budget, now: float, current_run: Optional[str]) -> bool:
+                    now: float, current_run: Optional[str],
+                    current_evidence: Optional[ProjectEvidence]) -> bool:
+    """Whether another run of `profile` may be active in any indexed project. The
+    current project's evidence is reused; the rest are read with their own budget."""
+    budget = Budget()
     for key in sorted(mapping):
-        ev = ProjectEvidence.load(mapping[key], uid=uid, attribute=True, table=table, budget=budget, now=now)
+        if key == current_key and current_evidence is not None and current_evidence.readable:
+            ev = current_evidence
+        else:
+            ev = ProjectEvidence.load(mapping[key], uid=uid, attribute=True, table=table,
+                                      budget=budget, now=now)
         if not ev.readable:
             if ev.reason == "missing":
                 continue
@@ -861,7 +928,18 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
     keep: List[Kept] = []
     if policy.empty:
         return Plan(profile, "sweep")
-    budget = Budget()
+    # Each class of storage walks under its own budget so one large tree cannot
+    # keep the others from ever being reached.
+    budgets: List[Budget] = []
+
+    def fresh() -> Budget:
+        budgets.append(Budget())
+        return budgets[-1]
+
+    def young(days: Optional[int]) -> Optional[float]:
+        return None if days is None else now - days * DAY_S
+
+    evidence_budget = fresh()
     current_key, mapping = _stores(dirs, project_root)
 
     evidence: Dict[str, ProjectEvidence] = {}
@@ -871,7 +949,8 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
             return None
         if key not in evidence:
             evidence[key] = ProjectEvidence.load(
-                mapping[key], uid=uid, attribute=(key == current_key), table=table, budget=budget, now=now)
+                mapping[key], uid=uid, attribute=(key == current_key), table=table,
+                budget=evidence_budget, now=now)
         return evidence[key]
 
     def days_for(kind: str, key: Optional[str]) -> Optional[int]:
@@ -882,7 +961,7 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
     cur = ev_for(current_key)
     runs_days = days_for("runs_days", current_key)
     if runs_days is not None and cur is not None and cur.readable:
-        items, kept = plan_store_runs(mapping[current_key], uid=uid, budget=budget)
+        items, kept = plan_store_runs(mapping[current_key], uid=uid, budget=fresh())
         keep.extend(kept)
         for item in items:
             facts = cur.runs.get(item.unit)
@@ -914,7 +993,8 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
                 keep.append(Kept(shown, "store-unavailable"))
                 continue
             days = days_for("runs_days", key)
-            items, kept = plan_entries(root, (cls, key), cls=cls, uid=uid, budget=budget)
+            items, kept = plan_entries(root, (cls, key), cls=cls, uid=uid, budget=fresh(),
+                                       young_after=young(days))
             keep.extend(kept)
             for item in items:
                 if cls == "snapshots":
@@ -927,34 +1007,37 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
                 _decide([[item]], days, now, remove, keep)
 
     # records
-    items, kept = plan_entries(root, ("records",), cls="records", uid=uid, budget=budget)
+    records_days = days_for("runs_days", None)
+    items, kept = plan_entries(root, ("records",), cls="records", uid=uid, budget=fresh(),
+                               young_after=young(records_days))
     keep.extend(kept)
-    _decide([[i] for i in items if _START_RECORD_RE.match(i.rel_parts[-1])],
-            days_for("runs_days", None), now, remove, keep)
+    _decide([[i] for i in items if _START_RECORD_RE.match(i.rel_parts[-1])], records_days, now, remove, keep)
 
     # cache and tmp
     cache_days = days_for("cache_days", None)
     if cache_days is not None:
-        if _profile_in_use(mapping, current_key, profile, uid, table, budget, now, current_run):
+        if _profile_in_use(mapping, current_key, profile, uid, table, now, current_run,
+                           ev_for(current_key)):
             keep.append(Kept("cache", "profile-in-use"))
             keep.append(Kept("tmp", "profile-in-use"))
         else:
-            top, kept = plan_entries(root, ("cache",), cls="cache", uid=uid, budget=budget,
-                                     skip=("opencode", "npm"))
+            top, kept = plan_entries(root, ("cache",), cls="cache", uid=uid, budget=fresh(),
+                                     skip=("opencode", "npm"), young_after=young(cache_days))
             keep.extend(kept)
             units = _group_manifest(top)
             for name in ("opencode", "npm"):
-                sub, kept = plan_entries(root, ("cache", name), cls="cache", uid=uid, budget=budget)
+                sub, kept = plan_entries(root, ("cache", name), cls="cache", uid=uid, budget=fresh(),
+                                         young_after=young(cache_days))
                 keep.extend(kept)
                 units.extend(_group_manifest(sub))
             _decide(units, cache_days, now, remove, keep)
-            tfiles, kept = _tmp_files(root, uid, budget)
+            tfiles, kept = _tmp_files(root, uid, fresh())
             keep.extend(kept)
             _decide([[i] for i in tfiles], cache_days, now, remove, keep)
 
     # logs and crash files
     log_parts = ("data", "opencode", "log")
-    logs, kept = plan_entries(root, log_parts, cls="logs", uid=uid, budget=budget)
+    logs, kept = plan_entries(root, log_parts, cls="logs", uid=uid, budget=fresh())
     keep.extend(kept)
     crash_units, log_units = [], []
     for item in logs:
@@ -962,18 +1045,20 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
             continue
         if fnmatch.fnmatchcase(item.rel_parts[-1], "heap-*.heapsnapshot"):
             crash_units.append([Item("crash", item.unit, item.display, item.rel_parts, item.kind,
-                                     item.files, item.bytes, item.newest_mtime, item.exclude, item.root)])
+                                     item.files, item.bytes, item.newest_mtime, item.exclude, item.root, item.root_id)])
         else:
             log_units.append([item])
     _decide(crash_units, days_for("crash_days", None), now, remove, keep)
     _decide(log_units, days_for("logs_days", None), now, remove, keep)
 
     # exports
-    items, kept = plan_entries(root, ("exports",), cls="exports", uid=uid, budget=budget)
+    exports_days = days_for("exports_days", None)
+    items, kept = plan_entries(root, ("exports",), cls="exports", uid=uid, budget=fresh(),
+                               young_after=young(exports_days))
     keep.extend(kept)
-    _decide([[i] for i in items], days_for("exports_days", None), now, remove, keep)
+    _decide([[i] for i in items], exports_days, now, remove, keep)
 
-    return Plan(profile, "sweep", tuple(remove), tuple(keep), (), (), budget.truncated)
+    return Plan(profile, "sweep", tuple(remove), tuple(keep), (), (), any(b.truncated for b in budgets))
 
 
 def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
@@ -988,7 +1073,7 @@ def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
         result = execute(plan, uid=uid)
         tmp_days = _days(policy.wide.get("cache_days"))
         if tmp_days is not None and any(i.cls == "tmp" for i in result.removed):
-            _prune_empty_dirs(str(dirs.root), uid, tmp_days, now)
+            _prune_empty_dirs(str(dirs.root), uid, tmp_days, now, Budget())
         removed: Dict[str, int] = {}
         for item in result.removed:
             removed[item.cls] = removed.get(item.cls, 0) + 1
@@ -1072,13 +1157,15 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
         if real not in stores:
             stores.append(real)
 
-    budget = Budget()
+    budgets: List[Budget] = []
     not_visited: List[Dict[str, str]] = []
     visited: List[Tuple[str, ProjectEvidence]] = []
     blockers: List[Blocker] = []
     for project in stores:
+        budget = Budget()
         ev = ProjectEvidence.load(project, uid=uid, attribute=True, table=table, budget=budget, now=now)
         if budget.truncated:
+            budgets.append(budget)
             not_visited.append({"project": project, "reason": "walk-truncated"})
             continue
         if not ev.readable:
@@ -1111,14 +1198,20 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
             keep.append(Kept(name, KEPT_TOP_LEVEL[name]))
             continue
         excludes = CREDENTIAL_EXCLUDES.get(name, ())
+        # Deleting must not depend on how much there is to measure: the totals are
+        # a lower bound when the walk budget runs out, and the unit is removed anyway.
+        unit_budget = Budget()
+        budgets.append(unit_budget)
         root_fd = _open_root(root, uid)
         try:
-            item, why = unit_item(root_fd, root, (), name, cls=_TOP_CLASS.get(name, "compiled" if re.fullmatch(r"[0-9a-f]{16}", name) else "other"),
-                                  uid=uid, budget=budget, exclude=excludes)
+            cls = _TOP_CLASS.get(name, "compiled" if re.fullmatch(r"[0-9a-f]{16}", name) else "other")
+            item, why = unit_item(root_fd, root, (), name, cls=cls, uid=uid, budget=unit_budget,
+                                  exclude=excludes, skip_foreign=True, measure_only=True)
         finally:
             os.close(root_fd)
         if item is not None:
             remove.append(item)
+            keep.extend(Kept(shown, reason) for shown, reason in item.skipped)
         if why is not None:
             keep.append(why)
         for rel in excludes:
@@ -1126,7 +1219,13 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
                 keep.append(Kept("%s/%s" % (name, rel), "credential"))
 
     for project, ev in visited:
-        items, kept = plan_store_runs(project, uid=uid, budget=budget)
+        try:
+            items, kept = plan_store_runs(project, uid=uid, budget=Budget(None))
+        except (RootUnsafe, runstore.RunStoreError, OSError) as exc:
+            not_visited.append({"project": project,
+                                "reason": "unsafe" if isinstance(exc, (RootUnsafe, runstore.RunStoreError))
+                                else "unreadable"})
+            continue
         keep.extend(kept)
         for item in items:
             facts = ev.runs.get(item.unit)
@@ -1141,4 +1240,9 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
                 referenced.append({"run_id": item.unit, "task": ref[0], "project": project,
                                    "referenced_by": ref[1]})
     return Plan(profile, "purge", tuple(remove), tuple(keep), tuple(referenced),
-                tuple(not_visited), budget.truncated)
+                tuple(not_visited), any(b.truncated for b in budgets))
+
+
+def purge_incomplete(plan: Plan) -> bool:
+    """Whether the plan leaves behind anything a purge is meant to delete."""
+    return any(k.reason in PURGE_INCOMPLETE_REASONS for k in plan.keep)

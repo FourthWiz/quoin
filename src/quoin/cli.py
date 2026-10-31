@@ -2446,6 +2446,13 @@ def _purge_report(plan, outcome: str, dry_run: bool, failed=(), extra=None) -> d
     return report
 
 
+def _printable(text: str) -> str:
+    """Entry names come from the filesystem; escape anything that could move the
+    cursor or rewrite earlier output in a terminal."""
+    return "".join(c if c.isprintable() else "\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)
+                   for c in text)
+
+
 def _print_purge_text(report: dict) -> None:
     print("quoin: opencode purge %s: %s" % (report["profile"], report["outcome"]))
     blocks = (
@@ -2462,7 +2469,7 @@ def _print_purge_text(report: dict) -> None:
         if lines:
             print(title + ":")
             for line in lines:
-                print("  " + line)
+                print("  " + _printable(line))
     print("total: %d item(s), %d file(s), %d byte(s)%s" % (
         len(report["remove"]), sum(r["files"] for r in report["remove"]),
         sum(r["bytes"] for r in report["remove"]), "; walk truncated" if report["truncated"] else ""))
@@ -2521,14 +2528,16 @@ def _cmd_opencode_purge(args: argparse.Namespace) -> int:
         if not as_json:
             _print_purge_text(_purge_report(plan, "planned", False))
         return show_refusal(exc, plan)
+    incomplete = retention.purge_incomplete(plan)
     if not plan.remove:
-        emit(_purge_report(plan, "nothing-to-do", False))
-        return 0
+        emit(_purge_report(plan, "partial" if incomplete else "nothing-to-do", False))
+        return 1 if incomplete else 0
     result = retention.execute(plan, uid=os.getuid())
     done = retention.Plan(plan.profile, "purge", result.removed, plan.keep, plan.referenced_runs,
                           plan.stores_not_visited, plan.truncated)
-    emit(_purge_report(done, "partial" if result.failed else "purged", False, failed=result.failed))
-    return 1 if result.failed else 0
+    partial = bool(result.failed) or incomplete
+    emit(_purge_report(done, "partial" if partial else "purged", False, failed=result.failed))
+    return 1 if partial else 0
 
 
 def _opencode_start_sweep(launch, project_root) -> None:
@@ -2538,7 +2547,7 @@ def _opencode_start_sweep(launch, project_root) -> None:
 
         from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
 
-        if launch.retention is None or launch.profile_root is None:
+        if launch.retention is None or launch.profile_root is None or launch.retention.empty:
             return
         retention.sweep(
             dirs=profile_dirs.ProfileDirs.at(launch.profile_root), project_root=project_root,

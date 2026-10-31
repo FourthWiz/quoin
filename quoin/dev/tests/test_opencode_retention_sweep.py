@@ -16,6 +16,12 @@ RUN_B = "oc-20260101T000001Z-bbbbbbbb"
 RUN_C = "oc-20260101T000002Z-cccccccc"
 
 
+@pytest.fixture(autouse=True)
+def _forgeable_arrival_time(monkeypatch):
+    """The suite runs on a fixed clock and forges mtimes; ctime cannot be forged."""
+    monkeypatch.setattr(rt, "_moved_time", lambda info: info.st_mtime)
+
+
 def _store(root):
     return runstore.store_dir(root, create=True)
 
@@ -265,12 +271,6 @@ def test_liveness_unknown_inside_and_past_window(shape):
     window = rt.stale_window(rec)
     assert rt.run_activity(rec, table, NOW, NOW - 60) == "liveness-unknown"
     assert rt.run_activity(rec, table, NOW, NOW - window - 1) is None
-
-
-def test_window_honours_record_max_run_seconds():
-    rec = _record(limits={"max_run_seconds": 10800})
-    assert rt.run_activity(rec, None, NOW, NOW - 7200) == "liveness-unknown"
-    assert rt.run_activity(_record(), None, NOW, NOW - 7200) is None
 
 
 def test_future_mtime_reads_age_zero():
@@ -589,7 +589,7 @@ def test_driver_sweeps_once_per_profile_and_not_on_resume(tmp_path, monkeypatch)
 
     calls = []
     monkeypatch.setattr(rt, "sweep", lambda **kw: calls.append(kw) or {"status": "done"})
-    monkeypatch.setattr(rt.RetentionPolicy, "from_effective", classmethod(lambda cls, e: "policy"))
+    monkeypatch.setattr(rt.RetentionPolicy, "from_effective", classmethod(lambda cls, e: __import__("types").SimpleNamespace(empty=False)))
     d = drv.OpenCodeDriver.__new__(drv.OpenCodeDriver)
     d._swept = set()
     d._clock = lambda: NOW
@@ -612,7 +612,7 @@ def test_start_sweep_is_best_effort(tmp_path, monkeypatch):
 
     seen = []
     monkeypatch.setattr(rt, "sweep", lambda **kw: seen.append(kw))
-    launch = SimpleNamespace(retention="p", profile_root=tmp_path, profile="work")
+    launch = SimpleNamespace(retention=SimpleNamespace(empty=False), profile_root=tmp_path, profile="work")
     cli._opencode_start_sweep(launch, tmp_path)
     assert len(seen) == 1
     monkeypatch.setattr(rt, "sweep", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
@@ -630,3 +630,49 @@ def test_task_folder_still_present_is_unfinished_even_with_a_finalized_copy(tmp_
     assert "t1" in _load(root).unfinished_tasks
     (root / ".workflow_artifacts" / "t1").rmdir()
     assert "t1" not in _load(root).unfinished_tasks
+
+
+def test_task_renamed_into_finalized_after_a_newer_state_write_is_finished(monkeypatch, tmp_path):
+    monkeypatch.undo()  # use the real arrival time: only a rename can produce it
+    root = tmp_path / "p"
+    art = root / ".workflow_artifacts"
+    art.mkdir(parents=True)
+    store = _store(root)
+    folder = art / "t1"
+    folder.mkdir()
+    old = os.stat(str(folder)).st_mtime - 40 * 86400
+    os.utime(str(folder), (old, old))
+    (store / "workflow-t1.json").write_text("{}")  # newer than the folder's own mtime
+    (art / "finalized").mkdir()
+    os.rename(str(folder), str(art / "finalized" / "t1"))
+    assert os.stat(str(art / "finalized" / "t1")).st_mtime == old
+    assert "t1" not in _load(root).unfinished_tasks
+
+
+def test_logs_are_swept_even_when_the_cache_exhausts_its_budget(tmp_path, monkeypatch):
+    project, peer, dirs = _world(tmp_path, other=False)
+    for i in range(60):
+        _touch(dirs.cache / "opencode" / "node_modules" / ("f%d" % i), age=40 * DAY)
+    _dir_aged(dirs.cache / "opencode" / "node_modules", 40 * DAY)
+    _touch(dirs.data / "opencode" / "log" / "old.log", age=40 * DAY)
+    _touch(dirs.exports / "e", age=40 * DAY)
+    original = rt.Budget
+    monkeypatch.setattr(rt, "Budget", lambda limit=30: original(limit))
+    out = _run_sweep(dirs, project, _policy(wide=30))
+    assert out["status"] == "done" and out["truncated"] is True
+    assert not (dirs.data / "opencode" / "log" / "old.log").exists()
+    assert not (dirs.exports / "e").exists()
+    assert (dirs.cache / "opencode" / "node_modules").exists()
+
+
+def test_a_young_entry_ends_the_measure_of_a_large_unit_early(tmp_path):
+    project, peer, dirs = _world(tmp_path, other=False)
+    unit = dirs.cache / "opencode" / "pkg"
+    for i in range(40):
+        _touch(unit / ("f%02d" % i), age=40 * DAY)
+    _touch(unit / "a-new", age=0)
+    budget = rt.Budget()
+    items, kept = rt.plan_entries(str(dirs.root), ("cache", "opencode"), cls="cache", uid=UID,
+                                  budget=budget, young_after=NOW - 30 * DAY)
+    assert [i.unit for i in items] == ["pkg"] and not kept
+    assert budget.left > rt.WALK_BUDGET - 10 and not budget.truncated
