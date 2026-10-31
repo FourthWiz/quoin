@@ -7,6 +7,7 @@ owned by another user are never entered or removed.
 """
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 import re
@@ -16,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple
 
-from . import boundaries, handoff, install, jsonio, paths, profile_dirs, runstore
+from . import boundaries, handoff, install, jsonio, paths, profile_dirs, profile_policy, runstore
 
 CLASSES = (
     "runs", "tests", "workflow", "snapshots", "records", "cache", "tmp", "logs",
@@ -651,3 +652,348 @@ def _read_record(path: str) -> Optional[Mapping]:
 def project_keys(dirs) -> Dict[str, str]:
     """Project key -> realpath for every project the profile's index lists."""
     return {paths.project_key(Path(p)): p for p in profile_dirs.read_index(dirs)}
+
+
+# ---------------------------------------------------------------------------
+# sweep
+# ---------------------------------------------------------------------------
+
+DAY_S = 86400.0
+_START_RECORD_RE = re.compile(r"^start-[0-9a-f]{12}\.json$")
+_MANIFEST_NAMES = ("package.json", "package-lock.json", "bun.lock", "bun.lockb", "yarn.lock", "node_modules")
+
+
+@dataclass(frozen=True)
+class RetentionPolicy:
+    wide: Mapping[str, Optional[int]]
+    project: Mapping[str, Optional[int]]
+
+    @classmethod
+    def from_effective(cls, effective) -> "RetentionPolicy":
+        view = profile_policy.view(effective)
+        return cls(dict(view.retention), dict(view.project_retention))
+
+    @property
+    def empty(self) -> bool:
+        return all(v is None for v in list(self.wide.values()) + list(self.project.values()))
+
+
+def _days(value) -> Optional[int]:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return None
+    return value
+
+
+def _aged(now: float, newest: float, days: Optional[int]) -> bool:
+    return days is not None and _age(now, newest) > days * DAY_S
+
+
+def _names(root: str, parts: Tuple[str, ...], uid: int) -> List[str]:
+    """Sorted entry names of `root/parts`, empty when it is absent or unsafe."""
+    try:
+        root_fd = _open_root(root, uid)
+    except RootUnsafe:
+        return []
+    try:
+        try:
+            fd = _chain_fd(root_fd, parts, uid)
+        except OSError:
+            return []
+        try:
+            return sorted(e.name for e in os.scandir(fd))
+        except OSError:
+            return []
+        finally:
+            os.close(fd)
+    finally:
+        os.close(root_fd)
+
+
+def _group_manifest(items: List[Item]) -> List[List[Item]]:
+    """Manifest siblings form one unit; every other item stands alone."""
+    group = [i for i in items if i.rel_parts[-1] in _MANIFEST_NAMES]
+    rest = [[i] for i in items if i.rel_parts[-1] not in _MANIFEST_NAMES]
+    return ([group] if group else []) + rest
+
+
+def _decide(units: List[List[Item]], days: Optional[int], now: float,
+            remove: List[Item], keep: List[Kept]) -> None:
+    for unit in units:
+        newest = max(i.newest_mtime for i in unit)
+        if _aged(now, newest, days):
+            remove.extend(unit)
+        else:
+            keep.extend(Kept(i.display, "not-aged") for i in unit)
+
+
+def _tmp_files(root: str, uid: int, budget: Budget) -> Tuple[List[Item], List[Kept]]:
+    """Every file under `tmp/` as a unit aged by the newer of itself and its directory."""
+    items: List[Item] = []
+    kept: List[Kept] = []
+    try:
+        root_fd = _open_root(root, uid)
+    except RootUnsafe:
+        return items, kept
+
+    def walk(fd: int, parts: Tuple[str, ...], dir_mtime: float) -> None:
+        try:
+            entries = sorted(os.scandir(fd), key=lambda e: e.name)
+        except OSError:
+            return
+        for entry in entries:
+            shown = "/".join(parts + (entry.name,))
+            if not budget.take():
+                kept.append(Kept(shown, "walk-truncated"))
+                return
+            try:
+                info = os.lstat(entry.name, dir_fd=fd)
+            except OSError:
+                continue
+            if info.st_uid != uid:
+                kept.append(Kept(shown, "foreign-owner"))
+                continue
+            if stat.S_ISDIR(info.st_mode):
+                try:
+                    sub = _open_child(fd, entry.name, uid)
+                except OSError:
+                    kept.append(Kept(shown, "foreign-owner"))
+                    continue
+                try:
+                    walk(sub, parts + (entry.name,), info.st_mtime)
+                finally:
+                    os.close(sub)
+            else:
+                items.append(Item("tmp", entry.name, shown, parts + (entry.name,), "file", 1,
+                                  info.st_size, max(info.st_mtime, dir_mtime), (), root))
+
+    try:
+        top = os.fstat(root_fd).st_mtime
+        try:
+            fd = _chain_fd(root_fd, ("tmp",), uid)
+        except OSError:
+            return items, kept
+        try:
+            walk(fd, ("tmp",), top)
+        finally:
+            os.close(fd)
+    finally:
+        os.close(root_fd)
+    return items, kept
+
+
+def _prune_empty_dirs(root: str, uid: int, cutoff_days: int, now: float) -> None:
+    """Remove emptied, aged directories below `tmp/`, deepest first."""
+    try:
+        root_fd = _open_root(root, uid)
+    except RootUnsafe:
+        return
+
+    def prune(fd: int) -> None:
+        try:
+            names = sorted(e.name for e in os.scandir(fd))
+        except OSError:
+            return
+        for name in names:
+            try:
+                info = os.lstat(name, dir_fd=fd)
+                if not stat.S_ISDIR(info.st_mode) or info.st_uid != uid:
+                    continue
+                sub = _open_child(fd, name, uid)
+            except OSError:
+                continue
+            try:
+                prune(sub)
+            finally:
+                os.close(sub)
+            try:
+                if _aged(now, os.lstat(name, dir_fd=fd).st_mtime, cutoff_days):
+                    os.rmdir(name, dir_fd=fd)
+            except OSError:
+                pass
+
+    try:
+        fd = _chain_fd(root_fd, ("tmp",), uid)
+    except OSError:
+        os.close(root_fd)
+        return
+    try:
+        prune(fd)
+    finally:
+        os.close(fd)
+        os.close(root_fd)
+
+
+def _stores(dirs, project_root) -> Tuple[str, Dict[str, str]]:
+    """(current key, key -> project realpath) for the current project and the index."""
+    current = os.path.realpath(str(project_root))
+    mapping = project_keys(dirs)
+    key = paths.project_key(Path(current))
+    mapping.setdefault(key, current)
+    return key, mapping
+
+
+def _profile_in_use(mapping: Mapping[str, str], current_key: str, profile: str, uid: int, table,
+                    budget: Budget, now: float, current_run: Optional[str]) -> bool:
+    for key in sorted(mapping):
+        ev = ProjectEvidence.load(mapping[key], uid=uid, attribute=True, table=table, budget=budget, now=now)
+        if not ev.readable:
+            if ev.reason == "missing":
+                continue
+            return True
+        for run_id, facts in ev.runs.items():
+            if facts.profile == profile and facts.active and not (key == current_key and run_id == current_run):
+                return True
+        if budget.truncated:
+            return True
+    return budget.truncated
+
+
+def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
+               profile: Optional[str] = None, table=None,
+               current_run: Optional[str] = None) -> Plan:
+    """What the at-launch sweep would remove under `policy`, and what it keeps."""
+    profile = profile or Path(str(dirs.root)).name
+    root = str(dirs.root)
+    remove: List[Item] = []
+    keep: List[Kept] = []
+    if policy.empty:
+        return Plan(profile, "sweep")
+    budget = Budget()
+    current_key, mapping = _stores(dirs, project_root)
+
+    evidence: Dict[str, ProjectEvidence] = {}
+
+    def ev_for(key: str) -> Optional[ProjectEvidence]:
+        if key not in mapping:
+            return None
+        if key not in evidence:
+            evidence[key] = ProjectEvidence.load(
+                mapping[key], uid=uid, attribute=(key == current_key), table=table, budget=budget, now=now)
+        return evidence[key]
+
+    def days_for(kind: str, key: Optional[str]) -> Optional[int]:
+        scope = policy.project if key == current_key else policy.wide
+        return _days(scope.get(kind))
+
+    # runs of the current project
+    cur = ev_for(current_key)
+    runs_days = days_for("runs_days", current_key)
+    if runs_days is not None and cur is not None and cur.readable:
+        items, kept = plan_store_runs(mapping[current_key], uid=uid, budget=budget)
+        keep.extend(kept)
+        for item in items:
+            facts = cur.runs.get(item.unit)
+            if facts is None or (facts.profile is None and not facts.empty_orphan):
+                keep.append(Kept(item.display, "unattributable"))
+                continue
+            if facts.profile is not None and facts.profile != profile:
+                continue
+            if item.unit == current_run or facts.active:
+                keep.append(Kept(item.display, "run-active"))
+                continue
+            ref = cur.referenced.get(item.unit)
+            if ref is not None and ref[0] in cur.unfinished_tasks:
+                keep.append(Kept(item.display, "evidence-referenced"))
+                continue
+            _decide([[item]], runs_days, now, remove, keep)
+    elif runs_days is not None and cur is not None and not cur.readable and cur.reason != "missing":
+        keep.append(Kept("run-store", "store-unavailable"))
+
+    # tests, workflow, snapshots, keyed by project
+    for cls in ("tests", "workflow", "snapshots"):
+        for key in _names(root, (cls,), uid):
+            shown = "%s/%s" % (cls, key)
+            ev = ev_for(key)
+            if ev is None:
+                keep.append(Kept(shown, "unattributable"))
+                continue
+            if not ev.readable:
+                keep.append(Kept(shown, "store-unavailable"))
+                continue
+            days = days_for("runs_days", key)
+            items, kept = plan_entries(root, (cls, key), cls=cls, uid=uid, budget=budget)
+            keep.extend(kept)
+            for item in items:
+                if cls == "snapshots":
+                    if ev.live_lock_tasks:
+                        keep.append(Kept(item.display, "live-lock"))
+                        continue
+                elif item.rel_parts[-1] in ev.unfinished_tasks:
+                    keep.append(Kept(item.display, "task-unfinished"))
+                    continue
+                _decide([[item]], days, now, remove, keep)
+
+    # records
+    items, kept = plan_entries(root, ("records",), cls="records", uid=uid, budget=budget)
+    keep.extend(kept)
+    _decide([[i] for i in items if _START_RECORD_RE.match(i.rel_parts[-1])],
+            days_for("runs_days", None), now, remove, keep)
+
+    # cache and tmp
+    cache_days = days_for("cache_days", None)
+    if cache_days is not None:
+        if _profile_in_use(mapping, current_key, profile, uid, table, budget, now, current_run):
+            keep.append(Kept("cache", "profile-in-use"))
+            keep.append(Kept("tmp", "profile-in-use"))
+        else:
+            top, kept = plan_entries(root, ("cache",), cls="cache", uid=uid, budget=budget,
+                                     skip=("opencode", "npm"))
+            keep.extend(kept)
+            units = _group_manifest(top)
+            for name in ("opencode", "npm"):
+                sub, kept = plan_entries(root, ("cache", name), cls="cache", uid=uid, budget=budget)
+                keep.extend(kept)
+                units.extend(_group_manifest(sub))
+            _decide(units, cache_days, now, remove, keep)
+            tfiles, kept = _tmp_files(root, uid, budget)
+            keep.extend(kept)
+            _decide([[i] for i in tfiles], cache_days, now, remove, keep)
+
+    # logs and crash files
+    log_parts = ("data", "opencode", "log")
+    logs, kept = plan_entries(root, log_parts, cls="logs", uid=uid, budget=budget)
+    keep.extend(kept)
+    crash_units, log_units = [], []
+    for item in logs:
+        if item.kind != "file":
+            continue
+        if fnmatch.fnmatchcase(item.rel_parts[-1], "heap-*.heapsnapshot"):
+            crash_units.append([Item("crash", item.unit, item.display, item.rel_parts, item.kind,
+                                     item.files, item.bytes, item.newest_mtime, item.exclude, item.root)])
+        else:
+            log_units.append([item])
+    _decide(crash_units, days_for("crash_days", None), now, remove, keep)
+    _decide(log_units, days_for("logs_days", None), now, remove, keep)
+
+    # exports
+    items, kept = plan_entries(root, ("exports",), cls="exports", uid=uid, budget=budget)
+    keep.extend(kept)
+    _decide([[i] for i in items], days_for("exports_days", None), now, remove, keep)
+
+    return Plan(profile, "sweep", tuple(remove), tuple(keep), (), (), budget.truncated)
+
+
+def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
+          profile: Optional[str] = None, table=None, current_run: Optional[str] = None) -> Dict:
+    """Plan and execute the at-launch sweep. Never raises."""
+    try:
+        if policy is None or policy.empty:
+            return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
+                    "failed": 0, "truncated": False}
+        plan = plan_sweep(dirs=dirs, project_root=project_root, policy=policy, now=now, uid=uid,
+                          profile=profile, table=table, current_run=current_run)
+        result = execute(plan, uid=uid)
+        tmp_days = _days(policy.wide.get("cache_days"))
+        if tmp_days is not None and any(i.cls == "tmp" for i in result.removed):
+            _prune_empty_dirs(str(dirs.root), uid, tmp_days, now)
+        removed: Dict[str, int] = {}
+        for item in result.removed:
+            removed[item.cls] = removed.get(item.cls, 0) + 1
+        evidence = sum(1 for k in plan.keep if k.reason in
+                       ("evidence-referenced", "task-unfinished", "run-active", "live-lock", "store-unavailable"))
+        return {"status": "done", "removed": removed, "kept_evidence": evidence,
+                "kept_other": len(plan.keep) - evidence, "failed": len(result.failed),
+                "truncated": plan.truncated}
+    except Exception:  # noqa: BLE001 - a sweep never refuses a launch
+        return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
+                "failed": 0, "truncated": False}

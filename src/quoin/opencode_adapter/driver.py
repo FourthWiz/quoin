@@ -31,7 +31,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optio
 from . import compiler, doctor, effective_record, frontmatter, install, inventory, isolation, jsonio, launch_codes, launch_env
 from . import manifest, names, netpolicy
 from . import paths as adapter_paths
-from . import profile_dirs, profile_policy, proctree, qualification, retry, roles, runstore
+from . import profile_dirs, profile_policy, proctree, qualification, retention, retry, roles, runstore
 from . import events as ev
 from . import secrets as credential_refs
 from .errors import ConfigErrors
@@ -231,6 +231,7 @@ class InteractiveLaunch:
     effective_config: Optional[Mapping[str, Any]] = field(default=None, repr=False, compare=False)
     effective_config_digest: Optional[str] = None
     profile_root: Optional[Path] = field(default=None, repr=False, compare=False)
+    retention: Optional[retention.RetentionPolicy] = field(default=None, repr=False, compare=False)
 
     def write_record(self, profile_root: Optional[Path] = None) -> Path:
         """Write the effective-configuration record under the profile's
@@ -792,6 +793,7 @@ class OpenCodeDriver:
         self._resolver_factory = resolver_factory
         self._proc = proc
         self._clock = clock
+        self._swept: Set[str] = set()
         self._monotonic = monotonic
         self._platform = platform
         self._poll_s = poll_s
@@ -1067,6 +1069,7 @@ class OpenCodeDriver:
                 "invalid-configuration", "profile-dir-unsafe",
                 "the profile storage directory cannot be used privately",
             ) from None
+        sweep_summary = self._retention_sweep(evaluation, dirs, root, state.run_id, resume_run_id)
 
         # 7. compiled pair
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
@@ -1208,6 +1211,7 @@ class OpenCodeDriver:
             # Observations change with every certificate rotation and DNS
             # answer, so they sit beside the record, outside its digest.
             "identity_check": observations,
+            "retention_sweep": sweep_summary,
         }
         record["prepared"] = summary
         record["refusal"] = None
@@ -1737,6 +1741,25 @@ class OpenCodeDriver:
             return ()
         return tuple((str(path), layer) for path, layer in scanned.fetch_dirs)
 
+    def _retention_sweep(self, evaluation: Any, dirs: Any, root: Path, run_id: Optional[str],
+                         resume_run_id: Optional[str]) -> Dict[str, Any]:
+        """Age out old profile storage once per driver per profile, for new runs
+        only. Never refuses a launch."""
+        if resume_run_id is not None:
+            return {"status": "skipped", "reason": "resume"}
+        if evaluation.profile in self._swept:
+            return {"status": "skipped", "reason": "already-swept"}
+        self._swept.add(evaluation.profile)
+        try:
+            return retention.sweep(
+                dirs=dirs, project_root=root, now=self._clock(), uid=os.getuid(),
+                policy=retention.RetentionPolicy.from_effective(evaluation.effective),
+                profile=evaluation.profile, table=self._proc.snapshot(), current_run=run_id,
+            )
+        except Exception:  # noqa: BLE001 - the sweep must not refuse a launch
+            return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
+                    "failed": 0, "truncated": False}
+
     def _claim_profile_dirs(self, evaluation: Any) -> "profile_dirs.ProfileDirs":
         """Latch this process to the evaluated profile and prepare its storage."""
         refuse = self._refusal
@@ -1826,6 +1849,7 @@ class OpenCodeDriver:
             effective_config=effective,
             effective_config_digest=effective["digest"],
             profile_root=dirs.root,
+            retention=retention.RetentionPolicy.from_effective(evaluation.effective),
         )
 
     def _compile_pair(self, evaluation: Any, cfg_env: Mapping[str, str]) -> Tuple[Any, Path]:

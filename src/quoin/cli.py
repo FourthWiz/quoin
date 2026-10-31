@@ -2412,8 +2412,27 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
     except Exception:  # noqa: BLE001 - the launch never proceeds without its record
         print("quoin: opencode start refused: the effective-configuration record could not be written", file=sys.stderr)
         return 3
+    _opencode_start_sweep(launch, project_root)
     env = launch.launch_env.materialize()
     return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
+
+
+def _opencode_start_sweep(launch, project_root) -> None:
+    """Age out old profile storage just before the TUI starts; never blocks the start."""
+    try:
+        import time as _time  # noqa: PLC0415
+
+        from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
+
+        if launch.retention is None or launch.profile_root is None:
+            return
+        retention.sweep(
+            dirs=profile_dirs.ProfileDirs.at(launch.profile_root), project_root=project_root,
+            policy=launch.retention, now=_time.time(), uid=os.getuid(), profile=launch.profile,
+            table=proctree.snapshot(),
+        )
+    except Exception:  # noqa: BLE001 - the sweep never refuses a start
+        return
 
 
 def _make_opencode_driver(project_root):

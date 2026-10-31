@@ -312,3 +312,309 @@ def test_attribute_false_reads_no_records(tmp_path, monkeypatch):
     assert not calls and ev.runs == {}
     _load(tmp_path, attribute=True, table={})
     assert len(calls) == 1
+
+
+# ---- sweep ------------------------------------------------------------------
+
+DAY = 86400.0
+
+
+def _world(tmp_path, other=True):
+    project = tmp_path / "proj"
+    (project / ".workflow_artifacts").mkdir(parents=True)
+    root = tmp_path / "prof"
+    root.mkdir(mode=0o700)
+    dirs = profile_dirs.ProfileDirs.at(root)
+    for sub in ("data", "state", "cache", "tmp"):
+        (root / sub).mkdir(mode=0o700)
+    profile_dirs.record_project(dirs, project)
+    peer = None
+    if other:
+        peer = tmp_path / "peer"
+        (peer / ".workflow_artifacts").mkdir(parents=True)
+        _store(peer)
+        profile_dirs.record_project(dirs, peer)
+    return project, peer, dirs
+
+
+def _policy(wide=30, project=None, **kinds):
+    keys = ("runs_days", "cache_days", "logs_days", "crash_days", "exports_days")
+    w = {k: kinds.get(k, wide) for k in keys}
+    p = dict(w)
+    if project is not None:
+        p["runs_days"] = project
+    return rt.RetentionPolicy(w, p)
+
+
+def _key(path):
+    return paths.project_key(path)
+
+
+def _dir_aged(path, age):
+    path.mkdir(parents=True, exist_ok=True)
+    os.utime(str(path), (NOW - age, NOW - age))
+
+
+def _run_sweep(dirs, project, policy, table=None, current_run=None):
+    return rt.sweep(dirs=dirs, project_root=project, policy=policy, now=NOW, uid=UID,
+                    profile="work", table=table, current_run=current_run)
+
+
+def test_project_scope_applies_to_current_project_only(tmp_path):
+    project, peer, dirs = _world(tmp_path)
+    store = _store(project)
+    _write_run(store, RUN_A, _record("completed"), age=2 * DAY)
+    _touch(dirs.tests / _key(peer) / "t1" / "pin.json", age=2 * DAY)
+    _touch(dirs.snapshots / _key(peer) / "s1" / "f", age=2 * DAY)
+    _touch(dirs.workflow / _key(peer) / "t1" / "w", age=2 * DAY)
+    _touch(dirs.data / "opencode" / "log" / "a.log", age=2 * DAY)
+    for d in (dirs.tests / _key(peer) / "t1", dirs.snapshots / _key(peer) / "s1", dirs.workflow / _key(peer) / "t1"):
+        os.utime(str(d), (NOW - 2 * DAY, NOW - 2 * DAY))
+    out = _run_sweep(dirs, project, _policy(wide=30, project=1))
+    assert out["status"] == "done"
+    assert not (store / (RUN_A + ".run.json")).exists()
+    assert (dirs.tests / _key(peer) / "t1").exists()
+    assert (dirs.snapshots / _key(peer) / "s1").exists()
+    assert (dirs.workflow / _key(peer) / "t1").exists()
+    assert (dirs.data / "opencode" / "log" / "a.log").exists()
+
+
+def test_unfinished_task_keeps_evidence_until_finalized(tmp_path):
+    project, peer, dirs = _world(tmp_path, other=False)
+    store = _store(project)
+    key = _key(project)
+    _write_run(store, RUN_A, _record("completed"), age=40 * DAY)
+    _touch(store / "workflow-t1.json", age=40 * DAY, text=json.dumps({"run": RUN_A}))
+    (project / ".workflow_artifacts" / "t1").mkdir()
+    _touch(dirs.tests / key / "t1" / "pin", age=40 * DAY)
+    _dir_aged(dirs.tests / key / "t1", 40 * DAY)
+    _dir_aged(dirs.tests / key, 40 * DAY)
+    _run_sweep(dirs, project, _policy())
+    assert (dirs.tests / key / "t1").exists()
+    assert (store / (RUN_A + ".run.json")).exists()
+    # finalized move
+    (project / ".workflow_artifacts" / "t1").rmdir()
+    _dir_aged(project / ".workflow_artifacts" / "finalized" / "t1", 1 * DAY)
+    _run_sweep(dirs, project, _policy())
+    assert not (dirs.tests / key / "t1").exists()
+    assert not (store / (RUN_A + ".run.json")).exists()
+
+
+def _attempt_rec(state="running", **attempt):
+    base = {"pid": None, "child_start": None, "driver_pid": None, "driver_start": None}
+    base.update(attempt)
+    return _record(state, attempts=[base] if attempt else [])
+
+
+def test_run_shapes_in_the_sweep(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    store = _store(project)
+    ids = {n: "oc-20260101T0000%02dZ-%08x" % (n, n) for n in range(1, 7)}
+    _write_run(store, ids[1], _record("prepared", refusal={"code": "x"}), age=40 * DAY)
+    _write_run(store, ids[2], _attempt_rec(driver_pid=10, driver_start="100"), age=40 * DAY)
+    _write_run(store, ids[3], _attempt_rec(driver_pid=20, driver_start="100"), age=40 * DAY)
+    _write_run(store, ids[4], _attempt_rec(), age=40 * DAY)
+    _write_run(store, ids[5], _attempt_rec(), age=600)
+    table = _table(_proc(20, "100"))
+    _run_sweep(dirs, project, _policy(), table=table)
+    exists = {n: (store / (i + ".run.json")).exists() for n, i in ids.items() if n < 6}
+    assert exists == {1: False, 2: False, 3: True, 4: False, 5: True}
+    # no table: old undecidable removed, fresh kept
+    _write_run(store, ids[6], _attempt_rec(driver_pid=1, driver_start="1"), age=40 * DAY)
+    _run_sweep(dirs, project, _policy(), table=None)
+    assert not (store / (ids[6] + ".run.json")).exists()
+    assert (store / (ids[5] + ".run.json")).exists()
+
+
+def test_other_profile_and_unattributable_runs_kept(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    store = _store(project)
+    _write_run(store, RUN_A, _record("completed", profile="personal"), age=40 * DAY)
+    _touch(store / (RUN_B + ".jsonl"), age=40 * DAY, text="not empty")
+    _touch(store / (RUN_C + ".jsonl"), age=40 * DAY, text="")
+    _run_sweep(dirs, project, _policy())
+    assert (store / (RUN_A + ".run.json")).exists()
+    assert (store / (RUN_B + ".jsonl")).exists()
+    assert not (store / (RUN_C + ".jsonl")).exists()
+
+
+def test_empty_orphan_fresh_is_kept(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    store = _store(project)
+    _touch(store / (RUN_C + ".jsonl"), age=60, text="")
+    _run_sweep(dirs, project, _policy())
+    assert (store / (RUN_C + ".jsonl")).exists()
+
+
+def test_profile_in_use_skips_cache_and_tmp_but_not_logs(tmp_path):
+    project, peer, dirs = _world(tmp_path)
+    _write_run(_store(peer), RUN_A, _attempt_rec(), age=60)
+    old = 40 * DAY
+    _touch(dirs.cache / "opencode" / "bin" / "tool", age=old)
+    _dir_aged(dirs.cache / "opencode" / "bin", old)
+    _touch(dirs.tmp / "x", age=old)
+    _dir_aged(dirs.tmp, old)
+    _touch(dirs.data / "opencode" / "log" / "a.log", age=old)
+    out = _run_sweep(dirs, project, _policy())
+    assert (dirs.cache / "opencode" / "bin").exists()
+    assert (dirs.tmp / "x").exists()
+    assert not (dirs.data / "opencode" / "log" / "a.log").exists()
+    assert out["removed"] == {"logs": 1}
+    # past the stale window the undecidable record no longer protects the profile
+    _write_run(_store(peer), RUN_A, _attempt_rec(), age=40 * DAY)
+    _run_sweep(dirs, project, _policy())
+    assert not (dirs.cache / "opencode" / "bin").exists()
+    assert not (dirs.tmp / "x").exists()
+
+
+def test_manifest_siblings_are_one_unit(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    base = dirs.cache / "opencode"
+    old = 40 * DAY
+    _touch(base / "package.json", age=1 * DAY)
+    _touch(base / "node_modules" / "m" / "f", age=old)
+    for d in (base / "node_modules" / "m", base / "node_modules"):
+        _dir_aged(d, old)
+    _touch(base / "bin" / "tool", age=old)
+    _dir_aged(base / "bin", old)
+    _dir_aged(base, old)
+    _run_sweep(dirs, project, _policy())
+    assert (base / "package.json").exists() and (base / "node_modules").exists()
+    assert not (base / "bin").exists()
+    os.utime(str(base / "package.json"), (NOW - old, NOW - old))
+    _run_sweep(dirs, project, _policy())
+    assert not (base / "package.json").exists() and not (base / "node_modules").exists()
+
+
+def test_fresh_package_with_old_files_is_kept_whole(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    pkg = dirs.cache / "opencode" / "pkgdir"
+    _touch(pkg / "a.js", age=400 * DAY)
+    _touch(pkg / "sub" / "b.js", age=400 * DAY)
+    _dir_aged(pkg / "sub", 400 * DAY)
+    os.utime(str(pkg), (NOW, NOW))
+    _run_sweep(dirs, project, _policy())
+    assert (pkg / "a.js").exists() and (pkg / "sub" / "b.js").exists()
+
+
+def test_cache_tmp_logs_crash_exports_records_by_own_days(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    log = dirs.data / "opencode" / "log"
+    age = 10 * DAY
+    _touch(log / "heap-1.heapsnapshot", age=age)
+    _touch(log / "app.log", age=age)
+    _touch(dirs.exports / "e1" / "f", age=age)
+    _dir_aged(dirs.exports / "e1", age)
+    _touch(dirs.records / ("start-%s.json" % ("a" * 12)), age=age)
+    _touch(dirs.cache / "other" / "f", age=age)
+    _dir_aged(dirs.cache / "other", age)
+    _touch(dirs.tmp / "sub" / "t", age=age)
+    _dir_aged(dirs.tmp / "sub", age)
+    _dir_aged(dirs.tmp, age)
+    policy = _policy(wide=30, crash_days=5)
+    _run_sweep(dirs, project, policy)
+    assert not (log / "heap-1.heapsnapshot").exists()
+    assert (log / "app.log").exists()
+    assert (dirs.exports / "e1").exists()
+    assert (dirs.cache / "other").exists()
+    assert (dirs.tmp / "sub" / "t").exists()
+    _run_sweep(dirs, project, _policy(wide=5))
+    assert not (log / "app.log").exists()
+    assert not (dirs.exports / "e1").exists()
+    assert not (dirs.cache / "other").exists()
+    assert not (dirs.tmp / "sub" / "t").exists()
+    assert not (dirs.tmp / "sub").exists()
+    assert dirs.tmp.exists()
+    assert not list(dirs.records.iterdir())
+
+
+def test_default_policy_skips_and_database_is_never_swept(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    db = dirs.data / "opencode" / "opencode.db"
+    for suffix in ("", "-wal", "-shm"):
+        _touch(db.with_name(db.name + suffix), age=400 * DAY)
+    _touch(dirs.data / "opencode" / "auth.json", age=400 * DAY)
+    empty = rt.RetentionPolicy({k: None for k in ("runs_days", "cache_days", "logs_days", "crash_days", "exports_days")},
+                               {k: None for k in ("runs_days", "cache_days", "logs_days", "crash_days", "exports_days")})
+    assert _run_sweep(dirs, project, empty)["status"] == "skipped"
+    _run_sweep(dirs, project, _policy(wide=1))
+    for suffix in ("", "-wal", "-shm"):
+        assert db.with_name(db.name + suffix).exists()
+    assert (dirs.data / "opencode" / "auth.json").exists()
+
+
+def test_invalid_days_skip_the_class(tmp_path):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    _touch(dirs.exports / "e1", age=400 * DAY)
+    bad = _policy(exports_days=0)
+    _run_sweep(dirs, project, bad)
+    assert (dirs.exports / "e1").exists()
+
+
+def test_live_lock_keeps_snapshots_and_missing_store_keeps_units(tmp_path):
+    project, peer, dirs = _world(tmp_path)
+    _store(project)
+    key = _key(project)
+    _touch(dirs.snapshots / key / "s1" / "f", age=40 * DAY)
+    _dir_aged(dirs.snapshots / key / "s1", 40 * DAY)
+    memory = project / ".workflow_artifacts" / "memory"
+    _touch(memory / "run-supervisor-t9.pid", text=json.dumps({"pid": os.getpid()}))
+    _run_sweep(dirs, project, _policy())
+    assert (dirs.snapshots / key / "s1").exists()
+    (memory / "run-supervisor-t9.pid").unlink()
+    gone = tmp_path / "gone"
+    (gone / ".workflow_artifacts").mkdir(parents=True)
+    profile_dirs.record_project(dirs, gone)
+    _touch(dirs.tests / _key(gone) / "t1" / "pin", age=40 * DAY)
+    _dir_aged(dirs.tests / _key(gone) / "t1", 40 * DAY)
+    _run_sweep(dirs, project, _policy())
+    assert not (dirs.snapshots / key / "s1").exists()
+    assert (dirs.tests / _key(gone) / "t1").exists()
+
+
+def test_sweep_never_raises(tmp_path, monkeypatch):
+    project, _peer, dirs = _world(tmp_path, other=False)
+
+    def boom(**_):
+        raise RuntimeError("x")
+
+    monkeypatch.setattr(rt, "plan_sweep", boom)
+    assert _run_sweep(dirs, project, _policy())["status"] == "error"
+
+
+def test_driver_sweeps_once_per_profile_and_not_on_resume(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from quoin.opencode_adapter import driver as drv
+
+    calls = []
+    monkeypatch.setattr(rt, "sweep", lambda **kw: calls.append(kw) or {"status": "done"})
+    monkeypatch.setattr(rt.RetentionPolicy, "from_effective", classmethod(lambda cls, e: "policy"))
+    d = drv.OpenCodeDriver.__new__(drv.OpenCodeDriver)
+    d._swept = set()
+    d._clock = lambda: NOW
+    d._proc = SimpleNamespace(snapshot=lambda: None)
+    ev = SimpleNamespace(profile="work", effective=None)
+    assert d._retention_sweep(ev, "dirs", tmp_path, "r1", None) == {"status": "done"}
+    assert d._retention_sweep(ev, "dirs", tmp_path, "r2", None) == {"status": "skipped", "reason": "already-swept"}
+    other = SimpleNamespace(profile="other", effective=None)
+    assert d._retention_sweep(other, "dirs", tmp_path, "r3", "oc-x")["reason"] == "resume"
+    assert len(calls) == 1 and calls[0]["current_run"] == "r1"
+    monkeypatch.setattr(rt, "sweep", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
+    third = SimpleNamespace(profile="third", effective=None)
+    assert d._retention_sweep(third, "dirs", tmp_path, "r4", None)["status"] == "error"
+
+
+def test_start_sweep_is_best_effort(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from quoin import cli
+
+    seen = []
+    monkeypatch.setattr(rt, "sweep", lambda **kw: seen.append(kw))
+    launch = SimpleNamespace(retention="p", profile_root=tmp_path, profile="work")
+    cli._opencode_start_sweep(launch, tmp_path)
+    assert len(seen) == 1
+    monkeypatch.setattr(rt, "sweep", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
+    cli._opencode_start_sweep(launch, tmp_path)
+    cli._opencode_start_sweep(SimpleNamespace(retention=None, profile_root=None, profile="w"), tmp_path)
