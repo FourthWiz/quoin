@@ -156,6 +156,44 @@ Status: deferred
 Decision: binary contract tests stay opt-in and skip with a reason when no pinned executable is present.
 Rationale: installing the pinned release in CI is a distribution choice for the maintainer, tracked with the release and install channel decision.
 
+### Isolation attestation and trust rule
+
+Status: decided
+Decision: managed isolation is attested by one root-owned JSON file at a fixed path beside
+the trusted managed policy. It counts only when the file and every directory above it are
+root-owned and not group or world writable, the invoking user is not root, the declaration
+is current and complete, an independent corroboration agrees with the declared
+environment, and no other profile is visible to this one.
+Rationale: a profile, a project file or an environment variable that could supply the
+declaration could attest itself. Every probe turns an operating-system failure into a
+missing-evidence token, so a launch never crashes inside the check.
+Scope: the declaration describes a setup and does not prove enforcement; wording stays
+"attested". Whether an administrator may trust a docker-group writer of the file is left
+to the deployment.
+
+### Enforcement layers without a launcher-owned proxy
+
+Status: decided
+Decision: Quoin enforces destination approval at configuration and launch time (host
+approval, proxy route, remote MCP hosts, web tools, registry) and a launch-time identity
+check. It provides no launcher proxy and no brokered registry; shell egress, redirects and
+DNS after launch are delegated to the managed boundary and recorded as such.
+Rationale: a proxy that sits between the child and the network would be a second security
+boundary to build and attest. Recording each control with its layer and status keeps the
+record from claiming more than was checked.
+Scope: a control that could not run is recorded as not enforced.
+
+### Launch-time destination identity check
+
+Status: decided
+Decision: the check connects to each provider endpoint, verifies the approved host name
+against the configured CA, optionally pins the leaf certificate, and refuses a mismatch.
+Observations are stored beside the effective-configuration record, not inside its digest.
+Rationale: certificates rotate and DNS answers change, so inside the digest they would make
+every comparison unstable and make the offline preview disagree with the launch.
+Scope: through a proxy the name is checked end to end but address ranges are not; whether
+the child honours the proxy stays unverified.
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.

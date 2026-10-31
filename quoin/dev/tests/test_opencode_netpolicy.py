@@ -394,8 +394,6 @@ def test_refusal_texts_are_closed_and_user_free():
 
 def test_readme_refusal_table_matches_the_registry():
     readme = (helpers.SOURCE_DIR / "adapters" / "opencode" / "README.md").read_text(encoding="utf-8")
-    if "Launch policy refusals" not in readme:
-        pytest.skip("documentation is written in a later step")
-    section = readme.split("Launch policy refusals", 1)[1]
+    section = readme.split("**Launch policy refusals.**", 1)[1].split("**Enforcement table.**", 1)[0]
     rows = set(re.findall(r"^\| `([a-z-]+)` \|", section, flags=re.M))
     assert rows == set(launch_codes.ISOLATION_NETWORK_CODES)

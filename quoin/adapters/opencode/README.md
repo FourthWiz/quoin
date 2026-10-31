@@ -338,6 +338,115 @@ The work profile is not yet supported: no corporate gateway has been
 qualified, and every gateway value in `decisions.md` is still `not set`. The
 personal OpenRouter profile is the only one `import-preview` produces.
 
+### Managed isolation, destinations and repositories
+
+A profile that sets `isolation: managed` (from the profile, the project file, or
+the trusted managed policy) launches only when this machine carries an isolation
+declaration that is attested by a root-owned file. The declaration describes how
+the profile was set up; it does not prove the operating system enforces it, and
+the work profile is still not supported.
+
+**The attestation file.** It lives at one fixed path beside the trusted managed
+policy: `/Library/Application Support/quoin/opencode/isolation-attestation.json` on
+macOS and `/etc/quoin/opencode/isolation-attestation.json` elsewhere. No
+environment variable, flag or project value can move it. The file and every
+directory above it must be owned by root and not writable by group or others, and
+nothing is followed through a symbolic link. The invoking user must not be root.
+The file is a closed JSON object:
+
+| Key | Meaning |
+|---|---|
+| `attestation_format` | `1` |
+| `environment` | `container`, `vm` or `managed-os-user` |
+| `issuer` | free text of at most 256 characters; only a digest is ever recorded |
+| `boundary` | `filesystem`, `secrets` and `process_env` booleans, and `egress`: `firewall`, `proxy` or `none` |
+| `approved_egress_hosts` | optional list of host names the boundary lets through |
+| `not_after` | optional date or timestamp after which the declaration is expired |
+
+The declaration counts only when the filesystem, secrets and process-environment
+boundaries are all declared and egress is `firewall` or `proxy`, it has not
+expired, one independent corroboration agrees with the declared environment (a
+`.dockerenv` or `.containerenv` marker or a container cgroup name; a hypervisor
+vendor name or, on macOS, the hypervisor sysctl; or, on macOS, a root-owned
+managed preferences file for the invoking user), and no other profile is visible
+to this one on the same account. A probe that cannot read something reports it as
+missing evidence, never as an error. Missing evidence tokens:
+`attestation-missing`, `attestation-invalid`, `attestation-not-root-owned`,
+`attestation-chain-writable`, `invoking-user-is-root`, `attestation-expired`,
+`attestation-incomplete`, `corroboration-missing`, `opposite-profile-present`.
+
+**Launch policy refusals.** Every refusal is raised before a process starts, a
+profile directory is created or a credential is resolved, with the category
+`policy-denial` and a detail token:
+
+| Code | When | Detail |
+|---|---|---|
+| `isolation-required-unverified` | effective isolation is managed and the attestation is not verified | the first missing evidence token |
+| `repository-not-approved` | the project root (or a workspace given to the driver) is not under an approved root | `policy-evaluation-failed` when the check itself failed |
+| `approved-repositories-unset` | managed isolation and the profile approves no repository roots | none |
+| `allowed-hosts-unset` | a work profile sets no allowed hosts | none |
+| `destination-not-approved` | a provider, registry or other destination host is not approved | `host-not-allowed`, `host-denied`, `host-unparseable`, `registry-not-approved`, `registry-unknown`, `policy-evaluation-failed` |
+| `web-tools-denied` | web tools are not denied in the compiled configuration, or allowed without approval | `posture-missing`, `not-approved` |
+| `mcp-remote-denied` | a remote MCP server names a host that is not approved | `host-not-allowed`, `host-unparseable` |
+| `proxy-route-not-approved` | the proxy a provider routes through is not an approved host | `host-not-allowed`, `host-unparseable` |
+| `destination-identity-mismatch` | a provider endpoint presented another identity | `name-mismatch`, `untrusted-certificate`, `pin-mismatch`, `address-outside` |
+| `destination-unverifiable` | the identity could not be checked | `dns-failed`, `dns-timeout`, `connect-failed`, `proxy-refused`, `proxy-unreachable`, `ca-file-unreadable`, `tls-failed`, `check-error`, `host-unparseable`, `reserved-name` |
+| `destination-plaintext` | a provider uses plain http beyond this machine while the identity check is required | none |
+
+Approval is by host, never by provider id: a provider named like an allowed host
+is not approved by its name. `allowed_hosts` approves only from the profile or the
+trusted managed policy; a project file can narrow it, never approve.
+
+**Enforcement table.** The record lists each control with a layer and a status:
+`enforced` (Quoin refuses or checks it), `delegated-verified` or
+`delegated-unverified` (a duty the managed boundary carries, with or without an
+attestation), `not-enforced`, or `not-provided` (`launcher-proxy` and
+`brokered-registry` do not exist). Shell egress, redirects, DNS after launch,
+opposite-profile files, profile config edits, executables on `PATH`, keychain
+access, the child trust store and, under work with package installs allowed, the
+global npm configuration are boundary duties. When the destination census could
+not be built on a profile that requires no network control, the network section
+reads `status: unavailable` and the four network-step rows read `not-enforced`.
+
+**Identity check.** When the effective `network.identity_check` is `required`
+(the work default; a personal profile may set it), each provider endpoint is
+contacted at launch: names are resolved with a timeout, the connection goes to a
+checked address (restricted to `network.allowed_addresses` when set), the TLS
+handshake verifies the approved host name against the provider `ca_file` or the
+system store, and `network.pins` compare the leaf certificate fingerprint. Through
+an approved proxy the name is checked end to end over a CONNECT tunnel and address
+ranges are not checked, because the proxy resolves. Names under `.invalid` are
+refused without a lookup. Loopback endpoints are recorded as `loopback` and not
+contacted. `identity_check: off` is accepted only from the profile or the trusted
+managed policy. The check does not prove that the child uses the proxy, and the
+provider `ca_file` is not passed to the child. Observations (address count,
+certificate fingerprint prefix) are stored beside the record, not inside its
+digest, because certificates rotate and DNS answers change.
+
+**Repositories.** The real path of the project root must lie under an approved
+`repositories.allowed_roots` entry. A workspace supplied to the driver, such as a
+sibling git worktree, must too, so list each worktree parent. The read-only
+snapshot the launcher makes for critic and review workflow phases is a copy of the
+already-checked project and needs no extra root; approving the quoin state
+directory is never required.
+
+**Doctor.** With no `--profile` the doctor adds one `isolation-verified` or
+`isolation-unverified` finding at `info` severity, so a plain `quoin opencode
+doctor` keeps its exit code on a machine that manages nothing. Under `--profile`
+the finding is a warning for a work or managed profile. A profile that would be
+refused also reports `launch-refused` with the code, `approved-repositories-unset`
+for a work profile that approves no roots, `enforcement-layers`, and
+`egress-shell-not-enforced`; `launch-check-unavailable` reports a check that could
+not be evaluated offline.
+
+Limitations. Container corroboration through `/proc/1/cgroup` rarely matches on
+cgroup v2 with a private namespace (`0::/`), so such hosts need a `.dockerenv` or
+`.containerenv` marker. The npm global and builtin configuration is not censused.
+The opposite-profile probe reads directories the environment selects, so it is
+corroboration, not enforcement; the managed boundary carries that duty. Under a
+user id with no password entry the managed-os-user corroboration is unavailable;
+the container and vm corroborations are unaffected.
+
 ### Qualification and the probe
 
 `quoin opencode probe` sends a short handshake to the model's gateway. It
