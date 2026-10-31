@@ -27,6 +27,8 @@ AUTO = object()
 
 # Sentinel for `effective`: a live preview was attempted and none is available.
 NO_PREVIEW = object()
+# Passed as `launch_refusal` when the offline launch-policy check itself failed.
+LAUNCH_CHECK_UNAVAILABLE = object()
 NO_RECORD_NOTE = (
     "not available: the configuration cannot be launched or the project has no Quoin install record"
 )
@@ -153,15 +155,32 @@ def inventory_rows(record: Dict[str, Any]) -> List[Dict[str, Any]]:
     ]
 
 
-def effective_section(record: Dict[str, Any], refusal: Any = None) -> Dict[str, Any]:
+def launch_refusal_view(launch_refusal: Any) -> Optional[Dict[str, Any]]:
+    """The launch-policy refusal as code and detail tokens only, never its
+    message; ``unavailable`` when the offline check could not run."""
+    if launch_refusal is None:
+        return None
+    if launch_refusal is LAUNCH_CHECK_UNAVAILABLE:
+        return {"code": "unavailable"}
+    view = {"code": launch_refusal.code}
+    if launch_refusal.token:
+        view["detail"] = launch_refusal.token
+    return view
+
+
+def effective_section(record: Dict[str, Any], refusal: Any = None, launch_refusal: Any = False) -> Dict[str, Any]:
     """The ``effective_config`` key for a record. ``refusal`` is the launch
     check's `Refusal` (or None); only its code, layer token and entry token
-    are shown, never its message."""
+    are shown, never its message. ``launch_refusal`` is the launch-policy
+    refusal; left at its default the key is absent (a persisted run record
+    has none to show)."""
     out: Dict[str, Any] = {
         "record": record,
         "inventory": inventory_rows(record),
         "first_refusal": refusal.code if refusal is not None else None,
     }
+    if launch_refusal is not False:
+        out["launch_refusal"] = launch_refusal_view(launch_refusal)
     if refusal is not None:
         out["first_refusal_layer"] = refusal.layer
         if refusal.token:
@@ -177,6 +196,7 @@ def explain_document(
     output_dir: Optional[Path] = None,
     gate_failure: Optional[str] = None,
     effective: Any = None,
+    launch_refusal: Any = None,
 ) -> Dict[str, Any]:
     if compile_result is AUTO:
         compile_result, gate_failure = try_build(ev)
@@ -292,9 +312,11 @@ def explain_document(
     }
     if effective is NO_PREVIEW:
         doc["effective_config"] = {"record": None, "note": NO_RECORD_NOTE}
+        doc["effective_config"]["launch_refusal"] = launch_refusal_view(launch_refusal)
     elif effective is not None:
         record, layer_check = effective
-        doc["effective_config"] = effective_section(record, layer_check.refusal)
+        shown = launch_refusal if launch_refusal is not None else getattr(layer_check, "launch_refusal", None)
+        doc["effective_config"] = effective_section(record, layer_check.refusal, shown)
     return doc
 
 
@@ -314,11 +336,39 @@ def _count_lines(record: Dict[str, Any]) -> List[str]:
     return []
 
 
+def _launch_line(view: Any) -> str:
+    return "launch policy refusal: %s" % (view["code"] if view else "none")
+
+
+def _isolation_lines(record: Dict[str, Any]) -> List[str]:
+    iso = record.get("isolation") or {}
+    if iso.get("status") in (None, "pending"):
+        return ["isolation: pending"]
+    return ["isolation: %s (evidence: %s; missing: %s)" % (
+        iso.get("status"), ", ".join(iso.get("evidence") or []) or "none", ", ".join(iso.get("missing") or []) or "none",
+    )]
+
+
+def _network_lines(record: Dict[str, Any]) -> List[str]:
+    net = record.get("network") or {}
+    if net.get("status") == "unavailable":
+        return ["network: unavailable (destination checks could not be evaluated; no destination control enforced)"]
+    return [
+        "destination %s %s %s approved_by=%s identity=%s" % (
+            d.get("role"), d.get("host"), d.get("kind"), d.get("approved_by"), d.get("identity"),
+        )
+        for d in net.get("destinations") or []
+    ]
+
+
 def record_lines(section: Dict[str, Any]) -> List[str]:
     """The text form of an ``effective_config`` section."""
     record = section.get("record")
     if record is None:
-        return ["effective configuration record: %s" % section.get("note", NO_RECORD_NOTE)]
+        lines = ["effective configuration record: %s" % section.get("note", NO_RECORD_NOTE)]
+        if "launch_refusal" in section:
+            lines.append(_launch_line(section["launch_refusal"]))
+        return lines
     out: List[str] = ["Effective-config record", "-----------------------"]
     out.append("digest: %s" % record.get("digest"))
     out.append("profile: %s (%s)" % (record.get("profile"), record.get("classification")))
@@ -326,6 +376,10 @@ def record_lines(section: Dict[str, Any]) -> List[str]:
     out.append("pending sections: %s" % (", ".join(record.get("pending_sections") or []) or "none"))
     for line in _count_lines(record):
         out.append("entries %s" % line)
+    out.extend(_isolation_lines(record))
+    out.extend(_network_lines(record))
+    for row in record.get("enforcement") or []:
+        out.append("enforcement %s %s %s" % (row.get("control"), row.get("layer"), row.get("status")))
     for cred in record.get("credentials") or []:
         out.append("credential: %s (%s)" % (cred.get("ref_masked", cred.get("provider")), cred.get("kind")))
     env = record.get("env") or {}
@@ -352,6 +406,8 @@ def record_lines(section: Dict[str, Any]) -> List[str]:
         out.append("first refusal: %s%s" % (section["first_refusal"], extra))
     else:
         out.append("first refusal: none")
+    if "launch_refusal" in section:
+        out.append(_launch_line(section["launch_refusal"]))
     return out
 
 
@@ -470,10 +526,11 @@ def render(
     output_dir: Optional[Path] = None,
     gate_failure: Optional[str] = None,
     effective: Any = None,
+    launch_refusal: Any = None,
 ) -> str:
     doc = explain_document(
         ev, redact=redact, compile_result=compile_result, output_dir=output_dir,
-        gate_failure=gate_failure, effective=effective,
+        gate_failure=gate_failure, effective=effective, launch_refusal=launch_refusal,
     )
     if as_json:
         return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"

@@ -12,6 +12,7 @@ import pytest
 
 import _opencode_driver_helpers as h
 import _opencode_helpers as helpers
+import _opencode_isolation_helpers as iso
 from _opencode_merge_helpers import NOW, World
 from quoin.opencode_adapter import driver, install, proctree, runstore
 from quoin.opencode_adapter import secrets as credential_refs
@@ -62,7 +63,8 @@ class Setup:
                 TimeoutExpired=subprocess.TimeoutExpired, SubprocessError=subprocess.SubprocessError,
             ),
         )
-        self.kw = {}
+        iso.launch_ready(self.world)
+        self.kw = iso.seams(tmp_path)
 
     def driver(self, **overrides):
         kw = dict(

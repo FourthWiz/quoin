@@ -13,6 +13,7 @@ import pytest
 
 import _opencode_driver_helpers as h
 import _opencode_helpers as helpers
+import _opencode_isolation_helpers as iso
 from _opencode_merge_helpers import NOW, World
 from _opencode_run_helpers import InstalledProject
 from quoin.opencode_adapter import driver, install, launch_env, paths, runstore
@@ -38,6 +39,9 @@ class Setup:
         (self.root / ".git").mkdir(exist_ok=True)
         assert install.run_install(str(self.root), helpers.SOURCE_DIR, None, False, io.StringIO(), io.StringIO()) == 0
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: self.world.home))
+        # Each workspace is a sibling of the project root, so its parent is approved too.
+        iso.launch_ready(self.world, extra_roots=[tmp_path])
+        self.seams = self.kw = iso.seams(tmp_path)
         scenario = h.fake.write_scenario(tmp_path / "s.json", h.fake.SCENARIOS["record_only"]())
         self.shim = h.fake.write_shim(tmp_path / "bin", scenario, tmp_path / "fake-state")
         monkeypatch.setattr(
@@ -64,6 +68,7 @@ class Setup:
             home=self.world.home, which=lambda name: str(self.shim),
             version_runner=lambda path: "1.18.32",
             resolver_factory=lambda environ, platform: _Resolver(), clock=lambda: NOW.timestamp(),
+            **self.seams,
         )
 
     def request(self, **overrides):

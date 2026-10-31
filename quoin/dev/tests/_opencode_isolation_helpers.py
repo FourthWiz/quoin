@@ -101,3 +101,55 @@ def empty_adapter_dirs(tmp_path: Path):
 def verdict_for(roots: isolation.TrustedRoots, tmp_path: Path, profile: str = "work") -> isolation.IsolationVerdict:
     state, profiles = empty_adapter_dirs(tmp_path)
     return isolation.evaluate(roots, profile=profile, adapter_root=state, profiles_dir=profiles)
+
+
+# --------------------------------------------------------------- identity
+
+
+class FakeIdentity:
+    """An identity checker that never touches the network. `results` maps a
+    destination host key to an `IdentityResult`; any other host is `ok` over
+    TLS. Every destination it was asked about is recorded."""
+
+    def __init__(self, results: Optional[Mapping[str, Any]] = None) -> None:
+        from quoin.opencode_adapter import netpolicy
+
+        self._netpolicy = netpolicy
+        self.results = dict(results or {})
+        self.checked: list = []
+
+    def check(self, destination, *, policy, proxy=None):
+        self.checked.append(destination.host_key)
+        if destination.host_key in self.results:
+            return self.results[destination.host_key]
+        return self._netpolicy.IdentityResult("ok", "tls", None, 1, "0" * 16, False)
+
+
+def seams(tmp_path: Path, **kw: Any) -> Dict[str, Any]:
+    """Driver keyword arguments that make a work world launchable without a
+    real attestation or network: fixture trusted roots and a fake identity
+    checker."""
+    return {
+        "isolation_roots": fixture_roots(tmp_path, **kw.pop("roots", {})),
+        "identity_checker": kw.pop("identity", None) or FakeIdentity(),
+    }
+
+
+def launch_ready(world: Any, extra_roots: Any = ()) -> None:
+    """Approve the world's project root (and any extra root) as a repository
+    root in the world's own profile copy and rewrite it. The shared fixture
+    files stay untouched. A root under the adapter state directory is
+    refused: approving it would hide the regression the launcher-snapshot
+    rule exists to prevent."""
+    from quoin.opencode_adapter import profile_dirs
+
+    state_root = os.path.realpath(str(profile_dirs.adapter_root(world.env, world.home)))
+    roots = [os.path.realpath(str(world.root))]
+    for extra in extra_roots:
+        real = os.path.realpath(str(extra))
+        if real == state_root or real.startswith(state_root + os.sep):
+            raise ValueError("an approved root must not lie under the adapter state directory")
+        roots.append(real)
+    policy = world.profile.setdefault("policy", {})
+    policy.setdefault("repositories", {})["allowed_roots"] = roots
+    world.write()

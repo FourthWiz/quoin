@@ -116,7 +116,7 @@ def test_prepare_explain_and_doctor_agree_on_the_first_refusal(denv, monkeypatch
     found, layer = _doctor_code(denv, env)
     assert (found, layer) == (expected, layer_check.refusal.layer)
     # a legacy refusal never exposes its message, and a seeded path never appears
-    text = out
+    text = out.replace('"%s"' % denv.root, '"<approved-root>"')  # the profile's own approved root
     assert str(denv.root) not in text and str(denv.world.home) not in text
     assert error.code == expected
 
@@ -217,7 +217,7 @@ def test_blocked_or_uninstalled_configuration_shows_a_note_instead_of_a_record(d
     _activate(denv, monkeypatch)
     code, out, _ = _explain(capsys, denv, "--json")
     section = json.loads(out)["effective_config"]
-    assert section == {"record": None, "note": explain.NO_RECORD_NOTE}
+    assert section == {"record": None, "note": explain.NO_RECORD_NOTE, "launch_refusal": None}
 
 
 def test_no_seeded_secret_reaches_text_json_or_export_output(denv, monkeypatch, capsys):
@@ -242,7 +242,9 @@ def test_no_seeded_secret_reaches_text_json_or_export_output(denv, monkeypatch, 
     for blob in seen:
         for seed in SEEDS:
             assert seed not in blob, seed
-        assert str(denv.root) not in blob
+        # The profile's own approved repository root is an operator-written
+        # value that explain shows unless redacted; no other form of the path may appear.
+        assert str(denv.root) not in blob.replace('"%s"' % denv.root, '"<approved-root>"')
 
 
 def test_doctor_does_not_import_the_driver_at_module_level():

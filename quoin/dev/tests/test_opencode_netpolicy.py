@@ -25,8 +25,12 @@ def _view(pid="gw", host="gw.example.com", *, proxy=False, ca=None):
 
 
 def _compiled(*hosts, scheme="https"):
+    from quoin.opencode_adapter import names
+
     doc = {"provider": {}, "permission": {"webfetch": "deny"}, "agent": {
-        "quoin-plan": {"permission": {"webfetch": "deny", "websearch": "deny"}}}}
+        names.role_agent_name(role): {"permission": {"webfetch": "deny", "websearch": "deny"}}
+        for role in compiler.ROLES}}
+    doc["agent"]["title"] = {}  # auxiliary agents carry no web denial
     for pid, host in hosts:
         view = _view(pid, host)
         doc["provider"][compiler.native_provider_id(view)] = {
@@ -185,7 +189,7 @@ def test_web_tools_posture_is_checked_against_the_compiled_document():
     assert _approve(effective, doc=bad).code == "web-tools-denied"
     assert _approve(effective) is None
     role_missing = _compiled(("gw", "gw.example.com"))
-    role_missing["agent"]["quoin-plan"]["permission"] = {"webfetch": "deny"}
+    role_missing["agent"]["quoin-planner"]["permission"] = {"webfetch": "deny"}
     assert _approve(effective, doc=role_missing).code == "web-tools-denied"
 
 

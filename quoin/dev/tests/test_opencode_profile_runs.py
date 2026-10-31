@@ -2,6 +2,7 @@
 storage roots, credentials, permissions, continuation and nested launches."""
 from __future__ import annotations
 
+import dataclasses
 import json
 import os
 import sys
@@ -60,6 +61,12 @@ def world(tmp_path, monkeypatch):
         (project.root / ".quoin" / "runtime.json").write_text(json.dumps(
             {"schema_version": 1, "runtime": "opencode", "profile": "work", "classification": "personal"}))
         _install(w.env, w.home, PROFILE_PERSONAL)
+        # This world deliberately holds both profiles, which the opposite-profile
+        # probe reports; these tests are about directory separation, not about
+        # the isolation attestation, so the listing sees nothing.
+        project._seams["isolation_roots"] = dataclasses.replace(
+            project._seams["isolation_roots"], scandir=lambda path: iter(()),
+        )
         for name in ("work", "personal"):
             loaded = config.load_all(project_root=project.root, profile=name, env=w.env, home=w.home)
             write_probe_records(w.env, w.home, merge.merge(loaded))

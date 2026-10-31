@@ -116,12 +116,19 @@ MESSAGES: Dict[str, str] = {
     "runtime-profile-launchable": "the profile's configuration compiles and is launchable",
     "inventory-refused": "a launch of this profile would be refused: %(name)s (layer %(path)s)",
     "inventory-clean": "the configuration sources a launch would read hold %(count)s entries, none of them refused",
-    "isolation-verified": "profile isolation for this profile is attested by a root-owned declaration",
-    "isolation-unverified": "profile isolation for this profile is not attested by a root-owned declaration",
+    "isolation-verified": "profile isolation for this profile is attested by a root-owned declaration (%(names)s)",
+    "isolation-unverified": "profile isolation for this profile is not attested by a root-owned declaration (%(names)s)",
     "isolation-required-unverified": "the profile requires managed isolation, which no root-owned declaration attests",
     "egress-shell-not-enforced": "commands started by a shell tool are not restricted to the approved network destinations",
-    "enforcement-layers": "the layers that enforce profile isolation on this machine, and the ones that do not",
+    "enforcement-layers": "the layers that enforce profile isolation on this machine, and the ones that do not (%(names)s)",
+    "launch-refused": "a launch of this profile would be refused before any model request: %(name)s",
+    "approved-repositories-unset": "the profile approves no repository roots, so any project can be launched under it",
+    "launch-check-unavailable": "the launch policy checks could not be evaluated offline; a launch of this profile may still refuse",
 }
+
+# The launchable finding keeps its id and severity; beside a launch refusal
+# its text only claims what is true.
+_LAUNCHABLE_WITH_REFUSAL = "the profile's configuration compiles; a launch policy refusal is reported separately"
 
 _REMEDIATIONS: Dict[str, str] = {
     "smoke-render": "run `quoin install --runtime opencode --check` to see the generation error",
@@ -162,6 +169,9 @@ _REMEDIATIONS: Dict[str, str] = {
     "isolation-required-unverified": "install the root-owned isolation declaration, or set the profile isolation to convenience",
     "egress-shell-not-enforced": "route shell commands through a network control outside OpenCode if they must not reach other destinations",
     "enforcement-layers": "run `quoin opencode config explain --profile PROFILE` to see which settings are enforced",
+    "launch-refused": "run `quoin opencode config explain --profile PROFILE` to see the launch policy refusal and what approves the destination, repository or isolation it names",
+    "approved-repositories-unset": "list the repository roots the profile may work in under policy.repositories.allowed_roots",
+    "launch-check-unavailable": "run `quoin opencode config explain --profile PROFILE`; a failing check is not worked around by editing the profile",
     "permission-loosened": "a generated role's own permission can override a stricter user config while that role runs directly; narrow the role's own permission map instead of the user config",
 }
 
@@ -518,6 +528,7 @@ def run_doctor(
     profile=None,
     config_env=None,
     now=None,
+    isolation_roots=None,
 ) -> int:
     """Run the doctor and print a report to `out`. `env`, `home`, `which`
     and `version_runner` default at call time (not at definition time), so
@@ -543,6 +554,7 @@ def run_doctor(
                 profile=profile,
                 config_env=config_env,
                 now=now,
+                isolation_roots=isolation_roots,
             )
     except (ValueError, OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         # Last-resort boundary: nothing here may reach `out`/`err` except
@@ -897,16 +909,52 @@ def _runtime_findings(root: Path, env, home, roots, proc_snapshot=None) -> List[
     return findings
 
 
-def _profile_findings(root: Path, profile: str, config_env, home, now=None, ambient_env=None) -> List[Finding]:
+def _isolation_verdict_for(profile, ambient, config_env, home, isolation_roots):
+    """The isolation verdict doctor reports. A probe failure is a verdict
+    (`attestation-invalid`), never an exception."""
+    from . import isolation, profile_dirs  # noqa: PLC0415
+    from . import paths as adapter_paths  # noqa: PLC0415
+
+    try:
+        roots = isolation_roots if isolation_roots is not None else isolation.TrustedRoots.system()
+        merged = dict(ambient or {})
+        return isolation.evaluate(
+            roots, profile=profile, adapter_root=profile_dirs.adapter_root(merged, home),
+            profiles_dir=adapter_paths.profiles_dir({**merged, **dict(config_env or {})}, home),
+        )
+    except Exception:  # noqa: BLE001
+        return isolation.unverified(("attestation-invalid",))
+
+
+def _isolation_finding(verdict, unverified_severity: str) -> Finding:
+    tokens = list(verdict.evidence if verdict.verified else verdict.missing) or ["none"]
+    if verdict.verified:
+        return make_finding("isolation-verified", "ok", names=", ".join(tokens))
+    return make_finding("isolation-unverified", unverified_severity, names=", ".join(tokens))
+
+
+def _profile_findings(
+    root: Path, profile: str, config_env, home, now=None, ambient_env=None, isolation_roots=None,
+) -> List[Finding]:
     """Evaluate one profile's configuration the way a phase run does and
     report what would refuse it. Opt-in, configuration only: credentials are
     never resolved, and the text is built only from closed sets (class names,
-    finding codes, counts), never from a configuration value."""
+    finding codes, counts), never from a configuration value.
+
+    Every run carries exactly one isolation finding for the profile."""
     from datetime import datetime, timezone  # noqa: PLC0415
 
     from . import categories, compiler, roles  # noqa: PLC0415
     from . import paths as adapter_paths  # noqa: PLC0415
     from .errors import ConfigErrors  # noqa: PLC0415
+
+    ambient = ambient_env if ambient_env is not None else config_env
+
+    def early(findings: List[Finding]) -> List[Finding]:
+        # The classification is unknown on these paths, so the isolation
+        # finding is informational.
+        verdict = _isolation_verdict_for(profile, ambient, config_env, home, isolation_roots)
+        return findings + [_isolation_finding(verdict, "info")]
 
     try:
         evaluation = compiler.evaluate(
@@ -929,55 +977,109 @@ def _profile_findings(root: Path, profile: str, config_env, home, now=None, ambi
                 "runtime-config-policy-denied" if policy else "runtime-config-invalid",
                 "error", name=cls, count=by_class[cls],
             ))
-        return found
+        return early(found)
     except roles.AllowUnqualifiedRefused:
-        return [make_finding("runtime-config-policy-denied", "error", name="allow-unqualified-refused", count=1)]
+        return early([make_finding("runtime-config-policy-denied", "error", name="allow-unqualified-refused", count=1)])
     except adapter_paths.AdapterDataMissing:
-        return [make_finding("runtime-adapter-data-missing", "error")]
+        return early([make_finding("runtime-adapter-data-missing", "error")])
 
-    if compiler.launchable(evaluation):
-        return [make_finding("runtime-profile-launchable", "ok")] + _inventory_findings(
-            root, profile, evaluation, home, ambient_env if ambient_env is not None else config_env, now
-        )
-    blockers = compiler.compile_blockers(evaluation)
-    unqualified = all(
-        f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
-        for f in blockers
-    )
-    if blockers and not unqualified:
-        return [make_finding(
-            "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
-        )]
-    return [make_finding("runtime-gateway-unqualified", "error")]
+    out: List[Finding] = []
+    verdict = _isolation_verdict_for(profile, ambient, config_env, home, isolation_roots)
+    effective = evaluation.effective
+    isolation_entry = effective.values.get("policy.isolation")
+    managed = isolation_entry is not None and isolation_entry.value == "managed"
+    work = effective.classification == "work"
+    out.append(_isolation_finding(verdict, "warn" if (work or managed) else "info"))
 
-
-def _inventory_findings(root: Path, profile: str, evaluation, home, ambient, now) -> List[Finding]:
-    """What the launch's configuration inventory says about this profile: the
-    first refusal, else a count of the entries it inspected. The driver is
-    imported here because it imports this module at its top."""
-    from . import driver  # noqa: PLC0415
-
+    refusal, drv, unavailable = None, None, False
     try:
         clock = (lambda: now.timestamp()) if now is not None else None
         kw = {"clock": clock} if clock is not None else {}
-        drv = driver.OpenCodeDriver(root, env=dict(ambient or {}), home=home, **kw)
+        from . import driver  # noqa: PLC0415 - the driver imports this module at its top
+
+        drv = driver.OpenCodeDriver(
+            root, env=dict(ambient or {}), home=home, isolation_roots=isolation_roots, **kw,
+        )
+        refusal = drv.offline_launch_refusal(profile, ambient_env=dict(ambient or {}), evaluation=evaluation)
+    except Exception:  # noqa: BLE001 - a failing check is reported, never silent
+        unavailable = True
+        out.append(make_finding("launch-check-unavailable", "warn"))
+
+    launchable = compiler.launchable(evaluation)
+    if refusal is not None:
+        out.append(make_finding("launch-refused", "error", name=refusal.code))
+    if not launchable:
+        blockers = compiler.compile_blockers(evaluation)
+        unqualified = all(
+            f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
+            for f in blockers
+        )
+        if blockers and not unqualified:
+            out.append(make_finding(
+                "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
+            ))
+        else:
+            out.append(make_finding("runtime-gateway-unqualified", "error"))
+        return out
+
+    launchable_finding = make_finding("runtime-profile-launchable", "ok")
+    if refusal is not None:
+        launchable_finding = Finding(
+            id=launchable_finding.id, severity=launchable_finding.severity, message=_LAUNCHABLE_WITH_REFUSAL,
+            path=launchable_finding.path, remediation=launchable_finding.remediation,
+        )
+    out.append(launchable_finding)
+    if managed and not verdict.verified and (refusal is None or refusal.code != "isolation-required-unverified") \
+            and not unavailable:
+        out.append(make_finding("isolation-required-unverified", "error"))
+    policy = None
+    try:
+        from . import profile_policy  # noqa: PLC0415
+
+        policy = profile_policy.view(effective)
+    except Exception:  # noqa: BLE001
+        policy = None
+    if policy is not None and work and not managed and not policy.approved("repositories.allowed_roots"):
+        out.append(make_finding("approved-repositories-unset", "warn"))
+    out.extend(_inventory_findings(drv, profile, evaluation, ambient, work or managed))
+    return out
+
+
+def _inventory_findings(drv, profile: str, evaluation, ambient, strict: bool = False) -> List[Finding]:
+    """What the launch's configuration inventory says about this profile: the
+    first refusal, else a count of the entries it inspected; then the
+    enforcement layers the record lists. `strict` makes the missing shell
+    egress control a warning (work or managed profiles)."""
+    if drv is None:
+        return []
+    try:
         preview = drv.effective_preview(profile, ambient_env=dict(ambient or {}), evaluation=evaluation)
     except Exception:  # noqa: BLE001 - the inventory finding is advisory; the other findings stand
         return []
     if preview is None:
         return []
     record, layer_check = preview
+    found: List[Finding] = []
     refusal = layer_check.refusal
     if refusal is not None:
-        return [make_finding("inventory-refused", "error", path=refusal.layer, name=refusal.code)]
-    entries = record.get("entries")
-    count = len(entries) if isinstance(entries, list) else int((entries or {}).get("count", 0))
-    return [make_finding("inventory-clean", "ok", count=count)]
+        found.append(make_finding("inventory-refused", "error", path=refusal.layer, name=refusal.code))
+    else:
+        entries = record.get("entries")
+        count = len(entries) if isinstance(entries, list) else int((entries or {}).get("count", 0))
+        found.append(make_finding("inventory-clean", "ok", count=count))
+    rows = record.get("enforcement")
+    if isinstance(rows, list) and rows:
+        names = ", ".join("%s=%s" % (r.get("control"), r.get("status")) for r in rows if isinstance(r, dict))
+        found.append(make_finding("enforcement-layers", "info", names=names))
+        shell = next((r for r in rows if isinstance(r, dict) and r.get("control") == "shell-egress"), None)
+        if shell is not None and shell.get("status") != "delegated-verified":
+            found.append(make_finding("egress-shell-not-enforced", "warn" if strict else "info"))
+    return found
 
 
 def run_host(
     project_root, source_dir, env, home, which, version_runner, *,
-    proc_snapshot=None, profile=None, config_env=None, now=None,
+    proc_snapshot=None, profile=None, config_env=None, now=None, isolation_roots=None,
 ) -> List[Finding]:
     """Host-environment checks: install state, manifest drift, config,
     rules fallback, skill-discovery census, flags and PATH/binary, and the
@@ -1017,7 +1119,13 @@ def run_host(
     findings.extend(_binary_findings(which, version_runner, source_dir))
     findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
     if profile is not None:
-        findings.extend(_profile_findings(root, profile, config_env or {}, Path(home), now, ambient_env=env))
+        findings.extend(_profile_findings(
+            root, profile, config_env or {}, Path(home), now, ambient_env=env, isolation_roots=isolation_roots,
+        ))
+    else:
+        findings.append(_isolation_finding(
+            _isolation_verdict_for(None, env, config_env or {}, Path(home), isolation_roots), "info",
+        ))
 
     return findings
 

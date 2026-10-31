@@ -833,13 +833,24 @@ def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
     try:
         output_dir = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
         result, gate = explain.try_build(ev)
-        preview = _make_opencode_driver(args.project_root).effective_preview(
-            ev.profile, ambient_env=dict(os.environ), evaluation=ev
-        )
+        drv = _make_opencode_driver(args.project_root)
+        try:
+            preview = drv.effective_preview(ev.profile, ambient_env=dict(os.environ), evaluation=ev)
+        except paths.AdapterDataMissing:
+            raise
+        except Exception:  # noqa: BLE001 - defence in depth: explain never shows a traceback for a preview failure
+            preview = None
+        try:
+            launch_refusal = drv.offline_launch_refusal(ev.profile, ambient_env=dict(os.environ), evaluation=ev)
+        except paths.AdapterDataMissing:
+            raise
+        except Exception:  # noqa: BLE001 - a failing offline check is shown as unavailable, never as a refusal
+            launch_refusal = explain.LAUNCH_CHECK_UNAVAILABLE
         text = explain.render(
             ev, redact=args.redact, as_json=args.json, compile_result=result,
             output_dir=output_dir, gate_failure=gate,
             effective=explain.NO_PREVIEW if preview is None else preview,
+            launch_refusal=launch_refusal,
         )
     except paths.AdapterDataMissing:
         print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)

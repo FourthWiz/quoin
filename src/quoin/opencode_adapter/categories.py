@@ -72,6 +72,9 @@ FINDING_CATEGORIES.update(
         "isolation-required-unverified",
         "egress-shell-not-enforced",
         "enforcement-layers",
+        "launch-refused",
+        "approved-repositories-unset",
+        "launch-check-unavailable",
     )
 )
 FINDING_CATEGORIES.update(

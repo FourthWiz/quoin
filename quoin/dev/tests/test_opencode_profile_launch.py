@@ -224,7 +224,7 @@ def test_a_classification_change_is_refused(env):
         env.root, env=dict(env.world.env, PATH=os.environ.get("PATH", "")), home=env.world.home,
         which=lambda name: str(env.shim), version_runner=lambda path: "1.18.32",
         resolver_factory=lambda environ, platform: _Resolver2(), clock=lambda: NOW.timestamp(),
-        session=session,
+        session=session, **env.kw,
     )
     with pytest.raises(driver.PrepareRefused) as info:
         drv.prepare(env.request())
@@ -256,6 +256,7 @@ def test_a_launcher_built_driver_compiles_beside_the_profile_not_inside_it(env):
     drv = driver.OpenCodeDriver(
         env.root, env=nested, home=env.world.home, which=lambda name: str(env.shim),
         version_runner=lambda path: "1.18.32", resolver_factory=lambda environ, platform: _Resolver2(), clock=lambda: NOW.timestamp(),
+        **env.kw,
     )
     prepared = drv.prepare(env.request())
     assert prepared.config_path.parent == root / paths.project_key(env.root)
@@ -424,7 +425,7 @@ def test_a_latched_session_refuses_a_profile_switch_before_looking_for_the_binar
         env.root, env=dict(env.world.env, PATH=os.environ.get("PATH", "")), home=env.world.home,
         which=lambda name: None, version_runner=lambda path: None,
         resolver_factory=lambda environ, platform: _Resolver2(), clock=lambda: NOW.timestamp(),
-        session=profile_dirs.LaunchSession(("work", "work")),
+        session=profile_dirs.LaunchSession(("work", "work")), **env.kw,
     )
     with pytest.raises(driver.PrepareRefused) as info:
         drv.prepare_interactive("other")

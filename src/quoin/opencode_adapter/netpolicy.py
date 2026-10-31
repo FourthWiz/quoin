@@ -31,7 +31,7 @@ import ssl
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlsplit
 
 from . import config, effective_record
@@ -277,10 +277,13 @@ def _proxy_routes(ambient: Mapping[str, str], allowed: frozenset, origin: str) -
 def _web_tools(effective: Any, compiled_doc: Mapping[str, Any], policy: Any) -> WebTools:
     posture = False
     try:
+        from . import compiler, names
+
         agents = compiled_doc.get("agent")
         posture = compiled_doc.get("permission") == {"webfetch": "deny"} and isinstance(agents, Mapping) and all(
-            isinstance(entry, Mapping) and entry.get("permission") == {"webfetch": "deny", "websearch": "deny"}
-            for entry in agents.values()
+            isinstance(agents.get(names.role_agent_name(role)), Mapping)
+            and agents[names.role_agent_name(role)].get("permission") == {"webfetch": "deny", "websearch": "deny"}
+            for role in compiler.ROLES
         )
     except Exception:  # noqa: BLE001
         posture = False
@@ -415,6 +418,11 @@ def _pin_set(pins: Optional[Sequence[str]]) -> frozenset:
             text = text[len("sha256:"):]
         out.add(text.replace(":", ""))
     return frozenset(out)
+
+
+class IdentityChecker(Protocol):
+    def check(self, destination: Destination, *, policy: Any, proxy: Optional[ProxyRoute] = None) -> IdentityResult:
+        ...
 
 
 class SystemIdentityChecker:
