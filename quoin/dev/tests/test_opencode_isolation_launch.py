@@ -56,7 +56,7 @@ def _no_side_effects(env):
     assert not (adapter / "work").exists(), "a refused launch must not create the profile directory"
 
 
-# ------------------------------------------------------------------- AC-5
+# -------------------------------------------------------- managed isolation
 
 
 def test_managed_work_with_no_attestation_refuses_before_anything_is_created(env):
@@ -123,7 +123,7 @@ def test_a_convenience_world_launches_with_the_unverified_verdict_recorded(env):
     assert section["status"] == "unverified" and "attestation-missing" in section["missing"]
 
 
-# ------------------------------------------------------------------- AC-7
+# ------------------------------------------------------------ destinations
 
 
 def test_a_label_approved_provider_with_an_unapproved_host_refuses(env):

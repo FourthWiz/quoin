@@ -60,7 +60,7 @@ def _refuses(env, code, detail=None, drv=None, profile="work"):
 
 
 def test_row_2_a_passwd_less_uid_is_missing_evidence_on_the_launch_path(env):
-    """Pins _passwd_name's KeyError catch through the real lookup (mutation r)."""
+    """Pins _passwd_name's KeyError catch through the real lookup."""
     import pwd
 
     roots = iso.fixture_roots(env.tmp / "r", "managed-os-user", corroborate=True,
@@ -162,7 +162,7 @@ def test_row_15_a_raising_census_refuses_work_and_continues_for_default_personal
 
 
 def test_row_15_a_refusal_raised_by_approve_keeps_its_own_code(env, monkeypatch):
-    """Pins the pass-through: PrepareRefused is re-raised before the broad handler (mutation x)."""
+    """Pins the pass-through: PrepareRefused is re-raised before the broad handler."""
     def refuses(census, policy, classification):
         raise driver.PrepareRefused("policy-denial", "proxy-route-not-approved", "proxy", detail="pin")
 
@@ -199,7 +199,7 @@ def test_row_14_the_snapshot_predicate_fails_to_not_exempt(env, monkeypatch):
 
 
 def test_the_guards_removed_would_crash_a_convenience_launch(env, monkeypatch):
-    """Pins mutation u: both guards matter, so each raising probe leaves a launch that works today working."""
+    """Both driver guards matter: each raising probe leaves a launch that works today working."""
     _personal(env)
     monkeypatch.setattr(isolation, "evaluate", _raising)
     monkeypatch.setattr(netpolicy, "census", _raising)
