@@ -135,6 +135,71 @@ def digest(record: Mapping[str, Any]) -> str:
     return "sha256:" + hashlib.sha256(jsonio.dump_canonical(body)).hexdigest()
 
 
+SURFACES = ("headless", "interactive")
+RETENTION_KINDS = profile_policy.RETENTION_KINDS
+_ORIGIN_TOKENS = {
+    "default": "default",
+    "profile": "profile",
+    "trusted-managed": "trusted-managed",
+    "managed": "managed-user-editable",
+    "project": "project",
+}
+
+
+def origin_token(layer: object) -> str:
+    """The closed record token for a policy layer name; an unknown layer reads as default."""
+    return _ORIGIN_TOKENS.get(layer, "default") if isinstance(layer, str) else "default"
+
+
+def logging_section(policy: Mapping[str, Any], surface: str = "headless") -> Dict[str, Any]:
+    """What a launch of this surface stores. The interactive start captures no
+    Quoin events; OpenCode's own log and session database are not controlled
+    by the content mode."""
+    content = policy.get("logging.content")
+    headless = surface != "interactive"
+    mode = content if content in ("metadata", "summary") else "metadata"
+    return {
+        "content": content,
+        "quoin_events": mode if headless else "not-captured",
+        "stderr": ("digest" if mode == "metadata" else "tail") if headless else "not-captured",
+        "redaction": "always",
+        "opencode_log": "not-controlled",
+        "session_database": "full-content-purge-only",
+        "other_runtime_files": "not-controlled-purge-only",
+    }
+
+
+def retention_section(policy: Mapping[str, Any], effective: Optional[Any] = None) -> Dict[str, Any]:
+    wide = {kind: policy.get("retention." + kind) for kind in RETENTION_KINDS}
+    scoped = dict(wide)
+    origin = {kind: ["default"] for kind in RETENTION_KINDS}
+    if effective is not None:
+        view = profile_policy.view(effective)
+        for kind in RETENTION_KINDS:
+            wide[kind] = view.retention.get(kind)
+            scoped[kind] = view.project_retention.get(kind)
+            tokens = []
+            for layer in view.origins.get("retention." + kind, ("default",)):
+                token = origin_token(layer)
+                if token not in tokens:
+                    tokens.append(token)
+            entry = effective.values.get("policy.retention.project." + kind)
+            if entry is not None and tuple(entry.origin) != ("default",):
+                for layer in entry.origin:
+                    token = origin_token(layer)
+                    if token == "project" and token not in tokens:
+                        tokens.append(token)
+            origin[kind] = tokens
+    active = any(v is not None for v in list(wide.values()) + list(scoped.values()))
+    return {
+        "days": wide,
+        "project_scoped": scoped,
+        "origin": origin,
+        "sweep": "at-launch" if active else "none",
+        "database": "purge-only",
+    }
+
+
 def build(
     *,
     inventory: "inventory.Inventory",  # noqa: F811 - the parameter name is the documented keyword
@@ -155,6 +220,8 @@ def build(
     isolation: Optional[Mapping[str, Any]] = None,
     network: Optional[Mapping[str, Any]] = None,
     enforcement: Optional[Sequence[Mapping[str, Any]]] = None,
+    surface: str = "headless",
+    effective: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """The record. When all of `isolation`, `network` and `enforcement` are
     given the three sections are filled and none is pending; otherwise each
@@ -190,8 +257,8 @@ def build(
         ],
         "credentials": [dict(c) for c in credentials],
         "static_key_in_use": any(c.get("kind") == "static-api-key" for c in credentials),
-        "logging": {"content": policy.get("logging.content")},
-        "retention": {k[len("retention."):]: policy.get(k) for k in policy if k.startswith("retention.")},
+        "logging": logging_section(policy, surface),
+        "retention": retention_section(policy, effective),
         "policy": dict(policy),
     }
     if len(jsonio.dump_canonical(record)) > MAX_RECORD_BYTES:

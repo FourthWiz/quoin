@@ -1554,6 +1554,7 @@ class OpenCodeDriver:
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
         evaluation: Any, metadata: Any, redactor: Any, dirs: "profile_dirs.ProfileDirs",
         cwd: Optional[Path] = None, version: str = "", verdict: Optional[isolation.IsolationVerdict] = None,
+        surface: str = "headless",
     ) -> Any:
         """Refuse on a configuration source that would change the compiled
         pair or that the profile does not allow, then run the destination
@@ -1585,7 +1586,7 @@ class OpenCodeDriver:
         )
         effective = self._effective_record(
             layer_check, fresh, evaluation, dirs, version, child_env.names(), self._env, child_env.redactor,
-            verdict=verdict, census=census, network_status=network_status,
+            verdict=verdict, census=census, network_status=network_status, surface=surface,
         )
         return child_env, effective, layer_check.inventory, observations
 
@@ -1623,6 +1624,7 @@ class OpenCodeDriver:
         self, layer_check: Any, fresh: Any, evaluation: Any, dirs: "profile_dirs.ProfileDirs",
         version: str, env_names: Sequence[str], ambient: Mapping[str, str], redactor: Any,
         *, verdict: isolation.IsolationVerdict, census: netpolicy.Census, network_status: str,
+        surface: str = "headless",
     ) -> Dict[str, Any]:
         classification = evaluation.effective.classification
         policy_view = profile_policy.view(evaluation.effective)
@@ -1644,7 +1646,7 @@ class OpenCodeDriver:
             },
             credentials=launch_env.credential_kinds(fresh.sidecar, evaluation.effective.providers),
             policy=effective_record.policy_section(evaluation.effective),
-            redactor=redactor,
+            redactor=redactor, surface=surface, effective=evaluation.effective,
             isolation=isolation.record_section(verdict),
             network=netpolicy.network_section(census, policy_view, status=network_status, egress_hosts=egress),
             enforcement=netpolicy.enforcement_table(
@@ -1809,7 +1811,7 @@ class OpenCodeDriver:
         redactor = launch_env.Redactor()
         child_env, effective, _scanned, _observations = self._scan_and_build_env(
             root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, version=version or "",
-            verdict=verdict,
+            verdict=verdict, surface="interactive",
         )
         return InteractiveLaunch(
             binary=Path(binary),

@@ -215,3 +215,68 @@ def test_expected_env_names_equal_the_built_environment(tmp_path, classification
         resolver=_Resolver({"env:PROV_KEY": LAUNCH_SECRET}), data_dir=tmp_path / "d", config_path=tmp_path / "c.json", **kw,
     )
     assert launch_env.expected_env_names(state_dir_set=False, **kw) == no_state.names()
+
+
+# ------------------------------------------------------------ logging and retention sections
+
+
+def _record_for(tmp_path, classification="work", surface="headless", layer=("profile",), **policy):
+    values = {"policy." + k.replace("__", "."): merge.Value(v, layer) for k, v in policy.items()}
+    effective = SimpleNamespace(values=values, classification=classification)
+    return _build(
+        World(tmp_path), classification=classification, surface=surface, effective=effective,
+        policy=effective_record.policy_section(effective),
+    )
+
+
+def test_work_logging_and_retention_sections(tmp_path):
+    record = _record_for(tmp_path, "work")
+    assert record["logging"] == {
+        "content": "metadata", "quoin_events": "metadata", "stderr": "digest", "redaction": "always",
+        "opencode_log": "not-controlled", "session_database": "full-content-purge-only",
+        "other_runtime_files": "not-controlled-purge-only",
+    }
+    retention = record["retention"]
+    assert set(retention) == {"days", "project_scoped", "origin", "sweep", "database"}
+    assert retention["days"]["runs_days"] == 30 and retention["origin"]["runs_days"] == ["default"]
+    assert retention["sweep"] == "at-launch" and retention["database"] == "purge-only"
+
+
+def test_personal_logging_and_retention_sections(tmp_path):
+    record = _record_for(tmp_path, "personal")
+    assert record["logging"]["content"] == "summary" and record["logging"]["stderr"] == "tail"
+    assert record["retention"]["sweep"] == "none"
+    assert all(v is None for v in record["retention"]["days"].values())
+
+
+def test_trusted_managed_retention_origin_and_value(tmp_path):
+    record = _record_for(tmp_path, "work", layer=("trusted-managed",), retention__runs_days=7)
+    assert record["retention"]["days"]["runs_days"] == 7
+    assert record["retention"]["origin"]["runs_days"] == ["trusted-managed"]
+
+
+def test_project_scoped_retention_stays_out_of_the_wide_days(tmp_path):
+    record = _record_for(tmp_path, "work", layer=("project",), retention__project__runs_days=1)
+    assert record["retention"]["project_scoped"]["runs_days"] == 1
+    assert record["retention"]["days"]["runs_days"] == 30
+    assert "project" in record["retention"]["origin"]["runs_days"]
+
+
+def test_interactive_surface_captures_no_quoin_events(tmp_path):
+    record = _record_for(tmp_path, "work", surface="interactive")
+    assert record["logging"]["quoin_events"] == "not-captured"
+    assert record["logging"]["stderr"] == "not-captured"
+    assert record["logging"]["content"] == "metadata"
+
+
+def test_digest_moves_with_logging_content_and_retention(tmp_path):
+    base = _record_for(tmp_path / "a", "work")
+    assert _record_for(tmp_path / "b", "work", logging__content="summary")["digest"] != base["digest"]
+    assert _record_for(tmp_path / "c", "work", retention__runs_days=3)["digest"] != base["digest"]
+
+
+def test_origin_tokens_cover_every_policy_layer():
+    tokens = {effective_record.origin_token(layer) for layer in profile_policy.LAYER_ORDER}
+    assert tokens == {"profile", "trusted-managed", "managed-user-editable", "project"}
+    assert effective_record.origin_token("default") == "default"
+    assert effective_record.origin_token("something-new") == "default"
