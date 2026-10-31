@@ -2476,7 +2476,7 @@ def _cmd_opencode_purge(args: argparse.Namespace) -> int:
 
     as_json = bool(args.json)
 
-    def refuse(exc, plan=None) -> int:
+    def show_refusal(exc, plan=None) -> int:
         blocking = [
             {("task" if b.reason == "live-lock" else "run_id"): b.run_id_or_task,
              "project": _home_relative(b.project), "reason": b.reason,
@@ -2502,7 +2502,7 @@ def _cmd_opencode_purge(args: argparse.Namespace) -> int:
             uid=os.getuid(), table=proctree.snapshot(), now=_time.time(),
         )
     except retention.PurgeRefused as exc:
-        return refuse(exc)
+        return show_refusal(exc)
     except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
         print("quoin: opencode purge failed: %s" % type(exc).__name__, file=sys.stderr)
         return 3
@@ -2520,7 +2520,7 @@ def _cmd_opencode_purge(args: argparse.Namespace) -> int:
         exc = retention.PurgeRefused("purge-confirm-required")
         if not as_json:
             _print_purge_text(_purge_report(plan, "planned", False))
-        return refuse(exc, plan)
+        return show_refusal(exc, plan)
     if not plan.remove:
         emit(_purge_report(plan, "nothing-to-do", False))
         return 0
