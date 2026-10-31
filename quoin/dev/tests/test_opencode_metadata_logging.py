@@ -1,155 +1,120 @@
-"""Content modes of the runtime event translator and their end-to-end effect."""
+"""Metadata logging: what the driver writes under work and personal content modes."""
 from __future__ import annotations
 
-import hashlib
+import dataclasses
 import json
-import secrets
-from decimal import Decimal
+import os
 
 import pytest
 
-from quoin.opencode_adapter import events as ev
-from quoin.opencode_adapter.events import EventType as ET
+import _opencode_driver_helpers as h
+from quoin.opencode_adapter import driver, events as ev, launch_env, runstore
 
-RUN_ID = "oc-20260101T000000Z-0123abcd"
-OBSERVED = "2026-01-01T00:00:00.000Z"
-REGISTERED = "sk-REGISTERED0123456789"
+pytestmark = pytest.mark.skipif(os.name != "posix", reason="process groups are POSIX-only")
 
-
-def redact(text):
-    return text.replace(REGISTERED, "[REDACTED]")
+SUFFIXES = ("text", "reasoning", "title", "toolerr", "native", "stderr")
 
 
-def tr(obj, content="summary"):
-    return ev.translate(
-        obj, run_id=RUN_ID, attempt=1, observed_at=OBSERVED, redact=redact, content=content
-    )
+@pytest.fixture(autouse=True)
+def _no_strays(tmp_path):
+    yield
+    h.cleanup_fakes(tmp_path)
+    assert h.stray_pids(tmp_path) == []
 
 
-def dump(events):
-    return json.dumps([e.to_dict() for e in events], sort_keys=True)
+def _run(tmp_path, scenario, mode, **kw):
+    prepared = h.make_prepared(tmp_path, scenario, **kw)
+    policy = None if mode is None else {"logging_content": mode}
+    prepared = dataclasses.replace(prepared, policy=policy)
+    drv = h.make_driver(tmp_path)
+    handle, events = h.run_to_end(drv, prepared)
+    return prepared, handle, events
 
 
-def _part(kind, text):
-    return {"type": kind, "timestamp": 1, "sessionID": "ses_a",
-            "part": {"id": "prt_1", "messageID": "msg_1", "text": text}}
+def _quoin_files(tmp_path, prepared):
+    store = h.store_of(tmp_path)
+    blobs = []
+    for path in sorted(store.iterdir()):
+        if path.is_file():
+            blobs.append((path.name, path.read_text(encoding="utf-8", errors="replace")))
+    return blobs
 
 
-def _tool(status, **state):
-    return {"type": "tool_use", "timestamp": 1, "sessionID": "ses_a",
-            "part": {"id": "prt_2", "messageID": "msg_1", "type": "tool", "tool": "read",
-                     "state": dict(status=status, **state)}}
+def _seed_scenario(seed="SEED"):
+    return ("seeded_content", {"seed": seed})
 
 
-def _error(message):
-    return {"type": "error", "timestamp": 1, "sessionID": "ses_a",
-            "error": {"name": "UnknownError", "data": {"message": message}}}
+def test_metadata_mode_keeps_every_content_site_out_of_quoin_files(tmp_path):
+    prepared, handle, _ = _run(tmp_path, _seed_scenario(), "metadata")
+    blobs = _quoin_files(tmp_path, prepared)
+    assert blobs
+    for suffix in SUFFIXES:
+        for name, text in blobs:
+            assert "SEED-" + suffix not in text, (suffix, name)
+    record = h.load_record(tmp_path, prepared.run_id)
+    assert record["stderr_tail"] == ""
+    assert record["stderr_summary"]["lines"] >= 1
+    assert record["stderr_summary"]["signals"] == []
+    assert len(record["stderr_summary"]["sha256_prefix"]) == 12
+    assert record["attempts"][0]["logging_content"] == "metadata"
 
 
-def _seed():
-    return "SEED-" + secrets.token_hex(8)
+def test_a_missing_policy_reads_as_metadata(tmp_path):
+    prepared, handle, _ = _run(tmp_path, _seed_scenario(), None)
+    for name, text in _quoin_files(tmp_path, prepared):
+        assert "SEED-" not in text, name
+    assert h.load_record(tmp_path, prepared.run_id)["attempts"][0]["logging_content"] == "metadata"
 
 
-SITES = {
-    "text": lambda s: _part("text", s),
-    "reasoning": lambda s: _part("reasoning", s),
-    "tool-title": lambda s: _tool("completed", title=s),
-    "tool-error": lambda s: _tool("error", error=s),
-    "native-error": lambda s: _error(s),
-}
+@pytest.mark.parametrize("suffix", SUFFIXES)
+def test_summary_mode_keeps_each_content_site_readable(tmp_path, suffix):
+    prepared, handle, _ = _run(tmp_path, _seed_scenario(), "summary")
+    joined = "\n".join(text for _, text in _quoin_files(tmp_path, prepared))
+    assert "SEED-" + suffix in joined
+    assert h.load_record(tmp_path, prepared.run_id)["attempts"][0]["logging_content"] == "summary"
 
 
-@pytest.mark.parametrize("site", sorted(SITES))
-def test_content_site_summary_keeps_text_metadata_drops_it(site):
-    seed = _seed()
-    obj = SITES[site](seed)
-    assert seed in dump(tr(obj, "summary"))
-    out = dump(tr(obj, "metadata"))
-    assert seed not in out
-    assert "[metadata] length=%d sha256=" % len(seed.encode()) in out
+def test_summary_and_metadata_runs_reach_the_same_outcome(tmp_path):
+    a, handle_a, _ = _run(tmp_path / "a", _seed_scenario(), "metadata")
+    b, handle_b, _ = _run(tmp_path / "b", _seed_scenario(), "summary")
+    oa, ob = handle_a.outcome, handle_b.outcome
+    assert (oa.state, oa.evidence, oa.reason) == (ob.state, ob.evidence, ob.reason)
+    ra = h.load_record(tmp_path / "a", a.run_id)
+    rb = h.load_record(tmp_path / "b", b.run_id)
+    assert ra["usage_totals"] == rb["usage_totals"]
 
 
-@pytest.mark.parametrize("site", sorted(SITES))
-def test_metadata_leaves_dedup_identity_unchanged(site):
-    obj = SITES[site](_seed())
-    summary, metadata = tr(obj, "summary")[0], tr(obj, "metadata")[0]
-    assert summary.native.id == metadata.native.id
-    assert summary.native.type == metadata.native.type
-    key = ev.native_key(obj, attempt=1, redact=redact)
-    assert key == ev.native_key(obj, attempt=1, redact=redact)
-    assert ev.content_hash(obj) == ev.content_hash(obj)
+def test_metadata_approval_patterns_are_digests(tmp_path):
+    prepared, handle, events = _run(tmp_path, ("seeded_approval", {"seed": "SEED"}), "metadata")
+    assert handle.outcome.state == "awaiting_approval"
+    approvals = [e for e in events if e.type is ev.EventType.APPROVAL_REQUIRED]
+    assert len(approvals) == 1
+    patterns = approvals[0].payload.patterns
+    assert patterns and all(ev.parse_metadata_summary(p) for p in patterns)
+    for name, text in _quoin_files(tmp_path, prepared):
+        assert "SEED-pattern" not in text, name
+    assert h.load_record(tmp_path, prepared.run_id)["stderr_summary"]["signals"] == ["approval"]
 
 
-def test_parse_metadata_summary_reads_redacted_length():
-    text = "abc " + REGISTERED + " é"
-    value = ev.metadata_summary(text, redact)
-    clean = redact(text).encode("utf-8")
-    assert ev.parse_metadata_summary(value) == (len(clean), hashlib.sha256(clean).hexdigest()[:12])
-    assert ev.metadata_summary(None, redact) is None
-    for bad in ("[metadata] length=1 sha256=ABC", "x [metadata] length=1 sha256=" + "0" * 12, 5, None):
-        assert ev.parse_metadata_summary(bad) is None
+def test_summary_approval_patterns_stay_readable(tmp_path):
+    prepared, handle, events = _run(tmp_path, ("seeded_approval", {"seed": "SEED"}), "summary")
+    approvals = [e for e in events if e.type is ev.EventType.APPROVAL_REQUIRED]
+    assert any("SEED-pattern" in p for p in approvals[0].payload.patterns)
 
 
-def test_registered_secret_absent_in_both_modes_and_digest_is_of_redacted_text():
-    obj = _part("text", "see " + REGISTERED)
-    for mode in ("summary", "metadata"):
-        assert REGISTERED not in dump(tr(obj, mode))
-    value = tr(obj, "metadata")[0].payload.summary
-    redacted = redact("see " + REGISTERED).encode()
-    assert ev.parse_metadata_summary(value) == (len(redacted), hashlib.sha256(redacted).hexdigest()[:12])
+def test_the_decoded_proxy_password_is_redacted():
+    redactor = launch_env.Redactor()
+    launch_env._register_proxy_secret(redactor, "http://proxyus%40er:s3cr%40tpassword@proxy.invalid:8080")
+    for plain in ("s3cr@tpassword", "proxyus@er", "proxyus@er:s3cr@tpassword"):
+        assert plain not in redactor("seen " + plain + " here"), plain
 
 
-REJECTED = "The user rejected permission to use this specific tool call."
-DENIED = (
-    "The user has specified a rule which prevents you from using this specific tool call. "
-    "Here are some of the relevant rules " + json.dumps([{"permission": "bash", "pattern": "rm *", "action": "deny"}])
-)
-
-
-def test_permission_classification_unchanged_under_metadata():
-    denied = tr(_tool("error", error=DENIED), "metadata")[0]
-    assert denied.payload.permission_outcome == "denied"
-    assert DENIED not in dump([denied])
-    rejected = tr(_tool("error", error=REJECTED), "metadata")[0]
-    assert rejected.type is ET.APPROVAL_REQUIRED
-
-
-def test_error_event_keeps_kind_and_status_under_metadata():
-    obj = {"type": "error", "timestamp": 1, "sessionID": "ses_a",
-           "error": {"name": "APIError", "data": {"message": _seed(), "statusCode": 429,
-                                                  "responseHeaders": {"retry-after": "7"}}}}
-    payload = tr(obj, "metadata")[0].payload
-    assert (payload.failure_kind, payload.http_status, payload.retry_after) == ("http", 429, "7")
-    assert payload.name == "APIError"
-
-
-def test_stderr_approval_metadata():
-    seed = _seed()
-    signal = ev.StderrSignal("approval", "bash", (seed, "second"), True)
-    summary = ev.approval_from_stderr(signal, redact=redact)
-    meta = ev.approval_from_stderr(signal, redact=redact, content="metadata")
-    assert seed in summary.patterns
-    assert seed not in json.dumps(meta.to_dict())
-    assert [ev.parse_metadata_summary(p) is not None for p in meta.patterns] == [True, True]
-    assert meta.permission == "bash"
-    odd = ev.StderrSignal("approval", "sk-looks-secret " + REGISTERED, ("p",), True)
-    shown = ev.approval_from_stderr(odd, redact=redact, content="metadata").permission
-    assert REGISTERED not in shown and shown.startswith("h-")
-    many = ev.StderrSignal("approval", "bash", tuple("p%d" % i for i in range(20)), True)
-    assert ev.approval_from_stderr(many, redact=redact, content="metadata").patterns[-1] == "…[4 more]"
-
-
-def test_unknown_mode_never_raises_in_translate_and_raises_in_pipeline():
-    seed = _seed()
-    assert seed not in dump(tr(_part("text", seed), "verbose"))
-    with pytest.raises(ValueError):
-        ev.EventPipeline(RUN_ID, 1, observed_clock=lambda: 1.0, content="verbose")
-
-
-def test_pipeline_content_mode_reaches_translation():
-    seed = _seed()
-    raw = (json.dumps(_part("text", seed)) + "\n").encode()
-    summary = ev.EventPipeline(RUN_ID, 1, redact=redact, observed_clock=lambda: 1.0)
-    meta = ev.EventPipeline(RUN_ID, 1, redact=redact, observed_clock=lambda: 1.0, content="metadata")
-    assert seed in dump(summary.feed_line(raw))
-    assert seed not in dump(meta.feed_line(raw))
+def test_the_decoded_proxy_password_is_absent_from_stderr_tail(tmp_path):
+    prepared = h.make_prepared(
+        tmp_path, {"attempts": [{"steps": [
+            {"do": "stderr", "text": "proxy said s3cr@tpassword"},
+            {"do": "emit_fixture", "name": "plain-complete.jsonl"}, {"do": "exit", "code": 0}]}]})
+    launch_env._register_proxy_secret(prepared.launch_env.redactor, "http://user:s3cr%40tpassword@proxy.invalid:8080")
+    prepared = dataclasses.replace(prepared, policy={"logging_content": "summary"})
+    h.run_to_end(h.make_driver(tmp_path), prepared)
+    assert "s3cr@tpassword" not in h.load_record(tmp_path, prepared.run_id)["stderr_tail"]

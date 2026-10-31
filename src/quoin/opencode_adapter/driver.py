@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import hashlib
 import json
 import os
 import queue
@@ -664,6 +665,14 @@ def _fetched_layers(baseline: Sequence[Tuple[str, str, Dict[str, Tuple[int, int]
 
 
 
+def _logging_content(prepared: "PreparedRun") -> str:
+    """The content mode of a prepared run; a missing value reads as metadata so
+    a run without a policy never stores text."""
+    policy = prepared.policy if isinstance(prepared.policy, Mapping) else {}
+    value = policy.get("logging_content")
+    return value if value in ev.CONTENT_MODES else "metadata"
+
+
 class RuntimeHandle:
     """One running attempt. Created by `start`/`resume`, consumed by
     `observe`, ended by `cancel`. Internal fields are documented where the
@@ -692,6 +701,11 @@ class RuntimeHandle:
         self.event_count = 0
         self.leftovers_count = 0
         self.stderr_discarded = 0
+        # Written only by the stderr thread; read after that thread is joined.
+        self.stderr_lines = 0
+        self.stderr_bytes = 0
+        self.stderr_hash = hashlib.sha256()
+        self.stderr_signals: set = set()
         self.last_scan = 0.0
         self.eof_at: Optional[float] = None
         self.started_yielded = False
@@ -1142,6 +1156,7 @@ class OpenCodeDriver:
             policy={
                 "profile": evaluation.profile,
                 "classification": evaluation.effective.classification,
+                "logging_content": profile_policy.view(evaluation.effective).logging_content,
                 "limits": limits,
                 "unqualified_models": list(fresh.sidecar.get("unqualified_models") or []),
             },
@@ -1924,6 +1939,7 @@ class OpenCodeDriver:
                 prepared.run_id, number, redact=redactor, observed_clock=self._clock,
                 start_sequence=seed.start_sequence, deduper=seed.deduper,
                 max_line_bytes=self._max_line_bytes,
+                content=_logging_content(prepared),
             )
             driver_start = self._proc.start_time(os.getpid())
             fetch_baseline = _fetch_baseline(prepared.fetch_watch)
@@ -1964,6 +1980,7 @@ class OpenCodeDriver:
                     driver_pid=os.getpid(), driver_start=driver_start, resume_mode=seed.resume_mode,
                     state="running", started_at=_iso(self._clock), reason=None,
                     input_hashes_before=hashes_before,
+                    logging_content=_logging_content(prepared),
                 )
                 if entry is not staged:
                     attempts.append(entry)
@@ -2087,12 +2104,16 @@ class OpenCodeDriver:
                 text = chunk.decode("utf-8", "replace")
                 found = ev.parse_stderr_line(text.rstrip("\r\n"))
                 if found is not None:
+                    handle.stderr_signals.add(found.kind)
                     handle.signal_q.put(found)
                 # Redact the whole chunk first, then bound it, so a secret that
                 # straddles the bound is replaced before it can be cut.
                 shown = handle.redactor(text.rstrip("\r\n"))
                 shown = shown.encode("utf-8")[:bound].decode("utf-8", "ignore")
                 handle.stderr_ring.append(shown)
+                handle.stderr_lines += 1
+                handle.stderr_bytes += len(shown.encode("utf-8"))
+                handle.stderr_hash.update(shown.encode("utf-8") + b"\n")
         except (OSError, ValueError):
             return
 
@@ -2170,7 +2191,10 @@ class OpenCodeDriver:
             except queue.Empty:
                 return out
             if found.kind == "approval":
-                payload = ev.approval_from_stderr(found, redact=handle.redactor)
+                payload = ev.approval_from_stderr(
+                    found, redact=handle.redactor,
+                    content=_logging_content(handle.prepared),
+                )
                 event = self._emit_driver(handle, EventType.APPROVAL_REQUIRED, payload)
                 handle.facts.approval = True
                 if event is not None:
@@ -2404,7 +2428,15 @@ class OpenCodeDriver:
             record["retry_usage"] = {
                 "tokens": usage.tokens, "cost": None if usage.cost is None else str(usage.cost),
             }
-            record["stderr_tail"] = handle.redactor("\n".join(list(handle.stderr_ring)))
+            logging_content = _logging_content(handle.prepared)
+            record["stderr_tail"] = (
+                handle.redactor("\n".join(list(handle.stderr_ring))) if logging_content == "summary" else ""
+            )
+            record["stderr_summary"] = {
+                "lines": handle.stderr_lines, "bytes": handle.stderr_bytes,
+                "sha256_prefix": handle.stderr_hash.hexdigest()[:12],
+                "signals": sorted(handle.stderr_signals), "discarded": handle.stderr_discarded,
+            }
             record["resume_blocked"] = outcome.resume_blocked
             record["outcome"] = {
                 "state": outcome.state, "evidence": outcome.evidence, "reason": outcome.reason,

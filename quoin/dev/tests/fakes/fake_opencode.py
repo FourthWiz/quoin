@@ -214,6 +214,48 @@ def _secret_echo(secret: str = "sk-FAKEECHOSECRET0123456789") -> Dict[str, Any]:
     )
 
 
+def _reasoning(pid: str, body: str) -> Dict[str, Any]:
+    return _emit(
+        "reasoning",
+        part={"id": pid, "messageID": "msg_fake", "type": "reasoning", "text": body,
+              "time": {"start": 1, "end": 2}},
+    )
+
+
+def _tool_error(pid: str, tool: str, error: str) -> Dict[str, Any]:
+    return _emit(
+        "tool_use",
+        part={"id": pid, "messageID": "msg_fake", "type": "tool", "tool": tool,
+              "state": {"status": "error", "input": {}, "error": error}},
+    )
+
+
+def _seeded_content(seed: str = "SEED") -> Dict[str, Any]:
+    """Every content site carries ``seed`` plus a per-site suffix; no approval
+    notice, so the attempt runs to a normal finish."""
+    return _scenario(
+        _step_start("prt_s1"),
+        _text("prt_t1", "text carries %s-text" % seed),
+        _reasoning("prt_r1", "reasoning carries %s-reasoning" % seed),
+        _tool_done("prt_b1", "bash", title="title carries %s-title" % seed),
+        _tool_error("prt_b2", "bash", "failed with %s-toolerr" % seed),
+        _session_error("native carries %s-native" % seed),
+        {"do": "stderr", "text": "stderr carries %s-stderr" % seed},
+        *_clean_finish(),
+    )
+
+
+def _seeded_approval(seed: str = "SEED") -> Dict[str, Any]:
+    """A stderr approval notice arrives well after stdout so the two reader
+    threads cannot race; the fake then waits to be terminated."""
+    return _scenario(
+        _step_start("prt_s1"),
+        {"do": "sleep", "seconds": 0.2},
+        {"do": "stderr", "text": "! permission requested: bash (rm %s-pattern); auto-rejecting" % seed},
+        {"do": "hang"},
+    )
+
+
 def _secret_echo_straddle(secret: str = "sk-FAKESTRADDLE0123456789") -> Dict[str, Any]:
     # The secret starts 4 bytes before the 8 KiB boundary of the stderr stream.
     return _scenario(
@@ -466,6 +508,8 @@ SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
         {"do": "exit", "code": 0}),
     "secret_echo": _secret_echo,
     "secret_echo_straddle": _secret_echo_straddle,
+    "seeded_content": _seeded_content,
+    "seeded_approval": _seeded_approval,
     "grandchild_holds_stdout": lambda: _scenario(
         _step_start("prt_s1"), {"do": "spawn_stdout_holder"},
         {"do": "emit_fixture", "name": "plain-complete.jsonl"}, {"do": "exit", "code": 0}),

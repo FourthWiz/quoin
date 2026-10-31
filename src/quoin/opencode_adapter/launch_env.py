@@ -23,7 +23,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
 from . import compiler, errors, install, inventory, jsonio, launch_codes, paths
@@ -188,6 +188,17 @@ def _register_proxy_secret(redactor: Redactor, value: str) -> None:
         redactor.add(username)
     if password:
         redactor.add(password)
+    # Percent-encoded credentials appear decoded in tool output; register the
+    # decoded forms of everything registered above.
+    candidates = [value, raw, userinfo, username, password]
+    if ":" in raw:
+        candidates.append(raw.split(":", 1)[1])
+    for text in candidates:
+        if not text:
+            continue
+        decoded = unquote(text)
+        if decoded and decoded != text:
+            redactor.add(decoded)
 
 
 def hardening_env(
