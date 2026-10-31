@@ -395,11 +395,25 @@ class _Hidden(str):
         return "'<hidden>'"
 
 
+def _url_is_unambiguous(url: str) -> bool:
+    """Printable ASCII without whitespace or a backslash (a JavaScript URL
+    parser reads it as a path separator) and no percent-escape in the
+    authority, so every parser reads the same host. Mirrors
+    `config.url_is_unambiguous`; this module imports nothing from the adapter
+    beyond errors and jsonio."""
+    if not url or any(ord(c) <= 32 or ord(c) > 126 for c in url) or "\\" in url:
+        return False
+    try:
+        return "%" not in urlsplit(url).netloc
+    except ValueError:
+        return False
+
+
 def url_facts(url: Any) -> Dict[str, Any]:
     """The scheme and host of a URL, for the network census. The host is the
     parser's own reading, unnormalised: the census validates and normalises it
     before any comparison, and a URL the parser cannot read gives None."""
-    if not isinstance(url, str):
+    if not isinstance(url, str) or not _url_is_unambiguous(url):
         return {"url_host": None, "url_scheme": None}
     try:
         parts = urlsplit(url)

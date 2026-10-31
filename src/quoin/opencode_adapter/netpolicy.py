@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 from urllib.parse import urlsplit
 
-from . import config, effective_record
+from . import config, effective_record, isolation
 
 # ------------------------------------------------------------------ closed sets
 
@@ -158,7 +158,7 @@ def _parse_endpoint(url: Any) -> Tuple[Optional[str], Optional[str], Optional[in
     """``(host_key, scheme, port)`` or ``(None, None, None)`` when the URL is
     not a plain http(s) endpoint with a well-formed host."""
     try:
-        if not isinstance(url, str):
+        if not isinstance(url, str) or not config.url_is_unambiguous(url):
             return None, None, None
         parts = urlsplit(url)
         host = parts.hostname
@@ -189,10 +189,13 @@ def _read_registry_hosts(files: Sequence[Path]) -> Optional[List[str]]:
     hosts: List[str] = []
     for path in files:
         try:
-            text = Path(path).read_text(encoding="utf-8")
-        except FileNotFoundError:
-            continue
-        except (OSError, UnicodeError):
+            if not os.path.lexists(path):
+                continue
+            raw = isolation._read_bounded(path)
+            if raw is None or len(raw) >= isolation.MAX_READ_BYTES:
+                return None
+            text = raw.decode("utf-8")
+        except (OSError, UnicodeError, ValueError):
             return None
         for line in text.splitlines():
             match = re.match(r"^\s*(?:@[^:=\s]+:)?registry\s*=\s*(.+?)\s*$", line)

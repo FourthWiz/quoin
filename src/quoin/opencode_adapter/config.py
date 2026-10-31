@@ -241,6 +241,20 @@ def host_key(host: str) -> str:
     return address.compressed
 
 
+def url_is_unambiguous(url: Any) -> bool:
+    """True when every URL parser reads the same host from `url`: printable
+    ASCII only, no whitespace, no backslash (a JavaScript parser reads it as a
+    path separator) and no percent-escape in the authority."""
+    if not isinstance(url, str) or not url:
+        return False
+    if any(ord(c) <= 32 or ord(c) > 126 for c in url) or "\\" in url:
+        return False
+    try:
+        return "%" not in urlsplit(url).netloc
+    except ValueError:
+        return False
+
+
 def _check_base_url(url: str, path: Tuple[Any, ...], label: str) -> Optional[ConfigError]:
     if any(c.isspace() or ord(c) < 32 for c in url):
         return make_error("invalid-url", label, path, "invalid-url")

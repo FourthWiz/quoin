@@ -399,3 +399,57 @@ def test_readme_refusal_table_matches_the_registry():
     section = readme.split("**Launch policy refusals.**", 1)[1].split("**Enforcement table.**", 1)[0]
     rows = set(re.findall(r"^\| `([a-z-]+)` \|", section, flags=re.M))
     assert rows == set(launch_codes.ISOLATION_NETWORK_CODES)
+
+
+# ----------------------------------------- parser-disagreement and bounded reads
+
+BACKSLASH_URL = "https://evil.example\\@api.allowed.example/"
+
+
+def test_a_backslash_before_at_is_never_read_as_the_allowed_host():
+    assert netpolicy._parse_endpoint(BACKSLASH_URL) == (None, None, None)
+    from quoin.opencode_adapter import config
+    assert config.url_is_unambiguous(BACKSLASH_URL) is False
+    assert inventory.url_facts(BACKSLASH_URL) == {"url_host": None, "url_scheme": None}
+
+
+def test_a_backslash_remote_mcp_url_has_no_host():
+    facts = inventory.url_facts("https://evil.example\\@mcp.example.org/")
+    inv = _inv(_entry("mcp-remote", **facts))
+    refusal = _approve(_effective(allowed=("gw.example.com", "mcp.example.org")), inv=inv)
+    assert refusal.code == "mcp-remote-denied" and refusal.detail == "host-unparseable"
+
+
+def test_a_backslash_npm_registry_is_unknown(tmp_path):
+    rc = _npm_world(tmp_path, "registry=" + BACKSLASH_URL + "\n")
+    effective = _install_allowed(allowed=("gw.example.com", "api.allowed.example"))
+    assert _approve(effective, npm=rc).detail == "registry-unknown"
+
+
+def test_a_backslash_proxy_is_unparseable():
+    effective = _effective(providers={"gw": _view(proxy=True)}, allowed=("gw.example.com", "api.allowed.example"))
+    refusal = _approve(effective, ambient={"HTTPS_PROXY": BACKSLASH_URL})
+    assert refusal.code == "proxy-route-not-approved" and refusal.detail == "host-unparseable"
+
+
+def test_a_symlinked_npmrc_is_unknown(tmp_path):
+    target = tmp_path / "real"
+    target.write_text("registry=https://npm.example.com/\n")
+    rc = tmp_path / "npmrc"
+    rc.symlink_to(target)
+    census = _census(_install_allowed(allowed=("gw.example.com", "npm.example.com")), npm=rc)
+    assert census.package_registry[0].kind == "unparseable"
+
+
+def test_an_npmrc_linked_to_a_device_is_unknown_without_reading(tmp_path):
+    rc = tmp_path / "npmrc"
+    rc.symlink_to("/dev/zero")
+    census = _census(_install_allowed(), npm=rc)
+    assert census.package_registry[0].kind == "unparseable"
+
+
+def test_an_oversized_npmrc_is_unknown(tmp_path):
+    rc = tmp_path / "npmrc"
+    rc.write_text("registry=https://npm.example.com/\n" + "#" * 70000 + "\n")
+    census = _census(_install_allowed(allowed=("gw.example.com", "npm.example.com")), npm=rc)
+    assert census.package_registry[0].kind == "unparseable"
