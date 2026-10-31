@@ -194,6 +194,41 @@ every comparison unstable and make the offline preview disagree with the launch.
 Scope: through a proxy the name is checked end to end but address ranges are not; whether
 the child honours the proxy stays unverified.
 
+### Metadata-only event logging for work profiles
+
+Status: decided
+Decision: under a work classification Quoin's event sidecar, run record and checkpoint store the
+length and a 12-hex digest of redacted text in place of text parts, reasoning, tool titles, tool
+errors, provider error messages and approval patterns. The string form sits inside the existing
+fields so the event schema does not change.
+Rationale: a work profile's default logs must not hold prompts, retrieved messages or tool output.
+The digest covers the redacted text and is not a secrecy control; a short or guessable text can be
+confirmed offline.
+Scope: OpenCode's own log and session database are not controlled by this setting.
+
+### Retention sweep scope and evidence
+
+Status: decided
+Decision: a sweep at launch removes aged units per class, never the session database or
+credentials, and keeps units that an unfinished task, a live lock, an active run or an unreadable
+store may still need. A task is finished only after its folder moved under a finalized directory.
+Rationale: the workflow state cannot tell a finished multi-stage task from one paused between
+stages, so keeping more is the safe direction. Cache is removed as whole package units because a
+partly removed package can break a session that offline policy cannot repair.
+Scope: the 30-day work values are local defaults; the maintainer retention decision below is
+unchanged.
+
+### Purge scope and kept credentials
+
+Status: decided
+Decision: purge removes every top-level entry of a profile directory except the stamp, the project
+index and the credential files, plus the profile's run sidecars in every project it touched, and
+needs an explicit confirmation flag.
+Rationale: the session database cannot be recovered, so an accidental re-run must not delete. The
+npm registry file can hold tokens and the MCP auth file is uncited, so both are kept.
+Scope: purge refuses while a run or lock of the profile is active; an open interactive session is
+not detected.
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.

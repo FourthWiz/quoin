@@ -321,3 +321,13 @@ def test_purge_refuses_inside_launch_and_with_lock(tmp_path, monkeypatch, capsys
     assert code == 2 and body["code"] == "purge-run-active"
     assert body["blocking"][0]["task"] == "t1" and body["blocking"][0]["pid_file"].endswith("run-supervisor-t1.pid")
     assert _tree_hash(adapter) == before
+
+
+# ---- documentation -----------------------------------------------------------------
+
+def test_readme_documents_logging_retention_and_purge():
+    text = (Path(__file__).resolve().parents[2] / "adapters" / "opencode" / "README.md").read_text(encoding="utf-8")
+    start = text.index("### Logging, retention and purge")
+    section = text[start:text.index("\n### ", start + 5)]
+    for needle in ("purge", "--dry-run", "--yes", "auth.json", "metadata", *launch_codes.RETENTION_CODES):
+        assert needle in section, needle

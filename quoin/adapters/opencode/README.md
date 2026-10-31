@@ -576,6 +576,72 @@ another profile's directories refuses with `env-path-outside-profile`.
 Snapshot, test and window state moved under the profile directory. Workflows
 started before this change fail closed and need to be configured again.
 
+### Logging, retention and purge
+
+Two content modes decide what Quoin's own run files hold. Under `metadata` (the
+default for a work project) the event sidecar, the run record and the
+checkpoint store lengths and 12-hex digests of redacted text instead of the
+text: text and reasoning parts, tool titles, tool error text, provider error
+messages and approval patterns. Tool names, statuses, ids, usage and outcomes
+stay readable, and the run record keeps only counts and a digest of the child's
+standard error. Under `summary` (the personal default) bounded, redacted text is
+kept. The digest is not a secrecy control: a short or guessable text that was
+not registered with the redactor can be confirmed offline by guessing it. The
+setting covers Quoin's files only. OpenCode's own log, its session database and
+its other runtime files (its state and other data subtrees; the list is not
+exhaustive) are outside it; they are covered by retention and purge.
+
+A retention sweep runs once per process per profile when a new run starts and
+before an interactive session opens. It never refuses a launch. Per class, a
+unit older than its days setting is removed:
+
+| class | what | days key |
+|---|---|---|
+| runs | this project's run sidecars of the profile, plus empty record-less sidecars | `runs_days` |
+| tests, workflow, snapshots | the profile's test pins, window files and leftover snapshots | `runs_days` |
+| records | interactive-start records | `runs_days` |
+| cache, tmp | cached packages and downloaded binaries, temporary files | `cache_days` |
+| logs | OpenCode log files | `logs_days` |
+| crash | heap snapshots in the OpenCode log directory | `crash_days` |
+| exports | exported files | `exports_days` |
+
+The minimum is one day, and a null value keeps the class. A project's own value
+applies to that project's units; every other unit uses the profile value. A
+cache unit is a whole immediate-child package directory (a manifest, its lock
+file and `node_modules` together), aged by the newest file or directory in it. A
+swept cache is not fetched again when the profile uses offline package policy
+(`package_install: deny`) or a network policy without the download host, so the
+next run loses that package or tool binary; set `cache_days` to null to keep the
+cache. The session database, `auth.json`, `mcp-auth.json`, `state/npmrc`, the
+profile stamp and the project index are never swept.
+
+The sweep keeps evidence: a run that a workflow state, continuation record or
+task pointer of an unfinished task refers to, a task's test and window files
+while it is unfinished, snapshots while the project has a live task lock, and
+every unit of a project whose run store cannot be read. A task counts as
+finished only after its folder moved under a `finalized` directory. Cache and
+temporary files are skipped while another run of the profile is active. A run
+whose liveness cannot be decided (no attempt yet, a staged resume attempt, no
+process table) is held for its own deadline plus an hour and then treated as
+finished. An open interactive session holds no run record and is not detected;
+close it before a purge.
+
+`quoin opencode purge --profile P [--project-root R] [--dry-run] [--yes] [--json]`
+removes everything under the profile's storage directory except the profile
+stamp, the project index, `auth.json`, `mcp-auth.json` and `state/npmrc`, and
+removes this profile's run sidecars in every project it was used in. Task
+folders, workflow state, continuation records and gate files are never touched.
+`--dry-run` lists what would go and what is kept; deleting needs `--yes`
+(without it the command prints the plan and exits 2). Exit codes: 0 done, 1 some
+items could not be removed, 2 refused, 3 failed. Refusals: `purge-run-active`
+(names each blocking run or lock and its reason; a stale supervisor pid file,
+whose process is gone but whose pid was reused, is cleared by deleting the named
+file), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`
+and `purge-confirm-required`. After a purge, a continuation from a purged run
+refuses with the "has no effective-config record" message; that is expected. A
+later launch of the profile with the other classification still refuses because
+the stamp is kept.
+
 ### Configuration inventory
 
 Before every launch the driver reads every configuration source OpenCode would
