@@ -225,3 +225,99 @@ def test_purge_refused_codes_are_registered():
     assert codes <= set(launch_codes.RETENTION_CODES)
     assert set(launch_codes.RETENTION_CODES) <= set(launch_codes.REGISTRY)
     assert set(launch_codes.RETENTION_CODES) == set(rt.PURGE_MESSAGES)
+
+
+# ---- command --------------------------------------------------------------------
+
+import hashlib  # noqa: E402
+
+from quoin import cli  # noqa: E402
+
+
+def _tree_hash(root):
+    digest = hashlib.sha256()
+    for path in sorted(Path(root).rglob("*")):
+        digest.update(str(path.relative_to(root)).encode())
+        if path.is_file():
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def _cli_world(tmp_path, monkeypatch):
+    adapter, dirs, project, store = _world(tmp_path)
+    monkeypatch.setattr(profile_dirs, "adapter_root", lambda env, home: adapter)
+    monkeypatch.delenv(paths.ENV_STATE_DIR, raising=False)
+    _write_run(store, RUN_A, _record())
+    _write_run(store, RUN_B, _record(profile="personal"))
+    _touch(store / "workflow-t1.json", text=json.dumps({"run": RUN_A}))
+    _touch(store / "task-t1.json", text=json.dumps({"run": RUN_A}))
+    _touch(project / ".workflow_artifacts" / "t1" / "gate-1.md", text="gate")
+    _touch(dirs.tests / "k" / "t" / "pin")
+    _touch(dirs.exports / "e")
+    _touch(dirs.data / "opencode" / "log" / "heap-1.heapsnapshot")
+    return adapter, dirs, project, store
+
+
+def _run_cli(capsys, *argv):
+    code = cli.main(["opencode", "purge", "--profile", "work", *argv])
+    out = capsys.readouterr()
+    return code, out.out, out.err
+
+
+def test_purge_needs_confirmation(tmp_path, monkeypatch, capsys):
+    adapter, dirs, project, store = _cli_world(tmp_path, monkeypatch)
+    before = _tree_hash(adapter)
+    code, out, err = _run_cli(capsys)
+    assert code == 2 and "purge-confirm-required" in err
+    assert _tree_hash(adapter) == before
+    code, out, err = _run_cli(capsys, "--json")
+    body = json.loads(out)
+    assert code == 2 and body["outcome"] == "refused" and body["code"] == "purge-confirm-required"
+    assert body["remove"]
+    assert _tree_hash(adapter) == before
+    code, out, _ = _run_cli(capsys, "--dry-run", "--yes", "--json")
+    assert code == 0 and json.loads(out)["outcome"] == "planned"
+    assert _tree_hash(adapter) == before
+
+
+def test_purge_parity_and_scope(tmp_path, monkeypatch, capsys):
+    adapter, dirs, project, store = _cli_world(tmp_path, monkeypatch)
+    wa = project / ".workflow_artifacts"
+    guarded = {p: p.read_bytes() for p in list(wa.rglob("*")) if p.is_file()
+               and not p.name.startswith("oc-")}
+    _, out, _ = _run_cli(capsys, "--dry-run", "--json")
+    planned = {r["path"] for r in json.loads(out)["remove"]}
+    code, out, _ = _run_cli(capsys, "--yes", "--json")
+    body = json.loads(out)
+    assert code == 0 and body["outcome"] == "purged"
+    assert {r["path"] for r in body["remove"]} == planned
+    left = {str(p.relative_to(dirs.root)) for p in dirs.root.rglob("*") if p.is_file()}
+    assert left == {"profile.json", "projects.json", "projects.json.lock",
+                    "data/opencode/auth.json", "data/opencode/mcp-auth.json", "state/npmrc"}
+    assert not (store / (RUN_A + ".run.json")).exists()
+    assert (store / (RUN_B + ".run.json")).exists()
+    for path, content in guarded.items():
+        assert path.read_bytes() == content
+    assert "secret" not in out
+
+
+def test_purge_text_output_hides_content(tmp_path, monkeypatch, capsys):
+    _cli_world(tmp_path, monkeypatch)
+    code, out, err = _run_cli(capsys, "--yes")
+    assert code == 0 and "secret" not in out + err and "purged" in out
+
+
+def test_purge_refuses_inside_launch_and_with_lock(tmp_path, monkeypatch, capsys):
+    adapter, dirs, project, store = _cli_world(tmp_path, monkeypatch)
+    before = _tree_hash(adapter)
+    monkeypatch.setenv(paths.ENV_STATE_DIR, "/x")
+    code, _, err = _run_cli(capsys, "--yes")
+    assert code == 2 and "purge-inside-launch" in err
+    monkeypatch.delenv(paths.ENV_STATE_DIR)
+    _touch(project / ".workflow_artifacts" / "memory" / "run-supervisor-t1.pid", text=json.dumps({"pid": os.getpid()}))
+    before = _tree_hash(adapter)
+    code, out, _ = _run_cli(capsys, "--yes", "--json")
+    body = json.loads(out)
+    assert code == 2 and body["code"] == "purge-run-active"
+    assert body["blocking"][0]["task"] == "t1" and body["blocking"][0]["pid_file"].endswith("run-supervisor-t1.pid")
+    assert _tree_hash(adapter) == before

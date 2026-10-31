@@ -2417,6 +2417,120 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
     return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
 
 
+def _purge_display(item_or_kept, plan_root: str) -> str:
+    shown = getattr(item_or_kept, "display")
+    if shown.startswith("oc-"):
+        root = getattr(item_or_kept, "root", "")
+        return (_home_relative(root) + "/" + shown) if root else shown
+    return "PROFILE/" + shown
+
+
+def _home_relative(path: str) -> str:
+    home = str(pathlib.Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
+def _purge_report(plan, outcome: str, dry_run: bool, failed=(), extra=None) -> dict:
+    report = {
+        "profile": plan.profile, "dry_run": dry_run, "outcome": outcome,
+        "remove": [{"path": _purge_display(i, ""), "class": i.cls, "files": i.files, "bytes": i.bytes}
+                   for i in plan.remove],
+        "keep": [{"path": _purge_display(k, ""), "reason": k.reason} for k in plan.keep],
+        "referenced_runs": [dict(r, project=_home_relative(r["project"])) for r in plan.referenced_runs],
+        "stores_not_visited": [dict(r, project=_home_relative(r["project"])) for r in plan.stores_not_visited],
+        "failed": [{"path": "PROFILE/" + d if not d.startswith("oc-") else d, "reason": r} for d, r in failed],
+        "truncated": plan.truncated,
+    }
+    if extra:
+        report.update(extra)
+    return report
+
+
+def _print_purge_text(report: dict) -> None:
+    print("quoin: opencode purge %s: %s" % (report["profile"], report["outcome"]))
+    blocks = (
+        ("remove", [("%s  [%s, %d files, %d bytes]" % (r["path"], r["class"], r["files"], r["bytes"]))
+                    for r in report["remove"]]),
+        ("keep", ["%s  [%s]" % (r["path"], r["reason"]) for r in report["keep"]]),
+        ("referenced runs (removed by purge)",
+         ["%s  task %s in %s (%s)" % (r["run_id"], r["task"], r["project"], r["referenced_by"])
+          for r in report["referenced_runs"]]),
+        ("not visited", ["%s  [%s]" % (r["project"], r["reason"]) for r in report["stores_not_visited"]]),
+        ("failed", ["%s  [%s]" % (r["path"], r["reason"]) for r in report["failed"]]),
+    )
+    for title, lines in blocks:
+        if lines:
+            print(title + ":")
+            for line in lines:
+                print("  " + line)
+    print("total: %d item(s), %d file(s), %d byte(s)%s" % (
+        len(report["remove"]), sum(r["files"] for r in report["remove"]),
+        sum(r["bytes"] for r in report["remove"]), "; walk truncated" if report["truncated"] else ""))
+
+
+def _cmd_opencode_purge(args: argparse.Namespace) -> int:
+    """`quoin opencode purge`: delete a profile's stored data, keeping credentials."""
+    import time as _time  # noqa: PLC0415
+
+    from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
+
+    as_json = bool(args.json)
+
+    def refuse(exc, plan=None) -> int:
+        blocking = [
+            {("task" if b.reason == "live-lock" else "run_id"): b.run_id_or_task,
+             "project": _home_relative(b.project), "reason": b.reason,
+             **({"pid_file": b.pid_file} if b.pid_file else {})}
+            for b in exc.blocking
+        ]
+        if as_json:
+            body = _purge_report(plan, "refused", args.dry_run) if plan is not None else {"profile": args.profile}
+            body.update({"outcome": "refused", "code": exc.code, "message": exc.message, "blocking": blocking})
+            print(json.dumps(body, sort_keys=True))
+        else:
+            print("quoin: opencode purge: %s: %s" % (exc.code, exc.message), file=sys.stderr)
+            for item in blocking:
+                print("quoin: opencode purge: blocked by %s" % " ".join("%s=%s" % kv for kv in sorted(item.items())),
+                      file=sys.stderr)
+        return 2
+
+    try:
+        adapter = profile_dirs.adapter_root(os.environ, pathlib.Path.home())
+        extra = pathlib.Path(args.project_root).resolve() if args.project_root else None
+        plan = retention.plan_purge(
+            adapter_root=adapter, profile=args.profile, extra_project=extra, env=os.environ,
+            uid=os.getuid(), table=proctree.snapshot(), now=_time.time(),
+        )
+    except retention.PurgeRefused as exc:
+        return refuse(exc)
+    except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
+        print("quoin: opencode purge failed: %s" % type(exc).__name__, file=sys.stderr)
+        return 3
+
+    def emit(report: dict) -> None:
+        if as_json:
+            print(json.dumps(report, sort_keys=True))
+        else:
+            _print_purge_text(report)
+
+    if args.dry_run:
+        emit(_purge_report(plan, "planned" if plan.remove else "nothing-to-do", True))
+        return 0
+    if not args.yes:
+        exc = retention.PurgeRefused("purge-confirm-required")
+        if not as_json:
+            _print_purge_text(_purge_report(plan, "planned", False))
+        return refuse(exc, plan)
+    if not plan.remove:
+        emit(_purge_report(plan, "nothing-to-do", False))
+        return 0
+    result = retention.execute(plan, uid=os.getuid())
+    done = retention.Plan(plan.profile, "purge", result.removed, plan.keep, plan.referenced_runs,
+                          plan.stores_not_visited, plan.truncated)
+    emit(_purge_report(done, "partial" if result.failed else "purged", False, failed=result.failed))
+    return 1 if result.failed else 0
+
+
 def _opencode_start_sweep(launch, project_root) -> None:
     """Age out old profile storage just before the TUI starts; never blocks the start."""
     try:
@@ -3459,6 +3573,28 @@ def main(argv: list[str] | None = None) -> int:
     status_target.add_argument("--run-id", help="Report this run id instead of a task's latest run.")
     opencode_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
 
+    opencode_purge_p = opencode_sub.add_parser(
+        "purge",
+        description=(
+            "Delete a runtime profile's stored data: its OpenCode data and state (including the session "
+            "database), cache, temporary files, exports, start records, test and window files, snapshots, "
+            "crash files, compiled configuration and the run sidecars of this profile in every project it "
+            "was used in. Kept: the profile stamp, the project index, auth.json, mcp-auth.json and the npm "
+            "registry file. Task folders, workflow state, continuation records and gate files under "
+            ".workflow_artifacts are never touched. Refuses while a run of the profile is active. Deleting "
+            "needs --yes; --dry-run lists without deleting."
+        ),
+        help="Delete a runtime profile's stored data (credentials are kept)",
+    )
+    opencode_purge_p.add_argument("--profile", required=True, help="Runtime profile whose storage to purge.")
+    opencode_purge_p.add_argument(
+        "--project-root", default=None,
+        help="Also visit this project's run store when the profile's project index does not list it.",
+    )
+    opencode_purge_p.add_argument("--dry-run", action="store_true", help="List what would be removed and kept; delete nothing.")
+    opencode_purge_p.add_argument("--yes", action="store_true", help="Confirm the deletion.")
+    opencode_purge_p.add_argument("--json", action="store_true", help="Print the result as one JSON object.")
+
     opencode_start_p = opencode_sub.add_parser(
         "start",
         description=(
@@ -3907,6 +4043,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_probe(args)
         if args.opencode_command == "status":
             return _cmd_opencode_status(args)
+        if args.opencode_command == "purge":
+            return _cmd_opencode_purge(args)
         if args.opencode_command == "start":
             return _cmd_opencode_start(args)
         if args.opencode_command == "gate":
