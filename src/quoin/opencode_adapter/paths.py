@@ -91,18 +91,26 @@ def managed_policy_path(env: Mapping[str, str]) -> Optional[Path]:
 
 # The trusted managed policy lives at a fixed location under a root-owned
 # directory; no environment variable, flag or project value can move it. The
-# same directories hold the isolation attestation file in a later stage.
+# same directories hold the isolation attestation file.
 TRUSTED_POLICY_DIRS = (
     "/Library/Application Support/quoin/opencode",
     "/etc/quoin/opencode",
 )
 TRUSTED_POLICY_NAME = "managed-policy.json"
+ATTESTATION_NAME = "isolation-attestation.json"
 
 
 def trusted_policy_path(platform: str = sys.platform) -> Path:
     """Fixed path of the trusted managed policy file (macOS or other POSIX)."""
     directory = TRUSTED_POLICY_DIRS[0] if platform == "darwin" else TRUSTED_POLICY_DIRS[1]
     return Path(directory) / TRUSTED_POLICY_NAME
+
+
+def attestation_path(platform: str = sys.platform) -> Path:
+    """Fixed path of the isolation attestation file, beside the trusted
+    policy. Nothing from the environment can move it."""
+    directory = TRUSTED_POLICY_DIRS[0] if platform == "darwin" else TRUSTED_POLICY_DIRS[1]
+    return Path(directory) / ATTESTATION_NAME
 
 
 def project_runtime_path(project_root: Path) -> Path:
