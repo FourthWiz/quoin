@@ -163,11 +163,13 @@ def test_unreadable_store_is_not_visited(tmp_path):
     memory.mkdir(exist_ok=True)
     memory.chmod(0)
     try:
-        plan = _plan(adapter)
+        with pytest.raises(rt.PurgeRefused) as refused:
+            _plan(adapter)
     finally:
         memory.chmod(0o700)
-    assert RUN_A not in _removed(plan)
-    assert {"project": os.path.realpath(str(project)), "reason": "unreadable"} in plan.stores_not_visited
+    assert refused.value.code == "purge-run-active"
+    assert [b.reason for b in refused.value.blocking] == ["store-unchecked"]
+    assert refused.value.blocking[0].project == os.path.realpath(str(project))
 
 
 def test_running_driver_dead_or_live(tmp_path):

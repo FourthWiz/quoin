@@ -82,7 +82,7 @@ class Plan:
 class Result:
     removed: Tuple[Item, ...] = ()
     failed: Tuple[Tuple[str, str], ...] = ()
-    skipped: Tuple[str, ...] = ()
+    left: Tuple[Kept, ...] = ()
 
 
 class Budget:
@@ -349,26 +349,48 @@ def plan_store_runs(project_root, *, uid: int, budget: Budget) -> Tuple[List[Ite
 
 
 def _remove_entry(dir_fd: int, name: str, rel: Tuple[str, ...], uid: int,
-                  excl: Set[Tuple[str, ...]]) -> bool:
+                  excl: Set[Tuple[str, ...]], left: List[Tuple[str, str]]) -> bool:
     """Remove `name` below `dir_fd`; True when it is gone, False when something
-    excluded had to stay inside it."""
+    excluded or unremovable had to stay inside it. Below the unit itself a
+    foreign-owned, unreadable or too-deep entry is recorded in `left` instead of
+    aborting, so the rest of the tree is still removed."""
     exact, ancestor = _is_excluded_or_ancestor(rel, excl)
     if exact:
         return False
+    shown = "/".join(rel)
     info = os.lstat(name, dir_fd=dir_fd)
     if info.st_uid != uid:
-        raise PermissionError("foreign-owner")
+        if not rel:
+            raise PermissionError("foreign-owner")
+        left.append((shown, "foreign-owner"))
+        return False
     if not stat.S_ISDIR(info.st_mode):
         os.unlink(name, dir_fd=dir_fd)
         return True
-    sub = _open_child(dir_fd, name, uid)
+    if len(rel) >= MAX_WALK_DEPTH:
+        left.append((shown, "walk-truncated"))
+        return False
+    try:
+        sub = _open_child(dir_fd, name, uid)
+    except OSError as exc:
+        if not rel:
+            raise
+        left.append((shown, "foreign-owner" if _is_foreign(exc) else "unreadable"))
+        return False
     try:
         mode = os.fstat(sub).st_mode
         if mode & 0o700 != 0o700:
             os.fchmod(sub, mode | 0o700)
         clean = True
-        for child in sorted(e.name for e in os.scandir(sub)):
-            if not _remove_entry(sub, child, rel + (child,), uid, excl):
+        try:
+            children = sorted(e.name for e in os.scandir(sub))
+        except OSError:
+            if not rel:
+                raise
+            left.append((shown, "unreadable"))
+            return False
+        for child in children:
+            if not _remove_entry(sub, child, rel + (child,), uid, excl, left):
                 clean = False
     finally:
         os.close(sub)
@@ -378,8 +400,15 @@ def _remove_entry(dir_fd: int, name: str, rel: Tuple[str, ...], uid: int,
     return True
 
 
-def _execute_item(item: Item, uid: int) -> Optional[str]:
-    """None on success, else a closed failure reason."""
+def _execute_item(item: Item, uid: int) -> Tuple[Optional[str], Tuple[Kept, ...]]:
+    """`(reason, left)`: `reason` is None on success, else a closed failure reason;
+    `left` lists entries that had to stay below a unit that was otherwise removed."""
+    left: List[Tuple[str, str]] = []
+    reason = _execute_item_inner(item, uid, left)
+    return reason, tuple(Kept("%s/%s" % (item.display, rel), why) for rel, why in left)
+
+
+def _execute_item_inner(item: Item, uid: int, left: List[Tuple[str, str]]) -> Optional[str]:
     try:
         root_fd = _open_root(item.root, uid)
     except RootUnsafe:
@@ -407,7 +436,7 @@ def _execute_item(item: Item, uid: int) -> Optional[str]:
             return "changed-since-plan"
         try:
             try:
-                _remove_entry(parent, parts[-1], (), uid, _excl_parts(item.exclude))
+                _remove_entry(parent, parts[-1], (), uid, _excl_parts(item.exclude), left)
             except FileNotFoundError:
                 return "changed-since-plan"
             except PermissionError as exc:
@@ -433,16 +462,18 @@ def execute(plan: Plan, *, uid: int) -> Result:
     reported as failed with a closed reason."""
     removed: List[Item] = []
     failed: List[Tuple[str, str]] = []
+    left: List[Kept] = []
     for item in plan.remove:
         try:
-            reason = _execute_item(item, uid)
+            reason, below = _execute_item(item, uid)
         except Exception:  # noqa: BLE001 - an item must never abort the rest
-            reason = "os-error"
+            reason, below = "os-error", ()
         if reason is None:
             removed.append(item)
+            left.extend(below)
         else:
             failed.append((item.display, reason))
-    return Result(tuple(removed), tuple(failed), ())
+    return Result(tuple(removed), tuple(failed), tuple(left))
 
 
 # ---------------------------------------------------------------------------
@@ -467,6 +498,7 @@ class RunFacts:
     active: bool
     empty_orphan: bool
     reason: Optional[str] = None
+    task: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -674,11 +706,14 @@ def _attribute_runs(directory: str, uid: int, table, budget: Budget, now: float)
         profile: Optional[str] = None
         active = False
         reason: Optional[str] = None
+        task: Optional[str] = None
         if "run.json" in parts:
             if not budget.take():
                 break
             record = _read_record(os.path.join(directory, run_id + ".run.json"))
             if record is not None:
+                value = record.get("task")
+                task = value if isinstance(value, str) and value else None
                 request = record.get("request")
                 value = request.get("profile") if isinstance(request, Mapping) else None
                 if isinstance(value, str) and install.PROFILE_RE.fullmatch(value):
@@ -686,7 +721,7 @@ def _attribute_runs(directory: str, uid: int, table, budget: Budget, now: float)
                     newest = max(i.st_mtime for i in parts.values())
                     reason = run_activity(record, table, now, newest)
                     active = reason is not None
-        out[run_id] = RunFacts(profile, active, empty, reason)
+        out[run_id] = RunFacts(profile, active, empty, reason, task)
     return out
 
 
@@ -964,6 +999,7 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
 
     # runs of the current project
     cur = ev_for(current_key)
+    cur_truncated = evidence_budget.truncated
     runs_days = days_for("runs_days", current_key)
     if runs_days is not None and cur is not None and cur.readable:
         items, kept = plan_store_runs(mapping[current_key], uid=uid, budget=fresh())
@@ -1022,7 +1058,7 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
     cache_days = days_for("cache_days", None)
     if cache_days is not None:
         if _profile_in_use(mapping, current_key, profile, uid, table, now, current_run,
-                           ev_for(current_key), evidence_budget.truncated):
+                           ev_for(current_key), cur_truncated):
             keep.append(Kept("cache", "profile-in-use"))
             keep.append(Kept("tmp", "profile-in-use"))
         else:
@@ -1072,7 +1108,7 @@ def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
     try:
         if policy is None or policy.empty:
             return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                    "failed": 0, "truncated": False}
+                    "failed": 0, "left": 0, "truncated": False}
         plan = plan_sweep(dirs=dirs, project_root=project_root, policy=policy, now=now, uid=uid,
                           profile=profile, table=table, current_run=current_run)
         result = execute(plan, uid=uid)
@@ -1086,10 +1122,10 @@ def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
                        ("evidence-referenced", "task-unfinished", "run-active", "live-lock", "store-unavailable"))
         return {"status": "done", "removed": removed, "kept_evidence": evidence,
                 "kept_other": len(plan.keep) - evidence, "failed": len(result.failed),
-                "truncated": plan.truncated}
+                "left": len(result.left), "truncated": plan.truncated}
     except Exception:  # noqa: BLE001 - a sweep never refuses a launch
         return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                "failed": 0, "truncated": False}
+                "failed": 0, "left": 0, "truncated": False}
 
 
 # ---------------------------------------------------------------------------
@@ -1167,15 +1203,14 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
     visited: List[Tuple[str, ProjectEvidence]] = []
     blockers: List[Blocker] = []
     for project in stores:
-        budget = Budget()
-        ev = ProjectEvidence.load(project, uid=uid, attribute=True, table=table, budget=budget, now=now)
-        if budget.truncated:
-            budgets.append(budget)
-            not_visited.append({"project": project, "reason": "walk-truncated"})
-            continue
+        # A store over the walk budget is still read in full: a truncated read could
+        # miss an active run, and an unvisited store would be deleted around.
+        ev = ProjectEvidence.load(project, uid=uid, attribute=True, table=table,
+                                  budget=Budget(None), now=now)
         if not ev.readable:
             if ev.reason != "missing":
                 not_visited.append({"project": project, "reason": ev.reason or "unreadable"})
+                blockers.append(Blocker(project, project, "store-unchecked"))
             continue
         visited.append((project, ev))
         mine = {rid for rid, f in ev.runs.items() if f.profile == profile}
@@ -1184,7 +1219,8 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
             if reason is not None:
                 blockers.append(Blocker(run_id, project, reason))
         for task in sorted(ev.live_lock_tasks):
-            if any(ev.referenced.get(rid, (None,))[0] == task for rid in mine):
+            if (any(ev.referenced.get(rid, (None,))[0] == task for rid in mine)
+                    or any(ev.runs[rid].task == task for rid in mine)):
                 blockers.append(Blocker(task, project, "live-lock",
                                         ".workflow_artifacts/memory/run-supervisor-%s.pid" % task))
     if blockers:
@@ -1250,4 +1286,5 @@ def plan_purge(*, adapter_root, profile: str, extra_project=None, env: Mapping[s
 
 def purge_incomplete(plan: Plan) -> bool:
     """Whether the plan leaves behind anything a purge is meant to delete."""
-    return any(k.reason in PURGE_INCOMPLETE_REASONS for k in plan.keep)
+    return (any(k.reason in PURGE_INCOMPLETE_REASONS for k in plan.keep)
+            or any(n.get("reason") != "missing" for n in plan.stores_not_visited))

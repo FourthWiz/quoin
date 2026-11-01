@@ -636,7 +636,7 @@ folders, workflow state, continuation records and gate files are never touched.
 items could not be removed or were kept as foreign-owned or unreadable, 2 refused, 3 failed. Refusals: `purge-run-active`
 (names each blocking run or lock and its reason; a stale supervisor pid file,
 whose process is gone but whose pid was reused, is cleared by deleting the named
-file), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`
+file; a project store that could not be read or is unsafe is named with `store-unchecked`, fix its permissions or remove the project from the index by deleting it), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`
 and `purge-confirm-required`. After a purge, a continuation from a purged run
 refuses with the "has no effective-config record" message; that is expected. A
 later launch of the profile with the other classification still refuses because

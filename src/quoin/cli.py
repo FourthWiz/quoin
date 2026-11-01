@@ -2575,7 +2575,9 @@ def _purge_report(plan, outcome: str, dry_run: bool, failed=(), extra=None) -> d
         "profile": plan.profile, "dry_run": dry_run, "outcome": outcome,
         "remove": [{"path": _purge_display(i, ""), "class": i.cls, "files": i.files, "bytes": i.bytes}
                    for i in plan.remove],
-        "keep": [{"path": _purge_display(k, ""), "reason": k.reason} for k in plan.keep],
+        "keep": [dict({"path": _purge_display(k, ""), "reason": k.reason},
+                      **({"hint": "chmod-u-rwx"} if k.reason == "unreadable" else {}))
+                 for k in plan.keep],
         "referenced_runs": [dict(r, project=_home_relative(r["project"])) for r in plan.referenced_runs],
         "stores_not_visited": [dict(r, project=_home_relative(r["project"])) for r in plan.stores_not_visited],
         "failed": [{"path": "PROFILE/" + d if not d.startswith("oc-") else d, "reason": r} for d, r in failed],
@@ -2598,7 +2600,9 @@ def _print_purge_text(report: dict) -> None:
     blocks = (
         ("remove", [("%s  [%s, %d files, %d bytes]" % (r["path"], r["class"], r["files"], r["bytes"]))
                     for r in report["remove"]]),
-        ("keep", ["%s  [%s]" % (r["path"], r["reason"]) for r in report["keep"]]),
+        ("keep", [line for r in report["keep"] for line in (
+            ["%s  [%s]" % (r["path"], r["reason"])]
+            + (["run: chmod -R u+rwx %s" % r["path"]] if r.get("hint") else []))]),
         ("referenced runs (removed by purge)",
          ["%s  task %s in %s (%s)" % (r["run_id"], r["task"], r["project"], r["referenced_by"])
           for r in report["referenced_runs"]]),
@@ -2625,7 +2629,8 @@ def _cmd_opencode_purge(args: argparse.Namespace) -> int:
 
     def show_refusal(exc, plan=None) -> int:
         blocking = [
-            {("task" if b.reason == "live-lock" else "run_id"): b.run_id_or_task,
+            {{"live-lock": "task", "store-unchecked": "store"}.get(b.reason, "run_id"):
+             (_home_relative(b.run_id_or_task) if b.reason == "store-unchecked" else b.run_id_or_task),
              "project": _home_relative(b.project), "reason": b.reason,
              **({"pid_file": b.pid_file} if b.pid_file else {})}
             for b in exc.blocking
@@ -2673,9 +2678,9 @@ def _cmd_opencode_purge(args: argparse.Namespace) -> int:
         emit(_purge_report(plan, "partial" if incomplete else "nothing-to-do", False))
         return 1 if incomplete else 0
     result = retention.execute(plan, uid=os.getuid())
-    done = retention.Plan(plan.profile, "purge", result.removed, plan.keep, plan.referenced_runs,
-                          plan.stores_not_visited, plan.truncated)
-    partial = bool(result.failed) or incomplete
+    done = retention.Plan(plan.profile, "purge", result.removed, plan.keep + result.left,
+                          plan.referenced_runs, plan.stores_not_visited, plan.truncated)
+    partial = bool(result.failed) or bool(result.left) or incomplete
     emit(_purge_report(done, "partial" if partial else "purged", False, failed=result.failed))
     return 1 if partial else 0
 
