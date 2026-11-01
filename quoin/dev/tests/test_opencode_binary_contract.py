@@ -264,6 +264,7 @@ def test_driver_phase_run_against_pinned_binary(tmp_path, monkeypatch):
     process from the run survives. The native stream is written under
     `tmp_path` for a maintainer to promote later."""
     import _opencode_helpers as helpers
+    import _opencode_isolation_helpers as iso
     from quoin.opencode_adapter import driver, runstore
 
     helpers.install_loopback_guard(monkeypatch)
@@ -274,13 +275,15 @@ def test_driver_phase_run_against_pinned_binary(tmp_path, monkeypatch):
         git = driver.NON_GIT_DISCOVERY_VERIFIED is not True
         world, root = _driver_world(tmp_path, server.base_url, git=git)
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: world.home))
+        iso.launch_ready(world)
+        seams = iso.seams(tmp_path)
         env = {
             **os.environ, **world.env,
             "HOME": str(world.home),
             "OPENCODE_DISABLE_AUTOUPDATE": "1",
             "QUOIN_CORP_GW_API_KEY": "loopback-only-value",
         }
-        drv = driver.OpenCodeDriver(root, env=env, home=world.home)
+        drv = driver.OpenCodeDriver(root, env=env, home=world.home, **seams)
         request = driver.RunRequest(
             project_root=root, task="contract-demo", stage=None, phase="checkpoint", profile="work",
             timeout_s=120,
@@ -290,7 +293,7 @@ def test_driver_phase_run_against_pinned_binary(tmp_path, monkeypatch):
             non_git = tmp_path / "non-git"
             non_git.mkdir()
             with pytest.raises(driver.PrepareRefused) as info:
-                driver.OpenCodeDriver(non_git, env=env, home=world.home).prepare(
+                driver.OpenCodeDriver(non_git, env=env, home=world.home, **seams).prepare(
                     driver.RunRequest(project_root=non_git, task="contract-demo", stage=None,
                                       phase="checkpoint", profile="work")
                 )
