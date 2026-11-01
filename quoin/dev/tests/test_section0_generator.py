@@ -8,7 +8,7 @@ ownership (inject_pollution_dispatch.py):
         exactly once per file, else raise
   (iii) roster (HARD completeness gate, NOT covered by the empty-diff check
         alone — critic MIN-1): SECTION0_TARGET_SKILLS must equal the OTHER
-        live 20-skill rosters (test_1m_context_precheck.py's per-skill
+        live 19-skill rosters (test_1m_context_precheck.py's per-skill
         (skill, tier, proceed_ref) table; CLAUDE.md's "§0 Model dispatch
         preamble" prose list), so a single-anchor drift or roster OMISSION
         can't slip through silently (a skill accidentally missing from
@@ -160,9 +160,9 @@ def test_rendered_block_ends_with_marker_on_own_line(gen, skill):
 
 # ── (iii) roster — HARD completeness gate (critic MIN-1) ───────────────────
 
-def test_section0_target_skills_roster_is_20(gen):
-    assert len(gen.SECTION0_TARGET_SKILLS) == 20
-    assert len(set(gen.SECTION0_TARGET_SKILLS)) == 20
+def test_section0_target_skills_roster_is_19(gen):
+    assert len(gen.SECTION0_TARGET_SKILLS) == 19
+    assert len(set(gen.SECTION0_TARGET_SKILLS)) == 19
 
 
 def test_section0_target_skills_matches_1m_context_precheck_roster(gen, m1_ctx):
@@ -184,15 +184,15 @@ def test_section0_target_skills_matches_1m_context_precheck_roster(gen, m1_ctx):
 
 def test_section0_target_skills_matches_claude_md_preamble_list(gen):
     """Cross-asserts against the CLAUDE.md '### §0 Model dispatch preamble'
-    prose list (the other independently-maintained 20-skill roster)."""
+    prose list (the other independently-maintained 19-skill roster)."""
     text = CLAUDE_MD.read_text(encoding="utf-8")
     marker = "### §0 Model dispatch preamble"
     body_start = text.index(marker) + len(marker) + 2  # skip heading's own "\n\n" separator
     para_end = text.index("\n\n", body_start)
     paragraph = text[body_start:para_end]
 
-    list_match = re.search(r"The 20 cheap-tier skills \(([^)]+)\)", paragraph)
-    assert list_match, "could not find the '20 cheap-tier skills (...)' list in CLAUDE.md"
+    list_match = re.search(r"The 19 cheap-tier skills \(([^)]+)\)", paragraph)
+    assert list_match, "could not find the '19 cheap-tier skills (...)' list in CLAUDE.md"
     claude_md_names = {s.strip() for s in list_match.group(1).split(",")}
 
     generator_names = set(gen.SECTION0_TARGET_SKILLS)

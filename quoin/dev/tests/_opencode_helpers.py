@@ -28,7 +28,7 @@ _SOURCE_SUBSET_DIRS = ("adapters/opencode", "core/workflow", "core/skills", "cor
 
 def copy_source_subset(dest) -> Path:
     """Copy `_SOURCE_SUBSET_DIRS` plus the format-kit sidecar into `dest`,
-    and give it an empty `skills/` directory so `_resolve_source_dir`
+    and give it an empty `adapters/claude/skills/` directory so `_resolve_source_dir`
     accepts `dest` as an explicit `--source-dir` (it only checks for that
     directory's presence). A full `shutil.copytree` of the whole quoin
     source tree is unnecessary for tests that only read this subset, and
@@ -43,7 +43,7 @@ def copy_source_subset(dest) -> Path:
         SOURCE_DIR / "memory" / "format-kit.sections.json",
         dest / "memory" / "format-kit.sections.json",
     )
-    (dest / "skills").mkdir(parents=True, exist_ok=True)  # required by --source-dir resolution
+    (dest / "adapters" / "claude" / "skills").mkdir(parents=True, exist_ok=True)  # required by --source-dir resolution
     return dest
 
 

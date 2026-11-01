@@ -14,7 +14,7 @@ function makeFixtureDir(): string {
     // Normal skills
     'architect', 'plan', 'critic', 'revise', 'implement', 'review',
     'gate', 'rollback', 'end_of_task', 'pr', 'run',
-    'start_of_day', 'end_of_day', 'checkpoint', 'cleanup', 'sleep',
+    'start_of_day', 'end_of_day', 'cleanup', 'sleep',
     'capture_insight', 'triage', 'status', 'expand', 'cost_snapshot',
     // CRIT-1 regression guard: hyphenated name must enumerate
     'revise-fast',
@@ -174,23 +174,11 @@ describe('groupSkills', () => {
     const commands = lifecycle.entries.map(e => e.command);
     assert.deepEqual(commands, [
       'init_workflow',
-      'checkpoint',
-      'checkpoint --restore',
       'end_of_day',
       'start_of_day',
       'weekly_review',
       'discover',
     ], 'Lifecycle entry order must match D-07 exactly');
-  });
-
-  it('Lifecycle contains synthetic checkpoint --restore entry with correct label', () => {
-    const groups = groupSkills([]);
-    const lifecycle = groups.find(g => g.group === 'Lifecycle');
-    assert.ok(lifecycle, 'Lifecycle group must exist');
-    const synthEntry = lifecycle.entries.find(e => e.command === 'checkpoint --restore');
-    assert.ok(synthEntry, 'Lifecycle must contain checkpoint --restore entry');
-    assert.equal(synthEntry.label, 'Checkpoint Restore',
-      'checkpoint --restore entry must have label "Checkpoint Restore"');
   });
 
   it('cost_snapshot lands in Other (Cost group removed)', () => {
@@ -205,8 +193,7 @@ describe('groupSkills', () => {
     );
   });
 
-  it('groupSkills([]) does not include checkpoint --restore in Other (synthetic is curated, not enumerated)', () => {
-    // The synthetic entry is in CURATED; it must NOT appear in Other even if not enumerated
+  it('groupSkills([]) leaves Other empty (curated entries are not enumerated into it)', () => {
     const groups = groupSkills([]);
     const other = groups.find(g => g.group === 'Other');
     // Other should be absent entirely for empty input

@@ -1,6 +1,6 @@
 ---
 name: review
-description: "Deep code review (Opus) verifying the implementation matches the plan and is production-ready. Use for: /review, 'code review', 'review my changes', 'does this look right', 'check the implementation', 'post-implementation review'."
+description: "Deep code review checking the implementation against the plan. Use for: /review, 'code review', 'review my changes', 'check the implementation'."
 model: opus
 ---
 
@@ -11,43 +11,19 @@ model: opus
 
 You are a senior code reviewer using the strongest available model. Your job is to verify that the implementation is flawless, matches the plan, handles all edge cases, and is safe for production. You are thorough, precise, and constructive.
 
-## §0c Pidfile lifecycle
-
-This skill is Opus-tier (no §0 dispatch block). §0c is the only §0-class block in this file — it is both first and last.
-
-At entry — immediately after reading this block:
-
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire review
-```
-
-If the script is missing or fails: emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue without abort (fail-OPEN).
-
-At exit — call from every completion path AND every error/abort path:
-```
-pidfile_release review
-```
-
-Use a trap when the skill body involves bash-driven subagents:
-```
-trap 'pidfile_release review' EXIT
-```
-
-Purpose: lets `precompact.sh` hook know a `/review` session is active. `precompact.sh` never blocks — it always allows auto-compaction (`precompact.sh:5-6`, `:14`); pidfile presence instead selects row 2 of its three-row truth table (`precompact.sh:323`, `:506-507`): a deterministic checkpoint is written, with no `pending-restore` sentinel, so the workflow continues uninterrupted.
-
 ## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
 
 This skill runs in the user's current session. If the session is polluted (high context from
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
   Determine dispatch contract fields:
@@ -94,7 +70,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 ## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
@@ -162,7 +138,7 @@ This skill should run in a fresh session for unbiased review (similar to /critic
    - **Not-found fallback:** if any bundle-provided path does not exist on disk, discard that member's bundle entry and resolve the artifact via path_resolve.py as if the bundle were absent (grandfathered/single-stage tasks may have artifacts at the task root rather than a stage dir).
    - If the ``[quoin-bundle]`` block is absent → resolve paths via path_resolve.py as today, read wholesale (unchanged behavior).
 
-1. Read `__QUOIN_HOME__/skills/review/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. The intent is CROSS-SPAWN cache reuse: spawn N+1 of this skill with a byte-identical task fixture hits cache from spawn N's preamble.md tool_result, within the 5-minute prompt-cache TTL. Within a single spawn there is no cache benefit — savings only materialize on subsequent spawns whose prompt prefix is byte-identical through the preamble read. (Stage 2-alt of pipeline-efficiency-improvements.)
+1. Read `__QUOIN_HOME__/skills/review/preamble.md` if it exists; if missing or empty, proceed normally. Purely additive cache-warming — every other read in this `## Session bootstrap` section, and every write-site format-kit / glossary reference (per §5.3 / §5.4 write-site instructions), stays in force unchanged. (Stage 2-alt of pipeline-efficiency-improvements.)
 2. Run `python3 __QUOIN_HOME__/scripts/memory_select.py --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is available from `current-plan.md` (read at bootstrap step 3); use the task title or `## For human` summary block as `--task-text`. If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback). Apply relevant lessons.
 3. Read `<task_dir>/current-plan.md` — this is the spec to review against. If a ``[quoin-bundle]`` block supplied the current-plan.md path at step 0b, use that path directly (this is the "saves a path_resolve.py call" in step 0b); otherwise resolve `<task_dir>` via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
 
@@ -255,8 +231,6 @@ Bypass on `[no-phase-budget]` (strip at bootstrap) or `QUOIN_DISABLE_PHASE_BUDGE
 - `## Issues Found` — union of all three dimensions' tagged issues on the full fan-out branch; the parent's own findings (plus the OWASP subagent's, on the Large carve-out) on every other branch.
 - `## Verdict` — merged worst-of (below) on the full fan-out branch and the Large carve-out (parent + OWASP subagent); the parent's own single verdict on the Single-pass branch.
 - `## Dimension Verdicts` (optional section) — the per-dimension verdict table, present only when more than one verdict is being merged: the Medium/Large fan-out (three dimensions) or the Large carve-out (parent + OWASP subagent, two entries). Absent entirely on the Single-pass branch, which produces one verdict with no merge.
-
-So the three dimension subagents return ONLY verdict + tagged issues + (architecture/integration dimension only) an integration-safety writeup — they never synthesize For human, Summary, Plan Compliance, Spec Compliance, or Test Coverage; the parent retains those steps exactly as in the Small single-pass flow.
 
 **Ledger:** the parent appends ONE cost-ledger row per reviewer subagent (phase `review`, model `opus`). Unless `QUOIN_INLINE_COST_CAPTURE=0`, each row is an on-behalf write, since the subagent's own session id is not resolvable: per dimension, `AID` is the `agentId` the Agent tool returned for that spawn (transcribed literally; if absent use `TUID`), `TUID` is that spawn's tool_use id, and the row is appended after the subagent returns (fallback when `AID` is absent: the row carries `src=unresolved`):
 ```bash
@@ -402,6 +376,7 @@ The helper resolves the git repo from `--project-root` itself (CRIT-1 fix: the o
 - exit 0 + `ran_pytest=false` → docs-only changeset, clean tree, or changed tests missing on disk (`exit_reason: missing-tests-only`; list the `missing_tests` paths in the review prose) — no affected tests to run (N/A) → APPROVED permissible. When `ran_pytest=false` the review MUST state "no affected tests (docs-only / N/A)" in `## Test Coverage` (never in the Verdict section) rather than asserting tests passed, so the verdict is not over-claimed. (The dominant quoin task shape — SKILL.md/docs-only edits — lands here and is correctly approvable without running the whole suite.)
 - exit 1 → at least one affected test RED. BEFORE forcing `CHANGES_REQUESTED`, run the IVG-144 known-red consult against the SAME captured run (Step 6b's affected-area pytest MUST capture its own `-rA` stdout to a file as part of the run that produced this exit code — `known_red.py` NEVER re-runs anything, MAJ-3): source in-scope selectors via `python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --select-only`, then `python3 __QUOIN_HOME__/scripts/known_red.py --pytest-output <captured-file> --selectors <selectors> --observed-rc <that run's RC> --project-root "$PROJECT_ROOT" --format text` (NO `--full-suite`). Branch on the payload's `downgrade` field (never bare exit): exit 0 with `downgrade=true` (ALL affected red are known-baseline, reconciled) → do NOT force `CHANGES_REQUESTED` on that basis; record the known-baseline failures (name/reason/date, verbatim text block) in `## Test Coverage`; NO `git worktree add … main` re-baseline. exit 1 (net-new affected red) → verdict MUST be `CHANGES_REQUESTED`; raise a CRITICAL issue listing the failing selectors. exit 2 (malformed manifest) → surface the stderr error + do-not-approve (fail-closed). exit 3 (reconcile-mismatch, CRIT-1) → surface the `## Reconciliation` line + `CHANGES_REQUESTED` (an unreconciled report is never grounds for approval). script missing → `CHANGES_REQUESTED` as today (fail-closed — no consult means no downgrade).
 - exit 3 or 4 → affected-area green UNCONFIRMED (a changed `.py` source had no resolvable test, or the changed set was undeterminable) → MUST NOT emit `APPROVED`. Either `CHANGES_REQUESTED` (if the cause is an unmatched source that needs a test) or surface to the user for explicit acknowledgement. Default: do-NOT-approve (fail-CLOSED rule).
+- exit 3 with `exit_reason: test-environment-unusable` → the helper's pytest cannot collect these tests even without the change (wrong Python, or a project with its own test runner), so the result says nothing about the change. Under `_AUTONOMOUS` only, `APPROVED` is allowed when the task's evidence records the project's own test command run on the final tree, green, including a test that exercises the change: quote that command and its result line in `## Test Coverage` and list the helper result under warnings. Without that evidence, or when not autonomous, treat it as the exit 3 row above.
 - exit 5 (exit_reason: no-quoin-task-context) → no active quoin task context → CLEAN SKIP / N/A (nothing to test in a non-quoin session); APPROVED remains permissible and MUST state "N/A — no active quoin task context" in `## Test Coverage` (never in the Verdict section) rather than asserting tests passed (no over-claim). NOT CHANGES_REQUESTED, NOT a blocking surface.
 - script missing → non-blocking note; fall back to the generic "run the tests" behavior (fail-OPEN only on absent binary).
 
@@ -566,15 +541,14 @@ If the verdict is APPROVED:
 
 Write session-state files in v3 format per the §5.4 Class A writer mechanism (mirrors the implement/SKILL.md pattern; reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; validate via validate_artifact.py with auto-detection → session type; retry-once-then-English-fallback on V-failure; atomic rename with graceful .body.tmp cleanup). `review-{round}.md` remains **Class B** per artifact-format-architecture v3 §4.1 — the parent Stage 3 work wired its Class B writer mechanism in the Output-format section above; this Save-session-state section governs ONLY the Class A session file at `.workflow_artifacts/memory/sessions/{date}-{task}.md`.
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with these required sections:
-- **## Status:** `in_progress` (REVISE) or `completed` (APPROVED)
-- **## Current stage:** `review`
-- **## Completed in this session:** verdict and summary of what was verified, with status glyphs ✓/✗
-- **## Unfinished work:** if REVISE — list of issues that must be fixed before re-review
-- **## Cost:** YAML block with Session UUID, Phase, Recorded in cost ledger
-- **## Decisions made:** any significant risk assessments or integration concerns raised (optional)
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress` (REVISE) or `completed` (APPROVED)
+- Current stage: `review round N`
+- Next command: `/end_of_task` on APPROVED, `/implement` on changes requested
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Important behaviors
 

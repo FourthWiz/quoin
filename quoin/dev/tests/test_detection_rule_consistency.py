@@ -11,7 +11,6 @@ import pytest
 TESTS_DIR = pathlib.Path(__file__).parent
 FIXTURE = TESTS_DIR / "fixtures" / "v3-detection-comment.txt"
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
-SKILLS_DIR = PKG_DIR / "skills"
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
 
 SKILL_FILES = [

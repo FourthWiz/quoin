@@ -1,6 +1,6 @@
 ---
 name: continue_work
-description: "Resumes context from a prior session: reads recent-sessions.md, presents a session picker, extracts checkpoint summary and recent messages from the JSONL. Use for: /continue_work, 'resume prior session', 'revive old session', 'where was I', 'switch to last session'."
+description: "Resumes a prior session from recent-sessions.md with a session picker and checkpoint summary. Use for: /continue_work, 'resume prior session', 'where was I'."
 model: sonnet
 ---
 
@@ -184,8 +184,8 @@ tail -5 "<cwd>/.workflow_artifacts/memory/recent-sessions.md" 2>/dev/null
 ```
 
 **Case C — File absent or < 2 records:**
-  Report: "No session history found yet. recent-sessions.md will be populated
-  as you work. Nothing to revive."
+  Report: "No session history found yet. recent-sessions.md gets a line each time a
+  session starts, resumes, ends or compacts. Nothing to revive."
   STOP.
 
 **Case A — All 5 session_ids identical:**
@@ -301,7 +301,8 @@ Last checkpoint context:
 Recent conversation tail:
 <last ~10 message pairs>
 
-To resume working in this context, type /checkpoint --restore in a fresh session
+To resume working in this context, run /run --resume TASK for task state,
+or `claude --resume SESSION_ID` to reopen this conversation,
 OR continue here with this context pre-loaded.
 ```
 

@@ -6,7 +6,9 @@ Import-free / bare-checkout runnable — subprocess-invokes the WRAPPER script
 Covers: OVER on a small synthetic transcript, OK on a large budget, fail-OPEN on
 missing transcript, opt-out (no read), threshold-boundary equality, env/CLI
 threshold precedence, exit-code contract, formula parity vs the awk in
-compute_utilization, bad-args fail-OPEN, --current-uuid named-jsonl resolution,
+the byte-estimate awk in _lib.sh (the fallback used when a transcript holds no
+usage record; these fixtures are all raw bytes, so they exercise that path),
+bad-args fail-OPEN, --current-uuid named-jsonl resolution,
 and Drive-conflict-copy filtering.
 """
 from __future__ import annotations
@@ -116,6 +118,7 @@ def test_exit_codes_contract(tmp_path):
 
 
 def test_formula_parity_fixed_byte_size(tmp_path):
+    # Byte-only files carry no usage record, so the reader uses the byte estimate.
     for nbytes in (0, 8, 150_000, 1_200_000, 5_000_000):
         t = _make_transcript(tmp_path, nbytes, name=f"t{nbytes}.jsonl")
         r = _run(["--transcript", str(t), "--threshold-bps", "999999"])
@@ -125,8 +128,8 @@ def test_formula_parity_fixed_byte_size(tmp_path):
 
 
 def test_formula_parity_vs_lib_sh_awk(tmp_path):
-    """Assert the Python util equals the awk formula literally present in
-    _lib.sh (parity anchor for R-07)."""
+    """Assert the Python estimate equals the awk formula literally present in
+    _lib.sh (the byte-estimate fallback)."""
     import re
     text = LIB_SH.read_text(encoding="utf-8")
     # The load-bearing awk line: printf "%d\n", (b / bpt / lim) * 10000

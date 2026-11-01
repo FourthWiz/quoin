@@ -35,7 +35,7 @@ TESTS_DIR = Path(__file__).resolve().parent
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
 SCRIPTS_DIR = PKG_DIR / "scripts"
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
-RUN_SKILL = ADAPTER_SKILLS_DIR / "run" / "SKILL.md"
+RUN_SKILL = ADAPTER_SKILLS_DIR / "run_hard" / "SKILL.md"
 CRITIC_SKILL = ADAPTER_SKILLS_DIR / "critic" / "SKILL.md"
 REVISE_FAST_SKILL = ADAPTER_SKILLS_DIR / "revise-fast" / "SKILL.md"
 

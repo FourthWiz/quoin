@@ -1,6 +1,6 @@
 ---
 name: revise
-description: "Revises an implementation plan based on critic feedback, addressing all critical and major issues (Opus). Use for: /revise, 'fix the plan', 'address the critic's comments', 'update the plan based on feedback'."
+description: "Revises a plan to address critic feedback. Use for: /revise, 'fix the plan', 'address the critic's comments'."
 model: opus
 ---
 
@@ -17,13 +17,13 @@ This skill runs in the user's current session. If the session is polluted (high 
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
   Determine dispatch contract fields:
@@ -70,7 +70,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 ## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
@@ -310,14 +310,14 @@ If running standalone, tell the user:
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `in_progress`
-- **Current stage:** `revise` (note the round number, e.g. `revise round 2`)
-- **Completed in this session:** which critic issues were addressed
-- **Unfinished work:** deferred issues, or "ready for /implement" if converged
-- **Decisions made:** rationale for any choices made while addressing feedback
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`
+- Current stage: `revise round N`
+- Next command: `/critic`
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Important behaviors
 

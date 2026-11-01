@@ -25,8 +25,8 @@ claude
 ## What the script does
 
 **`install.sh` — user-level, run once per machine:**
-1. **Copies skills** — all 32 skills into `~/.claude/skills/` (globally available in every project)
-2. **Writes workflow rules** — appends shared rules to `~/.claude/CLAUDE.md` (auto-loaded by Claude Code everywhere)
+1. **Copies skills** — all skills into `~/.claude/skills/` (globally available in every project)
+2. **Writes workflow rules** — appends the short core rules to `~/.claude/CLAUDE.md` (auto-loaded by Claude Code everywhere); the full rules live in `~/.claude/memory/workflow-catalog.md`
 
 **`/init_workflow` — run once per project inside Claude:**
 3. **Configures permissions** — creates `.claude/settings.json` with allow/deny lists
@@ -50,7 +50,7 @@ The script is the recommended path — it handles idempotent updates and edge ca
 ### 1. Install skills (user-level, once)
 ```bash
 mkdir -p ~/.claude/skills
-for skill in /path/to/quoin/skills/*/; do
+for skill in /path/to/quoin/adapters/claude/skills/*/; do
   name=$(basename "$skill")
   cp -r "$skill" ~/.claude/skills/$name
 done
@@ -60,9 +60,11 @@ done
 ```bash
 echo "" >> ~/.claude/CLAUDE.md
 echo "# === DEV WORKFLOW START ===" >> ~/.claude/CLAUDE.md
-cat /path/to/quoin/CLAUDE.md >> ~/.claude/CLAUDE.md
+sed "s|__QUOIN_HOME__|$HOME/.claude|g" /path/to/quoin/CLAUDE.slim.md >> ~/.claude/CLAUDE.md
 echo "# === DEV WORKFLOW END ===" >> ~/.claude/CLAUDE.md
 ```
+
+The default rules are the short core text in `CLAUDE.slim.md`; the sed call fills in the path to the catalog of full rules. To install every rule inline instead, pass `--claude-md-variant full` to `install.sh` (or set `QUOIN_CLAUDE_MD_VARIANT=full`). An explicit `--claude-md-variant` choice is remembered per scope in `.quoin-claude-md-variant` inside the install folder (`~/.claude/` for user scope, `<project>/.claude/` for project scope; commit that file to share the choice with the team, or add it to `.gitignore` to keep it personal). `--claude-md-variant slim` clears it.
 
 ### 3. Create project artifact structure
 ```bash
@@ -83,7 +85,7 @@ After installation, your project looks like:
 ```
 ~/.claude/
 ├── CLAUDE.md                ← workflow rules (auto-loaded everywhere)
-└── skills/                  ← all 32 workflow skills (global)
+└── skills/                  ← all workflow skills (global; partial list)
     ├── discover/
     ├── triage/
     ├── architect/
@@ -136,8 +138,8 @@ cd ~/projects/my-app && claude
 | You want to... | Type |
 |---|---|
 | Start your day | `/start_of_day` |
-| Plan a big feature | `/architect` then `/thorough_plan` |
-| Fix a bug | `/thorough_plan small: <description>` |
+| Fix a bug or build a feature | `/run <description>` |
+| Run the full plan/critic/gate chain (manual exception) | `/run hard: <description>` |
 | Review implementation | `/review` |
 | Ship it | `/end_of_task` |
 | Wrap up for the day | `/end_of_day` |
@@ -172,7 +174,7 @@ claude
 
 ## Troubleshooting
 
-**Skills not recognized:** check that skills are in `~/.claude/skills/` — `ls ~/.claude/skills/` should list all 32 skills. Re-run `bash install.sh` to reinstall them.
+**Skills not recognized:** check that skills are in `~/.claude/skills/` — `ls ~/.claude/skills/` should list every workflow skill. Re-run `bash install.sh` to reinstall them.
 
 **Claude doesn't follow workflow rules:** check that `~/.claude/CLAUDE.md` contains the quoin section (look for `# === DEV WORKFLOW START ===`). Re-run `bash install.sh` to rewrite it.
 

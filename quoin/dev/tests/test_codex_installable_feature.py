@@ -393,7 +393,7 @@ def test_generated_agents_md_uses_skills_json():
 def test_every_portable_skill_has_codex_adapter_doc():
     """Every migrated portable skill must have a Codex facing adapter doc."""
     names = _portable_skill_names()
-    assert len(names) == 32
+    assert len(names) == 33
     for name in names:
         assert (CORE_SKILLS_DIR / f"{name}.md").is_file(), f"Missing core doc for {name}"
         assert (CODEX_SKILLS_DIR / name / "README.md").is_file(), (

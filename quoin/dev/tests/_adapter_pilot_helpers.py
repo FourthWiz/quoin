@@ -1,13 +1,13 @@
 """Shared helper for adapter-pilot override tests (IVG-69 Stage B).
 
 Provides ``assert_installer_selects_adapter(skill_name)`` — the single
-source-of-truth assertion that ``installer.deploy_skills()`` selects the
-adapter SKILL.md over the legacy stub for a given skill.
+source-of-truth assertion that ``installer.deploy_skills()`` deploys the
+Claude adapter SKILL.md for a given skill.
 
 Design notes
 ------------
-* Uses a SYNTHETIC 2-file source tree (no real PKG_DIR copy) so there are
-  no ``__QUOIN_HOME__`` tokens in either source file.  installer.py calls
+* Uses a SYNTHETIC source tree (no real PKG_DIR copy) so there are
+  no ``__QUOIN_HOME__`` tokens in the source file.  installer.py calls
   ``_copy_with_substitution`` unconditionally (line 282), which substitutes
   every ``__QUOIN_HOME__`` token with the absolute dest_root; 16 of 21
   skills carry that token in their real adapter SKILL.md, making byte-equal
@@ -32,13 +32,13 @@ PKG_DIR = _THIS.parent.parent.parent  # quoin/quoin/
 
 
 def assert_installer_selects_adapter(skill_name: str) -> None:
-    """Assert that installer.deploy_skills() prefers the adapter over the stub.
+    """Assert that installer.deploy_skills() deploys the adapter SKILL.md.
 
     Steps
     -----
     (a) skill_name in installer.CANONICAL_SKILLS
     (b) real adapter SKILL.md exists at PKG_DIR/adapters/claude/skills/<name>/SKILL.md
-    (c) synthetic deploy: create a 2-file tmp source with placeholder-free content,
+    (c) synthetic deploy: create a tmp adapter source with placeholder-free content,
         deploy into a tmp dest, assert deployed text == synthetic adapter content.
 
     Raises AssertionError with a descriptive message on any failure.
@@ -58,10 +58,6 @@ def assert_installer_selects_adapter(skill_name: str) -> None:
     )
 
     # (c) synthetic deploy — placeholder-free content, exact byte equality after deploy
-    stub_content = (
-        f"# {skill_name} (deprecated stub)\n\n"
-        "> **DEPRECATED LOCATION.** Active content moved.\n"
-    )
     active_content = (
         f"# {skill_name}\n\n"
         f"Active Claude adapter skill for {skill_name}.\n"
@@ -70,12 +66,9 @@ def assert_installer_selects_adapter(skill_name: str) -> None:
     with tempfile.TemporaryDirectory() as src_d:
         with tempfile.TemporaryDirectory() as dst_d:
             src = pathlib.Path(src_d)
-            stub_dir = src / "skills" / skill_name
             adapter_dir = src / "adapters" / "claude" / "skills" / skill_name
-            stub_dir.mkdir(parents=True)
             adapter_dir.mkdir(parents=True)
 
-            (stub_dir / "SKILL.md").write_text(stub_content, encoding="utf-8")
             (adapter_dir / "SKILL.md").write_text(active_content, encoding="utf-8")
 
             dest = pathlib.Path(dst_d) / ".claude"
@@ -87,7 +80,7 @@ def assert_installer_selects_adapter(skill_name: str) -> None:
             )
             deployed = deployed_path.read_text(encoding="utf-8")
             assert deployed == active_content, (
-                f"deploy_skills() deployed stub content instead of adapter content "
+                f"deploy_skills() did not deploy the adapter content "
                 f"for skill {skill_name!r}.\n"
                 f"  Expected: {active_content!r}\n"
                 f"  Got:      {deployed!r}"

@@ -27,86 +27,50 @@ issue = "IVG-116"
 owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_generate_discovery_map.py::test_matches_golden_typical"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_two_agents_and_strip_proportions"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_generate_discovery_map.py::test_stdout_mode"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_floating_toggle_shows_and_hides_spend"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_generate_discovery_map.py::test_deployment_flat_layout_import"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_new_pane_keeps_the_strip_when_auto_layout_is_off"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_generate_discovery_map.py::test_single_repo_at_root"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_dashboard_tab_has_bars_and_survives_a_swap"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_generate_discovery_map.py::test_stray_stage_dir_no_stages_emitted"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_standard_layout_git_and_status_tabs_stay_alive"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-23"
+issue = "IVG-300"
+owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestDriverPlanOnly::test_plan_only_never_calls_verify_model"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_stream_deck_shape_titles"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-27"
+issue = "IVG-300"
+owner = "ivgo"
 
 [[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestDriverPlanOnly::test_full_mode_calls_verify_model_once"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestDriverPlanOnly::test_missing_rehearsal_record_stops_the_probe_from_ever_firing"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecord::test_preflight_requires_green_record_before_full_mode"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordAuthorisationPredicate::test_a_red_status_line_with_the_token_elsewhere_in_the_body_does_not_authorise_via_preflight"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_green_record_from_a_different_run_dir_does_not_authorise"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_green_record_from_a_different_candidate_commit_does_not_authorise"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_green_record_from_a_different_main_commit_does_not_authorise"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_green_record_from_a_different_suite_does_not_authorise"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_missing_identity_lines_fail_closed"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_three_arm_gate.py::TestRehearsalRecordRunIdentityBinding::test_red_record_with_matching_run_identity_still_does_not_authorise"
-reason = "fails at the branch base too; unrelated to the OpenCode adapter"
-added = "2026-09-27"
-
-[[entry]]
-id = "quoin/dev/tests/test_handoff_measure.py::test_growth_bound_case_u_capped_model_caps_at_deleted_bytes"
-reason = "macOS ENAMETOOLONG in an unrelated long-path fixture; fails at the branch base too"
-added = "2026-09-29"
+id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_swap_layouts_cycle_and_return"
+reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
+added = "2026-10-27"
+issue = "IVG-300"
+owner = "ivgo"

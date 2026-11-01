@@ -41,9 +41,7 @@ HUMAN_RUN_COMMAND_HINTS: tuple = (
         "`mv .workflow_artifacts/trash/<date>/<task> .workflow_artifacts/`",
     ),
 )
-DESCRIBES_HOOK_OR_HUMAN_BEHAVIOR: tuple = (
-    ("quoin/memory/checkpoint-spec.md", "deleted (`rm -f`)"),
-)
+DESCRIBES_HOOK_OR_HUMAN_BEHAVIOR: tuple = ()
 
 
 def _split(text: str):
@@ -113,7 +111,6 @@ def scan_text(relpath: str, text: str) -> list:
 def corpus_files() -> list:
     patterns = (
         "quoin/adapters/claude/skills/*/SKILL.md",
-        "quoin/skills/*/SKILL.md",
         "quoin/core/skills/*.md",
         "quoin/memory/*.md",
     )

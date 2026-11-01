@@ -58,12 +58,6 @@ def _adapter_skill(skill_name: str) -> Path:
     return PKG_DIR / "adapters" / "claude" / "skills" / skill_name / "SKILL.md"
 
 
-def _legacy_stub(skill_name: str) -> Path:
-    return PKG_DIR / "skills" / skill_name / "SKILL.md"
-
-
-
-
 # ── Parametrized tests (run over the gate skill) ───────────────────────────
 
 
@@ -135,34 +129,6 @@ def test_install_sh_has_adapter_override(skill_name, expected_model, has_section
     _adapter_pilot_helpers.assert_installer_selects_adapter(skill_name)
 
 
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_legacy_stub_differs_from_adapter(skill_name, expected_model, has_section_0):
-    """Adapter must contain full body; legacy is a short stub."""
-    legacy_bytes = _legacy_stub(skill_name).read_bytes()
-    adapter_bytes = _adapter_skill(skill_name).read_bytes()
-    assert legacy_bytes != adapter_bytes, (
-        f"Legacy stub and adapter SKILL.md for {skill_name} must differ — "
-        "the legacy file should be a short deprecated pointer"
-    )
-    assert len(legacy_bytes) < len(adapter_bytes), (
-        f"Legacy stub for {skill_name} should be shorter than the full adapter SKILL.md"
-    )
-
-
-@pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
-def test_legacy_stub_frontmatter_byte_equals_adapter(skill_name, expected_model, has_section_0):
-    """Stub frontmatter MUST byte-equal adapter frontmatter."""
-    legacy_text = _legacy_stub(skill_name).read_text(encoding="utf-8")
-    adapter_text = _adapter_skill(skill_name).read_text(encoding="utf-8")
-    legacy_fm = legacy_text.split("---", 2)[1]
-    adapter_fm = adapter_text.split("---", 2)[1]
-    assert legacy_fm == adapter_fm, (
-        f"Legacy stub frontmatter for {skill_name} must byte-equal adapter frontmatter. "
-        "Drift here causes silent runtime divergence."
-    )
-
-
 @pytest.mark.parametrize("skill_name,expected_model,has_section_0", SKILLS, ids=SKILL_IDS)
 def test_adapter_skill_md_has_or_lacks_section_0(skill_name, expected_model, has_section_0):
     text = _adapter_skill(skill_name).read_text(encoding="utf-8")
@@ -182,16 +148,16 @@ def test_adapter_skill_md_has_or_lacks_section_0(skill_name, expected_model, has
 # ── Non-parametrized constraint guards ────────────────────────────────────
 
 
-def test_legacy_preamble_stays_put_for_gate():
-    """R-02 guard: quoin/skills/gate/preamble.md must remain at this path.
+def test_preamble_present_for_gate():
+    """R-02 guard: quoin/adapters/claude/skills/gate/preamble.md must remain at this path.
 
-    install.sh copies it to ~/.claude/skills/gate/preamble.md for
+    The installer copies it to ~/.claude/skills/gate/preamble.md for
     cache-warming. Deleting or moving it would break the §0 model dispatch
     cost-guardrail and audit-log preamble deploy.
     """
-    preamble = PKG_DIR / "skills" / "gate" / "preamble.md"
+    preamble = PKG_DIR / "adapters" / "claude" / "skills" / "gate" / "preamble.md"
     assert preamble.is_file(), (
-        "CONSTRAINT VIOLATION: quoin/skills/gate/preamble.md was deleted or moved. "
+        "CONSTRAINT VIOLATION: quoin/adapters/claude/skills/gate/preamble.md was deleted or moved. "
         "This file MUST remain at this path — install.sh deploys it for cache-warming."
     )
 

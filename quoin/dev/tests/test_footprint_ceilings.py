@@ -1,6 +1,6 @@
 """IVG-162 T-02: per-file byte-ceiling checks (provisional = current size).
 
-Guards the 20 SECTION0_SKILLS deployed SKILL.md SOURCE files (the §0-carrying
+Guards the 19 SECTION0_SKILLS deployed SKILL.md SOURCE files (the §0-carrying
 skill set — see quoin/CLAUDE.md "### §0 Model dispatch preamble") plus the
 quoin/CLAUDE.md SOURCE file, against a per-file byte ceiling.
 
@@ -21,7 +21,7 @@ Each file is an INDEPENDENT parametrized assertion (hard constraint — not one
 aggregate budget), so a regression in one file never masks a regression in
 another, and a single ratchet edit (T-12) never has to touch every case.
 
-Update (IVG-165, 2026-08-02): the 20 §0-carrying skill ceilings are no
+Update (IVG-165, 2026-08-02): the 19 §0-carrying skill ceilings are no
 longer provisional/unslimmed — they went through the full generator-
 conversion arc (see the CEILINGS comment below) and are now FINAL post-slim
 * 1.10 ratchets, same status as claude_md's existing ratchet.
@@ -37,7 +37,7 @@ SKILLS_DIR = QUOIN_DIR / "adapters" / "claude" / "skills"
 CLAUDE_MD = QUOIN_DIR / "CLAUDE.md"
 SLIM_CLAUDE_MD = QUOIN_DIR / "CLAUDE.slim.md"
 
-# The 20 §0-carrying skills (single source of truth: quoin/CLAUDE.md "### §0
+# The 19 §0-carrying skills (single source of truth: quoin/CLAUDE.md "### §0
 # Model dispatch preamble" skill list, byte-mirrored against
 # test_quoin_stage1_worktree_fallback.py's SOURCE_MUTATING_WORKTREE_SKILLS
 # subset for the 5 sidecar carriers within this set).
@@ -57,7 +57,6 @@ SECTION0_SKILLS = [
     "revise-fast",
     "sleep",
     "next_steps",
-    "checkpoint",
     "continue_work",
     "pr",
     "status",
@@ -69,7 +68,7 @@ SECTION0_SKILLS = [
 # 2026-08-02) to post-slim size * 1.10 (rounded up) for files that WERE slimmed
 # this wave (checkpoint, claude_md — see T-06/T-07/T-08).
 #
-# The 20 §0-carrying skill ceilings went through the full IVG-165 §0
+# The 19 §0-carrying skill ceilings went through the full IVG-165 §0
 # generator-conversion arc on 2026-08-02 (Commits N1 -> N2 -> A -> B -> R):
 # N1 added the generator-conversion boundary marker (+17 bytes/file BY
 # CONSTRUCTION); N2 normalized 3 pre-existing off-axis prose residuals
@@ -78,7 +77,7 @@ SECTION0_SKILLS = [
 # gate (no byte change); B slimmed the Manual-kill-switch rationale sentence
 # to a memory/dispatch-guide.md pointer (-bytes/file, see
 # .workflow_artifacts/ivg-165-s0-generator-conversion/footprint-report-B.md).
-# All 20 (INCLUDING checkpoint, re-derived from its NEW post-slim size, not
+# All 19 (formerly including checkpoint, re-derived from its NEW post-slim size, not
 # skipped) are now FINAL post-slim * 1.10 ratchets, same discipline as the
 # claude_md ratchet below — NOT provisional/unslimmed, NOT "not attempted."
 # The generator (`inject_pollution_dispatch.py::render_section0_block`) is
@@ -93,21 +92,20 @@ SECTION0_SKILLS = [
 # precedent.
 CEILINGS = {
     "skill:capture_insight": 13196,  # post-description-trim 11996 * 1.10, monotonic vs prior 13396 Re-checked, no change (measured 11996 B, candidate 13196 B == prior ceiling 13196 B; unchanged).
-    "skill:checkpoint": 77492,  # post-description-trim 70447 * 1.10, monotonic vs prior 77901 Re-checked and held (measured 72815 B, candidate 80097 B > prior ceiling 77492 B; unchanged).
     "skill:cleanup": 22543,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3386 B measured; headroom unchanged.
     "skill:continue_work": 16019,  # post-description-trim 14562 * 1.10, monotonic vs prior 16077 Re-checked, no change (measured 14562 B, candidate 16019 B == prior ceiling 16019 B; unchanged).
     "skill:cost_snapshot": 22204,  # held (this ratchet only ever tightens, never loosens) — candidate 20209*1.10=22230 > prior; file grew since 2026-08-02 derivation Re-checked and held (measured 20209 B, candidate 22230 B > prior ceiling 22204 B; unchanged).
-    "skill:end_of_day": 49834,  # post-description-trim 45303 * 1.10, monotonic vs prior 50058 Re-checked, no change (measured 45303 B, candidate 49834 B == prior ceiling 49834 B; unchanged).
+    "skill:end_of_day": 48887,  # measured 44442 B, ceiling is that size plus 10 percent rounded up.
     "skill:end_of_task": 55541,  # post-description-trim 50491 * 1.10, monotonic vs prior 55771 Re-checked and held (measured 53393 B, candidate 58733 B > prior ceiling 55541 B; unchanged).
     "skill:expand": 20921,  # post-description-trim 19019 * 1.10, monotonic vs prior 21229 Re-checked, no change (measured 19019 B, candidate 20921 B == prior ceiling 20921 B; unchanged).
     "skill:gate": 61580,  # post-description-trim 55981 * 1.10, monotonic vs prior 62430 Re-checked and held (measured 59458 B, candidate 65404 B > prior ceiling 61580 B; unchanged).
     "skill:implement": 54414,  # post-description-trim 49467 * 1.10, monotonic vs prior 54715 Re-checked and held (measured 52096 B, candidate 57306 B > prior ceiling 54414 B; unchanged).
     "skill:next_steps": 12998,  # post-slim 11914 * 1.10 Re-checked and applied (measured 11816 B, candidate 12998 B <= prior ceiling 13106 B; only strict decrease in the whole task).
-    "skill:pr": 21122,  # raised 20850 -> 21122 (measured) for the Step 4 no-tool-attribution instruction; zero headroom.
+    "skill:pr": 21257,  # raised 21122 -> 21257 (measured) for the session-schema pointer in the two session-state lines; zero headroom.
     "skill:revise-fast": 29330,  # post-description-trim 26663 * 1.10, monotonic vs prior 29521 Re-checked, no change (measured 26663 B, candidate 29330 B == prior ceiling 29330 B; unchanged).
     "skill:rollback": 23984,  # post-description-trim 21803 * 1.10, monotonic vs prior 24247 Re-checked, no change (measured 21803 B, candidate 23984 B == prior ceiling 23984 B; unchanged).
     "skill:sleep": 31120,  # one-time authorized shift (IVG-263): tier move to Sonnet adds the generator-owned §0‴ block and §0 tier words, +3381 B measured; headroom unchanged.
-    "skill:start_of_day": 28944,  # post-description-trim 26312 * 1.10, monotonic vs prior 29155 Re-checked, no change (measured 26312 B, candidate 28944 B == prior ceiling 28944 B; unchanged).
+    "skill:start_of_day": 27770,  # measured 25245 B, ceiling is that size plus 10 percent rounded up.
     "skill:status": 9841,  # post-slim 8946 * 1.10 Re-checked, no change (measured 8946 B, candidate 9841 B == prior ceiling 9841 B; unchanged).
     "skill:triage": 34356,  # post-description-trim 31232 * 1.10, monotonic vs prior 34422 Re-checked, no change (measured 31232 B, candidate 34356 B == prior ceiling 34356 B; unchanged).
     "skill:weekly_review": 18633,  # post-description-trim 16939 * 1.10, monotonic vs prior 18803 Re-checked, no change (measured 16939 B, candidate 18633 B == prior ceiling 18633 B; unchanged).
@@ -123,9 +121,7 @@ CEILINGS = {
     # claude_md_slim ratchets the generated CLAUDE.slim.md the same way:
     # measured post-generation size 9,161 B (well-formed blank-line model)
     # * 1.10 rounded up.
-    "claude_md_slim": 10078,  # post-generation 9161 * 1.10 rounded up
-    # Re-checked: measured 9161 B, candidate 9161*1.10=10078 B (rounded up)
-    # == prior ceiling 10078 B -> unchanged. Net effect zero; recorded anyway.
+    "claude_md_slim": 2561,  # post-generation 2328 * 1.10 rounded up (core text composition)
 }
 
 
@@ -141,8 +137,8 @@ def _target_path(key: str) -> pathlib.Path:
 
 def test_section0_skills_set_matches_ceiling_keys():
     """Guard against the 20-skill set and the ceiling dict silently drifting apart."""
-    assert len(SECTION0_SKILLS) == 20, (
-        f"expected exactly 20 §0-carrying skills, got {len(SECTION0_SKILLS)}"
+    assert len(SECTION0_SKILLS) == 19, (
+        f"expected exactly 19 §0-carrying skills, got {len(SECTION0_SKILLS)}"
     )
     skill_keys = {k for k in CEILINGS if k.startswith("skill:")}
     expected_keys = {f"skill:{s}" for s in SECTION0_SKILLS}

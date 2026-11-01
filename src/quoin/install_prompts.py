@@ -23,6 +23,13 @@ AGENTDESK_QUESTION = (
     "ask which clipboard tool to use."
 )
 
+AGENTDESK_REFRESH_QUESTION = (
+    "agentdesk is already set up. Update its helper and zellij layout to the "
+    "versions shipped with this quoin? The old layout is backed up; a customised "
+    "layout is kept and the new one written beside it as agent-desk.kdl.new. "
+    "Nothing else (Homebrew, keybindings, ~/.zshrc) is touched."
+)
+
 # Must match SOURCE_LINE in tools/agentdesk/setup-agentdesk.sh (a test pins it).
 AGENTDESK_SOURCE_LINE = (
     '[ -f "$HOME/.config/agentdesk/agentdesk.zsh" ] && '
@@ -81,6 +88,18 @@ def run_agentdesk_setup(script: pathlib.Path) -> int:
     """Run the setup script with inherited stdio; never raises."""
     try:
         return subprocess.run(["bash", str(script)], check=False).returncode
+    except KeyboardInterrupt:
+        return 130
+    except OSError:
+        return 127
+
+
+def refresh_agentdesk(script: pathlib.Path) -> int:
+    """Rewrite only the agentdesk helper and zellij layout; never raises."""
+    try:
+        return subprocess.run(
+            ["bash", str(script), "--refresh"], stdin=subprocess.DEVNULL, check=False
+        ).returncode
     except KeyboardInterrupt:
         return 130
     except OSError:

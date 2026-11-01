@@ -95,6 +95,13 @@ def _load_manifest(run_path: Path) -> dict:
         import yaml  # type: ignore
         return yaml.safe_load(manifest_path.read_text(encoding="utf-8")) or {}
     except ImportError:
+        pass
+    except Exception:
+        # Manifests written before quoted values were escaped are not strict
+        # YAML; read them the way the tiered report does.
+        from quoin.benchmarks.harness.tiered_report import read_manifest
+        return read_manifest(run_path)
+    try:
         # yaml not available; try manual key parsing
         result = {}
         for line in manifest_path.read_text(encoding="utf-8").splitlines():

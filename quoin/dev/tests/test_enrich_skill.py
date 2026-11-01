@@ -20,7 +20,6 @@ THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
 ADAPTER_SKILL_MD = PKG_DIR / "adapters" / "claude" / "skills" / "enrich" / "SKILL.md"
-STUB_SKILL_MD = PKG_DIR / "skills" / "enrich" / "SKILL.md"
 
 
 def _adapter_text() -> str:
@@ -78,15 +77,6 @@ def test_adapter_references_core_doc():
     assert "quoin/core/skills/enrich.md" in text, (
         "Adapter SKILL.md must reference the portable intent doc path"
     )
-
-
-def test_stub_has_no_behavior_leaked_in():
-    """The deprecated stub at quoin/skills/enrich/ must carry no behavior body."""
-    text = STUB_SKILL_MD.read_text(encoding="utf-8")
-    assert "DEPRECATED" in text
-    forbidden_behavior_markers = ("AskUserQuestion", "Session bootstrap")
-    hits = [m for m in forbidden_behavior_markers if m in text]
-    assert not hits, f"Stub must not contain behavior markers: {hits}"
 
 
 @pytest.mark.parametrize(

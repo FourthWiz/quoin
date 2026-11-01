@@ -1,16 +1,14 @@
 #!/bin/sh
 # build_hook_fixtures.sh — Generate fixture transcript files for hook tests
 #
-# Creates three JSONL fixture transcripts at target utilization buckets:
-#   70% — below STOP_BPS (passthrough)
-#   88% — in advisory range (STOP_BPS..BLOCK_BPS-1)
-#   97% — in block range (>= BLOCK_BPS)
+# Creates the JSONL fixture transcript used as a high-fill input (97% of the
+# effective context window) by the prompt-hook and precompact tests.
 #
 # Reads constants from env (same defaults as hooks/_lib.sh):
 #   QUOIN_BYTES_PER_TOKEN  (default 8.0)
 #   QUOIN_EFFECTIVE_CONTEXT_LIMIT  (default 150000)
 #
-# Output: quoin/dev/tests/fixtures/hooks/transcript_{70,88,97}pct.jsonl
+# Output: quoin/dev/tests/fixtures/hooks/transcript_97pct.jsonl
 #
 # Idempotent: same constants → byte-identical output.
 # No timestamps or run-dependent content — deterministic filler text only.
@@ -102,8 +100,6 @@ generate_fixture() {
 
 printf 'Building hook fixture transcripts (BPT=%s, LIMIT=%s)...\n' "$BPT" "$LIMIT"
 
-generate_fixture 70 "$FIXTURES_DIR/transcript_70pct.jsonl"
-generate_fixture 88 "$FIXTURES_DIR/transcript_88pct.jsonl"
 generate_fixture 97 "$FIXTURES_DIR/transcript_97pct.jsonl"
 
 printf 'Done. Fixtures written to %s\n' "$FIXTURES_DIR"

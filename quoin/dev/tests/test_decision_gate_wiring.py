@@ -78,7 +78,7 @@ def test_guard_inert_when_autonomous():
 
 
 def test_run_injects_no_interactive_non_autonomous_only():
-    run = (ADAPTER_SKILLS_DIR / "run" / "SKILL.md").read_text(encoding="utf-8")
+    run = (ADAPTER_SKILLS_DIR / "run_hard" / "SKILL.md").read_text(encoding="utf-8")
     assert "[no-interactive]" in run
     assert "Non-interactive fail-closed propagation" in run
     # thorough_plan explicitly excluded
@@ -90,7 +90,7 @@ def test_run_injects_no_interactive_non_autonomous_only():
 
 
 def test_run_routes_needs_decision():
-    run = (ADAPTER_SKILLS_DIR / "run" / "SKILL.md").read_text(encoding="utf-8")
+    run = (ADAPTER_SKILLS_DIR / "run_hard" / "SKILL.md").read_text(encoding="utf-8")
     assert "NEEDS-DECISION" in run
     assert "gate-result: NEEDS-DECISION" in run
 

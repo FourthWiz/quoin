@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-test_sentinel_family_parity.py — drift guard across all 9 sentinel family-list copies.
+test_sentinel_family_parity.py — drift guard across the live sentinel family-list copies.
 
 Verifies that the three sources of the sentinel family list are byte-identical:
   1. hooks/_lib.sh:sentinel_globs() — machine-readable single source of truth
@@ -8,9 +8,10 @@ Verifies that the three sources of the sentinel family list are byte-identical:
   3. skills/sleep/SKILL.md ## Sentinel families covered section
 
 Also asserts:
-  - All three lists have EXACTLY 9 entries (catches partial 8→9 edits)
-  - idle-advisory-pending-*.txt is present in all three
-  - No stray "8 families"/"8 sentinel"/"8 hardcoded" count strings survive in either SKILL.md
+  - All three lists have EXACTLY 2 entries
+  - hooks/_lib.sh:legacy_sentinel_globs() holds exactly the seven retired family names
+    and no skill lists any of them
+  - No stale "9 families"/"9 sentinel"/"9 hardcoded" count strings survive in either SKILL.md
   - sessionstart.sh STEP 2 region references sentinel_globs and contains no inlined
     family list (ensures DRY: machine source not duplicated in the hook)
 
@@ -34,8 +35,10 @@ _SLEEP_SKILL_MD = _REPO_ROOT / "adapters" / "claude" / "skills" / "sleep" / "SKI
 
 EXPECTED_FAMILIES = [
     "pending-restore-*.txt",
-    "pending-prompt-*.txt",
     "compact-happened-*.txt",
+]
+RETIRED_FAMILIES = [
+    "pending-prompt-*.txt",
     "mid-agent-handoff-*.txt",
     "pending-resume-ref-*.txt",
     "checkpoint-defer-*.txt",
@@ -43,8 +46,8 @@ EXPECTED_FAMILIES = [
     "checkpoint-pending-compact-*.txt",
     "idle-advisory-pending-*.txt",
 ]
-EXPECTED_COUNT = 9
-STRAY_8_PATTERN = re.compile(r"8 families|8 sentinel|8 hardcoded", re.IGNORECASE)
+EXPECTED_COUNT = 2
+STRAY_9_PATTERN = re.compile(r"9 families|9 sentinel|9 hardcoded", re.IGNORECASE)
 
 
 def _extract_sentinel_globs_from_lib_sh() -> list[str]:
@@ -66,6 +69,19 @@ def _extract_sentinel_globs_from_lib_sh() -> list[str]:
         # Match quoted globs like 'pending-restore-*.txt' or "pending-restore-*.txt"
         found = re.findall(r"""['"]([a-z-]+\*\.[a-z]+)['"]""", line)
         for g in found:
+            if g not in globs:
+                globs.append(g)
+    return globs
+
+
+def _extract_legacy_globs_from_lib_sh() -> list[str]:
+    content = _LIB_SH.read_text(encoding="utf-8")
+    match = re.search(r"legacy_sentinel_globs\(\)\s*\{(.*?)\n\}", content, re.DOTALL)
+    if not match:
+        raise ValueError(f"legacy_sentinel_globs() function not found in {_LIB_SH}")
+    globs = []
+    for line in match.group(1).splitlines():
+        for g in re.findall(r"""['"]([a-z-]+\*\.[a-z]+)['"]""", line):
             if g not in globs:
                 globs.append(g)
     return globs
@@ -162,8 +178,8 @@ def _check_sessionstart_no_inline_list() -> tuple[bool, str]:
     return True, "STEP 2 region references sentinel_globs and contains no inlined family list"
 
 
-def test_lib_sh_parses_nine_families() -> None:
-    """sentinel_globs() in _lib.sh must declare exactly 9 families."""
+def test_lib_sh_parses_two_families() -> None:
+    """sentinel_globs() in _lib.sh must declare exactly 2 families."""
     globs = _extract_sentinel_globs_from_lib_sh()
     assert len(globs) == EXPECTED_COUNT, (
         f"hooks/_lib.sh:sentinel_globs() has {len(globs)} families, expected {EXPECTED_COUNT}. "
@@ -171,8 +187,8 @@ def test_lib_sh_parses_nine_families() -> None:
     )
 
 
-def test_cleanup_skill_md_has_nine_families() -> None:
-    """cleanup/SKILL.md allow-list section must have exactly 9 families."""
+def test_cleanup_skill_md_has_two_families() -> None:
+    """cleanup/SKILL.md allow-list section must have exactly 2 families."""
     families = _extract_cleanup_sentinel_list()
     assert len(families) == EXPECTED_COUNT, (
         f"cleanup/SKILL.md allow-list has {len(families)} families, expected {EXPECTED_COUNT}. "
@@ -180,8 +196,8 @@ def test_cleanup_skill_md_has_nine_families() -> None:
     )
 
 
-def test_sleep_skill_md_has_nine_families() -> None:
-    """sleep/SKILL.md sentinel families section must have exactly 9 families."""
+def test_sleep_skill_md_has_two_families() -> None:
+    """sleep/SKILL.md sentinel families section must have exactly 2 families."""
     families = _extract_sleep_sentinel_list()
     assert len(families) == EXPECTED_COUNT, (
         f"sleep/SKILL.md sentinel list has {len(families)} families, expected {EXPECTED_COUNT}. "
@@ -190,7 +206,7 @@ def test_sleep_skill_md_has_nine_families() -> None:
 
 
 def test_all_three_lists_identical() -> None:
-    """All three family lists must be byte-identical (same 9 families, same order)."""
+    """All three family lists must be byte-identical (same 2 families, same order)."""
     lib_globs = _extract_sentinel_globs_from_lib_sh()
     cleanup_families = _extract_cleanup_sentinel_list()
     sleep_families = _extract_sleep_sentinel_list()
@@ -209,40 +225,38 @@ def test_all_three_lists_identical() -> None:
     )
 
 
-def test_idle_advisory_present_in_all_three() -> None:
-    """idle-advisory-pending-*.txt must be present in all three lists."""
-    lib_globs = _extract_sentinel_globs_from_lib_sh()
-    cleanup_families = _extract_cleanup_sentinel_list()
-    sleep_families = _extract_sleep_sentinel_list()
-
-    assert "idle-advisory-pending-*.txt" in lib_globs, (
-        "idle-advisory-pending-*.txt missing from hooks/_lib.sh:sentinel_globs()"
-    )
-    assert "idle-advisory-pending-*.txt" in cleanup_families, (
-        "idle-advisory-pending-*.txt missing from cleanup/SKILL.md allow-list"
-    )
-    assert "idle-advisory-pending-*.txt" in sleep_families, (
-        "idle-advisory-pending-*.txt missing from sleep/SKILL.md sentinel list"
-    )
+def test_legacy_globs_hold_exactly_the_seven_retired_names() -> None:
+    assert _extract_legacy_globs_from_lib_sh() == RETIRED_FAMILIES
 
 
-def test_no_stray_eight_count_strings_in_cleanup() -> None:
-    """No '8 families'/'8 sentinel'/'8 hardcoded' count strings in cleanup/SKILL.md."""
+def test_no_skill_lists_a_retired_family() -> None:
+    for path in (_CLEANUP_SKILL_MD, _SLEEP_SKILL_MD):
+        text = path.read_text(encoding="utf-8")
+        for retired in RETIRED_FAMILIES:
+            assert retired not in text, f"{path.name} still lists the retired family {retired}"
+    sod = _REPO_ROOT / "adapters" / "claude" / "skills" / "start_of_day" / "SKILL.md"
+    sod_text = sod.read_text(encoding="utf-8")
+    for retired in RETIRED_FAMILIES:
+        assert retired not in sod_text, f"start_of_day still lists the retired family {retired}"
+
+
+def test_no_stale_nine_count_strings_in_cleanup() -> None:
+    """No '9 families'/'9 sentinel'/'9 hardcoded' count strings in cleanup/SKILL.md."""
     content = _CLEANUP_SKILL_MD.read_text(encoding="utf-8")
-    matches = STRAY_8_PATTERN.findall(content)
+    matches = STRAY_9_PATTERN.findall(content)
     assert len(matches) == 0, (
-        f"Stray '8 families/sentinel/hardcoded' count string(s) found in cleanup/SKILL.md: "
-        f"{matches}. Update all count strings from 8→9."
+        f"Stale '9 families/sentinel/hardcoded' count string(s) found in cleanup/SKILL.md: "
+        f"{matches}. Update all count strings to 2."
     )
 
 
-def test_no_stray_eight_count_strings_in_sleep() -> None:
-    """No '8 families'/'8 sentinel'/'8 hardcoded' count strings in sleep/SKILL.md."""
+def test_no_stale_nine_count_strings_in_sleep() -> None:
+    """No '9 families'/'9 sentinel'/'9 hardcoded' count strings in sleep/SKILL.md."""
     content = _SLEEP_SKILL_MD.read_text(encoding="utf-8")
-    matches = STRAY_8_PATTERN.findall(content)
+    matches = STRAY_9_PATTERN.findall(content)
     assert len(matches) == 0, (
-        f"Stray '8 families/sentinel/hardcoded' count string(s) found in sleep/SKILL.md: "
-        f"{matches}. Update all count strings from 8→9."
+        f"Stale '9 families/sentinel/hardcoded' count string(s) found in sleep/SKILL.md: "
+        f"{matches}. Update all count strings to 2."
     )
 
 
@@ -253,7 +267,7 @@ def test_sessionstart_uses_sentinel_globs_not_inline_list() -> None:
 
 
 def test_expected_families_all_present() -> None:
-    """All 9 expected family globs are present in all three sources."""
+    """All expected family globs are present in all three sources."""
     lib_globs = _extract_sentinel_globs_from_lib_sh()
     cleanup_families = _extract_cleanup_sentinel_list()
     sleep_families = _extract_sleep_sentinel_list()
@@ -270,13 +284,14 @@ if __name__ == "__main__":
     print(f"test_sentinel_family_parity.py — project root: {_PROJECT_ROOT}")
 
     all_tests = [
-        test_lib_sh_parses_nine_families,
-        test_cleanup_skill_md_has_nine_families,
-        test_sleep_skill_md_has_nine_families,
+        test_lib_sh_parses_two_families,
+        test_cleanup_skill_md_has_two_families,
+        test_sleep_skill_md_has_two_families,
         test_all_three_lists_identical,
-        test_idle_advisory_present_in_all_three,
-        test_no_stray_eight_count_strings_in_cleanup,
-        test_no_stray_eight_count_strings_in_sleep,
+        test_legacy_globs_hold_exactly_the_seven_retired_names,
+        test_no_skill_lists_a_retired_family,
+        test_no_stale_nine_count_strings_in_cleanup,
+        test_no_stale_nine_count_strings_in_sleep,
         test_sessionstart_uses_sentinel_globs_not_inline_list,
         test_expected_families_all_present,
     ]

@@ -33,7 +33,7 @@ PROJECT_ROOT = os.path.dirname(QUOIN_DIR)           # project root
 VALIDATOR = os.path.join(QUOIN_DIR, "core", "scripts", "handoff_validate.py")
 
 RUN_SKILL = os.path.join(
-    QUOIN_DIR, "adapters", "claude", "skills", "run", "SKILL.md"
+    QUOIN_DIR, "adapters", "claude", "skills", "run_hard", "SKILL.md"
 )
 # The three summary-mandating skills each inline the COMPLETE (and, for
 # implement, PARTIAL) return template directly in their final-message

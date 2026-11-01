@@ -2,8 +2,7 @@
 # test_sleep_chaining.sh — static text checks verifying /end_of_day → /sleep chaining.
 #
 # All tests are grep checks against quoin/adapters/claude/skills/end_of_day/SKILL.md
-# (the active Claude adapter file; quoin/skills/end_of_day/SKILL.md is a deprecated,
-# behavior-free stub since the Phase 16 adapter migration).
+# (the active Claude adapter file).
 # Runtime verification (actual sleep subagent firing) is T-16 Sub-task B manual smoke.
 #
 # Usage:

@@ -22,7 +22,7 @@ from typing import Optional
 
 # ---------------------------------------------------------------------------
 # Google Drive conflict-copy filter (IVG-75)
-# Conservative anchored regex — see find_drive_conflicts.py D-01 for rationale.
+# Conservative anchored regex: matches only Drive's " N" / " N.ext" suffix.
 # ---------------------------------------------------------------------------
 
 _DRIVE_CONFLICT_RE = re.compile(r" \d{1,3}(\.[^ ]*)?$")

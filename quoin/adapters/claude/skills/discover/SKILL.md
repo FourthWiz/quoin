@@ -1,6 +1,6 @@
 ---
 name: discover
-description: "Scans all repos in the project folder and saves inventory, architecture overview, and dependency map to memory. Use for: /discover, 'scan my repos', 'map the codebase', 'what repos do I have', 'index the project', 'learn my codebase'."
+description: "Scans all repos in the project and saves inventory, architecture and dependency map to memory. Use for: /discover, 'scan my repos', 'map the codebase'."
 model: opus
 ---
 
@@ -17,13 +17,13 @@ This skill runs in the user's current session. If the session is polluted (high 
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
   Determine dispatch contract fields:
@@ -69,7 +69,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 ## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
@@ -128,7 +128,7 @@ description wording for every branch below: memory/dispatch-guide.md §0″ verb
 ## Autonomous mode bootstrap
 
 Parse the incoming prompt for the `[autonomous]` sentinel (may stack after `[no-redispatch]`,
-e.g. `[no-redispatch] [autonomous]`, since `/run` prefixes it onto this skill's spawn prompt).
+e.g. `[no-redispatch] [autonomous]`, since `run_hard` prefixes it onto this skill's spawn prompt).
 If present, set internal state `_AUTONOMOUS=true` for the remainder of this skill's execution;
 strip the sentinel before further parsing. Default `_AUTONOMOUS=false` (opt-in only).
 `_AUTONOMOUS` gates ONLY the repo main spec offer below (see "Repo main spec (optional offer)").
@@ -181,7 +181,7 @@ Starting from the project root folder, examine every top-level directory. For ea
 
 ### Nested-root sanity scan (IVG-119)
 
-Before the per-repo inventory, run one project-wide check for accidental nested/duplicate `.workflow_artifacts/` roots (subproject dirs that create their own root break `/checkpoint --restore` and artifact discovery):
+Before the per-repo inventory, run one project-wide check for accidental nested/duplicate `.workflow_artifacts/` roots (subproject dirs that create their own root break run resume and artifact discovery):
 
 ```
 PROJECT_ROOT="$(pwd)"

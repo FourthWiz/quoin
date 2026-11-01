@@ -28,7 +28,7 @@ def _section_0b(text: str) -> str:
 
 def test_interactive_three_option_list():
     body = _section_0b(_eot_text())
-    for opt in ("Proceed in this session", "Checkpoint and finish in a fresh session", "Abort"):
+    for opt in ("Proceed in this session", "Finish in a fresh session", "Abort"):
         assert opt in body, f"missing session-age option: {opt}"
     assert "(recommended)" in body
 

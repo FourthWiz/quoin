@@ -2,8 +2,9 @@
 # postcompact.sh — PostCompact hook for quoin workflow
 # Deployed to ~/.claude/hooks/ by bash install.sh
 # Fires after auto compaction completes. No decision control — side effects only.
-# Writes a postcompact-reset-${session_id}.txt sentinel so userpromptsubmit.sh
-# STEP 0.5 can detect compaction and trash-move the sentinel on the next prompt submit.
+# Writes a compact-happened-${session_id}.txt marker (read by auto_resume.py
+# to label a continuation as a compaction) and appends the post half of the
+# compaction telemetry event.
 # Fail-OPEN: any error → exit 0. No stdout output.
 #
 # Shebang assertion: head -1 ... | grep -qE '^#!/bin/sh( |$)'
@@ -18,36 +19,25 @@ session_id=$(printf '%s' "$STDIN" | jq -r '.session_id // empty' 2>/dev/null) ||
 cwd=$(printf '%s' "$STDIN" | jq -r '.cwd // empty' 2>/dev/null) || exit 0
 transcript_path=$(printf '%s' "$STDIN" | jq -r '.transcript_path // empty' 2>/dev/null) || exit 0
 
-# Guard: session_id required for a usable sentinel filename
+# Guard: session_id required for a usable marker filename
 [ -z "$session_id" ] && exit 0
 [ -z "$cwd" ] && cwd="$PWD"
+_ctx_proj="$cwd"
 cwd=$(resolve_project_root "$cwd")
 
 MEMORY_DIR="${cwd}/.workflow_artifacts/memory"
 [ -d "$MEMORY_DIR" ] || exit 0
 
-SENTINEL="${MEMORY_DIR}/postcompact-reset-${session_id}.txt"
-
 compacted_at=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || compacted_at="unknown"
-
-transcript_bytes_after=0
-if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
-    transcript_bytes_after=$(wc -c < "$transcript_path" 2>/dev/null | awk '{print $1}') || transcript_bytes_after=0
-fi
-transcript_bytes_after=${transcript_bytes_after:-0}
-
-printf 'compacted_at=%s\nsession_id=%s\ntranscript_path=%s\ntranscript_bytes_after=%s\n' \
-    "$compacted_at" "$session_id" "$transcript_path" "$transcript_bytes_after" \
-    > "$SENTINEL" 2>/dev/null || true
 
 COMPACT_HAPPENED_SENTINEL="${MEMORY_DIR}/compact-happened-${session_id}.txt"
 printf 'compacted_at=%s\nsession_id=%s\n' "$compacted_at" "$session_id" \
     > "$COMPACT_HAPPENED_SENTINEL" 2>/dev/null || true
 
 # STEP 3: Telemetry — the "post" half of a compaction event, appended after
-# both sentinels above. Best-effort: a telemetry failure never affects the
-# sentinels or the exit code. The .allow-compact marker suppresses this
-# append only (both sentinels above are still written) — unlike
+# the compact-happened marker above. Best-effort: a telemetry failure never
+# affects the marker or the exit code. The .allow-compact marker suppresses this
+# append only (the compact-happened marker is still written) — unlike
 # precompact.sh, where the same marker skips the whole hook.
 (
   [ -f "${cwd}/.allow-compact" ] && exit 0
@@ -111,8 +101,8 @@ printf 'compacted_at=%s\nsession_id=%s\n' "$compacted_at" "$session_id" \
   fi
   # Computed exactly as the pre half's own _tel_ts/_tel_bytes/_tel_est —
   # a separate _tel_ba that stays empty when the transcript is unreadable
-  # (the sentinel's own transcript_bytes_after is 0-defaulted above and
-  # would misreport an unreadable transcript as a genuine zero-byte one).
+  # (a 0-defaulted size would misreport an unreadable transcript as a
+  # genuine zero-byte one).
   _tel_ts=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null) || _tel_ts=$(date +%Y-%m-%dT%H:%M:%SZ)
   _tel_ba=""
   if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
@@ -122,14 +112,35 @@ printf 'compacted_at=%s\nsession_id=%s\n' "$compacted_at" "$session_id" \
   if [ -n "$_tel_ba" ]; then
     _tel_est=$(awk -v b="$_tel_ba" -v bpt="${BPT:-8.0}" 'BEGIN{ printf "%d", b / bpt }' 2>/dev/null) || _tel_est=""
   fi
+  # Real token reading (best-effort): the value is recorded only when it came
+  # from transcript usage and the newest reading is a compact boundary; any failure leaves the fields null.
+  _tel_rt=""; _tel_rw=""; _tel_src=""
+  if [ -n "$transcript_path" ] && [ -r "$transcript_path" ]; then
+    _tel_rd=$(compute_context_reading "$transcript_path" "$_ctx_proj" --kind 2>/dev/null) || _tel_rd=""
+    _tel_rbps=""; _tel_rsrc=""; _tel_rtok=""; _tel_rwin=""; _tel_rkind=""
+    read -r _tel_rbps _tel_rsrc _tel_rtok _tel_rwin _tel_rkind <<TELEOF
+$_tel_rd
+TELEOF
+    if [ "$_tel_rsrc" = "real" ] && [ "$_tel_rkind" = "compact" ]; then
+      case "$_tel_rtok$_tel_rwin" in
+        ''|*[!0-9]*) ;;
+        *) _tel_rt="$_tel_rtok"; _tel_rw="$_tel_rwin" ;;
+      esac
+    fi
+  fi
+  if [ -n "$_tel_rt" ]; then _tel_src="real"; elif [ -n "$_tel_est" ]; then _tel_src="estimated"; fi
   jq -nc --arg half "post" --arg sid "$session_id" --arg seq "$_tel_seq" \
     --arg ts "$_tel_ts" --arg ba "$_tel_ba" --arg eta "$_tel_est" \
+    --arg rta "$_tel_rt" --arg rw "$_tel_rw" --arg rsrc "$_tel_src" \
     --arg trig "$_tel_trigger" --arg cslen "$_tel_cslen" \
     '{v: 1, half: $half, session_id: $sid,
       event_seq: (if $seq == "" then null else ($seq|tonumber) end),
       ts: $ts,
       bytes_after: (if $ba == "" then null else ($ba|tonumber) end),
       est_tokens_after: (if $eta == "" then null else ($eta|tonumber) end),
+      real_tokens_after: (if $rta == "" then null else ($rta|tonumber) end),
+      real_window: (if $rw == "" then null else ($rw|tonumber) end),
+      reading_source: (if $rsrc == "" then null else $rsrc end),
       trigger: $trig,
       compact_summary_len: (if $cslen == "" then null else ($cslen|tonumber) end)}' \
     >> "$_tel_sink" 2>/dev/null || exit 0

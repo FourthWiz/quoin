@@ -29,7 +29,12 @@ Exit-code semantics intentionally INVERT branch_hygiene's convention:
        broken (dangling link, missing, or not runnable) and no healthy venv
        with pytest was found
        (`exit_reason="venv-interpreter-broken"`, details in
-       `interpreter_problems`).  Treat as "cannot confirm green → do NOT auto-approve."
+       `interpreter_problems`), or every selected test failed to collect and
+       none ran, and the same tests also fail to collect at the baseline
+       revision (`exit_reason="test-environment-unusable"`: the interpreter or
+       runner cannot load the project, so the run says nothing about the
+       change; a change that breaks collection collects at the baseline and
+       stays exit 1).  Treat as "cannot confirm green → do NOT auto-approve."
        NOTE: QUOIN_DISABLE_AFFECTED_TESTS=1 also exits 3 (not 0) because
        disabling detection must not silently green-light an APPROVE — this
        is the OPPOSITE of branch_hygiene's env opt-out which exits 0.
@@ -213,10 +218,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     ),
     (
         "quoin/memory/cleanup-task-bookkeeping.md",
-        "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
-    ),
-    (
-        "quoin/memory/checkpoint-spec.md",
         "quoin/dev/tests/test_no_shell_rm_mv_in_instructions.py",
     ),
     (
@@ -463,7 +464,7 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_authored_content_lint_wiring.py",
     ),
     # IVG-123: each of the 9 spawn-target skills' generated preamble.md
-    # (quoin/skills/<skill>/preamble.md — see build_preambles.py's
+    # (quoin/adapters/claude/skills/<skill>/preamble.md — see build_preambles.py's
     # SPAWN_TARGETS) selects test_preamble_freshness.py directly. Per-file
     # rows, not a directory-prefix rule (D-04): a prefix rule would widen
     # matching semantics for every existing row above. Duplicate-key-safe
@@ -471,160 +472,40 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     # first rows for these specific paths, so no existing selector is
     # widened or displaced.
     (
-        "quoin/skills/critic/preamble.md",
+        "quoin/adapters/claude/skills/critic/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/revise/preamble.md",
+        "quoin/adapters/claude/skills/revise/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/revise-fast/preamble.md",
+        "quoin/adapters/claude/skills/revise-fast/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/plan/preamble.md",
+        "quoin/adapters/claude/skills/plan/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/review/preamble.md",
+        "quoin/adapters/claude/skills/review/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/architect/preamble.md",
+        "quoin/adapters/claude/skills/architect/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/gate/preamble.md",
+        "quoin/adapters/claude/skills/gate/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/specify/preamble.md",
+        "quoin/adapters/claude/skills/specify/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
     ),
     (
-        "quoin/skills/enrich/preamble.md",
+        "quoin/adapters/claude/skills/enrich/preamble.md",
         "quoin/dev/tests/test_preamble_freshness.py",
-    ),
-    # IVG-248 stage-1 T-08: the handoff_measure fixture tree is committed
-    # non-Python JSONL (subagent + parent-session transcripts) plus a
-    # future committed snapshot (T-05/T-10). The selector name-matches
-    # test_<stem>*.py against files on disk, so a fixture-only edit lands
-    # in `ignored` and selects zero tests without an explicit row here —
-    # same lesson-2026-07-04 blind spot the rows above were written to
-    # close. Both key and value are REPO-relative (resolved against the
-    # git root), matching every other row in this table.
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-a/subagents/agent-case-a.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-b/subagents/agent-case-b.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-c/subagents/agent-case-c.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-d/subagents/agent-case-d.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-e/subagents/agent-case-e.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-f/subagents/agent-case-f.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-g/subagents/agent-case-g.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-h/subagents/agent-case-h.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-i/subagents/agent-case-i.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-j/subagents/agent-case-j.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-k/subagents/agent-case-k.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-l/subagents/agent-case-l.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-m/subagents/agent-case-m.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-case-n/subagents/agent-case-n.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    # T-02 (agent-handoff-format stage 4): envelope partition / D-07
-    # envelope-anchored phase discriminator / contract-read channel fixtures,
-    # fresh sid-env-a..i namespace (see test_handoff_measure.py's own
-    # collision-avoidance note next to the sid-case-* fixtures above).
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-a/subagents/agent-env-a.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-b/subagents/agent-env-b.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-c/subagents/agent-env-c.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-d/subagents/agent-env-d.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-e/subagents/agent-env-e.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-f/subagents/agent-env-f.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-g/subagents/agent-env-g.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-h/subagents/agent-env-h.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-i/subagents/agent-env-i.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-env-j/subagents/agent-env-j.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-joint.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/projects/-fake-project/sid-joint/subagents/agent-joint.jsonl",
-        "quoin/dev/tests/test_handoff_measure.py",
-    ),
-    (
-        "quoin/dev/tests/fixtures/handoff_measure/baseline/handoff-baseline-snapshot.json",
-        "quoin/dev/tests/test_handoff_measure.py",
     ),
     # IVG-248 stage 2 T-14: a doc-only edit to the inter-agent handoff spec
     # is unselectable at a Standard gate without these rows — same
@@ -826,15 +707,11 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_run_state_wiring.py",
     ),
     # Task-bookkeeping pass prose spans cleanup/SKILL.md,
-    # checkpoint/SKILL.md, the runtime-neutral core doc, the reference doc,
+    # the runtime-neutral core doc, the reference doc,
     # and README.md's Utilities row -- none of their existing rows reach the
     # bookkeeping-pass slicer assertions.
     (
         "quoin/adapters/claude/skills/cleanup/SKILL.md",
-        "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
-    ),
-    (
-        "quoin/adapters/claude/skills/checkpoint/SKILL.md",
         "quoin/dev/tests/test_cleanup_bookkeeping_skill.py",
     ),
     (
@@ -882,6 +759,30 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/hooks/_lib.sh",
         "quoin/dev/tests/test_lib_thresholds_unchanged.py",
+    ),
+    (
+        "quoin/hooks/_lib.sh",
+        "quoin/dev/tests/test_context_reading_parity.py",
+    ),
+    (
+        "quoin/hooks/_lib.sh",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/hooks/_lib.sh",
+        "quoin/dev/tests/test_context_budget_guard.py",
+    ),
+    (
+        "quoin/core/scripts/context_budget_guard.py",
+        "quoin/dev/tests/test_context_reading_parity.py",
+    ),
+    (
+        "quoin/core/scripts/context_budget_guard.py",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/dev/tests/fixtures/context_reading/cases.json",
+        "quoin/dev/tests/test_context_reading_parity.py",
     ),
     (
         "quoin/memory/hooks-table.md",
@@ -1943,6 +1844,58 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/tools/agentdesk/setup-agentdesk.sh",
         "quoin/dev/tests/test_install_prompts.py",
     ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_keybinds.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_keybinds_v2.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_ghostty.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_keybinds_live.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_layout.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_layout_live.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_standard_layout.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_session_record.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_sessions_parity.py",
+    ),
+    (
+        "quoin/tools/agentdesk/agentdesk.zsh",
+        "quoin/dev/tests/test_agentdesk_launch_hints.py",
+    ),
+    (
+        "src/quoin/agentdesk_sessions.py",
+        "quoin/dev/tests/test_agentdesk_launch_hints.py",
+    ),
+    (
+        "quoin/tools/agentdesk/setup-agentdesk.sh",
+        "quoin/dev/tests/test_agentdesk_standard_layout.py",
+    ),
+    (
+        "quoin/tools/agentdesk/KEYBIND-VERIFY.md",
+        "quoin/dev/tests/test_agentdesk_keybinds_v2.py",
+    ),
     # Tests added with the interpreter, pytest-bound and ledger-summary work: an edit to
     # one of these documents must select the guard that reads it.
     (
@@ -1981,6 +1934,34 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/memory/dispatch-guide.md",
         "quoin/dev/tests/test_fullsuite_recipe_interpreter.py",
     ),
+    (
+        "quoin/hooks/userpromptsubmit.sh",
+        "quoin/dev/tests/test_context_reading_consumers.py",
+    ),
+    (
+        "quoin/hooks/precompact.sh",
+        "quoin/dev/tests/test_context_reading_telemetry.py",
+    ),
+    (
+        "quoin/hooks/postcompact.sh",
+        "quoin/dev/tests/test_context_reading_telemetry.py",
+    ),
+    (
+        "quoin/docs/hooks-guide.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
+    (
+        "quoin/memory/hooks-table.md",
+        "quoin/dev/tests/test_context_reading_docs.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/end_of_day/SKILL.md",
+        "quoin/dev/tests/test_end_of_day_cleanup_autofire.py",
+    ),
+    (
+        "src/quoin/installer.py",
+        "quoin/dev/tests/test_install_retired_skill.py",
+    ),
 )
 
 # SKILL.md coverage residual gap (review-1.md MAJOR 2, documented-acceptance branch):
@@ -2015,7 +1996,7 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
 # later its citation coverage, changed.
 #
 # Orthogonal addition (IVG-123): the 9 spawn-target preamble.md files
-# (quoin/skills/<skill>/preamble.md) are now covered per-file above, selecting
+# (quoin/adapters/claude/skills/<skill>/preamble.md) are now covered per-file above, selecting
 # test_preamble_freshness.py. This is unrelated to the SKILL.md citation-sweep
 # gap described above — preamble.md and SKILL.md are different files in the
 # same skill directory, and the citation-sweep gap for the remaining 30 adapter
@@ -2743,6 +2724,100 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
         return [], "no-changes"
 
     return sorted(combined), "worktree-diff"
+
+
+# ---------------------------------------------------------------------------
+# Test-environment check (collection fails with or without the change)
+# ---------------------------------------------------------------------------
+
+def _junit_only_collection_errors(junit_path: Path) -> bool:
+    """True when the report holds collection errors and no test that ran."""
+    import xml.etree.ElementTree as ET
+
+    try:
+        root = ET.parse(str(junit_path)).getroot()
+    except (OSError, ET.ParseError):
+        return False
+    collection_errors = 0
+    ran = 0
+    for case in root.iter("testcase"):
+        error = case.find("error")
+        if error is not None and "collection failure" in (error.get("message") or ""):
+            collection_errors += 1
+        else:
+            ran += 1
+    return collection_errors > 0 and ran == 0
+
+
+def _baseline_rev(repo_str: str) -> str:
+    """The revision the change is measured against: the same merge base the
+    diff-basis chain uses, or HEAD when the change is only in the worktree."""
+    ups, _, ups_rc = _run(
+        ["git", "-C", repo_str, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
+    )
+    refs = [ups] if ups_rc == 0 and ups else []
+    base_ref = _resolve_base_branch(repo_str)
+    if base_ref is not None:
+        refs.append(base_ref)
+    for ref in refs:
+        mb, _, mb_rc = _run(["git", "-C", repo_str, "merge-base", ref, "HEAD"])
+        if mb_rc == 0 and mb.strip():
+            head, _, _ = _run(["git", "-C", repo_str, "rev-parse", "HEAD"])
+            if mb.strip() != head.strip():
+                return mb.strip()
+    return "HEAD"
+
+
+_COLLECTED_RE = re.compile(r"(\d+) tests? collected")
+_ERRORS_RE = re.compile(r"\d+ errors?\b")
+
+
+def _baseline_collects_nothing(
+    repo_root: Path, interp: str, selectors: list[str], timeout: int
+) -> bool:
+    """True when the selected tests also fail to collect at the baseline revision.
+
+    That separates an interpreter or runner that cannot load this project at
+    all from a change that broke collection: only the first is reported as
+    undeterminable. Any doubt (no worktree, no selector present at the
+    baseline, a timeout) returns False so the run stays RED.
+    """
+    import shutil
+    import tempfile
+
+    repo_str = str(repo_root.resolve())
+    rev = _baseline_rev(repo_str)
+    tmp = Path(tempfile.mkdtemp(prefix="quoin-affected-base-"))
+    tree = tmp / "tree"
+    try:
+        _, _, rc = _run(["git", "-C", repo_str, "worktree", "add", "--detach", str(tree), rev])
+        if rc != 0:
+            return False
+        present = []
+        for sel in selectors:
+            path = Path(sel.split("::", 1)[0])
+            try:
+                rel = path.resolve().relative_to(Path(repo_str)) if path.is_absolute() else path
+            except ValueError:
+                continue
+            if (tree / rel).exists():
+                present.append(str(rel) + (sel[len(sel.split("::", 1)[0]):]))
+        if not present:
+            return False
+        try:
+            proc = subprocess.run(
+                [interp, "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider", *present],
+                cwd=str(tree), capture_output=True, text=True, timeout=timeout,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        out = (proc.stdout or "") + (proc.stderr or "")
+        collected = _COLLECTED_RE.search(out)
+        nothing = collected is None or int(collected.group(1)) == 0
+        return proc.returncode != 0 and nothing and bool(_ERRORS_RE.search(out))
+    finally:
+        _run(["git", "-C", repo_str, "worktree", "remove", "--force", str(tree)])
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
@@ -3523,9 +3598,21 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(sel.to_dict(), indent=2))
         return 3
 
+    import tempfile
+
+    junit_dir = None
+    junit_args: list[str] = []
+    if not any(str(a).startswith("--junitxml") or str(a).startswith("--junit-xml")
+               for a in args.pytest_args):
+        import atexit
+        import shutil
+
+        junit_dir = Path(tempfile.mkdtemp(prefix="quoin-affected-junit-"))
+        atexit.register(shutil.rmtree, str(junit_dir), True)
+        junit_args = [f"--junitxml={junit_dir / 'affected.xml'}"]
     try:
         proc = subprocess.run(
-            [interp, "-m", "pytest", *selectors, *args.pytest_args],
+            [interp, "-m", "pytest", *selectors, *args.pytest_args, *junit_args],
             cwd=str(repo_root),
             timeout=pytest_bound,
         )
@@ -3596,6 +3683,25 @@ def main(argv: list[str] | None = None) -> int:
     else:
         exit_reason = "affected-red"
         code = 1
+    remedy = ""
+    # Every selected test failed to collect, none ran, and the same tests fail
+    # to collect without the change: the interpreter or runner cannot load this
+    # project, so the result says nothing about the change. A change that
+    # breaks collection still collects at the baseline and stays RED.
+    if (
+        code == 1
+        and junit_dir is not None
+        and _junit_only_collection_errors(junit_dir / "affected.xml")
+        and _baseline_collects_nothing(repo_root, interp, selectors, pytest_bound)
+    ):
+        exit_reason = "test-environment-unusable"
+        code = 3
+        remedy = (
+            f"pytest under {interp} cannot collect these tests even without the change "
+            "(wrong Python version or a project that uses its own test runner). Run the "
+            "project's own test command on the change and record it, or point QUOIN_PYTHON "
+            "at an interpreter that can import the project."
+        )
     sel = Selection(
         changed=changed,
         selectors=selectors,
@@ -3611,6 +3717,7 @@ def main(argv: list[str] | None = None) -> int:
         interpreter_reason=interp_reason,
         interpreter_problems=interp_problems,
         **bound_kw,
+        remedy=remedy,
     )
     if fmt == "text":
         print(_format_text(sel))

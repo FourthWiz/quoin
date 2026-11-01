@@ -79,9 +79,8 @@ def test_fresh_clone_install_e2e(transport: str):
             assert skill_md.exists(), f"[{transport}] Missing skill SKILL.md: {skill}"
 
         # Phases 6–17 migrated skills: each is installed from the Claude
-        # adapter path. Verify the deployed file is byte-identical to the
-        # adapter source AND NOT identical to the legacy stub (i.e., the
-        # installer override actually fired).
+        # adapter path. Verify the deployed file matches the adapter source
+        # after __QUOIN_HOME__ substitution.
         MIGRATED_SKILLS = (
             "capture_insight", "triage", "start_of_day", "review",
             "plan", "critic", "revise", "revise-fast",
@@ -117,11 +116,6 @@ def test_fresh_clone_install_e2e(transport: str):
                 f"Deployed {migrated} SKILL.md does not match expected substituted content "
                 f"from Claude adapter source "
                 f"quoin/adapters/claude/skills/{migrated}/SKILL.md"
-            )
-            legacy_src = REPO_ROOT / "quoin" / "skills" / migrated / "SKILL.md"
-            assert legacy_src.read_bytes() != adapter_dst.read_bytes(), (
-                f"Deployed {migrated} matches legacy stub — "
-                "installer override did not fire"
             )
 
         memory_dir = tmp_home / ".claude" / "memory"

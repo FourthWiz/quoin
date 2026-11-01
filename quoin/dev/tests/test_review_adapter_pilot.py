@@ -6,7 +6,6 @@ TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent              # quoin/quoin/
 CORE_SKILL_DOC = PKG_DIR / "core" / "skills" / "review.md"
 ADAPTER_SKILL_MD = PKG_DIR / "adapters" / "claude" / "skills" / "review" / "SKILL.md"
-LEGACY_SKILL_MD = PKG_DIR / "skills" / "review" / "SKILL.md"
 
 # review is Opus-tier — forbidden tokens mirror the existing pilot tests plus gh CLI.
 FORBIDDEN_TOKENS = ("~/.claude", "/review", "Haiku", "Sonnet", "Opus", "Agent", "gh CLI")
@@ -58,31 +57,6 @@ def test_install_sh_has_review_override():
     # IVG-69 Stage B retarget: install.sh no longer carries ADAPTER_*_SRC vars.
     # Assert the equivalent contract against installer.py logic instead.
     _adapter_pilot_helpers.assert_installer_selects_adapter("review")
-
-
-def test_legacy_and_adapter_skill_md_differ():
-    """Adapter must contain full body; legacy is a short stub."""
-    legacy_bytes = LEGACY_SKILL_MD.read_bytes()
-    adapter_bytes = ADAPTER_SKILL_MD.read_bytes()
-    assert legacy_bytes != adapter_bytes, (
-        "Legacy stub and adapter SKILL.md must differ — "
-        "the legacy file should be a short deprecated pointer"
-    )
-    assert len(legacy_bytes) < len(adapter_bytes), (
-        "Legacy stub should be shorter than the full adapter SKILL.md"
-    )
-
-
-def test_legacy_stub_frontmatter_byte_equals_adapter():
-    """Stub frontmatter MUST byte-equal adapter frontmatter."""
-    legacy_text = LEGACY_SKILL_MD.read_text(encoding="utf-8")
-    adapter_text = ADAPTER_SKILL_MD.read_text(encoding="utf-8")
-    legacy_fm = legacy_text.split("---", 2)[1]
-    adapter_fm = adapter_text.split("---", 2)[1]
-    assert legacy_fm == adapter_fm, (
-        "Legacy stub frontmatter must byte-equal adapter frontmatter. "
-        "Drift here causes silent runtime divergence."
-    )
 
 
 def test_adapter_skill_md_does_not_have_section_0_dispatch():

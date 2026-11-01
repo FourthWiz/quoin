@@ -12,7 +12,7 @@ THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent
 
-CORE_DOC = PKG_DIR / "core" / "skills" / "run.md"
+CORE_DOC = PKG_DIR / "core" / "skills" / "run_hard.md"
 
 # Mirrors test_run_adapter_pilot.py::FORBIDDEN_TOKENS — the core doc is
 # runtime-neutral and must never name a specific model tier or dispatch
@@ -40,20 +40,20 @@ def test_core_doc_exists() -> None:
 
 def test_core_doc_mentions_autonomous() -> None:
     assert "autonomous" in _text().lower(), (
-        "core/skills/run.md must document the opt-in autonomous span"
+        "core/skills/run_hard.md must document the opt-in autonomous span"
     )
 
 
 def test_core_doc_mentions_non_interactive_formulation() -> None:
     assert "non-interactive formulation" in _text(), (
-        "core/skills/run.md must describe the non-interactive formulation pass "
+        "core/skills/run_hard.md must describe the non-interactive formulation pass "
         "that gates entry into the autonomous span"
     )
 
 
 def test_core_doc_mentions_hard_stop() -> None:
     assert "hard stop" in _text(), (
-        "core/skills/run.md must state that hard stops are preserved under "
+        "core/skills/run_hard.md must state that hard stops are preserved under "
         "autonomous mode"
     )
 
@@ -61,7 +61,7 @@ def test_core_doc_mentions_hard_stop() -> None:
 def test_core_doc_never_auto_creates_pr() -> None:
     text = _text().lower()
     assert "pull request" in text or " pr " in text or "pr creation" in text, (
-        "core/skills/run.md autonomous section must restate the never-auto-PR "
+        "core/skills/run_hard.md autonomous section must restate the never-auto-PR "
         "invariant"
     )
 
@@ -69,7 +69,7 @@ def test_core_doc_never_auto_creates_pr() -> None:
 def test_core_doc_documents_the_resume_record() -> None:
     """review-3 MINOR 13: the portable core previously said nothing about
     the plain-run resumability record -- a Codex adapter implementing this
-    skill from `core/skills/run.md` alone would not know to write it."""
+    skill from `core/skills/run_hard.md` alone would not know to write it."""
     text = _text()
     assert "run-state-{task}.json" in text
     assert "run-notes-{task}.md" in text
@@ -82,5 +82,5 @@ def test_core_doc_stays_token_clean() -> None:
     if _SLASH_RUN.search(text):
         hits.append("/run")
     assert not hits, (
-        f"core/skills/run.md contains forbidden tokens: {hits}"
+        f"core/skills/run_hard.md contains forbidden tokens: {hits}"
     )

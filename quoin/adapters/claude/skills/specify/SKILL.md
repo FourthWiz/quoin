@@ -1,6 +1,6 @@
 ---
 name: specify
-description: "Interactive intent elicitation that produces a structured feature spec (spec.md) upstream of /architect and planning. Use for: /specify, 'write a spec for X', 'capture the intent for this feature', 'what are the user stories', 'define acceptance criteria', 'turn this idea into a spec'."
+description: "Elicits intent and writes a structured feature spec (spec.md) before /architect. Use for: /specify, 'write a spec for X', 'define acceptance criteria'."
 model: opus
 ---
 
@@ -16,13 +16,13 @@ This skill runs in the user's current session. If the session is polluted (high 
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
   Determine dispatch contract fields:
@@ -70,7 +70,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 ## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
@@ -144,7 +144,7 @@ This skill may run in a fresh chat session with no prior context. On start:
 7. Then proceed with the work below.
 
 **Autonomous sentinel:** check whether the invocation prompt carries the `[autonomous]` sentinel
-(prefixed by `/run`, `/thorough_plan`, or `/architect` per their "Autonomous propagation" /
+(prefixed by `run_hard`, `/thorough_plan`, or `/architect` per their "Autonomous propagation" /
 re-prefix rules when this skill is spawned from an autonomous session, or passed directly on a
 standalone invocation). Parse and strip it at bootstrap into a local state flag `_AUTONOMOUS`:
 present → strip it (sentinels stack, e.g. `[no-redispatch] [autonomous] <task>` — strip each
@@ -191,8 +191,8 @@ already on hand:
    Lower confidence when inputs were sparse (no enriched prompt, no architecture, no prior spec)
    or when several assumptions had to be made; higher confidence when the raw prompt was already
    detailed and/or a rich `enriched-prompt.md`/`architecture.md` was available. This is the
-   Small-path Formulation-bar signal `/run`'s autonomous quality gate reads (alongside the
-   single-pass `/plan` confidence — see `run/SKILL.md` "Formulation quality bar").
+   Small-path Formulation-bar signal `run_hard`'s autonomous quality gate reads (alongside the
+   single-pass `/plan` confidence — see `run_hard/SKILL.md` "Formulation quality bar").
 
 The `§0'`/`§0″` dispatch-failure `AskUserQuestion` sites elsewhere in this file are a separate,
 generator-owned mechanism (see the `<!-- §0doubleprime-begin/end -->` block above) — their
@@ -281,11 +281,12 @@ On Approve: write `.workflow_artifacts/spec.md.tmp` with the Write tool, then ru
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `in_progress` (or `completed` if `spec.md` is written and validated)
-- **Current stage:** `specify`
-- **Completed in this session:** what was elicited and what `spec.md` covers
-- **Unfinished work:** any open questions the user deferred, or sections still needing confirmation
-- **Cost:** YAML block with Session UUID, Phase (`specify`), Recorded in cost ledger
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`, or `completed` once `spec.md` is written and validated
+- Current stage: `specify`
+- Next command: `/architect <task>` (Small: `/thorough_plan <task>`)
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
+

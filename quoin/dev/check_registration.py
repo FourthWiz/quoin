@@ -288,19 +288,19 @@ def rg_canon(fs_names: set, canonical_set: set, findings: list) -> None:
             "rule": RG_CANON,
             "roster": "CANONICAL_SKILLS",
             "entry": name,
-            "detail": f"quoin/skills/{name}/ exists on disk but is not registered in CANONICAL_SKILLS",
+            "detail": f"quoin/adapters/claude/skills/{name}/ exists on disk but is not registered in CANONICAL_SKILLS",
         })
     for name in sorted(canonical_set - fs_names):
         findings.append({
             "rule": RG_CANON,
-            "roster": "quoin/skills/",
+            "roster": "quoin/adapters/claude/skills/",
             "entry": name,
-            "detail": f"CANONICAL_SKILLS lists {name!r} but quoin/skills/{name}/ directory is missing",
+            "detail": f"CANONICAL_SKILLS lists {name!r} but quoin/adapters/claude/skills/{name}/ directory is missing",
         })
 
 
 def rg_manifest(fs_names: set, canonical_set: set, manifest_names: set, findings: list) -> None:
-    """Oracle integrity: skills.json names == CANONICAL_SKILLS == filesystem dirs == 31.
+    """Oracle integrity: skills.json Claude-adapter names (claude_adapter not false) == CANONICAL_SKILLS == filesystem dirs.
 
     Subsumes the runtime `== len(CANONICAL_SKILLS)` / `== 31` count-asserts scattered
     across test_install_fresh_clone.py, test_quoin_cli.py, test_runtime_portability_docs.py,
@@ -311,7 +311,7 @@ def rg_manifest(fs_names: set, canonical_set: set, manifest_names: set, findings
     for name in sorted(all_names):
         missing_from = []
         if name not in fs_names:
-            missing_from.append("filesystem (quoin/skills/)")
+            missing_from.append("filesystem (quoin/adapters/claude/skills/)")
         if name not in canonical_set:
             missing_from.append("CANONICAL_SKILLS")
         if name not in manifest_names:
@@ -422,7 +422,7 @@ NON_QUOIN_OVERRIDE_KEYS: frozenset = frozenset({"init", "keybindings-help"})
 # from SKILL_OVERRIDES (computed at authorship time as the exact diff —
 # CANONICAL_SKILLS minus the quoin keys of SKILL_OVERRIDES on `main`).
 SKILL_OVERRIDES_OPTIONAL: frozenset = frozenset({
-    "architect", "capture_insight", "discover", "end_of_task", "revise", "revise-fast",
+    "architect", "capture_insight", "discover", "end_of_task", "revise",
 })
 
 
@@ -464,7 +464,7 @@ def _class_from_manifest(manifest_skills: list, predicate) -> set:
 def _opus_leaf_class(manifest_skills: list) -> set:
     return _class_from_manifest(
         manifest_skills,
-        lambda r: r.get("section_0") is False and r["name"] not in {"run", "thorough_plan"},
+        lambda r: r.get("section_0") is False and r["name"] not in {"run", "run_hard", "thorough_plan"},
     )
 
 
@@ -634,10 +634,9 @@ def rg_genroster(dev_tests_dir: Path, scripts_dir: Path, manifest_skills: list, 
     # eval_collection extracts the key set.
     _check("SECTION0_TARGET_SKILLS", "inject_pollution_dispatch.py", all_s0, "all-section_0 class")
 
-    # ZC_SKILLS / WORKTREE_FALLBACK_SKILLS / SOURCE_MUTATING_WORKTREE_SKILLS:
+    # WORKTREE_FALLBACK_SKILLS / SOURCE_MUTATING_WORKTREE_SKILLS:
     # no skills.json-derivable field — sanity-check members ⊆ CANONICAL_SKILLS only.
     for file_name, roster_name in [
-        ("inject_pollution_dispatch.py", "ZC_SKILLS"),
         ("test_quoin_stage1_worktree_fallback.py", "WORKTREE_FALLBACK_SKILLS"),
         ("test_quoin_stage1_worktree_fallback.py", "SOURCE_MUTATING_WORKTREE_SKILLS"),
     ]:
@@ -679,7 +678,6 @@ COVERED_ROSTERS: frozenset = frozenset({
     "MINTIER_SONNET_TARGET_SKILLS@inject_pollution_dispatch.py",
     "SECTION0_TARGET_SKILLS@inject_pollution_dispatch.py",
     "OPUS_TIER_SKILLS@test_quoin_stage1_preamble.py",
-    "ZC_SKILLS@inject_pollution_dispatch.py",
     "WORKTREE_FALLBACK_SKILLS@test_quoin_stage1_worktree_fallback.py",
     "SOURCE_MUTATING_WORKTREE_SKILLS@test_quoin_stage1_worktree_fallback.py",
     # RG-MIGRATED (T-06): glob-discovered MIGRATED_TO_ADAPTER copies, all 5 files
@@ -714,7 +712,7 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     # ORCHESTRATOR_SKILLS: 2-member {run, thorough_plan} exclusion list, no
     # skills.json field distinguishes "orchestrator" — editorial, single concept
     # duplicated verbatim in the two §0' pollution-dispatch test files.
-    "ORCHESTRATOR_SKILLS": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated (not independently authored, no drift risk)",
+    "ORCHESTRATOR_SKILLS": "editorial 3-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated (not independently authored, no drift risk)",
     # CLASS_B_WRITERS: 6-member "Class B pattern writer" grouping, editorial
     # (per Stage 4 D-04-rev2 criterion), no skills.json field, single-file.
     "CLASS_B_WRITERS@test_tmp_cleanup_contract.py": "editorial Class-B-writer grouping (Stage 4 D-04-rev2 criterion), no skills.json field, single-file",
@@ -734,8 +732,8 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     # rather than silently passing.
     "PHASE_SKILLS@test_opencode_overlay_rewrites.py": "editorial list of the phase skills whose OpenCode overlays are rewritten, single-file, no skills.json field",
     "NON_INTERACTIVE_ENTRIES@test_opencode_overlay_rewrites.py": "editorial list of overlay entries carrying the non-interactive note, single-file, no skills.json field",
-    "ORCHESTRATOR_SKILLS@test_quoin_pollution_preamble.py": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
-    "ORCHESTRATOR_SKILLS@test_inject_pollution_dispatch.py": "editorial 2-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
+    "ORCHESTRATOR_SKILLS@test_quoin_pollution_preamble.py": "editorial 3-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
+    "ORCHESTRATOR_SKILLS@test_inject_pollution_dispatch.py": "editorial 3-member orchestrator-exclusion list, no skills.json field, verbatim-duplicated",
 
     # PRIOR_PHASE_SKILLS: a cumulative "skills that existed at rollout phase N"
     # snapshot, DIFFERENT per adapter-pilot smoke-test file by design (each
@@ -998,14 +996,13 @@ def main(argv: Optional[list] = None) -> int:
     repo_pkg: Path = args.repo_root if args.repo_root is not None else _default_repo_pkg()
     manifest_path: Path = args.manifest if args.manifest is not None else _default_manifest(repo_pkg)
 
-    skills_dir = repo_pkg / "skills"
     adapter_skills_dir = repo_pkg / "adapters" / "claude" / "skills"
     scripts_dir = repo_pkg / "scripts"
     core_scripts_dir = repo_pkg / "core" / "scripts"
     dev_tests_dir = repo_pkg / "dev" / "tests"
 
     manifest = load_manifest(manifest_path)
-    manifest_skills = manifest["skills"]
+    manifest_skills = [r for r in manifest["skills"] if r.get("claude_adapter", True)]
     manifest_names = {rec["name"] for rec in manifest_skills}
 
     installer_path = _default_installer(repo_pkg)
@@ -1014,7 +1011,11 @@ def main(argv: Optional[list] = None) -> int:
     deployed_set = set(deployed_scripts)
     core_scripts_set = set(core_scripts)
 
-    fs_names = {d.name for d in skills_dir.iterdir() if d.is_dir()} if skills_dir.is_dir() else set()
+    fs_names = (
+        {d.name for d in adapter_skills_dir.iterdir() if d.is_dir()}
+        if adapter_skills_dir.is_dir()
+        else set()
+    )
 
     findings: list = []
 

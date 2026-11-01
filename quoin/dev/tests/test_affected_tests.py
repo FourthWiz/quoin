@@ -574,9 +574,9 @@ class TestIvg123PreambleMapping:
 
     @pytest.mark.parametrize("skill", sorted(SPAWN_TARGETS.keys()))
     def test_spawn_target_preamble_triggers_freshness_test(self, skill):
-        """quoin/skills/<skill>/preamble.md -> test_preamble_freshness.py, cleanly."""
+        """quoin/adapters/claude/skills/<skill>/preamble.md -> test_preamble_freshness.py, cleanly."""
         selectors, unmatched, ignored = _at.map_changed_to_tests(
-            [f"quoin/skills/{skill}/preamble.md"], _REPO_ROOT
+            [f"quoin/adapters/claude/skills/{skill}/preamble.md"], _REPO_ROOT
         )
         assert any("test_preamble_freshness.py" in s for s in selectors), (
             f"expected test_preamble_freshness.py in selectors for {skill}, got {selectors}"
@@ -585,7 +585,7 @@ class TestIvg123PreambleMapping:
         assert not unmatched
 
     def test_bare_preamble_md_does_not_match(self):
-        """Bare 'preamble.md' (no quoin/skills/<skill>/ parent) must NOT match —
+        """Bare 'preamble.md' (no quoin/adapters/claude/skills/<skill>/ parent) must NOT match —
         anchored-suffix guard, mirrors test_bare_claude_md_does_not_match."""
         selectors, unmatched, ignored = _at.map_changed_to_tests(
             ["preamble.md"], _REPO_ROOT
@@ -598,11 +598,11 @@ class TestIvg123PreambleMapping:
         """A preamble.md under a skill NOT in SPAWN_TARGETS still lands in
         ignored — proves per-file enumeration, not a directory-prefix rule."""
         selectors, unmatched, ignored = _at.map_changed_to_tests(
-            ["quoin/skills/implement/preamble.md"], _REPO_ROOT
+            ["quoin/adapters/claude/skills/implement/preamble.md"], _REPO_ROOT
         )
         assert not selectors, f"expected no selectors, got {selectors}"
         assert not unmatched
-        assert "quoin/skills/implement/preamble.md" in ignored
+        assert "quoin/adapters/claude/skills/implement/preamble.md" in ignored
 
 
 # ---------------------------------------------------------------------------

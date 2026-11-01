@@ -270,6 +270,11 @@ def check_task_graph(roles_by_name: Dict[str, dict]) -> List[str]:
 # test.
 
 GENERATOR_SCHEMA_VERSION = 1
+
+# Open models still need the explicit planning and review scaffolding, so the
+# OpenCode `run` command keeps the heavy pipeline's contract while Claude's
+# `run` defaults to the light route.
+CONTRACT_SOURCE = {"run": "run_hard"}
 INSTRUCTIONS_PATH = ".opencode/quoin/instructions.md"
 CONFIG_PATH = ".opencode/opencode.jsonc"
 DEFAULT_SECTIONS = ("Purpose", "When to use", "Inputs", "Output", "Behavior contract")
@@ -468,7 +473,7 @@ def load_inputs(source_dir) -> GeneratorInputs:
     )
     contracts = {}
     for cid in supported_ids:
-        contracts[cid] = _read_text(source_dir / "core" / "skills" / ("%s.md" % cid))
+        contracts[cid] = _read_text(source_dir / "core" / "skills" / ("%s.md" % CONTRACT_SOURCE.get(cid, cid)))
 
     rules = _read_text(source_dir / "core" / "workflow" / "rules.md")
 

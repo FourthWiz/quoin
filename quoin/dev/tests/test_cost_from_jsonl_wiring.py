@@ -15,7 +15,7 @@ import re
 # ---------------------------------------------------------------------------
 REPO_ROOT = pathlib.Path(__file__).parent.parent.parent.parent  # project root
 DEV_WORKFLOW = REPO_ROOT / "quoin"
-SKILLS_DIR = DEV_WORKFLOW / "skills"
+SKILLS_DIR = DEV_WORKFLOW / "adapters" / "claude" / "skills"
 INSTALL_SH = DEV_WORKFLOW / "install.sh"
 
 COST_SNAPSHOT_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "cost_snapshot" / "SKILL.md"

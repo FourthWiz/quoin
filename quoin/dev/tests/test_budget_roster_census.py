@@ -31,14 +31,14 @@ PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
 
 BUDGET_TOKEN = "context_budget_guard.py"
-EXPECTED = {"run", "implement", "thorough_plan", "review"}
+EXPECTED = {"run_hard", "implement", "thorough_plan", "review"}
 
 # (start_anchor, end_anchor) bounding each skill's IVG-141 budget wiring region.
 # The region is the ONLY place this feature touches; AUQ/marker/[no-interactive]
 # assertions are scoped to it so unrelated site AUQ tokens in the same file don't
 # false-trip the census.
 WIRING_REGIONS = {
-    "run": (
+    "run_hard": (
         "## Pre-phase context budget (per heavy phase spawn) — IVG-141",
         "## On-behalf cost capture",
     ),
@@ -133,6 +133,6 @@ def test_run_no_interactive_injection_unchanged():
     """Regression (dropped MAJ-1/MAJ-2 wiring stays out): /run's existing
     [no-interactive] injection / /thorough_plan exclusion prose is UNCHANGED —
     the IVG-141 feature must not have touched it."""
-    run_text = _skill_text("run")
+    run_text = _skill_text("run_hard")
     assert "## Non-interactive fail-closed propagation" in run_text
     assert "`/thorough_plan` is excluded:" in run_text

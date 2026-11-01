@@ -30,3 +30,6 @@ jobs:
 
       - name: Run OpenCode doctor smoke check
         run: PYTHONPATH=src python3 -m quoin doctor --runtime opencode --smoke --project-root .
+
+      - name: Check generated slim rules are fresh
+        run: python3 quoin/scripts/build_claude_slim.py --check

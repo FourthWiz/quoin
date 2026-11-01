@@ -1,5 +1,5 @@
 """authored_content_lint.py must be wired into the ACTIVE adapter bodies for
-/end_of_task and /review — not the deprecated quoin/skills/* stubs.
+/end_of_task and /review.
 
 Position-sensitive assertions (not mere presence) guard against the wiring
 regressing into the AskUserQuestion-gated trigger region: the new advisory
@@ -31,7 +31,7 @@ def test_token_present_in_both_active_adapter_bodies():
         body = path.read_text(encoding="utf-8")
         assert _TOKEN in body, (
             f"{_TOKEN!r} not found in active adapter body {path} — the wiring "
-            f"must land here, not in the deprecated quoin/skills stub."
+            f"must land here."
         )
 
 

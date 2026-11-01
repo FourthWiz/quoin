@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /review skill.\n\n[quoin-handoff/1.1 dispatch]\nskill: review\ntask: env-f\ntask_dir: /tmp/env-f\nproject_root: /tmp\nreturn: envelope\n[/quoin-handoff]"}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Reviewed env-f."}], "usage": {"output_tokens": 6}, "stop_reason": "end_turn"}}

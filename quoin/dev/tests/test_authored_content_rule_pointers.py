@@ -51,9 +51,6 @@ _EXCLUDE_DIR_NAMES = {
     "__pycache__",
     ".serena",
 }
-# Deprecated stub tree — git-root-relative, matching the exclusion this repo
-# already applies for the same deprecated SKILL.md stubs elsewhere.
-_EXCLUDE_PATH_PREFIXES = ("quoin/skills/",)
 
 
 def _normalize(text: str) -> str:
@@ -71,17 +68,9 @@ def _extract_prohibition_paragraph(text: str) -> str:
 def _iter_scan_files():
     for dirpath, dirnames, filenames in os.walk(_REPO_ROOT):
         dirnames[:] = [d for d in dirnames if d not in _EXCLUDE_DIR_NAMES]
-        rel_dir = Path(dirpath).relative_to(_REPO_ROOT).as_posix()
-        if rel_dir != "." and any(
-            (rel_dir + "/").startswith(prefix) for prefix in _EXCLUDE_PATH_PREFIXES
-        ):
-            dirnames[:] = []
-            continue
         for fname in filenames:
             path = Path(dirpath) / fname
             rel = path.relative_to(_REPO_ROOT).as_posix()
-            if rel.startswith(_EXCLUDE_PATH_PREFIXES):
-                continue
             yield path, rel
 
 

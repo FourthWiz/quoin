@@ -86,7 +86,7 @@ def test_rg_canon_detects_missing_directory():
     canonical_set = {"architect", "phantom_skill"}
     cr.rg_canon(fs_names, canonical_set, findings)
     assert any(
-        f["rule"] == cr.RG_CANON and f["entry"] == "phantom_skill" and f["roster"] == "quoin/skills/"
+        f["rule"] == cr.RG_CANON and f["entry"] == "phantom_skill" and f["roster"] == "quoin/adapters/claude/skills/"
         for f in findings
     )
 
@@ -199,7 +199,6 @@ _ALL_NAMED_ROSTERS = [
     ("build_preambles.py", "SPAWN_TARGETS"),
     ("inject_pollution_dispatch.py", "POLLUTION_TARGET_SKILLS"),
     ("inject_pollution_dispatch.py", "MINTIER_TARGET_SKILLS"),
-    ("inject_pollution_dispatch.py", "ZC_SKILLS"),
     ("inject_pollution_dispatch.py", "MINTIER_SONNET_TARGET_SKILLS"),
 ]
 

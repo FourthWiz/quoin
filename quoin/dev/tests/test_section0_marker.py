@@ -29,7 +29,7 @@ ADAPTER_SKILLS_DIR = TESTS_DIR.parent.parent / "adapters" / "claude" / "skills"
 SECTION0_HEADING = "## §0 Model dispatch (FIRST STEP — execute before anything else)"
 SECTION0_END_MARKER = "<!-- §0-end -->"
 
-# The 20 §0-carrying skills — mirrors test_footprint_ceilings.py::SECTION0_SKILLS.
+# The 19 §0-carrying skills — mirrors test_footprint_ceilings.py::SECTION0_SKILLS.
 SECTION0_SKILLS = [
     "gate",
     "end_of_day",
@@ -46,7 +46,6 @@ SECTION0_SKILLS = [
     "revise-fast",
     "sleep",
     "next_steps",
-    "checkpoint",
     "continue_work",
     "pr",
     "status",
@@ -110,5 +109,5 @@ def test_section0_end_marker_offset_uniform(skill: str) -> None:
 
 
 def test_section0_skills_roster_is_20() -> None:
-    assert len(SECTION0_SKILLS) == 20
-    assert len(set(SECTION0_SKILLS)) == 20
+    assert len(SECTION0_SKILLS) == 19
+    assert len(set(SECTION0_SKILLS)) == 19

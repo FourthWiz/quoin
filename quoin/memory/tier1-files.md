@@ -8,6 +8,7 @@ The following files are explicitly **excluded** from terse-style writing — the
 
 **Hand-edited files:**
 - `quoin/CLAUDE.md` (this file).
+- `quoin/CLAUDE.core.md` (hand-edited always-on rules text, the second input of the slim generator `quoin/scripts/build_claude_slim.py`; not deployed on its own; keep it in step with `quoin/CLAUDE.md` and regenerate `CLAUDE.slim.md` after every edit).
 - `quoin/memory/lessons-learned.md`.
 - `quoin/memory/terse-rubric.md` (+ deployed copy at `__QUOIN_HOME__/memory/`) — compressing recreates the v1 CRIT-2 circular dependency.
 - `quoin/memory/format-kit.md` (+ deployed copy at `__QUOIN_HOME__/memory/`) — v3 content-type → primitive mapping.
@@ -29,14 +30,14 @@ The following files are explicitly **excluded** from terse-style writing — the
 - `quoin/memory/memory-maintenance.yaml` (+ `__QUOIN_HOME__/memory/memory-maintenance.yaml` deployed copy — pattern config (ignore/archived/read_only globs) for memory_check.py and /sleep; token-free glob file; added IVG-50 S-3 2026-06-18).
 - `quoin/memory/tier1-files.md` (+ `__QUOIN_HOME__/memory/tier1-files.md` deployed copy — relocated Tier-1 catalog; extracted claude-md-trim 2026-06-25)
 - `quoin/memory/verification-guide.md` (+ `__QUOIN_HOME__/memory/verification-guide.md` deployed copy — §V ground-truth verification verbose reference, analog of `dispatch-guide.md`; added IVG-115 2026-07-09)
-- `quoin/memory/checkpoint-spec.md` (+ `__QUOIN_HOME__/memory/checkpoint-spec.md` deployed copy — behavioral specification of the `/checkpoint` subsystem, source-cited characterization used as the test-harness contract; added checkpoint-spec-harness 2026-07-14)
+- `quoin/memory/session-schema.md` (+ `__QUOIN_HOME__/memory/session-schema.md` deployed copy — fixed session-state schema every skill writer points at: sections, `## Cost` field rules, same-day merge rule, reader map; added claude-adapter-optimization stage 3 2026-10-19)
 - `quoin/memory/decision-gate-guard.md` (+ `__QUOIN_HOME__/memory/decision-gate-guard.md` deployed copy — shared fail-closed decision-gate guard reference: the "cannot ask ≠ approved" invariant, the `[no-interactive]` sentinel, the decision-gate contract, the `needs-decision-{task}.md` sentinel schema, the classification-marker/census convention; added IVG-150 2026-07-23)
 - `quoin/memory/clean-authored-content.md` (+ `__QUOIN_HOME__/memory/clean-authored-content.md` deployed copy — shared rule for keeping comments, commit messages, and PR descriptions free of planning-process vocabulary; added 2026-08-15)
 - `quoin/memory/comment-cleanup-criteria.md` (+ `__QUOIN_HOME__/memory/comment-cleanup-criteria.md` deployed copy — category-3 keep/remove criteria and worked examples for the pre-PR comment cleanup; added IVG-255 2026-09-09)
 - `quoin/memory/cleanup-task-bookkeeping.md` (+ `__QUOIN_HOME__/memory/cleanup-task-bookkeeping.md` deployed copy — full interactive procedure for the standalone `/cleanup` task bookkeeping pass; added IVG-262)
 
 **Generated Tier-1 files (never hand-edit; regenerate with `quoin/scripts/build_claude_slim.py`):**
-- `quoin/memory/workflow-catalog.md` (+ `__QUOIN_HOME__/memory/workflow-catalog.md` deployed copy — full verbatim text of every section dropped from `CLAUDE.slim.md`, generated from `quoin/CLAUDE.md` by `quoin/scripts/build_claude_slim.py`; regenerate with `python3 quoin/scripts/build_claude_slim.py`; added IVG-164 stage 1 2026-08-07). This is the first GENERATED member of `TIER1_MEMORY_FILES` — the precedent for "generated but Tier-1-listed" already exists above in this file's **Source files:** block for `skills/<skill>/preamble.md`, which is listed "only for disambiguation — NOT a Tier 1 hand-edited source file"; the same disambiguation applies here. Tier-1 membership here means always-English + never terse-rewritten — it does NOT mean hand-editable, and `/sleep` must never treat it as a hand-maintained memory file.
+- `quoin/memory/workflow-catalog.md` (+ `__QUOIN_HOME__/memory/workflow-catalog.md` deployed copy — full verbatim text of every section of `quoin/CLAUDE.md` except the title line, generated from `quoin/CLAUDE.md` by `quoin/scripts/build_claude_slim.py`; regenerate with `python3 quoin/scripts/build_claude_slim.py`; added IVG-164 stage 1 2026-08-07). This is the first GENERATED member of `TIER1_MEMORY_FILES` — the precedent for "generated but Tier-1-listed" already exists above in this file's **Source files:** block for `skills/<skill>/preamble.md`, which is listed "only for disambiguation — NOT a Tier 1 hand-edited source file"; the same disambiguation applies here. Tier-1 membership here means always-English + never terse-rewritten — it does NOT mean hand-editable, and `/sleep` must never treat it as a hand-maintained memory file.
 
 NOTE: QUICKSTART.md sits at `quoin/` root and deploys to `__QUOIN_HOME__/QUICKSTART.md` (NOT under `memory/`) — this is intentional. Do NOT normalize paths.
 - `quoin/QUICKSTART.md` (+ `__QUOIN_HOME__/QUICKSTART.md` deployed copy).
@@ -50,7 +51,7 @@ NOTE: QUICKSTART.md sits at `quoin/` root and deploys to `__QUOIN_HOME__/QUICKST
 
 **Rendered briefings:** `memory/weekly/*.md`; `memory/daily/<date>.md` (NOT `daily/insights-<date>.md`, which is Tier 3).
 
-**Source files:** `MEMORY.md`; `quoin/skills/**/SKILL.md`; `quoin/dev/tests/fixtures/quoin-stage-1-preamble.md`; `quoin/dev/verify_subagent_dispatch.md`; `quoin/dev/tests/fixtures/path_resolve/**`; `quoin/skills/<skill>/preamble.md` (any of the 7 spawn targets — critic, revise, revise-fast, plan, review, gate, architect) — GENERATED by `quoin/scripts/build_preambles.py` at install time; never hand-edit. The file is machine-generated English content; listed here only for disambiguation — it is NOT a Tier 1 hand-edited source file.
+**Source files:** `MEMORY.md`; `quoin/adapters/claude/skills/**/SKILL.md`; `quoin/dev/tests/fixtures/quoin-stage-1-preamble.md`; `quoin/dev/verify_subagent_dispatch.md`; `quoin/dev/tests/fixtures/path_resolve/**`; `quoin/adapters/claude/skills/<skill>/preamble.md` (any of the 7 spawn targets — critic, revise, revise-fast, plan, review, gate, architect) — GENERATED by `quoin/scripts/build_preambles.py` at install time; never hand-edit. The file is machine-generated English content; listed here only for disambiguation — it is NOT a Tier 1 hand-edited source file.
 
 `.planner-trace.md` is a Tier-3 ephemeral: machine-written by `/plan`, read by `/critic` as a search-prior only, deleted by `/end_of_task` before archive; no Haiku summary, no validator.
 

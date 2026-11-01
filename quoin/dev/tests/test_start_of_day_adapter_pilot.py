@@ -6,7 +6,6 @@ TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent              # quoin/quoin/
 CORE_SKILL_DOC = PKG_DIR / "core" / "skills" / "start_of_day.md"
 ADAPTER_SKILL_MD = PKG_DIR / "adapters" / "claude" / "skills" / "start_of_day" / "SKILL.md"
-LEGACY_SKILL_MD = PKG_DIR / "skills" / "start_of_day" / "SKILL.md"
 
 # Per architecture R-2: start_of_day core doc forbids the slash token /start_of_day,
 # the deploy path ~/.claude, Claude-specific model/dispatch tokens, and the
@@ -66,29 +65,3 @@ def test_install_sh_has_start_of_day_override():
     # Assert the equivalent contract against installer.py logic instead.
     _adapter_pilot_helpers.assert_installer_selects_adapter("start_of_day")
 
-
-def test_legacy_and_adapter_skill_md_differ():
-    """Adapter must contain full body (incl. §0); legacy is a short stub."""
-    legacy_bytes = LEGACY_SKILL_MD.read_bytes()
-    adapter_bytes = ADAPTER_SKILL_MD.read_bytes()
-    assert legacy_bytes != adapter_bytes, (
-        "Legacy stub and adapter SKILL.md must differ — "
-        "the legacy file should be a short deprecated pointer"
-    )
-    assert len(legacy_bytes) < len(adapter_bytes), (
-        "Legacy stub should be shorter than the full adapter SKILL.md"
-    )
-
-
-def test_legacy_stub_frontmatter_byte_equals_adapter():
-    """Per architecture R-7: stub frontmatter MUST byte-equal adapter
-    frontmatter so that any tooling that parses the description: field is
-    independent of which file is read."""
-    legacy_text = LEGACY_SKILL_MD.read_text(encoding="utf-8")
-    adapter_text = ADAPTER_SKILL_MD.read_text(encoding="utf-8")
-    legacy_fm = legacy_text.split("---", 2)[1]
-    adapter_fm = adapter_text.split("---", 2)[1]
-    assert legacy_fm == adapter_fm, (
-        "Legacy stub frontmatter must byte-equal adapter frontmatter. "
-        "Drift here causes silent runtime divergence."
-    )

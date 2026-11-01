@@ -1,0 +1,56 @@
+{
+  "run_id": "run-v1",
+  "started_at": null,
+  "finished_at": null,
+  "cells": {
+    "quoin-claude": {
+      "n_tasks": 4,
+      "pass_at_1": 0.75,
+      "n_pass": 3,
+      "wilson_ci_95": [
+        0.1,
+        0.9
+      ],
+      "mean_cost_usd_or_null": 1.1666666666666667,
+      "total_cost_usd_or_null": 3.5,
+      "mean_wall_clock_s": 25.0,
+      "p50_wall_clock_s": 25.0,
+      "p95_wall_clock_s": 38.5,
+      "gate_intervention_count": 0,
+      "headline_metric_pass_per_dollar_or_null": 0.6428571428571428
+    },
+    "simple-claude": {
+      "n_tasks": 4,
+      "pass_at_1": 0.5,
+      "n_pass": 2,
+      "wilson_ci_95": [
+        0.1,
+        0.9
+      ],
+      "mean_cost_usd_or_null": 1.25,
+      "total_cost_usd_or_null": 5.0,
+      "mean_wall_clock_s": 25.0,
+      "p50_wall_clock_s": 25.0,
+      "p95_wall_clock_s": 38.5,
+      "gate_intervention_count": 0,
+      "headline_metric_pass_per_dollar_or_null": 0.4
+    },
+    "simple-codex": {
+      "n_tasks": 4,
+      "pass_at_1": 0.75,
+      "n_pass": 3,
+      "wilson_ci_95": [
+        0.1,
+        0.9
+      ],
+      "mean_cost_usd_or_null": null,
+      "total_cost_usd_or_null": null,
+      "mean_wall_clock_s": 25.0,
+      "p50_wall_clock_s": 25.0,
+      "p95_wall_clock_s": 38.5,
+      "gate_intervention_count": 0,
+      "headline_metric_pass_per_dollar_or_null": null
+    }
+  },
+  "within_claude_pair_mcnemar_pvalue": 0.5
+}

@@ -82,8 +82,8 @@ def test_takeover_halt_reason_is_documented():
 
 FR9_DOCS = (
     "quoin/memory/autonomous-mode.md",
-    "quoin/core/skills/run.md",
-    "quoin/adapters/claude/skills/run/SKILL.md",
+    "quoin/core/skills/run_hard.md",
+    "quoin/adapters/claude/skills/run_hard/SKILL.md",
     "quoin/QUICKSTART.md",
 )
 

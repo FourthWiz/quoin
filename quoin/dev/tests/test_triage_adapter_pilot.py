@@ -6,7 +6,6 @@ TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent              # quoin/quoin/
 CORE_SKILL_DOC = PKG_DIR / "core" / "skills" / "triage.md"
 ADAPTER_SKILL_MD = PKG_DIR / "adapters" / "claude" / "skills" / "triage" / "SKILL.md"
-LEGACY_SKILL_MD = PKG_DIR / "skills" / "triage" / "SKILL.md"
 
 # Per architecture R-2: triage core doc forbids the slash token /triage,
 # the deploy path ~/.claude, and Claude-specific model/dispatch tokens.
@@ -64,30 +63,3 @@ def test_install_sh_has_triage_override():
     # Assert the equivalent contract against installer.py logic instead.
     _adapter_pilot_helpers.assert_installer_selects_adapter("triage")
 
-
-def test_legacy_and_adapter_skill_md_differ():
-    """Adapter must contain full body (incl. §0); legacy is a short stub."""
-    legacy_bytes = LEGACY_SKILL_MD.read_bytes()
-    adapter_bytes = ADAPTER_SKILL_MD.read_bytes()
-    assert legacy_bytes != adapter_bytes, (
-        "Legacy stub and adapter SKILL.md must differ — "
-        "the legacy file should be a short deprecated pointer"
-    )
-    assert len(legacy_bytes) < len(adapter_bytes), (
-        "Legacy stub should be shorter than the full adapter SKILL.md"
-    )
-
-
-def test_legacy_stub_frontmatter_byte_equals_adapter():
-    """Per architecture R-7: stub frontmatter MUST byte-equal adapter
-    frontmatter so that triage's runtime trigger-phrase stripping (which
-    parses its own description: field) is independent of which file is
-    read by tooling."""
-    legacy_text = LEGACY_SKILL_MD.read_text(encoding="utf-8")
-    adapter_text = ADAPTER_SKILL_MD.read_text(encoding="utf-8")
-    legacy_fm = legacy_text.split("---", 2)[1]
-    adapter_fm = adapter_text.split("---", 2)[1]
-    assert legacy_fm == adapter_fm, (
-        "Legacy stub frontmatter must byte-equal adapter frontmatter. "
-        "Drift here causes silent runtime divergence."
-    )

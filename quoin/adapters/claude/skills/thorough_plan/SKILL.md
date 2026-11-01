@@ -1,6 +1,6 @@
 ---
 name: thorough_plan
-description: "Triages tasks by size (Small/Medium/Large) and orchestrates the matching planning path. Use for: /thorough_plan, 'plan this', 'plan this thoroughly', 'detailed plan with review', 'plan and critique', 'full planning cycle'. Always the entry point for planned work."
+description: "Triages a task as Small/Medium/Large and runs the matching planning path. Use for: /thorough_plan, 'plan this', 'plan this thoroughly', 'full planning cycle'."
 model: opus
 ---
 
@@ -24,8 +24,8 @@ On start:
 ### 0. Parse autonomous sentinel
 
 Before anything else, check whether the invocation prompt carries the `[autonomous]` sentinel
-(prefixed by `/run` per its "Autonomous propagation" rule when this skill is spawned from an
-autonomous `/run`, or passed directly on a standalone invocation). Parse and strip it at
+(prefixed by `run_hard` per its "Autonomous propagation" rule when this skill is spawned from an
+autonomous `run_hard` (`/run hard:`), or passed directly on a standalone invocation). Parse and strip it at
 bootstrap into an internal state flag `_AUTONOMOUS`:
 
 - If present: strip `[autonomous]` from the prompt text — leading sentinels stack (e.g.
@@ -69,8 +69,8 @@ Do NOT abort the orchestration on exit-code-2.
 
 After resolving `{task_dir}` and `mkdir -p`, scan for a phase-boundary progress checkpoint
 that matches THIS task before dispatching any planning work. This is the PRIMARY recovery
-path after an external kill — it reads `checkpoints/` DIRECTLY and is fully immune to the
-restore picker's B3 Clause-B gate (see `## Phase-boundary checkpoints` for rationale).
+path after an external kill — it reads `checkpoints/` DIRECTLY (see `## Phase-boundary
+checkpoints` for rationale).
 
 **Scan procedure:**
 
@@ -236,7 +236,7 @@ Before the spec pre-flight below, offer via `AskUserQuestion` to run `/enrich` o
 
 This is default-on but NON-BLOCKING — the loop proceeds regardless of the answer. If run: unless `QUOIN_INLINE_COST_CAPTURE=0`, the cost row is the on-behalf write described in "Invoking each agent" → "On-behalf cost capture" below (phase=enrich, model=opus) FIRST; either way, THEN append a best-effort cost-ledger row for the `enrich` phase if no row is found: `unknown-enrich-<timestamp> | <date> | enrich | opus | task | /thorough_plan subagent (on-behalf write failed, if capture was ON — else no UUID recorded)` — this fallback now runs regardless of flag state (mirrors the `run/SKILL.md` T-02 CRIT-2 fix), not only under opt-out. No `/gate` runs after enrich.
 
-**Under `[autonomous]`:** skip the `AskUserQuestion` — do not wait for a choice. When `/thorough_plan` was itself spawned with `[autonomous]` from `/run`, enrichment has typically already run at `/run` Phase 1.4 — skip re-running it here. When `/thorough_plan` is invoked standalone under `[autonomous]` (no upstream enrich), run `/enrich` best-effort without blocking; if it is unavailable, errors, or times out, proceed directly to the spec pre-flight below without waiting. Either way this stays non-blocking, exactly as the non-autonomous default already is.
+**Under `[autonomous]`:** skip the `AskUserQuestion` — do not wait for a choice. When `/thorough_plan` was itself spawned with `[autonomous]` from `run_hard`, enrichment has typically already run at `run_hard` Phase 1.4 — skip re-running it here. When `/thorough_plan` is invoked standalone under `[autonomous]` (no upstream enrich), run `/enrich` best-effort without blocking; if it is unavailable, errors, or times out, proceed directly to the spec pre-flight below without waiting. Either way this stays non-blocking, exactly as the non-autonomous default already is.
 
 ### 3c. Spec pre-flight (advisory, non-blocking)
 
@@ -310,7 +310,7 @@ and `/revise-fast` spawns, and the post-plan `/gate` subagent spawn — so the s
 those leaf skills' own `[autonomous]` / §0' / §0″ branches. Sentinels stack with any existing
 prefix (e.g. `[no-redispatch] [autonomous] <spawn instructions>`); each leaf skill parses and
 strips its own copy independently at its own bootstrap. This is the deeper-spawn re-prefix rule
-referenced by `/run`'s "Transitive propagation rule" (`D-07`).
+referenced by `run_hard`'s "Transitive propagation rule" (`D-07`).
 
 **On-behalf cost capture (`QUOIN_INLINE_COST_CAPTURE`, default-ON, opt-out via =0, D-1/D-2/D-3, IVG-111 stage 3):**
 Unless `QUOIN_INLINE_COST_CAPTURE=0`, this applies to EVERY managed spawn below — `/plan` (round 1),
@@ -486,17 +486,14 @@ summary: <clamped, one line, <=600 B>
        timeout, escalate to the user with the partial artifact
        and ask whether to proceed to /implement with a flagged
        plan, or stop.
-  NOTE: This retry only fires for subagents dispatched BY /thorough_plan.
-  Standalone /revise and /plan invocations have no automatic retry.
 - **Pass context explicitly.** Each agent starts with limited knowledge. Give them the file paths and repo locations they need.
 
 ## Phase-boundary checkpoints (IVG-98)
 
 `/thorough_plan` writes a durable progress checkpoint at every phase boundary so an externally
 killed session can be resumed by re-invoking `/thorough_plan {task}` in a fresh session (T-04 startup
-scan, PRIMARY path — see Setup §1b). `/checkpoint --restore` is a SECONDARY convenience path and
-may degrade to task-level restore in the kill-during-subagent window (B3 Clause-B fires when a
-subagent's `{date}-{task}.md` is newer than the checkpoint; T-04 direct scan is immune).
+scan, PRIMARY path — see Setup §1b). The sentinel is still written by the shared core helper;
+on Claude Code nothing reads it, and the direct checkpoint scan is the only resume path.
 
 Verified: `## Current stage` is free-text for all readers (`/start_of_day`, `/end_of_day`,
 `/status`, `/continue_work`, B3 awk); the colon-delimited token `thorough-plan:round-N-{phase}`
@@ -565,8 +562,8 @@ non-blocking check (it never prompts).
 
 **Round-boundary run-state refresh (third call in this boundary block, AFTER the
 `thorough_plan_checkpoint.py` invocation and the budget guard above).** `/thorough_plan`
-is a first-class standalone entry point, not only a `/run` subagent, so this call carries
-`--require-existing`: it refines a record `/run` already created and is a silent no-op
+is a first-class standalone entry point, not only a `run_hard` subagent, so this call carries
+`--require-existing`: it refines a record `run_hard` already created and is a silent no-op
 (no file, no directory, no notes append) when there is none — a standalone `/thorough_plan`
 run therefore leaves no run-state trace of its own. The call passes NO `--session-id`:
 the record keeps its creator's stored id (the writer preserves a non-empty stored id on
@@ -604,11 +601,6 @@ Run the checkpoint procedure at each of these points:
 - **Orchestrator writes:** `{date}-{task}-orchestrator.md` (fully owned; updated at each boundary via helper)
 - **Subagents write:** `{date}-{task}.md` (per-phase tracking only; orchestrator never reads this for resume)
 - **PRIMARY resume anchor:** `thorough-plan-progress-{sid}.md` checkpoint file (T-04 direct scan)
-- **SECONDARY convenience:** `/checkpoint --restore` — best-effort; B3 Clause-B limitation documented above
-
-The sentinel `pending-restore-{sid}.txt` is still written at each boundary and enables Tier-3
-picker enumeration. However, it CANNOT override B3 Clause-B when a subagent file is newer. In that
-window, T-04 direct scan (not the picker) is the reliable resume path.
 
 The checkpoint file includes `## Last user intent` with the next-phase re-entry string (e.g.,
 `"thorough_plan {task}: last completed boundary thorough-plan:round-1-plan; next phase to run: critic.

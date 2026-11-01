@@ -1,0 +1,4 @@
+{"type": "system", "subtype": "init", "apiKeySource": "none"}
+{"type": "assistant", "message": {"model": "claude-opus-4-7", "content": [{"type": "thinking"}]}}
+{"type": "assistant", "message": {"model": "claude-opus-4-7", "content": [{"type": "tool_use"}]}}
+{"type": "result", "subtype": "success", "is_error": false, "terminal_reason": "completed"}

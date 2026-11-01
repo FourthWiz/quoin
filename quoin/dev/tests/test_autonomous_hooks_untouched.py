@@ -47,15 +47,11 @@ MEMORY_DIR = PKG_DIR / "memory"
 EXPECTED_CONSTANTS = {
     "QUOIN_BYTES_PER_TOKEN": "8.0",
     "QUOIN_EFFECTIVE_CONTEXT_LIMIT": "150000",
-    "QUOIN_STOP_BPS": "7000",
-    "QUOIN_BLOCK_BPS": "9500",
-    "QUOIN_COMPACT_FIRST_BPS": "9000",
-    "QUOIN_PANIC_BPS": "10000",
 }
 
-# Pinned thirteen-name roster of every `${QUOIN_*:-...}` env-var override read by
+# Pinned eight-name roster of every `${QUOIN_*:-...}` env-var override read by
 # read_constants() — a superset of EXPECTED_CONSTANTS above (which only pins
-# the six BPS/threshold-shaped defaults). Used by
+# the two threshold-shaped defaults). Used by
 # test_read_constants_env_var_roster_unchanged() to catch an added or
 # removed constant via set-equality, not just a value change on an
 # already-known name.
@@ -63,16 +59,11 @@ READ_CONSTANTS_ENV_VAR_ROSTER = frozenset(
     {
         "QUOIN_BYTES_PER_TOKEN",
         "QUOIN_EFFECTIVE_CONTEXT_LIMIT",
-        "QUOIN_STOP_BPS",
-        "QUOIN_BLOCK_BPS",
         "QUOIN_STALE_SENTINEL_DAYS",
         "QUOIN_SESSIONSTART_SWEEP_DAYS",
-        "QUOIN_COMPACT_FIRST_BPS",
-        "QUOIN_PANIC_BPS",
         "QUOIN_DISCOVERY_STALE_DAYS",
         "QUOIN_SERENA_STALE_DAYS",
         "QUOIN_RUN_STATE_STALE_DAYS",
-        "QUOIN_PRECOMPACT_NORUN_CHECKPOINT",
         "QUOIN_TELEMETRY_MAX_BYTES",
     }
 )
@@ -141,7 +132,7 @@ def test_bps_threshold_constants_unchanged(lib_sh_text: str) -> None:
 
 def test_read_constants_env_var_roster_unchanged(lib_sh_text: str) -> None:
     """Set-equality guard: assert the exact set of `${QUOIN_*:-...}` env-var
-    override names inside read_constants() equals the pinned thirteen-name roster
+    override names inside read_constants() equals the pinned eight-name roster
     below. This is strictly stronger than the `_BPS`/`BPS`/`threshold`
     substring tokens dropped from the git-diff corroboration test's
     forbidden-token regex (see the comment on that test explaining why those
@@ -176,8 +167,8 @@ def test_read_constants_function_present_and_unmodified_shape(lib_sh_text: str) 
     text = lib_sh_text
     assert "read_constants() {" in text
     assert (
-        "export BPT LIMIT STOP_BPS BLOCK_BPS STALE_DAYS SESSIONSTART_SWEEP_DAYS "
-        "COMPACT_FIRST_BPS PANIC_BPS DISCOVERY_STALE_DAYS SERENA_STALE_DAYS" in text
+        "export BPT LIMIT STALE_DAYS SESSIONSTART_SWEEP_DAYS "
+        "DISCOVERY_STALE_DAYS SERENA_STALE_DAYS" in text
     )
 
 

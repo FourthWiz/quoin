@@ -22,13 +22,13 @@
 | `/end_of_day` | Saves session state, promotes captured insights |
 | `/weekly_review` | Aggregates the week's progress into a structured review |
 | `/capture_insight` | Logs a pattern or gotcha to the daily scratchpad |
-| `/checkpoint` | Save/restore session context mid-session; auto-runs /cleanup on save |
 | `/continue_work` | Resume context from a prior session using recent-sessions index |
 | `/pr` | Full pull-request lifecycle after /end_of_task: version bump, push, create, wait, switch |
 | `/sleep` | Memory consolidation; promotes insights to lessons-learned, archives stale entries |
-| `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs in /checkpoint |
+| `/cleanup` | Trash-move stale sentinels/old checkpoints; standalone also offers task-folder archive (`--no-tasks` to skip); auto-runs after /end_of_day (`--no-cleanup` to skip) |
 | `/next-steps` | Append-only queue for future work items (`add` / `list` / `done N`) |
-| `/run` | End-to-end pipeline: discover → architect → plan → implement → review → end_of_task |
+| `/run` | Default pipeline: brief → context pack → implement → one review → local commit (discover only when stale). Multi-repo or ordered work is split into 2–5 stages in a short `architecture.md`, each run the same way |
+| `/run hard:` | Full heavy pipeline (`/run_hard`): discover → specify → architect → plan with critic rounds → implement → gate → review → end_of_task |
 | `quoin run --takeover <task>` | Shell command: stops an autonomous run's supervisor and headless child, then prints the `claude --resume` command to continue that session yourself |
 | `/cost_snapshot` | Shows today's cost, project lifetime cost, and per-task breakdown |
 | `/status` | Renders the workflow pipeline graph with the active phase marked (read-only) |
@@ -37,11 +37,11 @@
 
 ## Typical flows
 
-**Large feature:**
-`/discover` → `/architect` → `/thorough_plan` → `/implement` → `/review` → `/end_of_task`
+**Bug fix or feature (default):**
+`/run <task>` → brief → context pack → implement → one review → local commit; then `/pr` when ready
 
-**Bug fix:**
-`/plan` → `/implement` → `/review` → `/end_of_task`
+**Work that needs the full plan/critic/gate chain (manual exception):**
+`/run hard: <task>`
 
 **Starting your day:**
 `/start_of_day`
@@ -104,9 +104,16 @@ Notes:
 - **Skill precedence:** User scope (`~/.claude/skills/`) overrides project scope (`.claude/skills/`) for same-named skills. A prior home install will shadow project skills — run `quoin doctor --scope project` to detect conflicts.
 - **Manual uninstall:** `rm -rf .claude/` removes the project-scope install. The CLAUDE.md quoin section can be removed with the quoin markers at the project root.
 
+## Optional: Stream Deck
+
+A Stream Deck panel for your running agents is available on macOS. Plain `quoin install` never installs it. To
+manage it, use `quoin streamdeck install`, `quoin streamdeck upgrade`, `quoin streamdeck status` and
+`quoin streamdeck uninstall`. After `pip install --upgrade quoin`, run `quoin streamdeck upgrade` to update the
+installed component. See `quoin/docs/streamdeck/README.md` in the Quoin repository.
+
 ## Files
 
-- `~/.claude/CLAUDE.md` — shared rules all skills follow (user-level)
+- `~/.claude/CLAUDE.md` — short core rules all skills follow (user-level); the full rules are in `~/.claude/memory/workflow-catalog.md`
 - `.workflow_artifacts/` — all workflow artifacts: memory, task plans, session state (gitignored)
 - `.workflow_artifacts/cache/` — auto-maintained code summary cache (knowledge cache)
 - `~/.claude/skills/` — all workflow skill definitions (user-level)

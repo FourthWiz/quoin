@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /implement skill (use the Skill tool) and follow its instructions."}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "[quoin-handoff/1.0 return]\nstatus: COMPLETE\nartifact: current-plan.md\nverdict: PASS\nsummary: Implemented env-b.\n[/quoin-handoff]"}], "usage": {"output_tokens": 10}, "stop_reason": "end_turn"}}

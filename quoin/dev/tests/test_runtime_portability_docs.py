@@ -57,6 +57,7 @@ def test_runtime_boundary_classifies_portable_and_claude_files():
     for claude_specific in [
         "cost_from_jsonl.py",
         "session_age_guard.py",
+        "pollution_guard.py",
         "build_preambles.py",
     ]:
         assert f"`{claude_specific}` is Claude-specific" in text
@@ -76,11 +77,16 @@ def test_runtime_parity_matrix_covers_major_semantics_and_all_migrated_skills():
     manifest = json.loads(read_rel("quoin/core/workflow/skills.json"))
     skill_names = [skill["name"] for skill in manifest["skills"]]
 
-    assert len(skill_names) == 32
+    assert len(skill_names) == 33
     for name in skill_names:
         assert f"`{name}`" in matrix
         assert f"quoin/core/skills/{name}.md" in matrix
-        assert f"quoin/adapters/claude/skills/{name}/SKILL.md" in matrix
+        entry = next(s for s in manifest["skills"] if s["name"] == name)
+        row = next(line for line in matrix.splitlines() if line.startswith(f"| `{name}` |"))
+        if entry.get("claude_adapter", True):
+            assert f"quoin/adapters/claude/skills/{name}/SKILL.md" in matrix
+        else:
+            assert "not shipped on Claude Code" in row
         assert f"quoin/adapters/codex/skills/{name}/README.md" in matrix
 
     for semantic in [
@@ -230,12 +236,16 @@ def test_handoff_format_core_and_reference_cross_reference():
 def test_skill_manifest_matches_current_claude_frontmatter():
     manifest = json.loads(read_rel("quoin/core/workflow/skills.json"))
     entries = manifest["skills"]
-    by_name = {entry["name"]: entry for entry in entries}
+    by_name = {
+        entry["name"]: entry for entry in entries if entry.get("claude_adapter", True)
+    }
 
-    skill_paths = sorted((REPO_ROOT / "quoin" / "skills").glob("*/SKILL.md"))
+    skill_paths = sorted(
+        (REPO_ROOT / "quoin" / "adapters" / "claude" / "skills").glob("*/SKILL.md")
+    )
     skill_paths_by_name = {path.parent.name: path for path in skill_paths}
-    missing_stubs = set(by_name) - set(skill_paths_by_name)
-    assert not missing_stubs
+    missing_skills = set(by_name) - set(skill_paths_by_name)
+    assert not missing_skills
 
     allowed_effort = {"low", "medium", "high", "max"}
     for name, entry in by_name.items():

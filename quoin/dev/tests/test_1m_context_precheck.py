@@ -42,7 +42,6 @@ THIS_FILE = Path(__file__).resolve()
 TESTS_DIR = THIS_FILE.parent
 PKG_DIR = TESTS_DIR.parent.parent  # quoin/quoin/
 ADAPTER_SKILLS_DIR = PKG_DIR / "adapters" / "claude" / "skills"
-LEGACY_SKILLS_DIR = PKG_DIR / "skills"
 
 # ---------------------------------------------------------------------------
 # Path resolver (mirrors skill_md_path() in test_quoin_stage1_preamble.py)
@@ -55,7 +54,7 @@ LEGACY_SKILLS_DIR = PKG_DIR / "skills"
 # 31 skills have an authoritative adapter SKILL.md; see D-02/D-03 in
 # .workflow_artifacts/ivg-118-registration-manifest/current-plan.md), so a
 # hardcoded subset silently drifts under-count. Matches
-# installer.resolve_skill_source_md's adapter-preferred resolution exactly.
+# the installer's adapter skill tree exactly.
 MIGRATED_TO_ADAPTER: frozenset[str] = frozenset(
     p.name for p in ADAPTER_SKILLS_DIR.iterdir() if (p / "SKILL.md").is_file()
 )
@@ -63,9 +62,7 @@ MIGRATED_TO_ADAPTER: frozenset[str] = frozenset(
 
 def skill_md_path(skill_name: str) -> Path:
     """Return the canonical SKILL.md path for a given skill."""
-    if skill_name in MIGRATED_TO_ADAPTER:
-        return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
-    return LEGACY_SKILLS_DIR / skill_name / "SKILL.md"
+    return ADAPTER_SKILLS_DIR / skill_name / "SKILL.md"
 
 
 # ---------------------------------------------------------------------------
@@ -88,10 +85,9 @@ SECTION0_TARGETS = [
     ("triage",         "haiku",  "§1"),
     ("pr",             "sonnet", "§1"),
     ("status",         "haiku",  "§1"),
-    ("cleanup",        "sonnet", "§0c"),
-    ("sleep",          "sonnet", "§0c"),
+    ("cleanup",        "sonnet", "§1"),
+    ("sleep",          "sonnet", "§1"),
     ("next_steps",     "haiku",  "§1"),
-    ("checkpoint",     "sonnet", "§0c"),
     ("continue_work",  "sonnet", "§1"),
     ("workspace",      "sonnet", "§1"),
 ]
@@ -123,7 +119,7 @@ SECTION0PRIME_TARGETS = [
 S0_1M_CORE_SUBSTRING = "Usage credits required for 1M context"
 S0_1M_ADVISORY_TOKEN = "1M-context credit mismatch"
 S0_1M_MODEL_HINT     = "run /model to switch this session to standard context"
-S0_1M_PROCEED_TOKEN  = "proceed to §1 at the current tier"  # or §0c for §0c-class skills
+S0_1M_PROCEED_TOKEN  = "proceed to §1 at the current tier"
 
 # §0 markers (D-03 Option A: §0-1m-context-precheck markers DELETED)
 S0_DEAD_BEGIN_MARKER = "<!-- §0-1m-context-precheck-begin -->"

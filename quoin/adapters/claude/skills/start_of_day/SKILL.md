@@ -1,6 +1,6 @@
 ---
 name: start_of_day
-description: "Restores context from the daily cache and unfinished sessions so you can resume where you left off. Use for: /start_of_day, 'what was I working on', 'pick up where I left off', 'morning standup', 'SOD', 'start of day'."
+description: "Restores context from the daily cache and unfinished sessions. Use for: /start_of_day, 'what was I working on', 'pick up where I left off', 'SOD'."
 model: haiku
 ---
 
@@ -127,28 +127,24 @@ Otherwise (already at or below declared tier, OR prompt has [no-redispatch] sent
 
 Read `<project-root>/.workflow_artifacts/memory/resume-cookie.md` if present.
 
-- **If absent:** continue to Step 1 (existing behavior — graceful fallback; no error).
-- **If present, check `expires` field:** if `expires` < now (ISO comparison), the cookie is stale — ignore it and continue to Step 1.
+- **If absent:** continue to Step 1.
+- **If present, check `expires`:** if `expires` < now (ISO comparison), the cookie is stale — ignore it and continue to Step 1.
 - **If present and fresh:** use the cookie's `task`, `last_skill`, `branch`, `dirty_count`, and body ("what's next" hint) to seed the Step 5 briefing. Note the task and branch at the start of the briefing so the user knows what was active yesterday.
 
-**Banner check (compose with Step 1 — signal B):** while reading session files for the briefing, also check `.workflow_artifacts/memory/sessions/` for any session-state files written within the last 36 hours that have `end_of_day_due: yes`. Count them as M. If M > 0, signal B is positive, and also compute `all_today` (T-04): compare each flagged file's `<YYYY-MM-DD>` filename-prefix date against today's date as plain ISO strings — `all_today = true` only if every flagged file's prefix equals today's date. Signal B (with `all_today`) is combined with signal A (the insights-file check in Step 1) in a unified banner — see Step 1 for the combined rule.
+**Banner check (compose with Step 1 — signal B):** while reading session files for the briefing, also check `.workflow_artifacts/memory/sessions/` for any session-state files written within the last 36 hours that have `end_of_day_due: yes`. Count them as M. If M > 0, signal B is positive, and also compute `all_today`: compare each flagged file's `<YYYY-MM-DD>` filename-prefix date against today's date as plain ISO strings — `all_today = true` only if every flagged file's prefix equals today's date. Signal B (with `all_today`) is combined with signal A (the insights-file check in Step 1) in a unified banner — see Step 1 for the combined rule.
 
 ### Step 1b: Sentinel-health check (read-only, lightweight)
 
-Count files under `.workflow_artifacts/memory/` at depth 1 matching the 9 sentinel families that are older than `QUOIN_STALE_SENTINEL_DAYS` (default 7) days AND whose filename suffix is NOT the current session's UUID. This step is **read-only** — no trash_move, no rm, no writes of any kind.
+Count files under `.workflow_artifacts/memory/` at depth 1 matching the 2 live sentinel families that are older than `QUOIN_STALE_SENTINEL_DAYS` (default 7) days AND whose filename suffix is NOT the current session's UUID. This step is **read-only** — no trash_move, no rm, no writes of any kind.
 
-The 9 sentinel families are: `pending-restore-*.txt`, `pending-prompt-*.txt`, `compact-happened-*.txt`, `mid-agent-handoff-*.txt`, `pending-resume-ref-*.txt`, `checkpoint-defer-*.txt`, `postcompact-reset-*.txt`, `checkpoint-pending-compact-*.txt`, `idle-advisory-pending-*.txt`.
+The 2 sentinel families are: `pending-restore-*.txt`, `compact-happened-*.txt`.
 
 ```sh
 # Pseudocode (lightweight count — fail-silent if memory dir absent)
 _sod_stale_days=${QUOIN_STALE_SENTINEL_DAYS:-7}
 _sod_warn_threshold=${QUOIN_SOD_SENTINEL_WARN:-3}
 _sod_count=$(find .workflow_artifacts/memory -maxdepth 1 \
-  \( -name 'pending-restore-*.txt' -o -name 'pending-prompt-*.txt' \
-     -o -name 'compact-happened-*.txt' -o -name 'mid-agent-handoff-*.txt' \
-     -o -name 'pending-resume-ref-*.txt' -o -name 'checkpoint-defer-*.txt' \
-     -o -name 'postcompact-reset-*.txt' -o -name 'checkpoint-pending-compact-*.txt' \
-     -o -name 'idle-advisory-pending-*.txt' \) \
+  \( -name 'pending-restore-*.txt' -o -name 'compact-happened-*.txt' \) \
   -mtime +"$_sod_stale_days" 2>/dev/null | wc -l || echo 0)
 # Exclude current-session files (any ending in -<current_uuid>.txt):
 # In practice Haiku counts all matches; the threshold of 3 provides enough
@@ -159,11 +155,11 @@ If the count exceeds `QUOIN_SOD_SENTINEL_WARN` (default 3), compose a one-line a
 
 > "⚠ N stale workflow sentinels in memory/ — run /cleanup to trash-move them (recoverable)."
 
-Compose this advisory INTO the existing unified Step 1 banner (signal A + signal B); do NOT add a separate AskUserQuestion for the sentinel count. If the count is at or below the threshold, skip silently.
+Compose this advisory into the unified Step 1 banner; do NOT add a separate AskUserQuestion for the sentinel count. At or below the threshold, skip silently.
 
 Fail-silent if `.workflow_artifacts/memory/` is absent or unreadable — never error on missing dir.
 
-Note: do NOT source any deployed file paths in this pseudocode. The count operates on the project-local `.workflow_artifacts/memory/` path only. No `__QUOIN_HOME__` reference needed.
+Note: the count operates on the project-local `.workflow_artifacts/memory/` path only; it needs no `__QUOIN_HOME__` reference.
 
 ### Step 1c: Discovery & Serena staleness check
 
@@ -174,14 +170,14 @@ Run `python3 __QUOIN_HOME__/scripts/discovery_staleness.py <project-root> --json
 
 This step is **read-only**. Do NOT write any files here. Marker writes happen only when the user takes the Serena action in Step 6b.
 
-Store the result for Step 6b. Fold a one-line advisory into the unified Step 1 banner if any staleness is detected:
+Store the result for Step 6b. If any staleness is detected, fold a one-line advisory into the unified Step 1 banner:
 - Discovery stale/absent: `"Discovery memory is stale or absent — /discover recommended."`
 - Serena present-but-stale: `"Serena project memory is stale — refresh available in Step 6b."`
 - Both: combine into a single advisory line.
 
-If the script is absent or errors → skip silently (no advisory, no error). Reuse `QUOIN_DISCOVERY_STALE_DAYS` for the threshold — do NOT introduce `QUOIN_SOD_DISCOVERY_STALE_DAYS`.
+If the script is absent or errors → skip silently. Reuse `QUOIN_DISCOVERY_STALE_DAYS` for the threshold — do NOT introduce `QUOIN_SOD_DISCOVERY_STALE_DAYS`.
 
-Note: `QUOIN_DISCOVERY_AUTOREFRESH=1` allows /start_of_day to invoke `/discover` inline without asking (auto-run opt-in). Serena refresh is NEVER auto-run interactively (D-04).
+Note: `QUOIN_DISCOVERY_AUTOREFRESH=1` allows /start_of_day to invoke `/discover` inline without asking (auto-run opt-in). Serena refresh is NEVER auto-run interactively.
 
 ## Session bootstrap
 
@@ -197,22 +193,21 @@ Cost tracking (conditional): `/start_of_day` is a lightweight daily-orientation 
 
 **Signal A:** look for `.workflow_artifacts/memory/daily/insights-<yesterday>.md` (yesterday's date). If it exists, count entries tagged `Promote?: yes` or `Promote?: maybe`. Let N = that count (0 if none or file absent).
 
-**Signal B:** (set in Step 1a) — count of session-state files written in the last 36 hours with `end_of_day_due: yes`. Let M = that count. When M > 0, also compute `all_today`: true iff EVERY flagged session's filename date prefix (`<YYYY-MM-DD>-<task>.md`) equals today's date (ISO string compare — ISO date prefixes sort/compare correctly as plain strings, no arithmetic needed); false if any flagged session's date prefix predates today.
+**Signal B:** (set in Step 1a) — count of session-state files written in the last 36 hours with `end_of_day_due: yes`. Let M = that count. When M > 0, also compute `all_today`: true iff EVERY flagged session's filename date prefix (`<YYYY-MM-DD>-<task>.md`) equals today's date (plain ISO string compare); false if any flagged session's date prefix predates today.
 
-**Unified banner composition (T-04 / Round 2 MIN-2 — fire if A OR B is positive, i.e. N > 0 OR M > 0):**
-- **Signal A alone (N > 0, M = 0):** no flagged session exists, so there is no date to branch on — keep the existing unconditional recommendation unchanged (do NOT attempt a same-day/cross-day branch with nothing to compare):
+**Unified banner composition (fires if N > 0 OR M > 0):**
+- **Signal A alone (N > 0, M = 0):** no flagged session exists, so there is no date to branch on — use the unconditional recommendation:
   > "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending. Recommend running `/end_of_day` before continuing."
   > "Want to run `/end_of_day` now or skip?"
 - **Signal B alone (M > 0, N = 0), `all_today = true`** (every flagged session dated today — same-day case):
-  > "⚠ M session(s) unflushed today. Recommend running `/checkpoint` to save your place."
-  > "Want to run `/checkpoint` now or skip?"
+  > "ℹ M session(s) unflushed today. Run `/end_of_day` when you wrap up (task state resumes with `/run --resume TASK`)."
 - **Signal B alone (M > 0, N = 0), `all_today = false`** (a flagged session predates today — cross-day case, a prior day was never wrapped up):
   > "⚠ M session(s) unflushed — a prior day was never wrapped up. Recommend running `/end_of_day` before continuing."
   > "Want to run `/end_of_day` now or skip?"
 - **Both signals positive (N > 0 AND M > 0):** the banner follows signal B's branch (a flagged session's date is available to branch on) and separately still mentions the pending insights:
-  > "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending and M session(s) unflushed [today | since a prior day]. Recommend running `/checkpoint` [or `/end_of_day` before continuing, if `all_today = false`]."
-  > "Want to run it now or skip?"
-- If they want to run the recommended command: invoke it inline before continuing (the promotion flow from `/end_of_day` Step 3b applies whenever `/end_of_day` is the recommendation, including the `/checkpoint`-recommended paths where the user chooses to run `/end_of_day` instead)
+  - `all_today = true`: recommend nothing and print one informational line — "ℹ N insight(s) pending and M session(s) unflushed today. Run `/end_of_day` when you wrap up (task state resumes with `/run --resume TASK`)."
+  - `all_today = false`: "⚠ Yesterday's `/end_of_day` did not fire — N insight(s) pending and M session(s) unflushed since a prior day. Recommend running `/end_of_day` before continuing." then "Want to run it now or skip?" (asked only in this case).
+- If they want to run the recommended command: invoke it inline before continuing (the promotion flow from `/end_of_day` Step 3b applies)
 - If they skip: proceed normally
 
 If neither signal is positive (N = 0 AND M = 0), skip this step silently.
@@ -321,7 +316,7 @@ Output a clear, concise briefing:
 <Based on urgency, dependencies, and momentum — what to tackle first and why>
 ```
 
-Keep the briefing factual. Report what you found in each step — do not speculate about what the user might want to do beyond what the daily cache and git state suggest. Let the user decide priorities.
+Keep the briefing factual: report what each step found and do not speculate beyond the daily cache and git state. Let the user decide priorities.
 
 ### Step 6: Offer to resume
 
@@ -365,10 +360,10 @@ Present a dedicated second AskUserQuestion for refresh actions (after the main S
 Build options dynamically:
 
 - **If discovery is stale or absent:** include `label: "Refresh discovery"`, `description: "Run /discover (incremental — cheap if HEAD unchanged)"`. If `QUOIN_DISCOVERY_AUTOREFRESH=1`, run `/discover` inline without asking and omit this option from the picker.
-- **If `serena.stale=true` (present-but-stale) OR `serena.present_marker=false` (absent marker):** probe with `ToolSearch select:mcp__serena__activate_project`. If probe loads a schema: include `label: "Set up / Refresh Serena memory"`, `description: "Run Serena onboarding or re-onboarding and update the staleness marker — prompt-only per D-04"`. On the user choosing this option: call the `serena-activation.md §Refresh` path (run `mcp__serena__activate_project` then `mcp__serena__onboarding` then `mcp__serena__initial_instructions`) then write/update `.workflow_artifacts/memory/serena-onboarded.md` with a 1-line body and ISO timestamp. If probe loads no schema → omit the Serena option entirely (Graceful Absence — do not mention Serena to users who may not have it).
+- **If `serena.stale=true` (present-but-stale) OR `serena.present_marker=false` (absent marker):** probe with `ToolSearch select:mcp__serena__activate_project`. If probe loads a schema: include `label: "Set up / Refresh Serena memory"`, `description: "Run Serena onboarding or re-onboarding and update the staleness marker — prompt-only"`. On the user choosing this option: call the `serena-activation.md §Refresh` path (run `mcp__serena__activate_project` then `mcp__serena__onboarding` then `mcp__serena__initial_instructions`) then write/update `.workflow_artifacts/memory/serena-onboarded.md` with a 1-line body and ISO timestamp. If probe loads no schema → omit the Serena option entirely (Graceful Absence — do not mention Serena to users who may not have it).
 - **Always include:** `label: "Skip refresh"`, `description: "Continue without refreshing."` as the last option.
 
-Both discovery and Serena options may appear simultaneously if both are stale. The Serena refresh is prompt-only in interactive sessions — NEVER auto-run (D-04).
+Both options may appear together. The Serena refresh is prompt-only in interactive sessions — NEVER auto-run.
 
 Example (both stale):
 ```
@@ -408,4 +403,4 @@ If nothing exists at all:
 - **Surface surprises.** If overnight CI broke, or someone force-pushed to a branch, or a PR got rejected — lead with that.
 - **Respect the user's time.** Don't make them re-read the entire plan. Summarize the resumption point in 2-3 sentences with the exact file/task/line to start at.
 - **Check git for real.** The daily cache is what *should* be true. Git state is what *is* true. Always reconcile.
-- **Prefer the `## For human` block.** If the daily cache is v3-format, display the `## For human` content as the primary orientation summary — it was written by the previous session's Haiku specifically to orient the next reader. Don't pad or paraphrase it; present it directly.
+- **Prefer the `## For human` block.** If the daily cache is v3-format, display the `## For human` content as the primary orientation summary — it exists to orient the next reader. Present it directly, without padding or paraphrase.

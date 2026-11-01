@@ -2,7 +2,7 @@
 """
 build_preambles.py — Preamble builder for subagent prompt-cache warming.
 
-Generates preamble.md files for 9 spawn-target skills under quoin/skills/<skill>/.
+Generates preamble.md files for 9 spawn-target skills under quoin/adapters/claude/skills/<skill>/.
 Each full preamble contains:
   - YAML frontmatter (path, kind, source_files, source_hashes, generated_at, generated_by, total_bytes)
   - [format-kit-§3-slice] marker + the marker-anchored §3 slice of format-kit.md
@@ -241,7 +241,7 @@ def run_check() -> int:
 
     stale = []
     for skill, kind in SPAWN_TARGETS.items():
-        preamble_path = QUOIN_DIR / "skills" / skill / "preamble.md"
+        preamble_path = QUOIN_DIR / "adapters" / "claude" / "skills" / skill / "preamble.md"
         if not preamble_path.exists():
             stale.append(f"{skill}: preamble.md missing")
             continue
@@ -273,7 +273,7 @@ def run_check() -> int:
                     f"Preamble for {skill} is stale: source {rel_path} changed "
                     f"(preamble has {expected_sha}, current is {current_sha}). "
                     f"Run: python3 quoin/scripts/build_preambles.py (or bash install.sh --dev), "
-                    f"then commit the regenerated quoin/skills/*/preamble.md",
+                    f"then commit the regenerated quoin/adapters/claude/skills/*/preamble.md",
                     file=sys.stderr,
                 )
                 stale.append(f"{skill}: {rel_path} changed")
@@ -350,7 +350,7 @@ Spawn targets: """ + ", ".join(SPAWN_TARGETS.keys()),
             continue
 
         # Atomic write: .tmp + os.replace()
-        dest_dir = QUOIN_DIR / "skills" / skill
+        dest_dir = QUOIN_DIR / "adapters" / "claude" / "skills" / skill
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest_path = dest_dir / "preamble.md"
         tmp_path = dest_dir / "preamble.md.tmp"

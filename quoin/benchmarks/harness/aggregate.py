@@ -27,12 +27,15 @@ Statistical methods:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import statistics
 from pathlib import Path
 from typing import Any, Optional
 
-VALID_VERDICTS = frozenset({"pass", "fail", "error", "timeout"})
+from .session_state import pipeline_invalid_reason
+
+VALID_VERDICTS = frozenset({"pass", "fail", "error", "timeout", "invalid"})
 CODEX_CELLS = frozenset({"simple-codex", "quoin-codex"})
 CLAUDE_CELLS = frozenset({"simple-claude", "quoin-claude"})
 
@@ -114,6 +117,7 @@ def aggregate_run(
     run_id: str,
     started_at: Optional[str] = None,
     finished_at: Optional[str] = None,
+    suite_path: Optional[Path] = None,
 ) -> dict[str, Any]:
     """
     Aggregate all task results for a run.
@@ -137,6 +141,8 @@ def aggregate_run(
         gate_intervention_count = 0
         task_ids: list[str] = []
         per_task_verdict: dict[str, str] = {}
+        invalid_ids: list[str] = []
+        invalid_costs: list[float] = []
 
         task_dirs = [d for d in cell_dir.iterdir() if d.is_dir()]
 
@@ -153,29 +159,52 @@ def aggregate_run(
                     verdict = j.get("verdict", "error")
                 except Exception:
                     pass
-            task_verdicts.append(verdict)
-            per_task_verdict[task_id] = verdict
 
             # Load metrics.json
+            m: dict = {}
+            have_metrics = False
             metrics_path = task_dir / "metrics.json"
             if metrics_path.exists():
                 try:
-                    m = json.loads(metrics_path.read_text(encoding="utf-8"))
-                    wc = m.get("wall_clock_seconds", 0.0)
-                    wall_clock_times.append(float(wc))
-                    gate_intervention_count += int(m.get("gate_intervention_count", 0))
+                    loaded = json.loads(metrics_path.read_text(encoding="utf-8"))
+                    if isinstance(loaded, dict):
+                        m = loaded
+                        have_metrics = True
                 except Exception:
                     pass
 
             # Load cost.json (Claude cells only)
+            row_cost: Optional[float] = None
             cost_path = task_dir / "cost.json"
             if cost_path.exists():
                 try:
                     c = json.loads(cost_path.read_text(encoding="utf-8"))
                     if c.get("cost_available") and c.get("cost_runtime_usd") is not None:
-                        costs_usd.append(float(c["cost_runtime_usd"]))
+                        row_cost = float(c["cost_runtime_usd"])
                 except Exception:
                     pass
+
+            # A quoin Verified row where the pipeline did not run is not
+            # evidence about the pipeline: it stays out of every figure below
+            # and its spend is reported separately.
+            if pipeline_invalid_reason(cell, task_dir, m) is not None:
+                per_task_verdict[task_id] = "invalid"
+                invalid_ids.append(task_id)
+                if row_cost is not None:
+                    invalid_costs.append(row_cost)
+                continue
+
+            task_verdicts.append(verdict)
+            per_task_verdict[task_id] = verdict
+            if have_metrics:
+                try:
+                    wc = m.get("wall_clock_seconds", 0.0)
+                    wall_clock_times.append(float(wc))
+                    gate_intervention_count += int(m.get("gate_intervention_count", 0))
+                except Exception:
+                    pass
+            if row_cost is not None:
+                costs_usd.append(row_cost)
 
         n_tasks = len(task_verdicts)
         n_pass = sum(1 for v in task_verdicts if v == "pass")
@@ -209,14 +238,25 @@ def aggregate_run(
             "headline_metric_pass_per_dollar_or_null": headline,
             "_task_ids": task_ids,
             "_per_task_verdict": per_task_verdict,
+            "_invalid_ids": invalid_ids,
         }
+        if invalid_ids:
+            cells_data[cell]["n_invalid"] = len(invalid_ids)
+            cells_data[cell]["invalid_total_cost_usd_or_null"] = (
+                sum(invalid_costs) if invalid_costs else None
+            )
 
     # McNemar test for Claude pair
     mcnemar_p: Optional[float] = None
     if "simple-claude" in cells_data and "quoin-claude" in cells_data:
         simple_ids = cells_data["simple-claude"]["_task_ids"]
         quoin_ids = cells_data["quoin-claude"]["_task_ids"]
-        common_ids = [tid for tid in simple_ids if tid in set(quoin_ids)]
+        excluded = set(cells_data["simple-claude"]["_invalid_ids"]) | set(
+            cells_data["quoin-claude"]["_invalid_ids"]
+        )
+        common_ids = [
+            tid for tid in simple_ids if tid in set(quoin_ids) and tid not in excluded
+        ]
         if common_ids:
             simple_verdicts = [
                 cells_data["simple-claude"]["_per_task_verdict"].get(tid, "error")
@@ -242,6 +282,9 @@ def aggregate_run(
         "within_claude_pair_mcnemar_pvalue": mcnemar_p,
     }
 
+    tiered_md = _build_tiered_section(summary, run_path, suite_path)
+    review_md = _build_review_section(summary, run_path, suite_path)
+
     # Write summary.json
     summary_json_path = run_path / "summary.json"
     summary_json_path.write_text(
@@ -251,10 +294,90 @@ def aggregate_run(
 
     # Write summary.md
     summary_md = _render_markdown_report(summary, cells_data, run_id)
+    if tiered_md:
+        summary_md = summary_md + tiered_md
+    if review_md:
+        summary_md = summary_md + review_md
     summary_md_path = run_path / "summary.md"
     summary_md_path.write_text(summary_md, encoding="utf-8")
 
     return summary
+
+
+_TIERED_ERROR_LIMIT = 200
+
+
+def _build_tiered_section(summary: dict, run_path: Path, suite_path: Optional[Path]) -> str:
+    """Add the tiered comparison to `summary` when the run's suite is tiered.
+
+    Returns the Markdown section, or an empty string for any other suite. A
+    failure while building, serializing or rendering is recorded in the
+    summary instead of raised, so the summary files are always written.
+    """
+    try:
+        from . import tiered_report
+
+        manifest = tiered_report.read_manifest(run_path)
+        suite_file = None
+        if suite_path is not None:
+            suite_file = Path(suite_path)
+        elif manifest.get("suite_path"):
+            suite_file = Path(manifest["suite_path"])
+        if suite_file is None:
+            return ""
+        if not suite_file.is_file():
+            error = f"suite file not found: {suite_file}"[:_TIERED_ERROR_LIMIT]
+            summary["tiered"] = {"error": error}
+            return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
+        raw = suite_file.read_bytes()
+        suite = json.loads(raw.decode("utf-8"))
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
+        summary["tiered"] = {"error": error}
+        return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
+    if not isinstance(suite, dict) or not isinstance(suite.get("tiered"), dict):
+        return ""
+    try:
+        sha = hashlib.sha256(raw).hexdigest()[:16]
+        tiered = tiered_report.build_tiered_report(run_path, suite, manifest, suite_sha=sha)
+        json.dumps(tiered)
+        tiered_md = tiered_report.render_tiered_markdown(tiered, _format_md_table)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
+        summary["tiered"] = {"error": error}
+        return f"\n## Tiered comparison\n\n_Tiered report unavailable: {error}_\n"
+    summary["tiered"] = tiered
+    return tiered_md
+
+
+def _build_review_section(summary: dict, run_path: Path, suite_path: Optional[Path]) -> str:
+    """Add the pairwise review to `summary` when the run has a review file.
+
+    Kept apart from the tiered report on purpose: nothing here is read by
+    `build_tiered_report`, so the review cannot move a pass count. Any failure
+    is recorded under `summary["pairwise_review"]` and never raised.
+    """
+    try:
+        from . import pairwise_review, tiered_report
+
+        if not (Path(run_path) / pairwise_review.STATE_FILE).is_file():
+            return ""
+        manifest = tiered_report.read_manifest(run_path)
+        suite_file = Path(suite_path) if suite_path is not None else (
+            Path(manifest["suite_path"]) if manifest.get("suite_path") else None
+        )
+        suite = json.loads(suite_file.read_text(encoding="utf-8")) if suite_file else {"tasks": []}
+        report = pairwise_review.build_review_report(run_path, suite)
+        if report is None:
+            return ""
+        json.dumps(report)
+        review_md = pairwise_review.render_review_markdown(report, _format_md_table)
+    except Exception as exc:
+        error = f"{type(exc).__name__}: {exc}"[:_TIERED_ERROR_LIMIT]
+        summary["pairwise_review"] = {"error": error}
+        return f"\n## Blind pairwise review (secondary measure)\n\n_Review report unavailable: {error}_\n"
+    summary["pairwise_review"] = report
+    return review_md
 
 
 def _render_markdown_report(
@@ -401,14 +524,19 @@ def _render_rank_order_table(cells_data: dict) -> str:
         row = [tid]
         for cell in cell_names:
             verdict = cells_data[cell].get("_per_task_verdict", {}).get(tid, "-")
-            symbol = {"pass": "P", "fail": "F", "error": "E", "timeout": "T"}.get(
+            symbol = {"pass": "P", "fail": "F", "error": "E", "timeout": "T", "invalid": "I"}.get(
                 verdict, "-"
             )
             row.append(symbol)
         rows.append(row)
 
+    has_invalid = any(
+        "invalid" in data.get("_per_task_verdict", {}).values() for data in cells_data.values()
+    )
     legend = (
-        "\n_Legend: P=pass, F=fail, E=error, T=timeout, -=not run_\n"
+        "\n_Legend: P=pass, F=fail, E=error, T=timeout, I=invalid (pipeline did not run), -=not run_\n"
+        if has_invalid
+        else "\n_Legend: P=pass, F=fail, E=error, T=timeout, -=not run_\n"
     )
     return _format_md_table(rows) + legend
 

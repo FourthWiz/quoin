@@ -84,7 +84,7 @@ HOOK_SCRIPTS = (
     "sessionstart.sh", "sessionend.sh", "worktreecreate.sh",
 )
 CATEGORY_SUBDIRS = {
-    "skills": "quoin/skills",
+    "skills": "quoin/adapters/claude/skills",
     "scripts": "quoin/scripts",
     "core-scripts": "quoin/core/scripts",
     "core-workflow": "quoin/core/workflow",

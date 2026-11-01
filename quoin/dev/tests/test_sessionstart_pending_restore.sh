@@ -1,6 +1,10 @@
 #!/bin/sh
 # test_sessionstart_pending_restore.sh — fixture tests for quoin/hooks/sessionstart.sh
 #
+# SessionStart emits no restore banner. These fixtures pin that (sentinels of
+# every family present, still no output), the sweep of live and retired
+# sentinel families and stale pidfile locks, and the compact re-entry output.
+#
 # Covers sub-cases from T-12c / T-11 acceptance criteria.
 # Requires: jq on PATH, sh (POSIX).
 #
@@ -56,39 +60,21 @@ if [ -f "$DEPLOYED_HOOK" ]; then
   fi
 fi
 
-# ─── (a) source=startup + sentinel matching session_id → banner emitted ───────
+# ─── (a)/(b) no restore banner on startup or resume, whatever sentinels exist ──
 
-printf '/checkpoint/file/for/startup.md\n' > "$MEMORY_DIR/pending-restore-sess-startup.txt"
-stdin=$(make_stdin "startup" "sess-startup")
-out=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
-
-if printf '%s' "$out" | grep -q 'Pending restore detected' 2>/dev/null; then
-  ok "(a) source=startup + matching sentinel → banner JSON emitted"
-else
-  fail "(a) source=startup + matching sentinel → expected banner, got: $out"
-fi
-
-if printf '%s' "$out" | grep -q 'current-session' 2>/dev/null; then
-  ok "(a) source=startup + matching sentinel → session-id match status is current-session"
-else
-  fail "(a) source=startup → banner emitted but missing current-session marker: $out"
-fi
-
-rm -f "$MEMORY_DIR/pending-restore-sess-startup.txt"
-
-# ─── (b) source=resume + sentinel matching session_id → banner emitted (CRIT-2) ─
-
-printf '/checkpoint/file/for/resume.md\n' > "$MEMORY_DIR/pending-restore-sess-resume.txt"
-stdin=$(make_stdin "resume" "sess-resume")
-out=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
-
-if printf '%s' "$out" | grep -q 'Pending restore detected' 2>/dev/null; then
-  ok "(b) source=resume + matching sentinel → banner JSON emitted (CRIT-2 critical case)"
-else
-  fail "(b) source=resume + matching sentinel → expected banner, got: $out"
-fi
-
-rm -f "$MEMORY_DIR/pending-restore-sess-resume.txt"
+for _src in startup resume; do
+  _sid="sess-nobanner-$_src"
+  printf '/checkpoint/file/for/%s.md\n' "$_src" > "$MEMORY_DIR/pending-restore-${_sid}.txt"
+  printf 'prior_session_uuid=x\ncheckpoint_path=/cp.md\n' > "$MEMORY_DIR/pending-resume-ref-${_sid}.txt"
+  printf 'prior_session_uuid=x\nactive_skills=critic 1\n' > "$MEMORY_DIR/mid-agent-handoff-${_sid}.txt"
+  out=$(printf '%s' "$(make_stdin "$_src" "$_sid")" | sh "$HOOK" 2>/dev/null)
+  if [ -z "$out" ]; then
+    ok "($_src) pending-restore, pending-resume-ref and mid-agent-handoff present → no banner"
+  else
+    fail "($_src) expected no output with restore sentinels present, got: $out"
+  fi
+  rm -f "$MEMORY_DIR/pending-restore-${_sid}.txt" "$MEMORY_DIR/pending-resume-ref-${_sid}.txt" "$MEMORY_DIR/mid-agent-handoff-${_sid}.txt"
+done
 
 # ─── (c) sentinel absent and no fallback → exit 0 no output ──────────────────
 
@@ -103,84 +89,16 @@ else
   fail "(c) sentinel absent → expected no output, got: $out"
 fi
 
-# ─── (d) sentinel present under DIFFERENT session_id → banner with mismatch ──
+# ─── (d) sentinel under a DIFFERENT session_id → still no banner ──────────────
 
 printf '/checkpoint/file/for/other-session.md\n' > "$MEMORY_DIR/pending-restore-sess-other.txt"
-stdin=$(make_stdin "startup" "sess-current-no-match")
-out=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
-
-if printf '%s' "$out" | grep -q 'Pending restore detected' 2>/dev/null; then
-  ok "(d) different session_id sentinel → banner emitted (mtime-most-recent fallback)"
+out=$(printf '%s' "$(make_stdin "startup" "sess-current-no-match")" | sh "$HOOK" 2>/dev/null)
+if [ -z "$out" ]; then
+  ok "(d) different session_id sentinel → no banner (no mtime-most-recent fallback)"
 else
-  fail "(d) different session_id sentinel → expected banner, got: $out"
+  fail "(d) different session_id sentinel → expected no output, got: $out"
 fi
-
-if printf '%s' "$out" | grep -q 'mismatch' 2>/dev/null; then
-  ok "(d) different session_id → mismatch warning in banner"
-else
-  fail "(d) different session_id → expected mismatch warning in banner, got: $out"
-fi
-
 rm -f "$MEMORY_DIR/pending-restore-sess-other.txt"
-
-# ─── (d2) mtime-most-recent fallback test ────────────────────────────────────
-# Create three pending-restore files with controlled mtimes:
-# zzzzZZ is oldest, aaaaAA is middle, mmmmMM is newest (within last 24h).
-# Lex order: zzzzZZ > mmmmMM > aaaaAA
-# Mtime order (newest first): mmmmMM > aaaaAA > zzzzZZ
-# The hook should surface mmmmMM (mtime-newest), NOT zzzzZZ (lex-greatest).
-#
-# IMPORTANT: Files must be RECENT (within STALE_DAYS=7 default) to survive the
-# stale-sentinel sweep at step 2. Use QUOIN_STALE_SENTINEL_DAYS=30 and recent
-# timestamps separated by seconds within the current day.
-
-rm -f "$MEMORY_DIR/pending-restore-"*.txt 2>/dev/null || true
-
-# Write files in order (each touch to set mtime), using slight delays via
-# sequential writes. We use seconds-resolution touch with today's date.
-# zzzzZZ: 1 hour ago, aaaaAA: 30min ago, mmmmMM: just now
-NOW_DATE=$(date +%Y%m%d%H%M.%S 2>/dev/null || date +%Y%m%d%H%M 2>/dev/null || echo "")
-
-printf 'checkpoint-zzzzZZ.md\n' > "$MEMORY_DIR/pending-restore-zzzzZZ.txt"
-printf 'checkpoint-aaaaAA.md\n' > "$MEMORY_DIR/pending-restore-aaaaAA.txt"
-printf 'checkpoint-mmmmMM.md\n' > "$MEMORY_DIR/pending-restore-mmmmMM.txt"
-
-# Use QUOIN_STALE_SENTINEL_DAYS=30 so stale sweep doesn't remove them.
-# We rely on filesystem write order for mtime: mmmmMM was written last → newest mtime.
-# (All three files will have very close mtimes — within a second — so test is best-effort.)
-# To guarantee order, wait 1s between writes if possible.
-# Instead of sleeping, use a known-ordering approach: write all then touch the
-# "oldest" ones to be 2 minutes ago (using date-based touch on macOS).
-
-# Set zzzzZZ to 2 minutes ago, aaaaAA to 1 minute ago, mmmmMM stays fresh
-TWO_MIN_AGO=$(date -v -2M +%Y%m%d%H%M.%S 2>/dev/null || \
-              date -d '2 minutes ago' +%Y%m%d%H%M.%S 2>/dev/null || echo "")
-ONE_MIN_AGO=$(date -v -1M +%Y%m%d%H%M.%S 2>/dev/null || \
-              date -d '1 minute ago' +%Y%m%d%H%M.%S 2>/dev/null || echo "")
-
-if [ -n "$TWO_MIN_AGO" ] && [ -n "$ONE_MIN_AGO" ]; then
-  touch -t "$TWO_MIN_AGO" "$MEMORY_DIR/pending-restore-zzzzZZ.txt" 2>/dev/null || true
-  touch -t "$ONE_MIN_AGO" "$MEMORY_DIR/pending-restore-aaaaAA.txt" 2>/dev/null || true
-  # mmmmMM keeps current mtime (newest)
-
-  stdin=$(make_stdin "startup" "sess-mtime-test")
-  out=$(printf '%s' "$stdin" | QUOIN_STALE_SENTINEL_DAYS=30 sh "$HOOK" 2>/dev/null)
-
-  if printf '%s' "$out" | grep -q 'mmmmMM' 2>/dev/null; then
-    ok "(d2) mtime-most-recent fallback → surfaced mmmmMM (mtime-newest, not lex-greatest)"
-  else
-    fail "(d2) mtime-most-recent fallback → expected mmmmMM, got: $out"
-  fi
-
-  if printf '%s' "$out" | grep -q 'zzzzZZ' 2>/dev/null && \
-     ! printf '%s' "$out" | grep -q 'mmmmMM' 2>/dev/null; then
-    fail "(d2) mtime fallback → incorrectly surfaced lex-greatest (zzzzZZ)"
-  fi
-else
-  ok "(d2) mtime-most-recent fallback → (skipped: date -v/-d not supported)"
-fi
-
-rm -f "$MEMORY_DIR/pending-restore-zzzzZZ.txt" "$MEMORY_DIR/pending-restore-aaaaAA.txt" "$MEMORY_DIR/pending-restore-mmmmMM.txt"
 
 # ─── (e) stale sentinel (> STALE_DAYS days) → trash-moved by sweep ──────────
 
@@ -277,27 +195,18 @@ fi
 
 SID_T10="sess-t10-$(date -u +%s)"
 
-# (T-10a) pending-resume-ref sentinel → informational banner emitted
+# (T-10a/b) pending-resume-ref and mid-agent-handoff sentinels → no banner
 printf 'prior_session_uuid=%s\ncheckpoint_path=/some/checkpoint.md\n' "$SID_T10" \
   > "$MEMORY_DIR/pending-resume-ref-${SID_T10}.txt"
-out_t10a=$(printf '%s' "$(make_stdin "resume" "$SID_T10")" | sh "$HOOK" 2>/dev/null)
-if printf '%s' "$out_t10a" | grep -q 'Prior session loaded as reference' 2>/dev/null; then
-  ok "(T-10a) pending-resume-ref sentinel → 'Prior session loaded as reference' banner emitted"
-else
-  fail "(T-10a) pending-resume-ref sentinel → expected reference banner, got: $out_t10a"
-fi
-rm -f "$MEMORY_DIR/pending-resume-ref-${SID_T10}.txt"
-
-# (T-10b) mid-agent-handoff sentinel → advisory banner emitted
 printf 'prior_session_uuid=%s\ntask_name=my-task\nactive_skills=critic 99999\ntimestamp=2026-05-15T10:00:00Z\n' \
   "$SID_T10" > "$MEMORY_DIR/mid-agent-handoff-${SID_T10}.txt"
-out_t10b=$(printf '%s' "$(make_stdin "startup" "$SID_T10")" | sh "$HOOK" 2>/dev/null)
-if printf '%s' "$out_t10b" | grep -q 'Mid-agent handoff detected' 2>/dev/null; then
-  ok "(T-10b) mid-agent-handoff sentinel → 'Mid-agent handoff detected' banner emitted"
+out_t10a=$(printf '%s' "$(make_stdin "resume" "$SID_T10")" | sh "$HOOK" 2>/dev/null)
+if [ -z "$out_t10a" ]; then
+  ok "(T-10a/b) pending-resume-ref and mid-agent-handoff sentinels → no banner"
 else
-  fail "(T-10b) mid-agent-handoff sentinel → expected handoff banner, got: $out_t10b"
+  fail "(T-10a/b) expected no banner, got: $out_t10a"
 fi
-rm -f "$MEMORY_DIR/mid-agent-handoff-${SID_T10}.txt"
+rm -f "$MEMORY_DIR/pending-resume-ref-${SID_T10}.txt" "$MEMORY_DIR/mid-agent-handoff-${SID_T10}.txt"
 
 # (T-10c) stale pending-resume-ref (10+ days old) → trash-moved
 printf 'prior_session_uuid=stale-uuid\ncheckpoint_path=/old/checkpoint.md\n' \
@@ -324,30 +233,19 @@ else
   rm -f "$MEMORY_DIR/mid-agent-handoff-stale-sess.txt"
 fi
 
-# (T-10e) priority ordering: when all three sentinel types match the same session_id,
-# pending-restore is surfaced (highest priority)
+# (T-10e) all three sentinel types for the same session → still no banner
 SID_T10E="sess-t10-priority-$(date -u +%s)"
 printf '/checkpoint/path.md\n' > "$MEMORY_DIR/pending-restore-${SID_T10E}.txt"
 printf 'prior_session_uuid=%s\ncheckpoint_path=/cp.md\n' "$SID_T10E" \
   > "$MEMORY_DIR/pending-resume-ref-${SID_T10E}.txt"
 printf 'prior_session_uuid=%s\ntask_name=t\nactive_skills=critic 1\ntimestamp=2026-05-15T10:00:00Z\n' \
   "$SID_T10E" > "$MEMORY_DIR/mid-agent-handoff-${SID_T10E}.txt"
-
 out_t10e=$(printf '%s' "$(make_stdin "startup" "$SID_T10E")" | sh "$HOOK" 2>/dev/null)
-if printf '%s' "$out_t10e" | grep -q 'Pending restore detected' 2>/dev/null; then
-  ok "(T-10e) priority ordering: pending-restore surfaced first when all three sentinels present"
+if [ -z "$out_t10e" ]; then
+  ok "(T-10e) all three sentinel types present → no banner"
 else
-  fail "(T-10e) priority ordering: expected pending-restore banner first, got: $out_t10e"
+  fail "(T-10e) expected no banner, got: $out_t10e"
 fi
-
-# Only one banner emitted (not multiple)
-banner_count_t10e=$(printf '%s' "$out_t10e" | grep -c 'hookSpecificOutput' 2>/dev/null || echo 0)
-if [ "$banner_count_t10e" -le 1 ]; then
-  ok "(T-10e) AT MOST ONE banner emitted when multiple sentinels present"
-else
-  fail "(T-10e) multiple banners emitted (expected at most one): count=$banner_count_t10e"
-fi
-
 rm -f "$MEMORY_DIR/pending-restore-${SID_T10E}.txt" \
       "$MEMORY_DIR/pending-resume-ref-${SID_T10E}.txt" \
       "$MEMORY_DIR/mid-agent-handoff-${SID_T10E}.txt"
@@ -464,10 +362,9 @@ else
   ok "(k) degraded-path conservatism → (skipped: date -v not supported)"
 fi
 
-# (l) STEP 4 fallback-window narrowing (pins D-08 behavior).
-# (l-1): 2-day-old pending-restore-OTHER IS swept by STEP 2, so STEP 4 does NOT
-#         surface it as a "different session" restore banner.
-# (l-2): Fresh pending-restore-OTHER SURVIVES (under 1d) AND STEP 4 surfaces it.
+# (l) sweep window for a live family that is no longer surfaced as a banner.
+# (l-1): 2-day-old pending-restore-OTHER is swept.
+# (l-2): Fresh pending-restore-OTHER survives (under 1d) and is not announced.
 if [ "$HAVE_DATE_V" = "yes" ]; then
   SID_L_CURRENT="sess-current-l"
   SID_L_OTHER="sess-other-l"
@@ -486,9 +383,9 @@ if [ "$HAVE_DATE_V" = "yes" ]; then
     L1_BANNER_SILENT=1
   fi
   if [ "$L1_FILE_SWEPT" -eq 1 ] && [ "$L1_BANNER_SILENT" -eq 1 ]; then
-    ok "(l-1) D-08 narrowing: 2-day-old non-current pending-restore swept + STEP 4 banner silent"
+    ok "(l-1) 2-day-old non-current pending-restore swept, no banner"
   else
-    fail "(l-1) D-08 narrowing: file_swept=$L1_FILE_SWEPT banner_silent=$L1_BANNER_SILENT (expected 1 1)"
+    fail "(l-1) file_swept=$L1_FILE_SWEPT banner_silent=$L1_BANNER_SILENT (expected 1 1)"
   fi
   rm -f "$MEMORY_DIR/pending-restore-${SID_L_OTHER}.txt" 2>/dev/null || true
 
@@ -500,11 +397,11 @@ if [ "$HAVE_DATE_V" = "yes" ]; then
   L2_SURVIVED=0
   L2_BANNER_FIRED=0
   [ -f "$MEMORY_DIR/pending-restore-${SID_L_OTHER}.txt" ] && L2_SURVIVED=1
-  printf '%s' "$out_l2" | grep -q 'mismatch\|mtime-most-recent\|different session\|Pending restore' 2>/dev/null && L2_BANNER_FIRED=1
-  if [ "$L2_SURVIVED" -eq 1 ] && [ "$L2_BANNER_FIRED" -eq 1 ]; then
-    ok "(l-2) D-08 narrowing: fresh non-current pending-restore survives AND STEP 4 banner fires"
+  [ -n "$out_l2" ] && L2_BANNER_FIRED=1
+  if [ "$L2_SURVIVED" -eq 1 ] && [ "$L2_BANNER_FIRED" -eq 0 ]; then
+    ok "(l-2) fresh non-current pending-restore survives and no banner is shown"
   else
-    fail "(l-2) D-08 narrowing: survived=$L2_SURVIVED banner_fired=$L2_BANNER_FIRED (expected 1 1)"
+    fail "(l-2) survived=$L2_SURVIVED banner_fired=$L2_BANNER_FIRED (expected 1 0)"
   fi
   rm -f "$MEMORY_DIR/pending-restore-${SID_L_OTHER}.txt" 2>/dev/null || true
 else
@@ -512,107 +409,41 @@ else
   ok "(l-2) D-08 narrowing → (skipped: date -v not supported)"
 fi
 
-# ─── T-03 (IVG-139): restore ground-truth backstop — WARN / silent / never-block /
-# advisory / shared-namespace-skip. No existing `command -v python3` skip idiom exists
-# in this file to mirror (critic round-1 m-2) — this guard is written fresh, following
-# only the file's generic `ok "... skipped: ..."` message shape.
+# ─── Sweep: every retired family and stale pidfile locks, one case per shape ──
+# Stale (older than the window) files from other sessions are trash-moved; the
+# current session's files and fresh pidfile locks are spared.
 
-if command -v python3 >/dev/null 2>&1; then
-  T139_SESSIONS_DIR="$MEMORY_DIR/sessions"
-  T139_CPDIR="$MEMORY_DIR/cpdir"
-  mkdir -p "$T139_SESSIONS_DIR" "$T139_CPDIR"
-
-  # (m1) MISMATCH → WARN present, exit 0 (never-block)
-  rm -f "$T139_SESSIONS_DIR"/*.md "$T139_CPDIR"/*.md "$MEMORY_DIR/pending-restore-"*.txt 2>/dev/null || true
-  printf 'state\n' > "$T139_SESSIONS_DIR/2026-07-09-othertask.md"
-  printf '## Active task\nmytask\n' > "$T139_CPDIR/2026-07-09T0900-mytask.md"
-  SID_M1="sess-ivg139-m1"
-  printf '%s\n' "$T139_CPDIR/2026-07-09T0900-mytask.md" > "$MEMORY_DIR/pending-restore-${SID_M1}.txt"
-  stdin_m1=$(make_stdin "startup" "$SID_M1")
-  out_m1=$(printf '%s' "$stdin_m1" | sh "$HOOK" 2>/dev/null); rc_m1=$?
-  if printf '%s' "$out_m1" | grep -q 'Pending restore detected' 2>/dev/null && \
-     printf '%s' "$out_m1" | grep -q 'task-context mismatch' 2>/dev/null && \
-     [ "$rc_m1" -eq 0 ]; then
-    ok "(m1) IVG-139 task-context MISMATCH → WARN present, never-block (rc=0)"
-  else
-    fail "(m1) IVG-139 mismatch → expected WARN+rc0, got rc=$rc_m1 out: $out_m1"
-  fi
-  rm -f "$MEMORY_DIR/pending-restore-${SID_M1}.txt"
-
-  # (m2) MATCH → silent (no WARN)
-  rm -f "$T139_SESSIONS_DIR"/*.md "$T139_CPDIR"/*.md 2>/dev/null || true
-  printf 'state\n' > "$T139_SESSIONS_DIR/2026-07-09-mytask.md"
-  printf '## Active task\nmytask\n' > "$T139_CPDIR/2026-07-09T0900-mytask.md"
-  SID_M2="sess-ivg139-m2"
-  printf '%s\n' "$T139_CPDIR/2026-07-09T0900-mytask.md" > "$MEMORY_DIR/pending-restore-${SID_M2}.txt"
-  stdin_m2=$(make_stdin "startup" "$SID_M2")
-  out_m2=$(printf '%s' "$stdin_m2" | sh "$HOOK" 2>/dev/null)
-  if printf '%s' "$out_m2" | grep -q 'Pending restore detected' 2>/dev/null && \
-     ! printf '%s' "$out_m2" | grep -q 'task-context mismatch' 2>/dev/null; then
-    ok "(m2) IVG-139 task-context MATCH → no WARN (silent)"
-  else
-    fail "(m2) IVG-139 match → expected no WARN, got: $out_m2"
-  fi
-  rm -f "$MEMORY_DIR/pending-restore-${SID_M2}.txt"
-
-  # (m3) advisory / does-not-override: mismatch state still recommends restore
-  rm -f "$T139_SESSIONS_DIR"/*.md "$T139_CPDIR"/*.md 2>/dev/null || true
-  printf 'state\n' > "$T139_SESSIONS_DIR/2026-07-09-othertask.md"
-  printf '## Active task\nmytask\n' > "$T139_CPDIR/2026-07-09T0900-mytask.md"
-  SID_M3="sess-ivg139-m3"
-  printf '%s\n' "$T139_CPDIR/2026-07-09T0900-mytask.md" > "$MEMORY_DIR/pending-restore-${SID_M3}.txt"
-  stdin_m3=$(make_stdin "startup" "$SID_M3")
-  out_m3=$(printf '%s' "$stdin_m3" | sh "$HOOK" 2>/dev/null)
-  if printf '%s' "$out_m3" | grep -q '/checkpoint --restore is recommended' 2>/dev/null && \
-     printf '%s' "$out_m3" | grep -q 'task-context mismatch' 2>/dev/null; then
-    ok "(m3) IVG-139 advisory: WARN augments, restore recommendation still present"
-  else
-    fail "(m3) IVG-139 advisory → expected both restore-recommendation and WARN, got: $out_m3"
-  fi
-  rm -f "$MEMORY_DIR/pending-restore-${SID_M3}.txt"
-
-  # (m4) fail-OPEN on absent checkpoint file (R-04 pre-guard: [ -f "$_gt_cp" ])
-  rm -f "$T139_SESSIONS_DIR"/*.md "$T139_CPDIR"/*.md 2>/dev/null || true
-  printf 'state\n' > "$T139_SESSIONS_DIR/2026-07-09-othertask.md"
-  SID_M4="sess-ivg139-m4"
-  printf '%s\n' "$T139_CPDIR/nonexistent-2026-07-09T0900-mytask.md" > "$MEMORY_DIR/pending-restore-${SID_M4}.txt"
-  stdin_m4=$(make_stdin "startup" "$SID_M4")
-  out_m4=$(printf '%s' "$stdin_m4" | sh "$HOOK" 2>/dev/null)
-  if printf '%s' "$out_m4" | grep -q 'Pending restore detected' 2>/dev/null && \
-     ! printf '%s' "$out_m4" | grep -q 'task-context mismatch' 2>/dev/null; then
-    ok "(m4) IVG-139 fail-OPEN: absent checkpoint file → no WARN"
-  else
-    fail "(m4) IVG-139 fail-OPEN → expected no WARN on absent file, got: $out_m4"
-  fi
-  rm -f "$MEMORY_DIR/pending-restore-${SID_M4}.txt"
-
-  # (m5) shared-namespace guard (critic round-1 M-1) — regression test constructed so it
-  # FAILS without the T-01 basename guard: freshest session has a genuinely different task,
-  # which would trigger task_backstop: if the predicate ran on a thorough-plan-progress-*
-  # candidate.
-  rm -f "$T139_SESSIONS_DIR"/*.md "$T139_CPDIR"/*.md 2>/dev/null || true
-  printf 'state\n' > "$T139_SESSIONS_DIR/2026-07-09-othertask.md"
-  SID_M5="sess-ivg139-m5"
-  printf 'irrelevant\n' > "$T139_CPDIR/thorough-plan-progress-${SID_M5}.md"
-  printf '%s\n' "$T139_CPDIR/thorough-plan-progress-${SID_M5}.md" > "$MEMORY_DIR/pending-restore-${SID_M5}.txt"
-  stdin_m5=$(make_stdin "startup" "$SID_M5")
-  out_m5=$(printf '%s' "$stdin_m5" | sh "$HOOK" 2>/dev/null)
-  if printf '%s' "$out_m5" | grep -q 'Pending restore detected' 2>/dev/null && \
-     ! printf '%s' "$out_m5" | grep -q 'task-context mismatch' 2>/dev/null; then
-    ok "(m5) IVG-139 shared-namespace guard: thorough-plan-progress-* checkpoint never WARNs"
-  else
-    fail "(m5) IVG-139 shared-namespace guard → expected no WARN for thorough-plan-progress-*, got: $out_m5"
-  fi
-  rm -f "$MEMORY_DIR/pending-restore-${SID_M5}.txt"
-
-  rm -rf "$T139_CPDIR" 2>/dev/null || true
-  rm -f "$T139_SESSIONS_DIR"/*.md 2>/dev/null || true
+HAVE_DATE_V2=$(date -v -2d >/dev/null 2>&1 && echo yes || echo no)
+if [ "$HAVE_DATE_V2" = "yes" ]; then
+  mkdir -p "$MEMORY_DIR/sessions"
+  SID_SW_CUR="sess-sweep-current"
+  OLD_TS=$(date -v -3d +%Y%m%d%H%M.%S)
+  for _fam in pending-prompt mid-agent-handoff pending-resume-ref checkpoint-defer postcompact-reset checkpoint-pending-compact idle-advisory-pending pending-restore compact-happened; do
+    printf 'x\n' > "$MEMORY_DIR/${_fam}-sess-sweep-other.txt"
+    printf 'x\n' > "$MEMORY_DIR/${_fam}-${SID_SW_CUR}.txt"
+    touch -t "$OLD_TS" "$MEMORY_DIR/${_fam}-sess-sweep-other.txt" "$MEMORY_DIR/${_fam}-${SID_SW_CUR}.txt"
+  done
+  for _pf in review-111 architect-phase-4-12345 checkpoint-222 sleep-333 cleanup-444; do
+    printf '1\n' > "$MEMORY_DIR/sessions/${_pf}.pidfile.lock"
+    touch -t "$OLD_TS" "$MEMORY_DIR/sessions/${_pf}.pidfile.lock"
+  done
+  printf '1\n' > "$MEMORY_DIR/sessions/fresh-555.pidfile.lock"
+  printf '%s' "$(make_stdin "startup" "$SID_SW_CUR")" | QUOIN_SESSIONSTART_SWEEP_DAYS=1 sh "$HOOK" >/dev/null 2>&1
+  SW_OK=1
+  for _fam in pending-prompt mid-agent-handoff pending-resume-ref checkpoint-defer postcompact-reset checkpoint-pending-compact idle-advisory-pending pending-restore compact-happened; do
+    [ -f "$MEMORY_DIR/${_fam}-sess-sweep-other.txt" ] && { SW_OK=0; fail "(sweep) stale ${_fam} of another session was not swept"; }
+    [ -f "$MEMORY_DIR/${_fam}-${SID_SW_CUR}.txt" ] || { SW_OK=0; fail "(sweep) current-session ${_fam} was swept"; }
+  done
+  [ "$SW_OK" -eq 1 ] && ok "(sweep) live and retired families: stale other-session files swept, current-session files spared"
+  PF_OK=1
+  for _pf in review-111 architect-phase-4-12345 checkpoint-222 sleep-333 cleanup-444; do
+    [ -f "$MEMORY_DIR/sessions/${_pf}.pidfile.lock" ] && { PF_OK=0; fail "(sweep) stale pidfile ${_pf} was not swept"; }
+  done
+  [ -f "$MEMORY_DIR/sessions/fresh-555.pidfile.lock" ] || { PF_OK=0; fail "(sweep) fresh pidfile lock was swept"; }
+  [ "$PF_OK" -eq 1 ] && ok "(sweep) stale pidfile locks of every naming shape swept, fresh lock spared"
+  rm -f "$MEMORY_DIR"/*-sess-sweep-*.txt "$MEMORY_DIR/sessions/"*.pidfile.lock
 else
-  ok "(m1) IVG-139 task-context mismatch → (skipped: no python3)"
-  ok "(m2) IVG-139 task-context match → (skipped: no python3)"
-  ok "(m3) IVG-139 advisory/does-not-override → (skipped: no python3)"
-  ok "(m4) IVG-139 fail-OPEN absent checkpoint → (skipped: no python3)"
-  ok "(m5) IVG-139 shared-namespace guard → (skipped: no python3)"
+  ok "(sweep) → (skipped: date -v not supported)"
 fi
 
 # ─── IVG-258 S-4 (T-11): compact-matcher fixtures ─────────────────────────────

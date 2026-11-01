@@ -116,7 +116,7 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
     """Resolve the quoin data source directory (proc:T-03).
 
     Resolution order:
-    1. Explicit --source-dir flag (always trusted if it has skills/).
+    1. Explicit --source-dir flag (always trusted if it has adapters/claude/skills/).
     2. Editable-install detection: if __file__ is under src/quoin/, skip
        importlib.resources and jump straight to Tier 2.
     3. Tier 1 (wheel install): importlib.resources.files('quoin') / 'data'.
@@ -125,9 +125,9 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
     """
     if explicit is not None:
         candidate = pathlib.Path(explicit).resolve()
-        if not (candidate / "skills").is_dir():
+        if not (candidate / "adapters" / "claude" / "skills").is_dir():
             print(
-                f"quoin: --source-dir {explicit!r} has no skills/ subdirectory",
+                f"quoin: --source-dir {explicit!r} has no adapters/claude/skills/ subdirectory",
                 file=sys.stderr,
             )
             sys.exit(2)
@@ -149,7 +149,7 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
             # Convert to a concrete path for is_dir() checks
             with importlib.resources.as_file(data_ref) as data_path:  # type: ignore[attr-defined]
                 data_path = pathlib.Path(data_path)
-                if (data_path / "skills").is_dir():
+                if (data_path / "adapters" / "claude" / "skills").is_dir():
                     return data_path
         except (TypeError, AttributeError, FileNotFoundError):
             pass
@@ -157,7 +157,7 @@ def _resolve_source_dir(explicit: Optional[str]) -> pathlib.Path:
     # Tier 2: editable or importlib fallback — walk from src/quoin/ up to repo/
     # pkg_file.parent = src/quoin/; two ".." reaches project root; then "quoin/"
     candidate = (pkg_file.parent / ".." / ".." / "quoin").resolve()
-    if (candidate / "skills").is_dir():
+    if (candidate / "adapters" / "claude" / "skills").is_dir():
         return candidate
 
     # Tier 3: abort
@@ -175,7 +175,7 @@ def _derive_allow_writes(source_dir: pathlib.Path, source_dir_explicit: bool) ->
     True iff ALL of:
     (a) --source-dir was explicitly passed
     (b) os.access(source_dir, os.W_OK) is True
-    (c) (source_dir / "skills").is_dir() is True
+    (c) (source_dir / "adapters" / "claude" / "skills").is_dir() is True
     (d) source_dir.parent has .git/ OR pyproject.toml
     (e) source_dir.resolve() is NOT a descendant of the package directory
     """
@@ -187,7 +187,7 @@ def _derive_allow_writes(source_dir: pathlib.Path, source_dir_explicit: bool) ->
         return False
 
     # (c)
-    if not (source_dir / "skills").is_dir():
+    if not (source_dir / "adapters" / "claude" / "skills").is_dir():
         return False
 
     # (d)
@@ -291,6 +291,7 @@ class _InstallAnswers(NamedTuple):
     agentdesk_declined: bool
     agentdesk_already: bool
     warned_mods: Tuple[str, ...]
+    agentdesk_refresh: bool = False
 
 
 def _ask_install_questions(
@@ -344,16 +345,71 @@ def _ask_install_questions(
     run = bool(getattr(args, "setup_agentdesk", False))
     declined = False
     already = False
-    if interactive and not is_project_mode and not run:
+    refresh = False
+    if not is_project_mode and not run:
         already = install_prompts.agentdesk_already_set_up(pathlib.Path.home() / ".zshrc")
+        if interactive and already:
+            refresh = install_prompts.ask_yes_no(
+                install_prompts.AGENTDESK_REFRESH_QUESTION, default=True
+            )
         # The setup script installs Homebrew and a macOS cask, so other hosts
         # only get the flag.
-        if not already and sys.platform == "darwin":
+        elif interactive and sys.platform == "darwin":
             run = install_prompts.ask_yes_no(install_prompts.AGENTDESK_QUESTION, default=False)
             declined = not run
     return _InstallAnswers(
-        modes["context-tracker"], modes["workflow-tasks"], run, declined, already, tuple(warned)
+        modes["context-tracker"], modes["workflow-tasks"], run, declined, already, tuple(warned),
+        refresh,
     )
+
+
+CLAUDE_MD_VARIANT_STATE_FILE = ".quoin-claude-md-variant"
+CLAUDE_MD_VARIANT_ENV = "QUOIN_CLAUDE_MD_VARIANT"
+_CLAUDE_MD_VARIANTS = ("full", "slim")
+
+
+def _resolve_claude_md_variant(args: argparse.Namespace, dest_root: pathlib.Path) -> tuple[str, str]:
+    """Return (variant, origin). Precedence: flag, env, stored choice, slim default.
+
+    Origin is one of flag, env, stored, default. Invalid env or stored values
+    are ignored with a warning.
+    """
+    flag = getattr(args, "claude_md_variant", None)
+    if flag:
+        return flag, "flag"
+    env = os.environ.get(CLAUDE_MD_VARIANT_ENV, "").strip()
+    if env:
+        if env in _CLAUDE_MD_VARIANTS:
+            return env, "env"
+        print(
+            f"quoin: ignoring invalid {CLAUDE_MD_VARIANT_ENV}={env!r} (expected full or slim)",
+            file=sys.stderr,
+        )
+    state = dest_root / CLAUDE_MD_VARIANT_STATE_FILE
+    try:
+        stored = state.read_text(encoding="utf-8").strip()
+    except OSError:
+        stored = ""
+    if stored:
+        if stored in _CLAUDE_MD_VARIANTS:
+            return stored, "stored"
+        print(
+            f"quoin: ignoring invalid value {stored!r} in {state} (expected full or slim)",
+            file=sys.stderr,
+        )
+    return "slim", "default"
+
+
+def _store_claude_md_variant(dest_root: pathlib.Path, variant: str) -> None:
+    """Persist an explicit choice: 'full' writes the state file, 'slim' removes it."""
+    state = dest_root / CLAUDE_MD_VARIANT_STATE_FILE
+    try:
+        if variant == "full":
+            state.write_text("full\n", encoding="utf-8")
+        else:
+            state.unlink(missing_ok=True)
+    except OSError as exc:
+        print(f"quoin: could not update {state}: {exc}", file=sys.stderr)
 
 
 def _cmd_claude_install(args: argparse.Namespace) -> int:
@@ -371,35 +427,45 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     scope: str = getattr(args, "scope", None) or "user"
     is_project_mode = scope.startswith("project")
 
-    # IVG-164 T-07: --claude-md-variant slim is a project-scope pilot only this wave.
-    # Placed here (before check_prerequisites) so the guard is a literal no-op: nothing
-    # has been probed or written yet when it fires.
-    claude_md_variant: str = getattr(args, "claude_md_variant", "full") or "full"
-    if claude_md_variant == "slim" and not is_project_mode:
-        print(
-            "quoin: --claude-md-variant slim is a project-scope pilot only this wave "
-            "(see IVG-164); re-run with --scope project",
-            file=sys.stderr,
-        )
-        return 1
+    # Slim is the default rules variant in both scopes. An explicit choice is
+    # remembered per scope (state file in the deploy root), so a later plain
+    # reinstall keeps it.
+    claude_md_variant, variant_origin = _resolve_claude_md_variant(args, dest_root)
 
-    # review-1.md MAJOR 1: project installs never regenerate (allow_writes is forced
-    # False below for is_project_mode), so a slim install must fail closed rather than
-    # silently deploy a CLAUDE.slim.md / workflow-catalog.md that's stale vs the live
-    # quoin/CLAUDE.md. Placed here (before any deploy_* call) so, like the guard
-    # above, nothing has been probed or written yet when it fires.
+    # Project installs never regenerate (allow_writes is forced False below), so a
+    # stale generated slim must be caught here, before any deploy_* call. An
+    # explicitly requested slim fails closed; a merely defaulted slim falls back
+    # to the full rules for this install so a stale generated file never blocks it.
     if claude_md_variant == "slim":
         stale = installer.check_slim_outputs_fresh(source_dir)
         if stale:
+            broken = any(
+                "staleness check unavailable" in e or "regen aborted" in e or "core text unreadable" in e
+                for e in stale
+            )
+            if variant_origin in ("flag", "env"):
+                print(
+                    "quoin: --claude-md-variant slim aborted — generated output(s) are "
+                    "stale vs a fresh regen of " + str(source_dir / "CLAUDE.md") + ": "
+                    + ", ".join(stale) + ". Either run "
+                    "'python3 quoin/scripts/build_claude_slim.py' in the quoin repo "
+                    "checkout and commit the result, or pass "
+                    "'--claude-md-variant full' to install the full rules.",
+                    file=sys.stderr,
+                )
+                return 1
+            if broken:
+                headline = "slim freshness check is broken (please report this)"
+            else:
+                headline = "generated slim rules are stale"
             print(
-                "quoin: --claude-md-variant slim aborted — generated output(s) are "
-                "stale vs a fresh regen of " + str(source_dir / "CLAUDE.md") + ": "
-                + ", ".join(stale) + ". Run "
-                "'python3 quoin/scripts/build_claude_slim.py' in the quoin repo "
-                "checkout and commit the result before installing the slim variant.",
+                "WARNING: " + headline + "; installing the full rules for this run.\n"
+                "  " + "\n  ".join(stale) + "\n"
+                "  Regenerate with 'python3 quoin/scripts/build_claude_slim.py' in the quoin "
+                "repo checkout, or pass '--claude-md-variant full' to silence this.",
                 file=sys.stderr,
             )
-            return 1
+            claude_md_variant = "full"
 
     # Mutex: --scope project is only valid with --runtime claude
     if is_project_mode and getattr(args, "runtime", "claude") == "codex":
@@ -503,6 +569,11 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
 
     runtime_record.remove_existing_record(dest_root)
 
+    # Every file deployed from here to deploy_hooks is recorded, so files the
+    # previous install deployed and this one did not can be pruned below.
+    previous_manifest = installer.read_deploy_manifest(dest_root)
+    installer.start_deploy_record()
+
     # T-04
     installer.deploy_memory(source_dir, dest_root)
     installer.deploy_quickstart(source_dir, dest_root)
@@ -524,6 +595,8 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
     installer.deploy_core_workflow(source_dir, dest_root)  # IVG-248: portable workflow docs (D-10)
     installer.deploy_dashboard_assets(source_dir, dest_root)  # T-12: SPA assets (D-11)
     installer.cleanup_obsolete_scripts(dest_root)
+    installer.cleanup_obsolete_skills(dest_root)
+    installer.cleanup_obsolete_memory(dest_root)
 
     # Hooks
     try:
@@ -539,6 +612,26 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         clear_autocompact_env=clear_autocompact_env,
     )
 
+    deployed = installer.take_deploy_record()
+    manifest = dict(deployed)
+    if getattr(args, "no_prune", False):
+        # Keep the stale entries so a later install can still prune them.
+        for rel, digest in (previous_manifest or {}).items():
+            manifest.setdefault(rel, digest)
+    elif previous_manifest is None:
+        installer.remove_pre_manifest_files(dest_root)
+    else:
+        foreign_mods = tuple(
+            f"skills/{mod.name}/"
+            for mod in installer.OPT_IN_MODS
+            if installer.mod_state(mod, dest_root) == "foreign"
+        )
+        _, retry = installer.prune_stale_deploys(
+            dest_root, previous_manifest, deployed, protected=foreign_mods
+        )
+        manifest.update(retry)
+    installer.write_deploy_manifest(dest_root, manifest)
+
     # agentdesk tool — user-mode only (user-level ~/.config/agentdesk/ location)
     if not is_project_mode:
         agentdesk_dest = pathlib.Path.home() / ".config" / "agentdesk"
@@ -549,6 +642,11 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
                 "To finish agentdesk setup (zellij, lazygit and fzf via Homebrew, plus a "
                 "~/.zshrc line), re-run the install with --setup-agentdesk."
             )
+        try:
+            from quoin.streamdeck import notice as _sd_notice
+            _sd_notice.maybe_print()
+        except Exception:
+            pass
 
     # T-06: CLAUDE.md placement differs by mode (D-02)
     if is_project_mode:
@@ -569,8 +667,8 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         claude_md_path = dest_root / "CLAUDE.md"
     source_claude_name = "CLAUDE.slim.md" if claude_md_variant == "slim" else "CLAUDE.md"
     print(
-        f"Using CLAUDE.md variant: {claude_md_variant} (source {source_claude_name}) "
-        f"→ {claude_md_path}"
+        f"Using CLAUDE.md variant: {claude_md_variant} ({variant_origin}; source "
+        f"{source_claude_name}) → {claude_md_path}"
     )
     installer.merge_workflow_rules(
         source_dir,
@@ -593,6 +691,10 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
         if len(violations) > 5:
             print(f"  ... ({len(violations) - 5} more)", file=sys.stderr)
         return 1
+
+    # Remember an explicit variant choice only after the install proved clean.
+    if variant_origin == "flag":
+        _store_claude_md_variant(dest_root, claude_md_variant)
 
     # T-07: preamble regeneration last
     installer.regenerate_preambles(source_dir, allow_writes=allow_writes)
@@ -640,6 +742,24 @@ def _cmd_claude_install(args: argparse.Namespace) -> int:
                 print(
                     f"quoin: warning: agentdesk setup exited with status {rc}; quoin itself "
                     "is installed. Re-run the install with --setup-agentdesk to retry.",
+                    file=sys.stderr,
+                )
+    elif answers.agentdesk_already and not is_project_mode:
+        script = pathlib.Path.home() / ".config" / "agentdesk" / "setup-agentdesk.sh"
+        if not answers.agentdesk_refresh:
+            if script.is_file():
+                print()
+                print(
+                    "To update the agentdesk layout to the version shipped with this "
+                    f"quoin, run: bash {script} --refresh"
+                )
+        elif script.is_file():
+            print()
+            rc = install_prompts.refresh_agentdesk(script)
+            if rc != 0:
+                print(
+                    f"quoin: warning: agentdesk refresh exited with status {rc}; quoin itself "
+                    f"is installed. Retry with: bash {script} --refresh",
                     file=sys.stderr,
                 )
 
@@ -1221,6 +1341,26 @@ def _doctor_auto_resume_cli(
             )
 
     print()
+
+
+def _safe_getcwd() -> Optional[str]:
+    # The shell's directory may have been removed; listing and killing do not need it.
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
+def _cmd_sessions(args: argparse.Namespace) -> int:
+    from quoin import agentdesk_sessions
+    return agentdesk_sessions.run_sessions(
+        args, environ=os.environ, cwd=_safe_getcwd(), out=sys.stdout, err=sys.stderr)
+
+
+def _cmd_attach(args: argparse.Namespace) -> int:
+    from quoin import agentdesk_sessions
+    return agentdesk_sessions.run_attach(
+        args, environ=os.environ, cwd=_safe_getcwd(), out=sys.stdout, err=sys.stderr)
 
 
 def _cmd_doctor(args: argparse.Namespace) -> int:
@@ -2912,6 +3052,27 @@ def _strip_handoff_pythonpath() -> None:
         del os.environ["PYTHONPATH"]
 
 
+def _light_task_refusal(project_root: pathlib.Path, task: str, memory_dir: pathlib.Path) -> Optional[str]:
+    """Why the supervisor must not drive `task`, or None.
+
+    The supervisor relaunches `/run --resume`, which only the heavy pipeline
+    can continue. A task the light `/run` started (a brief, but no heavy
+    run-state record or autonomous marker) would never write a done sentinel,
+    so each relaunch would be a wasted full session until the no-progress abort.
+    """
+    brief = project_root / ".workflow_artifacts" / task / "brief.md"
+    heavy = (memory_dir / f"run-state-{task}.json").exists() or (
+        memory_dir / f"autonomous-run-{task}.marker"
+    ).exists()
+    if brief.exists() and not heavy:
+        return (
+            f"quoin run: REFUSED: '{task}' was started by the light /run, which runs in one "
+            "session and cannot be relaunched; continue it with `/run --resume "
+            f"{task}` in Claude Code, or restart it with `/run hard: ...` for the supervised pipeline."
+        )
+    return None
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     """`quoin run --autonomous <task>` — external supervisor entrypoint (T-08).
 
@@ -2940,6 +3101,11 @@ def _cmd_run(args: argparse.Namespace) -> int:
         from quoin import takeover as _takeover  # noqa: PLC0415
 
         return _takeover.run_takeover(args.task, project_root)
+
+    refusal = _light_task_refusal(project_root, args.task, paths["memory_dir"])
+    if refusal:
+        print(refusal, file=sys.stderr)
+        return 2
 
     # Strips an auto-resume hand-off's PYTHONPATH prepend before any launch
     # so the relaunched `claude` subprocess (which inherits os.environ) sees
@@ -3107,7 +3273,82 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 2  # ABORTED
 
 
+_BENCH_CHECKOUT_MSG = (
+    "quoin bench needs a source checkout of the quoin repo "
+    "(run from the repo root or pass --repo-root)"
+)
+
+
+def _bench_candidates(rest: list[str]) -> list[pathlib.Path]:
+    """Directories that may be a quoin source checkout, most explicit first."""
+    for i, token in enumerate(rest):
+        # An explicit root is the only candidate: falling back would mix code from one tree
+        # with run state from another.
+        if token == "--repo-root" and i + 1 < len(rest):
+            return [pathlib.Path(rest[i + 1]).expanduser()]
+        if token.startswith("--repo-root="):
+            return [pathlib.Path(token.split("=", 1)[1]).expanduser()]
+    found = [pathlib.Path(__file__).resolve().parents[2]]
+    cwd = pathlib.Path.cwd()
+    found.append(cwd)
+    # Only the enclosing git checkout is considered, never arbitrary ancestors, so a
+    # writable parent directory cannot supply code that gets imported.
+    try:
+        top = subprocess.run(
+            ["git", "-C", str(cwd), "rev-parse", "--show-toplevel"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if top.returncode == 0 and top.stdout.strip():
+            found.append(pathlib.Path(top.stdout.strip()))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return found
+
+
+def _locate_bench_checkout(rest: list[str]) -> Optional[pathlib.Path]:
+    """The first candidate holding the benchmark scripts; makes them importable."""
+    for candidate in _bench_candidates(rest):
+        bench = candidate / "quoin" / "benchmarks"
+        scripts = bench / "scripts"
+        if (
+            (bench / "__init__.py").is_file()
+            and (scripts / "run_benchmark.py").is_file()
+            and (scripts / "tiered_entry.py").is_file()
+        ):
+            import quoin
+
+            inner = str(candidate / "quoin")
+            if inner not in quoin.__path__:
+                quoin.__path__.append(inner)
+            return candidate
+    return None
+
+
+def _cmd_bench(rest: list[str]) -> int:
+    """`quoin bench tiered ...`: hand everything after `tiered` to the benchmark entry point."""
+    if rest[:1] == ["tiered"]:
+        if _locate_bench_checkout(rest[1:]) is None:
+            print(_BENCH_CHECKOUT_MSG, file=sys.stderr)
+            return 2
+        from quoin.benchmarks.scripts import tiered_entry
+
+        return tiered_entry.main(rest[1:], prog="quoin bench tiered")
+    if not rest or rest[0] in ("-h", "--help"):
+        if _locate_bench_checkout(rest[1:]) is None:
+            print(_BENCH_CHECKOUT_MSG, file=sys.stderr)
+            return 2
+        from quoin.benchmarks.scripts import tiered_entry
+
+        print(tiered_entry.build_parser().format_help())
+        return 0
+    print("usage: quoin bench tiered [options]", file=sys.stderr)
+    return 2
+
+
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["bench"]:
+        return _cmd_bench(argv[1:])
     parser = argparse.ArgumentParser(
         prog="quoin",
         description="Quoin — workflow state for stateless coding agents",
@@ -3117,6 +3358,8 @@ def main(argv: list[str] | None = None) -> int:
               quoin install                  Install for Claude Code (prompts for scope)
               quoin install --scope project  Install into ./.claude for this project only
               quoin doctor                   Health-check an existing install (read-only)
+              quoin sessions                 List Agent Desk sessions for the current folder
+              quoin attach                   Attach to an Agent Desk session from any terminal
               quoin dashboard                Open the workflow dashboard in a browser
               quoin router setup             Enable open-model routing (claude-code-router)
               quoin models set opus glm      Map the opus tier to an OpenRouter model
@@ -3220,6 +3463,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Keep first DEV WORKFLOW marker pair; remove extra pairs",
     )
     install_p.add_argument(
+        "--no-prune",
+        action="store_true",
+        help="Keep files a previous install deployed that this version no longer ships",
+    )
+    install_p.add_argument(
         "--scope", default=None, metavar="SCOPE",
         help="Install scope: user (~/.claude, default) or project (<CWD>/.claude). "
              "Omitted → interactive prompt. See 'Scope' below for values.",
@@ -3227,10 +3475,11 @@ def main(argv: list[str] | None = None) -> int:
     install_p.add_argument(
         "--claude-md-variant",
         choices=("full", "slim"),
-        default="full",
+        default=None,
         help=(
-            "CLAUDE.md variant to merge: 'full' (default) or 'slim' "
-            "(IVG-164 project-scope pilot; requires --scope project)."
+            "CLAUDE.md variant to merge: 'slim' (default: core rules plus pointers "
+            "to the memory catalog) or 'full' (all rules inline); an explicit "
+            "choice is remembered for later installs"
         ),
     )
     install_p.add_argument(
@@ -3766,6 +4015,153 @@ def main(argv: list[str] | None = None) -> int:
         help="Override quoin data source directory (same as 'quoin install --source-dir')",
     )
 
+    streamdeck_p = sub.add_parser(
+        "streamdeck",
+        description=(
+            "Optional Stream Deck integration (opt-in, macOS only). Plain `quoin install` never installs it; "
+            "these commands manage the component, its plugin and its Claude Code / Codex hooks."
+        ),
+        help="Optional Stream Deck integration (opt-in): install, upgrade, status, uninstall",
+    )
+    streamdeck_sub = streamdeck_p.add_subparsers(
+        dest="streamdeck_command", title="streamdeck commands", metavar="<subcommand>"
+    )
+
+    def _sd_paths(p):
+        p.add_argument("--runtime-dir", dest="runtime_dir", metavar="DIR", help="Component runtime directory.")
+        p.add_argument("--plugins-dir", dest="plugins_dir", metavar="DIR", help="Stream Deck plugins directory.")
+        p.add_argument("--state-root", dest="state_root", metavar="DIR", help="Agent Desk Stream Deck state root.")
+        p.add_argument("--claude-settings", dest="claude_settings", metavar="FILE", help="Claude Code settings.json.")
+        p.add_argument("--codex-home", dest="codex_home", metavar="DIR", help="Codex home directory.")
+        p.add_argument("--agentdesk", metavar="PATH", help="Path to agentdesk.zsh.")
+
+    def _sd_runtimes(value):
+        names = [n.strip() for n in value.split(",") if n.strip()]
+        bad = [n for n in names if n not in ("claude", "codex")]
+        if bad or not names:
+            raise argparse.ArgumentTypeError("expected a comma-separated list of claude, codex (got %r)" % value)
+        return list(dict.fromkeys(names))
+
+    for _verb, _help in (("install", "Install the component, its plugin and hooks (adopts a prototype install)."),
+                         ("upgrade", "Upgrade an installed component to this package's version.")):
+        _p = streamdeck_sub.add_parser(_verb, description=_help, help=_help)
+        _sd_paths(_p)
+        _p.add_argument("--runtimes", type=_sd_runtimes, default=None, metavar="claude,codex",
+                        help="Hooks to manage (default both; passing it explicitly without a runtime removes "
+                             "that runtime's hooks).")
+        _p.add_argument("--python", metavar="PATH", help="Python interpreter to use for the hooks.")
+        _p.add_argument("--node", metavar="auto|bundled|PATH", default=None,
+                        help="Node for the plugin: auto, bundled, or a path.")
+        _p.add_argument("--prereqs", choices=("ask", "all", "none"), default="ask",
+                        help="Install missing prerequisites: ask (default), all, or none.")
+        _p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
+        _open = _p.add_mutually_exclusive_group()
+        _open.add_argument("--open-profile", dest="open_profile", action="store_true", default=None,
+                           help="Open the profile in Stream Deck afterwards, even if it is already imported.")
+        _open.add_argument("--no-open-profile", dest="open_profile", action="store_false",
+                           help="Do not open the profile. By default install opens it once, when Stream Deck "
+                                "does not have it yet; upgrade never does.")
+        _p.add_argument("--allow-downgrade", action="store_true",
+                        help="Replace an installed component that is newer than this package.")
+
+    _sd_uninstall_p = streamdeck_sub.add_parser(
+        "uninstall",
+        description="Remove the component and its hooks, leaving inert hook stubs for running agents.",
+        help="Remove the component and its hooks.",
+    )
+    _sd_paths(_sd_uninstall_p)
+    _sd_uninstall_p.add_argument("--runtimes", type=_sd_runtimes, default=None, metavar="claude,codex",
+                                 help="Remove only these runtimes' hooks and keep the rest installed.")
+    _sd_uninstall_p.add_argument("--dry-run", action="store_true", help="Print the plan without changing anything.")
+    _sd_uninstall_p.add_argument("--purge", action="store_true",
+                                 help="Also remove the inert stubs, the config and the state.")
+
+    _sd_codes = ""
+    if "streamdeck" in (sys.argv if argv is None else argv):
+        from quoin.streamdeck import status as _sd_status
+        _sd_codes = "problem codes: " + ", ".join(_sd_status.PROBLEM_CODES)
+    _sd_status_p = streamdeck_sub.add_parser(
+        "status",
+        description="Read-only report on the installed component.",
+        help="Show the state of the component (read-only).",
+        epilog="exit codes: 0 healthy, 10 not installed, 11 problems found, 12 an operation was interrupted\n"
+               + _sd_codes,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    _sd_paths(_sd_status_p)
+    _sd_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
+
+    sub.add_parser(
+        "bench",
+        help="Run the tiered paired SWE-bench benchmark from a source checkout "
+             "(quoin bench tiered --help)",
+    )
+
+    from quoin import agentdesk_sessions as _ads
+
+    sessions_p = sub.add_parser(
+        "sessions",
+        description=(
+            "List Agent Desk sessions for the current folder (or all of them with --all). "
+            "Works from any shell; no need to have sourced the launcher."
+        ),
+        help="List, kill or prune Agent Desk sessions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_ads.KEY_HINTS,
+    )
+    sessions_p.add_argument("--all", dest="list_all", action="store_true",
+                            help="Show every Agent Desk session, not just those for this folder.")
+    sessions_p.add_argument("--json", dest="list_json", action="store_true",
+                            help="Print the listing as JSON.")
+    sessions_sub = sessions_p.add_subparsers(dest="sessions_command", required=False)
+    sessions_kill_p = sessions_sub.add_parser(
+        "kill",
+        description="Delete one Agent Desk session. A running session needs --force.",
+        help="Delete a session",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_ads.KEY_HINTS,
+    )
+    sessions_kill_p.add_argument("name", help="Session name as shown by `quoin sessions --all`.")
+    sessions_kill_p.add_argument("--force", action="store_true",
+                                 help="Stop the session if it is running, then delete it.")
+    sessions_prune_p = sessions_sub.add_parser(
+        "prune",
+        description=(
+            "Delete EXITED Agent Desk sessions that have a launch record, and the launch records "
+            "left behind. Never touches a running session."
+        ),
+        help="Delete EXITED sessions",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "EXITED sessions started before launch records existed are listed as skipped: Zellij\n"
+            "shares its resurrection cache across socket directories, so one may belong to plain\n"
+            "Zellij. Delete them with `quoin sessions kill NAME` or --include-unrecorded.\n\n"
+            "EXITED sessions that are not Agent Desk's (Zellij shares its resurrection cache across\n"
+            "socket directories) are left alone and can still force a _N suffix on a new session;\n"
+            "remove one with `zellij delete-session NAME` in a shell that has not sourced the launcher.\n\n"
+            + _ads.KEY_HINTS
+        ),
+    )
+    sessions_prune_p.add_argument("--dry-run", action="store_true",
+                                  help="Report what would be removed without removing it.")
+    sessions_prune_p.add_argument("--include-unrecorded", dest="prune_unrecorded", action="store_true",
+                                  help="Also delete EXITED sessions that have no launch record "
+                                       "but carry an Agent Desk name.")
+    sessions_prune_p.add_argument("--json", dest="prune_json", action="store_true",
+                                  help="Print the result as JSON.")
+
+    attach_p = sub.add_parser(
+        "attach",
+        description=(
+            "Attach to an Agent Desk session. Without a name, picks the session for the current "
+            "folder, or asks when several match."
+        ),
+        help="Attach to an Agent Desk session",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=_ads.KEY_HINTS,
+    )
+    attach_p.add_argument("name", nargs="?", help="Session name; see `quoin sessions --all`.")
+
     router_p = sub.add_parser(
         "router",
         description=(
@@ -4036,6 +4432,12 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_dashboard(args)
     elif args.command == "doctor":
         return _cmd_doctor(args)
+    elif args.command == "sessions":
+        if args.sessions_command and (args.list_all or args.list_json):
+            sessions_p.error("--all and --json belong to the listing and cannot be combined with kill or prune")
+        return _cmd_sessions(args)
+    elif args.command == "attach":
+        return _cmd_attach(args)
     elif args.command == "codex":
         if args.codex_command == "init":
             return _cmd_codex_init(args)
@@ -4077,6 +4479,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         opencode_p.print_help()
         return 1
+    elif args.command == "streamdeck":
+        # Lazy import: the optional component stays out of the install path.
+        if args.streamdeck_command is None:
+            streamdeck_p.print_help()
+            return 1
+        from quoin.streamdeck import cli as _sd
+        return _sd.run(args)
     elif args.command == "router":
         # Lazy import keeps quoin install path import-clean (R-11 / D-01).
         from quoin import router as _router

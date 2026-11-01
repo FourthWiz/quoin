@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 PLAN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "plan" / "SKILL.md"
 AUTONOMOUS_MODE_DOC = REPO_ROOT / "quoin" / "memory" / "autonomous-mode.md"
 

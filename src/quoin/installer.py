@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+import hashlib
 import json
 import os
 import pathlib
@@ -41,10 +42,10 @@ TIER1_MEMORY_FILES = (
     "discovery-refresh-routine.md",
     # Added IVG-115: §V ground-truth verification verbose reference (Tier-1 memory file)
     "verification-guide.md",
-    # Added checkpoint-spec-harness: /checkpoint subsystem behavior spec (Tier-1 memory file)
-    "checkpoint-spec.md",
     # Added IVG-137: opt-in /schedule EOD cron recipe (Tier-1 memory file)
     "eod-refresh-routine.md",
+    # Added claude-adapter-optimization stage 3: fixed session-state schema (Tier-1 memory file)
+    "session-schema.md",
     # Added IVG-153: opt-in --autonomous span reference (Tier-1 memory file)
     "autonomous-mode.md",
     # Added IVG-150: shared fail-closed decision-gate guard reference (Tier-1 memory file)
@@ -59,11 +60,10 @@ TIER1_MEMORY_FILES = (
     "cleanup-task-bookkeeping.md",
 )
 
-# T-05: canonical skill list — must match quoin/skills/ on disk exactly
+# T-05: canonical skill list — must match quoin/adapters/claude/skills/ on disk exactly
 CANONICAL_SKILLS = (
     "architect",
     "capture_insight",
-    "checkpoint",
     "cleanup",
     "continue_work",
     "cost_snapshot",
@@ -84,6 +84,7 @@ CANONICAL_SKILLS = (
     "revise-fast",
     "rollback",
     "run",
+    "run_hard",
     "security_review",
     "sleep",
     "specify",
@@ -103,7 +104,7 @@ DEPLOYED_SCRIPTS = (
     "classify_critic_issues.py",
     "build_preambles.py",
     "session_age_guard.py",
-    "pidfile_helpers.sh",
+    "pollution_guard.py",  # Claude-adapter-owned §0' on-demand pollution score (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors session_age_guard.py)
     "sleep_score.py",
     "analyze_cost_ledger.py",
     "git_root_for_dispatch.py",
@@ -116,7 +117,6 @@ DEPLOYED_SCRIPTS = (
     "inject_pollution_dispatch.py",  # IVG-69 Stage A: §0' Pollution dispatch generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS needed)
     "spend_monitor.py",              # IVG-62: realtime token-spend monitor wrapper
     "get_session_uuid.py",           # IVG-74: reliable session-UUID capture for cost ledger
-    "find_drive_conflicts.py",       # IVG-75: Drive sync-conflict sweep wrapper
     "memory_check.py",               # IVG-50: auto-memory referential-integrity checker wrapper
     "memory_select.py",              # IVG-50 S-1: selective lessons retrieval wrapper
     "dispatch_config.py",            # IVG-90: 1M-dispatch config+cache reader/writer wrapper
@@ -141,7 +141,6 @@ DEPLOYED_SCRIPTS = (
     "compaction_telemetry.py",       # IVG-258 stage 5: compaction-telemetry sink reader wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "agent_transcript_cost.py",      # IVG-111 S-2: nested subagent-transcript resolver + pricer (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors cost_from_jsonl.py)
     "cost_ledger_summary.py",        # finalize-time ledger re-pricing + token-mix estimates (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors agent_transcript_cost.py)
-    "backfill_cost_attribution.py",  # IVG-111 S-5: historical col-8 backfill (adapter-only, DEPLOYED-only — no CORE twin, mirrors cost_from_jsonl.py / agent_transcript_cost.py)
     "known_red.py",  # IVG-144: known-red manifest reader/matcher (wrapped portable-core — also in CORE_SCRIPTS)
     "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper
     "plan_path_lint.py",  # IVG-143: cited-path resolver/linter wrapper (wrapped portable-core — also in CORE_SCRIPTS)
@@ -150,7 +149,6 @@ DEPLOYED_SCRIPTS = (
     "build_claude_slim.py",  # IVG-164 stage 1 T-04: slim CLAUDE.md variant generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors build_preambles.py)
     "context_bundle.py",  # IVG-164 stage 2 T-02: context bundle helper for orchestrator spawn-prompt construction (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors build_claude_slim.py)
     "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
-    "handoff_measure.py",  # IVG-248: agent-handoff payload-size instrument (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors footprint_report.py)
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
     "continuation_handoff.py",  # continuation handoff helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
@@ -162,24 +160,42 @@ DEPLOYED_SCRIPTS = (
 )
 
 # T-05: obsolete artifacts to remove from prior installs
-OBSOLETE_SCRIPTS = ("summarize_for_human.py", "with_env.sh", "audit_corpus_coverage.py")
+OBSOLETE_SCRIPTS = (
+    "summarize_for_human.py",
+    "with_env.sh",
+    "audit_corpus_coverage.py",
+    "pidfile_helpers.sh",
+)
+
+# Skills quoin used to ship; an upgrade removes the deployed directory when it
+# is quoin's own copy (see cleanup_obsolete_skills).
+OBSOLETE_SKILLS = ("checkpoint",)
+
+# Memory files quoin used to ship; removed from dest_root/memory/ on upgrade.
+OBSOLETE_MEMORY_FILES = ("checkpoint-spec.md",)
+
+# skillOverrides keys quoin used to write. A key is removed only while it still
+# holds the value quoin wrote; any other value is the user's own choice.
+RETIRED_SKILL_OVERRIDES = {"checkpoint": "on"}
 OBSOLETE_TESTS = ("test_summarize_for_human.py", "test_with_env_sh.py")
 
 # Canonical skillOverrides tier list written to settings.json on install.
 # "on" = full description in every session; "name-only" = invocable via /name, no auto-suggest description.
 # Only keys in this dict are touched; user-added keys for other skills are preserved.
 SKILL_OVERRIDES: dict[str, str] = {
-    # Core workflow skills — always show full description
-    "thorough_plan": "on",
-    "plan": "on",
-    "critic": "on",
-    "review": "on",
-    "implement": "on",
-    "gate": "on",
-    "triage": "on",
-    "checkpoint": "on",
+    # Light-path entry points — always show full description
+    "run": "on",
     "specify": "on",
     "enrich": "on",
+    "review": "on",
+    # Heavy-pipeline phases — reached through /run hard:, so name-only keeps
+    # them out of auto-suggest and off every session's skill listing
+    "thorough_plan": "name-only",
+    "plan": "name-only",
+    "critic": "name-only",
+    "implement": "name-only",
+    "gate": "name-only",
+    "triage": "name-only",
     # Lifecycle / one-shot skills — invocable by name, no description in auto-suggest
     "pr": "name-only",
     "init_workflow": "name-only",
@@ -194,17 +210,18 @@ SKILL_OVERRIDES: dict[str, str] = {
     "cost_snapshot": "name-only",
     "status": "name-only",
     "rollback": "name-only",
-    "run": "name-only",
+    "run_hard": "name-only",
     "weekly_review": "name-only",
     "next_steps": "name-only",
     "continue_work": "name-only",
     "security_review": "name-only",
     "workspace": "name-only",
+    # Dispatched by name from /thorough_plan; its description says not for direct use.
+    "revise-fast": "name-only",
 }
 
 _MARKER_START = "# === DEV WORKFLOW START ==="
 _MARKER_END = "# === DEV WORKFLOW END ==="
-DEPRECATED_SKILL_MARKERS = ("DEPRECATED LOCATION", "deprecated stub")
 
 # ── T-06: deploy-time path substitution ──────────────────────────────────────
 
@@ -277,6 +294,171 @@ def _copy_with_substitution(
         dst.write_bytes(new_bytes)
     if src.suffix in (".py", ".sh"):
         os.chmod(dst, 0o755)
+    if _deploy_record is not None:
+        try:
+            rel = dst.relative_to(dest_root).as_posix()
+        except ValueError:
+            return
+        _deploy_record[rel] = hashlib.sha256(new_bytes).hexdigest()
+
+
+# ── Deploy manifest and stale-file pruning ───────────────────────────────────
+
+# Every file the install writes into dest_root, with the sha256 of the bytes
+# written. The next install deletes the files it no longer ships, but only
+# while they still hold exactly what quoin wrote.
+MANIFEST_FILENAME = "quoin-manifest.json"
+MANIFEST_SCHEMA = 1
+
+# Files removed from quoin before the manifest existed. An install that finds
+# no previous manifest deletes these instead of pruning (relative to dest_root).
+PRE_MANIFEST_REMOVED_FILES = (
+    "scripts/backfill_cost_attribution.py",
+    "scripts/handoff_measure.py",
+    "scripts/find_drive_conflicts.py",
+    "core/scripts/find_drive_conflicts.py",
+)
+
+# Collects {relative path: sha256} while an install is recording; None otherwise.
+_deploy_record: Optional[dict[str, str]] = None
+
+
+def start_deploy_record() -> None:
+    """Start collecting every file _copy_with_substitution writes."""
+    global _deploy_record
+    _deploy_record = {}
+
+
+def take_deploy_record() -> dict[str, str]:
+    """Stop collecting and return what was recorded since start_deploy_record."""
+    global _deploy_record
+    record, _deploy_record = _deploy_record or {}, None
+    return record
+
+
+def _sha256_file(path: pathlib.Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def read_deploy_manifest(dest_root: pathlib.Path) -> Optional[dict[str, str]]:
+    """Return the previous install's {relative path: sha256}, or None.
+
+    None means there is no usable manifest (first install with pruning, or an
+    unreadable file); the caller then prunes nothing.
+    """
+    path = dest_root / MANIFEST_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, UnicodeDecodeError):
+        data = None
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, dict) or data.get("schema") != MANIFEST_SCHEMA:
+        print(f"quoin: warning: ignoring unreadable deploy manifest {path}", file=sys.stderr)
+        return None
+    return {k: v for k, v in files.items() if isinstance(k, str) and isinstance(v, str)}
+
+
+def write_deploy_manifest(dest_root: pathlib.Path, files: dict[str, str]) -> Optional[pathlib.Path]:
+    """Atomically write the manifest; returns its path, or None after a warning."""
+    path = dest_root / MANIFEST_FILENAME
+    tmp = path.with_name(path.name + ".tmp")
+    payload = {"schema": MANIFEST_SCHEMA, "files": dict(sorted(files.items()))}
+    try:
+        tmp.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    except OSError as exc:
+        print(f"quoin: warning: could not write deploy manifest {path}: {exc}", file=sys.stderr)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        return None
+    return path
+
+
+def _prunable_path(dest_root: pathlib.Path, rel: str) -> Optional[pathlib.Path]:
+    """Map a manifest entry to a path under a quoin deploy subdirectory, or None."""
+    pure = pathlib.PurePosixPath(rel)
+    parts = pure.parts
+    if pure.as_posix() != rel or pure.is_absolute() or ".." in parts:
+        return None
+    if len(parts) < 2 or parts[0] not in _QUOIN_DEPLOYED_SUBDIRS:
+        return None
+    return dest_root.joinpath(*parts)
+
+
+def remove_pre_manifest_files(dest_root: pathlib.Path) -> None:
+    """Delete PRE_MANIFEST_REMOVED_FILES; used only when no manifest exists yet."""
+    for rel in PRE_MANIFEST_REMOVED_FILES:
+        target = dest_root / rel
+        if target.is_file() and not target.is_symlink():
+            target.unlink()
+            print(f"Removed {target} (no longer shipped)")
+
+
+def prune_stale_deploys(
+    dest_root: pathlib.Path,
+    previous: dict[str, str],
+    current: dict[str, str],
+    protected: tuple[str, ...] = (),
+) -> tuple[list[str], dict[str, str]]:
+    """Delete files the previous install deployed that this install did not.
+
+    A file is deleted only while its sha256 still matches the previous
+    manifest; an edited file is kept with a warning. Only paths under the
+    quoin deploy subdirectories are considered, so settings.json, CLAUDE.md
+    and anything quoin never recorded are never touched. Directories left
+    empty by a deletion are removed up to (not including) the subdirectory.
+
+    Entries under a `protected` prefix (a mod folder quoin treats as foreign)
+    are left alone.
+
+    Returns (pruned relative paths, retry entries). An edited file leaves the
+    manifest, so it is reported once and is the user's from then on; a
+    protected entry, or a file that could not be read or deleted, is returned
+    for the next install to retry.
+    """
+    pruned: list[str] = []
+    kept: dict[str, str] = {}
+    for rel in sorted(set(previous) - set(current)):
+        if protected and rel.startswith(protected):
+            kept[rel] = previous[rel]
+            continue
+        target = _prunable_path(dest_root, rel)
+        if target is None or target.is_symlink() or not target.is_file():
+            continue
+        try:
+            unchanged = _sha256_file(target) == previous[rel]
+        except OSError as exc:
+            print(f"quoin: warning: could not check {target}: {exc}", file=sys.stderr)
+            kept[rel] = previous[rel]
+            continue
+        if not unchanged:
+            print(
+                f"quoin: warning: keeping {target}: quoin no longer ships it, "
+                "but it was changed after install",
+                file=sys.stderr,
+            )
+            continue
+        try:
+            target.unlink()
+        except OSError as exc:
+            print(f"quoin: warning: could not remove {target}: {exc}", file=sys.stderr)
+            kept[rel] = previous[rel]
+            continue
+        pruned.append(rel)
+        print(f"Removed {target} (no longer shipped)")
+        top = dest_root / pathlib.PurePosixPath(rel).parts[0]
+        parent = target.parent
+        while parent != top and parent != dest_root:
+            try:
+                parent.rmdir()
+            except OSError:
+                break
+            parent = parent.parent
+    return pruned, kept
 
 
 # ── T-13: home hook conflict detection ───────────────────────────────────────
@@ -290,6 +472,53 @@ _QUOIN_HOOK_BASENAMES = frozenset({
     "sessionend.sh",
     "stop.sh",
 })
+
+
+# Hook stanzas quoin no longer registers: (event, matcher, script basename).
+# Empty today; a later release adds a row when a hook script is retired.
+_RETIRED_HOOK_STANZAS: tuple[tuple[str, str, str], ...] = ()
+
+
+def _remove_retired_stanzas(hooks: dict, hooks_dir: pathlib.Path) -> None:
+    """Drop stanzas listed in _RETIRED_HOOK_STANZAS from `hooks` in place.
+
+    A stanza goes only when its matcher equals the entry's, it has at least one
+    command, and every command resolves to the entry's script inside hooks_dir.
+    Mixed or foreign stanzas keep their content and order. An event key whose
+    list this removal emptied is dropped; an event that was already empty stays.
+    """
+    for event, matcher, basename in _RETIRED_HOOK_STANZAS:
+        stanzas = hooks.get(event)
+        if not isinstance(stanzas, list):
+            continue
+
+        def _owned(stanza) -> bool:
+            if not isinstance(stanza, dict) or stanza.get("matcher") != matcher:
+                return False
+            entries = stanza.get("hooks")
+            if not isinstance(entries, list):
+                return False
+            cmds = [h.get("command", "") for h in entries if isinstance(h, dict)]
+            if not cmds:
+                return False
+            for cmd in cmds:
+                if not isinstance(cmd, str) or not cmd.endswith("/" + basename):
+                    return False
+                try:
+                    path = pathlib.Path(cmd).expanduser()
+                    if not path.is_absolute() or path.resolve().parent != hooks_dir:
+                        return False
+                except (OSError, RuntimeError):
+                    return False
+            return True
+
+        kept = [s for s in stanzas if not _owned(s)]
+        if len(kept) == len(stanzas):
+            continue
+        if kept:
+            hooks[event] = kept
+        else:
+            del hooks[event]
 
 
 def detect_home_hook_conflict() -> bool:
@@ -351,72 +580,30 @@ def deploy_quickstart(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None
 
 # ── T-05 ──────────────────────────────────────────────────────────────────────
 
-def _assert_not_deprecated_skill(skill_name: str, skill_md: pathlib.Path) -> None:
-    content = skill_md.read_text(encoding="utf-8")
-    for marker in DEPRECATED_SKILL_MARKERS:
-        if marker in content:
-            print(
-                f"quoin: Refusing to deploy deprecated Claude skill stub for "
-                f"{skill_name}: {skill_md}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-
-def resolve_skill_source_md(
-    src_skills: pathlib.Path,
-    src_adapter: pathlib.Path,
-    name: str,
-) -> pathlib.Path:
-    """Return the SKILL.md source path for skill `name`: adapter-preferred, else stub.
-
-    Encodes the single source-selection rule shared by deploy_skills (T-01) and
-    compute_drift (T-02): the Claude adapter SKILL.md at
-    src_adapter/<name>/SKILL.md wins when it exists; otherwise fall back to the
-    legacy stub at src_skills/<name>/SKILL.md. Returning the stub path even when
-    it does not exist on disk is intentional — callers decide how to handle a
-    missing source (deploy_skills aborts; compute_drift skips, never raises).
-    """
-    adapter_md = src_adapter / name / "SKILL.md"
-    if adapter_md.exists():
-        return adapter_md
-    return src_skills / name / "SKILL.md"
-
-
 def deploy_skills(source_dir: pathlib.Path, dest_root: pathlib.Path) -> int:
-    """Copy skills from source_dir/skills/ to dest_root/skills/. Returns count copied.
+    """Copy Claude skills to dest_root/skills/. Returns count copied.
 
-    When a Claude adapter SKILL.md exists at
-    source_dir/adapters/claude/skills/<name>/SKILL.md, it takes precedence over
-    the legacy stub at source_dir/skills/<name>/SKILL.md. This supports the
-    runtime-portability migration where real skill content moves to the adapter
-    path and the skills/ entry becomes a thin stub.
+    Skill sources live at source_dir/adapters/claude/skills/<name>/: SKILL.md is
+    required, and preamble.md is copied alongside it when present (subagent
+    spawn targets only).
     """
-    src_skills = source_dir / "skills"
     src_adapter = source_dir / "adapters" / "claude" / "skills"
     dst_skills = dest_root / "skills"
     count = 0
-    for skill_dir in sorted(src_skills.iterdir()):
+    for skill_dir in sorted(src_adapter.iterdir()):
         if not skill_dir.is_dir():
             continue
         skill_name = skill_dir.name
         # Skip directories not in CANONICAL_SKILLS (e.g. Drive sync artifacts like "next_steps 2")
         if skill_name not in CANONICAL_SKILLS:
             continue
-        dst_skill = dst_skills / skill_name
-        dst_skill.mkdir(parents=True, exist_ok=True)
-        # Prefer Claude adapter path when available (runtime-portability migration).
-        # T-01: source-selection rule lives in resolve_skill_source_md so deploy
-        # and drift-detection share ONE rule.
-        adapter_md = src_adapter / skill_name / "SKILL.md"
-        skill_md = resolve_skill_source_md(src_skills, src_adapter, skill_name)
+        skill_md = skill_dir / "SKILL.md"
         if not skill_md.exists():
             print(f"quoin: Expected SKILL.md at {skill_md} but not found", file=sys.stderr)
             sys.exit(1)
-        _assert_not_deprecated_skill(skill_name, skill_md)
+        dst_skill = dst_skills / skill_name
+        dst_skill.mkdir(parents=True, exist_ok=True)
         _copy_with_substitution(skill_md, dst_skill / "SKILL.md", dest_root)
-        if adapter_md.exists():
-            print(f"Deploying {skill_name} from Claude adapter path")
         preamble = skill_dir / "preamble.md"
         if preamble.exists():
             _copy_with_substitution(preamble, dst_skill / "preamble.md", dest_root)
@@ -439,12 +626,12 @@ CORE_SCRIPTS = (
     "affected_tests.py",          # IVG-71: wrapped impl; required by ~/.claude/scripts/affected_tests.py parents[1] loader
     "spend_monitor.py",           # IVG-62: realtime token-spend monitor core impl
     "get_session_uuid.py",        # IVG-74: reliable session-UUID capture for cost ledger
-    "find_drive_conflicts.py",    # IVG-75: Drive sync-conflict sweep core impl
     "memory_check.py",            # IVG-50: auto-memory referential-integrity checker core impl
     "memory_select.py",           # IVG-50 S-1: selective lessons retrieval core impl
     "dispatch_config.py",         # IVG-90: 1M-dispatch config+cache reader core impl; required by ~/.claude/scripts/dispatch_config.py parents[1] loader
     "worktree_isolation.py",      # IVG-116: worktree-dispatch decider+probe core impl; required by ~/.claude/scripts/worktree_isolation.py parents[1] loader
     "generate_discovery_map.py",  # /discover optional hook — builds discovery-map.json post-scan
+    "validate_discovery_map.py",  # loaded by generate_discovery_map.py --validate (on by default)
     "select_unprocessed_sessions.py",  # session-selection helper for end_of_day/weekly_review
     "thorough_plan_checkpoint.py",  # IVG-98: phase-boundary checkpoint core impl for /thorough_plan
     "cost_summary.py",              # IVG-96: portable cost-summary.json normalizer core impl
@@ -873,7 +1060,7 @@ def compute_drift(
     """Return the list of deployed files that drifted from source_dir (T-02).
 
     Iterates the SAME manifest tuples the deploy functions use — TIER1_MEMORY_FILES,
-    CANONICAL_SKILLS (via resolve_skill_source_md, + preamble.md when the source stub
+    CANONICAL_SKILLS (adapter SKILL.md, + preamble.md when the adapter skill folder
     carries one), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
     context-tracker mod is installed) CONTEXT_TRACKER_FILES — and compares each deployed file
     under dest_root against expected_deployed_content(src, dest_root). Per file:
@@ -920,13 +1107,11 @@ def compute_drift(
             _check("memory", src_mem / fname, dst_mem / fname)
 
     if "skills" in selected:
-        src_skills = source_dir / "skills"
         src_adapter = source_dir / "adapters" / "claude" / "skills"
         dst_skills = dest_root / "skills"
         for name in CANONICAL_SKILLS:
-            skill_md = resolve_skill_source_md(src_skills, src_adapter, name)
-            _check("skills", skill_md, dst_skills / name / "SKILL.md")
-            preamble = src_skills / name / "preamble.md"
+            _check("skills", src_adapter / name / "SKILL.md", dst_skills / name / "SKILL.md")
+            preamble = src_adapter / name / "preamble.md"
             if preamble.exists():
                 _check("skills", preamble, dst_skills / name / "preamble.md")
 
@@ -1006,8 +1191,14 @@ def _merge_skill_overrides(settings: dict) -> int:
 
     Returns count of keys added or changed.
     """
+    if "skillOverrides" in settings and not isinstance(settings["skillOverrides"], dict):
+        return 0
     overrides = settings.setdefault("skillOverrides", {})
     changed = 0
+    for skill, tier in RETIRED_SKILL_OVERRIDES.items():
+        if skill not in SKILL_OVERRIDES and overrides.get(skill) == tier:
+            del overrides[skill]
+            changed += 1
     for skill, tier in SKILL_OVERRIDES.items():
         if overrides.get(skill) != tier:
             overrides[skill] = tier
@@ -1089,13 +1280,12 @@ def deploy_hooks(
     In project mode, hooks are scoped to <project>/.claude/settings.json only.
     Home ~/.claude/settings.json is NOT modified.
     """
-    # _lib.sh copies FIRST: userpromptsubmit.sh calls
-    # run_state_probe unguarded (no `command -v` check, unlike the SKILL.md
-    # arms), so during an install window — or after an install aborted
-    # mid-copy — a userpromptsubmit.sh that already has the new call but
-    # sources a not-yet-updated _lib.sh would emit "command not found" on
-    # stderr and report no active run while one is live. Copying _lib.sh
-    # first closes that window; it never depends on the other hook scripts.
+    # _lib.sh copies FIRST: sessionstart.sh, sessionend.sh, precompact.sh,
+    # postcompact.sh and stop.sh source it, and a hook that already has a new
+    # call but sources a not-yet-updated _lib.sh during an install window (or
+    # after an install aborted mid-copy) would report "command not found".
+    # userpromptsubmit.sh no longer sources it. Copying _lib.sh first closes
+    # that window; it never depends on the other hook scripts.
     hook_scripts = ("_lib.sh", "userpromptsubmit.sh", "precompact.sh", "postcompact.sh", "sessionstart.sh", "sessionend.sh", "worktreecreate.sh", "stop.sh")
     src_hooks = source_dir / "hooks"
     dst_hooks = dest_root / "hooks"
@@ -1154,10 +1344,13 @@ def deploy_hooks(
         event_list[:] = [
             s for s in event_list
             if not (
-                s.get("matcher") == matcher
+                isinstance(s, dict)
+                and s.get("matcher") == matcher
+                and isinstance(s.get("hooks"), list)
                 and any(
-                    h.get("command", "").endswith(script_name)
-                    for h in s.get("hooks", [])
+                    isinstance(h, dict)
+                    and str(h.get("command", "")).endswith(script_name)
+                    for h in s["hooks"]
                 )
             )
         ]
@@ -1165,6 +1358,7 @@ def deploy_hooks(
         _stanza_count[0] += 1
 
     hooks_dir = str(dest_root.resolve() / "hooks")
+    _remove_retired_stanzas(hooks, pathlib.Path(hooks_dir))
     _append_stanza("UserPromptSubmit", "*",       f"{hooks_dir}/userpromptsubmit.sh", 5)
     _append_stanza("PreCompact",       "auto",    f"{hooks_dir}/precompact.sh",       10)
     _append_stanza("PostCompact",      "auto",    f"{hooks_dir}/postcompact.sh",      5)
@@ -1245,6 +1439,50 @@ def cleanup_obsolete_scripts(dest_root: pathlib.Path) -> None:
         if target.exists():
             target.unlink()
             print(f"Removed obsolete {fname} from {dest_root}/scripts/tests/ (Stage 5 cleanup)")
+
+
+def _is_quoin_skill_dir(skill_dir: pathlib.Path, name: str) -> bool:
+    """True when skill_dir holds a quoin-installed SKILL.md for `name`."""
+    skill_md = skill_dir / "SKILL.md"
+    if not skill_md.is_file():
+        return False
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    front = re.match(r"---\s*\n(.*?)\n---", text, re.DOTALL)
+    if front is None:
+        return False
+    declared = re.search(r"^name:\s*(\S+)\s*$", front.group(1), re.MULTILINE)
+    if declared is None or declared.group(1).strip("'\"") != name:
+        return False
+    return "quoin" in text.lower()
+
+
+def cleanup_obsolete_skills(dest_root: pathlib.Path) -> None:
+    """Remove skill directories quoin no longer ships from dest_root/skills/.
+
+    A directory is removed only when its SKILL.md is quoin's own copy; a
+    same-named skill the user installed from elsewhere is left in place.
+    """
+    for name in OBSOLETE_SKILLS:
+        skill_dir = dest_root / "skills" / name
+        if not skill_dir.is_dir():
+            continue
+        if _is_quoin_skill_dir(skill_dir, name):
+            shutil.rmtree(skill_dir)
+            print(f"Removed obsolete skill {name} from {dest_root}/skills/")
+        elif (skill_dir / "SKILL.md").is_file():
+            print(f"quoin: leaving {skill_dir} (not a quoin-installed skill)")
+
+
+def cleanup_obsolete_memory(dest_root: pathlib.Path) -> None:
+    """Remove memory files quoin no longer ships from dest_root/memory/."""
+    for fname in OBSOLETE_MEMORY_FILES:
+        target = dest_root / "memory" / fname
+        if target.exists():
+            target.unlink()
+            print(f"Removed obsolete {fname} from {dest_root}/memory/")
 
 
 # ── T-06 ──────────────────────────────────────────────────────────────────────
@@ -1460,7 +1698,7 @@ def _looks_like_source_tree(source_dir: pathlib.Path) -> bool:
     Mirrors conjuncts (c) and (d) of cli.py's _derive_allow_writes — copied,
     not imported, because installer.py must not import cli.py.
     """
-    if not (source_dir / "skills").is_dir():
+    if not (source_dir / "adapters" / "claude" / "skills").is_dir():
         return False
     parent = source_dir.parent
     return (parent / ".git").is_dir() or (parent / "pyproject.toml").is_file()
@@ -1514,7 +1752,7 @@ def _advise_preamble_freshness(source_dir: pathlib.Path) -> None:
             "[warn] preambles are stale relative to quoin/memory/format-kit.md and "
             "glossary.md. Regenerate and commit:\n"
             "  python3 quoin/scripts/build_preambles.py  (or bash install.sh --dev)\n"
-            "then commit quoin/skills/*/preamble.md",
+            "then commit quoin/adapters/claude/skills/*/preamble.md",
             file=sys.stderr,
         )
         for line in result.stderr.splitlines():
@@ -1545,7 +1783,7 @@ def regenerate_preambles(source_dir: pathlib.Path, *, allow_writes: bool) -> Non
             raise
     finally:
         sys.argv = old_argv
-    print(f"Regenerated subagent preambles in {source_dir}/skills/*/preamble.md")
+    print(f"Regenerated subagent preambles in {source_dir}/adapters/claude/skills/*/preamble.md")
 
 
 def regenerate_pollution_dispatch(source_dir: pathlib.Path, *, allow_writes: bool) -> None:
@@ -1620,13 +1858,13 @@ def regenerate_verification_step(source_dir: pathlib.Path, *, allow_writes: bool
 
 def check_slim_outputs_fresh(source_dir: pathlib.Path) -> list[str]:
     """Byte-compare committed CLAUDE.slim.md / memory/workflow-catalog.md against a
-    fresh regen (IVG-164 review round-1 MAJOR 1).
+    fresh regen from CLAUDE.md and CLAUDE.core.md.
 
-    Project-scope installs always run with allow_writes=False (T-07 MAJ-6), so
-    regenerate_pollution_dispatch's self-heal pattern above can never fire for the
-    one scope where --claude-md-variant slim is legal — an edit to quoin/CLAUDE.md
-    that skips re-running build_claude_slim.py would otherwise deploy stale
-    generated content silently. This is a read-only CHECK, never a write: it
+    Slim is the default variant in both scopes and installs often run with
+    allow_writes=False, so regenerate_pollution_dispatch's self-heal pattern above
+    cannot fire — an edit to quoin/CLAUDE.md or quoin/CLAUDE.core.md that skips
+    re-running build_claude_slim.py would otherwise deploy stale generated content
+    silently. This is a read-only CHECK, never a write: it
     borrows build_claude_slim.py's `build_outputs()` function and CLASSIFICATION
     table via runpy with a non-`"__main__"` run_name, so the script's own
     argparse/main()/file-write side effects never execute.
@@ -1656,8 +1894,13 @@ def check_slim_outputs_fresh(source_dir: pathlib.Path) -> list[str]:
         source_text = claude_md.read_text(encoding="utf-8")
     except (Exception, SystemExit) as exc:
         return [f"{script} (staleness check unavailable: {type(exc).__name__}: {exc})"]
+    core_md = source_dir / "CLAUDE.core.md"
     try:
-        slim_text, catalog_text = build_outputs(source_text)
+        core_text = core_md.read_text(encoding="utf-8")
+    except OSError as exc:
+        return [f"{core_md} (core text unreadable: {type(exc).__name__}: {exc})"]
+    try:
+        slim_text, catalog_text = build_outputs(source_text, core_text)
     except classification_error as exc:
         return [f"{claude_md} (regen aborted, CLASSIFICATION/heading mismatch: {exc})"]
 

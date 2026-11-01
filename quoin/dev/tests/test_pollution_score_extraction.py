@@ -1,27 +1,26 @@
 """
-Quoin Stage 1 — pollution-score computation and extraction tests.
+Quoin Stage 1 — pollution-guard detection tests.
 
-Tests three layers:
-  1. Hook-side computation: compute_pollution_score shell function (unit tests via subprocess).
-  2. Skill-side read: structural assertions that SKILL.md blocks contain the expected read pattern.
-  3. Threshold behavior: boundary conditions at QUOIN_POLLUTION_THRESHOLD.
+The score itself is computed by quoin/scripts/pollution_guard.py (covered by
+test_pollution_guard.py). This file covers two layers:
+  1. Skill-side read: the §0' blocks tell the model to run the guard, key on
+     the OVER| prefix and check the sentinel before running anything.
+  2. Threshold behaviour: boundary conditions driven through the guard script.
 
 Per lesson 2026-04-23: no live LLM calls — deterministic subprocess + string matching only.
-Per lesson 2026-04-29: stdlib-only for deployed scripts; no subprocess harness-tool assumptions.
+Per lesson 2026-04-29: stdlib-only for deployed scripts.
 """
 from __future__ import annotations
 
-import json
 import os
 import subprocess
-import tempfile
+import sys
 from pathlib import Path
 
 import pytest
 
 TESTS_DIR = Path(__file__).parent
-HOOKS_DIR = TESTS_DIR.parent.parent / "hooks"
-LIB_SH = HOOKS_DIR / "_lib.sh"
+GUARD = TESTS_DIR.parent.parent / "scripts" / "pollution_guard.py"
 
 POLLUTION_HEADING = "## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)"
 TARGET_SKILLS = [
@@ -34,410 +33,79 @@ TARGET_SKILLS = [
 SKILLS_DIR = TESTS_DIR.parent.parent / "adapters" / "claude" / "skills"
 
 
-def _run_score(
-    transcript_path: str,
-    extra_env: dict | None = None,
-    tmpdir: str | None = None,
-) -> subprocess.CompletedProcess:
-    """Run compute_pollution_score via sh, sourcing _lib.sh.
-
-    tmpdir, when given, sets TMPDIR for the subprocess so each call gets an
-    isolated pollution-cache directory (compute_pollution_score writes a
-    per-transcript-path cache file under ${TMPDIR:-/tmp} — see Stage 3,
-    IVG-163). Without per-call isolation, cache files written by one test
-    could be read back by another test that happens to score the same
-    transcript path.
-    """
-    env = os.environ.copy()
-    if tmpdir is not None:
-        env["TMPDIR"] = str(tmpdir)
+def _guard(transcript: Path, tmp_path: Path, extra_env: dict | None = None) -> str:
+    env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(tmp_path / "home")}
+    (tmp_path / "home").mkdir(exist_ok=True)
     if extra_env:
         env.update(extra_env)
-    script = f'. "{LIB_SH}" && compute_pollution_score "{transcript_path}"'
-    return subprocess.run(
-        ["sh", "-c", script],
-        capture_output=True, text=True, env=env
-    )
+    proc = subprocess.run([sys.executable, str(GUARD), "--transcript", str(transcript)],
+                          capture_output=True, text=True, env=env, timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.strip()
 
 
-def _cold_score(transcript_path: str) -> int:
-    """Score a transcript with a brand-new, throwaway TMPDIR — always a full
-    parse with no pre-existing cache. Used as the equivalence oracle: a
-    cache-assisted score (warm/rotated/corrupted/rewritten) must match this."""
-    with tempfile.TemporaryDirectory() as d:
-        result = _run_score(transcript_path, tmpdir=d)
-        assert result.returncode == 0, f"cold score run failed: {result.stderr}"
-        return int(result.stdout.strip())
+def _block(skill: str) -> str:
+    text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
+    start = text.index(POLLUTION_HEADING)
+    end = text.index("\n## ", start + 1)
+    return text[start:end]
 
 
-# ─── 1. Hook-side computation unit tests ─────────────────────────────────────
-
-class TestComputePollutionScore:
-
-    def test_empty_jsonl_returns_zero(self, tmp_path):
-        """Empty file → score 0 (0 bytes, no tool calls)."""
-        f = tmp_path / "empty.jsonl"
-        f.write_text("")
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0, f"Unexpected non-zero exit: {result.stderr}"
-        score = int(result.stdout.strip())
-        assert score == 0, f"Empty file should score 0, got {score}"
-
-    def test_5kb_no_tool_use_scores_approx_5(self, tmp_path):
-        """5KB JSONL with no tool-use entries → score ~5 (5000 bytes / 1000)."""
-        f = tmp_path / "5kb.jsonl"
-        # Write 5000 bytes of content (JSON objects without tool_result type)
-        line = json.dumps({"type": "text", "content": "x" * 80}) + "\n"
-        content = line * (5000 // len(line) + 1)
-        content = content[:5000]
-        f.write_bytes(content.encode("utf-8"))
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0
-        score = int(result.stdout.strip())
-        # 5000 bytes / 1000 = 5 kB; no tool calls → score exactly 5
-        assert score == 5, f"5KB no-tool file should score 5, got {score}"
-
-    def test_tool_weighted_score(self, tmp_path):
-        """1MB JSONL with 10 Agent + 20 Read + 5 Bash → score = 1000 + 50 + 20 + 5 = 1075.
-
-        Uses real Claude Code transcript shape: tool_use entries are nested under assistant
-        messages at .message.content[].type == "tool_use" with .name (not flat tool_result).
-        """
-        f = tmp_path / "tool_heavy.jsonl"
-        lines = []
-        # Fill to ~1MB with user-turn content (no tool_use — won't be counted)
-        filler = json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": "x" * 870}]}}) + "\n"
-        lines.extend([filler] * 1000)
-
-        # Add real-shape assistant messages with tool_use (10 Agent + 20 Read + 5 Bash)
-        def _tool_line(name: str) -> str:
-            return json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "tool_use", "id": "toolu_01", "name": name, "input": {}}]}
-            }) + "\n"
-
-        for _ in range(10):
-            lines.append(_tool_line("Agent"))
-        for _ in range(20):
-            lines.append(_tool_line("Read"))
-        for _ in range(5):
-            lines.append(_tool_line("Bash"))
-
-        content = "".join(lines)
-        # Pad to exactly 1MB
-        if len(content.encode()) < 1_000_000:
-            pad = json.dumps({"type": "user", "message": {"content": [{"type": "text", "text": "p" * 870}]}}) + "\n"
-            while len(content.encode()) < 1_000_000:
-                content += pad
-        f.write_bytes(content.encode("utf-8")[:1_000_000])
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0
-        score = int(result.stdout.strip())
-        # 1000 kB + (10×5) + (20×1) + (5×1) = 1075
-        assert score == 1075, f"Tool-weighted 1MB file should score 1075, got {score}"
-
-    def test_real_shape_fixture(self, tmp_path):
-        """50 assistant messages with tool_use → function counts them correctly.
-
-        Regression guard: ensures the jq filter walks .message.content[] as in
-        real Claude Code transcripts, not the synthetic flat tool_result shape.
-        """
-        f = tmp_path / "real_shape.jsonl"
-        lines = []
-        # 30 Bash + 15 Read + 5 Agent in real assistant message shape
-        for _ in range(30):
-            lines.append(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]}
-            }) + "\n")
-        for _ in range(15):
-            lines.append(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "tool_use", "id": "t2", "name": "Read", "input": {}}]}
-            }) + "\n")
-        for _ in range(5):
-            lines.append(json.dumps({
-                "type": "assistant",
-                "message": {"content": [{"type": "tool_use", "id": "t3", "name": "Agent", "input": {}}]}
-            }) + "\n")
-        f.write_text("".join(lines), encoding="utf-8")
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0
-        score = int(result.stdout.strip())
-        content_bytes = f.stat().st_size
-        kb = content_bytes // 1000
-        # Score = kb + (5×5) + (15×1) + (30×1) = kb + 25 + 15 + 30 = kb + 70
-        expected = kb + 70
-        assert score == expected, (
-            f"Real-shape fixture (5 Agent + 15 Read + 30 Bash) should score {expected}, got {score}. "
-            f"If score == {kb} (kb only), the jq filter is not walking .message.content[] correctly."
-        )
-
-    def test_missing_file_nonzero_exit(self, tmp_path):
-        """Missing file → non-zero exit code."""
-        result = _run_score("/tmp/quoin-test-nonexistent-file-xyz.jsonl", tmpdir=tmp_path)
-        assert result.returncode != 0, "Missing file should return non-zero exit"
-
-    def test_empty_path_nonzero_exit(self, tmp_path):
-        """Empty path argument → non-zero exit code."""
-        result = _run_score("", tmpdir=tmp_path)
-        assert result.returncode != 0, "Empty path should return non-zero exit"
-
-
-# ─── 2. Skill-side read — structural assertions ───────────────────────────────
+# ─── 1. Skill-side read — structural assertions ───────────────────────────────
 
 class TestSkillSideRead:
-    """Verify §0' blocks contain the session-state read pattern."""
+    """Verify §0' blocks run the guard and key on its OVER| output."""
 
     @pytest.mark.parametrize("skill", TARGET_SKILLS)
-    def test_skill_reads_pollution_score_field(self, skill):
-        text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-        assert "pollution_score" in text, (
-            f"{skill}/SKILL.md §0' block must reference `pollution_score` field "
-            "(the skill reads this from session-state to decide whether to dispatch)"
+    def test_block_names_the_guard_script(self, skill):
+        assert "pollution_guard.py" in _block(skill), (
+            f"{skill}/SKILL.md §0' block must run pollution_guard.py to decide whether to dispatch"
         )
 
     @pytest.mark.parametrize("skill", TARGET_SKILLS)
-    def test_skill_references_fallback_file(self, skill):
-        text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-        assert "pollution-score-latest.txt" in text, (
-            f"{skill}/SKILL.md §0' block must reference `pollution-score-latest.txt` fallback "
-            "(used when no session-state file exists)"
-        )
+    def test_block_keys_on_over_prefix(self, skill):
+        assert "OVER|" in _block(skill)
 
     @pytest.mark.parametrize("skill", TARGET_SKILLS)
-    def test_skill_reads_from_session_state(self, skill):
-        text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-        assert "sessions/" in text or "session-state" in text, (
-            f"{skill}/SKILL.md §0' block must reference session-state file location"
-        )
+    def test_block_does_not_read_a_score_file(self, skill):
+        block = _block(skill)
+        assert "pollution-score-latest.txt" not in block
+        assert "pollution_score:" not in block
+
+    @pytest.mark.parametrize("skill", TARGET_SKILLS)
+    def test_sentinel_check_precedes_the_guard_run(self, skill):
+        block = _block(skill)
+        sentinel = block.index("Sentinel check")
+        prior = block.index("prior §0 dispatch already fired")
+        run = block.index("pollution_guard.py")
+        assert sentinel < run and prior < run
 
 
-# ─── 3. Threshold behavior assertions ─────────────────────────────────────────
+# ─── 2. Threshold behavior assertions ─────────────────────────────────────────
 
 class TestThresholdBehavior:
     """Verify the threshold constant and tunable env var are documented in skills."""
 
     @pytest.mark.parametrize("skill", TARGET_SKILLS)
     def test_threshold_constant_referenced(self, skill):
-        text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-        # Either POLLUTION_THRESHOLD or QUOIN_POLLUTION_THRESHOLD must appear
-        assert "POLLUTION_THRESHOLD" in text, (
-            f"{skill}/SKILL.md §0' block must reference POLLUTION_THRESHOLD "
-            "(the default threshold value or the env var name)"
-        )
+        assert "POLLUTION_THRESHOLD" in (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
 
     @pytest.mark.parametrize("skill", TARGET_SKILLS)
     def test_threshold_default_value_documented(self, skill):
-        text = (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
-        # The default value 5000 must appear in the §0' block
-        assert "5000" in text, (
-            f"{skill}/SKILL.md §0' block must document the default threshold value 5000"
-        )
+        assert "5000" in (SKILLS_DIR / skill / "SKILL.md").read_text(encoding="utf-8")
 
     def test_score_boundary_below_threshold(self, tmp_path):
-        """Score at 4999 (threshold-1) → function returns value below 5000."""
-        # Create a 4999KB file with no tool calls → score = 4999
         f = tmp_path / "just_below.jsonl"
-        # 4999000 bytes = 4999 kB
         f.write_bytes(b"x" * 4_999_000)
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0
-        score = int(result.stdout.strip())
-        assert score == 4999, f"4999KB file should score 4999, got {score}"
+        assert _guard(f, tmp_path).startswith("OK|4999|")
 
     def test_score_at_threshold(self, tmp_path):
-        """Score at exactly 5000 → dispatch should trigger (>= comparison)."""
         f = tmp_path / "at_threshold.jsonl"
         f.write_bytes(b"x" * 5_000_000)
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0
-        score = int(result.stdout.strip())
-        assert score == 5000, f"5000KB file should score 5000, got {score}"
+        assert _guard(f, tmp_path).startswith("OVER|5000|")
 
     def test_custom_threshold_via_env(self, tmp_path):
-        """QUOIN_POLLUTION_THRESHOLD=2000: a 2000KB file hits the custom threshold."""
         f = tmp_path / "custom_threshold.jsonl"
         f.write_bytes(b"x" * 2_000_000)
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0
-        score = int(result.stdout.strip())
-        # Score = 2000; with custom threshold 2000 this should trigger dispatch
-        assert score == 2000, f"2000KB file should score 2000, got {score}"
-        # The QUOIN_POLLUTION_THRESHOLD=2000 env var is consumed by SKILL.md blocks,
-        # not by the shell function itself — this test verifies the score is at/above
-        # the custom threshold, confirming dispatch would fire.
-        assert score >= 2000, f"Score {score} should be >= custom threshold 2000"
-
-
-# ─── 4. Pollution cache (Stage 3, IVG-163) ────────────────────────────────────
-
-class TestPollutionCache:
-    """counts+offset cache in the jq path of compute_pollution_score.
-
-    Every case below gets its own isolated TMPDIR (via _run_score's tmpdir
-    param, defaulting to pytest's per-test tmp_path) — see the module-level
-    _run_score docstring. _cold_score() is the equivalence oracle: any
-    cache-assisted score must match a fresh full parse of the same file.
-    """
-
-    @staticmethod
-    def _tool_line(name: str) -> str:
-        return json.dumps({
-            "type": "assistant",
-            "message": {"content": [{"type": "tool_use", "id": "toolu_01", "name": name, "input": {}}]}
-        }) + "\n"
-
-    @classmethod
-    def _build(cls, agent: int = 0, read: int = 0, bash: int = 0) -> str:
-        lines = []
-        lines.extend([cls._tool_line("Agent")] * agent)
-        lines.extend([cls._tool_line("Read")] * read)
-        lines.extend([cls._tool_line("Bash")] * bash)
-        return "".join(lines)
-
-    @staticmethod
-    def _cache_file(tmpdir: Path) -> Path:
-        caches = list(Path(tmpdir).glob("quoin-pollution-*.cache"))
-        assert len(caches) == 1, f"expected exactly one cache file in {tmpdir}, found {caches}"
-        return caches[0]
-
-    def test_cold_creates_five_field_cache_offset_le_size(self, tmp_path):
-        """Cold run: cache file created, exactly 5 fields, offset <= file size."""
-        f = tmp_path / "cold.jsonl"
-        f.write_text(self._build(agent=1, read=2, bash=3), encoding="utf-8")
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0, result.stderr
-        cache_file = self._cache_file(tmp_path)
-        fields = cache_file.read_text(encoding="utf-8").strip().split()
-        assert len(fields) == 5, f"expected 5 fields, got {fields}"
-        off_str, fp_str, agent_str, read_str, bash_str = fields
-        assert off_str.isdigit(), f"offset field should be all-digit, got {off_str!r}"
-        assert agent_str.isdigit() and read_str.isdigit() and bash_str.isdigit()
-        assert "-" in fp_str, f"head fingerprint should be a crc-bytes token, got {fp_str!r}"
-        size = f.stat().st_size
-        assert int(off_str) <= size, f"offset {off_str} should be <= file size {size}"
-
-    def test_warm_append_matches_cold_score_of_final_file(self, tmp_path):
-        """Warm-append: append N tool_use lines, re-score, result equals a
-        cold score of the same final file."""
-        f = tmp_path / "warm.jsonl"
-        f.write_text(self._build(agent=1, read=1, bash=1), encoding="utf-8")
-        first = _run_score(str(f), tmpdir=tmp_path)
-        assert first.returncode == 0, first.stderr
-        with f.open("a", encoding="utf-8") as fh:
-            fh.write(self._build(agent=2, read=3, bash=4))
-        warm = _run_score(str(f), tmpdir=tmp_path)
-        assert warm.returncode == 0, warm.stderr
-        warm_score = int(warm.stdout.strip())
-        cold_score = _cold_score(str(f))
-        assert warm_score == cold_score, (
-            f"warm-append score {warm_score} should equal a fresh cold score "
-            f"{cold_score} of the same final file"
-        )
-
-    def test_truncate_rotate_matches_fresh_cold_score(self, tmp_path):
-        """Truncate/rotate: rewrite the file SHORTER, re-score; result equals
-        a fresh cold score (offset > size path)."""
-        f = tmp_path / "rotate.jsonl"
-        f.write_text(self._build(agent=5, read=5, bash=5), encoding="utf-8")
-        first = _run_score(str(f), tmpdir=tmp_path)
-        assert first.returncode == 0, first.stderr
-        f.write_text(self._build(agent=1), encoding="utf-8")
-        after = _run_score(str(f), tmpdir=tmp_path)
-        assert after.returncode == 0, after.stderr
-        after_score = int(after.stdout.strip())
-        fresh_cold = _cold_score(str(f))
-        assert after_score == fresh_cold, (
-            f"post-truncation score {after_score} should equal a fresh cold score {fresh_cold}"
-        )
-
-    @pytest.mark.parametrize(
-        "garbage",
-        ["not a cache line at all", "1 fp 2 3", "abc fp 1 2 3"],
-        ids=["garbage-text", "three-fields", "non-numeric-offset"],
-    )
-    def test_corrupt_cache_falls_back_to_cold_score(self, tmp_path, garbage):
-        """Corrupt cache (garbage / 3 fields / non-numeric offset): each
-        re-score equals the cold score and exits 0."""
-        f = tmp_path / "corrupt.jsonl"
-        f.write_text(self._build(agent=2, read=2, bash=2), encoding="utf-8")
-        first = _run_score(str(f), tmpdir=tmp_path)
-        assert first.returncode == 0, first.stderr
-        cache_file = self._cache_file(tmp_path)
-        cache_file.write_text(garbage, encoding="utf-8")
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0, result.stderr
-        score = int(result.stdout.strip())
-        cold = _cold_score(str(f))
-        assert score == cold, f"corrupt-cache re-score {score} should equal cold score {cold} ({garbage!r})"
-
-    def test_in_place_rewrite_same_length_matches_cold_score(self, tmp_path):
-        """In-place rewrite: same byte length, different first-1KB content —
-        score equals cold score (head-fingerprint mismatch path)."""
-        f = tmp_path / "rewrite.jsonl"
-        original = self._build(agent=1, read=1, bash=1)
-        f.write_text(original, encoding="utf-8")
-        first = _run_score(str(f), tmpdir=tmp_path)
-        assert first.returncode == 0, first.stderr
-        replaced = self._build(agent=3)
-        if len(replaced) < len(original):
-            replaced = replaced + ("x" * (len(original) - len(replaced)))
-        elif len(replaced) > len(original):
-            replaced = replaced[: len(original)]
-        assert len(replaced) == len(original)
-        f.write_text(replaced, encoding="utf-8")
-        result = _run_score(str(f), tmpdir=tmp_path)
-        assert result.returncode == 0, result.stderr
-        score = int(result.stdout.strip())
-        cold = _cold_score(str(f))
-        assert score == cold, f"in-place-rewrite re-score {score} should equal cold score {cold}"
-
-    def test_partial_trailing_line_counted_exactly_once(self, tmp_path):
-        """Partial trailing line: a JSONL line with NO trailing newline is
-        NOT counted; appending the rest of the line later counts it exactly
-        once (not double, not dropped)."""
-        f = tmp_path / "partial.jsonl"
-        f.write_text(self._build(agent=1, read=1, bash=1), encoding="utf-8")
-        first = _run_score(str(f), tmpdir=tmp_path)
-        assert first.returncode == 0, first.stderr
-        first_score = int(first.stdout.strip())
-
-        partial_line = json.dumps({
-            "type": "assistant",
-            "message": {"content": [{"type": "tool_use", "id": "t", "name": "Agent", "input": {}}]}
-        })
-        with f.open("a", encoding="utf-8") as fh:
-            fh.write(partial_line)  # deliberately no trailing newline
-        mid = _run_score(str(f), tmpdir=tmp_path)
-        assert mid.returncode == 0, mid.stderr
-        mid_score = int(mid.stdout.strip())
-        assert mid_score == first_score, (
-            f"an incomplete trailing line (no newline yet) must not be counted: "
-            f"expected {first_score}, got {mid_score}"
-        )
-
-        with f.open("a", encoding="utf-8") as fh:
-            fh.write("\n")
-        done = _run_score(str(f), tmpdir=tmp_path)
-        assert done.returncode == 0, done.stderr
-        done_score = int(done.stdout.strip())
-        cold = _cold_score(str(f))
-        assert done_score == cold, f"completed line should score {cold}, got {done_score}"
-        assert done_score > first_score, (
-            "completing the trailing line must raise the score exactly once "
-            f"(it did not: first={first_score}, done={done_score})"
-        )
-
-    def test_missing_cache_dir_still_exits_zero_with_correct_score(self, tmp_path):
-        """Missing/unwritable cache dir (TMPDIR pointed at a non-existent
-        path) → still exits 0 with a correct score (cache write is
-        best-effort; counts are already computed before the write)."""
-        f = tmp_path / "nodir.jsonl"
-        f.write_text(self._build(agent=1, read=2, bash=3), encoding="utf-8")
-        missing_dir = tmp_path / "does-not-exist"
-        result = _run_score(str(f), tmpdir=missing_dir)
-        assert result.returncode == 0, result.stderr
-        score = int(result.stdout.strip())
-        cold = _cold_score(str(f))
-        assert score == cold, f"unwritable TMPDIR should still score correctly: expected {cold}, got {score}"
+        assert _guard(f, tmp_path).startswith("OK|2000|")
+        assert _guard(f, tmp_path, {"QUOIN_POLLUTION_THRESHOLD": "2000"}).startswith("OVER|2000|")

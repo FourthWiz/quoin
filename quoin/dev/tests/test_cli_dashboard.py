@@ -71,7 +71,7 @@ class TestDashboardMissingScript:
     def test_missing_dashboard_server_exits_2(self, tmp_path):
         """If dashboard_server.py is not found in the resolved source tree, exit 2."""
         fake_source = tmp_path / "fake_quoin"
-        (fake_source / "skills").mkdir(parents=True)
+        (fake_source / "adapters" / "claude" / "skills").mkdir(parents=True)
         (fake_source / "scripts").mkdir(parents=True)
         # dashboard_server.py intentionally absent
 

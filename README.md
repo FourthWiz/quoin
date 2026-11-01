@@ -145,7 +145,7 @@ GitHub redirects the old `FourthWiz/claude_dev_workflow` URL to this repository.
 
 | Runtime | Setup command | Scope | Implemented behavior |
 |---------|---------------|-------|----------------------|
-| Claude Code | `quoin install --runtime claude` | Global adapter under `~/.claude` | Skills, scripts, hooks, memory files, `CLAUDE.md` workflow rules, slash-command workflow |
+| Claude Code | `quoin install --runtime claude` | Global adapter under `~/.claude` | Skills, scripts, hooks, memory files, short `CLAUDE.md` core rules (full rules in `memory/workflow-catalog.md`), slash-command workflow |
 | Codex | `quoin install --runtime codex --project-root .` | Repo-local `AGENTS.md` | Portable artifact workflow, generated root instructions, readiness/smoke checks, handoff validation, cost event writer |
 
 The portable core is shared. Runtime-specific mechanics are adapter-owned:
@@ -222,16 +222,15 @@ After installing the Claude adapter:
 
 ```text
 /init_workflow   one-time project bootstrap
-/architect       design the solution
-/thorough_plan   converge on a plan with critic review
-/implement       write code from the plan
-/review          verify implementation against the plan
-/gate            stop for an explicit quality checkpoint
-/end_of_task     finalize, push, and capture lessons
+/run <task>      brief, context pack, implement, one review, local commit
+/pr              push the branch and open a pull request
 ```
 
+`/run hard: <task>` runs the full discover/specify/architect/plan/critic/gate
+chain instead; use it only for work that really needs that rigor.
+
 Claude-specific command behavior, model assignments, hook behavior, and
-cost-capture plumbing are documented in `quoin/CLAUDE.md`.
+cost-capture plumbing are documented in `quoin/CLAUDE.md`; the installed `~/.claude/CLAUDE.md` carries only the short core rules, with every section kept in `~/.claude/memory/workflow-catalog.md`.
 
 ## Claude Skills
 
@@ -268,7 +267,6 @@ workflow intent through natural-language phase requests and repo-local docs.
 | `/start_of_day` | Haiku | Morning briefing from daily/session memory |
 | `/end_of_day` | Sonnet | Saves session state, dedupes and promotes insights; auto-invokes /sleep |
 | `/end_of_task` | Sonnet | Pushes branch, captures lessons, and finalizes task state |
-| `/checkpoint` | Sonnet | Save/restore session context mid-session; writes pending-restore sentinel |
 | `/continue_work` | Sonnet | Resume context from a prior session using the recent-sessions index |
 | `/sleep` | Sonnet | Memory consolidation: promotes insights to lessons-learned, archives stale entries |
 
@@ -276,7 +274,8 @@ workflow intent through natural-language phase requests and repo-local docs.
 
 | Command | Model | What it does |
 |---------|-------|-------------|
-| `/run` | Opus | End-to-end pipeline orchestrator; pauses at gates |
+| `/run` | Opus | Default light pipeline: brief, context pack, inline implement, one review, local commit |
+| `/run_hard` | Opus | Full heavy pipeline orchestrator (`/run hard:`); pauses at gates |
 | `/cost_snapshot` | Haiku | Live Claude cost: today, lifetime, and per-task breakdown |
 | `/triage` | Haiku | Routes the request to the right workflow phase |
 | `/weekly_review` | Haiku | Aggregates weekly progress into a structured review |
@@ -430,6 +429,7 @@ agentdesk <session-name>               # named session with fixed layout
 agentdesk --mode solo|duo|trio         # preset layout
 agentdesk --mode trio --name my-sess   # named preset-layout session
 agentdesk claude [codex] [shell] [...]  # custom layout from window-type tokens
+agentdesk --name deck --panes codex,codex,shell --no-prompt   # scripted launch, no questions
 ```
 
 **Preset modes:**
@@ -437,8 +437,32 @@ agentdesk claude [codex] [shell] [...]  # custom layout from window-type tokens
 | Mode | Panes |
 |------|-------|
 | `solo` | One Claude Code pane, full-width |
-| `duo` | Claude Code + Shell, side-by-side |
-| `trio` | Claude Code + Codex + Shell, side-by-side |
+| `duo` | Claude Code on top, a Shell strip below |
+| `trio` | Claude Code and Codex side by side on top, a Shell strip below |
+
+**Layout:** agents (Claude, Codex, CCR) sit on top and shells and status share a
+strip below; repeated agents are named `Claude · A`, `Claude · B` and so on.
+Token Spend is a floating pane that starts hidden (unless `spend` is the only
+token, when it opens visible). Swap between arrangements
+(even, focus-left, stacked) with Alt [ and Alt ]. `--compact-bar` or
+`AGENTDESK_COMPACT_BAR=1` replaces the tab bar and status bar with a single
+one-line bar (per launch, not remembered; it applies to generated layouts and to
+the generated Standard layout, while a customised `agent-desk.kdl` keeps its own
+bars).
+
+**Standard layout:** with no tokens, agentdesk opens three tabs. `main` has
+`Claude · A` and `Claude · B` on top and a `Shell` strip below, with Token Spend
+as a hidden floating pane. `git` runs lazygit when it is installed and the
+project root is a repo (or holds exactly one repo); otherwise it shows a
+refreshing git status, and any key drops to a shell. `status` runs the workflow
+status graph full width, or prints an install hint when it is missing. To
+customise it, edit `~/.config/zellij/layouts/agent-desk.kdl`: agentdesk then
+keeps your file as it is, and `setup-agentdesk.sh` writes the new Standard
+layout beside it as `agent-desk.kdl.new` instead of replacing yours.
+
+**Picker choices:** 1 Standard, 2-5 agent presets (claude + shell, two Claude,
+Claude + Codex, Claude + CCR, each with Spend), 6 claude + shell + status +
+spend, 7 custom comma-separated tokens. Typing a token list directly also works.
 
 **Window-type tokens** (positional, mutually exclusive with `--mode`):
 
@@ -458,10 +482,85 @@ agentdesk claude codex       # custom two-pane layout
 agentdesk claude claude      # two Claude panes side-by-side
 ```
 
-If Zellij is not running, agentdesk starts a new session. agentdesk never
-re-attaches: if a session with the chosen name already exists, it starts a
-fresh session with a numeric suffix (foo_1, foo_2, …). To resume an existing
+If Zellij is not running, agentdesk starts a new session. If a session with
+the chosen name already exists, agentdesk in a terminal asks whether to attach
+or start a new one; non-interactive runs start a fresh session with a numeric
+suffix (foo_1, foo_2, ...). `--if-exists` overrides this. To resume an existing
 session, use `agentdesk-attach SESSION-NAME`.
+
+**Find, attach to and clean up sessions from any shell** (no need to have
+sourced the launcher):
+
+```bash
+quoin sessions                  # Agent Desk sessions for the current folder
+quoin sessions --all            # every Agent Desk session in the socket directory
+quoin sessions --all --json     # same, as JSON (name, age, state, live, root, match)
+quoin attach [NAME]             # attach; without a name, pick the one for this folder
+quoin sessions kill NAME        # delete an EXITED session (--force stops a running one)
+quoin sessions prune [--dry-run]  # delete EXITED sessions that have a launch record, plus stale records
+quoin sessions prune --include-unrecorded  # also delete EXITED Agent Desk sessions without a record
+```
+
+A session belongs to a folder when its launch record (written by the launcher
+to `~/.config/agentdesk/sessions/NAME`) names that folder or a parent of the
+current directory. Sessions started before the launcher wrote records match by
+name instead (`<folder>-agents`, `<folder>-agents_2`, ...) until they are
+restarted. Live sessions show as `running`; the session you are inside shows
+as `current`. `prune` deletes EXITED sessions only when they have a launch
+record. An EXITED session without one (started before records existed) is
+listed as skipped, because Zellij shares its resurrection cache across socket
+directories and the name may belong to plain Zellij; delete it with
+`quoin sessions kill NAME`, or pass `--include-unrecorded` to delete them all.
+EXITED sessions that are not Agent Desk's are never touched and can still force
+a `_N` suffix on a new session; remove one with `zellij delete-session NAME` in
+a shell that has not sourced the launcher.
+Inside a session, detach with `Alt s`, then `d`, and quit with `Alt s`, then
+`q` (both need Ghostty `macos-option-as-alt`); `Ctrl+Q` is intentionally unbound.
+The launcher prints these keys when it starts or attaches to a session, but
+Zellij switches to the alternate screen right after, so the lines scroll out of
+view while the session runs and show again after you detach or quit.
+
+**Keyboard seems stuck.** From another terminal run `quoin sessions` and
+`quoin attach NAME` to get a second client in the same session, then close the
+stuck terminal tab or window; the session keeps running and the new client stays
+attached. Do not detach with `Alt s`, then `d` in the new client, because that
+detaches the working one; use it in the stuck tab only if the Alt keys still
+work there. The full list of checks (mode
+name in the status bar, a floating pane in front, Option not sent as Alt, and
+`reset` for a garbled terminal) is the "If the keyboard seems stuck" section of
+`quoin/tools/agentdesk/KEYBIND-VERIFY.md`.
+
+**Scripted launch:**
+
+- `--panes LIST` starts the session with an explicit pane set (for example
+  `codex,codex,shell`, joined by `,` or `+`). Token Spend is still available as a
+  hidden floating pane (toggle: Alt f, or pane mode then w), and the list is never
+  saved to the layout memory file.
+- `--no-prompt` asks nothing: no dashboard question, no picker, no
+  attach-or-new question.
+- `--if-exists attach|new|fail` decides what happens when the session name is
+  already taken. With `--no-prompt` the default is `attach`. `attach` needs a
+  terminal (Ghostty and other terminal launchers are fine).
+- `AGENTDESK_API_VERSION` in `agentdesk.zsh` marks the version of this
+  interface; tools can detect it with a plain grep without sourcing the file.
+
+## Stream Deck (optional)
+
+An optional 15-key Stream Deck panel shows your running Claude and Codex agents (orange when one needs you, blue
+while it works, green when it is done) and focuses their Zellij panes in Ghostty. It is macOS only and never
+installed by `pip install quoin` or `quoin install`. You manage it yourself:
+
+```bash
+quoin streamdeck install     # check prerequisites, then install the plugin, hooks and profile
+quoin streamdeck upgrade     # bring the installed component up to date
+quoin streamdeck status      # read-only health report
+quoin streamdeck uninstall   # remove it; --purge also removes config and state
+```
+
+`pip install --upgrade quoin` updates only the package; run `quoin streamdeck upgrade` afterwards to update the
+installed component. The guide, [`quoin/docs/streamdeck/README.md`](quoin/docs/streamdeck/README.md), covers
+prerequisites, hooks and Codex trust, moving over from the prototype, and recovery. What is verified by tests and
+what still needs hardware is in [`quoin/docs/streamdeck/VALIDATION.md`](quoin/docs/streamdeck/VALIDATION.md).
 
 ## Architecture
 
@@ -510,6 +609,8 @@ For runtime-neutral effort vocabulary, see
 - [`quoin/docs/runtime-portability-status.md`](quoin/docs/runtime-portability-status.md) - current migration status by runtime
 - [`quoin/docs/runtime-parity-matrix.md`](quoin/docs/runtime-parity-matrix.md) - evidence-based runtime parity matrix
 - [`quoin/docs/effort-levels.md`](quoin/docs/effort-levels.md) - runtime-neutral effort vocabulary
+- [`quoin/docs/streamdeck/README.md`](quoin/docs/streamdeck/README.md) - the optional Stream Deck component: install, hooks, recovery
+- [`quoin/docs/streamdeck/VALIDATION.md`](quoin/docs/streamdeck/VALIDATION.md) - what is tested, what was checked by hand, and what is not yet verified
 
 ## Boundaries
 

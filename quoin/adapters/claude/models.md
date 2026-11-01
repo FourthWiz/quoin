@@ -16,6 +16,6 @@ Use `high` for ordinary Opus planning, architecture, critic, and review work. Us
 
 ## Compatibility Rule
 
-Until Quoin has a generator or adapter loader, the `model:` field in each `quoin/skills/*/SKILL.md` file remains the source of Claude runtime behavior.
+Until Quoin has a generator or adapter loader, the `model:` field in each `quoin/adapters/claude/skills/*/SKILL.md` file remains the source of Claude runtime behavior.
 
 Any change to `skills.json` must keep `claude_model` aligned with that frontmatter.

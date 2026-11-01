@@ -177,13 +177,16 @@ Machine-readable sidecar: `quoin/memory/format-kit.sections.json` (consumed by `
 
 ### `session/<date>-<task>.md` (Class A)
 
+Shape, field rules and merge rule: `session-schema.md`.
+
 | Section | Status | Primitive | Description |
 |---------|--------|-----------|-------------|
 | `## Status` | REQUIRED | Single word or short phrase | `in_progress`, `completed`, `blocked` |
 | `## Current stage` | REQUIRED | Caveman prose, 1 line | Which skill/phase is active |
 | `## Completed in this session` | REQUIRED | Terse numbered list | Tasks/rounds finished with commit hashes if applicable |
 | `## Unfinished work` | REQUIRED | Terse numbered list | What remains, with exact resume point |
-| `## Cost` | REQUIRED | YAML | Session UUID, phase, recorded-in-ledger flag |
+| `## Next command` | OPTIONAL | One line | The command to type next; required by session-schema.md |
+| `## Cost` | REQUIRED | Fixed `- key: value` lines per session-schema.md | Session UUID, phase, recorded-in-ledger flag, end_of_day_due, fallback_fires, verification fields |
 | `## Decisions made` | OPTIONAL | Terse numbered list | Non-obvious choices and rationale |
 | `## Open questions` | OPTIONAL | Terse numbered list | Questions that need answers before resuming |
 

@@ -1,0 +1,8 @@
+- **Flow:** `/run` (default): brief → context pack → implement → one review → local commit. Heavy pipeline, only via `/run hard:`: `/discover → /specify → GATE → /architect → GATE → /thorough_plan → GATE → /implement → GATE → /review → GATE → /end_of_task`.
+- **Explicit commands:** no skill auto-invokes `/implement` or `/end_of_task`; only `/run_hard` may (`autonomous-mode.md`). Light `/run` commits locally, never pushes. `/pr` is always a separate user action.
+- **Git:** commit locally only; push happens in `/end_of_task`, PRs only via `/pr`. Start each task on a fresh branch from an up-to-date main; never land task commits on main/master. Conventional commit messages (`type(scope): summary`, body says why).
+- **Artifacts:** one `.workflow_artifacts/` root per project; task files live in `.workflow_artifacts/<task-name>/` (`stage-N/` for multi-stage tasks). Never move anything into `finalized/` except through `/end_of_task`.
+- **Sessions:** each skill bootstraps from files, never from a previous chat; artifacts are the shared memory.
+- **Shipped text** (code comments, commits, PR bodies) is plain engineering prose: no plan or finding IDs, gate verdicts or artifact paths (`clean-authored-content.md`).
+- **Lessons:** native auto memory (`MEMORY.md`) holds personal facts only; reusable engineering lessons go to the committed `.workflow_artifacts/memory/lessons-learned.md`, which planning skills read. Log gotchas as you work to `.workflow_artifacts/memory/daily/insights-<date>.md`.
+- **Serena:** if `ToolSearch select:mcp__serena__activate_project` loads a schema, follow `serena-activation.md`; otherwise never call Serena tools.

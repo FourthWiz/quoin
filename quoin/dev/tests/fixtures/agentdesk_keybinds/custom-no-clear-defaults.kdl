@@ -1,0 +1,10 @@
+keybinds {
+    normal {
+        bind "F12" { ToggleFloatingPanes; }
+    }
+}
+ui {
+    pane_frames {
+        rounded_corners true
+    }
+}

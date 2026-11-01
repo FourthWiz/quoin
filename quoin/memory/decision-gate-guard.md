@@ -4,7 +4,7 @@ Verbose Tier-1 reference for the shared fail-closed decision-gate guard. This is
 single source of truth for the "cannot ask ≠ approved" invariant, the `[no-interactive]`
 sentinel, the ordered decision-gate contract, the `needs-decision-{task}.md` sentinel
 schema, the structured NEEDS-DECISION return, and the classification-marker census.
-`run/SKILL.md` and the per-skill `SKILL.md` bodies carry the operative branches; this
+`run_hard/SKILL.md` and the per-skill `SKILL.md` bodies carry the operative branches; this
 file documents the whole surface in one pass.
 
 This primitive is a **sibling of `[autonomous]` (IVG-153) with the opposite default**:
@@ -29,7 +29,7 @@ explicit signal plus a per-mechanism fail-safe:
 1. **Pre-flight (primary, load-bearing): the `[no-interactive]` leading-prompt sentinel.**
    A greppable, stackable, strip-before-processing sentinel (same convention as
    `[autonomous]` / `[no-session-age-guard]` / `[no-redispatch]`), parsed at bootstrap into
-   a local `_INTERACTIVE=false` state. `/run` injects it onto every NON-autonomous
+   a local `_INTERACTIVE=false` state. `run_hard` (`/run hard:`) injects it onto every NON-autonomous
    phase-subagent spawn (and subagent-mode gate spawns). This is the ONLY layer that works
    at the two non-`AskUserQuestion` sites (`/gate` STOP, session-age guard), so it is
    load-bearing, not an optimization.
@@ -74,11 +74,11 @@ greppable, censusable `[no-interactive]` sentinel as the primary mechanism.
   <task>`.
 - Parsed at each in-scope skill's bootstrap into `_INTERACTIVE=false` (default: interactive
   == absent).
-- **Only `/run` injects it, only onto NON-autonomous phase-subagent spawns and
+- **Only `run_hard` injects it, only onto NON-autonomous phase-subagent spawns and
   subagent-mode gate spawns.** `/thorough_plan` never injects it (it spawns no fail-closed
-  skill). The inline post-implement / post-review gates run in the FOREGROUND `/run`
-  session where a human IS reachable — `/run` MUST NOT inject `[no-interactive]` onto them.
-- **Mutually exclusive with `[autonomous]` per spawn:** under AUTONOMOUS, `/run` injects
+  skill). The inline post-implement / post-review gates run in the FOREGROUND `run_hard`
+  session where a human IS reachable — `run_hard` MUST NOT inject `[no-interactive]` onto them.
+- **Mutually exclusive with `[autonomous]` per spawn:** under AUTONOMOUS, `run_hard` injects
   `[autonomous]` (pre-authorized answers) instead of `[no-interactive]`.
 - Absence == interactive (default), so a real foreground user is never fail-closed (R-06).
 
@@ -153,7 +153,7 @@ consumes it.
 ## Structured NEEDS-DECISION return
 
 The helper prints, and the skill echoes as its final message, a machine-extractable block
-(mirroring `review`'s verdict shape). `/run` routes `NEEDS-DECISION` exactly like it routes
+(mirroring `review`'s verdict shape). `run_hard` routes `NEEDS-DECISION` exactly like it routes
 review-BLOCKED / gate-FAIL — surface the block, STOP, never silent-proceed:
 
 ```

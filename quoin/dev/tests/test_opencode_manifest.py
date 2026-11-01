@@ -169,7 +169,7 @@ def test_bundle_membership_and_counts():
     assert by_status["supported"] == supported
     assert by_status["unsupported"] == unsupported
     assert len(by_status["supported"]) == 12
-    assert len(by_status.get("documentation-only", set())) == 15
+    assert len(by_status.get("documentation-only", set())) == 16
     assert len(by_status["unsupported"]) == 5
     assert all(row["live_runtime_evidence"] is False for row in rows)
 
@@ -458,7 +458,7 @@ def test_non_utf8_compat_file_raises_manifest_load_error_not_traceback(tmp_path)
 def test_cli_real_tree_exits_0_from_repo_root():
     result = _run_check_manifest_cli("--source-dir", "quoin")
     assert result.returncode == 0, result.stderr
-    assert "32" in result.stdout
+    assert "33" in result.stdout
 
 
 def test_cli_broken_temp_copy_exits_1_with_offender_id_on_stderr(tmp_path):
@@ -481,7 +481,7 @@ def test_cli_missing_directory_exits_2():
 def test_cli_omitted_source_dir_exits_0_via_default_resolution():
     result = _run_check_manifest_cli()
     assert result.returncode == 0, result.stderr
-    assert "32" in result.stdout
+    assert "33" in result.stdout
 
 
 def test_main_in_process_returns_0_1_2_for_the_three_cases(tmp_path):
@@ -527,11 +527,12 @@ def test_adapter_check_workflow_step_order_and_command_matches_manifest():
     assert re.search(r"^permissions:\s*$", text, re.MULTILINE), text
     assert re.search(r"^\s*contents:\s*read\s*$", text, re.MULTILINE), text
     run_lines = [line.strip()[len("run: "):] for line in text.splitlines() if line.strip().startswith("run:")]
-    assert len(run_lines) == 4, run_lines
+    assert len(run_lines) == 5, run_lines
     assert "validate_adapter_drift.py" in run_lines[0], run_lines
     assert "check_registration.py" in run_lines[1], run_lines
     assert "quoin.opencode_adapter check-manifest" in run_lines[2], run_lines
     assert "quoin doctor --runtime opencode --smoke" in run_lines[3], run_lines
+    assert "build_claude_slim.py --check" in run_lines[4], run_lines
 
     manifest_data = manifest.load_manifest(SOURCE_DIR)
     expected_command = manifest_data["validation"]["commands"][0]

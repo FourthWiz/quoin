@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /implement skill (use the Skill tool)."}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Truncated by a stop sequence before the turn ended naturally."}], "usage": {"output_tokens": 9}, "stop_reason": "stop_sequence"}}

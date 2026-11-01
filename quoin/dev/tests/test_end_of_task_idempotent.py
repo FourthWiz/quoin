@@ -52,7 +52,7 @@ def test_push_is_noop_if_head_equals_origin(eot_text: str) -> None:
     idx = text.index("**Step 6: Dispatch Sub-phase A")
     end = text.index("**Step 7: Dispatch Sub-phase B")
     section = text[idx:end]
-    assert "idempotent, T-11" in section
+    assert any("Push" in l and "idempotent" in l for l in section.splitlines())
     assert "git fetch origin" in section
     assert "SKIP the push as a no-op" in section
     assert '"push_skipped": true' in section
@@ -99,7 +99,7 @@ def test_cost_aggregation_re_runnable(eot_text: str) -> None:
     end = text.index("**Step 8: Dispatch Sub-phase C")
     section = " ".join(text[idx:end].split())
 
-    assert "Re-runnable (T-11)" in section
+    assert "**Re-runnable:**" in section
     assert "never blind-appends a second total row" in section
     assert "OVERWRITES cost-summary.json" in section
 
@@ -110,7 +110,8 @@ def test_subphase_b_sentinel_written_last_and_gated(eot_text: str) -> None:
     end = text.index("**Step 8: Dispatch Sub-phase C")
     section = " ".join(text[idx:end].split())
 
-    assert "Write the Sub-phase B entry-skip sentinel (T-11, `_AUTONOMOUS` only) — LAST" in section
+    assert "Write the Sub-phase B entry-skip sentinel" in section
+    assert "`_AUTONOMOUS` only) — LAST, after" in section
     assert "Inert when `_AUTONOMOUS` is false" in section
 
 
@@ -125,7 +126,7 @@ def test_archive_skips_if_target_already_exists(eot_text: str) -> None:
     end = text.index("## Important behaviors")
     section = text[idx:end]
 
-    assert "Archive (idempotent, T-11)" in section
+    assert any("**Archive (idempotent)**" in l for l in section.splitlines())
     assert "before the move, check whether the target directory" in section
     assert "already archived" in section
     assert "SKIP the move as a" in section
@@ -145,7 +146,8 @@ def test_done_sentinel_written_last_after_archive_and_report(eot_text: str) -> N
     section = " ".join(text[idx:end].split())
 
     assert "autonomous-done-<task_name>.md" in section
-    assert "Write the done-sentinel (T-11, `_AUTONOMOUS` only) — LAST" in section
+    assert "Write the done-sentinel" in section
+    assert "`_AUTONOMOUS` only) — LAST, after" in section
     assert "after the archive move (step 4) AND the report print (step 5)" in section
     assert "OUTSIDE the just-archived task folder" in section
     # Atomic write through the helper.
@@ -200,5 +202,5 @@ def test_step_ordering_push_then_b_then_archive_then_done(eot_text: str) -> None
     push_idx = text.index("**Step 6: Dispatch Sub-phase A")
     b_idx = text.index("**Step 7: Dispatch Sub-phase B")
     archive_idx = text.index("**Step 8: Dispatch Sub-phase C")
-    done_idx = text.index("Write the done-sentinel (T-11")
+    done_idx = text.index("Write the done-sentinel")
     assert push_idx < b_idx < archive_idx < done_idx

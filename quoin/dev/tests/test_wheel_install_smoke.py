@@ -422,6 +422,13 @@ def test_wheel_opencode_install_and_doctor_in_clean_venv(built_wheel, tmp_path):
     )
 
 
+def test_pyproject_force_include_line_for_claude_core_md():
+    """The wheel data dir needs CLAUDE.core.md: the install-time freshness check regenerates the slim file from it."""
+    text = (REPO / "pyproject.toml").read_text(encoding="utf-8")
+    assert '"quoin/CLAUDE.core.md" = "src/quoin/data/CLAUDE.core.md"' in text
+    assert (QUOIN_SRC / "CLAUDE.core.md").exists()
+
+
 def test_pyproject_force_include_line_for_claude_slim_md():
     """pyproject.toml must wire quoin/CLAUDE.slim.md into the wheel (T-06).
 
@@ -539,7 +546,6 @@ def test_wheel_install_and_quoin_install(built_wheel):
 
     from quoin.installer import (  # noqa: PLC0415
         CANONICAL_SKILLS,
-        DEPRECATED_SKILL_MARKERS,
         TIER1_MEMORY_FILES,
     )
 
@@ -592,9 +598,17 @@ def test_wheel_install_and_quoin_install(built_wheel):
             assert skill_md.exists(), (
                 f"Missing skill: {skill}"
             )
-            content = skill_md.read_text(encoding="utf-8")
-            for marker in DEPRECATED_SKILL_MARKERS:
-                assert marker not in content, f"Deprecated marker in deployed {skill}"
+
+        # Spawn-target preambles ship in the wheel and deploy next to SKILL.md
+        source_preambles = sorted(
+            p.parent.name
+            for p in (QUOIN_SRC / "adapters" / "claude" / "skills").glob("*/preamble.md")
+        )
+        assert source_preambles, "expected spawn-target preamble.md files in the source tree"
+        for skill in source_preambles:
+            assert (claude_dir / "skills" / skill / "preamble.md").is_file(), (
+                f"Missing deployed preamble.md for {skill}"
+            )
 
         migrated = "plan"
         deployed_plan = claude_dir / "skills" / migrated / "SKILL.md"

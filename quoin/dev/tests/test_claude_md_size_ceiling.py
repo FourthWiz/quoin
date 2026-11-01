@@ -6,11 +6,12 @@ warning threshold. Deploy overhead model (measured claude-md-trim 2026-06-25):
                     474 chars for Python venv + open-model routing blocks; ~226
                     headroom; 700 chosen as deliberate over-budget for user-owned
                     variable content)
-SOURCE_CEILING = 38951 chosen so that:
-  SOURCE_CEILING + sub_delta(105) + frame(56) + PRE_MARKER_BUDGET(700) = 39812 < 40000
-  giving a 193-char hard margin even on worst-case pre-marker growth.
+SOURCE_CEILING = 39066 chosen so that:
+  SOURCE_CEILING + sub_delta(105) + frame(56) + PRE_MARKER_BUDGET(700) = 39927 < 40000
+  giving a 73-char hard margin even on worst-case pre-marker growth.
 (IVG-119: bumped 38500 → 38951 by the exact +451 delta of the single-root-invariant
-convention text; the deploy-projection guard below remains the real 40k safety net.)"""
+convention text; bumped 38951 → 39066 by the +115 delta of the real-usage context-reading
+sentence; the deploy-projection guard below remains the real 40k safety net.)"""
 from pathlib import Path
 
 SOURCE = Path(__file__).resolve().parents[2] / "CLAUDE.md"
@@ -18,7 +19,7 @@ SOURCE = Path(__file__).resolve().parents[2] / "CLAUDE.md"
 # catalog extracted into quoin/memory/tier1-files.md; source dropped from 39297
 # to ~35011 chars).  Ceiling set to 38500 so the deploy-projection assertion
 # below guards the actual 40000 threshold independently of this source guard.
-SOURCE_CEILING = 38951
+SOURCE_CEILING = 39066
 
 # Deployed-projection constants (environment-independent: fixed home-path stand-in,
 # not os.path.expanduser — keeps the projection a true upper-bound guard regardless

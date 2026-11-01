@@ -105,7 +105,7 @@ else
   fail "(e) shebang: source hook does not start with #!/bin/sh"
 fi
 
-# ─── (a) Valid input → sentinel written ──────────────────────────────────────
+# ─── (a) Valid input → no postcompact-reset sentinel is written ──────────────
 
 SID="test-session-pc-a"
 stdin=$(make_stdin "$SID" "$TMPDIR_TEST" "$TRANSCRIPT")
@@ -114,31 +114,9 @@ stdout=$(printf '%s' "$stdin" | sh "$HOOK" 2>/dev/null)
 SENTINEL="$MEMORY_DIR/postcompact-reset-${SID}.txt"
 
 if [ -f "$SENTINEL" ]; then
-  ok "(a) valid input: sentinel written at correct path"
+  fail "(a) valid input: postcompact-reset sentinel written at $SENTINEL (nothing reads it any more)"
 else
-  fail "(a) valid input: sentinel NOT found at $SENTINEL"
-fi
-
-# ─── (b) Sentinel content fields ─────────────────────────────────────────────
-
-if [ -f "$SENTINEL" ]; then
-  if grep -q '^compacted_at=' "$SENTINEL"; then
-    ok "(b) sentinel has compacted_at= field"
-  else
-    fail "(b) sentinel missing compacted_at= field"
-  fi
-
-  if grep -q '^session_id=' "$SENTINEL"; then
-    ok "(b) sentinel has session_id= field"
-  else
-    fail "(b) sentinel missing session_id= field"
-  fi
-
-  if grep -q '^transcript_bytes_after=' "$SENTINEL"; then
-    ok "(b) sentinel has transcript_bytes_after= field"
-  else
-    fail "(b) sentinel missing transcript_bytes_after= field"
-  fi
+  ok "(a) valid input: no postcompact-reset sentinel written"
 fi
 
 # (b2) compact-happened sentinel present
@@ -198,7 +176,7 @@ fi
 
 # No sentinel should be written when session_id is missing (empty glob = no files)
 sentinel_count=$(find "$MEMORY_DIR" -name 'postcompact-reset-*.txt' -maxdepth 1 2>/dev/null | wc -l | awk '{print $1}')
-# We already have sentinels from tests (a) and (c) — just check none has empty name
+# Tests (c) wrote compact-happened markers; check none has an empty name
 if find "$MEMORY_DIR" -name 'postcompact-reset-.txt' -maxdepth 1 2>/dev/null | grep -q .; then
   fail "(d) missing session_id: stray sentinel 'postcompact-reset-.txt' created"
 else
@@ -281,7 +259,7 @@ fi
 
 # (T-01-marker-symmetry) .allow-compact suppresses telemetry on BOTH halves;
 # precompact.sh exits before its own allow printf (empty stdout); postcompact.sh
-# exits inside STEP 3 after both sentinels are already written.
+# exits inside STEP 3 after the compact-happened marker is already written.
 SID_MARK="sess-tel-marker"
 touch "$TMPDIR_TEST/.allow-compact"
 tel_before_mark=$(wc -l < "$TEL_SINK" 2>/dev/null | awk '{print $1}') || tel_before_mark=0
@@ -295,8 +273,8 @@ tel_after_mark=$(wc -l < "$TEL_SINK" 2>/dev/null | awk '{print $1}') || tel_afte
 SENTINEL_MARK="$MEMORY_DIR/postcompact-reset-${SID_MARK}.txt"
 COMPACT_HAPPENED_MARK="$MEMORY_DIR/compact-happened-${SID_MARK}.txt"
 if [ "$rc_pre_mark" -eq 0 ] && [ -z "$out_pre_mark" ] && [ "$rc_post_mark" -eq 0 ] && [ -z "$out_post_mark" ] \
-   && [ "$tel_after_mark" = "$tel_before_mark" ] && [ -f "$SENTINEL_MARK" ] && [ -f "$COMPACT_HAPPENED_MARK" ]; then
-  ok "(T-01-marker-symmetry) .allow-compact suppresses telemetry on both hooks; postcompact sentinels still written"
+   && [ "$tel_after_mark" = "$tel_before_mark" ] && [ ! -f "$SENTINEL_MARK" ] && [ -f "$COMPACT_HAPPENED_MARK" ]; then
+  ok "(T-01-marker-symmetry) .allow-compact suppresses telemetry on both hooks; compact-happened marker still written"
 else
   fail "(T-01-marker-symmetry) marker symmetry mishandled (rc_pre=$rc_pre_mark out_pre=$out_pre_mark rc_post=$rc_post_mark out_post=$out_post_mark tel=$tel_before_mark->$tel_after_mark)"
 fi
@@ -459,8 +437,8 @@ tel_after_s3=$(grep -cF "\"session_id\":\"$SID_S3\"" "$TEL_SINK" 2>/dev/null) ||
 SENTINEL_S3="$MEMORY_DIR/postcompact-reset-${SID_S3}.txt"
 COMPACT_HAPPENED_S3="$MEMORY_DIR/compact-happened-${SID_S3}.txt"
 if [ "$WD_TIMEDOUT" -eq 0 ] && [ "$WD_RC" -eq 0 ] && [ -z "$WD_OUT" ] \
-   && [ "$tel_after_s3" = "$tel_before_s3" ] && [ -f "$SENTINEL_S3" ] && [ -f "$COMPACT_HAPPENED_S3" ]; then
-  ok "(T-01-failopen-step3jq) jq failing only inside STEP 3 → exit 0, empty stdout, sentinels unaffected, nothing appended"
+   && [ "$tel_after_s3" = "$tel_before_s3" ] && [ ! -f "$SENTINEL_S3" ] && [ -f "$COMPACT_HAPPENED_S3" ]; then
+  ok "(T-01-failopen-step3jq) jq failing only inside STEP 3 → exit 0, empty stdout, marker unaffected, nothing appended"
 else
   fail "(T-01-failopen-step3jq) step3-only jq failure mishandled (rc=$WD_RC out=$WD_OUT tel=$tel_before_s3->$tel_after_s3)"
 fi

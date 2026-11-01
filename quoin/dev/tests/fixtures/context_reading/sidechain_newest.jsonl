@@ -1,0 +1,2 @@
+{"type":"assistant","isSidechain":false,"message":{"model":"claude-opus-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_read_input_tokens":99490,"cache_creation_input_tokens":500,"output_tokens":5}}}
+{"type":"assistant","isSidechain":true,"message":{"model":"claude-opus-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"cache_read_input_tokens":899490,"cache_creation_input_tokens":500,"output_tokens":5}}}

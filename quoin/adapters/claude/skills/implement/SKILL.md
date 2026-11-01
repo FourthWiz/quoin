@@ -1,6 +1,6 @@
 ---
 name: implement
-description: "Implementation agent (Sonnet) that turns a converged plan into code and tests. Use for: /implement, 'implement task N from the plan', 'start coding', 'build this based on the plan'."
+description: "Turns a converged plan into code and tests (Sonnet). Use for: /implement, 'implement task N from the plan', 'start coding'."
 model: sonnet
 ---
 
@@ -231,11 +231,11 @@ work in this dispatch. If the plan you've been given requires more:
   2. Mark remaining tasks as `⏳` in current-plan.md with a note
      `[continue in fresh /implement dispatch]`.
   3. Tell the orchestrator (or the user, if standalone) that you've
-     hit the soft cap and that /thorough_plan or /run should
+     hit the soft cap and that /thorough_plan or run_hard should
      re-dispatch a fresh narrow child for the remaining work.
   4. Commit any in-progress files first so nothing is lost.
 
-NOTE: If you are running standalone (not via /run or /thorough_plan),
+NOTE: If you are running standalone (not via run_hard or /thorough_plan),
 there is NO automatic retry on stream-idle timeout. Make sure to commit
 all in-progress work before reaching the cap — the user will need to
 re-invoke manually.
@@ -348,12 +348,12 @@ Parse the JSON output. The check uses `repos[]` from the JSON and filters on `on
 
 This skill MUST be explicitly invoked by the user typing `/implement`. No other skill may auto-invoke it. If you are an orchestrator or another skill and you think implementation should start — STOP and tell the user to run `/implement` themselves. This is a hard rule.
 
-**Exception: `/run` orchestrator.** When this skill is spawned by `/run` as a subagent, the user has already confirmed the implementation checkpoint ("yes, continue to implementation"). This constitutes explicit user invocation — the user consciously chose to run the full pipeline. If you see evidence that you were spawned by `/run` (e.g., the task description or session context mentions `/run`), proceed normally.
+**Exception: `run_hard` orchestrator.** When this skill is spawned by `run_hard` (`/run hard:`) as a subagent, the user has already confirmed the implementation checkpoint ("yes, continue to implementation"). This constitutes explicit user invocation — the user consciously chose to run the full pipeline. If you see evidence that you were spawned by `run_hard` (e.g., the task description or session context mentions `run_hard` or `/run hard:`), proceed normally.
 
 ## Session bootstrap
 
 This skill typically runs in a fresh session (clean context is a feature, not a bug — implementation doesn't need planning back-and-forth). On start:
-0. Parse the `[autonomous]` sentinel from the incoming prompt (parsed independently of `[no-redispatch]`; leading sentinels stack, e.g. `[no-redispatch] [autonomous]`). Store as `_AUTONOMOUS` state for this session. Used below in §0b (branch-hygiene auto-create) and step 4 (auto-select all pending tasks). ALSO parse the `[no-interactive]` sentinel (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`); `/run` injects it onto non-autonomous phase-subagent spawns so the §0b branch-hygiene decision FAILS CLOSED instead of silently proceeding when no human is reachable — mutually exclusive with `[autonomous]` per spawn. See `__QUOIN_HOME__/memory/decision-gate-guard.md`.
+0. Parse the `[autonomous]` sentinel from the incoming prompt (parsed independently of `[no-redispatch]`; leading sentinels stack, e.g. `[no-redispatch] [autonomous]`). Store as `_AUTONOMOUS` state for this session. Used below in §0b (branch-hygiene auto-create) and step 4 (auto-select all pending tasks). ALSO parse the `[no-interactive]` sentinel (leading, stackable, strip before further parsing) into `_INTERACTIVE=false` (default `_INTERACTIVE=true`); `run_hard` injects it onto non-autonomous phase-subagent spawns so the §0b branch-hygiene decision FAILS CLOSED instead of silently proceeding when no human is reachable — mutually exclusive with `[autonomous]` per spawn. See `__QUOIN_HOME__/memory/decision-gate-guard.md`.
 1. Run `python3 __QUOIN_HOME__/scripts/memory_select.py --task-text "<task description from current-plan.md>"` to read only task-relevant lessons from `.workflow_artifacts/memory/lessons-learned.md`. The task description is derived from `current-plan.md`'s `## For human` summary block (read at bootstrap step 3). If the script is absent, errors, or reports `fellback_to_wholesale`, read the whole `.workflow_artifacts/memory/lessons-learned.md` as the fallback (the wholesale read is preserved as the explicit fallback).
 2. Read `.workflow_artifacts/memory/sessions/` for active session state (which tasks are done, where to resume)
 3. Read `<task_dir>/current-plan.md` — this is your specification. Resolve `<task_dir>` via `python3 __QUOIN_HOME__/scripts/path_resolve.py --task <task-name> [--stage <N-or-name>]`. Apply the §5.7.1 detection rule below before reading. architecture.md: ALWAYS `<task-root>/architecture.md`. cost-ledger.md: ALWAYS `<task-root>/cost-ledger.md`. If exit code 2: display stderr verbatim, fall back to task root, ask user to disambiguate.
@@ -439,10 +439,6 @@ Spawn an Agent subagent with:
 On dispatch success: inject the summary inline and proceed; cache stays hot.
 
 On dispatch failure (harness rejects subagent or times out): fall back to keeping the raw result inline. Emit the one-line warning: `[implement-stage-5: large-result summarizer unavailable; proceeding with raw inline]`
-
-This matches the §0 dispatch fail-OPEN pattern (architecture I-01): cost guardrail is best-effort, not load-bearing for correctness.
-
-**Tunability:** threshold (5120) and model (`"sonnet"`) are explicit named constants in this prose — change both here and re-install. Soak data from T-13 AC-3 (Stage 5 testing) will determine if threshold should be raised.
 
 ### Code quality
 - Follow existing code style and conventions in the repository
@@ -717,24 +713,22 @@ After completing each task, update `<task_dir>/current-plan.md` (where `<task_di
 
 # V-05 reminder: T-NN/D-NN/R-NN/F-NN/Q-NN/S-NN are FILE-LOCAL.
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
-Write session-state files in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `__QUOIN_HOME__/memory/format-kit.md` (primitives + section set per artifact type), `__QUOIN_HOME__/memory/glossary.md` (abbreviation whitelist + status glyphs), `__QUOIN_HOME__/memory/terse-rubric.md` (prose discipline). The session-state body uses the `session` artifact-type sections per format-kit §2: `## Status` (single word — `in_progress` / `completed` / `blocked`), `## Current stage` (caveman prose, 1 line), `## Completed in this session` (terse numbered list with status glyphs ✓/⏳/🚫 + commit hashes), `## Unfinished work` (terse numbered list), `## Cost` (YAML — Session UUID, Phase, Recorded in cost ledger), optional `## Decisions made` (terse numbered list), optional `## Open questions` (terse numbered list). After composing the body to `{session-path}.body.tmp`, run `python3 __QUOIN_HOME__/scripts/validate_artifact.py {session-path}.tmp` (auto-detection → session type via the parent-directory check `parent in ('session', 'sessions')`). On validator failure: retry once with section-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename: `python3 __QUOIN_HOME__/scripts/fsops.py finalize "{session-path}.tmp" "{session-path}" --cleanup "{session-path}.body.tmp" "{session-path}.tmp"`.
+Write session-state files in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `__QUOIN_HOME__/memory/format-kit.md` (primitives + section set per artifact type), `__QUOIN_HOME__/memory/glossary.md` (abbreviation whitelist + status glyphs), `__QUOIN_HOME__/memory/terse-rubric.md` (prose discipline). The session-state body follows `__QUOIN_HOME__/memory/session-schema.md` (sections and `## Cost` lines). After composing the body to `{session-path}.body.tmp`, run `python3 __QUOIN_HOME__/scripts/validate_artifact.py {session-path}.tmp` (auto-detection → session type via the parent-directory check `parent in ('session', 'sessions')`). On validator failure: retry once with section-discipline reminder; on persistent failure, fall back to v2-style terse-rubric-only write. Atomic rename: `python3 __QUOIN_HOME__/scripts/fsops.py finalize "{session-path}.tmp" "{session-path}" --cleanup "{session-path}.body.tmp" "{session-path}.tmp"`.
 
-After each task (or at natural stopping points), write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with these required sections:
-- **## Status:** `in_progress` (or `completed` if all plan tasks are done)
-- **## Current stage:** `implement` — note which task you're on (e.g. `implement task 4 of 7`)
-- **## Completed in this session:** list of tasks finished with status glyphs ✓/⏳/🚫 + commit hashes
-- **## Unfinished work:** remaining tasks with exact file/function to resume at
-- **## Cost:** YAML block with Session UUID, Phase, Recorded in cost ledger
-- **## Decisions made:** any deviations from the plan and why (optional)
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`, or `completed` when every plan task is done
+- Current stage: `implement task K of M`
+- Next command: `/review` when all tasks are done, else `/implement`
+Write once at the end of the run, including the scope-cap partial exit; per-task progress lives in the glyphs of `current-plan.md`.
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Important behaviors
 
 - **Don't over-think architecture.** That was the architect's and planner's job. If you find yourself redesigning the approach, stop and escalate to `/review` or `/thorough_plan`.
-- **Test everything you touch.** No exceptions. If you change a function, its tests must pass. If it has no tests, write them.
 - **Small, reviewable changes.** Each commit and PR should be easy for a human to review. If a PR is over 500 lines of diff, consider splitting it.
-- **Keep the plan updated.** The plan is the source of truth. If reality diverges, the plan should reflect that.
 
 ## After implementation
 

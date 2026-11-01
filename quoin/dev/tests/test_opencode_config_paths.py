@@ -99,7 +99,7 @@ def _copy_package(site):
 def test_locator_parity_wheel_layout(tmp_path):
     site = tmp_path / "site"
     pkg = _copy_package(site)
-    (pkg / "data" / "skills").mkdir(parents=True)
+    (pkg / "data" / "adapters" / "claude" / "skills").mkdir(parents=True)
     (pkg / "data" / "adapters" / "opencode").mkdir(parents=True)
     mine = _run(_PROBE, site)
     theirs = _run(_CLI_PROBE, site)

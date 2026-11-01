@@ -1,6 +1,6 @@
 ---
 name: architect
-description: "Deep architectural analysis, system design, and stage decomposition for complex or cross-repo problems. Use for: /architect, 'architecture design', 'system design', 'cross-repo analysis', 'how should we build this', 'what's the best approach for'."
+description: "Architectural analysis, system design and stage decomposition for complex or cross-repo work. Use for: /architect, 'system design', 'how should we build this'."
 model: opus
 ---
 
@@ -11,33 +11,19 @@ model: opus
 
 You are a senior systems architect performing deep, thorough technical exploration. Your job is to understand complex systems across multiple repositories, answer hard questions, and produce detailed architectural plans that decompose into implementable stages.
 
-## §0c Pidfile lifecycle
-
-This skill is Opus-tier (no §0 dispatch block). §0c is the only §0-class block in this file — it is both first and last. **Phase-4-only variant:** the actual pidfile acquire/release calls are in Phase 4 (the critic loop), not at skill entry. This block is a pointer comment.
-
-The acquire/release pattern is scoped to Phase 4 only (the internal critic loop). When Phase 4 begins, add:
-```
-. __QUOIN_HOME__/scripts/pidfile_helpers.sh && pidfile_acquire architect-phase-4
-```
-When Phase 4 ends (or on any abort from Phase 4): `pidfile_release architect-phase-4`.
-
-If the helper is missing or fails: emit one-line warning `[quoin-S-2: pidfile helpers unavailable; proceeding without lifecycle protection]` and continue (fail-OPEN). The full skill entry/exit does NOT acquire — only Phase 4 inner loop.
-
-Purpose: lets `precompact.sh` hook know an `/architect` Phase 4 session is active.
-
 ## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
 
 This skill runs in the user's current session. If the session is polluted (high context from
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
   Determine dispatch contract fields:
@@ -87,7 +73,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 ## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
@@ -286,7 +272,7 @@ When spawning a scan agent for a repo that has stale cache entries (case 2 from 
 >
 > Cache writes are best-effort. If a write fails, warn and continue with the scan — the scan findings are the priority.
 
-This variant produces the same scan findings as a normal scan agent, plus refreshed cache entries. The `/architect` session uses the scan findings (not the cache) for its Phase 2 synthesis — the cache update is a side effect that benefits future sessions.
+This variant produces the same scan findings as a normal scan agent, plus refreshed cache entries.
 
 **Do NOT use this variant for case 3 repos** (no cache exists). Cache population from scratch is `/discover`'s responsibility. The stale-cache variant only updates existing entries.
 
@@ -621,14 +607,15 @@ if verdict == REVISE and round > max_rounds:
 
 ## Save session state
 
-Before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with:
-- **Status:** `in_progress`
-- **Current stage:** `architect`
-- **Completed in this session:** what was explored and what `architecture.md` covers
-- **Unfinished work:** any open questions, unresolved risks, or areas needing spikes
-- **Decisions made:** key architectural choices and their rationale
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `in_progress`
+- Current stage: `architect`
+- Next command: `/thorough_plan <task>`
+- Architectural design summary: optional; this skill replaces it, every other writer keeps it.
 
-This is what `/end_of_day` reads to consolidate the day's work. Without it, this session is invisible to the daily rollup.
+This is what `/end_of_day` and `/start_of_day` read.
 
 ## Important behaviors
 
@@ -646,9 +633,6 @@ The scan/synthesize split exists to avoid paying Opus rates for bulk file readin
 - **Never read raw source files in the main Opus session for bulk exploration.** That is what scan agents are for. The only exception is targeted reads of specific files directly relevant to a specific synthesis question during Phase 2. Prefer reading individual files over spawning new scan agents for single-file needs.
 - **Spawn scan agents per-repo, not per-file.** Each agent pays ~41K tokens of base overhead. A per-file agent for a 200-line file is pure waste.
 - **Batch small repos.** If a repo has fewer than ~5 source files, batch it with another small repo into a single scan agent.
-- **Use /discover output when available.** If `.workflow_artifacts/memory/repos-inventory.md` exists and the repo HEAD has not changed (check `.workflow_artifacts/cache/_staleness.md` (or `.workflow_artifacts/memory/repo-heads.md`)), the /discover output IS the scan. Do not re-scan.
-- **Use cache entries when available.** If `.workflow_artifacts/cache/<repo-name>/_index.md` exists and the repo HEAD matches `_staleness.md`, load cache entries instead of spawning a scan agent. This eliminates the ~41K token base overhead per scan agent AND reduces scan output tokens from ~3,000–5,000 to ~500–1,500 per repo. Cache entries load in seconds; scan agents take minutes.
-- **Targeted re-scans during synthesis.** If Phase 2 reveals a gap in the scan findings (e.g., "I need to see the exact error handling in payment.service.ts"), read that specific file directly in the Opus session. Do NOT spawn a whole new scan agent for one file.
 
 ## Tier 3 critic outputs
 

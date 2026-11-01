@@ -1,2 +1,0 @@
-{"type": "user", "message": {"role": "user", "content": "Invoke the /gate skill (use the Skill tool) and run the checks."}}
-{"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "Gate PASSED."}], "usage": {"output_tokens": 5}, "stop_reason": "end_turn"}}

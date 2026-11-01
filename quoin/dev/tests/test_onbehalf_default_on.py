@@ -208,7 +208,7 @@ def test_shared_parent_uuid_no_attribution_is_the_regressed_shape():
 # ---------------------------------------------------------------------------
 def test_run_setup_warns_on_explicit_optout():
     skill_path = (
-        REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+        REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
     )
     text = skill_path.read_text(encoding="utf-8")
 

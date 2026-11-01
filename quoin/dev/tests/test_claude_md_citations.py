@@ -145,23 +145,31 @@ def test_known_exception_records_have_a_nonempty_owner():
     )
 
 
-def test_resolves_records_cite_a_keep_classified_heading():
-    """Every resolves record's cited heading is in the generator's keep set.
+def test_resolves_records_cite_a_catalog_reachable_heading():
+    """Every resolves record cites a real source heading that a reader can reach.
 
-    A citation is only truly variant-independent ("resolves" regardless of
-    full or slim) if the heading it names survives into CLAUDE.slim.md —
-    i.e. is classified `keep`. Drop-row citations are, at best,
-    known-exception (valid under full, not guaranteed under slim).
+    The cited heading must be a CLASSIFICATION key (kept in slim, or dropped and
+    therefore verbatim in the catalog), and the committed slim file must carry
+    the sentence that points readers at the catalog.
     """
-    keep_headings = {h for h, (cls, _t) in bcs.CLASSIFICATION.items() if cls == "keep"}
+    headings = set(bcs.CLASSIFICATION)
     violations = []
-    for r in _load_fixture():
-        if r["heading_disposition"] != "resolves":
-            continue
+    records = [r for r in _load_fixture() if r["heading_disposition"] == "resolves"]
+    assert records, "no resolves records; the check would be vacuous"
+    catalog = (_MEMORY / "workflow-catalog.md").read_text(encoding="utf-8")
+    for r in records:
         heading = r.get("cited_heading")
-        if heading not in keep_headings:
+        if heading not in headings:
             violations.append((r["file"], r["line_hash"][:12], heading))
+        elif CLASSIFICATION_DROP(heading) and f"\n{heading}\n" not in catalog:
+            violations.append((r["file"], r["line_hash"][:12], heading, "not in catalog"))
     assert not violations, violations
+    slim = (_SOURCE_ROOT / "CLAUDE.slim.md").read_text(encoding="utf-8")
+    assert "workflow-catalog.md" in slim and "means that section there" in slim
+
+
+def CLASSIFICATION_DROP(heading):
+    return bcs.CLASSIFICATION[heading][0] == "drop"
 
 
 # --- Dangler-family fixes shipped in this task -------------------------------
@@ -230,26 +238,3 @@ def test_claude_md_has_zero_yaml_fences():
     claude_md_text = (_SOURCE_ROOT / "CLAUDE.md").read_text(encoding="utf-8")
     assert "```yaml" not in claude_md_text
 
-
-def test_stub_skills_tree_excluded_from_sweep_corpora():
-    """review-1.md MINOR 8: quoin/skills/ (the non-deployed compatibility stub
-    tree) is deliberately out of scope for the sweep, not an omission bug.
-
-    The sweep's live in-scope corpora are quoin/adapters/claude/skills/*/SKILL.md
-    (deployed), quoin/memory/*.md, and quoin/scripts/*.py — never quoin/skills/.
-    That stub tree still carries a live CLAUDE.md mention (init_workflow/SKILL.md);
-    this asserts _enumerate_live_mentions() never picks it up.
-    """
-    stub_tree = _SOURCE_ROOT / "skills"
-    stub_mentions = [
-        fp for fp in sorted(stub_tree.glob("*/SKILL.md"))
-        if _MENTION_RE.search(fp.read_text(encoding="utf-8"))
-    ]
-    assert stub_mentions, "expected the stub tree to still carry a live CLAUDE.md mention"
-
-    live_files = {file for file, _hash in _enumerate_live_mentions().keys()}
-    stub_relpaths = {_relpath(fp) for fp in stub_mentions}
-    assert not (stub_relpaths & live_files), (
-        "quoin/skills/ stub tree must stay out of _enumerate_live_mentions() corpora: "
-        f"{stub_relpaths & live_files}"
-    )

@@ -102,7 +102,7 @@ clone of `inject_pollution_dispatch.py`). `--dry-run` prints blocks; re-running 
 - **`status` / `triage` / `cost_snapshot` (light — reconcile-only, no side-effect check).**
   Read-only Haiku reporters; run `--reconcile-tasks`, derive displayed status from the table. A
   fixture contradiction is surfaced, not silently reported.
-- **`checkpoint` (T-07, deliberately narrow — see Descope below).**
+- **`checkpoint` (T-07, deliberately narrow — see Descope below; historical, the Claude skill is no longer shipped and the predicate stays in `verify_claims.py` for other runtimes).**
 
 ### `checkpoint` T-07 — descoped, on-disk-only
 
@@ -159,7 +159,7 @@ early-emitted manifest — it does NOT run a claimless reconcile.
 ## Session-state fields
 
 `verification_ran` (default `no`) / `verification_mismatches` (default `0`) live in the same
-`## Cost` YAML block as `fallback_fires`, atomic-rename increment, never decremented. Omission or
+`## Cost` lines as `fallback_fires` (`session-schema.md`); reset to those defaults at every session write. Omission or
 `no` is read as a **positive failure signal**, never a silent pass (MAJ-1) — this is why
 `start_of_day` treats a missing flag on an in-scope session as a mismatch in its own right.
 `end_of_day`'s Cost-summary and `weekly_review`'s Cost-data step roll up `verification_mismatches`

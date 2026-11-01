@@ -2,11 +2,11 @@
 
 The Claude Code adapter is the current production implementation.
 
-For backward compatibility, its active files still live at the existing paths:
+Its active files live at these paths:
 
 - `quoin/install.sh`
 - `quoin/CLAUDE.md`
-- `quoin/skills/`
+- `quoin/adapters/claude/skills/`
 - `quoin/memory/`
 - `quoin/scripts/`
 - `quoin/core/scripts/`
@@ -36,8 +36,8 @@ The first runtime-portability pass must not change Claude install behavior.
 
 Per-skill adapter SKILL.md files live under `skills/<name>/SKILL.md` in this
 directory and are the install source for the Claude runtime.
-`bash quoin/install.sh` deploys each to `~/.claude/skills/<name>/SKILL.md`
-instead of the legacy stub at `quoin/skills/<name>/SKILL.md`.
+`bash quoin/install.sh` deploys each to `~/.claude/skills/<name>/SKILL.md`,
+together with the generated `preamble.md` for subagent spawn targets.
 
 **Authoritative source for the full skill list:** `quoin/core/workflow/skills.json`
 (`skills[].name` array). This README previously maintained a per-skill enumeration
@@ -49,6 +49,4 @@ python3 -c "import json; d=json.load(open('quoin/core/workflow/skills.json')); [
 ```
 
 The runtime-neutral intent docs for each skill live at
-`quoin/core/skills/<name>.md`. Legacy stubs at `quoin/skills/<name>/SKILL.md`
-remain only so glob-based tests and the manifest frontmatter parser continue
-to find a valid SKILL.md at each path.
+`quoin/core/skills/<name>.md`.

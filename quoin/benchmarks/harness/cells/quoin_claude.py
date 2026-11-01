@@ -10,14 +10,17 @@ Key differences from simple_claude.py:
      followed by /init_workflow in non-interactive mode.
   2. Sets QUOIN_GATE_AUTO_APPROVE=1 AND QUOIN_BENCHMARK_RUN=<run_id> in the
      subprocess environment. Both must be set for /gate to auto-approve.
-  3. Prepends "Use /run --autonomous end-to-end on this task" to the agent
-     prompt (D-18). `/run`'s SKILL.md has no non-interactive path (17
-     `AskUserQuestion` calls, zero `QUOIN_GATE_AUTO_APPROVE` /
-     `QUOIN_BENCHMARK_RUN` references — F-11), so a `--print` session given
-     the plain "/run end-to-end" prompt cannot answer its own checkpoints
-     and either degrades or stalls to the wall clock, burning the
-     authorisation for no evidence. `--autonomous` is present in both arms'
-     `run/SKILL.md` and adds no candidate-only capability.
+  3. Starts the prompt with the slash command `/run --autonomous` (or
+     `/run --autonomous hard: small:` under QUOIN_BENCH_QUOIN_ROUTE=hard) and a
+     line saying the pipeline is required, so the CLI expands the run skill
+     itself (a prose request to "use /run" left a session free to skip the
+     pipeline, and the bare slash command still let a session decide an easy
+     issue was too small for it and fix it directly). `/run`'s
+     SKILL.md has no non-interactive path of its own for gates, so
+     `--autonomous` is required: a `--print` session cannot answer its
+     checkpoints. `--autonomous` is present in both arms' `run/SKILL.md` and
+     adds no candidate-only capability. The session also gets
+     QUOIN_AUTO_RESUME=0 so no earlier pipeline state is picked up.
   4. Post-run: captures .workflow_artifacts/<task-name>/ into the run output
      folder as evidence; validates that architecture.md and current-plan.md
      exist for at least one sampled task.
@@ -38,7 +41,9 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -48,8 +53,10 @@ from collections import deque
 from pathlib import Path
 from typing import Optional
 
+from .. import proc_group
+from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
-from ..cost import estimate_cost, load_pricing
+from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
     _MAX_RETAINED_STDERR_LINES,
@@ -60,6 +67,7 @@ from .simple_claude import (
     _drain_stream,
     _extract_cost_usd,
     _gate_mode,
+    _get_effort,
     _get_model,
     _read_ready_chunk,
     _split_ready_lines,
@@ -74,6 +82,30 @@ from .simple_claude import (
 
 ENV_GATE_AUTO_APPROVE = "QUOIN_GATE_AUTO_APPROVE"
 ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
+
+# The slash command alone still let a session judge an easy issue too small for
+# the pipeline and fix it directly, so the arm also states that the pipeline is
+# the thing under test. The default is the light /run route; setting
+# QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
+# `small:` (one plan pass, implement, review), as the earlier suites did.
+QUOIN_RUN_PREFIX = (
+    "/run --autonomous "
+    "This session benchmarks the quoin workflow, so the /run pipeline is required: "
+    "follow its steps (brief, context, implement, review) even if the fix looks "
+    "trivial, and do not fix the issue directly outside the pipeline.\n\n"
+)
+QUOIN_HARD_RUN_PREFIX = (
+    "/run --autonomous hard: small: "
+    "This session benchmarks the quoin workflow, so the /run pipeline is required: "
+    "run its phases (plan, implement, review) even if the fix looks trivial, and "
+    "do not fix the issue directly outside the pipeline.\n\n"
+)
+ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
+
+
+def _run_prefix() -> str:
+    route = os.environ.get(ENV_BENCH_ROUTE, "").strip().lower()
+    return QUOIN_HARD_RUN_PREFIX if route == "hard" else QUOIN_RUN_PREFIX
 
 
 _INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
@@ -179,6 +211,74 @@ def _run_install_subprocess(argv: list[str], env: Optional[dict] = None) -> dict
     }
 
 
+PHASE_FILE_PATTERNS = (
+    "spec.md", "architecture.md", "current-plan.md", "triage-decision.md",
+    "review-*.md", "cost-ledger.md", "brief.md", "context.md", "review.md",
+)
+_ROUTE_LINE = re.compile(r"^\s*route\s*:\s*(\w+)", re.IGNORECASE | re.MULTILINE)
+_PROFILE_LINE = re.compile(r"Task profile:\**\s*\**\s*([A-Za-z]+)", re.IGNORECASE)
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+
+
+def _pipeline_diagnostics(dest: Path) -> dict:
+    """On-disk evidence that the run pipeline started and the route it took.
+
+    Reads only the captured artifacts directory; a transcript `Skill` call is
+    not evidence, because the slash command expands the skill into the prompt.
+    """
+    phase_files = sorted({
+        str(path.relative_to(dest))
+        for pattern in PHASE_FILE_PATTERNS
+        for path in dest.rglob(pattern)
+        if path.is_file()
+    })
+    orchestrator_row = any(
+        "| run-orchestrator |" in _read_text(ledger) for ledger in dest.rglob("cost-ledger.md")
+    )
+    run_states = [p for p in dest.rglob("run-state-*.json") if p.parent.name == "memory"]
+    started = bool(orchestrator_row or run_states or phase_files)
+
+    route, profile = "unknown", None
+    triage = next(iter(sorted(dest.rglob("triage-decision.md"))), None)
+    plans = sorted(dest.rglob("current-plan.md"))
+    if triage is not None:
+        match = _ROUTE_LINE.search(_read_text(triage))
+        if match and match.group(1).lower() in ("fast", "full"):
+            route = match.group(1).lower()
+    if route == "unknown" and not plans and any(dest.rglob("brief.md")):
+        route = "light"
+    if route == "unknown" and plans:
+        plan_text = _read_text(plans[0])
+        route = "fast" if re.search(r"^provenance:\s*fast-path-triage\s*$", plan_text, re.MULTILINE) else "full"
+    for state_path in run_states:
+        try:
+            value = json.loads(_read_text(state_path)).get("profile")
+        except (ValueError, AttributeError):
+            value = None
+        if isinstance(value, str) and value:
+            profile = value
+            break
+    if profile is None:
+        for candidate in [triage, *plans]:
+            if candidate is None:
+                continue
+            match = _PROFILE_LINE.search(_read_text(candidate))
+            if match:
+                profile = match.group(1)
+                break
+    return {
+        "phase_files": phase_files,
+        "pipeline_started": started,
+        "workflow_route": {"route": route, "profile": profile},
+    }
+
+
 def _capture_workflow_artifacts(
     workdir: Path,
     run_output_dir: Path,
@@ -193,37 +293,42 @@ def _capture_workflow_artifacts(
         "has_architecture_md": bool,
         "has_current_plan_md": bool,
         "artifacts_path": str | None,
+        "phase_files": [str],
+        "pipeline_started": bool,
+        "workflow_route": {"route": "light" | "fast" | "full" | "unknown", "profile": str | None},
       }
     """
+    empty = {
+        "captured": False,
+        "has_architecture_md": False,
+        "has_current_plan_md": False,
+        "artifacts_path": None,
+        "phase_files": [],
+        "pipeline_started": False,
+        "workflow_route": {"route": "unknown", "profile": None},
+    }
     src = workdir / ".workflow_artifacts"
     if not src.exists():
-        return {
-            "captured": False,
-            "has_architecture_md": False,
-            "has_current_plan_md": False,
-            "artifacts_path": None,
-        }
+        return dict(empty)
 
     dest = run_output_dir / "workflow_artifacts_evidence"
     try:
         shutil.copytree(src, dest, dirs_exist_ok=True)
     except Exception:
-        return {
-            "captured": False,
-            "has_architecture_md": False,
-            "has_current_plan_md": False,
-            "artifacts_path": None,
-        }
+        # Evidence exists but could not be preserved: the plan is unknown, not absent.
+        return {**empty, "copy_failed": True}
 
-    # Validate: look for architecture.md and current-plan.md in any subfolder
+    # Validate: look for architecture.md and a plan in any subfolder. The light
+    # /run route plans in its brief instead of writing current-plan.md.
     has_arch = any(dest.rglob("architecture.md"))
-    has_plan = any(dest.rglob("current-plan.md"))
+    has_plan = any(dest.rglob("current-plan.md")) or any(dest.rglob("brief.md"))
 
     return {
         "captured": True,
         "has_architecture_md": has_arch,
         "has_current_plan_md": has_plan,
         "artifacts_path": str(dest),
+        **_pipeline_diagnostics(dest),
     }
 
 
@@ -239,6 +344,8 @@ def invoke(
     expected_quoin_commit: Optional[str] = None,
     max_budget_usd: Optional[float] = None,
     run_output_dir: Optional[Path] = None,
+    session_env: Optional[dict] = None,
+    arm_identity=None,
 ) -> dict:
     """
     Invoke Claude Code with the full Quoin workflow.
@@ -278,20 +385,25 @@ def invoke(
         task-unique. When omitted, falls back to a run-id-and-cell-unique
         temp path rather than the old shared-across-every-task default.
 
+    session_env:
+        Complete environment for the CLI process. When given, nothing is
+        inherited from the operator's environment, the CLI starts in its own
+        process group, and a missing spend cap refuses the spawn.
+    arm_identity:
+        An `ArmIdentity`; the init event is checked against it and a mismatch
+        kills the session before it can spend further.
+
     Returns
     -------
     dict with transcript_events, prompt, diff_patch, cost data, etc.
     """
     model = _get_model()
     base_prompt = _build_prompt(task_spec)
-    # Prepend the quoin workflow directive with --autonomous (D-18): a
-    # `--print` session cannot answer /run's own interactive checkpoints
-    # (17 AskUserQuestion calls, no QUOIN_GATE_AUTO_APPROVE /
-    # QUOIN_BENCHMARK_RUN awareness — F-11), so the plain form either
-    # degrades or stalls to the wall clock. The fixture clone's remote is
-    # stripped (T-08a) as belt-and-braces containment for the
-    # /implement + /end_of_task capability --autonomous grants.
-    prompt = f"Use /run --autonomous end-to-end on this task\n\n{base_prompt}"
+    # Slash-command dispatch: the CLI expands `/run` into the prompt. A `--print`
+    # session cannot answer /run's interactive checkpoints, hence --autonomous.
+    # The fixture clone's remote is stripped as belt-and-braces containment for
+    # the /implement + /end_of_task capability --autonomous grants.
+    prompt = f"{_run_prefix()}{base_prompt}"
 
     result: dict = {
         "prompt": prompt,
@@ -359,18 +471,24 @@ def invoke(
     # spent (D-03). A failed/skipped install, an unresolvable commit, or a
     # commit mismatch are all fatal — a silently-wrong install would make
     # the candidate arm secretly measure whatever was installed last.
+    # A paired run's refusals before the spawn are not sessions: flag them so
+    # they settle at zero and a resume runs them again.
+    refusal_flags = {"pre_spawn_error": True} if session_env is not None else {}
     if not install_result["ok"]:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "install-failed"
+        result["extra"].update(refusal_flags)
         return result
     if commit_error is not None:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "commit-unresolvable"
         result["extra"]["commit_error"] = commit_error
+        result["extra"].update(refusal_flags)
         return result
     if expected_quoin_commit is not None and installed_quoin_commit != expected_quoin_commit:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "commit-mismatch"
+        result["extra"].update(refusal_flags)
         return result
 
     # Fail-closed guards, evaluated in gate mode only (D-08's CRIT-2 fix).
@@ -381,19 +499,25 @@ def invoke(
     if gate_mode and not expected_commit_armed:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "expected-commit-unarmed"
+        result["extra"].update(refusal_flags)
         return result
 
-    cmd = _build_claude_argv(prompt, model, max_budget_usd)
+    cmd = _build_claude_argv(prompt, model, _get_effort(), max_budget_usd)
     budget_cap_armed = max_budget_usd is not None and "--max-budget-usd" in cmd
     result["extra"]["budget_cap_armed"] = budget_cap_armed
     result["extra"]["max_budget_usd_applied"] = max_budget_usd
-    if gate_mode and not budget_cap_armed:
+    if (gate_mode or session_env is not None) and not budget_cap_armed:
         result["verdict"] = "error"
         result["extra"]["failure_reason"] = "budget-cap-unarmed"
+        if session_env is not None:
+            result["extra"]["pre_spawn_error"] = True
         return result
 
+    group = session_env is not None or arm_identity is not None
+    check = InitIdentityCheck(arm_identity) if arm_identity is not None else None
+
     # Build subprocess environment with gate auto-approve
-    env = os.environ.copy()
+    env = dict(session_env) if session_env is not None else os.environ.copy()
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
 
@@ -411,54 +535,69 @@ def invoke(
             stderr=subprocess.PIPE,
             text=True,
             env=env,
+            start_new_session=group,
         )
+        pgid = proc.pid if group else None
 
-        # Ring buffer, not an unbounded list — see simple_claude.invoke
-        # for the full rationale; both cells share the same streaming
-        # shape.
-        events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
-        events_seen = 0
-        total_cost_usd: Optional[float] = None
-        tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
-        turn_count = 0
-        gate_intervention_count = 0
-        retry_delay = 1.0
-        budget_halted = False
-
-        # Stream every retained event to transcript.jsonl AS IT ARRIVES —
-        # see simple_claude.invoke for the full rationale.
         transcript_file = None
-        if run_output_dir is not None:
-            try:
-                run_output_dir.mkdir(parents=True, exist_ok=True)
-                transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
-            except OSError:
-                transcript_file = None
-        # Set at OPEN time — see simple_claude.invoke for the full
-        # rationale: a generic exception handler downstream must be able to
-        # tell a partially-streamed transcript apart from an empty one
-        # without depending on this loop ever reaching its normal exit.
-        result["extra"]["transcript_streamed"] = transcript_file is not None
-
-        # Drain stderr on a daemon thread started at spawn — see
-        # simple_claude.invoke for the full rationale, including why the
-        # retained buffer is a bounded diagnostic tail (`deque`) with
-        # budget-halt detection folded in incrementally rather than an
-        # unbounded accumulator.
-        stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
-        stderr_halt_event = threading.Event()
-        stderr_thread = threading.Thread(
-            target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
-        )
-        stderr_thread.start()
-
-        # See simple_claude.invoke for the full rationale — a real OS pipe
-        # gets the chunk-based, timer-driven read; a test double without a
-        # usable fd keeps the pre-fix line-buffered read.
         try:
-            stdout_fd: Optional[int] = proc.stdout.fileno()
-        except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
-            stdout_fd = None
+
+            # Ring buffer, not an unbounded list — see simple_claude.invoke
+            # for the full rationale; both cells share the same streaming
+            # shape.
+            events: deque = deque(maxlen=_MAX_RETAINED_EVENTS)
+            events_seen = 0
+            total_cost_usd: Optional[float] = None
+            tokens_in = tokens_out = tokens_cache_read = tokens_cache_write = 0
+            from ..stream_metrics import StreamMetrics
+            stream_metrics = StreamMetrics()
+            turn_count = 0
+            gate_intervention_count = 0
+            retry_delay = 1.0
+            budget_halted = False
+            identity_tripped = False
+
+            # Stream every retained event to transcript.jsonl AS IT ARRIVES —
+            # see simple_claude.invoke for the full rationale.
+            transcript_file = None
+            if run_output_dir is not None:
+                try:
+                    run_output_dir.mkdir(parents=True, exist_ok=True)
+                    transcript_file = open(run_output_dir / "transcript.jsonl", "w", encoding="utf-8")
+                except OSError:
+                    transcript_file = None
+            # Set at OPEN time — see simple_claude.invoke for the full
+            # rationale: a generic exception handler downstream must be able to
+            # tell a partially-streamed transcript apart from an empty one
+            # without depending on this loop ever reaching its normal exit.
+            result["extra"]["transcript_streamed"] = transcript_file is not None
+
+            # Drain stderr on a daemon thread started at spawn — see
+            # simple_claude.invoke for the full rationale, including why the
+            # retained buffer is a bounded diagnostic tail (`deque`) with
+            # budget-halt detection folded in incrementally rather than an
+            # unbounded accumulator.
+            stderr_buffer: deque = deque(maxlen=_MAX_RETAINED_STDERR_LINES)
+            stderr_halt_event = threading.Event()
+            stderr_thread = threading.Thread(
+                target=_drain_stream, args=(proc.stderr, stderr_buffer, stderr_halt_event), daemon=True,
+            )
+            stderr_thread.start()
+
+            # See simple_claude.invoke for the full rationale — a real OS pipe
+            # gets the chunk-based, timer-driven read; a test double without a
+            # usable fd keeps the pre-fix line-buffered read.
+            try:
+                stdout_fd: Optional[int] = proc.stdout.fileno()
+            except (AttributeError, ValueError, OSError, io.UnsupportedOperation):
+                stdout_fd = None
+        except BaseException:
+            # The session is already paid for; whatever interrupts the setup
+            # must not leave it running with nobody watching.
+            if transcript_file is not None:
+                transcript_file.close()
+            proc_group.kill_and_reap(proc, pgid, group)
+            raise
 
         def _handle_stream_line(raw_line: str) -> str:
             """Parse and record one stream-json line — see
@@ -468,7 +607,7 @@ def invoke(
             """
             nonlocal total_cost_usd, tokens_in, tokens_out, tokens_cache_read
             nonlocal tokens_cache_write, turn_count, budget_halted
-            nonlocal events_seen, gate_intervention_count
+            nonlocal events_seen, gate_intervention_count, identity_tripped
 
             line = raw_line.strip()
             if not line:
@@ -489,6 +628,9 @@ def invoke(
 
             events.append(event)
             events_seen += 1
+            stream_metrics.observe(event)
+            if check is not None and check.observe(event) is not None:
+                identity_tripped = True
             if transcript_file is not None:
                 transcript_file.write(json.dumps(event, ensure_ascii=False) + "\n")
                 transcript_file.flush()
@@ -515,13 +657,24 @@ def invoke(
             if event_type == "assistant":
                 turn_count += 1
 
-            return "ok"
+            return "identity_trip" if identity_tripped else "ok"
 
         try:
             read_buffer = ""
             try:
                 timed_out = False
+                leader_reaped = False
+                group_gone = False
+                drain_deadline = None
                 while True:
+                    if group and not leader_reaped and proc.poll() is not None:
+                        # The leader is gone but a background child may still hold
+                        # the inherited pipes, so EOF would never arrive.
+                        group_gone = proc_group.leader_exited_reap(proc, pgid, grace=0.5)
+                        leader_reaped = True
+                        drain_deadline = time.monotonic() + 2.0
+                    if drain_deadline is not None and time.monotonic() > drain_deadline:
+                        break
                     # Timer-driven, not event-driven — see simple_claude.invoke.
                     elapsed = time.monotonic() - wall_start - min(backoff_total, budget_seconds)
                     remaining = budget_seconds - elapsed
@@ -563,13 +716,15 @@ def invoke(
                             break
 
                         outcome = _handle_stream_line(raw_line)
+                        if outcome == "identity_trip":
+                            break
                         if outcome == "rate_limited":
                             backoff_start = time.monotonic()
                             time.sleep(min(retry_delay, remaining))
                             backoff_total += time.monotonic() - backoff_start
                             retry_delay = min(retry_delay * 2, 60.0)
 
-                    if timed_out:
+                    if timed_out or identity_tripped:
                         break
 
                 # Flush a final unterminated line — see
@@ -580,16 +735,25 @@ def invoke(
                 # a buffered terminal event worth recovering, and an
                 # earlier fix that only flushed on the clean-exit path
                 # left the timeout branch dropping it exactly as before.
-                if read_buffer.strip():
+                if read_buffer.strip() and not identity_tripped:
                     _handle_stream_line(read_buffer)
                     read_buffer = ""
 
-                if timed_out:
-                    proc.terminate()
+                if identity_tripped:
+                    proc_group.signal_tree(proc, signal.SIGKILL, group)
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        pass
+                    result["verdict"] = "error"
+                    result["extra"]["failure_reason"] = check.reason
+                    result["extra"]["identity_trip"] = True
+                elif timed_out:
+                    proc_group.signal_tree(proc, signal.SIGTERM, group)
                     try:
                         proc.wait(timeout=5)
                     except subprocess.TimeoutExpired:
-                        proc.kill()
+                        proc_group.signal_tree(proc, signal.SIGKILL, group)
                     result["verdict"] = "timeout"
                 else:
                     proc.wait(timeout=10)
@@ -597,11 +761,13 @@ def invoke(
                 # Guaranteed regardless of how the block above exits — see
                 # simple_claude.invoke.
                 if proc.poll() is None:
-                    proc.kill()
+                    proc_group.signal_tree(proc, signal.SIGKILL, group)
                     try:
                         proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
                         pass
+                if group and not group_gone:
+                    proc_group.reap_group(pgid)
                 stderr_thread.join(timeout=5)
         finally:
             if transcript_file is not None:
@@ -617,18 +783,22 @@ def invoke(
                 result["verdict"] = "budget_stopped"
                 result["extra"]["failure_reason"] = "budget-halt-detected"
 
-        # Get git diff from workdir
-        try:
-            diff_proc = subprocess.run(
-                ["git", "diff", "HEAD"],
-                cwd=str(workdir),
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            result["diff_patch"] = diff_proc.stdout
-        except Exception:
-            result["diff_patch"] = ""
+        # A plain `git diff` in the agent's clone reads agent-writable
+        # .git/config (fsmonitor, filters) and would run it under the
+        # operator's environment. Verified rows are scored from the
+        # harness-owned capture_patch() bytes instead, so skip it there.
+        if task_spec.get("source") != "swebench_verified":
+            try:
+                diff_proc = subprocess.run(
+                    ["git", "diff", "HEAD"],
+                    cwd=str(workdir),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                result["diff_patch"] = diff_proc.stdout
+            except Exception:
+                result["diff_patch"] = ""
 
         # Capture .workflow_artifacts/ evidence into THIS task's own result
         # directory (T-15). The old default — `workdir.parent /
@@ -655,10 +825,18 @@ def invoke(
         # them — T-01/T-02 fix; they were top-level-only before).
         result["workflow_artifacts_captured"] = artifacts_evidence.get("captured", False)
         result["workflow_artifacts_has_arch"] = artifacts_evidence.get("has_architecture_md", False)
-        result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
+        if not artifacts_evidence.get("copy_failed"):
+            result["workflow_artifacts_has_plan"] = artifacts_evidence.get("has_current_plan_md", False)
         result["extra"]["workflow_artifacts_captured"] = result["workflow_artifacts_captured"]
         result["extra"]["workflow_artifacts_has_arch"] = result["workflow_artifacts_has_arch"]
-        result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
+        if "workflow_artifacts_has_plan" in result:
+            result["extra"]["workflow_artifacts_has_plan"] = result["workflow_artifacts_has_plan"]
+        result["workflow_artifacts_phase_files"] = artifacts_evidence.get("phase_files", [])
+        result["workflow_pipeline_started"] = artifacts_evidence.get("pipeline_started", False)
+        result["workflow_route"] = artifacts_evidence.get("workflow_route")
+        result["extra"]["workflow_artifacts_phase_files"] = result["workflow_artifacts_phase_files"]
+        result["extra"]["workflow_pipeline_started"] = result["workflow_pipeline_started"]
+        result["extra"]["workflow_route"] = result["workflow_route"]
 
         # See simple_claude.invoke — the ring buffer silently drops the
         # OLDEST events once `events_seen` exceeds its cap; record that it
@@ -680,25 +858,31 @@ def invoke(
         result["tokens_out"] = tokens_out if tokens_out else None
         result["tokens_cache_read"] = tokens_cache_read if tokens_cache_read else None
         result["tokens_cache_write"] = tokens_cache_write if tokens_cache_write else None
+        result["extra"].update(stream_metrics.as_extra())
+        if check is not None:
+            result["extra"]["arm_identity"] = check.record()
 
         if total_cost_usd is not None:
             result["cost_available"] = True
             result["cost_runtime_usd"] = total_cost_usd
+            result["extra"]["unpriced_models"] = []
             try:
                 pricing = load_pricing()
-                estimated = estimate_cost(
-                    model=model,
-                    tokens_in=tokens_in,
-                    tokens_out=tokens_out,
-                    cache_write=tokens_cache_write,
-                    cache_read=tokens_cache_read,
-                    pricing=pricing,
+                estimated, unpriced = estimate_session_cost(
+                    model,
+                    stream_metrics.model_usage,
+                    tokens_in,
+                    tokens_out,
+                    tokens_cache_write,
+                    tokens_cache_read,
+                    pricing,
                 )
+                result["extra"]["unpriced_models"] = unpriced
                 if estimated is not None:
                     result["cost_estimated_usd"] = float(estimated)
                     result["cost_delta_usd"] = total_cost_usd - float(estimated)
             except Exception:
-                pass
+                pass  # Estimation failure is non-fatal
         else:
             result["cost_available"] = False
 
@@ -710,5 +894,7 @@ def invoke(
     except Exception as exc:
         result["verdict"] = "error"
         result["transcript_events"] = [{"type": "error", "error": str(exc)}]
+        if check is not None:
+            result["extra"]["arm_identity"] = check.record()
 
     return result

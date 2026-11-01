@@ -1,6 +1,6 @@
 ---
 name: security_review
-description: "Standalone OWASP-style security pass (Opus): injection, secrets exposure, authorization gaps, dependency risk. Use for: /security_review, 'security review', 'OWASP'. Auto-included in Large /review fan-out."
+description: "OWASP-style security pass: injection, secrets, authorization gaps, dependency risk. Use for: /security_review, 'security review'. Auto-included in Large /review."
 model: opus
 ---
 
@@ -16,13 +16,13 @@ This skill runs in the user's current session. If the session is polluted (high 
 prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
 
 Detection:
-  - Read the most-recent session-state file: `.workflow_artifacts/memory/sessions/<today>-<task>.md`
-    OR the fallback `.workflow_artifacts/memory/pollution-score-latest.txt`.
-  - Parse the `pollution_score: N` field (integer).
-  - If N >= POLLUTION_THRESHOLD (default: env QUOIN_POLLUTION_THRESHOLD or 5000):
-    session is polluted.
-  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch.
-  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0'.
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
 
 Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
   Determine dispatch contract fields:
@@ -69,7 +69,7 @@ Fail-OPEN path:
       On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
       and proceed with skill body.
 
-Otherwise (score below threshold OR sentinel OR §0 dispatched OR session-state unreadable):
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
 proceed to skill body.
 
 ## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
@@ -262,13 +262,16 @@ This skill never auto-invokes `/gate`, `/implement`, or any other workflow phase
 
 Write session-state files in v3 format per the §5.4 Class A writer mechanism (mirrors `/review`'s pattern; reference format-kit.md / glossary.md / terse-rubric.md at the body write-site; validate via validate_artifact.py with auto-detection → session type; retry-once-then-English-fallback on V-failure; atomic rename with graceful .body.tmp cleanup). `security-review-{round}.md` remains **Class B** per artifact-format-architecture v3 §4.1 — the Output format section above wires its Class B writer mechanism; this Save-session-state section governs ONLY the Class A session file at `.workflow_artifacts/memory/sessions/{date}-{task}.md` (or the standalone equivalent when no task is resolvable).
 
-If a task dir resolved, before finishing, write or update `.workflow_artifacts/memory/sessions/<date>-<task-name>.md` with these required sections:
-- **## Status:** `completed`
-- **## Current stage:** `security_review`
-- **## Completed in this session:** verdict and summary of what was checked, with status glyphs check-mark/x-mark
-- **## Unfinished work:** if CHANGES_REQUESTED or BLOCKED — list of findings that must be fixed
-- **## Cost:** YAML block with Session UUID, Phase, Recorded in cost ledger
-- **## Decisions made:** any significant risk assessments raised (optional)
+If a task dir resolved, at this skill's exit:
+
+At this skill's exit, write `.workflow_artifacts/memory/sessions/<date>-<task-name>.md`
+to the fixed schema in `__QUOIN_HOME__/memory/session-schema.md` (rewrite the whole
+file; keep the fields and the accumulated lists the schema says to preserve). Values for this skill:
+- Status: `completed`
+- Current stage: `security_review`
+- Next command: the caller's next step
+
+This is what `/end_of_day` and `/start_of_day` read.
 
 If no task dir resolved, this step is a no-op — the standalone cost-ledger row from Session bootstrap step 4 is the only required bookkeeping.
 

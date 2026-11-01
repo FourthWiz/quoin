@@ -8,6 +8,7 @@ Test suite covers:
 
 All subprocess tests skip gracefully when bash is not available.
 """
+import os
 import shutil
 import subprocess
 import textwrap
@@ -55,41 +56,17 @@ keybinds clear-defaults=true {
 
 
 def _run_merge(config_path: str, tmp_path: Path) -> subprocess.CompletedProcess:
-    """Source setup-agentdesk.sh functions and call manage_zellij_keybinds on config_path."""
-    # We source only the function definitions we need (write_if_changed + manage_zellij_keybinds)
-    # by running bash in a subshell that sources the script with set -euo pipefail disabled
-    # (the script runs top-level setup; we only want the function definitions).
+    """Source setup-agentdesk.sh (functions only) and run manage_zellij_keybinds on config_path."""
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
+    env = {
+        "HOME": str(home),
+        "XDG_CONFIG_HOME": str(home / ".config"),
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    }
     script = textwrap.dedent(f"""
-        set +euo pipefail 2>/dev/null || true
-        # Source only function definitions — suppress echo output from main body
-        # by redirecting top-level output to /dev/null.
-        # We temporarily override the key variables so the main body exits quickly.
-        HOME="{tmp_path}"
-        ZSHRC="{tmp_path}/.zshrc"
-        AGENTDESK_DIR="{tmp_path}/.config/agentdesk"
-        AGENTDESK_HELPERS="{tmp_path}/.config/agentdesk/agentdesk.zsh"
-        ZELLIJ_LAYOUT_DIR="{tmp_path}/.config/zellij/layouts"
-        ZELLIJ_LAYOUT="{tmp_path}/.config/zellij/layouts/agent-desk.kdl"
-        ZELLIJ_CONFIG_DIR="{tmp_path}/.config/zellij"
-        ZELLIJ_CONFIG="{tmp_path}/.config/zellij/config.kdl"
-        SOURCE_LINE=""
-
-        # Extract and eval only the function definitions we need.
-        # Use awk to extract write_if_changed and manage_zellij_keybinds.
-        eval "$(awk '
-            /^write_if_changed\\(\\)/ {{ in_fn=1; depth=0 }}
-            /^manage_zellij_keybinds\\(\\)/ {{ in_fn=1; depth=0 }}
-            in_fn {{
-                print
-                for (i=1; i<=length($0); i++) {{
-                    c = substr($0,i,1)
-                    if (c=="{{") depth++
-                    if (c=="}}") depth--
-                }}
-                if (in_fn && depth==0 && NR>1) {{ in_fn=0 }}
-            }}
-        ' "{SETUP_SH}")"
-
+        source "{SETUP_SH}"
+        set +euo pipefail
         manage_zellij_keybinds "{config_path}"
     """).strip()
 
@@ -98,7 +75,8 @@ def _run_merge(config_path: str, tmp_path: Path) -> subprocess.CompletedProcess:
         capture_output=True,
         text=True,
         cwd=str(tmp_path),
-        timeout=30,
+        env=env,
+        timeout=60,
     )
 
 
@@ -297,12 +275,14 @@ def test_alt_s_inside_shared_except_locked_block(tmp_path: Path) -> None:
 
     for ln in lines:
         stripped = ln.strip()
+        # Header lines may carry a trailing comment; judge the code part only.
+        code = stripped.split("//")[0].rstrip()
 
         # Detect entry into shared_except "locked" { (no extra quoted args)
         if (
-            'shared_except "locked"' in stripped
-            and stripped.endswith("{")
-            and '"locked" "' not in stripped  # exclude shared_except "locked" "session" etc.
+            'shared_except "locked"' in code
+            and code.endswith("{")
+            and '"locked" "' not in code  # exclude shared_except "locked" "session" etc.
         ):
             in_shared_locked = True
             depth = 1

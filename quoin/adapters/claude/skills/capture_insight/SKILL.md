@@ -1,6 +1,6 @@
 ---
 name: capture_insight
-description: "Captures a quick insight or pattern to the daily insights scratchpad without interrupting the current task. Use for: /capture_insight, 'note this', 'remember this pattern', 'log this decision', 'save this as a lesson', 'remember that'."
+description: "Logs an insight to the daily scratchpad without interrupting the task. Use for: /capture_insight, 'note this', 'remember this pattern', 'log this decision'."
 model: haiku
 ---
 

@@ -34,15 +34,20 @@ T2=$(mktemp -d)
 MEM2="$T2/.workflow_artifacts/memory"
 mkdir -p "$MEM2"
 : > "$MEM2/run-continue-arm-sid-2.txt"
-BEFORE=$(ls "$MEM2" | sort)
+BEFORE=$(ls "$MEM2" | grep -v '^recent-sessions\.md$' | sort)
 STDIN2=$(printf '{"session_id":"sid-2","cwd":"%s"}' "$T2")
 printf '%s' "$STDIN2" | sh "$SESSIONEND_SH" >/dev/null 2>&1
-AFTER=$(ls "$MEM2" | sort)
+AFTER=$(ls "$MEM2" | grep -v '^recent-sessions\.md$' | sort)
 if [ "$BEFORE" = "$AFTER" ]; then
   pass "Test 2 — no record: memory dir untouched"
 else
   fail "Test 2 — expected no change, before=[$BEFORE] after=[$AFTER]"
 fi
+RS2_LINES=$(wc -l < "$MEM2/recent-sessions.md" 2>/dev/null | tr -d ' ')
+case "$(cat "$MEM2/recent-sessions.md" 2>/dev/null)" in
+  *" | sid-2") [ "$RS2_LINES" = "1" ] && pass "Test 2 — recent-sessions.md holds one line for sid-2" || fail "Test 2 — recent-sessions.md has $RS2_LINES lines" ;;
+  *) fail "Test 2 — recent-sessions.md missing the sid-2 line" ;;
+esac
 rm -rf "$T2"
 
 echo ""

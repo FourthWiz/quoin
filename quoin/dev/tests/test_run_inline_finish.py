@@ -22,7 +22,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]  # quoin/ repo root
-RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "run_hard" / "SKILL.md"
 THOROUGH_PLAN_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "thorough_plan" / "SKILL.md"
 ARCHITECT_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "architect" / "SKILL.md"
 REVIEW_SKILL = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills" / "review" / "SKILL.md"

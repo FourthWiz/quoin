@@ -382,6 +382,9 @@ def _normalised(dest: Path) -> dict[str, bytes]:
     for rel, data in _snapshot(dest).items():
         if rel == "quoin-runtime.json":
             out[rel] = b""
+        elif rel == "quoin-manifest.json":
+            # Hashes cover path-substituted bytes, so only the deployed paths compare.
+            out[rel] = "\n".join(sorted(json.loads(data)["files"])).encode()
         else:
             out[rel] = data.replace(str(dest).encode(), b"DEST")
     return out
