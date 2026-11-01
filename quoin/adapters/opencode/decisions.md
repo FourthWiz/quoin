@@ -270,10 +270,15 @@ Design limits of role boundaries, snapshot runs and test runs that are accepted
 rather than open questions:
 
 - A write through an absolute path is detected after the run, not prevented.
+  It is prevented only when isolation is verified and the managed boundary
+  mounts the project read-only for the reviewer roles; otherwise it stays a
+  residual.
 - `.workspaces/` is outside the listing.
 - Include directories given to the test command are shared with the real
   tree and are writable.
-- There is no network isolation for snapshot or test runs.
+- There is no network isolation for snapshot or test runs of its own. Egress
+  from them is denied only when isolation is verified and the managed boundary
+  denies egress; otherwise it stays a residual.
 - Run-store files written during a run (current and prior run records, the
   pointer, the lock and result files) are excluded by exact path and trusted to
   their schema-checked loaders; the boundary check does not re-verify their
@@ -302,8 +307,9 @@ rather than open questions:
 - A passing test result attests only to what the code in the copied tree
   reported: test-run runs implementer-written code unprompted with the user's
   privileges. The coordinator runs it after every implement, and
-  `--test-command` is the operator's opt-in. An OS sandbox that confines writes
-  to the workspace is the follow-up.
+  `--test-command` is the operator's opt-in. Confinement of writes and egress
+  holds only when isolation is verified and the managed boundary mounts the
+  project read-only and denies egress; otherwise the run stays a residual.
 - The test workspace build is not capped: the binary diff is held in memory and
   untracked files are copied without a size limit, outside the test timeout.
 - The overlay residue test checks "MUST run finalization" rather than "run
