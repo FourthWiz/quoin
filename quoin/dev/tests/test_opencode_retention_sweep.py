@@ -676,3 +676,30 @@ def test_a_young_entry_ends_the_measure_of_a_large_unit_early(tmp_path):
                                   budget=budget, young_after=NOW - 30 * DAY)
     assert [i.unit for i in items] == ["pkg"] and not kept
     assert budget.left > rt.WALK_BUDGET - 10 and not budget.truncated
+
+
+def test_truncated_current_evidence_counts_the_profile_as_in_use(tmp_path, monkeypatch):
+    project, _peer, dirs = _world(tmp_path, other=False)
+    _store(project)
+    old = 40 * DAY
+    _touch(dirs.cache / "opencode" / "bin" / "tool", age=old)
+    _dir_aged(dirs.cache / "opencode" / "bin", old)
+    _touch(dirs.tmp / "x", age=old)
+    _dir_aged(dirs.tmp, old)
+    real_load = rt.ProjectEvidence.load.__func__
+
+    calls = []
+
+    def truncating_load(cls, root, **kwargs):
+        evidence = real_load(cls, root, **kwargs)
+        if not calls:  # only the sweep's own evidence load, not the in-use re-reads
+            kwargs["budget"].truncated = True  # the attribution walk ran out of budget
+        calls.append(root)
+        return evidence
+
+    monkeypatch.setattr(rt.ProjectEvidence, "load", classmethod(truncating_load))
+    _run_sweep(dirs, project, _policy())
+    assert (dirs.cache / "opencode" / "bin").exists() and (dirs.tmp / "x").exists()
+    monkeypatch.undo()
+    _run_sweep(dirs, project, _policy())
+    assert not (dirs.cache / "opencode" / "bin").exists()

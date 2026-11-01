@@ -539,7 +539,7 @@ def _moved_time(info: os.stat_result) -> float:
 
 
 def _finalized_dirs(artifacts: str, budget: Budget) -> Dict[str, float]:
-    """Task name -> mtime of a directory of that name directly inside a
+    """Task name -> arrival time (see `_moved_time`) of a directory of that name directly inside a
     `finalized` directory, searching a few levels, never following links."""
     found: Dict[str, float] = {}
     stack = [(artifacts, 0)]
@@ -896,9 +896,14 @@ def _stores(dirs, project_root) -> Tuple[str, Dict[str, str]]:
 
 def _profile_in_use(mapping: Mapping[str, str], current_key: str, profile: str, uid: int, table,
                     now: float, current_run: Optional[str],
-                    current_evidence: Optional[ProjectEvidence]) -> bool:
+                    current_evidence: Optional[ProjectEvidence],
+                    evidence_truncated: bool = False) -> bool:
     """Whether another run of `profile` may be active in any indexed project. The
-    current project's evidence is reused; the rest are read with their own budget."""
+    current project's evidence is reused unless its load ran out of budget (a partial
+    attribution can miss an active run, so that counts as in use); the rest are read
+    with their own budget."""
+    if evidence_truncated and current_evidence is not None and current_evidence.readable:
+        return True
     budget = Budget()
     for key in sorted(mapping):
         if key == current_key and current_evidence is not None and current_evidence.readable:
@@ -1017,7 +1022,7 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
     cache_days = days_for("cache_days", None)
     if cache_days is not None:
         if _profile_in_use(mapping, current_key, profile, uid, table, now, current_run,
-                           ev_for(current_key)):
+                           ev_for(current_key), evidence_budget.truncated):
             keep.append(Kept("cache", "profile-in-use"))
             keep.append(Kept("tmp", "profile-in-use"))
         else:

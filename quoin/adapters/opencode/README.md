@@ -633,7 +633,7 @@ removes this profile's run sidecars in every project it was used in. Task
 folders, workflow state, continuation records and gate files are never touched.
 `--dry-run` lists what would go and what is kept; deleting needs `--yes`
 (without it the command prints the plan and exits 2). Exit codes: 0 done, 1 some
-items could not be removed, 2 refused, 3 failed. Refusals: `purge-run-active`
+items could not be removed or were kept as foreign-owned or unreadable, 2 refused, 3 failed. Refusals: `purge-run-active`
 (names each blocking run or lock and its reason; a stale supervisor pid file,
 whose process is gone but whose pid was reused, is cleared by deleting the named
 file), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`

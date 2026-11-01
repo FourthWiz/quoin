@@ -427,3 +427,20 @@ def test_readme_documents_logging_retention_and_purge():
     section = text[start:text.index("\n### ", start + 5)]
     for needle in ("purge", "--dry-run", "--yes", "auth.json", "metadata", *launch_codes.RETENTION_CODES):
         assert needle in section, needle
+
+
+def test_purge_exits_nonzero_when_the_only_removable_unit_is_foreign(tmp_path, monkeypatch, capsys):
+    import shutil
+    adapter, dirs, project, store = _cli_world(tmp_path, monkeypatch)
+    for gone in (dirs.data, dirs.state, dirs.tmp, dirs.tests, dirs.exports):
+        shutil.rmtree(str(gone))
+    for run in store.glob("*"):
+        run.unlink()
+    _alien_lstat(monkeypatch, "cache")
+    leftover = _plan(adapter).remove
+    assert not leftover, [i.display for i in leftover]
+    code, out, _ = _run_cli(capsys, "--yes", "--json")
+    body = json.loads(out)
+    assert code == 1 and body["outcome"] == "partial"
+    assert {"path": "PROFILE/cache", "reason": "foreign-owner"} in body["keep"]
+    assert (dirs.cache / "opencode" / "pkg" / "f").exists()
