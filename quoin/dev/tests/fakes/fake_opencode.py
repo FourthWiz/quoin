@@ -40,8 +40,11 @@ import shlex
 import signal
 import subprocess
 import sys
+import socket
 import time
+import urllib.request
 from pathlib import Path
+from urllib.parse import urlsplit
 from typing import Any, Callable, Dict, List, Optional
 
 FIXTURE_DIR = (
@@ -439,7 +442,33 @@ def _empty_node_modules(dir: str = ".opencode") -> Dict[str, Any]:
     return _scenario({"do": "make_dir", "path": "%s/node_modules" % dir}, *_clean_finish())
 
 
+def _provider_call(role: str = "implementer") -> Dict[str, Any]:
+    """One model call for `role` through the compiled configuration."""
+    return _scenario({"do": "provider_call", "role": role}, *_clean_finish())
+
+
+def _shell_net(url: str = "http://127.0.0.1:9/") -> Dict[str, Any]:
+    return _scenario({"do": "shell_net", "url": url}, *_clean_finish())
+
+
+def _shell_net_proxy(url: str = "http://127.0.0.1:9/") -> Dict[str, Any]:
+    return _scenario({"do": "shell_net_proxy", "url": url}, *_clean_finish())
+
+
+def _read_and_send(path: str = "input.txt", url: str = "http://127.0.0.1:9/") -> Dict[str, Any]:
+    return _scenario({"do": "read_and_send", "path": path, "url": url}, *_clean_finish())
+
+
+def _npm_install(dir: str = ".opencode") -> Dict[str, Any]:
+    return _scenario({"do": "npm_install", "dir": dir}, *_clean_finish())
+
+
 SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "provider_call": _provider_call,
+    "shell_net": _shell_net,
+    "shell_net_proxy": _shell_net_proxy,
+    "read_and_send": _read_and_send,
+    "npm_install": _npm_install,
     "npm_fetch": _npm_fetch,
     "empty_node_modules": _empty_node_modules,
     "boundary_escape": _boundary_escape,
@@ -837,6 +866,195 @@ def _run_cmd(step: Dict[str, Any], state: Path) -> None:
     _log_effect(state, "ran %d %s" % (res.returncode, tail))
 
 
+# ---------------------------------------------------------------------------
+# network verbs
+#
+# Each verb models only behaviour backed by a verified compatibility row: the
+# compiled document restricts providers (`enabled_providers`) and models
+# (provider `whitelist`), `apiKey` is an `{env:NAME}` reference, and a call is
+# an HTTP POST to the provider's `options.baseURL`. Proxy variables are not
+# honoured by `provider_call` (the proxy behaviour of the provider fetch is
+# unverified), and `endpoint_family` is ignored: every call is a
+# chat-completions POST, so the fake is not a model of a `responses` call.
+#
+# The fake enforces an egress allowlist on itself and its children. The list
+# is the top-level `allowed_targets` of the scenario file (never an
+# environment variable: the launcher strips names it does not know) and is
+# handed to the child processes on their argument vector. A missing or empty
+# list blocks every target.
+# ---------------------------------------------------------------------------
+
+BLOCKED_EXIT = 95
+_NET_CHILD_FLAG = "--net-child"
+_AUX_AGENTS = {"title": "title", "compaction": "compaction"}
+
+
+def _split_target(url: str) -> "tuple[str, int]":
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    port = parts.port or (443 if parts.scheme == "https" else 80)
+    return host, port
+
+
+def _network_log(state: Path, verb: str, host: str, port: int, ok: bool, blocked: bool) -> None:
+    record = {"verb": verb, "target_host": host, "target_port": port, "ok": ok, "blocked": blocked}
+    with open(state / "network.jsonl", "a", encoding="utf-8") as fh:
+        fh.write(json.dumps(record) + "\n")
+
+
+def _connect_note(state: Path, verb: str, host: str, port: int) -> None:
+    """Written immediately before any connect, so a test can prove none happened."""
+    with open(state / "connect-attempts.log", "a", encoding="utf-8") as fh:
+        fh.write("%s %s:%d\n" % (verb, host, port))
+
+
+def _is_allowed(allowed: List[str], host: str, port: int) -> bool:
+    return "%s:%d" % (host, port) in allowed
+
+
+def _proxy_url(url: str) -> Optional[str]:
+    names = ("HTTPS_PROXY", "https_proxy") if url.startswith("https") else ("HTTP_PROXY", "http_proxy")
+    for name in names:
+        if os.environ.get(name):
+            return os.environ[name]
+    return None
+
+
+def _net_post(verb: str, url: str, payload: bytes, allowed: List[str], state: Path, use_proxy: bool) -> int:
+    """POST `payload` to `url` over a raw socket (through the proxy named in
+    the environment when `use_proxy`). Returns 0, BLOCKED_EXIT, or 1 when the
+    connection failed."""
+    host, port = _split_target(url)
+    proxy = _proxy_url(url) if use_proxy else None
+    conn_host, conn_port = _split_target(proxy) if proxy else (host, port)
+    if not _is_allowed(allowed, conn_host, conn_port):
+        _network_log(state, verb, conn_host, conn_port, False, True)
+        return BLOCKED_EXIT
+    path = urlsplit(url).path or "/"
+    try:
+        _connect_note(state, verb, conn_host, conn_port)
+        sock = socket.create_connection((conn_host, conn_port), timeout=3)
+        try:
+            if proxy and url.startswith("https"):
+                sock.sendall(("CONNECT %s:%d HTTP/1.1\r\nHost: %s:%d\r\n\r\n" % (host, port, host, port)).encode())
+            else:
+                target = url if proxy else path
+                head = "POST %s HTTP/1.1\r\nHost: %s:%d\r\nContent-Length: %d\r\nConnection: close\r\n\r\n" % (
+                    target, host, port, len(payload))
+                sock.sendall(head.encode() + payload)
+            sock.settimeout(2)
+            try:
+                sock.recv(512)
+            except OSError:
+                pass
+        finally:
+            sock.close()
+    except OSError:
+        _network_log(state, verb, conn_host, conn_port, False, False)
+        return 1
+    _network_log(state, verb, conn_host, conn_port, True, False)
+    return 0
+
+
+def _net_child(args: List[str]) -> int:
+    verb, url, state_arg, allowed_csv, mode = args[:5]
+    allowed = [a for a in allowed_csv.split(",") if a]
+    return _net_post(verb, url, b"{}", allowed, Path(state_arg), mode == "proxy")
+
+
+def _spawn_net_child(verb: str, url: str, scenario: Dict[str, Any], state: Path, proxy: bool) -> int:
+    allowed = ",".join(scenario.get("allowed_targets") or [])
+    res = subprocess.run(
+        [sys.executable, str(Path(__file__).resolve()), _NET_CHILD_FLAG, verb, url, str(state), allowed,
+         "proxy" if proxy else "direct"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    return res.returncode
+
+
+def _document_model(doc: Dict[str, Any], role: str) -> Optional[str]:
+    agents = doc.get("agent") or {}
+    if role in _AUX_AGENTS:
+        entry = agents.get(_AUX_AGENTS[role]) or {}
+        return entry.get("model") or doc.get("small_model") or doc.get("model")
+    if role == "small":
+        return doc.get("small_model") or doc.get("model")
+    entry = agents.get("quoin-" + role) or {}
+    return entry.get("model") or doc.get("model")
+
+
+def _env_reference(value: Any) -> str:
+    match = re.fullmatch(r"\{env:([A-Za-z0-9_]+)\}", value) if isinstance(value, str) else None
+    return os.environ.get(match.group(1), "") if match else ""
+
+
+def _verb_provider_call(step: Dict[str, Any], session: str, state: Path, scenario: Dict[str, Any]) -> Optional[int]:
+    """A model call for a role. Refuses (session error, exit 1, no socket)
+    when the provider is not enabled or the model is not whitelisted."""
+    role = step.get("role", "implementer")
+    doc = json.loads(Path(os.environ["OPENCODE_CONFIG"]).read_text(encoding="utf-8"))
+    ref = _document_model(doc, role)
+
+    def refuse(message: str) -> int:
+        obj = _fill(_session_error_event({"message": message}), session)
+        obj.setdefault("timestamp", _now_ms())
+        _out(json.dumps(obj) + "\n")
+        return 1
+
+    if not isinstance(ref, str) or "/" not in ref:
+        return refuse("no model for role")
+    provider_id, _, model_id = ref.partition("/")
+    providers = doc.get("provider") or {}
+    entry = providers.get(provider_id)
+    if provider_id not in (doc.get("enabled_providers") or []) or not isinstance(entry, dict):
+        return refuse("provider not enabled")
+    if model_id not in (entry.get("whitelist") or []):
+        return refuse("model not in the provider whitelist")
+    options = entry.get("options") or {}
+    base = str(options.get("baseURL", "")).rstrip("/")
+    key = _env_reference(options.get("apiKey"))
+    host, port = _split_target(base)
+    if not _is_allowed(scenario.get("allowed_targets") or [], host, port):
+        _network_log(state, "provider_call", host, port, False, True)
+        return BLOCKED_EXIT
+    body = json.dumps({"model": model_id, "messages": [{"role": "user", "content": "hi"}]}).encode()
+    request = urllib.request.Request(
+        base + "/chat/completions", data=body, method="POST",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + key})
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    ok = False
+    try:
+        _connect_note(state, "provider_call", host, port)
+        with opener.open(request, timeout=5) as response:
+            response.read()
+            ok = True
+    except OSError:
+        ok = False
+    _network_log(state, "provider_call", host, port, ok, False)
+    return None
+
+
+def _verb_read_and_send(step: Dict[str, Any], state: Path, scenario: Dict[str, Any]) -> Optional[int]:
+    host, port = _split_target(step["url"])
+    try:
+        digest = hashlib.sha256(Path(step["path"]).read_bytes()).hexdigest()
+    except OSError:
+        _network_log(state, "read_and_send", host, port, False, False)
+        return None
+    code = _net_post("read_and_send", step["url"], digest.encode(), list(scenario.get("allowed_targets") or []),
+                     state, False)
+    return code if code == BLOCKED_EXIT else None
+
+
+def _verb_npm_install(step: Dict[str, Any], state: Path) -> None:
+    """The offline-conditional half of the dependency install."""
+    if os.environ.get("npm_config_offline") == "true":
+        return
+    base = Path(step.get("dir", ".opencode"))
+    for rel, content in (("bun.lock", "\n"), ("node_modules/@opencode-ai/plugin/package.json", "{}\n")):
+        _boundary_write("try_write", {"path": str(base / rel), "content": content}, state)
+
+
+
 def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
                scenario: Optional[Dict[str, Any]] = None) -> int:
     scenario = scenario or {}
@@ -912,6 +1130,20 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
             _no_core_dumps()
             os.kill(os.getpid(), getattr(signal, step["signal"]))
             time.sleep(5)
+        elif verb == "provider_call":
+            code = _verb_provider_call(step, session, state, scenario)
+            if code is not None:
+                return code
+        elif verb in ("shell_net", "shell_net_proxy"):
+            code = _spawn_net_child(verb, step["url"], scenario, state, verb == "shell_net_proxy")
+            if code == BLOCKED_EXIT:
+                return code
+        elif verb == "read_and_send":
+            code = _verb_read_and_send(step, state, scenario)
+            if code is not None:
+                return code
+        elif verb == "npm_install":
+            _verb_npm_install(step, state)
         elif verb == "exit":
             return int(step["code"])
         else:
@@ -921,6 +1153,8 @@ def _run_steps(steps: List[Dict[str, Any]], session: str, state: Path,
 
 
 def main(argv: List[str]) -> int:
+    if argv and argv[0] == _NET_CHILD_FLAG:
+        return _net_child(argv[1:])
     scenario_path: Optional[str] = None
     state_arg: Optional[str] = None
     i = 0

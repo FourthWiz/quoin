@@ -251,7 +251,7 @@ class InstalledProject:
     `cli._make_opencode_driver`."""
 
     def __init__(self, tmp_path: Path, monkeypatch: Any, scenario: Any, *,
-                 version: str = "1.18.32") -> None:
+                 version: str = "1.18.32", secret: str = SEEDED_SECRET) -> None:
         import io
         import os
 
@@ -275,9 +275,13 @@ class InstalledProject:
         self.version = version
         self._os = os
 
+        self.resolver_calls: List[Any] = []
+        calls = self.resolver_calls
+
         class _Resolver:
             def resolve(self, ref: Any) -> Any:
-                return credential_refs.SecretValue(SEEDED_SECRET)
+                calls.append(ref)
+                return credential_refs.SecretValue(secret)
 
         self._resolver = _Resolver()
         self.drivers = 0
