@@ -207,8 +207,8 @@ def _text(raw: Mapping[str, Any], name: str, what: str, max_chars: int, *, singl
     text = text.strip() if single_line else text.rstrip()
     if len(text) > max_chars:
         raise BrokerError(INVALID_INPUT, "%s exceeds %d characters" % (what, max_chars))
-    if single_line and any(c in text for c in "\r\n"):
-        raise BrokerError(INVALID_INPUT, "%s must be a single line" % what)
+    if single_line and (len(text.splitlines()) > 1 or any(ord(c) < 0x20 or ord(c) == 0x7F for c in text)):
+        raise BrokerError(INVALID_INPUT, "%s must be a single line without control characters" % what)
     return text
 
 

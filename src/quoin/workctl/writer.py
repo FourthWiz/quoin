@@ -468,7 +468,7 @@ def _look_up(
                 record["proposal"]["params"],
                 ctx,
                 marker=record["idempotency_key"],
-                since=proposal_mod.parse_iso(record["first_started_at"]) - LOOKUP_MARGIN_SECONDS,
+                since=proposal_mod.parse_iso(record["started_at"]) - LOOKUP_MARGIN_SECONDS,
             )
         except BrokerError as exc:
             record["last_lookup_error"] = exc.code
@@ -549,7 +549,6 @@ def execute(
             }
             record["nonces"] = list(record.get("nonces", [])) + [token["nonce"]]
             record["attempts"] = int(record.get("attempts", 0)) + 1
-            record.setdefault("first_started_at", _now_iso(clock))
             record.update(state=PENDING, error=None, started_at=_now_iso(clock), updated_at=_now_iso(clock))
             journal.put(record)  # intent is durable before anything is sent
             try:

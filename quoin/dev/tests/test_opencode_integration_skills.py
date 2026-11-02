@@ -36,6 +36,9 @@ def test_skill_teaches_syntax_pagination_provenance_and_draft_first(rendered, na
     text = rendered[".opencode/skills/%s/SKILL.md" % name].content.decode()
     for op in (o for o in operations.OPERATIONS.values() if o.service == service and o.read_only):
         assert "workctl %s %s" % (service, op.name.split(".")[1]) in text
+    for op in (o for o in operations.OPERATIONS.values() if o.service == service and not o.read_only):
+        assert "workctl propose %s %s" % (service, op.name.split(".")[1]) in text
+    assert "workctl-write approve" in text and "data.writes_enabled" in text
     for needle in ("--query-file", "--cursor", "pagination.cursor", "provenance", "untrusted", "local draft",
                    "Summarize", "POLICY_DENIED", "retry_after"):
         assert needle in text, needle

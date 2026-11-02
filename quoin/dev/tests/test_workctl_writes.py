@@ -1,6 +1,7 @@
 """workctl approved writes: proposals, approval, the journaled writer."""
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -11,8 +12,10 @@ import pytest
 from quoin.opencode_adapter import paths as oa_paths
 from quoin.opencode_adapter.secrets import SecretValue
 from quoin.workctl import cli, config as config_mod, proposal, writer, writer_cli
-from quoin.workctl.backends import Receipt
+from quoin.workctl.backends import Context, Receipt, gmail, jira_cloud, slack_web
+from quoin.workctl.config import Limits, ServiceConfig
 from quoin.workctl.envelope import BrokerError
+from quoin.workctl.transport import ReplayTransport
 
 APPROVAL_KEY = "k" * 40
 WRITE_TOKEN = "xoxb-writer-secret-0000000000"
@@ -481,3 +484,141 @@ def test_propose_reads_no_credential_and_opens_no_connection(home, body, tmp_pat
     monkeypatch.setattr(broker, "default_resolver", boom)
     monkeypatch.setattr(transport.HttpTransport, "send", boom)
     make_proposal(home, body, tmp_path)
+
+
+# --- backends: write and lookup against synthetic exchanges ------------------
+
+
+MARKER = "ab" * 16
+
+
+def ctx_for(backend, transport, **svc):
+    service = ServiceConfig(service=svc.pop("service"), backend=backend.name, tenant="t", **svc)
+    origin = ("https", (svc.get("base_url") or backend.default_base).split("/")[2])
+    return Context(service=service, limits=Limits(), transport=transport, credential=SecretValue(WRITE_TOKEN),
+                   fetched_at="2027-01-15T08:00:00Z", origin=origin)
+
+
+def exchange(method, path, body, status=200, query=None):
+    return {"request": {"method": method, "path": path, "query": query or {}}, "response": {"status": status, "body": body}}
+
+
+def test_slack_post_tags_the_message_and_lookup_finds_the_tag():
+    t = ReplayTransport([
+        exchange("POST", "/api/chat.postMessage", {"ok": True, "channel": "C0123", "ts": "1800000000.000100"}),
+        exchange("GET", "/api/conversations.replies", {"ok": True, "messages": [
+            {"ts": "1800000000.000100", "metadata": {"event_type": "quoin_workctl_write",
+                                                     "event_payload": {"idempotency_key": MARKER}}}]},
+                 query={"include_all_metadata": "true", "ts": "1799999999.000001"}),
+    ])
+    ctx = ctx_for(slack_web.BACKEND, t, service="slack", web_url="https://acme.slack.com")
+    params = {"channel": "C0123", "thread": "1799999999.000001", "body": "hi"}
+    receipt = slack_web.BACKEND.write("slack.post", params, ctx, marker=MARKER)
+    assert receipt.remote_id == "1800000000.000100" and receipt.url.endswith("/archives/C0123/p1800000000000100")
+    sent = json.loads(t.sent[0].body)
+    assert sent["thread_ts"] == "1799999999.000001" and sent["metadata"]["event_payload"]["idempotency_key"] == MARKER
+    assert t.sent[0].headers["Authorization"] == "Bearer " + WRITE_TOKEN
+    assert slack_web.BACKEND.lookup("slack.post", params, ctx, marker=MARKER, since=NOW).remote_id == "1800000000.000100"
+    assert slack_web.BACKEND.lookup("slack.post", params, ctx, marker="cd" * 16, since=NOW) is None
+
+
+@pytest.mark.parametrize("answer,code", [
+    ({"ok": False, "error": "is_archived"}, "FORBIDDEN"),
+    ({"ok": False, "error": "some_new_error"}, "INVALID_INPUT"),
+    ({"ok": False, "error": "internal_error"}, "UNAVAILABLE"),
+    ({}, "UNAVAILABLE"),  # no clear refusal: the post may exist
+    ([1], "UNAVAILABLE"),
+])
+def test_slack_refusal_is_definite_but_unclear_answers_stay_ambiguous(answer, code):
+    t = ReplayTransport([exchange("POST", "/api/chat.postMessage", answer)])
+    with pytest.raises(BrokerError) as exc:
+        slack_web.BACKEND.write("slack.post", {"channel": "C0123", "thread": None, "body": "x"},
+                                ctx_for(slack_web.BACKEND, t, service="slack"), marker=MARKER)
+    assert exc.value.code == code
+
+
+def test_jira_comment_carries_a_property_and_lookup_finds_it():
+    base = "https://acme.atlassian.net"
+    t = ReplayTransport([
+        exchange("POST", "/rest/api/3/issue/ENG-1/comment", {"id": "10042"}, status=201),
+        exchange("GET", "/rest/api/3/issue/ENG-1/comment", {"comments": [
+            {"id": "10041", "properties": []},
+            {"id": "10042", "properties": [{"key": "quoin.workctl", "value": {"idempotency_key": MARKER}}]}]},
+                 query={"expand": "properties"}),
+    ])
+    ctx = ctx_for(jira_cloud.BACKEND, t, service="jira", base_url=base, account="bot@acme.example")
+    params = {"key": "ENG-1", "body": "first line\nsecond\n\nnext paragraph"}
+    receipt = jira_cloud.BACKEND.write("jira.comment", params, ctx, marker=MARKER)
+    assert receipt.remote_id == "10042" and receipt.url == base + "/browse/ENG-1?focusedCommentId=10042"
+    sent = json.loads(t.sent[0].body)
+    assert [p["type"] for p in sent["body"]["content"]] == ["paragraph", "paragraph"]
+    assert sent["properties"] == [{"key": "quoin.workctl", "value": {"idempotency_key": MARKER}}]
+    assert jira_cloud.BACKEND.lookup("jira.comment", params, ctx, marker=MARKER, since=NOW).remote_id == "10042"
+
+
+def test_gmail_send_sets_a_marker_message_id_and_lookup_searches_for_it():
+    mid = "<%s@quoin-workctl.invalid>" % MARKER
+    t = ReplayTransport([
+        exchange("POST", "/gmail/v1/users/me/messages/send", {"id": "m1", "threadId": "t1"}),
+        exchange("GET", "/gmail/v1/users/me/messages", {"messages": [{"id": "m1", "threadId": "t1"}]},
+                 query={"q": "rfc822msgid:" + mid[1:-1]}),
+    ])
+    ctx = ctx_for(gmail.BACKEND, t, service="mail", account="me@acme.example")
+    params = {"to": ["a@b.example"], "cc": [], "subject": "Status", "in_reply_to": "<x@y>", "body": "Done."}
+    assert gmail.BACKEND.write("mail.send", params, ctx, marker=MARKER).remote_id == "m1"
+    raw = json.loads(t.sent[0].body)["raw"]
+    message = base64.urlsafe_b64decode(raw + "=" * (-len(raw) % 4)).decode()
+    assert "Message-ID: " + mid in message and "In-Reply-To: <x@y>" in message and "From:" not in message
+    assert gmail.BACKEND.lookup("mail.send", params, ctx, marker=MARKER, since=NOW).remote_id == "m1"
+
+
+def test_backends_without_write_support_are_refused():
+    from quoin.workctl.backends import load
+
+    for name in ("msgraph", "command"):
+        assert not callable(getattr(load(name), "write", None))
+
+
+def test_slack_channel_lookup_pages_within_a_window_and_never_claims_a_partial_scan():
+    page = {"ok": True, "messages": [{"ts": "1"}], "response_metadata": {"next_cursor": "more"}}
+    t = ReplayTransport([exchange("GET", "/api/conversations.history", page, query={"latest": "%d.000000" % (NOW + 1200)})])
+    ctx = ctx_for(slack_web.BACKEND, t, service="slack")
+    with pytest.raises(BrokerError) as exc:
+        slack_web.BACKEND.lookup("slack.post", {"channel": "C0123", "thread": None, "body": "x"}, ctx,
+                                 marker=MARKER, since=NOW)
+    assert exc.value.code == "UNAVAILABLE" and len(t.sent) == slack_web.LOOKUP_PAGES
+
+
+def test_jira_lookup_stops_at_comments_older_than_the_send():
+    t = ReplayTransport([exchange("GET", "/rest/api/3/issue/ENG-1/comment", {"total": 500, "comments": [
+        {"id": "9", "created": "2020-01-01T00:00:00.000+0000", "properties": []}]})])
+    ctx = ctx_for(jira_cloud.BACKEND, t, service="jira", base_url="https://acme.atlassian.net")
+    assert jira_cloud.BACKEND.lookup("jira.comment", {"key": "ENG-1", "body": "x"}, ctx, marker=MARKER, since=NOW) is None
+    assert len(t.sent) == 1
+
+
+@pytest.mark.parametrize("status,body,code", [(503, {}, "UNAVAILABLE"), (200, "not json", "UNAVAILABLE"),
+                                              (400, {}, "INVALID_INPUT"), (403, {}, "FORBIDDEN")])
+def test_jira_write_errors_separate_maybe_sent_from_refused(status, body, code):
+    t = ReplayTransport([exchange("POST", "/rest/api/3/issue/ENG-1/comment", body, status=status)])
+    ctx = ctx_for(jira_cloud.BACKEND, t, service="jira", base_url="https://acme.atlassian.net")
+    with pytest.raises(BrokerError) as exc:
+        jira_cloud.BACKEND.write("jira.comment", {"key": "ENG-1", "body": "x"}, ctx, marker=MARKER)
+    assert exc.value.code == code
+
+
+def test_mail_subject_with_any_line_separator_is_refused_at_propose():
+    from quoin.workctl import operations
+
+    for subject in ("a\x0bb", "a\u2028b", "a\x85b", "a\tb"):
+        with pytest.raises(BrokerError):
+            operations.normalize_write(operations.OPERATIONS["mail.send"], {"to": ["a@b.example"], "subject": subject, "body": "x"})
+
+
+def test_write_to_a_host_outside_the_service_origin_is_refused():
+    t = ReplayTransport([])
+    ctx = ctx_for(slack_web.BACKEND, t, service="slack")
+    ctx.origin = ("https", "other.example")
+    with pytest.raises(BrokerError) as exc:
+        slack_web.BACKEND.write("slack.post", {"channel": "C0123", "thread": None, "body": "x"}, ctx, marker=MARKER)
+    assert exc.value.code == "POLICY_DENIED" and t.sent == []

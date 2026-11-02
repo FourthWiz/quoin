@@ -9,9 +9,10 @@ workctl slack search --query-file {{ARTIFACT_ROOT}}/<task>/slack-query.txt --lim
 workctl slack search --query-file {{ARTIFACT_ROOT}}/<task>/slack-query.txt --limit 10 --cursor <pagination.cursor> --json
 workctl slack thread C0123ABCD 1759400000.000100 --limit 50 --json
 workctl slack thread C0123ABCD 1759400000.000100 --limit 50 --cursor <pagination.cursor> --json
+workctl propose slack post C0123ABCD --thread 1759400000.000100 --body-file {{ARTIFACT_ROOT}}/<task>/slack-reply.txt --out {{ARTIFACT_ROOT}}/<task>/slack-reply.proposal.json --json
 ```
 
-The search query file holds Slack search syntax, for example `checkout double charge in:#payments after:2026-10-01`. A thread is addressed by its channel id (starts with C, G or D) and the parent message timestamp; a permalink ending in `/archives/C0123ABCD/p1759400000000100` maps to channel `C0123ABCD` and timestamp `1759400000.000100` (insert the dot before the last six digits). When the link carries `thread_ts=`, it points at a reply: use the `thread_ts` value as the thread timestamp.
+The search query file holds Slack search syntax, for example `checkout double charge in:#payments after:2026-10-01`. A thread is addressed by its channel id (starts with C, G or D) and the parent message timestamp; a permalink ending in `/archives/C0123ABCD/p1759400000000100` maps to channel `C0123ABCD` and timestamp `1759400000.000100` (insert the dot before the last six digits). When the link carries `thread_ts=`, it points at a reply: use the `thread_ts` value as the thread timestamp. A proposed post replies in the thread given with `--thread`; without it, it posts to the channel.
 
 ## What comes back
 

@@ -8,17 +8,25 @@ account and an API token when `account` is set, otherwise a bearer token
 gateway and `web_url` gives the site for browse links).
 Descriptions and comments arrive as Atlassian Document Format and are
 flattened to plain text; attachments are reported as metadata only.
+
+The approved writer adds a comment (`POST /rest/api/3/issue/{key}/comment`)
+built from plain text and stores the proposal's idempotency key in a
+comment property; `lookup` pages through the issue's comments, newest
+first, with their properties until it finds that key or reaches comments
+older than the send, and refuses to call a partial scan "not found". The
+write credential needs Browse Projects and Add Comments.
 """
 from __future__ import annotations
 
 import base64
+import datetime as _dt
 import re
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote, urlencode
 
-from ..envelope import INVALID_INPUT, POLICY_DENIED, BrokerError
-from . import Result
-from ._common import as_dict, as_list, bearer, decode_cursor, encode_cursor, get_json, text
+from ..envelope import INVALID_INPUT, POLICY_DENIED, UNAVAILABLE, BrokerError
+from . import Receipt, Result
+from ._common import as_dict, as_list, bearer, decode_cursor, encode_cursor, get_json, post_json, text
 
 NAME = "jira-cloud"
 ISSUE_FIELDS = "summary,status,issuetype,priority,assignee,reporter,labels,created,updated,description,comment,attachment"
@@ -27,6 +35,27 @@ _BLOCK_NODES = {
     "paragraph", "heading", "blockquote", "codeBlock", "rule", "tableRow", "panel",
     "taskItem", "decisionItem", "mediaSingle", "expand", "nestedExpand",
 }
+
+
+COMMENT_PROPERTY = "quoin.workctl"
+LOOKUP_COMMENTS = 100
+LOOKUP_PAGES = 5
+
+
+def text_to_adf(body: str) -> Dict[str, Any]:
+    """Plain text as an ADF document: blank lines separate paragraphs and
+    single newlines become hard breaks. Nothing is interpreted as markup."""
+    paragraphs = []
+    for block in re.split(r"\n\s*\n", body):
+        content: List[Dict[str, Any]] = []
+        for i, line in enumerate(block.split("\n")):
+            if i:
+                content.append({"type": "hardBreak"})
+            if line:
+                content.append({"type": "text", "text": line})
+        if content:
+            paragraphs.append({"type": "paragraph", "content": content})
+    return {"type": "doc", "version": 1, "content": paragraphs}
 
 
 def adf_to_text(node: Any) -> str:
@@ -70,6 +99,16 @@ def _person(value: Any) -> Optional[str]:
 
 def _name(value: Any) -> Optional[str]:
     return text(as_dict(value).get("name"))
+
+
+def _jira_time(value: Any) -> Optional[float]:
+    """Jira's `2026-10-01T12:00:00.000+0000` timestamps as epoch seconds."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return _dt.datetime.strptime(value, "%Y-%m-%dT%H:%M:%S.%f%z").timestamp()
+    except ValueError:
+        return None
 
 
 class JiraCloud:
@@ -171,6 +210,51 @@ class JiraCloud:
             cursor=encode_cursor(NAME, next_token),
             trim_key="items",
         )
+
+    def _comment_url(self, ctx: Any, key: str, comment_id: str) -> Optional[str]:
+        web = self._web(ctx)
+        return "%s/browse/%s?focusedCommentId=%s" % (web, quote(key, safe=""), quote(comment_id, safe="")) if web else None
+
+    def write(self, op_name: str, params: Mapping[str, Any], ctx: Any, *, marker: str) -> Receipt:
+        key = params["key"]
+        url = "%s/rest/api/3/issue/%s/comment" % (self._base(ctx), quote(key, safe=""))
+        payload = {
+            "body": text_to_adf(params["body"]),
+            "properties": [{"key": COMMENT_PROPERTY, "value": {"idempotency_key": marker}}],
+        }
+        body = as_dict(post_json(ctx, url, payload, self._headers(ctx)))
+        comment_id = text(body.get("id"))
+        if not comment_id:
+            raise BrokerError(UNAVAILABLE, "Jira accepted the comment without returning its id")
+        return Receipt(remote_id=comment_id, url=self._comment_url(ctx, key, comment_id), extra={"issue": key})
+
+    def lookup(
+        self, op_name: str, params: Mapping[str, Any], ctx: Any, *, marker: str, since: float
+    ) -> Optional[Receipt]:
+        key = params["key"]
+        start = 0
+        for _ in range(LOOKUP_PAGES):
+            query = urlencode(
+                {"orderBy": "-created", "startAt": start, "maxResults": LOOKUP_COMMENTS, "expand": "properties"}
+            )
+            url = "%s/rest/api/3/issue/%s/comment?%s" % (self._base(ctx), quote(key, safe=""), query)
+            body = as_dict(get_json(ctx, url, self._headers(ctx)))
+            comments = list(map(as_dict, as_list(body.get("comments"))))
+            for comment in comments:
+                comment_id = text(comment.get("id"))
+                for prop in map(as_dict, as_list(comment.get("properties"))):
+                    value = as_dict(prop.get("value"))
+                    if prop.get("key") == COMMENT_PROPERTY and value.get("idempotency_key") == marker and comment_id:
+                        url = self._comment_url(ctx, key, comment_id)
+                        return Receipt(remote_id=comment_id, url=url, extra={"issue": key})
+                created = _jira_time(comment.get("created"))
+                if created is not None and created < since:
+                    return None  # newest first: everything further is older than the send
+            start += len(comments)
+            total = body.get("total")
+            if not comments or (isinstance(total, int) and start >= total):
+                return None
+        raise BrokerError(UNAVAILABLE, "too many Jira comments to check for the write", retryable=False)
 
 
 BACKEND = JiraCloud()

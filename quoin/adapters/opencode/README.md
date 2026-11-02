@@ -1391,12 +1391,96 @@ returns `POLICY_DENIED`:
   summarize-before-adding-sources and draft-first behaviour. They carry no credentials.
 - No MCP server is configured. `quoin.workctl.mcp` only describes the same operations as MCP tools
   and dispatches them through the broker, for a later CLI-versus-MCP evaluation.
-- Writes, remote drafts and approval flows are out of scope; draft replies locally and send them
-  yourself.
+- The broker itself never writes. Writes go through the approved-write path below; remote mailbox
+  drafts are never created, since a draft in the mailbox is itself an external write.
+
+### Approved writes
+
+Writes are disabled unless the configuration declares a trusted approval boundary. Disabled is the
+default and a complete outcome: the agent prepares local drafts and you submit them yourself.
+
+```text
+workctl propose jira comment ENG-123 --body-file comment.txt --out comment.proposal.json --json
+workctl propose slack post C0123ABCD [--thread TS] --body-file reply.txt --out reply.proposal.json --json
+workctl propose mail send --to a@example.invalid [--cc ...] --subject-file subject.txt \
+                          --body-file body.txt [--in-reply-to '<id@host>'] --out mail.proposal.json --json
+workctl-write approve PROPOSAL [--out APPROVAL]
+workctl-write execute PROPOSAL APPROVAL
+workctl-write reconcile IDEMPOTENCY_KEY [--confirm-not-sent]
+workctl-write status IDEMPOTENCY_KEY
+```
+
+- `workctl propose` is the only write step the agent can take. It validates the target and content
+  and saves an immutable proposal: operation, service, backend, tenant, account, exact target, full
+  body, attachments (none are supported yet), creation and expiry times, an idempotency key and the
+  SHA-256 `content_hash` of all of it. It reads no credential and sends nothing. MCP has no write
+  tools, and the read broker refuses write operations whichever transport asks.
+- `workctl-write approve` is for a person at a terminal outside the agent's session. It shows the
+  proposal on the controlling terminal with invisible and control characters escaped, every body
+  line prefixed and the destination and hash repeated after the body, asks you to type back a
+  one-time code shown only there, and signs the hash with the approval key (HMAC-SHA256) into a single-use approval that expires
+  after `approval_ttl_seconds` or with the proposal, whichever is first. There is no approve flag
+  the agent can pass.
+- `workctl-write execute` refuses unless writes are enabled for the operation, the proposal still
+  matches its hash and its tenant and account binding, and the approval is genuine, unexpired, for
+  this exact content and not used before. It records the intent in a private journal before it
+  sends, sends once with the write credential, and records the service's receipt. A changed body
+  or destination, a forged, expired or reused approval, or a second execute of a completed write
+  is refused with `POLICY_DENIED`.
+- After a timeout, a lost connection, a server error or a crash, the writer does not resend. It
+  asks the service for the write by its idempotency marker (a Slack message metadata tag, a Jira
+  comment property, or a Gmail Message-ID). If the service confirms it, the receipt is recorded;
+  otherwise the result is `OUTCOME_UNKNOWN` and the journal keeps the write unresolved. Running
+  `execute` again only repeats the lookup. `reconcile` looks again later; `--confirm-not-sent`
+  (interactive, and only after a lookup found nothing) records that you checked and the write did
+  not happen, after which a fresh approval can send it. Journal records carry a MAC derived from
+  the approval key, so a record edited by hand is reported as `OUTCOME_UNKNOWN`, never trusted. Delivery is at most once as far as the journal can tell, not exactly once.
+- `workctl-write` refuses to run inside an OpenCode launcher session. That only prevents accidents;
+  the boundary is where the approval key and write credentials live. Keep them where the agent
+  cannot read them: a separate OS account, a managed container the agent runs in without access to
+  your keychain, or a platform approval service. A process that can read the approval key can
+  approve, so on a shared login keychain give the item an access list that excludes the agent's
+  tools. `approval_boundary` records which one you rely on; Quoin cannot verify it.
+- Supported writes and what the write credential needs: `jira.comment` (`jira-cloud`; Browse
+  Projects and Add Comments), `slack.post` (`slack-web`; `chat:write` plus the `channels:history`,
+  `groups:history`, `im:history` or `mpim:history` scope for the conversations it posts to) and
+  `mail.send` (`gmail`; `gmail.send` plus `gmail.readonly`). The read scopes serve the lookup after
+  an ambiguous outcome; without them every such lookup fails and the write stays unknown until a
+  person resolves it. The `msgraph` and `command` backends refuse writes.
+- Lookups scan a bounded window around the send (a few pages of the Slack conversation, the Jira
+  comments newer than the send) and report a scan that could not finish as unresolved, never as
+  "not sent". Whether Gmail keeps the client-supplied Message-ID the Gmail lookup searches for, and
+  whether Slack returns message metadata for the token type you use, has not been checked against a
+  live service. Gmail sends leave the sender to Gmail and do not join the thread in your own
+  mailbox; recipients still see a reply.
+
+```json
+"writes": {
+  "approval_boundary": "separate-user",
+  "approval_key": "keychain:quoin-workctl-approver/acme",
+  "operations": ["slack.post"],
+  "credentials": {"slack": "keychain:quoin-workctl-writer/T0123"},
+  "proposal_ttl_seconds": 3600,
+  "approval_ttl_seconds": 900
+}
+```
+
+`approval_boundary` is one of `platform`, `separate-user` or `managed-container`, and needs
+`approval_key`, a keychain item of at least 32 bytes under `quoin-workctl-approver`. Write
+credentials live under `quoin-workctl-writer`; read credentials may use neither prefix, so the read
+broker can never be pointed at them. Each allowed write operation needs a backend that implements
+it and a write credential for its service, or the configuration is refused. The journal lives at
+`~/.local/state/quoin/workctl/journal/` (mode 700) under the writer account's home and cannot be
+moved by configuration. A service's `operations` allowlist names reads only; writes are allowed by
+`writes.operations`.
+
+No MCP comparison has been run: with no tenant or model chosen, the CLI-versus-MCP scoring of the
+same scenarios is deferred, and any later MCP transport has to call the same operation table and
+policy, which give it no write tools.
 
 Status: offline-verified against synthetic recorded exchanges only. The Jira/Slack/mail clients,
-tenants and mail backend are still maintainer decisions in `decisions.md`, so no live tenant read
-has been run.
+tenants, mail backend and trusted approval mechanism are still maintainer decisions in
+`decisions.md`, so no live tenant read or write has been run.
 
 ## Running the probe
 
