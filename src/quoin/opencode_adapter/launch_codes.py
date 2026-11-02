@@ -55,6 +55,7 @@ EXISTING_CODES: Dict[str, str] = {
     "owned-file-drift": "workflow-validation",
     "phase-unsupported": "workflow-validation",
     "plugin-directory-present": "policy-denial",
+    "tui-plugin-present": "policy-denial",
     "process-groups-unsupported": "workflow-validation",
     "project-root-mismatch": "workflow-validation",
     "protected-key-overridden": "policy-denial",
@@ -139,6 +140,15 @@ for _code in ("profile-selection-unverified", "profile-unknown"):
 del _code
 
 
+# Codes `plugin_artifact.PluginRefused` carries when the pinned lifecycle
+# plugin cannot be admitted; the driver raises them through a variable.
+PLUGIN_CODES: Dict[str, str] = {
+    "plugin-artifact-changed": "invalid-configuration",
+    "plugin-artifact-missing": "workflow-validation",
+    "plugin-install-failed": "invalid-configuration",
+}
+
+
 RETENTION_CODES: Dict[str, str] = {
     code: "workflow-validation"
     for code in (
@@ -153,7 +163,8 @@ RETENTION_CODES: Dict[str, str] = {
 
 def _build() -> Mapping[str, str]:
     merged: Dict[str, str] = {}
-    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, ISOLATION_NETWORK_CODES, RETENTION_CODES, PLANNED_CODES):
+    for group in (EXISTING_CODES, CONFIG_DERIVED_CODES, COMPILED_REASON_CODES, INVENTORY_CODES, ISOLATION_NETWORK_CODES, PLUGIN_CODES, RETENTION_CODES,
+                  PLANNED_CODES):
         for code, category in group.items():
             if code in merged and merged[code] != category:
                 raise AssertionError("launch code registered under two categories")

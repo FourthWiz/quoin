@@ -86,6 +86,7 @@ exclude = [
     "quoin/.pytest_cache/",
     "quoin/**/__pycache__/",
     "quoin/**/*.pyc",
+    "**/node_modules/",
     "quoin/tools/agentdesk/streamdeck/",
     "**/.DS_Store",
     "**/dist/",

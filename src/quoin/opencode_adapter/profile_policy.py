@@ -73,6 +73,7 @@ ENUM_ORDER: Dict[str, Tuple[str, ...]] = {
     "formatter.mode": ("deny", "allow-listed", "builtin"),
     "network.identity_check": ("required", "off"),
     "logging.content": ("metadata", "summary"),
+    "plugin.lifecycle": ("deny", "allow"),
 }
 GRANT_LISTS = ("mcp.allowed", "lsp.allowed", "formatter.allowed")
 RESTRICTION_LISTS = (
@@ -131,6 +132,7 @@ CLASSIFICATION_DEFAULTS: Mapping[str, Mapping[str, Any]] = MappingProxyType(
                 "network.allowed_addresses": None,
                 "network.pins": None,
                 "logging.content": "metadata",
+                "plugin.lifecycle": "deny",
                 "repositories.allowed_roots": None,
                 **_WORK_RETENTION,
             }
@@ -151,6 +153,7 @@ CLASSIFICATION_DEFAULTS: Mapping[str, Mapping[str, Any]] = MappingProxyType(
                 "network.allowed_addresses": None,
                 "network.pins": None,
                 "logging.content": "summary",
+                "plugin.lifecycle": "allow",
                 "repositories.allowed_roots": None,
                 **_PERSONAL_RETENTION,
             }
@@ -213,6 +216,7 @@ def flatten_policy(policy: Optional[Mapping[str, Any]]) -> Dict[str, Any]:
         ("formatter", ("mode",)),
         ("network", ("identity_check",)),
         ("logging", ("content",)),
+        ("plugin", ("lifecycle",)),
     ):
         sub = policy.get(group)
         if isinstance(sub, Mapping):
@@ -488,6 +492,7 @@ class ProfilePolicy:
     retention: Mapping[str, Optional[int]]
     project_retention: Mapping[str, Optional[int]]
     repository_roots: Optional[Tuple[str, ...]]
+    plugin_lifecycle: str = "deny"
     origins: Mapping[str, Tuple[str, ...]] = field(default_factory=dict)
 
     def approved(self, key: str) -> bool:
@@ -533,5 +538,6 @@ def view(effective: _EffectiveLike) -> ProfilePolicy:
         retention=MappingProxyType(retention),
         project_retention=MappingProxyType(project_retention),
         repository_roots=read("repositories.allowed_roots"),
+        plugin_lifecycle=read("plugin.lifecycle"),
         origins=MappingProxyType(dict(origins)),
     )

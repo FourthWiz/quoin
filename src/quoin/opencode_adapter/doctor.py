@@ -108,6 +108,9 @@ MESSAGES: Dict[str, str] = {
     "runtime-stale-lock": "the supervisor lock for task %(name)s names an OpenCode run that is no longer alive",
     "runtime-command-agent-not-primary": "an installed phase command does not select an installed primary agent",
     "runtime-plugin-directory-present": "an OpenCode plugin directory holds plugin files, so phase runs are refused while it does",
+    "runtime-lifecycle-plugin": "the Quoin lifecycle plugin %(version)s is qualified for OpenCode %(expected)s",
+    "runtime-lifecycle-plugin-incompatible": "the Quoin lifecycle plugin is qualified for OpenCode %(version)s, but the adapter is pinned to %(expected)s",
+    "runtime-lifecycle-plugin-invalid": "the packaged Quoin lifecycle plugin is %(name)s, so a profile that enables it cannot start an interactive session",
     "runtime-config-invalid": "the profile's configuration has %(count)s error(s) of class %(name)s",
     "runtime-config-policy-denied": "the profile's configuration was refused by policy (class %(name)s, %(count)s occurrence(s))",
     "runtime-adapter-data-missing": "the packaged adapter data was not found",
@@ -157,6 +160,8 @@ _REMEDIATIONS: Dict[str, str] = {
     "runtime-orphan-run": "run `quoin opencode status --task TASK` for the process ids, stop any child that is still alive, then start over with --new-run",
     "runtime-stale-lock": "re-run the phase with `quoin run --runtime opencode ...`, which reclaims a dead lock, or remove the lock file",
     "runtime-command-agent-not-primary": "re-run `quoin install --runtime opencode` to restore the command and agent files",
+    "runtime-lifecycle-plugin-incompatible": "reinstall quoin so the plugin and the pinned OpenCode release come from the same build",
+    "runtime-lifecycle-plugin-invalid": "reinstall quoin; the launcher loads the plugin only when it matches the pinned build",
     "runtime-plugin-directory-present": "move the plugin files out of the OpenCode plugin directories for the duration of a run, or run with a separate XDG_CONFIG_HOME; the launcher refuses rather than trust plugin code with the approval flow",
     "runtime-config-invalid": "run `quoin opencode config explain --profile PROFILE` to see where each value comes from",
     "runtime-config-policy-denied": "run `quoin opencode config explain --profile PROFILE`; a policy refusal is not worked around by editing the profile",
@@ -771,6 +776,24 @@ def _binary_findings(which, version_runner, source_dir) -> List[Finding]:
     return [make_finding("opencode-version", "info", version=match.group(0), expected=pinned)]
 
 
+def _lifecycle_plugin_findings(source_dir) -> List[Finding]:
+    """The packaged lifecycle plugin's version, whether it matches the pinned
+    build, and whether it was qualified against the pinned OpenCode release."""
+    from . import plugin_artifact  # noqa: PLC0415
+
+    found = plugin_artifact.status()
+    if found.state != "ok":
+        return [make_finding("runtime-lifecycle-plugin-invalid", "warn", name=found.state)]
+    try:
+        pinned = manifest.read_pinned_version(source_dir)
+    except manifest.ManifestLoadError:
+        pinned = "unknown"
+    qualified = plugin_artifact.PLUGIN_OPENCODE_VERSION
+    if pinned not in (qualified, "unknown"):
+        return [make_finding("runtime-lifecycle-plugin-incompatible", "warn", version=qualified, expected=pinned)]
+    return [make_finding("runtime-lifecycle-plugin", "info", version=found.version or "unknown", expected=qualified)]
+
+
 def _subagent_depth_findings(docs: List[Tuple[Path, dict]], roots) -> List[Finding]:
     findings: List[Finding] = []
     for path, payload in docs:
@@ -1119,6 +1142,7 @@ def run_host(
     findings.extend(_flag_findings(env))
     findings.extend(_path_findings(which))
     findings.extend(_binary_findings(which, version_runner, source_dir))
+    findings.extend(_lifecycle_plugin_findings(source_dir))
     findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
     if profile is not None:
         findings.extend(_profile_findings(

@@ -83,7 +83,9 @@ def test_nothing_is_written_to_the_run_store_and_no_lock_is_taken(world):
 def test_dry_run_prints_and_does_not_launch(world, capsys):
     assert start(world, "--dry-run") == 0
     out = json.loads(capsys.readouterr().out)
-    assert set(out) == {"argv", "cwd", "config_path", "env_names", "runtime_version", "effective_config_digest"}
+    assert set(out) == {"argv", "cwd", "config_path", "env_names", "runtime_version", "effective_config_digest",
+                        "lifecycle_plugin"}
+    assert out["lifecycle_plugin"] is False
     assert out["argv"] == [str(world.shim), str(world.root)]
     assert "OPENCODE_CONFIG" in out["env_names"] and "ambient-provider-key-0000" not in json.dumps(out)
     assert world.calls == []

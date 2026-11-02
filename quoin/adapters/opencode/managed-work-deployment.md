@@ -107,6 +107,12 @@ launching.
   `inventory-mcp-local`, `inventory-mcp-remote`, `inventory-plugin`,
   `inventory-lsp`, `inventory-formatter` and related `inventory-*` codes;
   doctor reports `inventory-refused` and `inventory-clean`.
+- Lifecycle plugin: off for a work profile unless the profile or the trusted
+  managed policy sets `policy.plugin.lifecycle: allow`; a managed policy of
+  `deny` keeps it off whatever the profile says. When on, only Quoin's pinned
+  plugin loads, and only for interactive starts. A packaged plugin that differs
+  from the pin refuses with `plugin-artifact-changed`; doctor reports
+  `runtime-lifecycle-plugin-invalid`.
 - Destinations: each provider endpoint must be under an approved host. Refusals
   are `destination-not-approved`, `proxy-route-not-approved`,
   `web-tools-denied` and `mcp-remote-denied`.

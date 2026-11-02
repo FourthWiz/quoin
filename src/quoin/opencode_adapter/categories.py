@@ -40,7 +40,10 @@ def _table(category: str, *ids: str) -> Dict[str, str]:
 FINDING_CATEGORIES: Dict[str, str] = {}
 FINDING_CATEGORIES.update(_table("missing-binary", "opencode-binary-absent"))
 FINDING_CATEGORIES.update(
-    _table("unsupported-version", "opencode-version", "opencode-version-unknown")
+    _table(
+        "unsupported-version", "opencode-version", "opencode-version-unknown",
+        "runtime-lifecycle-plugin", "runtime-lifecycle-plugin-incompatible",
+    )
 )
 FINDING_CATEGORIES.update(
     _table(
@@ -92,6 +95,7 @@ FINDING_CATEGORIES.update(
 FINDING_CATEGORIES.update(
     _table(
         "workflow-validation",
+        "runtime-lifecycle-plugin-invalid",
         "smoke-render",
         "smoke-roundtrip",
         "smoke-names",

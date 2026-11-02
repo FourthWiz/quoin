@@ -54,7 +54,15 @@ DECISION_HEADINGS = (
     "Egress",
     "Interactive-first or headless-first",
     "Trusted approval mechanism",
+    "Lifecycle plugin",
 )
+
+# Decisions the maintainer has set, with their recorded values. Every other
+# maintainer decision must still read "not set".
+DECIDED_VALUES = {
+    "Interactive-first or headless-first": "interactive-first",
+    "Lifecycle plugin": "allow Quoin's own plugin only",
+}
 
 # A public documentation host is added here only when a claim actually cites
 # it, in the same commit as the citation, with a reason comment.
@@ -382,11 +390,16 @@ def test_decisions_sections():
     for heading in DECISION_HEADINGS:
         assert heading in sections, heading
         body = sections[heading]
-        assert re.search(r"^Status:\s*TODO\s*$", body, re.MULTILINE), heading
         assert re.search(r"^Owner:\s*maintainer\s*$", body, re.MULTILINE), heading
         blocks = re.search(r"^Blocks:\s*(\S.*)$", body, re.MULTILINE)
         assert blocks and blocks.group(1).strip(), heading
-        assert re.search(r"^Value:\s*not set\s*$", body, re.MULTILINE), heading
+        if heading in DECIDED_VALUES:
+            assert re.search(r"^Status:\s*decided\s*$", body, re.MULTILINE), heading
+            value = re.search(r"^Value:\s*(\S.*)$", body, re.MULTILINE)
+            assert value and value.group(1).strip() == DECIDED_VALUES[heading], heading
+        else:
+            assert re.search(r"^Status:\s*TODO\s*$", body, re.MULTILINE), heading
+            assert re.search(r"^Value:\s*not set\s*$", body, re.MULTILINE), heading
         has_proposed = re.search(r"^Proposed:", body, re.MULTILINE) is not None
         if heading == "OpenCode release and install channel":
             assert has_proposed, heading
@@ -441,14 +454,23 @@ def test_probe_results_template_mirrors_record():
             assert value_cell == "", (line, cells)
 
 
-def test_plugin_need_is_empty():
+def test_plugin_need_names_events_and_why_the_cli_path_falls_short():
     sections = _sections(DECISIONS_PATH.read_text(encoding="utf-8"), 2)
     assert "Plugin need" in sections
-    body = sections["Plugin need"].strip()
-    assert "intentionally empty" in body.lower()
-    for line in body.splitlines():
-        line = line.strip()
-        assert not line.startswith(("-", "*", "|")), line
+    body = sections["Plugin need"]
+    assert "intentionally empty" not in body.lower()
+    # The CLI-path shortfall is stated against verified behaviour.
+    assert "os.execve" in body
+    assert "child-events-filtered" in body and "json-event-types" in body
+    for event in (
+        "session.created",
+        "session.idle",
+        "experimental.session.compacting",
+        "tool.execute.after",
+        "session.error",
+    ):
+        assert "`%s`" % event in body, event
+    assert "observe only" in body
 
 
 _FORBIDDEN_PATTERNS = (
@@ -600,9 +622,11 @@ def test_adapter_design_decisions_section():
     assert order.index("Maintainer decisions") < order.index("Adapter design decisions") < order.index(
         "Gateway probe results"
     )
-    # Every maintainer decision still has no value.
+    # Every maintainer decision the maintainer has not set still has no value.
     maintainer = sections["Maintainer decisions"]
-    assert len(re.findall(r"^Value:\s*not set\s*$", maintainer, re.MULTILINE)) == len(DECISION_HEADINGS)
+    assert len(re.findall(r"^Value:\s*not set\s*$", maintainer, re.MULTILINE)) == len(DECISION_HEADINGS) - len(
+        DECIDED_VALUES
+    )
 
 
 def test_documents_never_call_the_work_profile_supported():
