@@ -131,6 +131,14 @@ Status: generated project assets, offline-verified; no live runtime evidence.
   profile. Doctor findings carry a problem category, and `--profile` adds
   configuration checks. These are verified against a fake executable only;
   there is still no live runtime evidence.
+- The benchmark framework has paired `simple-opencode` and `quoin-opencode`
+  cells on one model and endpoint, with frozen pilot thresholds; no
+  qualification results are recorded yet.
+- Release shapes, the acceptance matrix with its verification pointers, the
+  live qualification and requalification procedures, upgrade qualification and
+  rollback are in `quoin/adapters/opencode/release-acceptance.md`. The claimed
+  shape is a personal pilot pending live qualification; the work profile is not
+  supported until its live qualification passes.
 - Pinned release and claim status in `quoin/adapters/opencode/compatibility.md`.
 - Open maintainer decisions in `quoin/adapters/opencode/decisions.md`.
 - There is no global OpenCode installer or global OpenCode path assumed; all

@@ -22,6 +22,9 @@ backend.
   `quoin opencode probe` — the runtime-configuration commands: resolve the
   layered profile, compile a native config outside the project, propose a
   personal profile, and qualify a model (see "Runtime configuration").
+- `release-acceptance.md` — release shapes, the acceptance matrix with its
+  verification pointers, the live qualification and requalification
+  procedures, the compatibility matrix, upgrade qualification and rollback.
 - `feature-manifest.json` — the classified catalogue of every Quoin skill,
   with a support status, a target milestone, and the OpenCode asset names
   generated for it. See "Support classification" below.

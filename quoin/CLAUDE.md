@@ -23,7 +23,7 @@ by the installer.
 
 This file defines the common rules and behaviors shared across all development workflow skills: `/init_workflow`, `/discover`, `/enrich`, `/specify`, `/architect`, `/plan`, `/critic`, `/revise`, `/thorough_plan` (orchestrator), `/run` (end-to-end orchestrator), `/gate`, `/implement`, `/review`, `/rollback`, `/end_of_task`, `/pr`, `/end_of_day`, `/start_of_day`, `/weekly_review`, `/cost_snapshot`, `/capture_insight`, `/next-steps`, `/triage`, and `/continue_work`.
 
-Runtime portability note: shared workflow semantics are being extracted under `quoin/core/workflow/` (`rules.md`, `task-layout.md`, `session-state.md`, `cost-ledger.md`, `handoff-format.md`, `handoff-format-reference.md` — the inter-agent handoff envelope). This file remains the active Claude Code runtime rules file installed by `bash quoin/install.sh`; do not treat it as generated yet.
+Portability: shared workflow semantics are in `quoin/core/workflow/` (`rules.md`, `task-layout.md`, `session-state.md`, `cost-ledger.md`, `handoff-format.md`, `handoff-format-reference.md` — handoff envelope). This file stays the active Claude Code runtime rules file (installed by `bash quoin/install.sh`), not generated. OpenCode release: `quoin/adapters/opencode/release-acceptance.md`.
 
 ## Working Rules
 

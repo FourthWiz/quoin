@@ -3,6 +3,12 @@ name: Adapter Completeness Check
 on:
   pull_request:
   push:
+  workflow_dispatch:
+    inputs:
+      opencode_results:
+        description: "Run directory or JSON Lines file with OpenCode qualification rows (repo path)"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -10,6 +16,7 @@ permissions:
 jobs:
   adapter-check:
     name: Validate adapter drift
+    if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,3 +40,26 @@ jobs:
 
       - name: Check generated slim rules are fresh
         run: python3 quoin/scripts/build_claude_slim.py --check
+
+      - name: Install test runner
+        run: python3 -m pip install pytest
+
+      - name: Run OpenCode benchmark and release acceptance tests
+        run: python3 -m pytest -q quoin/dev/tests/test_bench_opencode_cells.py quoin/dev/tests/test_opencode_release_matrix.py quoin/dev/tests/test_benchmarks.py quoin/dev/tests/test_opencode_manifest.py
+
+  opencode-qualification-report:
+    name: OpenCode qualification report (manual)
+    if: github.event_name == 'workflow_dispatch' && inputs.opencode_results != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Evaluate the frozen pilot thresholds (invariants reported as pending; green is not a qualification pass)
+        env:
+          RESULTS: ${{ inputs.opencode_results }}
+        run: python3 quoin/benchmarks/scripts/opencode_report.py "$RESULTS"

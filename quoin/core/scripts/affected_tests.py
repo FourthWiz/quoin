@@ -1460,6 +1460,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/decisions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),
+    (
+        "quoin/adapters/opencode/release-acceptance.md",
+        "quoin/dev/tests/test_opencode_release_matrix.py",
+    ),
+    (
+        "quoin/adapters/opencode/release-acceptance.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
     # The lifecycle plugin: its build project, shipped artifact and captured fixture.
     (
         "quoin/dev/opencode-plugin/package.json",
