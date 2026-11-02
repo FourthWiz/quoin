@@ -90,6 +90,10 @@ def make_world(tmp_path, venv):
     script("node", "#!/bin/sh\ncase \"$1\" in --version) echo v22.11.0;; *) exit 0;; esac\n")
     script("zellij", "#!/bin/sh\ncase \"$1\" in\n  action) echo 'list-panes focus-pane-id';;\n"
                      "  --version) echo 'zellij 0.43.1';;\n  *) exit 0;;\nesac\n")
+    # The install opens its profile with `open` and may call `osascript`; the real tools
+    # bring the Stream Deck app forward and offer to import the temporary profile.
+    for name in ("open", "osascript"):
+        script(name, "#!/bin/sh\nexit 0\n")
     apps = tmp_path / "apps"
     info = apps / "Elgato Stream Deck.app" / "Contents" / "Info.plist"
     info.parent.mkdir(parents=True)

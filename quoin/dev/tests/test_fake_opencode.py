@@ -213,8 +213,8 @@ def test_version_output_and_mismatch(make):
 
 
 def test_crash_scenarios_give_negative_returncode(make):
-    for name, sig in (("crash_after_start", signal.SIGKILL), ("crash_mid_stream", signal.SIGSEGV),
-                      ("crash_in_open_step", signal.SIGABRT), ("crash_after_last_finish", signal.SIGKILL)):
+    for name, sig in (("crash_after_start", signal.SIGKILL), ("crash_mid_stream", signal.SIGHUP),
+                      ("crash_in_open_step", signal.SIGTERM), ("crash_after_last_finish", signal.SIGKILL)):
         h = make(name)
         res = h.run("run", "--", "x")
         assert res.returncode == -sig, name
