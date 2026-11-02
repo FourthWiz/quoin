@@ -7,8 +7,10 @@ found; it does not sandbox the child process.
 
 ## Scope and status
 
-- The work profile is not yet supported on an unmanaged machine. A work launch
-  refuses until the environment below is in place.
+- The work profile is not yet supported on an unmanaged machine. A work profile
+  with `isolation: managed` refuses to launch until the attestation below is in
+  place. With the default `convenience` isolation it launches, and the
+  managed-boundary controls are recorded as `not-enforced`.
 - Isolation is verified only by an attestation the user cannot edit: a
   root-owned declaration plus an independent corroboration that agrees with it.
   Without both, the isolation verdict is unverified and a work profile that

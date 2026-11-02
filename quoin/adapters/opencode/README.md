@@ -652,8 +652,9 @@ the stamp is kept.
 
 An entry that could not be removed because it is unreadable carries a hint in the
 JSON output (`chmod-u-rwx`) and a text line of the form `run: chmod -R u+rwx PATH`;
-run it and purge again. The sweep runs on every launch; there is no last-sweep
-stamp, so a launch never skips it for recency.
+run it and purge again. The sweep runs on every new-run launch (once per process per
+profile, not on resume); there is no persisted last-sweep stamp, so a launch never
+skips it for recency.
 
 For what the environment must provide around a work profile (mounts, secrets,
 egress, attestation) and what Quoin verifies, see

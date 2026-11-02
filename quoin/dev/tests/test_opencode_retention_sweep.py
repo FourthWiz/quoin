@@ -596,7 +596,7 @@ def test_driver_sweeps_once_per_profile_and_not_on_resume(tmp_path, monkeypatch)
     d._proc = SimpleNamespace(snapshot=lambda: None)
     ev = SimpleNamespace(profile="work", effective=None)
     assert d._retention_sweep(ev, "dirs", tmp_path, "r1", None) == {"status": "done"}
-    assert d._retention_sweep(ev, "dirs", tmp_path, "r2", None) == {"status": "skipped", "reason": "already-swept"}
+    assert d._retention_sweep(ev, "dirs", tmp_path, "r2", None) == {"status": "skipped", "reason": "already-swept", "left": 0}
     other = SimpleNamespace(profile="other", effective=None)
     assert d._retention_sweep(other, "dirs", tmp_path, "r3", "oc-x")["reason"] == "resume"
     assert len(calls) == 1 and calls[0]["current_run"] == "r1"

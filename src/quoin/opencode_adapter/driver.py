@@ -1748,13 +1748,13 @@ class OpenCodeDriver:
         if resume_run_id is not None:
             return {"status": "skipped", "reason": "resume"}
         if evaluation.profile in self._swept:
-            return {"status": "skipped", "reason": "already-swept"}
+            return {"status": "skipped", "reason": "already-swept", "left": 0}
         self._swept.add(evaluation.profile)
         try:
             policy = retention.RetentionPolicy.from_effective(evaluation.effective)
             if policy.empty:
                 return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                        "failed": 0, "truncated": False}
+                        "failed": 0, "left": 0, "truncated": False}
             return retention.sweep(
                 dirs=dirs, project_root=root, now=self._clock(), uid=os.getuid(),
                 policy=policy, profile=evaluation.profile, table=self._proc.snapshot(),
@@ -1762,7 +1762,7 @@ class OpenCodeDriver:
             )
         except Exception:  # noqa: BLE001 - the sweep must not refuse a launch
             return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                    "failed": 0, "truncated": False}
+                    "failed": 0, "left": 0, "truncated": False}
 
     def _claim_profile_dirs(self, evaluation: Any) -> "profile_dirs.ProfileDirs":
         """Latch this process to the evaluated profile and prepare its storage."""

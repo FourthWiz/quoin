@@ -23,6 +23,7 @@
     "quoin/dev/tests/_opencode_run_helpers.py": "the installed-project world builds its driver with the same fixture trusted roots and fake identity checker and approves its project root, for the same reason as the prepare test setup; and its resolver can return a test-chosen secret and counts its calls, for the secret scan and the refused-launch checks",
     "quoin/dev/tests/test_opencode_binary_contract.py": "the real-binary work driver now needs fixture trusted roots, a fake identity checker and an approved repository root, like every other work-launch test",
     "quoin/dev/tests/test_opencode_workflow_binary_tier.py": "the real-binary work driver now needs fixture trusted roots, a fake identity checker and an approved repository root, like every other work-launch test",
+    "quoin/dev/tests/test_fake_opencode.py": "the stray-process check matches the worker base directory followed by a path separator, so one xdist worker no longer counts another worker's live fake as stray",
     "quoin/dev/tests/test_probe_gateway.py": "the self-check's per-file dict gains a row for the new deployment document"
   }
 }

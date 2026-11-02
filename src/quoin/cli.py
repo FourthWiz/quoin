@@ -2602,7 +2602,7 @@ def _print_purge_text(report: dict) -> None:
                     for r in report["remove"]]),
         ("keep", [line for r in report["keep"] for line in (
             ["%s  [%s]" % (r["path"], r["reason"])]
-            + (["run: chmod -R u+rwx %s" % r["path"]] if r.get("hint") else []))]),
+            + (["run: chmod -R u+rwx %s" % shlex.quote(r["path"])] if r.get("hint") else []))]),
         ("referenced runs (removed by purge)",
          ["%s  task %s in %s (%s)" % (r["run_id"], r["task"], r["project"], r["referenced_by"])
           for r in report["referenced_runs"]]),

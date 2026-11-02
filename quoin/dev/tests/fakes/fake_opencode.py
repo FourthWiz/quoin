@@ -964,10 +964,13 @@ def _net_child(args: List[str]) -> int:
 
 def _spawn_net_child(verb: str, url: str, scenario: Dict[str, Any], state: Path, proxy: bool) -> int:
     allowed = ",".join(scenario.get("allowed_targets") or [])
-    res = subprocess.run(
-        [sys.executable, str(Path(__file__).resolve()), _NET_CHILD_FLAG, verb, url, str(state), allowed,
-         "proxy" if proxy else "direct"],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        res = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), _NET_CHILD_FLAG, verb, url, str(state), allowed,
+             "proxy" if proxy else "direct"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=15)
+    except subprocess.TimeoutExpired:
+        return 1
     return res.returncode
 
 

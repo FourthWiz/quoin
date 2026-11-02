@@ -130,6 +130,11 @@ def test_no_line_claims_support_or_verified_isolation_without_a_limit():
             assert re.search(r"\b(not|only when|only by|unverified)\b", line, re.IGNORECASE) or "`" in line, line
 
 
+def test_the_scope_section_names_both_isolation_modes():
+    scope = _body(_doc(), 2, "Scope and status")
+    assert "isolation: managed" in scope and "`convenience`" in scope
+
+
 def test_the_egress_duties_state_the_loopback_rule():
     bullets = _bullets(_body(_doc(), 3, "Egress"))
     assert any("loopback" in b and "approved" in b for b in bullets)
