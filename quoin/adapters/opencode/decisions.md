@@ -105,6 +105,13 @@ Owner: maintainer
 Blocks: network egress policy
 Value: not set
 
+### Trusted approval mechanism
+
+Status: TODO
+Owner: maintainer
+Blocks: integrated writes
+Value: not set
+
 ### Interactive-first or headless-first
 
 Status: TODO
@@ -287,6 +294,30 @@ mail backend has been chosen (see the maintainer decisions above), so no live re
 keychain backend is macOS-only, so Linux use needs the command backend with an organization CLI
 that keeps its own credentials. The broker runs with the caller's Python environment, so a work
 deployment should launch it with an isolated interpreter (`python -I -m quoin.workctl`).
+
+### Approved-write path
+
+Status: decided
+Decision: the agent can only prepare an immutable local proposal (`workctl propose`), whose
+SHA-256 hash covers the operation, binding, exact target, full content, expiry and idempotency key.
+A person approves it with `workctl-write approve` at a terminal outside the agent's session, which
+signs the hash with an approval key into a single-use, expiring approval. `workctl-write execute`
+revalidates the proposal, the approval and the configured write policy, records its intent in a
+private journal before sending, sends once with a write credential and records the receipt. After
+a timeout, server error or crash it looks the write up by its idempotency marker and otherwise
+reports `OUTCOME_UNKNOWN`; it never resends an unresolved write. Writes stay disabled unless the
+configuration declares a trusted approval boundary and an approval key.
+Rationale: an approve flag the model can pass is not authorization, and a resent email or a
+duplicate post cannot be taken back. Signing the content hash makes any change to text or target
+void the approval, and journaling intent first keeps a crash from turning into a blind resend.
+Scope: approval keys and write credentials use their own keychain prefixes, which read credentials
+may not use, but the approver and writer run as ordinary processes: keeping them out of the agent's
+reach is the deployment's duty (a separate account, a managed container or a platform service),
+which `approval_boundary` records and Quoin cannot verify. No trusted approval mechanism has been
+chosen (see the maintainer decisions above), so the default outcome is local drafts submitted by
+hand. Only Jira comments, Slack posts and Gmail sends are implemented, against synthetic exchanges;
+attachments are refused, and the idempotency markers (Slack metadata, Jira comment property, Gmail
+Message-ID) are unverified against live services. The CLI-versus-MCP comparison was not run and no MCP write tools exist.
 
 ## Gateway probe results
 

@@ -6,18 +6,33 @@ per result, bounded by `--limit`. `mail read` fetches `format=full` and
 renders the text/plain part (or the HTML part as text). Attachments are
 reported as metadata only; their content is never downloaded. The broker
 expects an OAuth access token with a read-only Gmail scope in its keychain.
+
+The approved writer sends with `messages/send` using its own credential
+(`gmail.send`, plus `gmail.readonly` for the lookup) and gives the message
+a Message-ID derived from the proposal's idempotency key; `lookup`
+searches for that Message-ID (`rfc822msgid:`) after an ambiguous outcome.
+That Gmail keeps a client-supplied Message-ID on API sends has not been
+checked against a live mailbox. The sender is left to Gmail (the write
+credential's account), and a reply is not threaded in the sender's own
+mailbox because no thread id is sent. Nothing is saved as a remote draft:
+a draft in the mailbox would itself be an external write.
 """
 from __future__ import annotations
 
 import base64
 import binascii
 import codecs
+import datetime as _dt
 import re
+import time
+from email.message import EmailMessage
+from email.policy import SMTP
+from email.utils import formatdate
 from typing import Any, Dict, List, Mapping, Optional
 from urllib.parse import quote, urlencode
 
-from ..envelope import INVALID_INPUT, NOT_FOUND, BrokerError
-from . import Result
+from ..envelope import INVALID_INPUT, NOT_FOUND, UNAVAILABLE, BrokerError
+from . import Receipt, Result
 from ._common import (
     as_dict,
     as_list,
@@ -26,6 +41,7 @@ from ._common import (
     encode_cursor,
     get_json,
     html_to_text,
+    post_json,
     text,
 )
 
@@ -33,6 +49,37 @@ NAME = "gmail"
 DEFAULT_BASE = "https://gmail.googleapis.com"
 METADATA_HEADERS = ("From", "To", "Cc", "Subject", "Date")
 MAX_PARTS = 200
+MESSAGE_ID_DOMAIN = "quoin-workctl.invalid"
+
+
+def message_id(marker: str) -> str:
+    return "<%s@%s>" % (marker, MESSAGE_ID_DOMAIN)
+
+
+def build_message(params: Mapping[str, Any], *, marker: str, now: float) -> bytes:
+    """The RFC 5322 message for one approved send. Addresses and the
+    subject were validated when the proposal was made (no line breaks or
+    control characters); a header the email package still refuses is an
+    invalid request, raised before anything is sent."""
+    try:
+        return _build(params, marker=marker, now=now)
+    except (ValueError, TypeError):
+        raise BrokerError(INVALID_INPUT, "the message headers are not valid")
+
+
+def _build(params: Mapping[str, Any], *, marker: str, now: float) -> bytes:
+    msg = EmailMessage(policy=SMTP)
+    msg["To"] = ", ".join(params["to"])
+    if params.get("cc"):
+        msg["Cc"] = ", ".join(params["cc"])
+    msg["Subject"] = params["subject"]
+    msg["Date"] = formatdate(now, usegmt=True)
+    msg["Message-ID"] = message_id(marker)
+    if params.get("in_reply_to"):
+        msg["In-Reply-To"] = params["in_reply_to"]
+        msg["References"] = params["in_reply_to"]
+    msg.set_content(params["body"] + "\n")
+    return msg.as_bytes()
 
 
 def _headers(payload: Mapping[str, Any]) -> Dict[str, str]:
@@ -179,6 +226,36 @@ class Gmail:
             "attachments": attachments,
         }
         return Result(data={"message": message})
+
+    def write(self, op_name: str, params: Mapping[str, Any], ctx: Any, *, marker: str) -> Receipt:
+        base = (ctx.service.base_url or DEFAULT_BASE) + "/gmail/v1/users/me"
+        raw = build_message(params, marker=marker, now=_epoch(ctx.fetched_at))
+        payload = {"raw": base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")}
+        body = as_dict(post_json(ctx, base + "/messages/send", payload, bearer(ctx)))
+        sent_id = text(body.get("id"))
+        if not sent_id:
+            raise BrokerError(UNAVAILABLE, "Gmail accepted the message without returning its id")
+        return Receipt(remote_id=sent_id, extra={"thread_id": text(body.get("threadId")), "message_id": message_id(marker)})
+
+    def lookup(
+        self, op_name: str, params: Mapping[str, Any], ctx: Any, *, marker: str, since: float
+    ) -> Optional[Receipt]:
+        base = (ctx.service.base_url or DEFAULT_BASE) + "/gmail/v1/users/me"
+        bare = message_id(marker)[1:-1]
+        query = urlencode({"q": "rfc822msgid:%s" % bare, "includeSpamTrash": "true", "maxResults": 1})
+        listing = as_dict(get_json(ctx, "%s/messages?%s" % (base, query), bearer(ctx)))
+        for ref in map(as_dict, as_list(listing.get("messages"))):
+            found = text(ref.get("id"))
+            if found:
+                return Receipt(remote_id=found, extra={"thread_id": text(ref.get("threadId")), "message_id": message_id(marker)})
+        return None
+
+
+def _epoch(stamp: str) -> float:
+    try:
+        return _dt.datetime.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=_dt.timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return time.time()
 
 
 BACKEND = Gmail()

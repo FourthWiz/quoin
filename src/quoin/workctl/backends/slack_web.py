@@ -6,6 +6,16 @@ paged by page number; `slack thread` calls `conversations.replies`, paged by
 with `ok: false` and an error string, which is mapped onto the envelope's
 closed codes here. Mentions and links in message text are left as Slack
 writes them.
+
+The approved writer posts with `chat.postMessage` (a token with
+`chat:write`, plus the `*:history` scopes for the channels it posts to,
+which the lookup needs) and tags the message with metadata carrying the proposal's
+idempotency key; `lookup` reads the channel or thread history with
+metadata included to find that tag after an ambiguous outcome, scanning a
+bounded time window around the send and refusing to call a partial scan
+"not found". An
+`ok: false` answer to a post means Slack did not post, except for its
+transient server errors, which leave the outcome unknown.
 """
 from __future__ import annotations
 
@@ -21,8 +31,8 @@ from ..envelope import (
     UNAVAILABLE,
     BrokerError,
 )
-from . import Result
-from ._common import as_dict, as_list, bearer, decode_cursor, encode_cursor, get_json, text
+from . import Receipt, Result
+from ._common import as_dict, as_list, bearer, decode_cursor, encode_cursor, get_json, post_json, text
 
 NAME = "slack-web"
 DEFAULT_BASE = "https://slack.com/api"
@@ -69,6 +79,42 @@ def _check(body: Any) -> Dict[str, Any]:
     code = _ERRORS.get(error, UNAVAILABLE)
     transient = error in _TRANSIENT
     raise BrokerError(code, _MESSAGES[code], retryable=True if transient else (False if code == UNAVAILABLE else None))
+
+
+METADATA_EVENT = "quoin_workctl_write"
+LOOKUP_PAGE = 200
+LOOKUP_PAGES = 5
+LOOKUP_WINDOW_SECONDS = 1_200
+
+_WRITE_ERRORS = {
+    "not_in_channel": FORBIDDEN,
+    "is_archived": FORBIDDEN,
+    "restricted_action": FORBIDDEN,
+    "restricted_action_read_only_channel": FORBIDDEN,
+    "restricted_action_thread_only_channel": FORBIDDEN,
+    "restricted_action_non_threadable_channel": FORBIDDEN,
+    "ekm_access_denied": FORBIDDEN,
+    "msg_too_long": INVALID_INPUT,
+    "no_text": INVALID_INPUT,
+    "invalid_blocks": INVALID_INPUT,
+    "invalid_metadata_format": INVALID_INPUT,
+    "invalid_metadata_schema": INVALID_INPUT,
+    "metadata_too_large": INVALID_INPUT,
+    "too_many_attachments": INVALID_INPUT,
+}
+
+
+def _check_write(body: Any) -> Dict[str, Any]:
+    """`ok: false` to a post is a refusal, so it maps to a definite code;
+    only Slack's transient server errors stay UNAVAILABLE."""
+    if isinstance(body, dict) and body.get("ok") is True:
+        return body
+    error = text(body.get("error")) if isinstance(body, dict) and body.get("ok") is False else None
+    if not error or error in _TRANSIENT:
+        raise BrokerError(UNAVAILABLE, "Slack gave no clear answer to the post; it may or may not exist")
+    code = _WRITE_ERRORS.get(error) or _ERRORS.get(error) or INVALID_INPUT
+    message = "Slack refused the post" if code in (FORBIDDEN, INVALID_INPUT) else _MESSAGES[code]
+    raise BrokerError(code, message)
 
 
 def _permalink(ctx: Any, channel: str, ts: str) -> Optional[str]:
@@ -146,6 +192,55 @@ class SlackWeb:
             cursor=encode_cursor(NAME, next_cursor),
             trim_key="messages",
         )
+
+    def write(self, op_name: str, params: Mapping[str, Any], ctx: Any, *, marker: str) -> Receipt:
+        base = ctx.service.base_url or DEFAULT_BASE
+        payload: Dict[str, Any] = {
+            "channel": params["channel"],
+            "text": params["body"],
+            "unfurl_links": False,
+            "unfurl_media": False,
+            "metadata": {"event_type": METADATA_EVENT, "event_payload": {"idempotency_key": marker}},
+        }
+        if params.get("thread"):
+            payload["thread_ts"] = params["thread"]
+        body = _check_write(post_json(ctx, base + "/chat.postMessage", payload, bearer(ctx)))
+        ts = text(body.get("ts"))
+        channel = text(body.get("channel")) or params["channel"]
+        if not ts:
+            raise BrokerError(UNAVAILABLE, "Slack accepted the post without returning its timestamp")
+        return Receipt(remote_id=ts, url=_permalink(ctx, channel, ts), extra={"channel": channel})
+
+    def lookup(
+        self, op_name: str, params: Mapping[str, Any], ctx: Any, *, marker: str, since: float
+    ) -> Optional[Receipt]:
+        base = ctx.service.base_url or DEFAULT_BASE
+        query: Dict[str, Any] = {
+            "channel": params["channel"],
+            "oldest": "%d.000000" % max(0, int(since)),
+            "latest": "%d.000000" % (int(since) + LOOKUP_WINDOW_SECONDS),
+            "inclusive": "true",
+            "include_all_metadata": "true",
+            "limit": LOOKUP_PAGE,
+        }
+        method = "conversations.history"
+        if params.get("thread"):
+            method = "conversations.replies"
+            query["ts"] = params["thread"]
+        for _ in range(LOOKUP_PAGES):
+            body = _check(get_json(ctx, "%s/%s?%s" % (base, method, urlencode(query)), bearer(ctx)))
+            for message in map(as_dict, as_list(body.get("messages"))):
+                meta = as_dict(message.get("metadata"))
+                payload = as_dict(meta.get("event_payload"))
+                ts = text(message.get("ts"))
+                if meta.get("event_type") == METADATA_EVENT and payload.get("idempotency_key") == marker and ts:
+                    channel = params["channel"]
+                    return Receipt(remote_id=ts, url=_permalink(ctx, channel, ts), extra={"channel": channel})
+            cursor = text(as_dict(body.get("response_metadata")).get("next_cursor"))
+            if not cursor:
+                return None
+            query["cursor"] = cursor
+        raise BrokerError(UNAVAILABLE, "too many Slack messages to check in the lookup window", retryable=False)
 
 
 BACKEND = SlackWeb()

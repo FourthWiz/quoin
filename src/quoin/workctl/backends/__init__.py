@@ -82,11 +82,36 @@ class Result:
     extra_pagination: Dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class Receipt:
+    """What the service returned for a write: its identifier for the new
+    resource and, when known, a link to it."""
+
+    remote_id: str
+    url: Optional[str] = None
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+
 class Backend(Protocol):
     name: str
     default_base: Optional[str]
 
     def run(self, op_name: str, params: Mapping[str, Any], ctx: Context) -> Result: ...
+
+
+class WriteBackend(Backend, Protocol):
+    """A backend the writer may use. `write` sends one normalized write and
+    tags it with `marker` (the proposal's idempotency key) so `lookup` can
+    find it again; it raises UNAVAILABLE only when the service may have
+    acted (timeout, connection loss, server error) and a definite code when
+    it certainly did not. `lookup` returns the receipt of the write carrying
+    `marker`, or None when the service shows no such write since `since`."""
+
+    def write(self, op_name: str, params: Mapping[str, Any], ctx: Context, *, marker: str) -> Receipt: ...
+
+    def lookup(
+        self, op_name: str, params: Mapping[str, Any], ctx: Context, *, marker: str, since: float
+    ) -> Optional[Receipt]: ...
 
 
 def load(name: str) -> Backend:

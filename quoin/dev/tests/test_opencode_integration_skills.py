@@ -34,8 +34,11 @@ def test_integration_skills_are_generated(rendered):
 @pytest.mark.parametrize("name,service", [("quoin-jira-context", "jira"), ("quoin-slack-context", "slack"), ("quoin-mail-context", "mail")])
 def test_skill_teaches_syntax_pagination_provenance_and_draft_first(rendered, name, service):
     text = rendered[".opencode/skills/%s/SKILL.md" % name].content.decode()
-    for op in (o for o in operations.OPERATIONS.values() if o.service == service):
+    for op in (o for o in operations.OPERATIONS.values() if o.service == service and o.read_only):
         assert "workctl %s %s" % (service, op.name.split(".")[1]) in text
+    for op in (o for o in operations.OPERATIONS.values() if o.service == service and not o.read_only):
+        assert "workctl propose %s %s" % (service, op.name.split(".")[1]) in text
+    assert "workctl-write approve" in text and "data.writes_enabled" in text
     for needle in ("--query-file", "--cursor", "pagination.cursor", "provenance", "untrusted", "local draft",
                    "Summarize", "POLICY_DENIED", "retry_after"):
         assert needle in text, needle
@@ -105,8 +108,8 @@ def test_render_refuses_integration_rows_without_their_template():
 
 def test_mcp_tool_schemas_match_the_operation_parameters():
     by_name = {t["name"]: t for t in mcp.tools()}
-    assert set(by_name) == {mcp.tool_name(op) for op in operations.OPERATIONS}
-    for op_name in operations.OPERATIONS:
+    assert set(by_name) == {mcp.tool_name(op) for op in operations.READ_OPERATIONS}
+    for op_name in operations.READ_OPERATIONS:
         tool = by_name[mcp.tool_name(op_name)]
         assert set(tool["inputSchema"]["properties"]) == operations.ALLOWED_PARAMS[op_name] - {"query_file"}
         assert tool["inputSchema"]["additionalProperties"] is False

@@ -7,7 +7,7 @@ import json
 import re
 from typing import Any, Dict, Mapping, Optional
 
-from ..envelope import INVALID_INPUT, UNAVAILABLE, BrokerError
+from ..envelope import FORBIDDEN, INVALID_INPUT, UNAVAILABLE, BrokerError
 from ..operations import CURSOR_RE
 from ..transport import Request, json_body, status_error
 
@@ -24,6 +24,25 @@ def get_json(ctx: Any, url: str, headers: Optional[Mapping[str, str]] = None) ->
     response = ctx.send(Request("GET", url, request_headers))
     error = status_error(response)
     if error is not None:
+        raise error
+    return json_body(response)
+
+
+def post_json(ctx: Any, url: str, payload: Any, headers: Optional[Mapping[str, str]] = None) -> Any:
+    """Send one JSON POST. A server error or a lost answer surfaces as
+    UNAVAILABLE, which the writer treats as "the service may have acted"."""
+    request_headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
+        "User-Agent": USER_AGENT,
+    }
+    request_headers.update(headers or {})
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    response = ctx.send(Request("POST", url, request_headers, body))
+    error = status_error(response)
+    if error is not None:
+        if error.code == FORBIDDEN:
+            error.message = "the write credential may not perform this write"
         raise error
     return json_body(response)
 

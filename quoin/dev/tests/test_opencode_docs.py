@@ -53,6 +53,7 @@ DECISION_HEADINGS = (
     "Retention",
     "Egress",
     "Interactive-first or headless-first",
+    "Trusted approval mechanism",
 )
 
 # A public documentation host is added here only when a claim actually cites

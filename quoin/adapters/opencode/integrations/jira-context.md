@@ -8,9 +8,10 @@ Use this skill when the task names a Jira issue key (for example `ENG-123`) or n
 workctl jira issue ENG-123 --json
 workctl jira search --query-file {{ARTIFACT_ROOT}}/<task>/jql.txt --limit 10 --json
 workctl jira search --query-file {{ARTIFACT_ROOT}}/<task>/jql.txt --limit 10 --cursor <pagination.cursor> --json
+workctl propose jira comment ENG-123 --body-file {{ARTIFACT_ROOT}}/<task>/jira-comment.txt --out {{ARTIFACT_ROOT}}/<task>/jira-comment.proposal.json --json
 ```
 
-The search query file holds one JQL expression, for example `project = ENG AND status != Done ORDER BY updated DESC`. The broker passes it to Jira unchanged, so write valid JQL; the file may hold at most 4000 characters.
+The search query file holds one JQL expression, for example `project = ENG AND status != Done ORDER BY updated DESC`. The broker passes it to Jira unchanged, so write valid JQL; the file may hold at most 4000 characters. A proposed comment is plain text; blank lines separate paragraphs and nothing is read as Jira markup.
 
 ## What comes back
 
