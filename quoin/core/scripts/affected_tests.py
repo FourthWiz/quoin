@@ -1449,6 +1449,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_opencode_native_schema.py",
     ),
     (
+        "quoin/adapters/opencode/managed-work-deployment.md",
+        "quoin/dev/tests/test_opencode_deployment_doc.py",
+    ),
+    (
+        "quoin/adapters/opencode/managed-work-deployment.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
         "quoin/adapters/opencode/decisions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),

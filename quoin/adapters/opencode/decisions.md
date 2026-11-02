@@ -206,6 +206,44 @@ The digest covers the redacted text and is not a secrecy control; a short or gue
 confirmed offline.
 Scope: OpenCode's own log and session database are not controlled by this setting.
 
+### Classification-keyed defaults
+
+Status: decided
+Decision: a profile's classification (work or personal) chooses the defaults for logging
+content, retention days, identity check, web tools, package installs and which inventory
+entries are refused. The work values are strict; the personal values record and allow more.
+An explicit profile or trusted managed policy value overrides a default; a project file can
+only tighten.
+Rationale: one switch keeps a work profile safe without per-key configuration, and a personal
+profile keeps working without work-grade refusals.
+Scope: defaults are local to this adapter; the maintainer retention and egress decisions
+below are unchanged.
+
+### Executable-fetch prevention
+
+Status: decided
+Decision: a work profile runs offline for package installs and the launcher refuses a launch
+whose configuration would make OpenCode fetch code (a plugin package, a dependency install
+for an owned directory) when the network policy cannot rule the fetch out, using
+`executable-fetch-detected` and `executable-fetch-possible`.
+Rationale: fetched code runs with the child's access, and a network policy alone cannot tell
+which request carries code.
+Scope: detection reads configuration and the offline policy; it does not observe what the
+child fetches afterwards.
+
+### Configuration inventory allowlist
+
+Status: decided
+Decision: before every launch the driver reads every configuration source OpenCode would read
+and admits an entry only when it is on a short allowlist (declared providers and models,
+allow-listed MCP servers defined in a file the user controls, owned agents and commands).
+Anything that could change which models run, add code or widen permissions is refused with an
+`inventory-*` code under a work profile and recorded under a personal one.
+Rationale: later configuration layers can override compiled keys, so the launcher verifies the
+merged inventory rather than trusting its own output.
+Scope: the inventory covers what OpenCode reads at start; it does not cover files a tool writes
+later.
+
 ### Retention sweep scope and evidence
 
 Status: decided
@@ -216,7 +254,8 @@ Rationale: the workflow state cannot tell a finished multi-stage task from one p
 stages, so keeping more is the safe direction. Cache is removed as whole package units because a
 partly removed package can break a session that offline policy cannot repair.
 Scope: the 30-day work values are local defaults; the maintainer retention decision below is
-unchanged.
+unchanged. The worst-case walk is bounded by per-class budgets of 50000 entries plus three per
+indexed project; a unit too large to measure within its budget is kept and needs a purge.
 
 ### Purge scope and kept credentials
 

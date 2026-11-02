@@ -418,7 +418,10 @@ an approved proxy the name is checked end to end over a CONNECT tunnel and addre
 ranges are not checked, because the proxy resolves. Names under `.invalid` are
 refused without a lookup. Loopback endpoints are recorded as `loopback` and not
 contacted. `identity_check: off` is accepted only from the profile or the trusted
-managed policy. The check does not prove that the child uses the proxy, and the
+managed policy. An identity check through a proxy that requires credentials is not
+supported: the CONNECT request carries no proxy credentials, and a 407 refuses
+`destination-unverifiable` under `identity_check: required`; set the profile's
+identity check or use a non-authenticating proxy. The check does not prove that the child uses the proxy, and the
 provider `ca_file` is not passed to the child. Observations (address count,
 certificate fingerprint prefix) are stored beside the record, not inside its
 digest, because certificates rotate and DNS answers change.
@@ -638,14 +641,24 @@ removes this profile's run sidecars in every project it was used in. Task
 folders, workflow state, continuation records and gate files are never touched.
 `--dry-run` lists what would go and what is kept; deleting needs `--yes`
 (without it the command prints the plan and exits 2). Exit codes: 0 done, 1 some
-items could not be removed or were kept as foreign-owned or unreadable, 2 refused, 3 failed. Refusals: `purge-run-active`
+items could not be removed or were kept as foreign-owned or unreadable, or cut short by the walk budget, 2 refused, 3 failed. Refusals: `purge-run-active`
 (names each blocking run or lock and its reason; a stale supervisor pid file,
 whose process is gone but whose pid was reused, is cleared by deleting the named
-file; a project store that could not be read or is unsafe is named with `store-unchecked`, fix its permissions or remove the project from the index by deleting it), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`
+file; a project store that could not be read or is unsafe is named with `store-unchecked`; fix its permissions or remove the project from the index by deleting it), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`
 and `purge-confirm-required`. After a purge, a continuation from a purged run
 refuses with the "has no effective-config record" message; that is expected. A
 later launch of the profile with the other classification still refuses because
 the stamp is kept.
+
+An entry that could not be removed because it is unreadable carries a hint in the
+JSON output (`chmod-u-rwx`) and a text line of the form `run: chmod -R u+rwx PATH`;
+run it and purge again. The sweep runs on every launch; there is no last-sweep
+stamp, so a launch never skips it for recency.
+
+For what the environment must provide around a work profile (mounts, secrets,
+egress, attestation) and what Quoin verifies, see
+[managed-work-deployment.md](managed-work-deployment.md). The work profile is
+not yet supported on an unmanaged machine.
 
 ### Configuration inventory
 

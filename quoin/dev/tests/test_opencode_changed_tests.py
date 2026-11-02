@@ -19,6 +19,9 @@ from _opencode_task_scope import task_guard_active
 TESTS_DIR = Path(__file__).resolve().parent
 LIST_PATH = TESTS_DIR / "opencode_changed_tests.json"
 OPENCODE_PREFIXES = ("test_opencode_", "_opencode_", "test_fake_opencode")
+# Tests of files under quoin/adapters/opencode that do not carry the prefix. A
+# closed set of exact names, never a prefix.
+OPENCODE_ADAPTER_TESTS = frozenset({"test_probe_gateway.py"})
 
 
 def _git(root, *args):
@@ -57,7 +60,11 @@ def merge_base(root, base_ref):
 
 def is_opencode_test(relative_path):
     name = Path(relative_path).name
-    return name.startswith(OPENCODE_PREFIXES) or "dev/tests/fakes/" in relative_path
+    return (
+        name.startswith(OPENCODE_PREFIXES)
+        or name in OPENCODE_ADAPTER_TESTS
+        or "dev/tests/fakes/" in relative_path
+    )
 
 
 def test_the_diff_command_detects_a_modified_file(tmp_path):
@@ -78,6 +85,17 @@ def test_the_diff_command_detects_a_modified_file(tmp_path):
     assert changed_pre_existing(repo, base, "tests") == ["tests/test_sample.py"]
     (repo / "tests" / "test_new.py").write_text("", encoding="utf-8")
     assert changed_pre_existing(repo, base, "tests") == ["tests/test_sample.py"]
+
+
+def test_the_adapter_test_exception_is_a_closed_name_set():
+    assert is_opencode_test("quoin/dev/tests/test_probe_gateway.py")
+    for rejected in (
+        "quoin/dev/tests/test_quoin_run_opencode_x.py",
+        "quoin/dev/tests/test_probe_gateway_tool_loop.py",
+        "quoin/dev/tests/test_install.py",
+    ):
+        assert not is_opencode_test(rejected), rejected
+    assert OPENCODE_ADAPTER_TESTS == frozenset({"test_probe_gateway.py"})
 
 
 def test_changed_tests_are_listed_with_reasons():
