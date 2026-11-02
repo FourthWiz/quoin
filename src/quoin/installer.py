@@ -127,6 +127,7 @@ DEPLOYED_SCRIPTS = (
     "thorough_plan_checkpoint.py",   # IVG-98: phase-boundary checkpoint wrapper for /thorough_plan
     "cost_summary.py",               # IVG-96: portable cost-summary.json normalizer wrapper
     "discovery_staleness.py",        # IVG-106: discovery/Serena staleness detector wrapper
+    "repo_map.py",                   # ranked symbol map for /discover cache wrapper
     "verify_claims.py",              # IVG-115: §V ground-truth reconciliation engine wrapper
     "inject_verification_step.py",   # IVG-115 T-04: §V block generator (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS needed)
     "deploy_drift_check.py",         # IVG-136: post-merge deploy-drift guard (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, see D-05)
@@ -637,6 +638,7 @@ CORE_SCRIPTS = (
     "thorough_plan_checkpoint.py",  # IVG-98: phase-boundary checkpoint core impl for /thorough_plan
     "cost_summary.py",              # IVG-96: portable cost-summary.json normalizer core impl
     "discovery_staleness.py",       # IVG-106: discovery/Serena staleness detector core impl
+    "repo_map.py",                  # ranked symbol map core impl; required by the wrapper's parents[1] loader
     "verify_claims.py",             # IVG-115: §V ground-truth reconciliation engine core impl
     "ci_mirror.py",  # IVG-138: wrapped impl; required by ~/.claude/scripts/ci_mirror.py parents[1] loader
     "checkpoint_picker.py",         # IVG-139: wrapped impl; required by ~/.claude/scripts/checkpoint_picker.py parents[1] loader

@@ -173,7 +173,7 @@ Before writing anything:
 - Read `<task-root>/spec.md` if it exists — the plan's tasks must collectively satisfy its acceptance criteria.
 - **Check the knowledge cache** (if `.workflow_artifacts/cache/_index.md` exists):
   - Read `_staleness.md` (if it exists, otherwise fall back to `.workflow_artifacts/memory/repo-heads.md`) — compare each relevant repo's HEAD against cached hash
-  - For non-stale repos: load `cache/<repo>/_index.md`, `cache/<repo>/_deps.md`, and module `_index.md` files for task-relevant directories. Load in this order (root → repo → module) for prompt cache efficiency.
+  - For non-stale repos: load `cache/<repo>/_index.md`, `cache/<repo>/_deps.md`, `cache/<repo>/repo-map.md` (ranked symbols; when Serena is not active, skip if absent), and module `_index.md` files for task-relevant directories. Load in this order (root → repo → module) for prompt cache efficiency.
   - For stale repos: run `git diff --name-only <cached-head> <current-head>` to identify changed files. Trust cache entries for unchanged files; read source only for changed files relevant to the task.
   - If no cache exists, skip this step — fall through to source reads (current behavior)
 - Read the existing codebase — **targeted reads only**: source files where cache was stale/missing/insufficient, files that need exact code details for task specifications

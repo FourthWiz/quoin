@@ -130,8 +130,11 @@ most about 60 lines), which you then save as `.workflow_artifacts/<task>/context
 - relevant lessons-learned entries;
 - anything surprising (generated files, duplicated logic, a second call site).
 
-Tell the subagent to prefer Serena symbol tools when available, to read excerpts
-rather than whole files, and to report conclusions, not file dumps. You keep only
+Tell the subagent to start from `.workflow_artifacts/cache/<repo>/repo-map.md`
+(a ranked symbol map; skip it if absent or its `hash:` is not the current HEAD)
+to locate likely files, to prefer Serena
+symbol tools when available, to read excerpts rather than whole files, and to
+report conclusions, not file dumps. You keep only
 its summary in context.
 
 ## Step 4b — Decompose (staged tasks only, inline)

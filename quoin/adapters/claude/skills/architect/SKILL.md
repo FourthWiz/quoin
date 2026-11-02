@@ -178,6 +178,7 @@ The goal of Phase 1 is to gather structured facts from the codebase WITHOUT doin
 1. **Cache exists and repo is NOT stale** (HEAD matches `_staleness.md`): Read the cache entries instead of spawning a scan agent. Load in this order to maximize prompt cache hits:
    - `.workflow_artifacts/cache/<repo-name>/_index.md` (repo summary)
    - `.workflow_artifacts/cache/<repo-name>/_deps.md` (dependencies)
+   - `.workflow_artifacts/cache/<repo-name>/repo-map.md` (ranked symbol map) when Serena is not active; skip if absent
    - Module-level `_index.md` files for directories relevant to the current task
    - File-level `<stem>.md` entries for key files relevant to the current task
 

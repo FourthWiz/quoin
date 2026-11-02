@@ -26,8 +26,8 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
    Shape is `single` by default and `staged` when the change spans
    several repositories, has parts that must land in order, or will not
    fit one coherent diff.
-5. Context pack, delegated to a read-only helper: likely files and
-   symbols, covering tests and how to run them, conventions, relevant
+5. Context pack, delegated to a read-only helper that starts from the
+   cached repo map when present: likely files and symbols, covering tests and how to run them, conventions, relevant
    lessons. Written to `context.md`.
 5b. Staged tasks only: write a short `architecture.md` whose
    `## Stage decomposition` section lists two to five stages (one repo
