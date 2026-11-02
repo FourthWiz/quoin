@@ -212,6 +212,17 @@ def test_quoin_skill_outside_project(fixture):
     assert outside[0].message == "a skill named 'quoin-plan' was found outside the project's own .opencode/skills directory"
 
 
+def test_integration_skill_outside_project_is_a_quoin_skill(fixture):
+    home, project, source_dir, env = fixture
+    _write_skill(home / ".agents" / "skills" / "quoin-jira-context" / "SKILL.md", "quoin-jira-context")
+
+    findings = _run_host(project, source_dir, env, home)
+    outside = [f for f in findings if f.id == "quoin-skill-outside-project"]
+    assert [f.message for f in outside] == [
+        "a skill named 'quoin-jira-context' was found outside the project's own .opencode/skills directory"
+    ]
+
+
 def test_duplicate_remediation_names_no_location_and_adds_url_sentence_when_configured(fixture):
     home, project, source_dir, env = fixture
     _write_skill(home / ".claude" / "skills" / "plan" / "SKILL.md", "plan")

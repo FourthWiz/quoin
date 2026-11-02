@@ -268,6 +268,26 @@ npm registry file can hold tokens and the MCP auth file is uncited, so both are 
 Scope: purge refuses while a run or lock of the profile is active; an open interactive session is
 not detected.
 
+### Read-only integration broker
+
+Status: decided
+Decision: Jira, Slack and mail context reaches the agent only through `workctl`, a read-only broker
+with one normalized operation table and one authorization policy that every transport calls. Its
+configuration lives at a fixed path under the account's real home and holds keychain references
+under the `quoin-workctl` service prefix only; it never reads credentials, configuration paths,
+proxies or CA bundles from the caller's environment. Requests are pinned to the configured service
+origin. The generated `quoin-*-context` skills teach the syntax and carry no credentials, and no
+MCP server is enabled; `quoin.workctl.mcp` is an evaluation stub that routes through the same
+broker entry point.
+Rationale: the agent is untrusted once it reads retrieved text, so neither a flag, an environment
+variable nor a cursor may decide which secret is read or where it is sent. Sharing one entry point
+keeps a future MCP transport from bypassing validation or the read-only policy.
+Scope: backends were exercised only against synthetic recorded exchanges; no tenant, client or
+mail backend has been chosen (see the maintainer decisions above), so no live read has run. The
+keychain backend is macOS-only, so Linux use needs the command backend with an organization CLI
+that keeps its own credentials. The broker runs with the caller's Python environment, so a work
+deployment should launch it with an isolated interpreter (`python -I -m quoin.workctl`).
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.

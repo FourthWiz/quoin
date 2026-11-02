@@ -59,6 +59,10 @@
     {
       "path": "quoin/core/workflow/rules.md",
       "description": "Portable workflow rules source for the generated instruction document"
+    },
+    {
+      "path": "quoin/adapters/opencode/integrations/*.md",
+      "description": "Service-specific bodies of the generated workctl integration skills"
     }
   ],
   "generated_outputs": [
@@ -81,6 +85,10 @@
     {
       "path": ".opencode/opencode.jsonc",
       "description": "The generated config file pointing OpenCode at the instruction document"
+    },
+    {
+      "path": ".opencode/skills/quoin-*-context/SKILL.md",
+      "description": "One read-only integration skill per supported integration_skills row, teaching workctl syntax, pagination, provenance and draft-first behaviour"
     }
   ],
   "unsupported_outputs": [
@@ -742,6 +750,44 @@
       "assets": [],
       "live_runtime_evidence": false,
       "evidence": []
+    }
+  ],
+  "integration_skills": [
+    {
+      "id": "jira-context",
+      "status": "supported",
+      "service": "jira",
+      "skill": "quoin-jira-context",
+      "source": "quoin/adapters/opencode/integrations/jira-context.md",
+      "reason": "Teaches read-only Jira context through the workctl broker; carries no credentials",
+      "live_runtime_evidence": false,
+      "evidence": [
+        "quoin/dev/tests/test_opencode_integration_skills.py"
+      ]
+    },
+    {
+      "id": "mail-context",
+      "status": "supported",
+      "service": "mail",
+      "skill": "quoin-mail-context",
+      "source": "quoin/adapters/opencode/integrations/mail-context.md",
+      "reason": "Teaches read-only mail context through the workctl broker; carries no credentials",
+      "live_runtime_evidence": false,
+      "evidence": [
+        "quoin/dev/tests/test_opencode_integration_skills.py"
+      ]
+    },
+    {
+      "id": "slack-context",
+      "status": "supported",
+      "service": "slack",
+      "skill": "quoin-slack-context",
+      "source": "quoin/adapters/opencode/integrations/slack-context.md",
+      "reason": "Teaches read-only Slack context through the workctl broker; carries no credentials",
+      "live_runtime_evidence": false,
+      "evidence": [
+        "quoin/dev/tests/test_opencode_integration_skills.py"
+      ]
     }
   ]
 }

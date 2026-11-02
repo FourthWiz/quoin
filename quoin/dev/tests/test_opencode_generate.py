@@ -883,20 +883,24 @@ def test_load_inputs_wraps_recursion_error_from_check_manifest(monkeypatch):
 # render() on the real tree: file set, path families, bindings
 
 
-def test_render_source_dir_renders_exactly_34_files_with_run_command():
+def test_render_source_dir_renders_exactly_37_files_with_run_command():
     files = generate.render_source_dir(SOURCE_DIR)
     manifest_data = _load_real_manifest()
     supported = _supported_rows(manifest_data)
     expected_names = sorted(generate.names.normalize(row["id"]) for row in supported)
 
     command_paths = sorted(k for k in files if k.startswith(".opencode/commands/"))
-    skill_paths = sorted(k for k in files if k.startswith(".opencode/skills/"))
+    skill_paths = sorted(k for k, f in files.items() if f.kind == "skill")
+    integration_paths = sorted(k for k, f in files.items() if f.kind == "integration-skill")
     agent_paths = sorted(k for k in files if k.startswith(".opencode/agents/"))
 
     assert command_paths == [".opencode/commands/%s.md" % n for n in expected_names]
     assert skill_paths == [".opencode/skills/%s/SKILL.md" % n for n in expected_names]
+    assert integration_paths == [
+        ".opencode/skills/%s/SKILL.md" % row["skill"] for row in manifest_data["integration_skills"]
+    ]
     assert len(agent_paths) == len(manifest_data["roles"])
-    assert len(files) == 34
+    assert len(files) == 37
     assert ".opencode/commands/quoin-run.md" in files
     assert ".opencode/skills/quoin-run/SKILL.md" in files
 
@@ -925,7 +929,7 @@ def test_render_command_agent_binding_matches_manifest_rows():
 def test_skill_names_equal_command_names_and_pass_name_error():
     files = generate.render_source_dir(SOURCE_DIR)
     command_names = {k.split("/")[-1][:-3] for k in files if k.startswith(".opencode/commands/")}
-    skill_dirs = {k.split("/")[2] for k in files if k.startswith(".opencode/skills/")}
+    skill_dirs = {k.split("/")[2] for k, f in files.items() if f.kind == "skill"}
     assert command_names == skill_dirs
     for name in skill_dirs:
         assert generate.names.name_error(name) is None
@@ -941,6 +945,7 @@ def test_rendered_path_families_equal_manifest_generated_outputs():
     assert families == {
         ".opencode/commands/quoin-*.md",
         ".opencode/skills/quoin-*/SKILL.md",
+        ".opencode/skills/quoin-*-context/SKILL.md",
         ".opencode/agents/quoin-*.md",
         ".opencode/quoin/instructions.md",
         ".opencode/opencode.jsonc",
@@ -1163,6 +1168,8 @@ def test_injected_collision_raises_name_collision_error():
         templates=inputs.templates,
         contracts=contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     with pytest.raises(names.NameCollisionError) as exc_info:
         generate.render(mutated)
@@ -1184,6 +1191,8 @@ def _mutated_inputs(**overrides):
         templates=dict(inputs.templates),
         contracts=dict(inputs.contracts),
         rules=inputs.rules,
+        integrations=dict(inputs.integrations),
+        integration_template=inputs.integration_template,
     )
     kwargs.update(overrides)
     return generate.GeneratorInputs(**kwargs)
@@ -1610,6 +1619,8 @@ def test_dependency_exact_bundle_contract_edit_changes_only_that_skill():
         templates=inputs.templates,
         contracts=edited,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(inputs_after)
 
@@ -1630,6 +1641,8 @@ def test_dependency_exact_rules_edit_changes_only_the_instructions_document():
         templates=inputs.templates,
         contracts=inputs.contracts,
         rules=inputs.rules + "\n\nExtra rule prose for the dependency-exactness test.\n",
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(inputs_after)
 
@@ -1652,6 +1665,8 @@ def test_dependency_exact_command_template_edit_changes_only_the_commands():
         templates=templates_after,
         contracts=inputs.contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(inputs_after)
 
@@ -1675,6 +1690,8 @@ def test_dependency_exact_agent_template_edit_changes_only_the_agents():
         templates=templates_after,
         contracts=inputs.contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(inputs_after)
 
@@ -1698,6 +1715,8 @@ def test_dependency_exact_role_prompt_edit_changes_only_that_agent():
         templates=inputs.templates,
         contracts=inputs.contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(inputs_after)
 
@@ -1720,6 +1739,8 @@ def test_dependency_exact_entry_notes_edit_changes_only_that_skill():
         templates=inputs.templates,
         contracts=inputs.contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(inputs_after)
 
@@ -1759,6 +1780,8 @@ def test_dependency_exact_new_catalog_id_mentioned_in_a_contract_changes_only_th
         templates=inputs.templates,
         contracts=contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     before = generate.render(before_inputs)
 
@@ -1771,6 +1794,8 @@ def test_dependency_exact_new_catalog_id_mentioned_in_a_contract_changes_only_th
         templates=inputs.templates,
         contracts=contracts,
         rules=inputs.rules,
+        integrations=inputs.integrations,
+        integration_template=inputs.integration_template,
     )
     after = generate.render(after_inputs)
 

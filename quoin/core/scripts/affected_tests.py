@@ -1589,6 +1589,38 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/templates/instructions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),
+    (
+        "quoin/adapters/opencode/templates/integration-skill.md",
+        "quoin/dev/tests/test_opencode_integration_skills.py",
+    ),
+    (
+        "quoin/adapters/opencode/templates/integration-skill.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/integrations/jira-context.md",
+        "quoin/dev/tests/test_opencode_integration_skills.py",
+    ),
+    (
+        "quoin/adapters/opencode/integrations/jira-context.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/integrations/mail-context.md",
+        "quoin/dev/tests/test_opencode_integration_skills.py",
+    ),
+    (
+        "quoin/adapters/opencode/integrations/mail-context.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/adapters/opencode/integrations/slack-context.md",
+        "quoin/dev/tests/test_opencode_integration_skills.py",
+    ),
+    (
+        "quoin/adapters/opencode/integrations/slack-context.md",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
     # The generator reads rules.md, skills.json and every supported bundle
     # contract at render time (`generate.load_inputs`), so an edit to any of
     # them needs to select the generator's own test file too.
