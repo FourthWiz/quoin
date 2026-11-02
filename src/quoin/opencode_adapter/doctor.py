@@ -291,9 +291,11 @@ def _command_or_agent_basename(relpath: str) -> str:
 def _check_smoke_names(files: Dict[str, "generate.RenderedFile"]) -> List[Finding]:
     findings: List[Finding] = []
     for relpath, rf in files.items():
-        if rf.kind not in ("command", "agent", "skill"):
+        if rf.kind not in ("command", "agent", "skill", "integration-skill"):
             continue
-        basename = _skill_basename(relpath) if rf.kind == "skill" else _command_or_agent_basename(relpath)
+        basename = (
+            _skill_basename(relpath) if rf.kind in ("skill", "integration-skill") else _command_or_agent_basename(relpath)
+        )
         if names.name_error(basename) is not None:
             findings.append(make_finding("smoke-names", "error", path=relpath))
     return findings
@@ -305,7 +307,7 @@ def _parse_frontmatter_all(
     parsed: Dict[str, dict] = {}
     findings: List[Finding] = []
     for relpath, rf in files.items():
-        if rf.kind not in ("command", "agent", "skill"):
+        if rf.kind not in ("command", "agent", "skill", "integration-skill"):
             continue
         try:
             fields, _body = frontmatter.parse(rf.content.decode("utf-8"))
@@ -321,7 +323,7 @@ def _check_smoke_digests(
 ) -> List[Finding]:
     findings: List[Finding] = []
     for relpath, rf in files.items():
-        if rf.kind == "skill":
+        if rf.kind in ("skill", "integration-skill"):
             fields = parsed.get(relpath)
             metadata = fields.get("metadata") if fields else None
             digest = metadata.get("source_digest") if isinstance(metadata, dict) else None
@@ -1541,7 +1543,9 @@ def _census_findings(project_root, worktree, env, home, docs, rendered, roots) -
     catalog_ids = frozenset(
         rf.source_id for rf in rendered.values() if rf.kind == "skill"
     ) if rendered else frozenset()
-    quoin_names = frozenset(names.normalize(cid) for cid in catalog_ids)
+    quoin_names = frozenset(names.normalize(cid) for cid in catalog_ids) | frozenset(
+        names.normalize(rf.source_id) for rf in (rendered or {}).values() if rf.kind == "integration-skill"
+    )
 
     skills_urls, _skills_urls_doc = _last_skills_field(docs, "urls")
     urls_nonempty = isinstance(skills_urls, list) and bool(skills_urls)

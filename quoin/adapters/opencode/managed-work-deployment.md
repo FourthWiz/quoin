@@ -42,6 +42,12 @@ beyond what "What Quoin verifies" lists.
   credential file or shell history may be readable from inside the boundary.
 - Quoin resolves the work credential at launch and hands it to the child by
   environment variable only. It never writes the value to a record.
+- If integrated writes are enabled, keep the `workctl` approval key
+  (`quoin-workctl-approver*`) and write credentials (`quoin-workctl-writer*`)
+  outside the boundary, and run `workctl-write approve` and `execute` there,
+  as a separate account or outside the container. Inside the boundary the agent
+  may only prepare proposals. Record the arrangement in the broker
+  configuration's `writes.approval_boundary`; Quoin cannot verify it.
 
 ### Process environment
 
