@@ -36,12 +36,23 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
    stage brief under `stage-N/`, one review and one commit per stage,
    marking each stage done in `architecture.md`. `--resume` continues at
    the first unfinished stage.
-6. Implement, inline, with no plan file. Tests are proportionate: about
-   one regression test per behaviour change, extending existing files.
-7. Verify, inline: run affected tests once; if the environment cannot
-   be built, record that and continue without retry loops.
+6. Implement, with no plan file, always on the strong (implementation)
+   model: inline when the session already runs on it, otherwise in one
+   delegated implementer on that model, given the brief, the context
+   pack, the branch and the test command. Any other tier, cheaper or
+   more expensive, delegates. Orchestration, helpers and user questions
+   stay in the parent. Opt out with a no-redispatch prefix or the
+   runtime's min-tier knob. If delegation fails, proceed inline: silently
+   in autonomous mode, otherwise only after the user picks abort or
+   proceed. Staged tasks use one implementer per stage. Tests are
+   proportionate: about one regression test per behaviour change,
+   extending existing files.
+7. Verify, in the same place as step 6: run affected tests once; if the
+   environment cannot be built, record that and continue without retry
+   loops.
 8. Review, delegated, one pass, strong model, given only the brief, the
-   diff and the test result. Fixes are applied inline; no second review.
+   diff and the test result. Fixes are applied where step 6 ran (the
+   same implementer when delegated); no second review.
 9. Commit locally. Never push or open a PR.
 
 ## Escalation

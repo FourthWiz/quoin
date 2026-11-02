@@ -104,6 +104,7 @@ DEPLOYED_SCRIPTS = (
     "classify_critic_issues.py",
     "build_preambles.py",
     "session_age_guard.py",
+    "model_tier.py",  # IVG-307: Claude-adapter-owned model-name to tier mapping for the /run implementer guard (adapter-only, no CORE_SCRIPTS twin)
     "pollution_guard.py",  # Claude-adapter-owned §0' on-demand pollution score (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors session_age_guard.py)
     "sleep_score.py",
     "analyze_cost_ledger.py",

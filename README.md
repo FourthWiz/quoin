@@ -274,7 +274,7 @@ workflow intent through natural-language phase requests and repo-local docs.
 
 | Command | Model | What it does |
 |---------|-------|-------------|
-| `/run` | Opus | Default light pipeline: brief, context pack, inline implement, one review, local commit |
+| `/run` | Opus | Default light pipeline: brief, context pack, implement on Opus, one review, local commit |
 | `/run_hard` | Opus | Full heavy pipeline orchestrator (`/run hard:`); pauses at gates |
 | `/cost_snapshot` | Haiku | Live Claude cost: today, lifetime, and per-task breakdown |
 | `/triage` | Haiku | Routes the request to the right workflow phase |
