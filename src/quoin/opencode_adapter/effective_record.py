@@ -173,6 +173,7 @@ def retention_section(policy: Mapping[str, Any], effective: Optional[Any] = None
     wide = {kind: policy.get("retention." + kind) for kind in RETENTION_KINDS}
     scoped = dict(wide)
     origin = {kind: ["default"] for kind in RETENTION_KINDS}
+    project_origin: List[str] = []
     if effective is not None:
         view = profile_policy.view(effective)
         for kind in RETENTION_KINDS:
@@ -181,20 +182,21 @@ def retention_section(policy: Mapping[str, Any], effective: Optional[Any] = None
             tokens = []
             for layer in view.origins.get("retention." + kind, ("default",)):
                 token = origin_token(layer)
-                if token not in tokens:
+                if token != "project" and token not in tokens:
                     tokens.append(token)
             entry = effective.values.get("policy.retention.project." + kind)
             if entry is not None and tuple(entry.origin) != ("default",):
                 for layer in entry.origin:
                     token = origin_token(layer)
-                    if token == "project" and token not in tokens:
-                        tokens.append(token)
-            origin[kind] = tokens
+                    if token == "project" and kind not in project_origin:
+                        project_origin.append(kind)
+            origin[kind] = tokens or ["default"]
     active = any(v is not None for v in list(wide.values()) + list(scoped.values()))
     return {
         "days": wide,
         "project_scoped": scoped,
         "origin": origin,
+        "project_origin": project_origin,
         "sweep": "at-launch" if active else "none",
         "database": "purge-only",
     }

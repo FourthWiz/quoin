@@ -736,12 +736,19 @@ def map_native_error(
         kind = "timeout"
     elif code == "ECONNRESET" or (retryable and status is None):
         kind = "connect"
+    def ident(value: object) -> Optional[str]:
+        # Under metadata these native strings are not free text: a well-formed
+        # identifier or a digest, never a bounded copy of arbitrary content.
+        if content == "summary":
+            return _bound(value, redact, 256)
+        return _safe_ident(value, redact)
+
     return ErrorPayload(
-        name=_bound(name, redact, 256) or "UnknownError",
+        name=ident(name) or "UnknownError",
         message=message,
         failure_kind=kind,
         http_status=status if kind == "http" else None,
-        retry_after=_bound(retry_after, redact, 256) if kind == "http" else None,
+        retry_after=ident(retry_after) if kind == "http" else None,
     )
 
 
@@ -992,7 +999,9 @@ def _translate(obj, run_id, attempt, observed_at, redact, limit, content="summar
                 cache_read_tokens=_count(cache.get("read")),
                 cache_write_tokens=_count(cache.get("write")),
                 cost=_decimal_text(part.get("cost")),
-                finish_reason=_bound(reason, redact, 128),
+                finish_reason=(
+                    _bound(reason, redact, 128) if content == "summary" else _safe_ident(reason, redact)
+                ),
             ),
         )
 
@@ -1076,7 +1085,10 @@ def _translate_tool(part, make, redact, limit, content="summary") -> Tuple[Runti
             permission_outcome="denied" if outcome == "denied" else None,
         )
 
-    return progress(kind="tool", tool=tool, status=_bound(status, redact, 256))
+    return progress(
+        kind="tool", tool=tool,
+        status=_bound(status, redact, 256) if content == "summary" else _safe_ident(status, redact),
+    )
 
 
 # ---------------------------------------------------------------------------

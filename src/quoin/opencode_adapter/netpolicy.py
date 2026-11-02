@@ -105,6 +105,7 @@ class Census:
     proxies: Tuple[ProxyRoute, ...] = ()
     web_tools: Optional[WebTools] = None
     package_registry: Tuple[Destination, ...] = ()
+    registry_cause: Optional[str] = None  # set only when the npmrc read failed
 
 
 EMPTY_CENSUS = Census()
@@ -183,9 +184,22 @@ def _no_proxy_matches(host: str, ambient: Mapping[str, str]) -> bool:
     return False
 
 
-def _read_registry_hosts(files: Sequence[Path]) -> Optional[List[str]]:
-    """Registry hosts named by npmrc files; None when a file cannot be read or
-    a value cannot be parsed (the registry is then unknown and refused)."""
+def _scheme_transport(scheme: object) -> str:
+    """Transport label of a remote destination's URL scheme: `http` and `ws`
+    are plaintext, `https` and `wss` are tls, anything else is unparseable."""
+    value = scheme.lower() if isinstance(scheme, str) else ""
+    if value in ("http", "ws"):
+        return "plaintext"
+    if value in ("https", "wss"):
+        return "tls"
+    return "unparseable"
+
+
+def _read_registry_hosts(files: Sequence[Path]) -> Tuple[Optional[List[str]], Optional[str]]:
+    """Registry hosts named by npmrc files, as `(hosts, None)`; `(None, cause)`
+    when a file cannot be read (`registry-unreadable`) or a file or value
+    cannot be parsed (`registry-unparseable`). The registry is then unknown
+    and refused."""
     hosts: List[str] = []
     for path in files:
         try:
@@ -193,18 +207,20 @@ def _read_registry_hosts(files: Sequence[Path]) -> Optional[List[str]]:
                 continue
             raw = isolation._read_bounded(path)
             if raw is None or len(raw) >= isolation.MAX_READ_BYTES:
-                return None
+                return None, "registry-unreadable"
             text = raw.decode("utf-8")
-        except (OSError, UnicodeError, ValueError):
-            return None
+        except UnicodeError:
+            return None, "registry-unparseable"
+        except (OSError, ValueError):
+            return None, "registry-unreadable"
         for line in text.splitlines():
             match = re.match(r"^\s*(?:@[^:=\s]+:)?registry\s*=\s*(.+?)\s*$", line)
             if match:
                 host, _scheme, _port = _parse_endpoint(match.group(1))
                 if host is None:
-                    return None
+                    return None, "registry-unparseable"
                 hosts.append(host)
-    return hosts
+    return hosts, None
 
 
 # ------------------------------------------------------------------ census
@@ -325,7 +341,7 @@ def census(
             else:
                 rows.append(Destination(
                     "mcp-remote", host, facts.get("url_scheme"), None,
-                    "plaintext" if facts.get("url_scheme") == "http" else "tls",
+                    _scheme_transport(facts.get("url_scheme")),
                     origin if host in allowed else "none",
                 ))
         elif item.kind in ("instruction", "skill") and facts.get("url"):
@@ -338,10 +354,11 @@ def census(
     ))
     rows.append(Destination("models-catalogue", "*", None, None, "disabled", "none"))
     registry: List[Destination] = []
+    registry_cause: Optional[str] = None
     if work and policy.package_install == "allow":
         files = [Path(npm_userconfig)] if npm_userconfig else []
         files += [Path(d) / ".npmrc" for d, _layer in fetch_dirs]
-        found = _read_registry_hosts(files)
+        found, registry_cause = _read_registry_hosts(files)
         if found is None:
             registry.append(Destination("npm-registry", "unknown", None, None, "unparseable", "none"))
         else:
@@ -351,7 +368,7 @@ def census(
                 ))
     rows.extend(registry)
     rows.sort(key=lambda r: (r.role, effective_record.digest_token(r.host_key), r.provider_id or ""))
-    return Census(tuple(rows), tuple(proxies), tools, tuple(registry))
+    return Census(tuple(rows), tuple(proxies), tools, tuple(registry), registry_cause)
 
 
 def approve(census_: Census, policy: Any, classification: str) -> Optional[NetRefusal]:
@@ -381,7 +398,7 @@ def approve(census_: Census, policy: Any, classification: str) -> Optional[NetRe
             return NetRefusal("destination-not-approved", "host-not-allowed")
         if row.role == "npm-registry" and row.approved_by == "none":
             return NetRefusal(
-                "destination-not-approved", "registry-unknown" if row.kind == "unparseable" else "registry-not-approved",
+                "destination-not-approved", (census_.registry_cause or "registry-unreadable") if row.kind == "unparseable" else "registry-not-approved",
             )
     return None
 

@@ -385,7 +385,7 @@ profile directory is created or a credential is resolved, with the category
 | `repository-not-approved` | the project root (or a workspace given to the driver) is not under an approved root | `policy-evaluation-failed` when the check itself failed |
 | `approved-repositories-unset` | managed isolation and the profile approves no repository roots | none |
 | `allowed-hosts-unset` | a work profile sets no allowed hosts | none |
-| `destination-not-approved` | a provider, registry or other destination host is not approved | `host-not-allowed`, `host-denied`, `host-unparseable`, `registry-not-approved`, `registry-unknown`, `policy-evaluation-failed` |
+| `destination-not-approved` | a provider, registry or other destination host is not approved | `host-not-allowed`, `host-denied`, `host-unparseable`, `registry-not-approved`, `registry-unreadable`, `registry-unparseable`, `policy-evaluation-failed` |
 | `web-tools-denied` | web tools are not denied in the compiled configuration, or allowed without approval | `posture-missing`, `not-approved` |
 | `mcp-remote-denied` | a remote MCP server names a host that is not approved | `host-not-allowed`, `host-unparseable` |
 | `proxy-route-not-approved` | the proxy a provider routes through is not an approved host | `host-not-allowed`, `host-unparseable` |
@@ -590,6 +590,11 @@ not registered with the redactor can be confirmed offline by guessing it. The
 setting covers Quoin's files only. OpenCode's own log, its session database and
 its other runtime files (its state and other data subtrees; the list is not
 exhaustive) are outside it; they are covered by retention and purge.
+
+The effective-configuration record's retention section lists, per class, the
+profile-level origin (`default`, `profile`, `trusted-managed` or
+`managed-user-editable`) under `origin`, and the classes whose value came from
+the project's own scope under `project_origin`.
 
 A retention sweep runs once per process per profile when a new run starts and
 before an interactive session opens. It never refuses a launch. Per class, a

@@ -237,7 +237,7 @@ def test_work_logging_and_retention_sections(tmp_path):
         "other_runtime_files": "not-controlled-purge-only",
     }
     retention = record["retention"]
-    assert set(retention) == {"days", "project_scoped", "origin", "sweep", "database"}
+    assert set(retention) == {"days", "project_scoped", "origin", "project_origin", "sweep", "database"}
     assert retention["days"]["runs_days"] == 30 and retention["origin"]["runs_days"] == ["default"]
     assert retention["sweep"] == "at-launch" and retention["database"] == "purge-only"
 
@@ -259,7 +259,13 @@ def test_project_scoped_retention_stays_out_of_the_wide_days(tmp_path):
     record = _record_for(tmp_path, "work", layer=("project",), retention__project__runs_days=1)
     assert record["retention"]["project_scoped"]["runs_days"] == 1
     assert record["retention"]["days"]["runs_days"] == 30
-    assert "project" in record["retention"]["origin"]["runs_days"]
+    assert record["retention"]["origin"]["runs_days"] == ["default"]
+    assert record["retention"]["project_origin"] == ["runs_days"]
+
+
+def test_wide_retention_has_no_project_origin(tmp_path):
+    record = _record_for(tmp_path, "work", layer=("trusted-managed",), retention__runs_days=7)
+    assert record["retention"]["project_origin"] == []
 
 
 def test_interactive_surface_captures_no_quoin_events(tmp_path):

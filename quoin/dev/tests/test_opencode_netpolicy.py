@@ -232,7 +232,7 @@ def test_scoped_registry_lines_count(tmp_path):
 
 def test_unknown_registry_is_refused(tmp_path):
     rc = _npm_world(tmp_path, "registry=not a url at all\n")
-    assert _approve(_install_allowed(), npm=rc).detail == "registry-unknown"
+    assert _approve(_install_allowed(), npm=rc).detail == "registry-unparseable"
 
 
 def test_default_registry_when_none_is_set(tmp_path):
@@ -423,7 +423,7 @@ def test_a_backslash_remote_mcp_url_has_no_host():
 def test_a_backslash_npm_registry_is_unknown(tmp_path):
     rc = _npm_world(tmp_path, "registry=" + BACKSLASH_URL + "\n")
     effective = _install_allowed(allowed=("gw.example.com", "api.allowed.example"))
-    assert _approve(effective, npm=rc).detail == "registry-unknown"
+    assert _approve(effective, npm=rc).detail == "registry-unparseable"
 
 
 def test_a_backslash_proxy_is_unparseable():
