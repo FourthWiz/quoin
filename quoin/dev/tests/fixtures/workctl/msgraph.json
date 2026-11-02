@@ -1,0 +1,203 @@
+{
+  "note": "Synthetic exchanges hand-written from the public API reference for this service; not captured from a live tenant. Shapes cover the fields the backend reads.",
+  "service": {
+    "backend": "msgraph",
+    "tenant": "acme-m365",
+    "account": "reader@acme.example",
+    "credential": "keychain:quoin-workctl-graph/reader@acme.example"
+  },
+  "scenarios": [
+    {
+      "name": "search",
+      "operation": "mail.search",
+      "params": {
+        "query": "invoice \"Q4\"",
+        "limit": 2
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1.0/me/messages",
+            "query": {
+              "$search": "\"invoice  Q4 \"",
+              "$top": "2"
+            }
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "@odata.nextLink": "https://graph.microsoft.com/v1.0/me/messages?%24search=%22invoice++Q4+%22&%24top=2&%24skiptoken=MSZZVlhNVEF4",
+              "value": [
+                {
+                  "id": "AAMkAGI2THVSAAA=",
+                  "conversationId": "c1",
+                  "subject": "Q4 invoice",
+                  "bodyPreview": "The Q4 invoice is attached",
+                  "from": {
+                    "emailAddress": {
+                      "name": "Finance",
+                      "address": "finance@acme.example"
+                    }
+                  },
+                  "toRecipients": [
+                    {
+                      "emailAddress": {
+                        "address": "reader@acme.example"
+                      }
+                    }
+                  ],
+                  "receivedDateTime": "2026-10-05T09:00:00Z",
+                  "hasAttachments": true,
+                  "webLink": "https://outlook.office365.com/owa/?ItemID=AAMkAGI2THVSAAA%3D"
+                },
+                {
+                  "id": "AAMkAGI2THVSAAB=",
+                  "subject": "Re: Q4 invoice",
+                  "bodyPreview": "thanks"
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "paths": {
+          "data.items[0].from": "Finance <finance@acme.example>",
+          "data.items[0].has_attachments": true,
+          "data.items[0].url": "https://outlook.office365.com/owa/?ItemID=AAMkAGI2THVSAAA%3D",
+          "pagination.cursor": "<present>"
+        }
+      }
+    },
+    {
+      "name": "search-foreign-next-link",
+      "operation": "mail.search",
+      "params": {
+        "query": "invoice",
+        "limit": 1
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1.0/me/messages"
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "@odata.nextLink": "https://evil.example/v1.0/me/other?x=1",
+              "value": []
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "paths": {
+          "pagination.cursor": null,
+          "data.items": []
+        }
+      }
+    },
+    {
+      "name": "read-with-attachments",
+      "operation": "mail.read",
+      "params": {
+        "id": "AAMkAGI2THVSAAA="
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1.0/me/messages/AAMkAGI2THVSAAA="
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "id": "AAMkAGI2THVSAAA=",
+              "conversationId": "c1",
+              "subject": "Q4 invoice",
+              "from": {
+                "emailAddress": {
+                  "name": "Finance",
+                  "address": "finance@acme.example"
+                }
+              },
+              "ccRecipients": [
+                {
+                  "emailAddress": {
+                    "name": "Audit",
+                    "address": "audit@acme.example"
+                  }
+                }
+              ],
+              "body": {
+                "contentType": "text",
+                "content": "Hi team,\nThe Q4 invoice is attached.\nThanks, Finance"
+              },
+              "hasAttachments": true,
+              "webLink": "https://outlook.office365.com/owa/?ItemID=AAMkAGI2THVSAAA%3D"
+            }
+          }
+        },
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1.0/me/messages/AAMkAGI2THVSAAA=/attachments"
+          },
+          "response": {
+            "status": 200,
+            "body": {
+              "value": [
+                {
+                  "name": "invoice-q4.pdf",
+                  "contentType": "application/pdf",
+                  "size": 48213
+                }
+              ]
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ok": true,
+        "paths": {
+          "data.message.body": "Hi team,\nThe Q4 invoice is attached.\nThanks, Finance",
+          "data.message.cc": "Audit <audit@acme.example>",
+          "data.message.attachments[0].content_fetched": false,
+          "provenance.url": "https://outlook.office365.com/owa/?ItemID=AAMkAGI2THVSAAA%3D"
+        }
+      }
+    },
+    {
+      "name": "forbidden",
+      "operation": "mail.read",
+      "params": {
+        "id": "AAMkOther"
+      },
+      "exchanges": [
+        {
+          "request": {
+            "method": "GET",
+            "path": "/v1.0/me/messages/AAMkOther"
+          },
+          "response": {
+            "status": 403,
+            "body": {
+              "error": {
+                "code": "ErrorAccessDenied",
+                "message": "Access is denied."
+              }
+            }
+          }
+        }
+      ],
+      "expect": {
+        "ok": false,
+        "code": "FORBIDDEN"
+      }
+    }
+  ]
+}

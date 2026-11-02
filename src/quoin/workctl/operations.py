@@ -25,7 +25,7 @@ JIRA_KEY_RE = re.compile(r"[A-Z][A-Z0-9_]{0,31}-[1-9][0-9]{0,9}")
 SLACK_CHANNEL_RE = re.compile(r"[CGD][A-Z0-9]{2,31}")
 SLACK_TS_RE = re.compile(r"[0-9]{9,11}\.[0-9]{1,6}")
 MAIL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_\-=+.]{0,511}")
-CURSOR_RE = re.compile(r"[A-Za-z0-9_\-=+/.:]{1,1024}")
+CURSOR_RE = re.compile(r"[A-Za-z0-9_\-=+/.:]{1,2048}")
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Mapping, Optional, Tuple
-from urllib.parse import parse_qsl, urlsplit
+from urllib.parse import parse_qsl, unquote, urlsplit
 
 from .envelope import (
     AUTH_REQUIRED,
@@ -150,7 +150,7 @@ def json_body(response: Response) -> Any:
 class ReplayTransport:
     """Answers requests from recorded exchanges and keeps the requests it saw
     so a test can check what would have been sent. An exchange matches on
-    method, URL path and every query parameter it lists (others may vary);
+    method, decoded URL path and every query parameter it lists (others may vary);
     the host is not compared."""
 
     def __init__(self, exchanges: List[Mapping[str, Any]]) -> None:
@@ -178,7 +178,7 @@ class ReplayTransport:
         parts = urlsplit(request.url)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         for method, path, wanted, response in self._exchanges:
-            if method != request.method.upper() or path != parts.path:
+            if method != request.method.upper() or path != unquote(parts.path):
                 continue
             if any(query.get(k) != v for k, v in wanted.items()):
                 continue
