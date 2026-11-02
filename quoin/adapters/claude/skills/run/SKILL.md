@@ -1,6 +1,6 @@
 ---
 name: run
-description: "Default pipeline: brief, context pack, inline implement, one review, local commit. Use for: /run, 'do this task'. Tags: hard: (full pipeline), --autonomous."
+description: "Default pipeline: brief, context pack, implement on Opus, one review, local commit. Use for: /run, 'do this task'. Tags: hard: (full pipeline), --autonomous."
 model: opus
 ---
 
@@ -20,8 +20,9 @@ behalf. It never pushes and never opens a PR.
 ## Step 0 — Route
 
 Scan the input before anything else. The task name is the first token that is
-not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `hard:`, `strict:`,
-`small:` and the like); when handing off to `run_hard`, always pass the original
+not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
+`hard:`, `strict:`, `small:` and the like; a leading `[no-redispatch]` is
+stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
 input unchanged apart from removing `hard:`.
 
 1. **`hard:`** or **`strict:`** anywhere in the input → this task wants the full
@@ -187,9 +188,58 @@ If this session's context is getting heavy after a few stages, stop after a
 completed stage and tell the user to continue with `/run --resume <task>` in a
 fresh session; resume starts at the first ⏳ stage.
 
+## Implementer tier guard (before Step 5)
+
+Steps 5–6 and the Step 7 fix pass always run on **opus**. Everything else
+(Steps 0–4, the review spawn, Step 8 and every user question) stays in this
+session, so discovery, the context pack and the review keep working: never
+wrap the whole of `/run` in one subagent.
+
+1. **Opt-out.** Implement inline when the input started with
+   `[no-redispatch]`.
+2. **Detect.** Read your model from system context ("powered by the model
+   named X") and run `python3 __QUOIN_HOME__/scripts/model_tier.py "<X>"`.
+   `INLINE|opus`, or `INLINE|optout` (`QUOIN_DISABLE_MINTIER_GUARD=1` is
+   set) → run Steps 5–7 inline as written. `DISPATCH|<tier>` (haiku,
+   sonnet, fable, mythos or unknown) → dispatch. Tiers above Opus dispatch
+   too. If the script is missing, decide yourself: any model but Opus
+   dispatches.
+3. **Dispatch.** Spawn one general-purpose Agent with `model: "opus"`. Its
+   prompt starts with `[no-redispatch]` and gives the brief text, the context
+   pack path, the relevant lessons-learned entries, the repo path and task
+   branch, the test command, and the text of Steps 5 and 6 below (it cannot
+   see this file). It tells the agent to do those two steps, not to commit
+   and not to spawn subagents, and to return the files changed, the tests
+   added, the verification result (command and pass/fail) and any blocker.
+   Its verification is Step 6's result. On this path you never edit project
+   source files yourself. If it reports a blocker or failing verification,
+   send it back once with SendMessage; if it still fails, that counts as two
+   failed attempts under Escalation. Never fix it inline.
+4. **Review fixes.** After the Step 7 review, send the blockers and
+   should-fixes to the same implementer with SendMessage (load it through
+   ToolSearch if it is deferred). If SendMessage fails, spawn one more Opus
+   Agent with the brief, the findings and the diff instead; if that spawn
+   errors, apply item 6. The implementer applies the fixes, re-runs Step 6
+   once and reports back. There is still only one review.
+5. **Staged tasks.** Apply the guard per stage: one Opus implementer per
+   stage, given the stage brief.
+6. **Fail-open** (only when the Agent spawn itself errors). Classify the
+   error in this order:
+   - **Autonomous-class** (`AUTONOMOUS`): never ask. Print
+     `[quoin-run-impl-autonomous: opus implementer dispatch failed; implementing inline at current tier]`,
+     record it under Assumptions in the brief, then implement inline.
+   - **1M-credit-class** (the error contains `Usage credits required for 1M context`)
+     and **generic**: AskUserQuestion with two options, "Abort, switch with /model"
+     and "Proceed at current tier". Abort → print
+     `[quoin-run-impl: aborted; switch with /model, then /run --resume <task>]`
+     and STOP. Proceed → print
+     `[quoin-run-impl: opus implementer unavailable; implementing at current tier per user choice]`
+     and implement inline.
+
 ## Step 5 — Implement (inline)
 
-Implement the brief in this session, using the context pack. Plan in your own
+Implement the brief in this session (or, when the implementer tier guard
+dispatched, in the Opus implementer), using the context pack. Plan in your own
 reasoning; do not write a plan file. Keep the diff minimal: no drive-by refactors,
 no speculative abstractions.
 
@@ -229,7 +279,8 @@ yours. Ask it for at most about 10 findings, each with `path:line`, severity
 against the acceptance criteria, missed call sites, security issues, and whether
 the tests are proportionate (flag both missing and excessive tests).
 
-Then, inline: apply blockers and should-fixes, skip nits unless trivial, and
+Then, inline on Opus (or through the Opus implementer when the guard
+dispatched): apply blockers and should-fixes, skip nits unless trivial, and
 re-run Step 6 once if code changed. Do not spawn a second review. Write a short
 `.workflow_artifacts/<task>/review.md` listing each finding and what you did with it.
 
@@ -266,8 +317,9 @@ Never switch to the heavy pipeline on your own.
 ## Important behaviours
 
 - One session from start to finish. Subagents only for discovery, the context
-  pack and the review: steps whose job is to read a lot and return a conclusion,
-  or to give a fresh read.
+  pack and the review (steps whose job is to read a lot and return a conclusion,
+  or to give a fresh read), plus the Opus implementer when the session is not
+  on Opus.
 - No cost-ledger rows, run-state records, checkpoints or progress sentinels: those
   belong to the heavy pipeline's multi-session orchestration.
 - Never write quoin's own files (for example `quoin/dev/tests/...`) into another
