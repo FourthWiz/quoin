@@ -7,6 +7,15 @@
     workctl mail search --query-file F --limit N [--cursor C] --json
     workctl mail read ID --json
 
+    workctl propose jira comment KEY --body-file F --out P --json
+    workctl propose slack post CHANNEL [--thread TS] --body-file F --out P --json
+    workctl propose mail send --to A [--to B] [--cc C] --subject-file S --body-file F
+                               [--in-reply-to ID] --out P --json
+
+`propose` writes a local proposal file (a complete draft of one external
+write) and never sends anything; sending happens only through the separate
+`workctl-write` commands after a person approves the proposal.
+
 Output is always JSON; `--json` is accepted so the documented syntax stays
 explicit. Usage errors are reported as an INVALID_INPUT envelope rather
 than argparse text, and `--help` returns the usage inside an ok envelope,
@@ -25,7 +34,7 @@ import sys
 import uuid
 from typing import Any, Dict, List, Optional, Sequence
 
-from . import broker
+from . import broker, proposal
 from .envelope import INVALID_INPUT, BrokerError, failure, success
 from .transport import scrub_environment
 
@@ -97,10 +106,35 @@ def build_parser() -> argparse.ArgumentParser:
     read = mail.add_parser("read")
     read.add_argument("id")
     read.add_argument("--json", action="store_true")
+
+    propose = services.add_parser("propose").add_subparsers(dest="pservice", parser_class=_Parser)
+    jira_p = propose.add_parser("jira").add_subparsers(dest="action", parser_class=_Parser)
+    comment = jira_p.add_parser("comment")
+    comment.add_argument("key")
+    _proposal_args(comment)
+    slack_p = propose.add_parser("slack").add_subparsers(dest="action", parser_class=_Parser)
+    post = slack_p.add_parser("post")
+    post.add_argument("channel")
+    post.add_argument("--thread")
+    _proposal_args(post)
+    mail_p = propose.add_parser("mail").add_subparsers(dest="action", parser_class=_Parser)
+    send = mail_p.add_parser("send")
+    send.add_argument("--to", action="append", required=True)
+    send.add_argument("--cc", action="append")
+    send.add_argument("--subject-file", dest="subject_file", required=True)
+    send.add_argument("--in-reply-to", dest="in_reply_to")
+    _proposal_args(send)
     return parser
 
 
+def _proposal_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--body-file", dest="body_file", required=True)
+    parser.add_argument("--out", required=True)
+    parser.add_argument("--json", action="store_true")
+
+
 _PARAM_NAMES = ("key", "query_file", "limit", "cursor", "channel", "thread", "id")
+_PROPOSAL_PARAM_NAMES = ("key", "channel", "thread", "to", "cc", "subject_file", "in_reply_to", "body_file")
 
 
 def _emit(envelope: Dict[str, Any]) -> int:
@@ -122,6 +156,11 @@ def main(argv: Optional[Sequence[str]] = None, **execute_kwargs: Any) -> int:
         sys.stderr.write("workctl: %s\n" % exc)
         err = BrokerError(INVALID_INPUT, "invalid command line; run workctl --help for the syntax")
         return _emit(failure(err, request_id=uuid.uuid4().hex))
+    if args.service == "propose":
+        params = {n: getattr(args, n) for n in _PROPOSAL_PARAM_NAMES if getattr(args, n, None) is not None}
+        kwargs = {k: v for k, v in execute_kwargs.items() if k in ("home", "config_path", "clock")}
+        kwargs.setdefault("env", execute_kwargs.get("env", dict(os.environ)))
+        return _emit(proposal.propose("%s.%s" % (args.pservice, args.action), params, out=args.out, **kwargs))
     params = {name: getattr(args, name) for name in _PARAM_NAMES if getattr(args, name, None) is not None}
     execute_kwargs.setdefault("env", dict(os.environ))
     execute_kwargs.setdefault("use_cache", not args.no_cache)

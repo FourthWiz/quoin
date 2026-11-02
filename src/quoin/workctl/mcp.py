@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Mapping
 
 from . import broker
 from .envelope import INVALID_INPUT, BrokerError, failure
-from .operations import CURSOR_RE, HARD_MAX_LIMIT, MAX_QUERY_CHARS, OPERATIONS
+from .operations import CURSOR_RE, HARD_MAX_LIMIT, MAX_QUERY_CHARS, OPERATIONS, READ_OPERATIONS
 
 TOOL_PREFIX = "workctl_"
 
@@ -53,7 +53,8 @@ def tool_name(op_name: str) -> str:
 def tools() -> List[Dict[str, Any]]:
     """MCP tool descriptors, one per read operation."""
     out = []
-    for name, op in sorted(OPERATIONS.items()):
+    for name in sorted(READ_OPERATIONS):
+        op = OPERATIONS[name]
         schema = dict(_SCHEMAS[name], type="object", additionalProperties=False)
         out.append(
             {
@@ -70,7 +71,9 @@ def tools() -> List[Dict[str, Any]]:
 def call_tool(name: str, arguments: Mapping[str, Any], **execute_kwargs: Any) -> Dict[str, Any]:
     """Dispatch one tool call to the broker. Unknown tools and non-object
     arguments are refused with the same envelope the CLI would print."""
-    by_tool = {tool_name(op): op for op in OPERATIONS}
+    # Write operations get no tool: a write is only ever a local proposal,
+    # approved and executed outside the agent.
+    by_tool = {tool_name(op): op for op in READ_OPERATIONS}
     op_name = by_tool.get(name)
     if op_name is None or not isinstance(arguments, Mapping):
         return failure(BrokerError(INVALID_INPUT, "unknown tool or invalid arguments"), request_id=uuid.uuid4().hex)

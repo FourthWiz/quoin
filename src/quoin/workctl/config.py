@@ -24,8 +24,21 @@ Shape::
         "slack": {"backend": "slack-web", "tenant": "T0123", "credential": "..."},
         "mail":  {"backend": "command", "tenant": "acme",
                   "argv": ["/usr/local/bin/org-mail", "--json"]}
+      },
+      "writes": {
+        "approval_boundary": "separate-user",
+        "approval_key": "keychain:quoin-workctl-approver/acme",
+        "operations": ["slack.post"],
+        "credentials": {"slack": "keychain:quoin-workctl-writer/T0123"}
       }
     }
+
+The `writes` section is optional and writes stay disabled without it. It
+declares which trusted approval boundary the deployment provides, the
+keychain item holding the approval key, the write operations allowed and
+the write credentials. Approval keys and write credentials use their own
+keychain prefixes, which read credentials may not use, so the read broker
+can never be pointed at a write credential.
 """
 from __future__ import annotations
 
@@ -47,6 +60,27 @@ from .operations import OPERATIONS, SERVICES
 CONFIG_SCHEMA_VERSION = 1
 MAX_CONFIG_BYTES = 64 * 1024
 KEYCHAIN_SERVICE_PREFIX = "quoin-workctl"
+APPROVER_KEYCHAIN_PREFIX = "quoin-workctl-approver"
+WRITER_KEYCHAIN_PREFIX = "quoin-workctl-writer"
+_RESERVED_PREFIXES = (APPROVER_KEYCHAIN_PREFIX, WRITER_KEYCHAIN_PREFIX)
+
+# The boundary that keeps approval and write credentials away from the
+# agent: a platform approval mechanism, a separate OS account, or a managed
+# container the agent runs in without access to the writer's keychain.
+APPROVAL_BOUNDARIES = ("platform", "separate-user", "managed-container")
+
+# write operation -> backends that implement it (all use a write credential)
+WRITE_BACKENDS: Dict[str, Tuple[str, ...]] = {
+    "jira.comment": ("jira-cloud",),
+    "slack.post": ("slack-web",),
+    "mail.send": ("gmail",),
+}
+
+# name: (default, minimum, maximum)
+WRITE_TTL_SPECS: Dict[str, Tuple[int, int, int]] = {
+    "proposal_ttl_seconds": (3_600, 60, 604_800),
+    "approval_ttl_seconds": (900, 60, 86_400),
+}
 
 TENANT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._@-]{0,127}")
 ACCOUNT_RE = re.compile(r"[A-Za-z0-9._@+-]{1,256}")
@@ -97,11 +131,26 @@ class Network:
 
 
 @dataclass(frozen=True)
+class Writes:
+    approval_boundary: Optional[str] = None
+    approval_key: Optional[secrets.CredentialRef] = None
+    operations: Tuple[str, ...] = ()
+    credentials: Dict[str, secrets.CredentialRef] = field(default_factory=dict)
+    proposal_ttl_seconds: int = WRITE_TTL_SPECS["proposal_ttl_seconds"][0]
+    approval_ttl_seconds: int = WRITE_TTL_SPECS["approval_ttl_seconds"][0]
+
+    @property
+    def enabled(self) -> bool:
+        return self.approval_boundary is not None and self.approval_key is not None and bool(self.operations)
+
+
+@dataclass(frozen=True)
 class BrokerConfig:
     profile: Optional[str]
     limits: Limits
     services: Dict[str, ServiceConfig] = field(default_factory=dict)
     network: Network = field(default_factory=Network)
+    writes: Writes = field(default_factory=Writes)
 
 
 def _deny(message: str) -> BrokerError:
@@ -191,25 +240,83 @@ def _https_url(value: Any, where: str) -> Optional[str]:
     return value.rstrip("/")
 
 
-def _credential(value: Any, service: str) -> Optional[secrets.CredentialRef]:
-    if value is None:
-        return None
+def _has_prefix(name: str, prefix: str) -> bool:
+    return name == prefix or name.startswith(prefix + "-")
+
+
+def _keychain_ref(value: Any, where: str, prefix: str) -> secrets.CredentialRef:
     try:
         ref = secrets.parse(value)
     except ValueError:
-        raise _deny("services.%s.credential must be keychain:SERVICE/ACCOUNT" % service)
+        raise _deny("%s must be keychain:SERVICE/ACCOUNT" % where)
     if ref.scheme != "keychain":
         raise _deny(
-            "services.%s.credential must be a keychain reference: broker credentials "
-            "never come from the agent environment" % service
+            "%s must be a keychain reference: broker credentials never come from the agent environment" % where
         )
-    service_name = ref.service or ""
-    if service_name != KEYCHAIN_SERVICE_PREFIX and not service_name.startswith(KEYCHAIN_SERVICE_PREFIX + "-"):
-        raise _deny(
-            "services.%s.credential keychain service must start with %s"
-            % (service, KEYCHAIN_SERVICE_PREFIX)
-        )
+    if not _has_prefix(ref.service or "", prefix):
+        raise _deny("%s keychain service must start with %s" % (where, prefix))
     return ref
+
+
+def _credential(value: Any, service: str) -> Optional[secrets.CredentialRef]:
+    if value is None:
+        return None
+    where = "services.%s.credential" % service
+    ref = _keychain_ref(value, where, KEYCHAIN_SERVICE_PREFIX)
+    if any(_has_prefix(ref.service or "", p) for p in _RESERVED_PREFIXES):
+        raise _deny("%s must not name an approval key or write credential" % where)
+    return ref
+
+
+def _writes(obj: Any, services: Mapping[str, ServiceConfig]) -> Writes:
+    if obj is None:
+        return Writes()
+    obj = _keys(
+        obj,
+        {"approval_boundary", "approval_key", "operations", "credentials"} | set(WRITE_TTL_SPECS),
+        "writes",
+    )
+    boundary = obj.get("approval_boundary")
+    if boundary is not None and boundary not in APPROVAL_BOUNDARIES:
+        raise _deny("writes.approval_boundary must be one of: %s" % ", ".join(APPROVAL_BOUNDARIES))
+    key = obj.get("approval_key")
+    key_ref = None if key is None else _keychain_ref(key, "writes.approval_key", APPROVER_KEYCHAIN_PREFIX)
+    if boundary is not None and key_ref is None:
+        raise _deny("writes.approval_key is required when writes.approval_boundary is set")
+    ops = obj.get("operations", [])
+    if not isinstance(ops, list) or not all(
+        isinstance(o, str) and o in OPERATIONS and not OPERATIONS[o].read_only for o in ops
+    ):
+        raise _deny("writes.operations must list write operations only")
+    if ops and boundary is None:
+        raise _deny("writes.operations needs writes.approval_boundary and writes.approval_key")
+    creds_obj = _keys(obj.get("credentials", {}), set(SERVICES), "writes.credentials")
+    credentials = {
+        name: _keychain_ref(value, "writes.credentials.%s" % name, WRITER_KEYCHAIN_PREFIX)
+        for name, value in creds_obj.items()
+    }
+    for name in ops:
+        service = OPERATIONS[name].service
+        svc = services.get(service)
+        if svc is None:
+            raise _deny("writes.operations lists %s, whose service is not configured" % name)
+        if svc.backend not in WRITE_BACKENDS[name]:
+            raise _deny("the %s backend does not support %s" % (svc.backend, name))
+        if service not in credentials:
+            raise _deny("writes.credentials needs a write credential for %s" % service)
+    ttls = {}
+    for name, (default, minimum, maximum) in WRITE_TTL_SPECS.items():
+        value = obj.get(name, default)
+        if isinstance(value, bool) or not isinstance(value, int) or not minimum <= value <= maximum:
+            raise _deny("writes.%s must be an integer from %d to %d" % (name, minimum, maximum))
+        ttls[name] = value
+    return Writes(
+        approval_boundary=boundary,
+        approval_key=key_ref,
+        operations=tuple(ops),
+        credentials=credentials,
+        **ttls,
+    )
 
 
 def _network(obj: Any) -> Network:
@@ -260,9 +367,12 @@ def _service(name: str, obj: Any, backends: Mapping[str, Tuple[str, ...]]) -> Se
     ops = obj.get("operations")
     if ops is not None:
         if not isinstance(ops, list) or not all(
-            isinstance(o, str) and o in OPERATIONS and OPERATIONS[o].service == name for o in ops
+            isinstance(o, str) and o in OPERATIONS and OPERATIONS[o].read_only and OPERATIONS[o].service == name
+            for o in ops
         ):
-            raise _deny("services.%s.operations lists an unknown operation" % name)
+            raise _deny(
+                "services.%s.operations lists an unknown operation (write operations go in writes.operations)" % name
+            )
         ops = tuple(ops)
     return ServiceConfig(
         service=name,
@@ -278,7 +388,7 @@ def _service(name: str, obj: Any, backends: Mapping[str, Tuple[str, ...]]) -> Se
 
 
 def parse(data: Mapping[str, Any], backends: Mapping[str, Tuple[str, ...]]) -> BrokerConfig:
-    data = _keys(data, {"schema_version", "profile", "limits", "services", "network"}, "configuration")
+    data = _keys(data, {"schema_version", "profile", "limits", "services", "network", "writes"}, "configuration")
     if data.get("schema_version") != CONFIG_SCHEMA_VERSION:
         raise _deny("broker configuration schema_version must be %d" % CONFIG_SCHEMA_VERSION)
     profile = data.get("profile")
@@ -291,6 +401,7 @@ def parse(data: Mapping[str, Any], backends: Mapping[str, Tuple[str, ...]]) -> B
         limits=_limits(data.get("limits")),
         services=services,
         network=_network(data.get("network")),
+        writes=_writes(data.get("writes"), services),
     )
 
 
