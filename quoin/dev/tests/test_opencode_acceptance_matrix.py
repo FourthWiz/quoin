@@ -57,7 +57,7 @@ def no_spawn(denv):
 
 
 # ----------------------------------------------------------------------------
-# AC-3: work refusals, each with its own code
+# Work refusals, each with its own code
 # ----------------------------------------------------------------------------
 
 MD = "---\n%s\n---\nbody\n"
@@ -117,7 +117,7 @@ def test_legacy_toml_is_also_refused_for_a_personal_profile(tmp_path, monkeypatc
 
 
 # ----------------------------------------------------------------------------
-# AC-2: the paths Quoin can see
+# The paths Quoin can see
 # ----------------------------------------------------------------------------
 
 
@@ -162,7 +162,7 @@ def test_the_driver_argv_has_no_model_flag_and_start_rejects_one(denv, capsys):
 
 
 # ----------------------------------------------------------------------------
-# AC-4: the record
+# The effective-configuration record
 # ----------------------------------------------------------------------------
 
 
@@ -219,7 +219,7 @@ def test_the_persisted_record_and_every_refusal_text_hold_no_seeded_secret_path_
 
 
 # ----------------------------------------------------------------------------
-# AC-6: executable-fetch prevention
+# Executable-fetch prevention
 # ----------------------------------------------------------------------------
 
 
