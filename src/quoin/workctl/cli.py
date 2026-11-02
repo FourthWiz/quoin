@@ -11,10 +11,10 @@ Output is always JSON; `--json` is accepted so the documented syntax stays
 explicit. Usage errors are reported as an INVALID_INPUT envelope rather
 than argparse text, and `--help` returns the usage inside an ok envelope,
 so stdout stays parseable. Exit status is 0 when the envelope is ok and 1
-otherwise. Before anything else the CLI drops proxy and CA-bundle variables
-from its environment, so a caller cannot route the broker's credentialed
-requests through a proxy or trust store of its choosing; those settings
-come only from the broker configuration.
+otherwise. Proxy and CA-bundle variables are dropped from the environment
+first (the broker repeats this for every transport), so a caller cannot
+route the broker's credentialed requests through a proxy or trust store of
+its choosing; those settings come only from the broker configuration.
 """
 from __future__ import annotations
 
@@ -27,22 +27,7 @@ from typing import Any, Dict, List, Optional, Sequence
 
 from . import broker
 from .envelope import INVALID_INPUT, BrokerError, failure, success
-
-
-SCRUBBED_ENV = (
-    "SSL_CERT_FILE",
-    "SSL_CERT_DIR",
-    "REQUESTS_CA_BUNDLE",
-    "CURL_CA_BUNDLE",
-    "HTTPS_PROXY",
-    "https_proxy",
-    "HTTP_PROXY",
-    "http_proxy",
-    "ALL_PROXY",
-    "all_proxy",
-    "NO_PROXY",
-    "no_proxy",
-)
+from .transport import scrub_environment
 
 
 class _UsageError(Exception):
@@ -122,12 +107,6 @@ def _emit(envelope: Dict[str, Any]) -> int:
     sys.stdout.write(json.dumps(envelope, ensure_ascii=False, sort_keys=False) + "\n")
     sys.stdout.flush()
     return 0 if envelope.get("ok") else 1
-
-
-def scrub_environment(environ: Any = None) -> None:
-    environ = os.environ if environ is None else environ
-    for name in SCRUBBED_ENV:
-        environ.pop(name, None)
 
 
 def main(argv: Optional[Sequence[str]] = None, **execute_kwargs: Any) -> int:

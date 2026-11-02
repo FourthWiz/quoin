@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import os
 import socket
 import ssl
 import urllib.error
@@ -29,6 +30,32 @@ from .envelope import (
 )
 
 MAX_RETRY_AFTER = 3600.0
+
+# Variables that would let a caller pick the proxy or the CA trust for the
+# broker's credentialed requests. Dropped from the process environment
+# before any request (OpenSSL reads SSL_CERT_* when a context loads the
+# default trust store); the broker configuration's `network` block is the
+# only source for these settings.
+SCRUBBED_ENV = (
+    "SSL_CERT_FILE",
+    "SSL_CERT_DIR",
+    "REQUESTS_CA_BUNDLE",
+    "CURL_CA_BUNDLE",
+    "HTTPS_PROXY",
+    "https_proxy",
+    "HTTP_PROXY",
+    "http_proxy",
+    "ALL_PROXY",
+    "all_proxy",
+    "NO_PROXY",
+    "no_proxy",
+)
+
+
+def scrub_environment(environ: Any = None) -> None:
+    environ = os.environ if environ is None else environ
+    for name in SCRUBBED_ENV:
+        environ.pop(name, None)
 
 
 @dataclass(frozen=True)
@@ -65,8 +92,8 @@ def _read_capped(handle: Any, max_bytes: int) -> bytes:
 class HttpTransport:
     """Proxy and CA trust come only from the broker configuration: the
     proxy handler is built explicitly, so `*_proxy` variables in the
-    caller's environment are ignored, and the CLI drops `SSL_CERT_*` before
-    any TLS context exists (see `cli.scrub_environment`)."""
+    caller's environment are ignored, and `broker.execute` drops `SSL_CERT_*`
+    before any TLS context exists (see `scrub_environment`)."""
 
     def __init__(self, *, https_proxy: Optional[str] = None, ca_file: Optional[str] = None) -> None:
         context = ssl.create_default_context(cafile=ca_file) if ca_file else ssl.create_default_context()

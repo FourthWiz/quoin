@@ -501,7 +501,9 @@ def plan_install(root, rendered: Dict[str, "generate.RenderedFile"], meta: Optio
         relpath: {
             "sha256": _sha256_hex(rendered[relpath].content),
             "source_digest": rendered[relpath].source_digest,
-            "kind": rendered[relpath].kind,
+            # Integration skills are recorded as skills so metadata stays
+            # readable by installs that predate the integration-skill kind.
+            "kind": "skill" if rendered[relpath].kind == "integration-skill" else rendered[relpath].kind,
             "id": rendered[relpath].source_id,
         }
         for relpath in rendered

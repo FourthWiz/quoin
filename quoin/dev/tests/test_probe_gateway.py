@@ -1034,6 +1034,12 @@ def test_affected_tests_self_check():
             "test_opencode_native_schema.py",
             "test_opencode_docs.py",
         }
+    for rel in ("templates/integration-skill.md", "integrations/jira-context.md",
+                "integrations/mail-context.md", "integrations/slack-context.md"):
+        per_file_expected["quoin/adapters/opencode/" + rel] = {
+            "test_opencode_integration_skills.py",
+            "test_opencode_docs.py",
+        }
     per_file_expected["quoin/adapters/opencode/managed-work-deployment.md"] = {
         "test_opencode_deployment_doc.py",
         "test_opencode_docs.py",

@@ -1330,6 +1330,74 @@ phase run headless therefore gets a `lock-held` outcome (exit 3) and writes
 nothing; the verdict or handoff has to be written from the TUI, where no lock is
 held, or after the run. The overlay text for those phases says so.
 
+## Work integrations (`workctl`)
+
+`workctl` gives the agent bounded, read-only context from Jira, Slack and mail. Every call prints
+exactly one JSON envelope on stdout (`schema_version`, `ok`, `data`, `error`, `pagination`,
+`provenance`, `request_id`). Stderr carries only a usage error and, with `--verbose`, one
+diagnostic line without retrieved content.
+
+```text
+workctl jira issue ENG-123 --json
+workctl jira search --query-file jql.txt --limit 20 --json
+workctl slack search --query-file query.txt --limit 20 --json
+workctl slack thread C0123ABCD 1759400000.000100 --json
+workctl mail search --query-file query.txt --limit 20 --json
+workctl mail read MESSAGE_ID --json
+```
+
+Errors carry a stable code (`AUTH_REQUIRED`, `FORBIDDEN`, `NOT_FOUND`, `RATE_LIMITED`,
+`INVALID_INPUT`, `POLICY_DENIED`, `OUTCOME_UNKNOWN`, `UNAVAILABLE`), a safe message, `retryable`
+and an optional `retry_after`. Results are bounded by item count, per-field text length and total
+bytes, with `pagination.truncated`, `truncation_reasons` and an opaque `cursor` for the next page.
+Attachments are listed as metadata only. Provenance names the service, tenant, account, resource
+id, fetch time and service URL, and marks the content `untrusted`.
+
+The broker reads only `~/.config/quoin/workctl.json` (resolved from the password database, owned by
+you, not group- or world-writable). Nothing is configured by default, and an unconfigured service
+returns `POLICY_DENIED`:
+
+```json
+{
+  "schema_version": 1,
+  "profile": "work",
+  "limits": {"max_items": 50, "max_bytes": 262144, "timeout_seconds": 20, "cache_ttl_seconds": 300},
+  "network": {"https_proxy": "http://proxy.example.invalid:8080", "ca_file": "/etc/ssl/corp.pem"},
+  "services": {
+    "jira": {"backend": "jira-cloud", "tenant": "acme", "base_url": "https://jira.example.invalid",
+             "account": "reader@example.invalid",
+             "credential": "keychain:quoin-workctl-jira/reader@example.invalid"},
+    "slack": {"backend": "slack-web", "tenant": "T0123", "web_url": "https://chat.example.invalid",
+              "credential": "keychain:quoin-workctl-slack/reader"},
+    "mail": {"backend": "command", "tenant": "acme", "argv": ["/usr/local/bin/org-mail-cli", "--json"]}
+  }
+}
+```
+
+- Backends: `jira-cloud` (Jira Cloud REST v3), `slack-web` (Slack Web API, user token with
+  `search:read`), `gmail` (Gmail API, read-only OAuth access token), `msgraph` (Microsoft Graph,
+  `Mail.Read` token), and `command` for any service: an organization-approved CLI run as an
+  argument array with the request as JSON on stdin and a JSON result on stdout.
+- Credentials are `keychain:` references whose service starts with `quoin-workctl`; `env:`
+  references are refused, so the agent's environment never holds or selects a broker credential.
+  Use read-only credentials, separate from the agent's provider key.
+- Proxy and CA trust come only from `network`; the broker drops `*_proxy` and `SSL_CERT_*` from its
+  process environment before any request, whichever transport called it. Requests never follow redirects and only reach the configured service origin.
+- With `profile` set, the broker runs only inside an OpenCode launcher session of that profile.
+  Results are cached for `cache_ttl_seconds` under that profile's `cache/workctl/` directory
+  (mode 700); without a stamped profile there is no cache. Retrieved bodies never appear in logs.
+- The installer generates `quoin-jira-context`, `quoin-slack-context` and `quoin-mail-context`
+  skills (manifest `integration_skills`) that teach this syntax, paging, provenance citation,
+  summarize-before-adding-sources and draft-first behaviour. They carry no credentials.
+- No MCP server is configured. `quoin.workctl.mcp` only describes the same operations as MCP tools
+  and dispatches them through the broker, for a later CLI-versus-MCP evaluation.
+- Writes, remote drafts and approval flows are out of scope; draft replies locally and send them
+  yourself.
+
+Status: offline-verified against synthetic recorded exchanges only. The Jira/Slack/mail clients,
+tenants and mail backend are still maintainer decisions in `decisions.md`, so no live tenant read
+has been run.
+
 ## Running the probe
 
 ```

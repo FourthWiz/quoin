@@ -32,7 +32,7 @@ from . import config as config_mod
 from . import limits as limits_mod
 from . import operations, policy
 from .envelope import AUTH_REQUIRED, POLICY_DENIED, UNAVAILABLE, BrokerError, failure, success
-from .transport import HttpTransport
+from .transport import HttpTransport, scrub_environment
 
 ENVELOPE_OVERHEAD = 4096
 CACHE_SUBDIR = "workctl"
@@ -106,6 +106,7 @@ def execute(
     stderr: Optional[TextIO] = None,
 ) -> Dict[str, Any]:
     request_id = uuid.uuid4().hex
+    scrub_environment()  # every transport, not only the CLI
     redact = Redactor()
     started = time.monotonic()
     provenance: Optional[Dict[str, Any]] = None

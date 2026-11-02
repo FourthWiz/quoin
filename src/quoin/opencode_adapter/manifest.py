@@ -335,7 +335,67 @@ def check_manifest(
     errs.extend(names.find_collisions("catalog", catalog_wide_pairs))
     errs.extend(names.find_collisions("command", command_pairs))
     errs.extend(names.find_collisions("skill", skill_pairs))
+    errs.extend(_check_integration_skills(manifest, catalog_wide_pairs, repo_root))
 
+    return errs
+
+
+INTEGRATION_SERVICES = ("jira", "slack", "mail")
+INTEGRATION_SOURCE_PREFIX = "quoin/adapters/opencode/integrations/"
+
+
+def _check_integration_skills(manifest: dict, catalog_pairs: list, repo_root: Optional[Path]) -> List[str]:
+    """`integration_skills` is optional: one row per generated read-only
+    integration skill (it has no catalog entry and no command)."""
+    rows = manifest.get("integration_skills")
+    if rows is None:
+        return []
+    if not isinstance(rows, list):
+        return ["integration_skills must be a list"]
+    errs: List[str] = []
+    ids: List[str] = []
+    pairs = list(catalog_pairs)
+    for row in rows:
+        if not isinstance(row, dict) or not isinstance(row.get("id"), str):
+            errs.append("integration_skills contains a row without a string id")
+            continue
+        rid = row["id"]
+        ids.append(rid)
+        if row.get("status") not in STATUSES:
+            errs.append("integration '%s' has status %r, expected one of %s" % (rid, row.get("status"), STATUSES))
+        if row.get("service") not in INTEGRATION_SERVICES:
+            errs.append("integration '%s' has service %r, expected one of %s" % (rid, row.get("service"), INTEGRATION_SERVICES))
+        if not row.get("reason"):
+            errs.append("integration '%s' has an empty reason" % rid)
+        expected = names.normalize(rid)
+        if row.get("skill") != expected:
+            errs.append("integration '%s' skill is %r, expected %r" % (rid, row.get("skill"), expected))
+        name_err = names.name_error(expected)
+        if name_err:
+            errs.append("integration '%s': %s" % (rid, name_err))
+        source = row.get("source")
+        if (
+            not isinstance(source, str)
+            or not source.startswith(INTEGRATION_SOURCE_PREFIX)
+            or not source.endswith(".md")
+            or ".." in source.split("/")
+        ):
+            errs.append("integration '%s' source must be a .md file under %s" % (rid, INTEGRATION_SOURCE_PREFIX))
+        elif repo_root is not None and not (Path(repo_root) / source).is_file():
+            errs.append("integration '%s' source %r is not a file in the repository" % (rid, source))
+        live_evidence, evidence = row.get("live_runtime_evidence"), row.get("evidence")
+        if not isinstance(live_evidence, bool):
+            errs.append("integration '%s' live_runtime_evidence must be a bool" % rid)
+        if not isinstance(evidence, list) or not all(isinstance(e, str) for e in evidence):
+            errs.append("integration '%s' evidence must be a list of strings" % rid)
+        elif repo_root is not None:
+            errs.extend(_evidence_errors(rid, evidence, repo_root))
+        pairs.append((expected, "integration:%s" % rid))
+    if len(set(ids)) != len(ids):
+        errs.append("integration_skills has duplicate ids")
+    if ids != sorted(ids):
+        errs.append("integration_skills is not sorted by id")
+    errs.extend(names.find_collisions("skill", pairs))
     return errs
 
 

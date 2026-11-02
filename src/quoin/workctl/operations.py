@@ -50,6 +50,16 @@ OPERATIONS: Dict[str, Operation] = {
 
 SERVICES = ("jira", "slack", "mail")
 
+_SEARCH_PARAMS = frozenset(("query", "query_file", "limit", "cursor"))
+ALLOWED_PARAMS: Dict[str, frozenset] = {
+    "jira.issue": frozenset(("key",)),
+    "jira.search": _SEARCH_PARAMS,
+    "slack.search": _SEARCH_PARAMS,
+    "slack.thread": frozenset(("channel", "thread", "limit", "cursor")),
+    "mail.search": _SEARCH_PARAMS,
+    "mail.read": frozenset(("id",)),
+}
+
 
 def get(name: str) -> Operation:
     op = OPERATIONS.get(name)
@@ -122,14 +132,7 @@ def _cursor(value: Any) -> Optional[str]:
 def normalize(op: Operation, raw: Mapping[str, Any], *, max_items: int) -> Dict[str, Any]:
     """Validate raw parameters for `op` and return the normalized form.
     Unknown parameters are refused so a transport cannot smuggle options."""
-    allowed = {
-        "jira.issue": {"key"},
-        "jira.search": {"query", "query_file", "limit", "cursor"},
-        "slack.search": {"query", "query_file", "limit", "cursor"},
-        "slack.thread": {"channel", "thread", "limit", "cursor"},
-        "mail.search": {"query", "query_file", "limit", "cursor"},
-        "mail.read": {"id"},
-    }[op.name]
+    allowed = ALLOWED_PARAMS[op.name]
     extra = set(k for k, v in raw.items() if v is not None) - allowed
     if extra:
         raise BrokerError(INVALID_INPUT, "unexpected parameter: %s" % sorted(extra)[0])
