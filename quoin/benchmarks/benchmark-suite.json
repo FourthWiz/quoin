@@ -32,6 +32,20 @@
       "runtime": "codex",
       "quoin_enabled": true,
       "description": "Use Codex with repo-local Quoin guidance, preserving the portable workflow artifacts without assuming Codex global install paths or command files."
+    },
+    {
+      "id": "simple-opencode",
+      "label": "Simple OpenCode workflow",
+      "runtime": "opencode",
+      "quoin_enabled": false,
+      "description": "Use the pinned OpenCode binary with the same model, endpoint and native configuration as the Quoin cell, without the Quoin scaffold."
+    },
+    {
+      "id": "quoin-opencode",
+      "label": "Quoin + OpenCode workflow",
+      "runtime": "opencode",
+      "quoin_enabled": true,
+      "description": "Install the Quoin OpenCode scaffold into the work tree and use its workflow commands with the shared .workflow_artifacts/ layout, on the same model and endpoint as the simple cell."
     }
   ],
   "metrics": [
@@ -112,6 +126,20 @@
       "label": "Session handoff / memory reuse",
       "file": "scenarios/session-handoff-memory-reuse.md",
       "workflow_focus": "Continuation quality across sessions using prior evidence and handoff notes.",
+      "requires_code_change": false
+    },
+    {
+      "id": "tool-call-reliability",
+      "label": "Tool-call reliability",
+      "file": "scenarios/tool-call-reliability.md",
+      "workflow_focus": "Whether the runtime and model complete a harmless native tool loop without protocol errors.",
+      "requires_code_change": false
+    },
+    {
+      "id": "cross-service-context-synthesis",
+      "label": "Cross-service context synthesis",
+      "file": "scenarios/cross-service-context-synthesis.md",
+      "workflow_focus": "Combining read-only issue, chat and mail context with the repository into a grounded plan with source provenance.",
       "requires_code_change": false
     }
   ],

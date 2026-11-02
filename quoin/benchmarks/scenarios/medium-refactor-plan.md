@@ -25,6 +25,10 @@ explicit non-goals. Do not implement the refactor.
 - Simple Codex: use native Codex planning and return a plan.
 - Quoin + Codex: use repo-local Quoin guidance to create portable architecture
   and current-plan artifacts under `.workflow_artifacts/`.
+- Simple OpenCode: ask OpenCode for a refactor plan in its native session. Same
+  model and endpoint as the Quoin OpenCode run.
+- Quoin + OpenCode: use the Quoin planning commands from the installed scaffold,
+  writing the plan under `.workflow_artifacts/`.
 
 ## Expected Evidence
 

@@ -12,7 +12,7 @@ evidence.
 
 ## Comparison Modes
 
-Run each scenario in the same fixture repository under four modes:
+Run each scenario in the same fixture repository under six modes:
 
 - `simple-claude` - Claude Code used normally, without Quoin phases or Quoin
   workflow artifacts.
@@ -22,6 +22,10 @@ Run each scenario in the same fixture repository under four modes:
   sandboxing, and repo-scoped instructions, without Quoin artifacts.
 - `quoin-codex` - Codex with repo-local Quoin guidance and portable artifacts,
   without Codex global install assumptions or generated command files.
+- `simple-opencode` - the pinned OpenCode binary on a chosen model and endpoint,
+  without the Quoin scaffold.
+- `quoin-opencode` - the same binary, model, endpoint and native configuration,
+  with the Quoin OpenCode scaffold installed into the work tree.
 
 Simple modes may still keep ordinary notes or final answers, but they should
 not be prompted to create Quoin-specific artifacts. Quoin modes should use the
@@ -36,6 +40,11 @@ The suite is intentionally small:
 - Implementing a scoped code change: bounded implementation plus relevant checks.
 - Reviewing changes: concrete findings, test gaps, and plan mismatch detection.
 - Session handoff / memory reuse: continuation quality after prior-session context.
+- Tool-call reliability: a harmless native tool loop, repeated, to separate
+  protocol problems from task quality.
+- Cross-service context synthesis: a grounded plan from read-only issue, chat
+  and mail fixtures, with source provenance. Mutation-approval scenarios run
+  only in test tenants and are not part of this suite.
 
 The machine-readable source of truth is `benchmark-suite.json`. Human scenario
 instructions live under `scenarios/`.
@@ -82,6 +91,55 @@ python3 quoin/benchmarks/scripts/validate_benchmarks.py --project-root .
 
 This check validates the manifest, scenario files, templates, comparison modes,
 and metric coverage. It does not execute benchmark tasks or infer results.
+
+## OpenCode cells and pilot qualification
+
+`simple-opencode` and `quoin-opencode` are a paired comparison: both read one
+model, one endpoint and one native configuration file from the environment, so
+the only difference is the Quoin scaffold. Comparing a model with Quoin against a
+different model without it would confound the result, and the report refuses it.
+
+```bash
+export QUOIN_BENCH_OPENCODE_MODEL=<provider/model>      # required
+export QUOIN_BENCH_OPENCODE_BASE_URL=<endpoint>         # required
+export QUOIN_BENCH_OPENCODE_CONFIG=<opencode.json>      # required, used by both cells
+export QUOIN_BENCH_OPENCODE_ROUTE=<route label>         # optional provenance
+export QUOIN_BENCH_OPENCODE_CONTEXT_LIMIT=<tokens>      # optional provenance
+export QUOIN_BENCH_OPENCODE_OUTPUT_LIMIT=<tokens>       # optional provenance
+export QUOIN_BENCH_OPENCODE_PERMISSIONS=<label>         # optional provenance
+export QUOIN_BENCH_TASK_SEED=<seed>                     # optional provenance
+python3 quoin/benchmarks/scripts/run_benchmark.py --cells simple-opencode,quoin-opencode ...
+```
+
+Each run records runtime and version, adapter, provider route, endpoint, model,
+configuration digest, context and output limits, repository commit,
+permissions and task seed in `extra.provenance`, next to turns, tool errors and
+setup and wall time. Token counts and cost come from the runtime's own usage
+events and stay unknown when it does not report them. The endpoint is stored
+without credentials, query or fragment.
+
+A cell refuses to start (verdict `error`, with a `failure_reason`) without a
+model, endpoint and configuration file, or when the provider `baseURL` in the
+configuration file differs from `QUOIN_BENCH_OPENCODE_BASE_URL`. Both cells run
+with a fresh HOME and XDG directories, `OPENCODE_DISABLE_CLAUDE_CODE=1` and
+`OPENCODE_DISABLE_EXTERNAL_SKILLS=1`, and without `OPENCODE_CONFIG_CONTENT`,
+`OPENCODE_CONFIG_DIR` or `OPENCODE_PERMISSION`, so the user's global OpenCode
+and Claude files cannot reach either cell; provider credentials passed as
+environment variables are kept. SWE-bench Verified tasks are not supported by
+these cells yet, and `--max-budget-usd` does not cap them: bound OpenCode runs
+with the wall clock and the provider's own limits.
+
+The pilot thresholds are frozen in `opencode-qualification.json`: at least 19 of
+20 harmless gateway tool-loop runs, at least 8 of 10 scoped workflow tasks
+completed correctly, and every deterministic safety and artifact invariant
+passing. Changing the task set or a threshold needs maintainer approval.
+`scripts/opencode_report.py` reads a finished run directory, or one JSON Lines
+row per run (failed runs included), and prints each threshold as pass, fail or
+pending with the actual counts and failure modes, followed by task quality and
+overhead as separate tables. Each count threshold judges the first runs up to
+its sample size, in order; later runs are reported as surplus. The tool loop is
+judged separately for each cell. These counts are qualification evidence for one model and endpoint,
+not a general reliability guarantee.
 
 ## Quantitative Benchmark Harness (v1)
 

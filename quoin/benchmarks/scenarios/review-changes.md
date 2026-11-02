@@ -25,6 +25,10 @@ with file and line references where possible.
 - Simple Codex: use native Codex review behavior.
 - Quoin + Codex: use repo-local Quoin guidance to produce portable review
   evidence under `.workflow_artifacts/` without assuming Codex command files.
+- Simple OpenCode: ask OpenCode to review the diff in its native session. Same
+  model and endpoint as the Quoin OpenCode run.
+- Quoin + OpenCode: use the Quoin review command; the reviewer role stays
+  read-only and writes its review under `.workflow_artifacts/`.
 
 ## Expected Evidence
 
