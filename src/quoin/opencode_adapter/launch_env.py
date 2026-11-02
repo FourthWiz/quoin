@@ -143,8 +143,11 @@ PROFILE_STORAGE_ENV_NAMES: Tuple[str, ...] = (
     "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR",
     "npm_config_cache", "npm_config_userconfig", "npm_config_offline",
 )
+# Variables the launcher sets for Quoin's own lifecycle plugin, on an
+# interactive launch whose profile allows it.
+PLUGIN_ENV_NAMES: Tuple[str, ...] = ("QUOIN_OPENCODE_RUN_ID", "QUOIN_OPENCODE_PLUGIN_LOG")
 LAUNCHER_ENV_NAMES: Tuple[str, ...] = (
-    ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR) + HARDENING_ENV_NAMES
+    ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR) + HARDENING_ENV_NAMES + PLUGIN_ENV_NAMES
 )
 
 
@@ -204,9 +207,15 @@ def _register_proxy_secret(redactor: Redactor, value: str) -> None:
 def hardening_env(
     *, classification: str, sharing: str, package_install: str,
     npm_cache: Union[str, Path], npm_userconfig: Union[str, Path],
+    lifecycle_plugin: bool = False,
 ) -> Dict[str, str]:
     """The flags and package-manager settings that keep a headless child from
-    fetching, updating, sharing or loading code on its own."""
+    fetching, updating, sharing or loading code on its own.
+
+    ``lifecycle_plugin`` leaves ``OPENCODE_PURE`` unset, because that flag
+    empties the external plugin list and so would drop Quoin's own pinned
+    plugin too. Every other plugin is still refused by the launch checks, and
+    the built-in plugins stay off."""
     work = classification == "work"
     out: Dict[str, str] = {
         "OPENCODE_DISABLE_MODELS_FETCH": "1",
@@ -221,6 +230,8 @@ def hardening_env(
             "OPENCODE_DISABLE_EXTERNAL_SKILLS", "OPENCODE_PURE",
             "OPENCODE_DISABLE_DEFAULT_PLUGINS",
         ):
+            if name == "OPENCODE_PURE" and lifecycle_plugin:
+                continue
             out[name] = "1"
         out["npm_config_userconfig"] = str(npm_userconfig)
         if package_install == "deny":
@@ -236,6 +247,7 @@ def expected_env_names(
     storage: Optional[Mapping[str, str]] = None,
     hardening: Optional[Mapping[str, str]] = None,
     state_dir_set: bool = True,
+    plugin: Optional[Mapping[str, str]] = None,
 ) -> List[str]:
     """The child environment's names without resolving any credential; kept
     equal to ``build_env(...).names()`` by a parity test."""
@@ -248,7 +260,7 @@ def expected_env_names(
             for name in (base, base.lower()):
                 if isinstance(ambient.get(name), str):
                     names.add(name)
-    for extra in (storage, hardening):
+    for extra in (storage, hardening, plugin):
         if extra:
             names.update(extra)
     names.update(("OPENCODE_CONFIG", "XDG_DATA_HOME"))
@@ -315,6 +327,7 @@ def build_env(
     adapter_root: Optional[Union[str, Path]] = None,
     storage: Optional[Mapping[str, str]] = None,
     hardening: Optional[Mapping[str, str]] = None,
+    plugin: Optional[Mapping[str, str]] = None,
 ) -> LaunchEnv:
     """Allowlist the ambient environment, then add the launcher's own
     variables and the resolved credentials the compiled file names."""
@@ -334,7 +347,7 @@ def build_env(
                     values[name] = ambient[name]
                     _register_proxy_secret(redactor, ambient[name])
 
-    for extra in (storage, hardening):
+    for extra in (storage, hardening, plugin):
         if extra:
             values.update({name: str(value) for name, value in extra.items()})
 
@@ -797,6 +810,43 @@ def plugin_directories(
     worktree = inventory.worktree_root(cwd)
     global_dir = inventory.xdg_config_dir(env, home)
     return _plugin_entries(_config_bases(cwd, home, worktree, global_dir) + [Path(managed_root)])
+
+
+_TUI_FILES = ("tui.json", "tui.jsonc")
+
+
+def check_tui_plugins(cwd: Union[str, Path], env: Mapping[str, str], home: Union[str, Path]) -> None:
+    """Refuse when a TUI configuration file declares a ``plugin`` key.
+
+    OpenCode's terminal interface loads external TUI plugins from ``tui.json``
+    and ``tui.jsonc`` in the global configuration directory, every project
+    directory up to the worktree and every scanned ``.opencode`` directory,
+    unless ``OPENCODE_PURE`` is set. A launch that leaves that flag unset (to
+    load Quoin's lifecycle plugin) therefore checks these files first."""
+    cwd, home = Path(cwd), Path(home)
+    worktree = inventory.worktree_root(cwd)
+    global_dir = inventory.xdg_config_dir(env, home)
+    roots = inventory.build_roots(cwd, env, home)
+    dirs = inventory.project_config_dirs(worktree, cwd) + _config_bases(cwd, home, worktree, global_dir)
+    seen = set()
+    for directory in dirs:
+        for name in _TUI_FILES:
+            path = directory / name
+            key = os.path.abspath(str(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            shown = inventory.display_path(path, roots)
+            try:
+                doc = inventory.load_config_file(path)
+            except inventory.ConfigUnreadable:
+                raise _refuse("invalid-configuration", "config-layer-unreadable", "%s could not be read" % shown) from None
+            if doc is not None and "plugin" in doc:
+                raise _refuse(
+                    "policy-denial",
+                    "tui-plugin-present",
+                    "%s declares terminal interface plugins, which load once OPENCODE_PURE is unset" % shown,
+                )
 
 
 def _check_markdown(

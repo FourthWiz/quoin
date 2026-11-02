@@ -37,6 +37,7 @@ DYNAMIC_SITES = {
     ("driver.py", "OpenCodeDriver._evaluate_launchable"): "configuration error class, or config-invalid",
     ("driver.py", "OpenCodeDriver._policy_refusal"): "a code from the registered isolation, repository and network group, with its closed text",
     ("driver.py", "OpenCodeDriver._compile_pair"): "compiled- plus a compiler.check reason",
+    ("driver.py", "OpenCodeDriver._lifecycle_plugin"): "a plugin_artifact.PluginRefused code from PLUGIN_CODES",
     ("launch_env.py", "_refuse"): "the factory itself forwards its parameters",
     ("launch_env.py", "check_config_layers"): "raises the first refusal's code, a legacy rule's or the inventory's",
 }

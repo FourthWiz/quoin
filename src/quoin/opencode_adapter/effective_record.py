@@ -91,6 +91,7 @@ def policy_section(effective: Any) -> Dict[str, Any]:
         "network.pins": _restriction(view.pins),
         "repositories.allowed_roots": _restriction(view.repository_roots, realpath=True),
         "logging.content": view.logging_content,
+        "plugin.lifecycle": view.plugin_lifecycle,
     }
     for kind in profile_policy.RETENTION_KINDS:
         out["retention." + kind] = view.retention.get(kind)
@@ -224,6 +225,7 @@ def build(
     enforcement: Optional[Sequence[Mapping[str, Any]]] = None,
     surface: str = "headless",
     effective: Optional[Any] = None,
+    plugin: Optional[Mapping[str, Any]] = None,
 ) -> Dict[str, Any]:
     """The record. When all of `isolation`, `network` and `enforcement` are
     given the three sections are filled and none is pending; otherwise each
@@ -263,6 +265,9 @@ def build(
         "retention": retention_section(policy, effective),
         "policy": dict(policy),
     }
+    if plugin is not None:
+        # Present only when Quoin's lifecycle plugin was admitted.
+        record["plugin"] = dict(plugin)
     if len(jsonio.dump_canonical(record)) > MAX_RECORD_BYTES:
         by_kind: Dict[str, int] = {}
         for item in entries:

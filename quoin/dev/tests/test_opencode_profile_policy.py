@@ -177,6 +177,7 @@ WORK = {
     "lsp.mode": "deny", "lsp.allowed": (), "formatter.mode": "deny", "formatter.allowed": (),
     "network.identity_check": "required", "network.allowed_addresses": None, "network.pins": None,
     "logging.content": "metadata", "repositories.allowed_roots": None,
+    "plugin.lifecycle": "deny",
 }
 PERSONAL = {
     "fallback": "same-profile", "web_tools": "allow", "package_install": "allow",
@@ -184,6 +185,7 @@ PERSONAL = {
     "lsp.mode": "deny", "lsp.allowed": (), "formatter.mode": "deny", "formatter.allowed": (),
     "network.identity_check": "off", "network.allowed_addresses": None, "network.pins": None,
     "logging.content": "summary", "repositories.allowed_roots": None,
+    "plugin.lifecycle": "allow",
 }
 
 

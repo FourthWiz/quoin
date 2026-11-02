@@ -993,6 +993,29 @@ receives Ctrl-C directly. The data directory is per profile and shared by
 every run and TUI session of that profile, so sessions created interactively
 are stored beside headless ones and are visible to the same profile.
 
+**Lifecycle plugin.** When the profile's effective `policy.plugin.lifecycle` is
+`allow` (the personal default; a work profile defaults to `deny` and must set
+it), `quoin opencode start` loads Quoin's own lifecycle plugin, which records
+session start, idle, compaction, tool completion, approval prompts and errors.
+The launcher checks the packaged plugin against the digest pinned in this
+release, copies it into the profile's private state directory and writes an
+interactive variant of the compiled configuration whose `plugin` list names
+only that copy. The plugin appends one JSON line per event to
+`PROFILE/plugin-events/RUN_ID.jsonl`, using a run id the launcher mints and
+passes in `QUOIN_OPENCODE_RUN_ID` and `QUOIN_OPENCODE_PLUGIN_LOG`. A packaged
+plugin that differs from the pin refuses the start (`plugin-artifact-changed`).
+`OPENCODE_PURE` is left unset for such a launch, because it would also drop
+Quoin's plugin; `OPENCODE_DISABLE_DEFAULT_PLUGINS` stays set, and a plugin in any
+other configuration layer or plugin directory is still refused, and so is a
+`tui.json` or `tui.jsonc` that declares terminal interface plugins
+(`tui-plugin-present`), since those also load once the flag is unset. A plugin
+file written into a plugin directory during a session is caught at the next
+start, not blocked inside the running one. Like the other
+policy settings, a project file can turn the plugin off but not on. Headless
+runs never load the plugin, and `config explain` and `doctor --profile` preview
+the headless launch shape. `--dry-run` reports `lifecycle_plugin` and, like a
+real start, copies the plugin and writes the interactive configuration.
+
 ### Doctor categories and profile checks
 
 Every doctor finding carries a `category` in the JSON report, using the same
@@ -1001,23 +1024,28 @@ slugs as run refusals so a finding and a refusal about one problem agree:
 | Category | Label | Example finding ids |
 |---|---|---|
 | `missing-binary` | missing binary | `opencode-binary-absent` |
-| `unsupported-version` | unsupported version | `opencode-version`, `opencode-version-unknown` |
+| `unsupported-version` | unsupported version | `opencode-version`, `opencode-version-unknown`, `runtime-lifecycle-plugin`, `runtime-lifecycle-plugin-incompatible` |
 | `invalid-configuration` | invalid configuration | `config-unreadable`, `runtime-config-invalid`, `runtime-compile-blocked` |
 | `unqualified-gateway` | unqualified gateway | `runtime-gateway-unqualified` |
 | `policy-denial` | policy denial | `runtime-config-policy-denied`, `runtime-plugin-directory-present` |
 | `missing-optional-integration` | missing optional integration | `quoin-not-on-path`, `census-unverified` |
-| `workflow-validation` | workflow validation failure | `owned-modified`, `runtime-orphan-run`, `runtime-stale-lock` |
+| `workflow-validation` | workflow validation failure | `owned-modified`, `runtime-orphan-run`, `runtime-stale-lock`, `runtime-lifecycle-plugin-invalid` |
 
 Host checks now also report process-group support, an unusable run store,
 orphaned runs, a stale OpenCode task lock, a phase command whose agent is not
-primary, and plugin directories. With `--profile NAME` (not with `--smoke`)
+primary, plugin directories, and the packaged lifecycle plugin's version, whether
+it matches the pinned build and the OpenCode release it was qualified against
+(`runtime-lifecycle-plugin`, `runtime-lifecycle-plugin-incompatible`,
+`runtime-lifecycle-plugin-invalid`). With `--profile NAME` (not with `--smoke`)
 the doctor also evaluates that profile's configuration without resolving any
 credential and reports whether it can launch. A role blocked by a provider
 exclusion is reported as compile-blocked, exactly as the run refusal reports
 it.
 
 A plugin script in any OpenCode plugin directory (including the global one)
-refuses launches, because plugin code can hook permission handling. Move the
+refuses launches, because plugin code can hook permission handling. Quoin's
+own lifecycle plugin is the only exception, and it is never placed in a plugin
+directory. Move the
 plugin files out of those directories for the duration of a run, or run with a
 separate `XDG_CONFIG_HOME`. The doctor does not scan Quoin-named skills placed
 outside the installed project folders.

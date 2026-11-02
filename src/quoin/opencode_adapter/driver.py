@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 from . import compiler, doctor, effective_record, frontmatter, install, inventory, isolation, jsonio, launch_codes, launch_env
-from . import manifest, names, netpolicy
+from . import manifest, names, netpolicy, plugin_artifact
 from . import paths as adapter_paths
 from . import profile_dirs, profile_policy, proctree, qualification, retention, retry, roles, runstore
 from . import events as ev
@@ -215,6 +215,27 @@ class PreparedRun:
 
 
 @dataclass(frozen=True)
+class LifecyclePlugin:
+    """Quoin's lifecycle plugin as admitted for one interactive launch."""
+
+    run_id: str
+    log: Path
+    path: Path
+    config_path: Path
+    config_sha256: str
+    document: Mapping[str, Any] = field(repr=False)
+    env: Mapping[str, str] = field(repr=False)
+
+    def record_section(self) -> Dict[str, Any]:
+        return {
+            "version": plugin_artifact.PLUGIN_VERSION,
+            "sha256": plugin_artifact.PLUGIN_SHA256,
+            "opencode_version": plugin_artifact.PLUGIN_OPENCODE_VERSION,
+            "config_sha256": self.config_sha256,
+        }
+
+
+@dataclass(frozen=True)
 class InteractiveLaunch:
     """A validated interactive (TUI) launch. Secrets live only in
     `launch_env`; nothing about a run is recorded."""
@@ -232,6 +253,10 @@ class InteractiveLaunch:
     effective_config_digest: Optional[str] = None
     profile_root: Optional[Path] = field(default=None, repr=False, compare=False)
     retention: Optional[retention.RetentionPolicy] = field(default=None, repr=False, compare=False)
+    # Set only when the profile loads Quoin's lifecycle plugin: the id the
+    # plugin tags its records with and the log it appends them to.
+    run_id: Optional[str] = None
+    plugin_log: Optional[Path] = field(default=None, repr=False, compare=False)
 
     def write_record(self, profile_root: Optional[Path] = None) -> Path:
         """Write the effective-configuration record under the profile's
@@ -1558,16 +1583,19 @@ class OpenCodeDriver:
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
         evaluation: Any, metadata: Any, redactor: Any, dirs: "profile_dirs.ProfileDirs",
         cwd: Optional[Path] = None, version: str = "", verdict: Optional[isolation.IsolationVerdict] = None,
-        surface: str = "headless",
+        surface: str = "headless", plugin: Optional["LifecyclePlugin"] = None,
     ) -> Any:
         """Refuse on a configuration source that would change the compiled
         pair or that the profile does not allow, then run the destination
         checks, then build the child environment and the
         effective-configuration record. Returns ``(child_env, record,
         inventory, identity_observations)``. May raise `LaunchRefused`."""
+        # With the plugin, OpenCode reads the interactive variant of the
+        # compiled file; the scan treats that variant as the compiled layer.
+        scanned_build = dataclasses.replace(fresh, document=plugin.document) if plugin is not None else fresh
         layer_check, hardening = self._layer_check(
-            root, cfg_env, config_path, fresh, evaluation, metadata, dirs, cwd=cwd,
-            ambient=self._env, capture=False,
+            root, cfg_env, config_path, scanned_build, evaluation, metadata, dirs, cwd=cwd,
+            ambient=self._env, capture=False, lifecycle_plugin=plugin is not None,
         )
         if verdict is None:
             verdict = self._isolation_verdict(evaluation)
@@ -1587,17 +1615,19 @@ class OpenCodeDriver:
             data_dir=dirs.data, config_path=config_path, redactor=redactor,
             state_dir=dirs.root, profile_root=dirs.root, adapter_root=self.state_root,
             storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
+            plugin=plugin.env if plugin is not None else None,
         )
         effective = self._effective_record(
             layer_check, fresh, evaluation, dirs, version, child_env.names(), self._env, child_env.redactor,
             verdict=verdict, census=census, network_status=network_status, surface=surface,
+            plugin=plugin.record_section() if plugin is not None else None,
         )
         return child_env, effective, layer_check.inventory, observations
 
     def _layer_check(
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any, evaluation: Any,
         metadata: Any, dirs: "profile_dirs.ProfileDirs", *, cwd: Optional[Path], ambient: Mapping[str, str],
-        capture: bool,
+        capture: bool, lifecycle_plugin: bool = False,
     ) -> Tuple[Any, Dict[str, str]]:
         owned_agents = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "agent"}
         owned_commands = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "command"}
@@ -1611,6 +1641,7 @@ class OpenCodeDriver:
         hardening = launch_env.hardening_env(
             classification=classification, sharing=sharing, package_install=policy_view.package_install,
             npm_cache=dirs.npm_cache, npm_userconfig=dirs.npm_userconfig,
+            lifecycle_plugin=lifecycle_plugin,
         )
         expected = inventory.Expected.from_compiled(
             fresh.document, {**owned_agents, **owned_commands}, policy_view
@@ -1628,7 +1659,7 @@ class OpenCodeDriver:
         self, layer_check: Any, fresh: Any, evaluation: Any, dirs: "profile_dirs.ProfileDirs",
         version: str, env_names: Sequence[str], ambient: Mapping[str, str], redactor: Any,
         *, verdict: isolation.IsolationVerdict, census: netpolicy.Census, network_status: str,
-        surface: str = "headless",
+        surface: str = "headless", plugin: Optional[Mapping[str, Any]] = None,
     ) -> Dict[str, Any]:
         classification = evaluation.effective.classification
         policy_view = profile_policy.view(evaluation.effective)
@@ -1659,6 +1690,7 @@ class OpenCodeDriver:
                 allowed_hosts_approved=netpolicy.hosts_approved(evaluation.effective),
                 network_status=network_status,
             ),
+            plugin=plugin,
         )
         # Persist exactly the redacted form, so the stored object and its digest agree.
         return json.loads(effective_record.serialise(effective, redactor).decode("utf-8"))
@@ -1802,7 +1834,10 @@ class OpenCodeDriver:
         that only matter for a headless run (run store, phase command, role
         and process groups). Creates no run store, record, pointer, sidecar
         or lock; it may write the compiled configuration pair, as `prepare`
-        does."""
+        does. When the profile allows the lifecycle plugin it also copies the
+        plugin into the profile, writes the interactive configuration variant
+        and creates the plugin log directory; the log file itself is created
+        by the plugin once OpenCode runs."""
         try:
             return self._prepare_interactive(profile)
         except launch_env.LaunchRefused as exc:
@@ -1835,10 +1870,16 @@ class OpenCodeDriver:
         config_path = compiled_dir / compiler.NATIVE_FILE
         metadata = self._load_install(root, base_redact)
         self._verify_owned(root, metadata)
+        plugin: Optional[LifecyclePlugin] = None
+        if profile_policy.view(evaluation.effective).plugin_lifecycle == "allow":
+            scan_env = {k: cfg_env[k] for k in ("XDG_CONFIG_HOME",) if k in cfg_env}
+            launch_env.check_tui_plugins(root, scan_env, self._home)
+            plugin = self._lifecycle_plugin(dirs, fresh, compiled_dir)
+            config_path = plugin.config_path
         redactor = launch_env.Redactor()
         child_env, effective, _scanned, _observations = self._scan_and_build_env(
             root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, version=version or "",
-            verdict=verdict, surface="interactive",
+            verdict=verdict, surface="interactive", plugin=plugin,
         )
         return InteractiveLaunch(
             binary=Path(binary),
@@ -1854,6 +1895,44 @@ class OpenCodeDriver:
             effective_config_digest=effective["digest"],
             profile_root=dirs.root,
             retention=retention.RetentionPolicy.from_effective(evaluation.effective),
+            run_id=plugin.run_id if plugin is not None else None,
+            plugin_log=plugin.log if plugin is not None else None,
+        )
+
+    def _lifecycle_plugin(self, dirs: "profile_dirs.ProfileDirs", fresh: Any, compiled_dir: Path) -> "LifecyclePlugin":
+        """Admit Quoin's pinned lifecycle plugin for one interactive launch:
+        copy the verified artifact into the profile, mint the run id, and
+        write the interactive variant of the compiled file, which is the
+        compiled document plus a ``plugin`` list naming only that copy. The
+        headless pair is left untouched."""
+        refuse = self._refusal
+        try:
+            copy = plugin_artifact.install(dirs.root)
+            run_id = runstore.new_run_id(self._clock)
+            log = plugin_artifact.log_path(dirs.root, run_id)
+        except plugin_artifact.PluginRefused as exc:
+            raise refuse(launch_codes.category(exc.code), exc.code, exc.message) from None
+        document = dict(fresh.document)
+        document["plugin"] = [plugin_artifact.file_url(copy)]
+        data = compiler.native_bytes(document)
+        path = compiled_dir / plugin_artifact.INTERACTIVE_CONFIG_FILE
+        try:
+            jsonio.write_private_atomic(path, data, private_parent=True)
+            stored = jsonio.read_regular_bytes(path, max_bytes=compiler.MAX_OUTPUT_BYTES)
+        except (jsonio.UnsafeDirectoryError, OSError):
+            raise refuse(
+                "invalid-configuration", "compiled-output-unwritable",
+                "the compiled output directory cannot be used",
+            ) from None
+        digest = hashlib.sha256(data).hexdigest()
+        if stored is None or hashlib.sha256(stored[0]).hexdigest() != digest:
+            raise refuse(
+                "invalid-configuration", "compiled-file-changed",
+                "the interactive configuration file does not match what was written",
+            )
+        return LifecyclePlugin(
+            run_id=run_id, log=log, path=copy, config_path=path, config_sha256=digest, document=document,
+            env=plugin_artifact.launch_env(run_id, log),
         )
 
     def _compile_pair(self, evaluation: Any, cfg_env: Mapping[str, str]) -> Tuple[Any, Path]:

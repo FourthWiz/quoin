@@ -626,6 +626,7 @@ FIELD_TOKENS = frozenset(
         "formatter-mode",
         "network-identity_check",
         "logging-content",
+        "plugin-lifecycle",
         "retention-runs_days",
         "retention-cache_days",
         "retention-logs_days",

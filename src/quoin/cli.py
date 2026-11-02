@@ -2545,6 +2545,7 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
             "env_names": list(launch.env_names),
             "runtime_version": launch.runtime_version,
             "effective_config_digest": launch.effective_config_digest,
+            "lifecycle_plugin": launch.run_id is not None,
         }, sort_keys=True))
         return 0
     try:

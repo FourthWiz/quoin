@@ -309,6 +309,19 @@
             }
           }
         },
+        "plugin": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "lifecycle": {
+              "type": "string",
+              "enum": [
+                "deny",
+                "allow"
+              ]
+            }
+          }
+        },
         "network": {
           "type": "object",
           "additionalProperties": false,

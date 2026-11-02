@@ -134,8 +134,12 @@ Value: allow Quoin's own plugin only
 Quoin may load exactly one plugin: its own, built from the adapter source, pinned to
 the tested OpenCode release and named in the launch allowlist. Every other plugin, in
 any configuration layer or plugin directory, is still refused. The plugin observes and
-records; it never decides approvals, owns workflow state or routes providers. Until
-the plugin ships, the launcher keeps refusing all plugins.
+records; it never decides approvals, owns workflow state or routes providers. The
+launcher admits it by digest for interactive starts when the profile's
+`policy.plugin.lifecycle` is `allow` (off by default for work profiles). Such a launch
+leaves `OPENCODE_PURE` unset, so the launch checks are the only barrier to other plugins:
+they refuse plugin entries, plugin directories and terminal interface plugin files at
+start, but a plugin file written during the session is caught only at the next start.
 
 ## Adapter design decisions
 
@@ -173,7 +177,7 @@ Rationale: sequencing, gating and recovery belong in one coordinator that holds 
 
 Status: deferred
 Decision: approval requests raised inside delegated (subagent) work are not visible to the driver, so such runs report partial evidence.
-Rationale: seeing them needs a server or plugin event path. Quoin's own plugin is now allowed (see the lifecycle plugin decision), so this stays deferred only until that plugin ships.
+Rationale: seeing them needs a server or plugin event path. Quoin's lifecycle plugin now records interactive sessions, but whether child-session events reach it is unverified (`hook-child-sessions`) and headless runs do not load it.
 
 ### Installing OpenCode in CI
 
