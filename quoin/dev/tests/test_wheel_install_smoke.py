@@ -153,6 +153,18 @@ def test_distributions_do_not_include_benchmark_folders(built_wheel, built_sdist
 
 
 @_requires_build
+def test_distributions_ship_the_plugin_artifact_without_node_modules(built_wheel, built_sdist):
+    """The built lifecycle plugin ships in both; its npm build tree never does."""
+    with zipfile.ZipFile(built_wheel) as whl:
+        wheel_names = whl.namelist()
+    with tarfile.open(built_sdist, "r:gz") as sdist:
+        sdist_names = sdist.getnames()
+    for names in (wheel_names, sdist_names):
+        assert not any("/node_modules/" in name for name in names)
+    assert any(n.endswith("quoin/adapters/opencode/plugin/quoin-opencode-plugin.js") for n in sdist_names)
+
+
+@_requires_build
 def test_wheel_contents_include_codex_cli_assets(built_wheel):
     """Wheel installs must include the repo-local assets used by Codex CLI helpers."""
     with zipfile.ZipFile(built_wheel) as whl:
@@ -195,6 +207,8 @@ def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
         "quoin/data/adapters/opencode/README.md",
         "quoin/data/adapters/opencode/compatibility.md",
         "quoin/data/adapters/opencode/decisions.md",
+        # lifecycle plugin: the built artifact (its build project stays in dev)
+        "quoin/data/adapters/opencode/plugin/quoin-opencode-plugin.js",
         # generator/installer/doctor runtime data
         "quoin/data/adapters/opencode/feature-manifest.json",
         "quoin/data/adapters/opencode/overlays.json",

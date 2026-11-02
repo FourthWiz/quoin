@@ -267,11 +267,23 @@ class ProgressPayload(_Payload):
     permission_outcome: Optional[str] = None
     delegation: Optional[str] = None
     task_id: Optional[str] = None
+    # Correlates an approval prompt with its reply. Omitted from the
+    # serialized form when unset, so existing events keep their exact shape.
+    request_id: Optional[str] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        out = super().to_dict()
+        if out.get("request_id") is None:
+            out.pop("request_id", None)
+        return out
 
     def __post_init__(self) -> None:
-        _check_in("kind", self.kind, ("step_start", "text", "reasoning", "tool", "halted", "unknown"))
+        _check_in(
+            "kind", self.kind,
+            ("step_start", "text", "reasoning", "tool", "halted", "session", "approval", "unknown"),
+        )
         _check_str("raw_type", self.raw_type)
-        for name in ("tool", "status", "summary", "task_id"):
+        for name in ("tool", "status", "summary", "task_id", "request_id"):
             _check_opt_str(name, getattr(self, name))
         _check_in("permission_outcome", self.permission_outcome, (None, "denied"))
         _check_in(

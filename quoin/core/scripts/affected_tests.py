@@ -1460,6 +1460,51 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/decisions.md",
         "quoin/dev/tests/test_opencode_docs.py",
     ),
+    # The lifecycle plugin: its build project, shipped artifact and captured fixture.
+    (
+        "quoin/dev/opencode-plugin/package.json",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/package.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/package-lock.json",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/package-lock.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/tsconfig.json",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/tsconfig.json",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/.gitignore",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/dev/opencode-plugin/src/quoin-opencode-plugin.ts",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/adapters/opencode/plugin/quoin-opencode-plugin.js",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/plugin-events/real-plugin.jsonl",
+        "quoin/dev/tests/test_opencode_plugin_events.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/plugin-events/real-plugin.jsonl",
+        "quoin/dev/tests/test_opencode_docs.py",
+    ),
     (
         "quoin/adapters/opencode/README.md",
         "quoin/dev/tests/test_opencode_docs.py",

@@ -1040,6 +1040,11 @@ def test_affected_tests_self_check():
             "test_opencode_integration_skills.py",
             "test_opencode_docs.py",
         }
+    for rel in ("package.json", "package-lock.json", "tsconfig.json", ".gitignore",
+                "src/quoin-opencode-plugin.ts"):
+        per_file_expected["quoin/dev/opencode-plugin/" + rel] = {"test_opencode_plugin_events.py"}
+    for rel in ("plugin/quoin-opencode-plugin.js", "fixtures/plugin-events/real-plugin.jsonl"):
+        per_file_expected["quoin/adapters/opencode/" + rel] = {"test_opencode_plugin_events.py"}
     per_file_expected["quoin/adapters/opencode/managed-work-deployment.md"] = {
         "test_opencode_deployment_doc.py",
         "test_opencode_docs.py",
