@@ -26,6 +26,8 @@ REQUIRED_MODE_IDS = {
     "quoin-claude",
     "simple-codex",
     "quoin-codex",
+    "simple-opencode",
+    "quoin-opencode",
 }
 
 REQUIRED_METRIC_IDS = {
@@ -44,6 +46,8 @@ REQUIRED_SCENARIO_IDS = {
     "scoped-code-change",
     "review-changes",
     "session-handoff-memory-reuse",
+    "tool-call-reliability",
+    "cross-service-context-synthesis",
 }
 
 REQUIRED_SCENARIO_HEADINGS = [
@@ -116,8 +120,8 @@ def check_manifest_shape() -> CheckResult:
         issues.append(f"comparison modes mismatch: {sorted(mode_ids)}")
 
     for mode in manifest.get("comparison_modes", []):
-        if mode.get("runtime") not in {"claude", "codex"}:
-            issues.append(f"{mode.get('id')}: runtime must be claude or codex")
+        if mode.get("runtime") not in {"claude", "codex", "opencode"}:
+            issues.append(f"{mode.get('id')}: runtime must be claude, codex or opencode")
         if not isinstance(mode.get("quoin_enabled"), bool):
             issues.append(f"{mode.get('id')}: quoin_enabled must be boolean")
 
@@ -137,7 +141,10 @@ def check_manifest_shape() -> CheckResult:
 def check_scenario_docs() -> CheckResult:
     manifest = _load_manifest()
     issues = []
-    mode_tokens = ["Simple Claude", "Quoin + Claude", "Simple Codex", "Quoin + Codex"]
+    mode_tokens = [
+        "Simple Claude", "Quoin + Claude", "Simple Codex", "Quoin + Codex",
+        "Simple OpenCode", "Quoin + OpenCode",
+    ]
 
     for scenario in manifest.get("scenarios", []):
         path = BENCHMARK_DIR / scenario["file"]

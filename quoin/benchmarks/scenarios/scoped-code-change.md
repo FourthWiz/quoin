@@ -25,6 +25,10 @@ changed and what was not verified.
 - Simple Codex: use native Codex implementation workflow.
 - Quoin + Codex: use repo-local Quoin guidance while relying on native Codex
   approvals and sandboxing, with portable evidence under `.workflow_artifacts/`.
+- Simple OpenCode: use OpenCode to implement and report. Same model and endpoint
+  as the Quoin OpenCode run.
+- Quoin + OpenCode: use the Quoin workflow commands for plan, implementation,
+  gate and review, with artifacts under `.workflow_artifacts/`.
 
 ## Expected Evidence
 

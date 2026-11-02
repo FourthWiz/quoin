@@ -24,6 +24,10 @@ the top risks or unknowns for a future contributor. Do not edit files.
 - Simple Codex: use Codex normally and return a discovery report.
 - Quoin + Codex: use repo-local Quoin guidance and preserve portable discovery
   evidence under `.workflow_artifacts/`.
+- Simple OpenCode: use the pinned OpenCode binary to explore and summarise the
+  repository. Same model and endpoint as the Quoin OpenCode run.
+- Quoin + OpenCode: run the Quoin discover command from the installed scaffold
+  and keep its memory files under `.workflow_artifacts/`.
 
 ## Expected Evidence
 

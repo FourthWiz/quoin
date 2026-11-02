@@ -518,7 +518,7 @@ def test_main_usage_error_raises_system_exit_2():
         raise AssertionError("expected SystemExit(2) for an unrecognized option")
 
 
-# --- third and fourth CI steps in adapter-check.yml ---
+# --- CI steps in adapter-check.yml ---
 
 
 def test_adapter_check_workflow_step_order_and_command_matches_manifest():
@@ -527,12 +527,18 @@ def test_adapter_check_workflow_step_order_and_command_matches_manifest():
     assert re.search(r"^permissions:\s*$", text, re.MULTILINE), text
     assert re.search(r"^\s*contents:\s*read\s*$", text, re.MULTILINE), text
     run_lines = [line.strip()[len("run: "):] for line in text.splitlines() if line.strip().startswith("run:")]
-    assert len(run_lines) == 5, run_lines
+    assert len(run_lines) == 8, run_lines
     assert "validate_adapter_drift.py" in run_lines[0], run_lines
     assert "check_registration.py" in run_lines[1], run_lines
     assert "quoin.opencode_adapter check-manifest" in run_lines[2], run_lines
     assert "quoin doctor --runtime opencode --smoke" in run_lines[3], run_lines
     assert "build_claude_slim.py --check" in run_lines[4], run_lines
+    assert run_lines[5] == "python3 -m pip install pytest", run_lines
+    for test_file in ("test_bench_opencode_cells.py", "test_opencode_release_matrix.py", "test_opencode_manifest.py"):
+        assert test_file in run_lines[6], run_lines
+    # The qualification report is a manual job only; push and pull requests never run it.
+    assert "opencode_report.py" in run_lines[7], run_lines
+    assert "github.event_name == 'workflow_dispatch'" in text, text
 
     manifest_data = manifest.load_manifest(SOURCE_DIR)
     expected_command = manifest_data["validation"]["commands"][0]

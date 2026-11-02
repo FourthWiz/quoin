@@ -997,6 +997,10 @@ def test_affected_tests_self_check():
             "test_opencode_native_schema.py",
         },
         "quoin/adapters/opencode/decisions.md": {"test_opencode_docs.py"},
+        "quoin/adapters/opencode/release-acceptance.md": {
+            "test_opencode_release_matrix.py",
+            "test_opencode_docs.py",
+        },
         "pyproject.toml": {"test_probe_gateway.py"},
         "quoin/core/workflow/skills.json": {"test_opencode_manifest.py", "test_opencode_generate.py"},
         ".github/workflows/adapter-check.yml": {"test_opencode_manifest.py"},

@@ -26,6 +26,10 @@ non-destructive workflow step.
 - Simple Codex: use Codex normally with the plain handoff note.
 - Quoin + Codex: use repo-local Quoin guidance and portable session-state
   semantics under `.workflow_artifacts/`.
+- Simple OpenCode: start a fresh OpenCode session and rely on the repository
+  alone. Same model and endpoint as the Quoin OpenCode run.
+- Quoin + OpenCode: continue from the portable handoff under
+  `.workflow_artifacts/` in a new OpenCode session.
 
 ## Expected Evidence
 

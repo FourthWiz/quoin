@@ -37,6 +37,8 @@ def test_benchmark_manifest_modes_metrics_and_scenarios():
         "quoin-claude",
         "simple-codex",
         "quoin-codex",
+        "simple-opencode",
+        "quoin-opencode",
     }
     assert {
         (mode["runtime"], mode["quoin_enabled"])
@@ -46,6 +48,8 @@ def test_benchmark_manifest_modes_metrics_and_scenarios():
         ("claude", True),
         ("codex", False),
         ("codex", True),
+        ("opencode", False),
+        ("opencode", True),
     }
 
     assert {metric["id"] for metric in manifest["metrics"]} == {
@@ -63,6 +67,8 @@ def test_benchmark_manifest_modes_metrics_and_scenarios():
         "scoped-code-change",
         "review-changes",
         "session-handoff-memory-reuse",
+        "tool-call-reliability",
+        "cross-service-context-synthesis",
     }
 
 
@@ -101,7 +107,10 @@ def test_benchmark_scenarios_are_well_formed():
         "## Expected Evidence",
         "## Evaluation Notes",
     ]
-    required_modes = ["Simple Claude", "Quoin + Claude", "Simple Codex", "Quoin + Codex"]
+    required_modes = [
+        "Simple Claude", "Quoin + Claude", "Simple Codex", "Quoin + Codex",
+        "Simple OpenCode", "Quoin + OpenCode",
+    ]
 
     for scenario in manifest["scenarios"]:
         text = read_rel(f"quoin/benchmarks/{scenario['file']}")

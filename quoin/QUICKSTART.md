@@ -122,6 +122,8 @@ installed component. See `quoin/docs/streamdeck/README.md` in the Quoin reposito
 
 The quantitative benchmark harness (`quoin/benchmarks/`) measures pass-rate-per-dollar for quoin-assisted vs. plain agent workflows on HumanEval+ tasks. Full design: `quoin/benchmarks/methodology.md`.
 
+OpenCode has its own paired cells (`--cells simple-opencode,quoin-opencode`) and frozen pilot thresholds; see `quoin/benchmarks/README.md` and `quoin/adapters/opencode/release-acceptance.md`.
+
 **Prerequisites:** Claude Code CLI authenticated, `evalplus` installed, Docker available for judge.
 
 **Step 1 — dry-run (always first, estimates cost without running agents):**

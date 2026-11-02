@@ -9,7 +9,7 @@ agents (Claude Code and Codex CLI), and a 120-task suite.
 
 ## Comparison Cells
 
-The benchmark uses four cells, named to match the Phase 29 scaffold's
+The benchmark uses six cells, named to match the Phase 29 scaffold's
 `REQUIRED_MODE_IDS` (see `scripts/validate_benchmarks.py`):
 
 | Cell ID | Agent | Quoin? | Notes |
@@ -18,6 +18,8 @@ The benchmark uses four cells, named to match the Phase 29 scaffold's
 | `quoin-claude` | Claude Code CLI | Yes | Full Quoin slash-command workflow; auto-mode gates |
 | `simple-codex` | Codex CLI | No | Baseline: Codex without Quoin guidance |
 | `quoin-codex` | Codex CLI | Thin | Ambient `AGENTS.md` + portable workflow contracts; no slash-command emulation |
+| `simple-opencode` | OpenCode CLI (pinned) | No | Baseline: same model, endpoint and native config as `quoin-opencode` |
+| `quoin-opencode` | OpenCode CLI (pinned) | Yes | Quoin OpenCode scaffold installed into the work tree; paired with `simple-opencode` only |
 
 ### What "Quoin" Means in This Benchmark (Decision D-01: Auto-Mode)
 
@@ -209,9 +211,11 @@ must match a strict schema.
 
 ## Naming: Relationship to Phase 29 Scaffold
 
-The cell names `simple-claude`, `quoin-claude`, `simple-codex`, and `quoin-codex`
-match the `REQUIRED_MODE_IDS` in the Phase 29 scaffold (`scripts/validate_benchmarks.py`
-lines 24–29).
+The cell names `simple-claude`, `quoin-claude`, `simple-codex`, `quoin-codex`,
+`simple-opencode` and `quoin-opencode` match the `REQUIRED_MODE_IDS` in
+`scripts/validate_benchmarks.py`. The OpenCode cells are compared only with each
+other, on one model and endpoint; see README.md, "OpenCode cells and pilot
+qualification".
 
 The Phase 29 qualitative suite (5 scenarios, subjective 0-4 scores on workflow
 usefulness dimensions) remains independent and complementary. The new quantitative

@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "id": "opencode-pilot-qualification",
+  "status": "frozen",
+  "change_policy": "The task set and thresholds are frozen before prompt tuning. Changing either requires maintainer approval recorded in the commit that changes this file.",
+  "sample_policy": "Each count threshold judges the first required_runs matching runs in run order; later runs are reported as surplus and do not change the verdict. The tool loop is judged separately for each cell.",
+  "cells": ["simple-opencode", "quoin-opencode"],
+  "pairing_keys": ["model", "endpoint"],
+  "provenance_fields": [
+    "runtime",
+    "runtime_version",
+    "adapter",
+    "adapter_version",
+    "provider_route",
+    "endpoint",
+    "model",
+    "config_digest",
+    "context_limit",
+    "output_limit",
+    "repo_commit",
+    "permissions",
+    "task_seed"
+  ],
+  "thresholds": [
+    {
+      "id": "gateway_tool_loop",
+      "label": "Harmless gateway tool loop",
+      "scenario": "tool-call-reliability",
+      "per_cell": true,
+      "required_runs": 20,
+      "min_successes": 19
+    },
+    {
+      "id": "scoped_workflow_tasks",
+      "label": "Scoped workflow tasks completed correctly",
+      "scenario": "scoped-code-change",
+      "cell": "quoin-opencode",
+      "required_runs": 10,
+      "min_successes": 8
+    },
+    {
+      "id": "deterministic_invariants",
+      "label": "Deterministic safety and artifact invariants",
+      "kind": "all_pass"
+    }
+  ],
+  "scenarios": [
+    "fresh-repo-discovery",
+    "medium-refactor-plan",
+    "scoped-code-change",
+    "review-changes",
+    "session-handoff-memory-reuse",
+    "tool-call-reliability",
+    "cross-service-context-synthesis"
+  ],
+  "test_tenant_only_scenarios": ["mutation-approval"],
+  "note": "Small samples are qualification evidence for one model and endpoint, not a general reliability guarantee. Publish actual counts and failure modes."
+}
