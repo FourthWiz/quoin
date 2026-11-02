@@ -1,7 +1,8 @@
 # OpenCode maintainer decisions
 
 These are decisions only the maintainer can make. Nothing in this document is a
-guessed value — every `Value:` below is `not set` until a maintainer sets it.
+guessed value — every `Value:` below is `not set` until a maintainer sets it, and a
+set decision reads `Status: decided`.
 
 ## Maintainer decisions
 
@@ -114,10 +115,27 @@ Value: not set
 
 ### Interactive-first or headless-first
 
-Status: TODO
+Status: decided
 Owner: maintainer
 Blocks: session mode selection
-Value: not set
+Value: interactive-first
+
+The primary way to use Quoin on OpenCode is a person working inside the OpenCode
+terminal or desktop interface, with Quoin present as generated commands, agents and
+its lifecycle plugin. The headless driver stays for unattended runs.
+
+### Lifecycle plugin
+
+Status: decided
+Owner: maintainer
+Blocks: in-session event capture for interactive use
+Value: allow Quoin's own plugin only
+
+Quoin may load exactly one plugin: its own, built from the adapter source, pinned to
+the tested OpenCode release and named in the launch allowlist. Every other plugin, in
+any configuration layer or plugin directory, is still refused. The plugin observes and
+records; it never decides approvals, owns workflow state or routes providers. Until
+the plugin ships, the launcher keeps refusing all plugins.
 
 ## Adapter design decisions
 
@@ -155,7 +173,7 @@ Rationale: sequencing, gating and recovery belong in one coordinator that holds 
 
 Status: deferred
 Decision: approval requests raised inside delegated (subagent) work are not visible to the driver, so such runs report partial evidence.
-Rationale: seeing them needs a server or plugin event path, and plugins are refused because they could loosen permission handling.
+Rationale: seeing them needs a server or plugin event path. Quoin's own plugin is now allowed (see the lifecycle plugin decision), so this stays deferred only until that plugin ships.
 
 ### Installing OpenCode in CI
 
@@ -352,7 +370,32 @@ Paste values from a probe run's `--output` record here; no probe has been run ye
 
 ## Plugin need
 
-Intentionally empty — filled only when a concrete event or diagnostic that the CLI path cannot provide has been measured.
+Required for interactive sessions. Once `quoin opencode start` has launched the
+terminal interface it replaces the Quoin process (`os.execve`), and the desktop
+interface is started without Quoin at all, so no Quoin code runs while the person
+works. The CLI path therefore records nothing about an interactive session: not
+when it starts or ends, not compaction, not file writes, not errors.
+
+The headless JSON stream does not fill the gap even where Quoin owns the process.
+It has no start, stop or usage event type, and it drops every event from child
+sessions, so a subagent's tool calls and approval requests never reach the driver
+(compatibility rows `json-event-types` and `child-events-filtered`).
+
+A sidecar reading the server's event route was considered. It is not qualified for
+the pinned release, and an outside observer cannot add Quoin's continuation context
+to the compaction prompt, which the `experimental.session.compacting` hook can.
+
+Events the plugin is required for, each still to be qualified against the pinned
+release (synchronous or not, veto-capable or not, complete, stable):
+
+| Native event or hook | What Quoin needs it for |
+|---|---|
+| `session.created` | open the session record and attach the active task |
+| `session.idle`, `session.status` | close a step: session state, handoff and cost capture |
+| `experimental.session.compacting`, `session.compacted` | keep the task context across compaction |
+| `tool.execute.after` | audit file writes and role boundaries as they happen |
+| `session.error` | show failures instead of losing them |
+| permission requests, including from child sessions | record approvals raised in delegated work (observe only) |
 
 ## Workflow parity residuals
 
