@@ -24,10 +24,10 @@ exists or after ``max_lifetime_s`` seconds (default 120), so a failed test
 cannot leave one running forever; each writes its own pid to
 ``STATE/grandchildren.txt`` before it creates its ready marker.
 
-Crash steps disable core dumps for the process before signalling, but macOS
-may still write a crash report for SIGSEGV and SIGABRT. Tests that only need
-a signalled exit should use SIGKILL, and at most one test per other signal
-kind should exercise it.
+Crash steps disable core dumps for the process before signalling. Use only
+signals macOS does not treat as a crash (SIGKILL, SIGHUP, SIGTERM): SIGSEGV,
+SIGABRT, SIGBUS and the like make the system crash reporter pop a "Python quit
+unexpectedly" dialog on the developer's desktop for every run.
 """
 from __future__ import annotations
 
@@ -484,9 +484,9 @@ SCENARIOS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "crash_after_start": lambda: _scenario(_step_start("prt_s1"), {"do": "crash", "signal": "SIGKILL"}),
     "crash_mid_stream": lambda: _scenario(
         _step_start("prt_s1"), _step_finish("prt_f1", "tool-calls"), _step_start("prt_s2"),
-        _text("prt_t2", "working"), {"do": "crash", "signal": "SIGSEGV"}),
+        _text("prt_t2", "working"), {"do": "crash", "signal": "SIGHUP"}),
     "crash_in_open_step": lambda: _scenario(
-        _step_start("prt_s1"), _tool_done("prt_b1", "bash"), {"do": "crash", "signal": "SIGABRT"}),
+        _step_start("prt_s1"), _tool_done("prt_b1", "bash"), {"do": "crash", "signal": "SIGTERM"}),
     "crash_after_last_finish": lambda: _scenario(
         _step_start("prt_s1"), _step_finish("prt_f1", "stop"), {"do": "crash", "signal": "SIGKILL"}),
     "hang": lambda: _scenario(_step_start("prt_s1"), {"do": "hang"}),
