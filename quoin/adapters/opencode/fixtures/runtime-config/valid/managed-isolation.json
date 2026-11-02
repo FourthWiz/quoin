@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "policy": {
+    "web_tools": "deny",
+    "package_install": "deny",
+    "mcp": {
+      "remote": "deny"
+    },
+    "network": {
+      "identity_check": "required",
+      "pins": [
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+      ]
+    },
+    "logging": {
+      "content": "metadata"
+    },
+    "retention": {
+      "runs_days": 30,
+      "logs_days": 30
+    }
+  },
+  "limits": {
+    "max_run_seconds": 3600
+  }
+}

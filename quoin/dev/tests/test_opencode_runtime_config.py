@@ -788,7 +788,7 @@ def test_module_python_floor_and_purity(name):
 
 
 def test_config_imports_are_limited():
-    allowed_relative = {"jsonio", "paths", "schema_check", "secrets", "errors", "generate", "install"}
+    allowed_relative = {"jsonio", "paths", "schema_check", "secrets", "errors", "generate", "install", "profile_policy"}
     tree = _module_tree("config")
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 1:

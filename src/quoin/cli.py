@@ -882,23 +882,106 @@ def _opencode_config_evaluate(args: argparse.Namespace, *, allow_unqualified: bo
     return ev, env, home
 
 
-def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import compiler, explain, paths
+_EXPLAIN_RUN_MISSING = "quoin: no effective-configuration record was found for that run"
+_EXPLAIN_RUN_INVALID = "quoin: the run id is not valid"
+_EXPLAIN_EXPORT_UNAVAILABLE = "quoin: no effective-configuration record is available to export for this configuration"
+_EXPLAIN_EXPORT_FAILED = "quoin: the export could not be written; check the profile storage directory"
 
+
+def _explain_persisted_run(args: argparse.Namespace) -> int:
+    from quoin.opencode_adapter import explain, runstore
+
+    try:
+        run_id = runstore.check_run_id(args.run)
+        directory = runstore.inspect_store(pathlib.Path(args.project_root).resolve())
+        if directory is None:
+            print(_EXPLAIN_RUN_MISSING, file=sys.stderr)
+            return 2
+        stored = runstore.load_record(directory, run_id)
+    except runstore.RunStoreError as exc:
+        print(_EXPLAIN_RUN_INVALID if exc.code == "invalid-run-id" else _EXPLAIN_RUN_MISSING, file=sys.stderr)
+        return 2
+    record = ((stored or {}).get("prepared") or {}).get("effective_config")
+    if not isinstance(record, dict):
+        print(_EXPLAIN_RUN_MISSING, file=sys.stderr)
+        return 2
+    if args.json:
+        doc = {
+            "explain_format": explain.EXPLAIN_FORMAT,
+            "run_id": run_id,
+            "effective_config": explain.effective_section(record),
+        }
+        sys.stdout.write(json.dumps(doc, indent=2, ensure_ascii=False) + "\n")
+    else:
+        sys.stdout.write(explain.render_record_text(record))
+    return 0
+
+
+def _explain_export(ev, record: dict, home) -> int:
+    from quoin.opencode_adapter import jsonio, profile_dirs
+
+    root = profile_dirs.adapter_root(os.environ, home)
+    try:
+        dirs = profile_dirs.prepare(root, ev.profile, ev.effective.classification)
+        jsonio.ensure_private_directory(dirs.exports)
+        name = "explain-%s.json" % str(record["digest"]).split(":", 1)[-1][:12]
+        target = dirs.exports / name
+        jsonio.write_private_atomic(target, jsonio.dump_canonical(record))
+    except (profile_dirs.ProfileDirError, jsonio.UnsafeDirectoryError, OSError, ValueError):
+        print(_EXPLAIN_EXPORT_FAILED, file=sys.stderr)
+        return 2
+    try:
+        shown = "~/" + str(target.relative_to(home))
+    except ValueError:
+        shown = "<state>/" + str(target.relative_to(root))
+    print("export written: %s" % shown, file=sys.stderr)
+    return 0
+
+
+def _cmd_opencode_config_explain(args: argparse.Namespace) -> int:
+    from quoin.opencode_adapter import compiler, explain, paths, profile_dirs
+
+    if getattr(args, "run", None) is not None:
+        if getattr(args, "export", False):
+            print("quoin: --export cannot be combined with --run", file=sys.stderr)
+            return 2
+        return _explain_persisted_run(args)
     got = _opencode_config_evaluate(args, allow_unqualified=False)
     if isinstance(got, int):
         return got
     ev, env, home = got
     try:
-        output_dir = paths.compiled_output_dir(ev.profile, ev.project_root, env, home)
+        output_dir = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
         result, gate = explain.try_build(ev)
+        drv = _make_opencode_driver(args.project_root)
+        try:
+            preview = drv.effective_preview(ev.profile, ambient_env=dict(os.environ), evaluation=ev)
+        except paths.AdapterDataMissing:
+            raise
+        except Exception:  # noqa: BLE001 - defence in depth: explain never shows a traceback for a preview failure
+            preview = None
+        try:
+            launch_refusal = drv.offline_launch_refusal(ev.profile, ambient_env=dict(os.environ), evaluation=ev)
+        except paths.AdapterDataMissing:
+            raise
+        except Exception:  # noqa: BLE001 - a failing offline check is shown as unavailable, never as a refusal
+            launch_refusal = explain.LAUNCH_CHECK_UNAVAILABLE
         text = explain.render(
             ev, redact=args.redact, as_json=args.json, compile_result=result,
             output_dir=output_dir, gate_failure=gate,
+            effective=explain.NO_PREVIEW if preview is None else preview,
+            launch_refusal=launch_refusal,
         )
     except paths.AdapterDataMissing:
         print("quoin: packaged adapter data not found; reinstall quoin", file=sys.stderr)
         return 2
+    if getattr(args, "export", False):
+        if preview is None:
+            print(_EXPLAIN_EXPORT_UNAVAILABLE, file=sys.stderr)
+            return 2
+        code = _explain_export(ev, preview[0], home)
+        if code != 0:
+            return code
     sys.stdout.write(text)
     return 1 if (gate is not None or compiler.compile_blockers(ev)) else 0
 
@@ -907,15 +990,18 @@ _COMPILE_IO_TEXT = "quoin: the compiled files could not be written or read; chec
 
 
 def _cmd_opencode_config_compile(args: argparse.Namespace) -> int:
-    from quoin.opencode_adapter import compiler, paths
+    from quoin.opencode_adapter import compiler, paths, profile_dirs
     from quoin.opencode_adapter.jsonio import UnsafeDirectoryError
 
     got = _opencode_config_evaluate(args, allow_unqualified=args.allow_unqualified)
     if isinstance(got, int):
         return got
     ev, env, home = got
+    output = args.output
+    if output is None:
+        output = profile_dirs.compiled_dir(profile_dirs.adapter_root(os.environ, home), ev.profile, ev.project_root)
     try:
-        directory = compiler.resolve_output_dir(ev, output=args.output, env=env, home=home)
+        directory = compiler.resolve_output_dir(ev, output=output, env=env, home=home)
     except compiler.OutputRefused as exc:
         print("quoin: %s\n  fix: %s" % (exc, exc.fix), file=sys.stderr)
         return 2
@@ -2129,7 +2215,37 @@ def _cmd_opencode_test_run(args: argparse.Namespace) -> int:
         if state_root is None:
             return refuse("state-dir-invalid", "the state directory variable must be an absolute path")
     else:
-        state_root = _paths.state_dir(os.environ, pathlib.Path.home())
+        from quoin.opencode_adapter import handoff as _handoff, profile_dirs as _profile_dirs  # noqa: PLC0415
+        from quoin.opencode_adapter.install import PROFILE_RE  # noqa: PLC0415
+
+        name, source = args.profile, "flag"
+        if name is None:
+            name, source = testrun.recorded_profile(project_root, args.task)
+        if source == "unreadable":
+            return refuse(
+                "profile-selection-unverified",
+                "the task's workflow state or run record cannot be read; pass --profile",
+            )
+        if name is None:
+            return refuse("profile-unknown", "no profile is recorded for the task; pass --profile")
+        if not PROFILE_RE.fullmatch(name):
+            return refuse("request-invalid", "the profile name is not valid")
+        home = pathlib.Path.home()
+        try:
+            state_root = _profile_dirs.profile_root(_profile_dirs.adapter_root(os.environ, home), name)
+        except ValueError:
+            return refuse("request-invalid", "the profile name is not valid")
+        if source != "flag":
+            unverified = (
+                "profile-selection-unverified",
+                "the recorded profile cannot be confirmed against its storage directory; pass --profile",
+            )
+            try:
+                scope = _handoff.scope_for_profile(project_root, name, env=_opencode_config_env(), home=home)
+            except _handoff.HandoffRefused:
+                return refuse(*unverified)
+            if _profile_dirs.stamped_classification(state_root) != scope["classification"]:
+                return refuse(*unverified)
     run = testrun.run_tests(project_root, args.task, stage, state_root=state_root)
     payload = run.to_dict()
     if run.outcome == testrun.REFUSED:
@@ -2220,6 +2336,14 @@ def _handoff_evaluator(project_root: pathlib.Path):
     return lambda profile: handoff.scope_for_profile(project_root, profile, env=env, home=home)
 
 
+def _handoff_policy_evaluator(project_root: pathlib.Path):
+    from quoin.opencode_adapter import handoff  # noqa: PLC0415
+
+    env = _opencode_config_env()
+    home = pathlib.Path.home()
+    return lambda profile: handoff.policy_for_profile(project_root, profile, env=env, home=home)
+
+
 def _handoff_rel(project_root: pathlib.Path, path) -> str:
     return os.path.relpath(str(path), str(project_root)).replace(os.sep, "/")
 
@@ -2288,8 +2412,14 @@ def _cmd_opencode_handoff_show(args: argparse.Namespace) -> int:
         return refused
     try:
         requested = _handoff_evaluator(project_root)(args.profile) if args.profile else None
+        requested_policy = (
+            (lambda: _handoff_policy_evaluator(project_root)(args.profile)) if args.profile else None
+        )
         record = handoff.load_for_continuation(
             project_root, args.task, source_dir=source_dir, requested_scope=requested,
+            requested_policy=requested_policy, policy_profile=args.profile,
+            resume_hint="quoin run --runtime opencode --profile %s --workflow --continue %s --project-root %s" % (
+                shlex.quote(args.profile or "PROFILE"), shlex.quote(args.task), shlex.quote(str(project_root))),
         )
         directory, state, run = handoff.advice_inputs(project_root, args.task)
         advice = handoff.next_step(project_root, record, state, run, source_dir)
@@ -2348,6 +2478,7 @@ def _exec_tui(argv, cwd, env) -> int:
     sys.stdout.flush()
     sys.stderr.flush()
     if _is_posix():
+        previous_umask = os.umask(0o077)
         try:
             os.chdir(cwd)
             # Python ignores these two at startup and an ignored signal stays
@@ -2358,8 +2489,12 @@ def _exec_tui(argv, cwd, env) -> int:
                     signal.signal(number, signal.SIG_DFL)
             os.execve(argv[0], list(argv), env)
         except OSError as exc:
+            os.umask(previous_umask)
             print("quoin: opencode start failed: %s" % (exc.strerror or type(exc).__name__), file=sys.stderr)
             return 3
+        except BaseException:
+            os.umask(previous_umask)
+            raise
     # No exec here: keep Python alive but let the TUI own Ctrl-C.
     previous = None
     try:
@@ -2409,10 +2544,163 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
             "config_path": redact(str(launch.config_path)),
             "env_names": list(launch.env_names),
             "runtime_version": launch.runtime_version,
+            "effective_config_digest": launch.effective_config_digest,
         }, sort_keys=True))
         return 0
+    try:
+        launch.write_record()
+    except Exception:  # noqa: BLE001 - the launch never proceeds without its record
+        print("quoin: opencode start refused: the effective-configuration record could not be written", file=sys.stderr)
+        return 3
+    _opencode_start_sweep(launch, project_root)
     env = launch.launch_env.materialize()
     return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
+
+
+def _purge_display(item_or_kept, plan_root: str) -> str:
+    shown = getattr(item_or_kept, "display")
+    if shown.startswith("oc-"):
+        root = getattr(item_or_kept, "root", "")
+        return (_home_relative(root) + "/" + shown) if root else shown
+    return "PROFILE/" + shown
+
+
+def _home_relative(path: str) -> str:
+    home = str(pathlib.Path.home())
+    return "~" + path[len(home):] if path == home or path.startswith(home + os.sep) else path
+
+
+def _purge_report(plan, outcome: str, dry_run: bool, failed=(), extra=None) -> dict:
+    report = {
+        "profile": plan.profile, "dry_run": dry_run, "outcome": outcome,
+        "remove": [{"path": _purge_display(i, ""), "class": i.cls, "files": i.files, "bytes": i.bytes}
+                   for i in plan.remove],
+        "keep": [dict({"path": _purge_display(k, ""), "reason": k.reason},
+                      **({"hint": "chmod-u-rwx"} if k.reason == "unreadable" else {}))
+                 for k in plan.keep],
+        "referenced_runs": [dict(r, project=_home_relative(r["project"])) for r in plan.referenced_runs],
+        "stores_not_visited": [dict(r, project=_home_relative(r["project"])) for r in plan.stores_not_visited],
+        "failed": [{"path": "PROFILE/" + d if not d.startswith("oc-") else d, "reason": r} for d, r in failed],
+        "truncated": plan.truncated,
+    }
+    if extra:
+        report.update(extra)
+    return report
+
+
+def _printable(text: str) -> str:
+    """Entry names come from the filesystem; escape anything that could move the
+    cursor or rewrite earlier output in a terminal."""
+    return "".join(c if c.isprintable() else "\\x%02x" % ord(c) if ord(c) < 256 else "\\u%04x" % ord(c)
+                   for c in text)
+
+
+def _print_purge_text(report: dict) -> None:
+    print("quoin: opencode purge %s: %s" % (report["profile"], report["outcome"]))
+    blocks = (
+        ("remove", [("%s  [%s, %d files, %d bytes]" % (r["path"], r["class"], r["files"], r["bytes"]))
+                    for r in report["remove"]]),
+        ("keep", [line for r in report["keep"] for line in (
+            ["%s  [%s]" % (r["path"], r["reason"])]
+            + (["run: chmod -R u+rwx %s" % shlex.quote(r["path"])] if r.get("hint") else []))]),
+        ("referenced runs (removed by purge)",
+         ["%s  task %s in %s (%s)" % (r["run_id"], r["task"], r["project"], r["referenced_by"])
+          for r in report["referenced_runs"]]),
+        ("not visited", ["%s  [%s]" % (r["project"], r["reason"]) for r in report["stores_not_visited"]]),
+        ("failed", ["%s  [%s]" % (r["path"], r["reason"]) for r in report["failed"]]),
+    )
+    for title, lines in blocks:
+        if lines:
+            print(title + ":")
+            for line in lines:
+                print("  " + _printable(line))
+    print("total: %d item(s), %d file(s), %d byte(s)%s" % (
+        len(report["remove"]), sum(r["files"] for r in report["remove"]),
+        sum(r["bytes"] for r in report["remove"]), "; walk truncated" if report["truncated"] else ""))
+
+
+def _cmd_opencode_purge(args: argparse.Namespace) -> int:
+    """`quoin opencode purge`: delete a profile's stored data, keeping credentials."""
+    import time as _time  # noqa: PLC0415
+
+    from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
+
+    as_json = bool(args.json)
+
+    def show_refusal(exc, plan=None) -> int:
+        blocking = [
+            {{"live-lock": "task", "store-unchecked": "store"}.get(b.reason, "run_id"):
+             (_home_relative(b.run_id_or_task) if b.reason == "store-unchecked" else b.run_id_or_task),
+             "project": _home_relative(b.project), "reason": b.reason,
+             **({"pid_file": b.pid_file} if b.pid_file else {})}
+            for b in exc.blocking
+        ]
+        if as_json:
+            body = _purge_report(plan, "refused", args.dry_run) if plan is not None else {"profile": args.profile}
+            body.update({"outcome": "refused", "code": exc.code, "message": exc.message, "blocking": blocking})
+            print(json.dumps(body, sort_keys=True))
+        else:
+            print("quoin: opencode purge: %s: %s" % (exc.code, exc.message), file=sys.stderr)
+            for item in blocking:
+                print("quoin: opencode purge: blocked by %s" % " ".join("%s=%s" % kv for kv in sorted(item.items())),
+                      file=sys.stderr)
+        return 2
+
+    try:
+        adapter = profile_dirs.adapter_root(os.environ, pathlib.Path.home())
+        extra = pathlib.Path(args.project_root).resolve() if args.project_root else None
+        plan = retention.plan_purge(
+            adapter_root=adapter, profile=args.profile, extra_project=extra, env=os.environ,
+            uid=os.getuid(), table=proctree.snapshot(), now=_time.time(),
+        )
+    except retention.PurgeRefused as exc:
+        return show_refusal(exc)
+    except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
+        print("quoin: opencode purge failed: %s" % type(exc).__name__, file=sys.stderr)
+        return 3
+
+    def emit(report: dict) -> None:
+        if as_json:
+            print(json.dumps(report, sort_keys=True))
+        else:
+            _print_purge_text(report)
+
+    if args.dry_run:
+        emit(_purge_report(plan, "planned" if plan.remove else "nothing-to-do", True))
+        return 0
+    if not args.yes:
+        exc = retention.PurgeRefused("purge-confirm-required")
+        if not as_json:
+            _print_purge_text(_purge_report(plan, "planned", False))
+        return show_refusal(exc, plan)
+    incomplete = retention.purge_incomplete(plan)
+    if not plan.remove:
+        emit(_purge_report(plan, "partial" if incomplete else "nothing-to-do", False))
+        return 1 if incomplete else 0
+    result = retention.execute(plan, uid=os.getuid())
+    done = retention.Plan(plan.profile, "purge", result.removed, plan.keep + result.left,
+                          plan.referenced_runs, plan.stores_not_visited, plan.truncated)
+    partial = bool(result.failed) or bool(result.left) or incomplete
+    emit(_purge_report(done, "partial" if partial else "purged", False, failed=result.failed))
+    return 1 if partial else 0
+
+
+def _opencode_start_sweep(launch, project_root) -> None:
+    """Age out old profile storage just before the TUI starts; never blocks the start."""
+    try:
+        import time as _time  # noqa: PLC0415
+
+        from quoin.opencode_adapter import profile_dirs, proctree, retention  # noqa: PLC0415
+
+        if launch.retention is None or launch.profile_root is None or launch.retention.empty:
+            return
+        retention.sweep(
+            dirs=profile_dirs.ProfileDirs.at(launch.profile_root), project_root=project_root,
+            policy=launch.retention, now=_time.time(), uid=os.getuid(), profile=launch.profile,
+            table=proctree.snapshot(),
+        )
+    except Exception:  # noqa: BLE001 - the sweep never refuses a start
+        return
 
 
 def _make_opencode_driver(project_root):
@@ -2454,6 +2742,7 @@ _WORKFLOW_ONLY_FLAGS = (
     ("--from-discover", "from_discover", False), ("--max-critic-rounds", "max_critic_rounds", None),
     ("--test-command", "test_command", None), ("--test-include", "test_include", None),
     ("--test-timeout", "test_timeout", None), ("--rerun-from", "rerun_from", None), ("--adopt", "adopt", None),
+    ("--accept-unverified-policy", "accept_unverified_policy", False),
 )
 
 
@@ -2469,6 +2758,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
     from quoin import supervisor as _supervisor  # noqa: PLC0415
     from quoin.opencode_adapter import driver as _driver  # noqa: PLC0415
     from quoin.opencode_adapter import phase_loop, run_hooks, runstore  # noqa: PLC0415
+    from quoin.opencode_adapter import profile_dirs as _profile_dirs  # noqa: PLC0415
 
     project_root = pathlib.Path(args.project_root).resolve()
     ident = {
@@ -2526,7 +2816,10 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                 source_dir = mark = candidate = listing = state_root = None
                 try:
                     drv = _make_opencode_driver(project_root)
-                    state_root = getattr(drv, "state_root", None)
+                    try:
+                        state_root = _profile_dirs.state_root_for(drv, args.profile)
+                    except ValueError:
+                        state_root = None
                     request = _driver.RunRequest(
                         project_root=project_root, task=args.task, stage=args.stage,
                         phase=args.phase, profile=args.profile, budget=args.budget,
@@ -2608,6 +2901,7 @@ def _workflow_options(args: argparse.Namespace):
         max_relaunch=args.max_relaunch, halt_on_abort=bool(args.halt_on_abort), budget=args.budget,
         test_command=shlex.split(args.test_command) if args.test_command else None,
         test_include=tuple(args.test_include or ()), test_timeout=args.test_timeout,
+        accept_unverified_policy=bool(args.accept_unverified_policy),
     )
 
 
@@ -2692,9 +2986,14 @@ def _cmd_run_opencode_workflow(args: argparse.Namespace) -> int:
                         project_root, args.task, args.profile, evaluate=_handoff_evaluator(project_root),
                     )
                     drv = _make_opencode_driver(project_root)
+                    requested_policy = (
+                        (lambda: _handoff_policy_evaluator(project_root)(options.profile))
+                        if options.continue_ else None
+                    )
                     coord = workflow.Coordinator(
                         drv, project_root, args.task, options, source_dir=source_dir, cancel=cancel,
                         scope=scope, scope_source=scope_source, backoff_fn=_opencode_backoff,
+                        requested_policy=requested_policy,
                     )
                     coord.begin()
                     summary = coord.run_items(coord.sequence(coord.load_state()))
@@ -3433,6 +3732,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Mask endpoint hosts, host lists, keychain accounts and the output location.",
     )
     config_explain_p.add_argument("--json", action="store_true", help="Print JSON instead of text.")
+    config_explain_p.add_argument(
+        "--run",
+        metavar="RUN_ID",
+        help="Show the effective-configuration record stored for a run instead of evaluating now.",
+    )
+    config_explain_p.add_argument(
+        "--export",
+        action="store_true",
+        help="Also write the live effective-configuration record under the profile's exports directory.",
+    )
 
     config_compile_p = opencode_config_sub.add_parser(
         "compile",
@@ -3527,6 +3836,28 @@ def main(argv: list[str] | None = None) -> int:
     status_target.add_argument("--run-id", help="Report this run id instead of a task's latest run.")
     opencode_status_p.add_argument("--json", action="store_true", help="Print the report as JSON.")
 
+    opencode_purge_p = opencode_sub.add_parser(
+        "purge",
+        description=(
+            "Delete a runtime profile's stored data: its OpenCode data and state (including the session "
+            "database), cache, temporary files, exports, start records, test and window files, snapshots, "
+            "crash files, compiled configuration and the run sidecars of this profile in every project it "
+            "was used in. Kept: the profile stamp, the project index, auth.json, mcp-auth.json and the npm "
+            "registry file. Task folders, workflow state, continuation records and gate files under "
+            ".workflow_artifacts are never touched. Refuses while a run of the profile is active. Deleting "
+            "needs --yes; --dry-run lists without deleting."
+        ),
+        help="Delete a runtime profile's stored data (credentials are kept)",
+    )
+    opencode_purge_p.add_argument("--profile", required=True, help="Runtime profile whose storage to purge.")
+    opencode_purge_p.add_argument(
+        "--project-root", default=None,
+        help="Also visit this project's run store when the profile's project index does not list it.",
+    )
+    opencode_purge_p.add_argument("--dry-run", action="store_true", help="List what would be removed and kept; delete nothing.")
+    opencode_purge_p.add_argument("--yes", action="store_true", help="Confirm the deletion.")
+    opencode_purge_p.add_argument("--json", action="store_true", help="Print the result as one JSON object.")
+
     opencode_start_p = opencode_sub.add_parser(
         "start",
         description=(
@@ -3601,6 +3932,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     opencode_test_run_p.add_argument("--task", required=True, help="Task name.")
     opencode_test_run_p.add_argument("--stage", type=int, default=None, help="Stage number for a staged task.")
+    opencode_test_run_p.add_argument(
+        "--profile", default=None,
+        help="Runtime profile whose storage the run uses; defaults to the profile recorded for the task. "
+             "Ignored inside an agent shell, which already carries its profile.",
+    )
 
     opencode_handoff_p = opencode_sub.add_parser(
         "handoff",
@@ -4037,6 +4373,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Only with --workflow: continue a started workflow from its state or continuation record.",
     )
     run_p.add_argument(
+        "--accept-unverified-policy", action="store_true",
+        help=(
+            "Only with --workflow --continue: accept the policy of a recorded run that has no "
+            "effective-config record as unknown. A recorded policy narrower than the requested one is still refused."
+        ),
+    )
+    run_p.add_argument(
         "--no-pause", action="store_true",
         help="Only with --workflow: do not stop for review after the plan and review gates.",
     )
@@ -4116,6 +4459,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_probe(args)
         if args.opencode_command == "status":
             return _cmd_opencode_status(args)
+        if args.opencode_command == "purge":
+            return _cmd_opencode_purge(args)
         if args.opencode_command == "start":
             return _cmd_opencode_start(args)
         if args.opencode_command == "gate":

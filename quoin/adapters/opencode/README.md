@@ -186,11 +186,23 @@ no live OpenCode run or corporate gateway has been qualified.
 
 ### Commands
 
-- `quoin opencode config explain [--profile NAME] [--project-root PATH] [--redact] [--json]`
+- `quoin opencode config explain [--profile NAME] [--project-root PATH] [--redact] [--json] [--run RUN_ID] [--export]`
   shows how the layers resolve, which roles are blocked and why, and where the
   compiled files would go. `--redact` masks endpoint hosts, keychain accounts
-  and the output location. Exit 0 when compilable, 1 when a blocking finding
-  remains, 2 for configuration or usage errors.
+  and the output location. The result ends with an effective-config section:
+  the record a launch of this profile would store (digest, sections still
+  pending, entry counts by kind and verdict, masked credential kinds,
+  environment names and storage directories), one line per inspected
+  configuration entry (verdict, kind, layer, entry token, code) and the first
+  refusal a launch would hit. It is computed the way a launch computes it but
+  creates no directory and resolves no credential; the record is always
+  redacted, with or without `--redact`. `--run RUN_ID` prints the record a
+  stored run kept instead of evaluating now, so it works even when the
+  configuration no longer evaluates; it exits 2 when the run or its record is
+  missing. `--export` also writes the live record to
+  `explain-DIGEST12.json` under the profile's `exports` directory (directory
+  0700, file 0600) and names the file on stderr. Exit 0 when compilable, 1
+  when a blocking finding remains, 2 for configuration or usage errors.
 - `quoin opencode config compile --profile NAME [--project-root PATH] [--output DIR] [--check] [--allow-unqualified]`
   writes the compiled pair (see file locations). `--check` writes nothing and
   reports whether the files on disk match a fresh build. `--allow-unqualified`
@@ -326,6 +338,118 @@ The work profile is not yet supported: no corporate gateway has been
 qualified, and every gateway value in `decisions.md` is still `not set`. The
 personal OpenRouter profile is the only one `import-preview` produces.
 
+### Managed isolation, destinations and repositories
+
+A profile that sets `isolation: managed` (from the profile, the project file, or
+the trusted managed policy) launches only when this machine carries an isolation
+declaration that is attested by a root-owned file. The declaration describes how
+the profile was set up; it does not prove the operating system enforces it, and
+the work profile is still not supported.
+
+**The attestation file.** It lives at one fixed path beside the trusted managed
+policy: `/Library/Application Support/quoin/opencode/isolation-attestation.json` on
+macOS and `/etc/quoin/opencode/isolation-attestation.json` elsewhere. No
+environment variable, flag or project value can move it. The file and every
+directory above it must be owned by root and not writable by group or others, and
+nothing is followed through a symbolic link. The invoking user must not be root.
+The file is a closed JSON object:
+
+| Key | Meaning |
+|---|---|
+| `attestation_format` | `1` |
+| `environment` | `container`, `vm` or `managed-os-user` |
+| `issuer` | free text of at most 256 characters; only a digest is ever recorded |
+| `boundary` | `filesystem`, `secrets` and `process_env` booleans, and `egress`: `firewall`, `proxy` or `none` |
+| `approved_egress_hosts` | optional list of host names the boundary lets through |
+| `not_after` | optional date or timestamp after which the declaration is expired |
+
+The declaration counts only when the filesystem, secrets and process-environment
+boundaries are all declared and egress is `firewall` or `proxy`, it has not
+expired, one independent corroboration agrees with the declared environment (a
+`.dockerenv` or `.containerenv` marker or a container cgroup name; a hypervisor
+vendor name or, on macOS, the hypervisor sysctl; or, on macOS, a root-owned
+managed preferences file for the invoking user), and no other profile is visible
+to this one on the same account. A probe that cannot read something reports it as
+missing evidence, never as an error. Missing evidence tokens:
+`attestation-missing`, `attestation-invalid`, `attestation-not-root-owned`,
+`attestation-chain-writable`, `invoking-user-is-root`, `attestation-expired`,
+`attestation-incomplete`, `corroboration-missing`, `opposite-profile-present`.
+
+**Launch policy refusals.** Every refusal is raised before a process starts, a
+profile directory is created or a credential is resolved, with the category
+`policy-denial` and a detail token:
+
+| Code | When | Detail |
+|---|---|---|
+| `isolation-required-unverified` | effective isolation is managed and the attestation is not verified | the first missing evidence token |
+| `repository-not-approved` | the project root (or a workspace given to the driver) is not under an approved root | `policy-evaluation-failed` when the check itself failed |
+| `approved-repositories-unset` | managed isolation and the profile approves no repository roots | none |
+| `allowed-hosts-unset` | a work profile sets no allowed hosts | none |
+| `destination-not-approved` | a provider, registry or other destination host is not approved | `host-not-allowed`, `host-denied`, `host-unparseable`, `registry-not-approved`, `registry-unreadable`, `registry-unparseable`, `policy-evaluation-failed` |
+| `web-tools-denied` | web tools are not denied in the compiled configuration, or allowed without approval | `posture-missing`, `not-approved` |
+| `mcp-remote-denied` | a remote MCP server names a host that is not approved | `host-not-allowed`, `host-unparseable` |
+| `proxy-route-not-approved` | the proxy a provider routes through is not an approved host | `host-not-allowed`, `host-unparseable` |
+| `destination-identity-mismatch` | a provider endpoint presented another identity | `name-mismatch`, `untrusted-certificate`, `pin-mismatch`, `address-outside` |
+| `destination-unverifiable` | the identity could not be checked | `dns-failed`, `dns-timeout`, `connect-failed`, `proxy-refused`, `proxy-unreachable`, `ca-file-unreadable`, `tls-failed`, `check-error`, `host-unparseable`, `reserved-name` |
+| `destination-plaintext` | a provider uses plain http beyond this machine while the identity check is required | none |
+
+Approval is by host, never by provider id: a provider named like an allowed host
+is not approved by its name. `allowed_hosts` approves only from the profile or the
+trusted managed policy; a project file can narrow it, never approve.
+
+**Enforcement table.** The record lists each control with a layer and a status:
+`enforced` (Quoin refuses or checks it), `delegated-verified` or
+`delegated-unverified` (a duty the managed boundary carries, with or without an
+attestation), `not-enforced`, or `not-provided` (`launcher-proxy` and
+`brokered-registry` do not exist). Shell egress, redirects, DNS after launch,
+opposite-profile files, profile config edits, executables on `PATH`, keychain
+access, the child trust store and, under work with package installs allowed, the
+global npm configuration are boundary duties. When the destination census could
+not be built on a profile that requires no network control, the network section
+reads `status: unavailable` and the four network-step rows read `not-enforced`.
+
+**Identity check.** When the effective `network.identity_check` is `required`
+(the work default; a personal profile may set it), each provider endpoint is
+contacted at launch: names are resolved with a timeout, the connection goes to a
+checked address (restricted to `network.allowed_addresses` when set), the TLS
+handshake verifies the approved host name against the provider `ca_file` or the
+system store, and `network.pins` compare the leaf certificate fingerprint. Through
+an approved proxy the name is checked end to end over a CONNECT tunnel and address
+ranges are not checked, because the proxy resolves. Names under `.invalid` are
+refused without a lookup. Loopback endpoints are recorded as `loopback` and not
+contacted. `identity_check: off` is accepted only from the profile or the trusted
+managed policy. An identity check through a proxy that requires credentials is not
+supported: the CONNECT request carries no proxy credentials, and a 407 refuses
+`destination-unverifiable` under `identity_check: required`; set the profile's
+identity check or use a non-authenticating proxy. The check does not prove that the child uses the proxy, and the
+provider `ca_file` is not passed to the child. Observations (address count,
+certificate fingerprint prefix) are stored beside the record, not inside its
+digest, because certificates rotate and DNS answers change.
+
+**Repositories.** The real path of the project root must lie under an approved
+`repositories.allowed_roots` entry. A workspace supplied to the driver, such as a
+sibling git worktree, must too, so list each worktree parent. The read-only
+snapshot the launcher makes for critic and review workflow phases is a copy of the
+already-checked project and needs no extra root; approving the quoin state
+directory is never required.
+
+**Doctor.** With no `--profile` the doctor adds one `isolation-verified` or
+`isolation-unverified` finding at `info` severity, so a plain `quoin opencode
+doctor` keeps its exit code on a machine that manages nothing. Under `--profile`
+the finding is a warning for a work or managed profile. A profile that would be
+refused also reports `launch-refused` with the code, `approved-repositories-unset`
+for a work profile that approves no roots, `enforcement-layers`, and
+`egress-shell-not-enforced`; `launch-check-unavailable` reports a check that could
+not be evaluated offline.
+
+Limitations. Container corroboration through `/proc/1/cgroup` rarely matches on
+cgroup v2 with a private namespace (`0::/`), so such hosts need a `.dockerenv` or
+`.containerenv` marker. The npm global and builtin configuration is not censused.
+The opposite-profile probe reads directories the environment selects, so it is
+corroboration, not enforcement; the managed boundary carries that duty. Under a
+user id with no password entry the managed-os-user corroboration is unavailable;
+the container and vm corroborations are unaffected.
+
 ### Qualification and the probe
 
 `quoin opencode probe` sends a short handshake to the model's gateway. It
@@ -369,7 +493,7 @@ these keys:
 - `native_provider` — profile provider id to native provider id.
 - `launch_requirements` — what a launcher must do:
   - `config_path_env` — the variable that carries the compiled file's path.
-  - `protected_keys` — the keys later config layers must not change: `$schema`, `model`, `small_model`, `agent`, `share`, `autoupdate`, `enabled_providers`, `provider`, `experimental.policies`.
+  - `protected_keys` — the keys later config layers must not change: `$schema`, `model`, `small_model`, `agent`, `share`, `autoupdate`, `enabled_providers`, `provider`, `experimental.policies`, `lsp`, `formatter`, `permission`.
   - `credential_env_required` — every `credential_env` name must be exported with a value.
 
 A launcher must:
@@ -404,6 +528,250 @@ and no `--workflow`) is still refused; a whole task runs through the
 coordinator described under "Workflow coordinator". The driver is verified
 offline against a fake executable only: no live OpenCode run has been verified,
 and the work profile is not made supported by anything here.
+
+### Profile storage and the launch environment
+
+Each profile has its own directory under the adapter state directory
+(`$XDG_STATE_HOME/quoin/opencode/PROFILE`, mode 0700), holding `data`, `state`,
+`cache` and `tmp` for the OpenCode child, plus the compiled configuration,
+snapshots, test results and workflow windows, and the `exports` directory that
+`config explain --export` writes to. A launched child gets
+`XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `TMPDIR` pointing into
+its own profile directory, `npm_config_cache` under `cache`, and runs with
+umask 077, so what it writes there is private to the user. The launcher's
+state-directory variable names the profile directory itself; a quoin command run
+inside that child reads and writes the same profile directory, including
+`config compile` and `config explain`, whose default output location follows
+it (the redacted location label in `config explain` output is a placeholder,
+not the literal path, when run under a launcher).
+
+The first launch writes a `profile.json` stamp recording the profile name and
+its classification, and every launch of that profile checks it: a profile whose
+classification changed refuses with `profile-stamp-mismatch`, a directory that
+is not private or a damaged stamp refuses with `profile-dir-unsafe`. A
+`projects.json` index in the same directory lists the projects that launched
+the profile. If it is damaged the launch refuses with `profile-dir-unsafe`;
+move the unreadable file aside and launch each project once again. Deleting it
+instead only means a purge undercounts projects until each has launched again.
+
+One process launches one profile and one classification. A second profile in
+the same process refuses with `profile-switch-in-process`. A child process is
+held to its launcher's profile on a best-effort basis: the latch is a launcher
+variable that an agent could unset, so keeping a child away from the other
+profile's directories remains a duty of the managed boundary, not of this
+check. Naming a different profile than a task's
+interrupted run with `quoin run` is not a resume: it starts a new run in that
+profile's own directories and continues no session of the other profile. The
+interrupted run stays resumable under its own profile until a newer run of the
+task replaces the task's latest-run pointer. An explicit resume of a stored run
+under another profile refuses with `resume-request-mismatch` and a `profile`
+detail, and `handoff` keeps refusing `profile-mismatch`.
+
+The child also gets flags that stop it fetching model catalogues, updating
+itself, sharing sessions, downloading language servers or loading code the
+profile did not configure. For a work profile all of them are set, the sharing
+and package settings of the profile decide the rest, and package installs are
+offline when the profile denies them. A personal profile gets the model-fetch
+and autoupdate flags, and the sharing flag only when the profile denies
+sharing. An inherited path variable that points into
+another profile's directories refuses with `env-path-outside-profile`.
+
+Snapshot, test and window state moved under the profile directory. Workflows
+started before this change fail closed and need to be configured again.
+
+### Logging, retention and purge
+
+Two content modes decide what Quoin's own run files hold. Under `metadata` (the
+default for a work project) the event sidecar, the run record and the
+checkpoint store lengths and 12-hex digests of redacted text instead of the
+text: text and reasoning parts, tool titles, tool error text, provider error
+messages and approval patterns. Tool names, statuses, ids, usage and outcomes
+stay readable, and the run record keeps only counts and a digest of the child's
+standard error. Under `summary` (the personal default) bounded, redacted text is
+kept. The digest is not a secrecy control: a short or guessable text that was
+not registered with the redactor can be confirmed offline by guessing it. The
+setting covers Quoin's files only. OpenCode's own log, its session database and
+its other runtime files (its state and other data subtrees; the list is not
+exhaustive) are outside it; they are covered by retention and purge.
+
+The effective-configuration record's retention section lists, per class, the
+profile-level origin (`default`, `profile`, `trusted-managed` or
+`managed-user-editable`) under `origin`, and the classes whose value came from
+the project's own scope under `project_origin`.
+
+A retention sweep runs once per process per profile when a new run starts and
+before an interactive session opens. It never refuses a launch. Per class, a
+unit older than its days setting is removed:
+
+| class | what | days key |
+|---|---|---|
+| runs | this project's run sidecars of the profile, plus empty record-less sidecars | `runs_days` |
+| tests, workflow, snapshots | the profile's test pins, window files and leftover snapshots | `runs_days` |
+| records | interactive-start records | `runs_days` |
+| cache, tmp | cached packages and downloaded binaries, temporary files | `cache_days` |
+| logs | OpenCode log files | `logs_days` |
+| crash | heap snapshots in the OpenCode log directory | `crash_days` |
+| exports | exported files | `exports_days` |
+
+The minimum is one day, and a null value keeps the class. A project's own value
+applies to that project's units; every other unit uses the profile value. A
+cache unit is a whole immediate-child package directory (a manifest, its lock
+file and `node_modules` together), aged by the newest file or directory in it. A
+swept cache is not fetched again when the profile uses offline package policy
+(`package_install: deny`) or a network policy without the download host, so the
+next run loses that package or tool binary; set `cache_days` to null to keep the
+cache. The session database, `auth.json`, `mcp-auth.json`, `state/npmrc`, the
+profile stamp and the project index are never swept.
+
+The sweep keeps evidence: a run that a workflow state, continuation record or
+task pointer of an unfinished task refers to, a task's test and window files
+while it is unfinished, snapshots while the project has a live task lock, and
+every unit of a project whose run store cannot be read. A task counts as
+finished only after its folder moved under a `finalized` directory. Cache and
+temporary files are skipped while another run of the profile is active. A run
+whose liveness cannot be decided (no attempt yet, a staged resume attempt, no
+process table) is held for its own deadline plus an hour and then treated as
+finished. An open interactive session holds no run record and is not detected;
+close it before a purge.
+
+`quoin opencode purge --profile P [--project-root R] [--dry-run] [--yes] [--json]`
+removes everything under the profile's storage directory except the profile
+stamp, the project index, `auth.json`, `mcp-auth.json` and `state/npmrc`, and
+removes this profile's run sidecars in every project it was used in. Task
+folders, workflow state, continuation records and gate files are never touched.
+`--dry-run` lists what would go and what is kept; deleting needs `--yes`
+(without it the command prints the plan and exits 2). Exit codes: 0 done, 1 some
+items could not be removed or were kept as foreign-owned or unreadable, or cut short by the walk budget, 2 refused, 3 failed. Refusals: `purge-run-active`
+(names each blocking run or lock and its reason; a stale supervisor pid file,
+whose process is gone but whose pid was reused, is cleared by deleting the named
+file; a project store that could not be read or is unsafe is named with `store-unchecked`; fix its permissions or remove the project from the index by deleting it), `purge-inside-launch`, `purge-profile-invalid`, `purge-profile-unsafe`
+and `purge-confirm-required`. After a purge, a continuation from a purged run
+refuses with the "has no effective-config record" message; that is expected. A
+later launch of the profile with the other classification still refuses because
+the stamp is kept.
+
+An entry that could not be removed because it is unreadable carries a hint in the
+JSON output (`chmod-u-rwx`) and a text line of the form `run: chmod -R u+rwx PATH`;
+run it and purge again. The sweep runs on every new-run launch (once per process per
+profile, not on resume); there is no persisted last-sweep stamp, so a launch never
+skips it for recency.
+
+For what the environment must provide around a work profile (mounts, secrets,
+egress, attestation) and what Quoin verifies, see
+[managed-work-deployment.md](managed-work-deployment.md). The work profile is
+not yet supported on an unmanaged machine.
+
+### Configuration inventory
+
+Before every launch the driver reads every configuration source OpenCode would
+read for the child (global and project configuration, `.opencode` directories,
+managed files and preferences, the profile's `auth.json` and session database,
+and the `OPENCODE_CONFIG*` variables) into one inventory and judges each entry.
+Under a work profile anything that could change which models run, add code or
+widen permissions is refused before the process starts; under a personal
+profile the same entries are recorded and only the few listed below are
+refused. A refusal names the code, the layer and an entry token (a short plain
+name, or an `h-` digest when the name is long or secret-shaped), never a path
+or a value. The same inventory feeds `config explain`, the doctor findings
+`inventory-refused` and `inventory-clean`, and the record stored with every run
+and every interactive start. Two behaviours depend on the profile policy: an
+MCP server, language server or formatter is recorded for a personal profile
+unless the profile explicitly denies it, and a provider block is refused when
+it names a provider outside the compiled set (for a provider inside the set, a
+global block is refused for work only).
+
+An allow-listed MCP server is admitted by name only when its definition comes
+from a file the user controls (the compiled, global, home `.opencode` or
+managed layers); a definition of the same name in a project file is refused,
+because the project could otherwise change the command that runs. Definitions
+from the project `.opencode` directory or `OPENCODE_CONFIG_DIR` are refused the
+same way, and a project `enabled` toggle is judged on the allow-list alone
+(it cannot change the command).
+
+Agent and command frontmatter is read by a small, strict scanner rather than a
+YAML parser. It closes the block where OpenCode's loader does (the first later
+line that starts with `---`) and accepts printable ASCII only: any non-ASCII
+character (including non-breaking and other Unicode spaces) or control
+character anywhere in the block makes the file unknown. So do constructs
+outside its grammar: an indented root mapping, escaped or non-identifier keys,
+a key whose colon is not followed by a space, a language-tagged `---yaml`
+fence, a `...` document end followed by anything but blank or comment lines,
+a quoted or flow value that does not close on its own line or has text glued
+after it, block, flow, anchor or tag values on `model`, a `model` that is
+`~` or `null`, a boolean, a number or a date, and an empty `model` followed
+(after any blank or comment lines) by an indented value, a bare carriage
+return on a line with a second colon, and a comment line holding a bare
+carriage return. An unquoted `model` value containing a colon (a Bedrock id
+ending `-v2:0`, a local-server id such as `name:8b`) does not make the file
+unknown by itself, but OpenCode reparses such a file after a parse error and
+keeps the raw value, comment included, and any indented, comment or
+whitespace-only line after it, with its whitespace. The scanner therefore
+reports the value, the value without its comment and, when such a following
+line exists, one more reading that can never be an allowed model, and the
+file is refused with the model code under both profiles unless every reading
+is an allowed model. Quote a `model` value that contains a colon to give it a
+single reading; the model refusal text repeats this. These readings are
+checked even when the file is otherwise unknown, so an unknown file can still
+be refused with the model code under personal; the readings of an unknown
+file are best effort, because its later lines may not be read the way OpenCode
+reads them. Any other unknown file is refused for work with
+`inventory-agent-unreadable` and recorded for personal. OpenCode's loader (gray-matter 4.0.3) caches by file
+content, so a second load of identical content that failed the first time can
+return empty data without a retry; the scanner over-reports in that case and
+policy never relies on an agent's own `permission: deny` narrowing.
+Ordinary files (one `key: value` per line, comments, blank lines, CRLF line
+ends, block-scalar descriptions, nested `permission` and `tools` blocks) read
+as known. Because of the ASCII rule, a work profile refuses an agent or command
+whose description contains, for example, an accented letter; keep work-profile
+agent frontmatter in ASCII.
+
+A symlinked tool file or agent directory, and a markdown tree larger than the
+scan bound (files and directories both count), are counted rather than
+skipped; a directory that cannot be listed marks its source unreadable, and a
+tree past the bound marks it truncated. Under the work profile either refuses
+the launch. A personal
+profile can also be refused by a global `tools` toggle, `disabled_providers`,
+an out-of-profile provider or model, or a legacy TOML file; remove or move the
+entry, or run the launch under a profile whose policy permits it.
+
+The table is generated from the verdicts the code returns for a representative
+entry of each kind under a default work and a default personal profile; a
+docs test compares it with the code.
+
+| Code | Work | Personal | Meaning |
+|---|---|---|---|
+| `inventory-plugin` | refused | refused | a plugin is configured, which could hook permission handling |
+| `inventory-provider` | refused | refused | a provider block or enabled-provider entry is not controlled by the profile; add the provider to the profile or remove the block |
+| `inventory-disabled-providers` | refused | refused | disabled_providers changes which providers load and is not allowed |
+| `inventory-mcp-local` | refused | recorded | a local MCP server is configured that the profile policy does not allow |
+| `inventory-mcp-remote` | refused | recorded | a remote MCP server is configured that the profile policy does not allow |
+| `inventory-tool` | refused | refused | a custom tool is defined, which would run arbitrary code |
+| `inventory-lsp` | refused | recorded | a language server entry is configured outside the compiled configuration |
+| `inventory-formatter` | refused | recorded | a formatter entry is configured outside the compiled configuration |
+| `inventory-agent-permission` | refused | recorded | an agent defines its own permission or tool rules |
+| `inventory-agent-unreadable` | refused | recorded | an agent or command definition could not be read completely, so its model and rules are unknown |
+| `inventory-config-permission` | refused | recorded | a top-level permission block is configured outside the compiled configuration |
+| `inventory-remote-config` | refused | recorded | remote or account configuration is present for this profile |
+| `inventory-account-busy` | refused | recorded | the profile's OpenCode session database is locked by another process; close other OpenCode sessions using this profile and retry |
+| `inventory-remote-instructions` | refused | recorded | instructions or skills are loaded from a URL |
+| `inventory-unknown-key` | refused | recorded | a configuration key the adapter does not recognise is set |
+| `inventory-legacy-config` | refused | refused | a legacy TOML configuration file is present |
+| `agent-model-outside-allowlist` | refused | refused | an agent selects a model that is not in the profile's allowed models (if the value contains a colon, quote it) |
+| `command-model-outside-allowlist` | refused | refused | a command selects a model that is not in the profile's allowed models (if the value contains a colon, quote it) |
+| `config-env-opencode-config` | refused | stripped | OPENCODE_CONFIG points at a configuration file other than the compiled one |
+| `config-env-opencode-config-dir` | refused | stripped | OPENCODE_CONFIG_DIR adds a configuration directory |
+| `config-env-opencode-config-content` | refused | stripped | OPENCODE_CONFIG_CONTENT injects configuration |
+| `executable-fetch-possible` | prevented-offline | recorded | a configuration directory is writable and unlocked, so a dependency install could fetch executable code |
+| `executable-fetch-detected` | run fails | run fails when package installs are denied | an executable package was written under node_modules during the run |
+| `config-layer-unreadable` | refused | recorded | a configuration source could not be read completely |
+
+Executable packages: a work profile that denies package installs runs with
+`OPENCODE_PURE=1` and `npm_config_offline=true`, so a dependency install in a
+writable, unlocked configuration directory fetches nothing; those directories
+are recorded as `prevented-offline`. A headless run additionally compares the
+watched directories before and after each attempt and fails the attempt as a
+configuration failure if a regular file appeared or changed under
+`node_modules`. An interactive start has the prevention only.
 
 ### Phase runs
 
@@ -754,8 +1122,22 @@ read, so other runtimes' transcripts and session files are not opened, and a
 new native session is started. Refusals: `continuation-missing`,
 `continuation-invalid`, `continuation-legacy-format` (only older-format files
 exist), `task-finalized`, `continuation-state-mismatch`,
-`continuation-artifact-changed`, `profile-mismatch`, `classification-mismatch`
-and `policy-widened`.
+`continuation-artifact-changed`, `profile-mismatch`, `classification-mismatch`,
+`policy-widened` and `scope-unverifiable`.
+
+When the OpenCode run that produced a continuation stored an effective-config
+record, loading the continuation also compares the policy that run used with
+the policy being requested now (the completed run that finished last is the one
+compared), and refuses `policy-widened` when the request is wider in any field,
+naming each as `effective_config.FIELD`. A run prepared before that record
+existed, or whose stored record lacks a profile, cannot be compared and refuses
+`scope-unverifiable`; the message names
+the exact command. To continue anyway, run the same command with
+`--accept-unverified-policy` (valid only with `--workflow --continue`): that
+accepts the policy of the compared run as unknown, is remembered for that run
+in the workflow state, and never overrides `policy-widened`. Once a newer run
+with a record completes, the normal comparison applies again. Records written
+by another runtime are not compared.
 
 ## Role boundaries
 
@@ -876,7 +1258,7 @@ Limits:
 
 ## Test runs
 
-`quoin opencode test-run --task TASK [--stage N]` runs the task's configured
+`quoin opencode test-run --task TASK [--stage N] [--profile NAME]` runs the task's configured
 test command against a throwaway copy of the working tree and prints one JSON
 line (exit 0 `PASSED`, 1 `FAILED`, 2 refused). The command and the
 include directories (git-ignored subdirectories of the project) are fixed in the task's workflow state by a human-side
@@ -898,10 +1280,20 @@ must therefore run its tests again. Test-run does not take the task lock, since
 it runs inside a phase run that holds it; a busy file stops two test runs of the
 same task from overlapping.
 
+Outside the launcher, `test-run` keeps its results under a profile directory,
+so it needs to know the profile. It uses `--profile` when given. Otherwise it
+takes the profile the workflow recorded for the task (from the coordinator's
+settings, or else from the task's latest run) and trusts it only when that
+profile's directory stamp agrees with the classification the profile evaluates
+to now; if nothing is recorded it refuses with `profile-unknown`, and if the
+record or the stamp cannot be confirmed it refuses with
+`profile-selection-unverified` and asks for `--profile`. Inside the launcher the
+profile is the one the child was started with.
+
 The command runs with a scrubbed environment. Under the launcher it keeps only
 the basic variables the launcher lets through (path, home, locale and similar),
 which drops the launcher's own variables, provider credentials and proxy
-settings. Outside the launcher it removes only the launcher's own names. A
+settings, and it gets the profile's own state, cache and temporary directories. Outside the launcher it removes only the launcher's own names. A
 command that needs anything else, such as `PYTHONPATH`, sets it in its own
 argv, for example `env PYTHONPATH=src python -m pytest`, and a command that
 needs a proxy must set it the same way. Review entries carry no test result

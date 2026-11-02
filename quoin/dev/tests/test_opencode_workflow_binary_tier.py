@@ -32,6 +32,7 @@ def test_the_tier_names_why_it_is_skipped():
 @pytest.mark.skipif(SKIP_REASON is not None, reason=SKIP_REASON or "")
 def test_workflow_discover_launches_the_pinned_binary(tmp_path, monkeypatch, capsys):
     import _opencode_helpers as helpers
+    import _opencode_isolation_helpers as iso
     from quoin.opencode_adapter import driver, runstore
 
     helpers.install_loopback_guard(monkeypatch)
@@ -41,9 +42,11 @@ def test_workflow_discover_launches_the_pinned_binary(tmp_path, monkeypatch, cap
     with server_module.FakeProviderServer() as server:
         world, root = contract._driver_world(tmp_path, server.base_url, git=driver.NON_GIT_DISCOVERY_VERIFIED is not True)  # noqa: SLF001
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: world.home))
+        iso.launch_ready(world)
+        seams = iso.seams(tmp_path)
         env = {**os.environ, **world.env, "HOME": str(world.home),
                "OPENCODE_DISABLE_AUTOUPDATE": "1", "QUOIN_CORP_GW_API_KEY": "loopback-only-value"}
-        monkeypatch.setattr(cli, "_make_opencode_driver", lambda r: driver.OpenCodeDriver(r, env=env, home=world.home))
+        monkeypatch.setattr(cli, "_make_opencode_driver", lambda r: driver.OpenCodeDriver(r, env=env, home=world.home, **seams))
         monkeypatch.setattr(cli, "_opencode_backoff", lambda n: 0)
         (root / ".workflow_artifacts" / "wf-demo").mkdir(parents=True, exist_ok=True)
         code = cli.main(["run", "wf-demo", "--runtime", "opencode", "--project-root", str(root),

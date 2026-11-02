@@ -104,22 +104,10 @@ def _plain(tree: Any) -> Any:
     return tree
 
 
-def _read_and_parse(
-    path, file_label: str, max_bytes: int, nofollow: bool = False
-) -> Tuple[Any, os.stat_result]:
-    try:
-        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-        if nofollow:
-            flags |= getattr(os, "O_NOFOLLOW", 0)
-        with os.fdopen(os.open(path, flags), "rb") as handle:
-            info = os.fstat(handle.fileno())
-            if not stat.S_ISREG(info.st_mode):
-                raise OSError("not a regular file")
-            if info.st_size > max_bytes:
-                raise _fail(file_label, "file-too-large", limit=max_bytes)
-            raw = handle.read(max_bytes + 1)
-    except OSError:
-        raise _fail(file_label, "unreadable-file") from None
+def _parse_strict_bytes(raw: bytes, file_label: str, max_bytes: int) -> Any:
+    """The strict parse shared by every loader: size limit, byte-order mark,
+    UTF-8, duplicate keys, floats, non-finite numbers, nesting and big
+    integers. Returns the plain tree."""
     if len(raw) > max_bytes:
         raise _fail(file_label, "file-too-large", limit=max_bytes)
     if raw.startswith(b"\xef\xbb\xbf"):
@@ -149,7 +137,106 @@ def _read_and_parse(
         raise ConfigErrors(
             [make_error("duplicate-key", file_label, seg, "duplicate-key") for seg in dups]
         )
-    return _plain(tree), info
+    return _plain(tree)
+
+
+def _read_and_parse(
+    path, file_label: str, max_bytes: int, nofollow: bool = False
+) -> Tuple[Any, os.stat_result]:
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
+        if nofollow:
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise OSError("not a regular file")
+            if info.st_size > max_bytes:
+                raise _fail(file_label, "file-too-large", limit=max_bytes)
+            raw = handle.read(max_bytes + 1)
+    except OSError:
+        raise _fail(file_label, "unreadable-file") from None
+    return _parse_strict_bytes(raw, file_label, max_bytes), info
+
+
+def check_root_owned_chain(path, *, owner_uid: int, top, lstat=os.lstat) -> Optional[str]:
+    """Check every directory from `top` down to the parent of `path`.
+
+    Each must be a real directory (never a symbolic link), owned by
+    `owner_uid`, with no group or other write permission. Returns a closed
+    token (`chain-not-directory`, `chain-not-owned`, `chain-writable`) for the
+    first failure nearest `top`, or None. `top` is `/` in production.
+    """
+    top_text = os.path.normpath(os.fspath(top))
+    chain = []
+    current = os.path.dirname(os.path.normpath(os.fspath(path)))
+    while True:
+        chain.append(current)
+        if current == top_text:
+            break
+        parent = os.path.dirname(current)
+        if parent == current:
+            raise ValueError("path is not below the chain top")
+        current = parent
+    for directory in reversed(chain):
+        try:
+            info = lstat(directory)
+        except OSError:
+            return "chain-not-directory"
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            return "chain-not-directory"
+        if info.st_uid != owner_uid:
+            return "chain-not-owned"
+        if info.st_mode & 0o022:
+            return "chain-writable"
+    return None
+
+
+def _trusted_unreadable(file_label: str) -> ConfigErrors:
+    return ConfigErrors([make_error("invalid-json", file_label, "$", "trusted-policy-unreadable")])
+
+
+def read_trusted_json(
+    path, *, file_label: str, owner_uid: int, max_bytes: int = MAX_CONFIG_BYTES, lstat=os.lstat
+) -> Tuple[Optional[Any], Optional[str]]:
+    """Read the trusted policy file without ever following a link.
+
+    Returns ``(None, "absent")`` when nothing is there, ``(tree, None)`` for a
+    file whose owner and mode pass, and ``(tree, token)`` with token
+    `file-not-owned` or `file-writable` when the content is readable but not
+    trusted. A symbolic link, a non-regular object, an unreadable file or an
+    inode that changed between the two looks refuses with `ConfigErrors`.
+    """
+    try:
+        before = lstat(path)
+    except FileNotFoundError:
+        return None, "absent"
+    except NotADirectoryError:
+        return None, "absent"
+    except OSError:
+        raise _trusted_unreadable(file_label) from None
+    if not stat.S_ISREG(before.st_mode):
+        raise _trusted_unreadable(file_label)
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_NOFOLLOW", 0)
+        with os.fdopen(os.open(path, flags), "rb") as handle:
+            info = os.fstat(handle.fileno())
+            if not stat.S_ISREG(info.st_mode) or (info.st_dev, info.st_ino) != (
+                before.st_dev,
+                before.st_ino,
+            ):
+                raise OSError("file changed while opening")
+            if info.st_size > max_bytes:
+                raise _fail(file_label, "file-too-large", limit=max_bytes)
+            raw = handle.read(max_bytes + 1)
+    except OSError:
+        raise _trusted_unreadable(file_label) from None
+    tree = _parse_strict_bytes(raw, file_label, max_bytes)
+    if info.st_uid != owner_uid:
+        return tree, "file-not-owned"
+    if info.st_mode & 0o022:
+        return tree, "file-writable"
+    return tree, None
 
 
 def load_strict_with_stat(

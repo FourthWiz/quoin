@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Mapping, Optional, Sequence, Tuple
 
-from . import boundaries, gate, install, jsonio, paths, phase_loop, runstore
+from . import boundaries, gate, install, jsonio, paths, phase_loop, profile_dirs, runstore
 
 DEFAULT_MAX_BYTES = 512 * 1024 * 1024
 DEFAULT_MAX_FILES = 20000
@@ -765,7 +765,8 @@ def run_in_snapshot(
         try:
             snap = create(
                 root, task, request.stage, role="critic" if kind == "critic" else "reviewer",
-                source_dir=source_dir, state_root=drv.state_root, clock=clock,
+                source_dir=source_dir, state_root=profile_dirs.state_root_for(drv, request.profile),
+                clock=clock,
             )
         except SnapshotRefused as exc:
             return IsolatedRun(None, None, None, None, True, refusal=exc.code)

@@ -1,0 +1,6549 @@
+{
+ "minimal|narrow|managed-strict": {
+  "errors": [
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_hosts[0]",
+    "allowlist-broadening-host"
+   ]
+  ]
+ },
+ "minimal|narrow|managed-work": {
+  "errors": [
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_hosts[0]",
+    "allowlist-broadening-host"
+   ]
+  ]
+ },
+ "minimal|narrow|none": {
+  "errors": [
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_hosts[0]",
+    "allowlist-broadening-host"
+   ]
+  ]
+ },
+ "minimal|none|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [],
+   "excluded_providers": {
+    "local-gw": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "local-gw",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "absent",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "managed"
+     ],
+     "value": 250
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|none|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [],
+   "excluded_providers": {
+    "local-gw": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "local-gw",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "absent",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "managed"
+     ],
+     "value": 3600
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "127.0.0.1"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|none|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "local-gw"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "absent",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "127.0.0.1"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "local-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|personal|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [],
+   "excluded_providers": {
+    "local-gw": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "local-gw",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "personal",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "managed"
+     ],
+     "value": 250
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|personal|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [],
+   "excluded_providers": {
+    "local-gw": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "local-gw",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "personal",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "managed"
+     ],
+     "value": 3600
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "127.0.0.1"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|personal|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "local-gw"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "personal",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "127.0.0.1"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "local-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|unclassified|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [],
+   "excluded_providers": {
+    "local-gw": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "local-gw",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "missing",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "managed"
+     ],
+     "value": 250
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|unclassified|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [],
+   "excluded_providers": {
+    "local-gw": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "local-gw",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "missing",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "managed"
+     ],
+     "value": 3600
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "127.0.0.1"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|unclassified|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "local-gw"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "local-model": {
+     "model_id": "example-vendor/example-local",
+     "name": "local-model",
+     "provider": "local-gw",
+     "qualification_ref": "local:local-model"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "minimal",
+   "project_state": "missing",
+   "providers": {
+    "local-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_LOCAL_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "127.0.0.1",
+     "id": "local-gw",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "local-model"
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "127.0.0.1"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "local-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "minimal|work|managed-strict": {
+  "errors": [
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_providers[0]",
+    "allowlist-broadening"
+   ]
+  ]
+ },
+ "minimal|work|managed-work": {
+  "errors": [
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_providers[0]",
+    "allowlist-broadening"
+   ]
+  ]
+ },
+ "minimal|work|none": {
+  "errors": [
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_providers[0]",
+    "allowlist-broadening"
+   ]
+  ]
+ },
+ "personal|narrow|managed-strict": {
+  "errors": [
+   [
+    "personal-profile-for-work",
+    ".quoin/runtime.json",
+    "$.classification",
+    "personal-profile-for-work"
+   ],
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_hosts[0]",
+    "allowlist-broadening-host"
+   ]
+  ]
+ },
+ "personal|narrow|managed-work": {
+  "errors": [
+   [
+    "personal-profile-for-work",
+    ".quoin/runtime.json",
+    "$.classification",
+    "personal-profile-for-work"
+   ],
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_hosts[0]",
+    "allowlist-broadening-host"
+   ]
+  ]
+ },
+ "personal|narrow|none": {
+  "errors": [
+   [
+    "personal-profile-for-work",
+    ".quoin/runtime.json",
+    "$.classification",
+    "personal-profile-for-work"
+   ],
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_hosts[0]",
+    "allowlist-broadening-host"
+   ]
+  ]
+ },
+ "personal|none|managed-strict": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [],
+   "excluded_providers": {
+    "openrouter": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "openrouter",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "absent",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "managed"
+     ],
+     "value": 250
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|none|managed-work": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [],
+   "excluded_providers": {
+    "openrouter": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "openrouter",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "absent",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "managed"
+     ],
+     "value": 3600
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter.ai"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|none|none": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [
+    "openrouter"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "absent",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter.ai"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|personal|managed-strict": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [],
+   "excluded_providers": {
+    "openrouter": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "openrouter",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "personal",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "managed"
+     ],
+     "value": 250
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|personal|managed-work": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [],
+   "excluded_providers": {
+    "openrouter": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "openrouter",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "personal",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "managed"
+     ],
+     "value": 3600
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter.ai"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|personal|none": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [
+    "openrouter"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "personal",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter.ai"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|unclassified|managed-strict": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [],
+   "excluded_providers": {
+    "openrouter": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "openrouter",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "missing",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "managed"
+     ],
+     "value": 250
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|unclassified|managed-work": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [],
+   "excluded_providers": {
+    "openrouter": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "openrouter",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "missing",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "managed"
+     ],
+     "value": 3600
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter.ai"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "managed"
+     ],
+     "value": []
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "managed"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|unclassified|none": {
+  "canonical": {
+   "classification": "personal",
+   "effective_providers": [
+    "openrouter"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "personal-model": {
+     "model_id": "example-vendor/example-model",
+     "name": "personal-model",
+     "provider": "openrouter",
+     "qualification_ref": "local:personal-model"
+    }
+   },
+   "profile_classification": "personal",
+   "profile_name": "personal",
+   "project_state": "missing",
+   "providers": {
+    "openrouter": {
+     "ca_file": null,
+     "credential_env": "QUOIN_OPENROUTER_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "openrouter.ai",
+     "id": "openrouter",
+     "kind": "openrouter",
+     "name": null,
+     "use_env_proxy": false
+    }
+   },
+   "values": {
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "personal-model"
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter.ai"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": [
+      "openrouter"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "default"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "default"
+     ],
+     "value": []
+    },
+    "policy.external_writes": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    },
+    "policy.isolation": {
+     "origin": [
+      "default"
+     ],
+     "value": "convenience"
+    },
+    "policy.sharing": {
+     "origin": [
+      "default"
+     ],
+     "value": "deny"
+    }
+   }
+  }
+ },
+ "personal|work|managed-strict": {
+  "errors": [
+   [
+    "personal-profile-for-work",
+    ".quoin/runtime.json",
+    "$.classification",
+    "personal-profile-for-work"
+   ],
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_providers[0]",
+    "allowlist-broadening"
+   ]
+  ]
+ },
+ "personal|work|managed-work": {
+  "errors": [
+   [
+    "personal-profile-for-work",
+    ".quoin/runtime.json",
+    "$.classification",
+    "personal-profile-for-work"
+   ],
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_providers[0]",
+    "allowlist-broadening"
+   ]
+  ]
+ },
+ "personal|work|none": {
+  "errors": [
+   [
+    "personal-profile-for-work",
+    ".quoin/runtime.json",
+    "$.classification",
+    "personal-profile-for-work"
+   ],
+   [
+    "allowlist-broadening",
+    ".quoin/runtime.json",
+    "$.policy.allowed_providers[0]",
+    "allowlist-broadening"
+   ]
+  ]
+ },
+ "work|narrow|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "denied"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "denied"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "work",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "project",
+      "managed"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b",
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "project"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|narrow|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "work",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "project"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "project"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|narrow|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "host-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "host-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "work",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "project"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "project"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|none|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "denied"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "denied"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "absent",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b",
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|none|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "absent",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|none|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw",
+    "corp-gw-b"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "absent",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw",
+      "corp-gw-b"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|personal|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "denied"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "denied"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "personal",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b",
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|personal|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "personal",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|personal|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw",
+    "corp-gw-b"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "personal",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw",
+      "corp-gw-b"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|unclassified|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "denied"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "denied"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "missing",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b",
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|unclassified|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "missing",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|unclassified|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw",
+    "corp-gw-b"
+   ],
+   "excluded_providers": {},
+   "findings": [
+    {
+     "blocking": true,
+     "code": "missing-classification",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "missing",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "profile"
+     ],
+     "value": 200
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "corp-gw",
+      "corp-gw-b"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|work|managed-strict": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "work",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "project"
+     ],
+     "value": 100
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "project"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "corp-gw-b",
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "project"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|work|managed-work": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "managed-not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "managed-not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "provider-ids-are-labels",
+     "subject": []
+    }
+   ],
+   "managed_present": true,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "work",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "project"
+     ],
+     "value": 100
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "project",
+      "managed"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile",
+      "managed"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "project"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ },
+ "work|work|none": {
+  "canonical": {
+   "classification": "work",
+   "effective_providers": [
+    "corp-gw"
+   ],
+   "excluded_providers": {
+    "corp-gw-b": "not-allowed"
+   },
+   "findings": [
+    {
+     "blocking": false,
+     "code": "provider-excluded",
+     "subject": [
+      "corp-gw-b",
+      "not-allowed"
+     ]
+    },
+    {
+     "blocking": false,
+     "code": "isolation-unverified",
+     "subject": []
+    },
+    {
+     "blocking": false,
+     "code": "no-managed-policy",
+     "subject": []
+    }
+   ],
+   "managed_present": false,
+   "models": {
+    "work-coder": {
+     "model_id": "example-vendor/example-coder",
+     "name": "work-coder",
+     "provider": "corp-gw",
+     "qualification_ref": "local:work-coder"
+    },
+    "work-planner": {
+     "model_id": "example-vendor/example-planner",
+     "name": "work-planner",
+     "provider": "corp-gw-b",
+     "qualification_ref": "local:work-planner"
+    }
+   },
+   "profile_classification": "work",
+   "profile_name": "work",
+   "project_state": "work",
+   "providers": {
+    "corp-gw": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_API_KEY",
+     "endpoint_family": "chat-completions",
+     "host_key": "gateway.example.invalid",
+     "id": "corp-gw",
+     "kind": "openai-compatible",
+     "name": "Corporate gateway",
+     "use_env_proxy": false
+    },
+    "corp-gw-b": {
+     "ca_file": null,
+     "credential_env": "QUOIN_CORP_GW_B_API_KEY",
+     "endpoint_family": "responses",
+     "host_key": "gateway-b.example.invalid",
+     "id": "corp-gw-b",
+     "kind": "openai-compatible",
+     "name": null,
+     "use_env_proxy": true
+    }
+   },
+   "values": {
+    "auxiliary_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "default_model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "integrations.backend": {
+     "origin": [
+      "profile"
+     ],
+     "value": "corp-gw"
+    },
+    "integrations.enabled": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "jira",
+      "slack"
+     ]
+    },
+    "integrations.mode": {
+     "origin": [
+      "profile"
+     ],
+     "value": "read-only"
+    },
+    "limits.max_context_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 128000
+    },
+    "limits.max_output_tokens": {
+     "origin": [
+      "profile"
+     ],
+     "value": 8192
+    },
+    "limits.max_run_seconds": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3600
+    },
+    "limits.max_tool_calls": {
+     "origin": [
+      "project"
+     ],
+     "value": 100
+    },
+    "limits.max_transient_retries": {
+     "origin": [
+      "profile"
+     ],
+     "value": 3
+    },
+    "policy.allowed_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "gateway-b.example.invalid",
+      "gateway.example.invalid"
+     ]
+    },
+    "policy.allowed_providers": {
+     "origin": [
+      "profile",
+      "project"
+     ],
+     "value": [
+      "corp-gw"
+     ]
+    },
+    "policy.cross_profile_fallback": {
+     "origin": [
+      "profile"
+     ],
+     "value": false
+    },
+    "policy.denied_hosts": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "untrusted.example.invalid"
+     ]
+    },
+    "policy.denied_providers": {
+     "origin": [
+      "profile"
+     ],
+     "value": [
+      "retired-gw"
+     ]
+    },
+    "policy.external_writes": {
+     "origin": [
+      "profile"
+     ],
+     "value": "approval-required"
+    },
+    "policy.isolation": {
+     "origin": [
+      "profile"
+     ],
+     "value": "managed"
+    },
+    "policy.sharing": {
+     "origin": [
+      "profile"
+     ],
+     "value": "deny"
+    },
+    "roles.architect.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "max"
+    },
+    "roles.architect.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.coordinator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.coordinator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.critic.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.critic.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.gate.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "low"
+    },
+    "roles.gate.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.implementer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.implementer.model": {
+     "origin": [
+      "project"
+     ],
+     "value": "work-coder"
+    },
+    "roles.investigator.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "medium"
+    },
+    "roles.investigator.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-coder"
+    },
+    "roles.planner.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.planner.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    },
+    "roles.reviewer.effort": {
+     "origin": [
+      "profile"
+     ],
+     "value": "high"
+    },
+    "roles.reviewer.model": {
+     "origin": [
+      "profile"
+     ],
+     "value": "work-planner"
+    }
+   }
+  }
+ }
+}

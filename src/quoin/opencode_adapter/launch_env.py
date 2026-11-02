@@ -21,11 +21,12 @@ import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple, Union
 
-from . import compiler, doctor, errors, install, jsonio, paths
+from . import compiler, errors, install, inventory, jsonio, launch_codes, paths
 from . import secrets as credential_refs
 
 MAX_OWNED_BYTES = install.MAX_OWNED_BYTES
@@ -59,11 +60,12 @@ class LaunchRefused(Exception):
     refusal categories (passed in by the raise site, so this module does not
     import the driver); ``code`` is a stable machine identifier."""
 
-    def __init__(self, category: str, code: str, message: str) -> None:
+    def __init__(self, category: str, code: str, message: str, *, detail: Optional[str] = None) -> None:
         super().__init__(message)
         self.category = category
         self.code = code
         self.message = message
+        self.detail = detail
 
     def __str__(self) -> str:
         return self.message
@@ -125,7 +127,25 @@ class LaunchEnv:
 
 
 # Variables the launcher itself sets in the child environment.
-LAUNCHER_ENV_NAMES: Tuple[str, ...] = ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR)
+HARDENING_ENV_NAMES: Tuple[str, ...] = (
+    "OPENCODE_DISABLE_MODELS_FETCH",
+    "OPENCODE_DISABLE_AUTOUPDATE",
+    "OPENCODE_DISABLE_SHARE",
+    "OPENCODE_DISABLE_LSP_DOWNLOAD",
+    "OPENCODE_DISABLE_CLAUDE_CODE",
+    "OPENCODE_DISABLE_EXTERNAL_SKILLS",
+    "OPENCODE_PURE",
+    "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+)
+# Storage variables the launcher points at the selected profile. They are not
+# launcher-owned names: outside a launch they are the person's own settings.
+PROFILE_STORAGE_ENV_NAMES: Tuple[str, ...] = (
+    "XDG_STATE_HOME", "XDG_CACHE_HOME", "TMPDIR",
+    "npm_config_cache", "npm_config_userconfig", "npm_config_offline",
+)
+LAUNCHER_ENV_NAMES: Tuple[str, ...] = (
+    ("OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR) + HARDENING_ENV_NAMES
+)
 
 
 def _allowed_ambient(name: str) -> bool:
@@ -168,6 +188,117 @@ def _register_proxy_secret(redactor: Redactor, value: str) -> None:
         redactor.add(username)
     if password:
         redactor.add(password)
+    # Percent-encoded credentials appear decoded in tool output; register the
+    # decoded forms of everything registered above.
+    candidates = [value, raw, userinfo, username, password]
+    if ":" in raw:
+        candidates.append(raw.split(":", 1)[1])
+    for text in candidates:
+        if not text:
+            continue
+        decoded = unquote(text)
+        if decoded and decoded != text:
+            redactor.add(decoded)
+
+
+def hardening_env(
+    *, classification: str, sharing: str, package_install: str,
+    npm_cache: Union[str, Path], npm_userconfig: Union[str, Path],
+) -> Dict[str, str]:
+    """The flags and package-manager settings that keep a headless child from
+    fetching, updating, sharing or loading code on its own."""
+    work = classification == "work"
+    out: Dict[str, str] = {
+        "OPENCODE_DISABLE_MODELS_FETCH": "1",
+        "OPENCODE_DISABLE_AUTOUPDATE": "1",
+        "npm_config_cache": str(npm_cache),
+    }
+    if work or sharing == "deny":
+        out["OPENCODE_DISABLE_SHARE"] = "1"
+    if work:
+        for name in (
+            "OPENCODE_DISABLE_LSP_DOWNLOAD", "OPENCODE_DISABLE_CLAUDE_CODE",
+            "OPENCODE_DISABLE_EXTERNAL_SKILLS", "OPENCODE_PURE",
+            "OPENCODE_DISABLE_DEFAULT_PLUGINS",
+        ):
+            out[name] = "1"
+        out["npm_config_userconfig"] = str(npm_userconfig)
+        if package_install == "deny":
+            out["npm_config_offline"] = "true"
+    return out
+
+
+def expected_env_names(
+    *,
+    ambient: Mapping[str, str],
+    compile_sidecar: Mapping[str, Any],
+    providers: Union[Mapping[str, Any], Iterable[Any]],
+    storage: Optional[Mapping[str, str]] = None,
+    hardening: Optional[Mapping[str, str]] = None,
+    state_dir_set: bool = True,
+) -> List[str]:
+    """The child environment's names without resolving any credential; kept
+    equal to ``build_env(...).names()`` by a parity test."""
+    by_id = _providers_by_id(providers)
+    credential_env = compile_sidecar.get("credential_env") or {}
+    emitted = [by_id[pid] for pid in credential_env.values() if pid in by_id]
+    names = {name for name, value in ambient.items() if _allowed_ambient(name) and isinstance(value, str)}
+    if any(getattr(view, "use_env_proxy", False) for view in emitted):
+        for base in _PROXY_ENV:
+            for name in (base, base.lower()):
+                if isinstance(ambient.get(name), str):
+                    names.add(name)
+    for extra in (storage, hardening):
+        if extra:
+            names.update(extra)
+    names.update(("OPENCODE_CONFIG", "XDG_DATA_HOME"))
+    if state_dir_set:
+        names.add(paths.ENV_STATE_DIR)
+    names.update(credential_env)
+    return sorted(names)
+
+
+def credential_kinds(
+    compile_sidecar: Mapping[str, Any], providers: Union[Mapping[str, Any], Iterable[Any]],
+) -> List[Dict[str, str]]:
+    """What kind of credential each emitted variable carries; no value is read."""
+    by_id = _providers_by_id(providers)
+    out: List[Dict[str, str]] = []
+    for provider_id in sorted(set((compile_sidecar.get("credential_env") or {}).values())):
+        view = by_id.get(provider_id)
+        ref = getattr(view, "credential_ref", "") if view is not None else ""
+        try:
+            masked = credential_refs.parse(ref).masked()
+        except (ValueError, AttributeError):
+            masked = "unparseable"
+        out.append({"provider": provider_id, "ref_masked": masked, "kind": "static-api-key"})
+    return out
+
+
+def _check_containment(
+    values: Mapping[str, str], skip: Iterable[str], adapter_root: Union[str, Path],
+    profile_root: Union[str, Path],
+) -> None:
+    adapter = os.path.normpath(str(adapter_root))
+    profile = os.path.normpath(str(profile_root))
+
+    def under(path: str, base: str) -> bool:
+        return path == base or path.startswith(base.rstrip(os.sep) + os.sep)
+
+    skipped = set(skip)
+    for name in sorted(values):
+        if name in skipped:
+            continue
+        for part in values[name].split(os.pathsep):
+            if not os.path.isabs(part):
+                continue
+            norm = os.path.normpath(part)
+            if under(norm, adapter) and not under(norm, profile):
+                raise LaunchRefused(
+                    "invalid-configuration",
+                    "env-path-outside-profile",
+                    "the launch environment variable %s points outside the selected profile" % name,
+                )
 
 
 def build_env(
@@ -180,6 +311,10 @@ def build_env(
     config_path: Union[str, Path],
     redactor: Optional[Redactor] = None,
     state_dir: Optional[Union[str, Path]] = None,
+    profile_root: Optional[Union[str, Path]] = None,
+    adapter_root: Optional[Union[str, Path]] = None,
+    storage: Optional[Mapping[str, str]] = None,
+    hardening: Optional[Mapping[str, str]] = None,
 ) -> LaunchEnv:
     """Allowlist the ambient environment, then add the launcher's own
     variables and the resolved credentials the compiled file names."""
@@ -199,10 +334,17 @@ def build_env(
                     values[name] = ambient[name]
                     _register_proxy_secret(redactor, ambient[name])
 
+    for extra in (storage, hardening):
+        if extra:
+            values.update({name: str(value) for name, value in extra.items()})
+
     values["OPENCODE_CONFIG"] = str(config_path)
     values["XDG_DATA_HOME"] = str(data_dir)
     if state_dir is not None:
         values[paths.ENV_STATE_DIR] = str(state_dir)
+
+    if adapter_root is not None and profile_root is not None:
+        _check_containment(values, credential_env, adapter_root, profile_root)
 
     for env_name in sorted(credential_env):
         provider_id = credential_env[env_name]
@@ -437,6 +579,36 @@ def _managed_defaults(env: Mapping[str, str]) -> Tuple[Path, List[Path]]:
     return Path(_MANAGED_DIR_OTHER), []
 
 
+@dataclass(frozen=True)
+class Refusal:
+    """The first reason a launch would be refused. ``layer`` is a closed
+    token; ``token`` is the entry name passed through the token rule (empty
+    for a legacy refusal, whose ``message`` already carries its own text).
+    ``launch-policy`` is the layer of a refusal from the isolation, repository
+    and destination checks; its ``token`` is the refusal detail."""
+
+    code: str
+    category: str
+    layer: str
+    token: str
+    message: str
+
+
+@dataclass(frozen=True)
+class LayerCheck:
+    inventory: inventory.Inventory
+    verdicts: List[inventory.Verdict]
+    refusal: Optional[Refusal]
+    # The first refusal the launch-policy checks (evaluation, repositories,
+    # isolation, destination approval) would raise offline; the inventory
+    # refusal stays in `refusal`.
+    launch_refusal: Optional[Refusal] = None
+
+
+def _inventory_category(code: str) -> str:
+    return launch_codes.category(code)
+
+
 def check_config_layers(
     *,
     cwd: Union[str, Path],
@@ -448,7 +620,12 @@ def check_config_layers(
     managed_dir: Optional[Union[str, Path]] = None,
     managed_prefs: Optional[Sequence[Union[str, Path]]] = None,
     plutil: Optional[Callable[[Path], str]] = None,
-) -> None:
+    data_dir: Optional[Union[str, Path]] = None,
+    ambient_env: Optional[Mapping[str, str]] = None,
+    expected: Optional[inventory.Expected] = None,
+    hardening_names: Sequence[str] = (),
+    capture: bool = False,
+) -> LayerCheck:
     """Refuse the launch when any configuration layer OpenCode reads would
     override the compiled file or shadow an installed ``quoin-*`` unit.
 
@@ -457,70 +634,124 @@ def check_config_layers(
     ``owned_commands`` map project-relative paths to the install record's
     sha256. When the project is not inside a git worktree OpenCode walks
     every ancestor up to the filesystem root, and so does this scan.
+
+    The source scan runs once. The long-standing deny rules replay over it in
+    their original order; only when ``expected`` is given does the inventory
+    allowlist run as well. The first refusal is the first legacy refusal if
+    any, else the inventory's. With ``capture`` false that refusal is raised
+    (a legacy one unchanged); with ``capture`` true it is returned.
     """
     cwd = Path(cwd)
     home = Path(home)
-    worktree = doctor._worktree_root(cwd)  # noqa: SLF001 - shares the doctor's discovery walk
-    roots = doctor._build_roots(cwd, env, home)  # noqa: SLF001
-
-    def shown(path: Path) -> str:
-        return doctor.display_path(path, roots)
-
-    docs, findings = doctor._read_config_files(cwd, worktree, env, home, roots)  # noqa: SLF001
-    for finding in findings:
-        if finding.id == "config-unreadable":
-            raise _refuse(
-                "invalid-configuration",
-                "config-layer-unreadable",
-                "%s could not be read as configuration" % (finding.path or "a configuration file"),
-            )
-
-    compiled_file = env.get("OPENCODE_CONFIG")
-    global_dir = doctor._xdg_config_dir(env, home)  # noqa: SLF001
-    for path, doc in docs:
-        if compiled_file and _same_path(path, compiled_file):
-            continue
-        below = _same_path(path.parent, global_dir)
-        _check_layer(doc, shown(path), below, compiled_doc)
-
+    worktree = inventory.worktree_root(cwd)
+    roots = inventory.build_roots(cwd, env, home)
+    global_dir = inventory.xdg_config_dir(env, home)
     managed_root, default_prefs = _managed_defaults(env)
     managed_root = Path(managed_dir) if managed_dir is not None else managed_root
     prefs = [Path(p) for p in managed_prefs] if managed_prefs is not None else default_prefs
-    for name in ("opencode.json", "opencode.jsonc"):
-        path = managed_root / name
-        try:
-            payload = doctor._load_config_file(path)  # noqa: SLF001
-        except doctor._ConfigUnreadable:  # noqa: SLF001
-            raise _refuse(
-                "invalid-configuration",
-                "config-layer-unreadable",
-                "the managed configuration file %s could not be read" % path,
-            ) from None
-        if payload is not None:
-            _check_layer(payload, "managed configuration %s" % path, False, compiled_doc)
     convert = plutil if plutil is not None else _default_plutil
-    for plist in prefs:
-        if not os.path.lexists(str(plist)):
-            continue
-        try:
-            payload = json.loads(convert(plist))
-        except Exception:  # noqa: BLE001 - any failure to convert is a refusal
-            payload = None
-        if not isinstance(payload, dict):
+    compiled_file = env.get("OPENCODE_CONFIG")
+
+    def shown(path: Path) -> str:
+        return inventory.display_path(path, roots)
+
+    owned = dict(owned_agents)
+    owned.update(owned_commands)
+    inv = inventory.collect(
+        cwd=cwd, scan_env=env, ambient_env=ambient_env, home=home,
+        compiled_path=compiled_file, compiled_doc=compiled_doc, owned=owned, data_dir=data_dir,
+        managed_dir=managed_root, managed_prefs=prefs, plutil=convert,
+        hardening_names=tuple(hardening_names),
+    )
+    pref_keys = {os.path.abspath(str(p)) for p in prefs}
+
+    def is_managed_file(path: Path) -> bool:
+        return path.parent == managed_root and path.name in ("opencode.json", "opencode.jsonc")
+
+    def is_pref(path: Path) -> bool:
+        return os.path.abspath(str(path)) in pref_keys
+
+    layer_step = ["global"]
+
+    def replay() -> None:
+        config_docs = [(p, d) for p, d in inv.docs if not is_managed_file(p) and not is_pref(p)]
+        for path in inv.unreadable:
+            if is_managed_file(path) or is_pref(path):
+                continue
+            layer_step[0] = "global" if _same_path(path.parent, global_dir) else "project"
             raise _refuse(
                 "invalid-configuration",
                 "config-layer-unreadable",
-                "the managed preferences file %s could not be converted" % plist,
+                "%s could not be read as configuration" % shown(path),
             )
-        _check_layer(payload, "managed preferences %s" % plist, False, compiled_doc)
+        for path, doc in config_docs:
+            if compiled_file and _same_path(path, compiled_file):
+                continue
+            below = _same_path(path.parent, global_dir)
+            layer_step[0] = "global" if below else "project"
+            _check_layer(doc, shown(path), below, compiled_doc)
 
-    _check_markdown(cwd, env, home, worktree, global_dir, managed_root, owned_agents, owned_commands, shown)
+        layer_step[0] = "managed"
+        for name in ("opencode.json", "opencode.jsonc"):
+            path = managed_root / name
+            if path in inv.unreadable:
+                raise _refuse(
+                    "invalid-configuration",
+                    "config-layer-unreadable",
+                    "the managed configuration file %s could not be read" % path,
+                )
+            for doc_path, payload in inv.docs:
+                if doc_path == path:
+                    _check_layer(payload, "managed configuration %s" % path, False, compiled_doc)
+        layer_step[0] = "managed-prefs"
+        for plist in prefs:
+            if not os.path.lexists(str(plist)):
+                continue
+            payload = next((d for p, d in inv.docs if p == plist), None)
+            if not isinstance(payload, dict):
+                raise _refuse(
+                    "invalid-configuration",
+                    "config-layer-unreadable",
+                    "the managed preferences file %s could not be converted" % plist,
+                )
+            _check_layer(payload, "managed preferences %s" % plist, False, compiled_doc)
+
+        layer_step[0] = "markdown"
+        _check_markdown(cwd, env, home, worktree, global_dir, managed_root, owned_agents, owned_commands, shown,
+                        plugin_step=layer_step)
+
+    legacy: Optional[LaunchRefused] = None
+    try:
+        replay()
+    except LaunchRefused as exc:
+        legacy = exc
+
+    verdicts: List[inventory.Verdict] = []
+    if expected is not None:
+        verdicts = inventory.evaluate(inv, expected)
+
+    refusal: Optional[Refusal] = None
+    if legacy is not None:
+        refusal = Refusal(legacy.code, legacy.category, layer_step[0], "", legacy.message)
+    else:
+        first = inventory.first_refusal(verdicts)
+        if first is not None and first.code is not None:
+            refusal = Refusal(
+                first.code, _inventory_category(first.code), first.layer, first.token,
+                inventory.refusal_message(first.code, first.layer, first.token),
+            )
+    if not capture:
+        if legacy is not None:
+            raise legacy
+        if refusal is not None:
+            raise LaunchRefused(refusal.category, refusal.code, refusal.message, detail=refusal.token or None)
+    return LayerCheck(inv, verdicts, refusal)
 
 
 def _config_bases(cwd: Path, home: Path, worktree: Path, global_dir: Path) -> List[Path]:
     """Every ``.opencode`` style base directory OpenCode scans for markdown
     and plugin files, in scan order and without duplicates."""
-    bases: List[Path] = [d / ".opencode" for d in doctor._project_config_dirs(worktree, cwd)]  # noqa: SLF001
+    bases: List[Path] = [d / ".opencode" for d in inventory.project_config_dirs(worktree, cwd)]
     home_opencode = home / ".opencode"
     if os.path.isdir(str(home_opencode)):
         bases.append(home_opencode)
@@ -563,8 +794,8 @@ def plugin_directories(
     entries for a project, exactly as the launch check visits them. Shared
     with the doctor so both report the same directory first."""
     cwd, home = Path(cwd), Path(home)
-    worktree = doctor._worktree_root(cwd)  # noqa: SLF001
-    global_dir = doctor._xdg_config_dir(env, home)  # noqa: SLF001
+    worktree = inventory.worktree_root(cwd)
+    global_dir = inventory.xdg_config_dir(env, home)
     return _plugin_entries(_config_bases(cwd, home, worktree, global_dir) + [Path(managed_root)])
 
 
@@ -578,6 +809,7 @@ def _check_markdown(
     owned_agents: Mapping[str, str],
     owned_commands: Mapping[str, str],
     shown: Callable[[Path], str],
+    plugin_step: Optional[List[str]] = None,
 ) -> None:
     unique = _config_bases(cwd, home, worktree, global_dir)
 
@@ -591,6 +823,8 @@ def _check_markdown(
     # Plugin files under a config directory load automatically and can hook
     # permission requests, so any of them defeats the approval contract.
     for directory, state in _plugin_entries(unique + [managed_root]):
+        if plugin_step is not None:
+            plugin_step[0] = "plugin-dir"
         if state == "unreadable":
             raise _refuse(
                 "invalid-configuration",

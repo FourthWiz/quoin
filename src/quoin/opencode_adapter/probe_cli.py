@@ -133,6 +133,7 @@ def run(
     runner: Any = None,
     stderr: Any = None,
     probe_module: Any = None,
+    trusted: Optional[config.TrustedSource] = None,
 ) -> int:
     """Qualify one profile model against its gateway. Returns the probe's exit
     code (0 qualified, 1 not qualified, 2 could not run) or 2 for a refusal.
@@ -145,14 +146,22 @@ def run(
         return _refuse(err, "synthetic-only-required")
 
     profile_layer = config.load_profile(profile, env=env, home=home)
-    managed = config.load_managed(env)
+    managed_layers = config.load_managed_layers(env, trusted)
     project = None
     if project_root is not None:
         project = config.load_project(project_root)
         errors = config.check_cross_layer(profile_layer, project)
         if errors:
             raise ConfigErrors(list(errors))
-    effective = merge.merge(config.LoadedConfig(profile_layer, project, managed))
+    effective = merge.merge(
+        config.LoadedConfig(
+            profile_layer,
+            project,
+            managed_layers.managed,
+            managed_layers.trusted_managed,
+            managed_layers.trusted_state,
+        )
+    )
     if project_root is not None and effective.project_state not in ("work", "personal"):
         return _refuse(err, "classification-required")
 

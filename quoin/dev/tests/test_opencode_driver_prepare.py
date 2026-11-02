@@ -12,6 +12,7 @@ import pytest
 
 import _opencode_driver_helpers as h
 import _opencode_helpers as helpers
+import _opencode_isolation_helpers as iso
 from _opencode_merge_helpers import NOW, World
 from quoin.opencode_adapter import driver, install, proctree, runstore
 from quoin.opencode_adapter import secrets as credential_refs
@@ -42,9 +43,9 @@ def env(tmp_path, monkeypatch):
 
 
 class Setup:
-    def __init__(self, tmp_path, monkeypatch, root=None, git=True):
+    def __init__(self, tmp_path, monkeypatch, root=None, git=True, **world_kw):
         self.tmp = tmp_path
-        self.world = World(tmp_path, agents=False, root=root)
+        self.world = World(tmp_path, agents=False, root=root, **world_kw)
         self.root = self.world.root
         if git:
             (self.root / ".git").mkdir(exist_ok=True)
@@ -62,7 +63,8 @@ class Setup:
                 TimeoutExpired=subprocess.TimeoutExpired, SubprocessError=subprocess.SubprocessError,
             ),
         )
-        self.kw = {}
+        iso.launch_ready(self.world)
+        self.kw = iso.seams(tmp_path)
 
     def driver(self, **overrides):
         kw = dict(

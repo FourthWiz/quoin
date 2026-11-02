@@ -136,7 +136,7 @@ def test_schema_file_shape():
     assert "$schema" not in SCHEMA and "json-schema.org" not in SCHEMA_PATH.read_text(encoding="utf-8")
     assert set(SCHEMA["$defs"]) >= {"config", "provider", "model", "variant", "policy", "agent_entry"}
     assert SCHEMA["$defs"]["config"]["additionalProperties"] is False
-    assert set(SCHEMA["$defs"]["config"]["required"]) == set(SCHEMA["$defs"]["config"]["properties"])
+    assert set(SCHEMA["$defs"]["config"]["required"]) | {"lsp", "formatter", "permission"} == set(SCHEMA["$defs"]["config"]["properties"])
     assert not any(k not in schema_check.SUPPORTED_KEYWORDS for _, k in schema_check.iter_keywords(SCHEMA))
 
 
@@ -338,4 +338,4 @@ def test_golden_documents_validate_offline():
         assert list(doc) == [
             "$schema", "model", "small_model", "agent", "share", "autoupdate",
             "enabled_providers", "provider", "experimental",
-        ]
+        ] + ([] if path.name == "personal.opencode.json" else ["lsp", "formatter", "permission"])

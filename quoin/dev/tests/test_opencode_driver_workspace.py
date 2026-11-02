@@ -13,6 +13,7 @@ import pytest
 
 import _opencode_driver_helpers as h
 import _opencode_helpers as helpers
+import _opencode_isolation_helpers as iso
 from _opencode_merge_helpers import NOW, World
 from _opencode_run_helpers import InstalledProject
 from quoin.opencode_adapter import driver, install, launch_env, paths, runstore
@@ -38,6 +39,9 @@ class Setup:
         (self.root / ".git").mkdir(exist_ok=True)
         assert install.run_install(str(self.root), helpers.SOURCE_DIR, None, False, io.StringIO(), io.StringIO()) == 0
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: self.world.home))
+        # Each workspace is a sibling of the project root, so its parent is approved too.
+        iso.launch_ready(self.world, extra_roots=[tmp_path])
+        self.seams = self.kw = iso.seams(tmp_path)
         scenario = h.fake.write_scenario(tmp_path / "s.json", h.fake.SCENARIOS["record_only"]())
         self.shim = h.fake.write_shim(tmp_path / "bin", scenario, tmp_path / "fake-state")
         monkeypatch.setattr(
@@ -64,6 +68,7 @@ class Setup:
             home=self.world.home, which=lambda name: str(self.shim),
             version_runner=lambda path: "1.18.32",
             resolver_factory=lambda environ, platform: _Resolver(), clock=lambda: NOW.timestamp(),
+            **self.seams,
         )
 
     def request(self, **overrides):
@@ -187,8 +192,9 @@ def test_state_root_and_the_child_state_variable(env):
     assert drv.state_root == paths.state_dir(env.world.env, env.world.home)
     prepared = drv.prepare(env.request())
     assert paths.ENV_STATE_DIR in prepared.env_names
-    assert "XDG_STATE_HOME" not in prepared.env_names
-    assert prepared.launch_env.materialize()[paths.ENV_STATE_DIR] == str(drv.state_root)
+    values = prepared.launch_env.materialize()
+    assert values[paths.ENV_STATE_DIR] == str(drv.profile_state_root("work"))
+    assert values["XDG_STATE_HOME"] == str(drv.profile_state_root("work") / "state")
 
 
 def test_build_env_state_dir_keyword(tmp_path):
@@ -200,7 +206,8 @@ def test_build_env_state_dir_keyword(tmp_path):
 
     assert build(state_dir=tmp_path / "s")[paths.ENV_STATE_DIR] == str(tmp_path / "s")
     assert paths.ENV_STATE_DIR not in build()
-    assert set(launch_env.LAUNCHER_ENV_NAMES) == {"OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR}
+    assert set(launch_env.LAUNCHER_ENV_NAMES) == {
+        "OPENCODE_CONFIG", "XDG_DATA_HOME", paths.ENV_STATE_DIR, *launch_env.HARDENING_ENV_NAMES}
     assert launch_env.allowed_ambient("PATH") and launch_env.allowed_ambient("LC_ALL")
     assert not launch_env.allowed_ambient("XDG_STATE_HOME")
 
@@ -220,6 +227,6 @@ def test_the_fake_sees_the_state_variable_and_no_operator_state_home(tmp_path, m
         )
         h.run_to_end(drv, prepared)
         names = project.invocations()[-1]["env_names"]
-        assert paths.ENV_STATE_DIR in names and "XDG_STATE_HOME" not in names
+        assert paths.ENV_STATE_DIR in names and "XDG_STATE_HOME" in names
     finally:
         project.cleanup()

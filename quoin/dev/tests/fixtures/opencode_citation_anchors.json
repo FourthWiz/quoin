@@ -1,0 +1,713 @@
+{
+  "version": 1,
+  "tag": "v1.18.32",
+  "commit": "545f51d26cc39a907d2867492d498d9607ea5fa4",
+  "rows": {
+    "global-xdg-paths": [
+      {
+        "path": "packages/core/src/global.ts",
+        "lines": [
+          3,
+          3
+        ],
+        "anchor": "xdgData, xdgCache, xdgConfig, xdgState"
+      },
+      {
+        "path": "packages/core/src/global.ts",
+        "lines": [
+          11,
+          14
+        ],
+        "anchor": "const state = path.join(xdgState!, app)"
+      },
+      {
+        "path": "packages/core/src/global.ts",
+        "lines": [
+          23,
+          23
+        ],
+        "anchor": "log: path.join(data, \"log\")"
+      }
+    ],
+    "data-dir-state": [
+      {
+        "path": "packages/core/src/global.ts",
+        "lines": [
+          10,
+          11
+        ],
+        "anchor": "const data = path.join(xdgData!, app)"
+      }
+    ],
+    "tmp-dir": [
+      {
+        "path": "packages/core/src/global.ts",
+        "lines": [
+          15,
+          15
+        ],
+        "anchor": "const tmp = path.join(os.tmpdir(), app)"
+      }
+    ],
+    "config-wellknown-remote": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          370,
+          376
+        ],
+        "anchor": "value.type === \"wellknown\""
+      },
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          374,
+          374
+        ],
+        "anchor": "/.well-known/opencode"
+      }
+    ],
+    "config-account-remote": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          492,
+          498
+        ],
+        "anchor": "accountSvc.active()"
+      },
+      {
+        "path": "packages/opencode/src/account/repo.ts",
+        "lines": [
+          51,
+          56
+        ],
+        "anchor": "AccountStateTable"
+      },
+      {
+        "path": "packages/core/src/account/sql.ts",
+        "lines": [
+          16,
+          22
+        ],
+        "anchor": "active_account_id"
+      }
+    ],
+    "config-directories": [
+      {
+        "path": "packages/opencode/src/config/paths.ts",
+        "lines": [
+          23,
+          41
+        ],
+        "anchor": "OPENCODE_CONFIG_DIR ? [Flag.OPENCODE_CONFIG_DIR]"
+      },
+      {
+        "path": "packages/opencode/src/config/paths.ts",
+        "lines": [
+          34,
+          38
+        ],
+        "anchor": "start: Global.Path.home"
+      }
+    ],
+    "config-global-files": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          272,
+          274
+        ],
+        "anchor": "\"config.json\""
+      },
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          274,
+          274
+        ],
+        "anchor": "\"opencode.jsonc\""
+      }
+    ],
+    "config-legacy-toml": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          276,
+          289
+        ],
+        "anchor": "with: { type: \"toml\" }"
+      },
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          286,
+          286
+        ],
+        "anchor": "fsNode.unlink(legacy)"
+      }
+    ],
+    "config-content-env": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          482,
+          489
+        ],
+        "anchor": "OPENCODE_CONFIG_CONTENT"
+      }
+    ],
+    "opencode-permission-env": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          559,
+          565
+        ],
+        "anchor": "Flag.OPENCODE_PERMISSION"
+      }
+    ],
+    "permission-last-match": [
+      {
+        "path": "packages/opencode/src/permission/index.ts",
+        "lines": [
+          28,
+          33
+        ],
+        "anchor": ".findLast("
+      }
+    ],
+    "agent-markdown-merge-order": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          415,
+          418
+        ],
+        "anchor": "Flag.OPENCODE_CONFIG"
+      },
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          473,
+          475
+        ],
+        "anchor": "ConfigAgent.load(dir)"
+      }
+    ],
+    "agent-permission-merge": [
+      {
+        "path": "packages/opencode/src/agent/agent.ts",
+        "lines": [
+          293,
+          293
+        ],
+        "anchor": "Permission.fromConfig(value.permission ?? {})"
+      }
+    ],
+    "command-model-precedence": [
+      {
+        "path": "packages/opencode/src/session/prompt.ts",
+        "lines": [
+          1411,
+          1419
+        ],
+        "anchor": "if (cmd.model) return Provider.parseModel(cmd.model)"
+      }
+    ],
+    "custom-tool-dirs": [
+      {
+        "path": "packages/opencode/src/tool/registry.ts",
+        "lines": [
+          183,
+          197
+        ],
+        "anchor": "{tool,tools}/*.{js,ts}"
+      }
+    ],
+    "plugin-npm-install": [
+      {
+        "path": "packages/opencode/src/config/config.ts",
+        "lines": [
+          452,
+          460
+        ],
+        "anchor": "name: \"@opencode-ai/plugin\""
+      }
+    ],
+    "npm-install-skip-conditions": [
+      {
+        "path": "packages/core/src/npm.ts",
+        "lines": [
+          147,
+          152
+        ],
+        "anchor": "afs.access(dir, { writable: true })"
+      },
+      {
+        "path": "packages/core/src/npm.ts",
+        "lines": [
+          155,
+          165
+        ],
+        "anchor": "nodeModulesExists"
+      },
+      {
+        "path": "packages/core/src/npm.ts",
+        "lines": [
+          189,
+          194
+        ],
+        "anchor": "locked.has(name)"
+      }
+    ],
+    "npm-config-env": [
+      {
+        "path": "packages/core/src/npm-config.ts",
+        "lines": [
+          12,
+          28
+        ],
+        "anchor": "env: { ...process.env }"
+      },
+      {
+        "path": "packages/core/src/npm.ts",
+        "lines": [
+          93,
+          95
+        ],
+        "anchor": "NpmConfig.load(input.dir)"
+      }
+    ],
+    "npm-config-precedence": [
+      {
+        "path": "bun.lock",
+        "lines": [
+          1873,
+          1873
+        ],
+        "anchor": "@npmcli/config@10.8.1"
+      }
+    ],
+    "plugin-pure-flag": [
+      {
+        "path": "packages/opencode/src/plugin/index.ts",
+        "lines": [
+          181,
+          181
+        ],
+        "anchor": "flags.pure ? []"
+      },
+      {
+        "path": "packages/opencode/src/effect/runtime-flags.ts",
+        "lines": [
+          18,
+          18
+        ],
+        "anchor": "OPENCODE_PURE"
+      }
+    ],
+    "plugin-default-flag": [
+      {
+        "path": "packages/opencode/src/plugin/index.ts",
+        "lines": [
+          67,
+          86
+        ],
+        "anchor": "CopilotAuthPlugin"
+      },
+      {
+        "path": "packages/opencode/src/plugin/index.ts",
+        "lines": [
+          170,
+          170
+        ],
+        "anchor": "flags.disableDefaultPlugins ? []"
+      }
+    ],
+    "lsp-default-off": [
+      {
+        "path": "packages/opencode/src/lsp/lsp.ts",
+        "lines": [
+          151,
+          153
+        ],
+        "anchor": "all LSPs are disabled"
+      }
+    ],
+    "lsp-builtin-ids": [
+      {
+        "path": "packages/opencode/src/lsp/server.ts",
+        "lines": [
+          89,
+          89
+        ],
+        "anchor": "id: \"deno\""
+      },
+      {
+        "path": "packages/opencode/src/lsp/server.ts",
+        "lines": [
+          1516,
+          1516
+        ],
+        "anchor": "id: \"php intelephense\""
+      },
+      {
+        "path": "packages/opencode/src/lsp/server.ts",
+        "lines": [
+          1969,
+          1969
+        ],
+        "anchor": "id: \"julials\""
+      },
+      {
+        "path": "packages/opencode/src/lsp/lsp.ts",
+        "lines": [
+          154,
+          156
+        ],
+        "anchor": "Object.values(LSPServer)"
+      },
+      {
+        "path": "packages/opencode/src/lsp/lsp.ts",
+        "lines": [
+          98,
+          108
+        ],
+        "anchor": "filterExperimentalServers"
+      }
+    ],
+    "lsp-custom-command": [
+      {
+        "path": "packages/opencode/src/lsp/lsp.ts",
+        "lines": [
+          160,
+          180
+        ],
+        "anchor": "item.command[0]"
+      }
+    ],
+    "formatter-default-off": [
+      {
+        "path": "packages/opencode/src/format/index.ts",
+        "lines": [
+          120,
+          121
+        ],
+        "anchor": "all formatters are disabled"
+      }
+    ],
+    "formatter-builtin-ids": [
+      {
+        "path": "packages/opencode/src/format/formatter.ts",
+        "lines": [
+          19,
+          19
+        ],
+        "anchor": "name: \"gofmt\""
+      },
+      {
+        "path": "packages/opencode/src/format/formatter.ts",
+        "lines": [
+          397,
+          397
+        ],
+        "anchor": "name: \"dfmt\""
+      },
+      {
+        "path": "packages/opencode/src/format/index.ts",
+        "lines": [
+          130,
+          132
+        ],
+        "anchor": "Object.values(Formatter)"
+      }
+    ],
+    "formatter-ruff-uv-pair": [
+      {
+        "path": "packages/opencode/src/format/index.ts",
+        "lines": [
+          138,
+          144
+        ],
+        "anchor": "[\"ruff\", \"uv\"].includes(name)"
+      }
+    ],
+    "lsp-download-flag": [
+      {
+        "path": "packages/opencode/src/lsp/server.ts",
+        "lines": [
+          152,
+          152
+        ],
+        "anchor": "flags.disableLspDownload"
+      },
+      {
+        "path": "packages/opencode/src/effect/runtime-flags.ts",
+        "lines": [
+          22,
+          22
+        ],
+        "anchor": "OPENCODE_DISABLE_LSP_DOWNLOAD"
+      }
+    ],
+    "models-fetch-flag": [
+      {
+        "path": "packages/core/src/models-dev.ts",
+        "lines": [
+          222,
+          222
+        ],
+        "anchor": "Flag.OPENCODE_DISABLE_MODELS_FETCH"
+      },
+      {
+        "path": "packages/core/src/models-dev.ts",
+        "lines": [
+          255,
+          255
+        ],
+        "anchor": "Flag.OPENCODE_DISABLE_MODELS_FETCH"
+      },
+      {
+        "path": "packages/core/src/flag/flag.ts",
+        "lines": [
+          29,
+          29
+        ],
+        "anchor": "OPENCODE_DISABLE_MODELS_FETCH"
+      }
+    ],
+    "runtime-flag-names": [
+      {
+        "path": "packages/core/src/flag/flag.ts",
+        "lines": [
+          23,
+          23
+        ],
+        "anchor": "OPENCODE_DISABLE_AUTOUPDATE"
+      },
+      {
+        "path": "packages/core/src/flag/flag.ts",
+        "lines": [
+          45,
+          47
+        ],
+        "anchor": "OPENCODE_DB"
+      },
+      {
+        "path": "packages/opencode/src/effect/runtime-flags.ts",
+        "lines": [
+          21,
+          24
+        ],
+        "anchor": "OPENCODE_DISABLE_CLAUDE_CODE"
+      },
+      {
+        "path": "packages/opencode/src/auth/index.ts",
+        "lines": [
+          59,
+          59
+        ],
+        "anchor": "OPENCODE_AUTH_CONTENT"
+      },
+      {
+        "path": "packages/opencode/src/share/share-next.ts",
+        "lines": [
+          23,
+          23
+        ],
+        "anchor": "OPENCODE_DISABLE_SHARE"
+      }
+    ],
+    "flag-truthy-values": [
+      {
+        "path": "packages/core/src/flag/flag.ts",
+        "lines": [
+          3,
+          6
+        ],
+        "anchor": "value === \"true\" || value === \"1\""
+      },
+      {
+        "path": "packages/opencode/src/effect/runtime-flags.ts",
+        "lines": [
+          4,
+          4
+        ],
+        "anchor": "Config.boolean(name).pipe(Config.withDefault(false))"
+      }
+    ],
+    "claude-code-compat-flags": [
+      {
+        "path": "packages/opencode/src/session/instruction.ts",
+        "lines": [
+          62,
+          66
+        ],
+        "anchor": "disableClaudeCodePrompt"
+      },
+      {
+        "path": "packages/opencode/src/skill/index.ts",
+        "lines": [
+          187,
+          187
+        ],
+        "anchor": "disableClaudeCodeSkills"
+      }
+    ],
+    "external-skills-flag": [
+      {
+        "path": "packages/opencode/src/skill/index.ts",
+        "lines": [
+          186,
+          188
+        ],
+        "anchor": "!disableExternalSkills"
+      }
+    ],
+    "share-flag": [
+      {
+        "path": "packages/opencode/src/share/share-next.ts",
+        "lines": [
+          23,
+          23
+        ],
+        "anchor": "OPENCODE_DISABLE_SHARE"
+      },
+      {
+        "path": "packages/opencode/src/share/share-next.ts",
+        "lines": [
+          126,
+          126
+        ],
+        "anchor": "if (disabled) return"
+      }
+    ],
+    "autoupdate-flag": [
+      {
+        "path": "packages/opencode/src/cli/upgrade.ts",
+        "lines": [
+          10,
+          10
+        ],
+        "anchor": "Flag.OPENCODE_DISABLE_AUTOUPDATE"
+      }
+    ],
+    "auth-content-env": [
+      {
+        "path": "packages/opencode/src/auth/index.ts",
+        "lines": [
+          59,
+          63
+        ],
+        "anchor": "JSON.parse(process.env.OPENCODE_AUTH_CONTENT)"
+      }
+    ],
+    "websearch-gating": [
+      {
+        "path": "packages/opencode/src/tool/registry.ts",
+        "lines": [
+          58,
+          65
+        ],
+        "anchor": "flags.exa"
+      },
+      {
+        "path": "packages/opencode/src/tool/registry.ts",
+        "lines": [
+          292,
+          295
+        ],
+        "anchor": "webSearchEnabled(input.providerID"
+      }
+    ],
+    "webfetch-permission": [
+      {
+        "path": "packages/opencode/src/tool/registry.ts",
+        "lines": [
+          218,
+          218
+        ],
+        "anchor": "fetch: Tool.init(webfetch)"
+      },
+      {
+        "path": "packages/opencode/src/tool/webfetch.ts",
+        "lines": [
+          39,
+          40
+        ],
+        "anchor": "permission: \"webfetch\""
+      }
+    ],
+    "mcp-server-shapes": [
+      {
+        "path": "packages/core/src/v1/config/mcp.ts",
+        "lines": [
+          6,
+          8
+        ],
+        "anchor": "Schema.Literal(\"local\")"
+      },
+      {
+        "path": "packages/core/src/v1/config/mcp.ts",
+        "lines": [
+          44,
+          46
+        ],
+        "anchor": "Schema.Literal(\"remote\")"
+      },
+      {
+        "path": "packages/core/src/v1/config/config.ts",
+        "lines": [
+          113,
+          115
+        ],
+        "anchor": "ConfigMCPV1.Info"
+      }
+    ],
+    "remote-instructions": [
+      {
+        "path": "packages/opencode/src/session/instruction.ts",
+        "lines": [
+          158,
+          163
+        ],
+        "anchor": "item.startsWith(\"https://\")"
+      },
+      {
+        "path": "packages/opencode/src/skill/index.ts",
+        "lines": [
+          222,
+          223
+        ],
+        "anchor": "cfg.skills?.urls"
+      }
+    ],
+    "crash-files": [
+      {
+        "path": "packages/opencode/src/cli/heap.ts",
+        "lines": [
+          13,
+          13
+        ],
+        "anchor": "OPENCODE_AUTO_HEAP_SNAPSHOT"
+      },
+      {
+        "path": "packages/opencode/src/cli/heap.ts",
+        "lines": [
+          28,
+          33
+        ],
+        "anchor": "writeHeapSnapshot(file)"
+      },
+      {
+        "path": "packages/opencode/src/cli/tui/worker.ts",
+        "lines": [
+          51,
+          51
+        ],
+        "anchor": "writeHeapSnapshot(\"server.heapsnapshot\")"
+      }
+    ]
+  }
+}

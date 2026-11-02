@@ -1034,6 +1034,10 @@ def test_affected_tests_self_check():
             "test_opencode_native_schema.py",
             "test_opencode_docs.py",
         }
+    per_file_expected["quoin/adapters/opencode/managed-work-deployment.md"] = {
+        "test_opencode_deployment_doc.py",
+        "test_opencode_docs.py",
+    }
     for path, expected in per_file_expected.items():
         selectors, unmatched, ignored = affected_tests.map_changed_to_tests([path], repo_root)
         assert not unmatched, (path, unmatched)

@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import collections
 import dataclasses
+import hashlib
+import json
 import os
 import queue
 import re
@@ -26,9 +28,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
-from . import compiler, doctor, frontmatter, install, jsonio, launch_env, manifest, names
+from . import compiler, doctor, effective_record, frontmatter, install, inventory, isolation, jsonio, launch_codes, launch_env
+from . import manifest, names, netpolicy
 from . import paths as adapter_paths
-from . import proctree, qualification, retry, roles, runstore
+from . import profile_dirs, profile_policy, proctree, qualification, retention, retry, roles, runstore
 from . import events as ev
 from . import secrets as credential_refs
 from .errors import ConfigErrors
@@ -125,12 +128,16 @@ _CONTEXT_REF = re.compile(
 class PrepareRefused(Exception):
     """A run was refused before any process was spawned."""
 
-    def __init__(self, category: str, code: str, message: str, run_id: Optional[str] = None) -> None:
+    def __init__(
+        self, category: str, code: str, message: str, run_id: Optional[str] = None,
+        *, detail: Optional[str] = None,
+    ) -> None:
         super().__init__(message)
         self.category = category
         self.code = code
         self.message = message
         self.run_id = run_id
+        self.detail = detail
 
     def __str__(self) -> str:
         return self.message
@@ -201,6 +208,10 @@ class PreparedRun:
     agent: str = ""
     # Secrets live only here; never shown and never part of equality.
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
+    effective_config_digest: Optional[str] = None
+    # (absolute directory, layer token) of every scanned configuration
+    # directory; in memory only, filled only when package installs are denied.
+    fetch_watch: Tuple[Tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -217,6 +228,24 @@ class InteractiveLaunch:
     env_names: Tuple[str, ...]
     profile: str
     launch_env: Optional[LaunchEnv] = field(default=None, repr=False, compare=False)
+    effective_config: Optional[Mapping[str, Any]] = field(default=None, repr=False, compare=False)
+    effective_config_digest: Optional[str] = None
+    profile_root: Optional[Path] = field(default=None, repr=False, compare=False)
+    retention: Optional[retention.RetentionPolicy] = field(default=None, repr=False, compare=False)
+
+    def write_record(self, profile_root: Optional[Path] = None) -> Path:
+        """Write the effective-configuration record under the profile's
+        private ``records`` directory (0700 directory, 0600 file) and return
+        its path. Raises when there is nothing to write or the write fails."""
+        root = profile_root if profile_root is not None else self.profile_root
+        if self.effective_config is None or self.effective_config_digest is None or root is None:
+            raise ValueError("the launch has no record to write")
+        dirs = profile_dirs.ProfileDirs.at(root)
+        target = profile_dirs.records_path(dirs, self.effective_config_digest)
+        jsonio.ensure_private_directory(dirs.records)
+        body = json.dumps(self.effective_config, sort_keys=True, indent=2) + "\n"
+        jsonio.write_private_atomic(target, body.encode("utf-8"), private_parent=True)
+        return target
 
 
 @dataclass(frozen=True)
@@ -386,6 +415,8 @@ class AttemptFacts:
     native_error: Optional[ev.ErrorPayload] = None
     agent_fallback: bool = False
     driver_error: bool = False
+    executable_fetch: bool = False
+    executable_fetch_rows: Set[str] = field(default_factory=set)
     orphan: bool = False
     eof_without_exit: bool = False
     session_lost: bool = False
@@ -440,7 +471,7 @@ def failure_for(
         return retry.Failure("config")
     if outcome.state != "failed":
         return None
-    if outcome.reason in ("agent-fallback", "delegation-failed"):
+    if outcome.reason in ("agent-fallback", "delegation-failed", "executable-fetch-detected"):
         return retry.Failure("config")
     payload = facts.native_error
     if payload is None:
@@ -477,6 +508,8 @@ def classify(facts: AttemptFacts) -> AttemptOutcome:
         return make("cancelled", "cancelled")
     if facts.approval:
         return make("awaiting_approval", "approval-required")
+    if facts.executable_fetch:
+        return make("failed", "executable-fetch-detected")
     if facts.native_error is not None and not facts.denied_halt:
         return make("failed", "error-event")
     if facts.delegation_failed:
@@ -529,6 +562,11 @@ _POLICY_CLASSES = frozenset(
 _FORBIDDEN_FLAGS = ("--auto", "--yolo", "--dangerously-skip-permissions", "--agent")
 _STAGED = "staged"
 
+# Returned by the network guard when a check raised unexpectedly but the
+# profile requires no network control: the launch continues and the record
+# says the destination checks were unavailable.
+_NETWORK_UNAVAILABLE = object()
+
 
 def _iso(clock: Callable[[], float]) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(clock()))
@@ -570,6 +608,72 @@ class AttemptSeed:
     state_changing: Iterable[str] = ()
 
 
+# ------------------------------------------------- executable-fetch watch
+
+_FETCH_WALK_LIMIT = 20000
+
+
+def _node_modules_snapshot(directory: str) -> Tuple[Dict[str, Tuple[int, int]], int]:
+    """Regular files under ``directory/node_modules`` as
+    ``{relative path: (size, mtime_ns)}`` plus a count of entries past the
+    walk bound. Symlinks and directories are not followed or recorded."""
+    files: Dict[str, Tuple[int, int]] = {}
+    seen = 0
+    overflow = 0
+    root = os.path.join(directory, "node_modules")
+    stack = [""]
+    while stack:
+        rel = stack.pop()
+        try:
+            entries = list(os.scandir(os.path.join(root, rel) if rel else root))
+        except OSError:
+            continue
+        for entry in entries:
+            seen += 1
+            if seen > _FETCH_WALK_LIMIT:
+                overflow += 1
+                continue
+            child = os.path.join(rel, entry.name) if rel else entry.name
+            try:
+                if entry.is_symlink():
+                    continue
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(child)
+                elif entry.is_file(follow_symlinks=False):
+                    info = entry.stat(follow_symlinks=False)
+                    files[child] = (info.st_size, info.st_mtime_ns)
+            except OSError:
+                continue
+    return files, overflow
+
+
+def _fetch_baseline(watch: Sequence[Tuple[str, str]]) -> List[Tuple[str, str, Dict[str, Tuple[int, int]], int]]:
+    return [(path, layer, *_node_modules_snapshot(path)) for path, layer in watch]
+
+
+def _fetched_layers(baseline: Sequence[Tuple[str, str, Dict[str, Tuple[int, int]], int]]) -> Set[str]:
+    """Layer tokens whose node_modules gained a regular file or changed one.
+    Removed files and new or removed directories do not count."""
+    layers: Set[str] = set()
+    for path, layer, before, before_overflow in baseline:
+        after, after_overflow = _node_modules_snapshot(path)
+        if after_overflow != before_overflow:
+            layers.add(layer)
+            continue
+        if any(before.get(name) != info for name, info in after.items()):
+            layers.add(layer)
+    return layers
+
+
+
+def _logging_content(prepared: "PreparedRun") -> str:
+    """The content mode of a prepared run; a missing value reads as metadata so
+    a run without a policy never stores text."""
+    policy = prepared.policy if isinstance(prepared.policy, Mapping) else {}
+    value = policy.get("logging_content")
+    return value if value in ev.CONTENT_MODES else "metadata"
+
+
 class RuntimeHandle:
     """One running attempt. Created by `start`/`resume`, consumed by
     `observe`, ended by `cancel`. Internal fields are documented where the
@@ -598,6 +702,11 @@ class RuntimeHandle:
         self.event_count = 0
         self.leftovers_count = 0
         self.stderr_discarded = 0
+        # Written only by the stderr thread; read after that thread is joined.
+        self.stderr_lines = 0
+        self.stderr_bytes = 0
+        self.stderr_hash = hashlib.sha256()
+        self.stderr_signals: set = set()
         self.last_scan = 0.0
         self.eof_at: Optional[float] = None
         self.started_yielded = False
@@ -672,6 +781,9 @@ class OpenCodeDriver:
         checkpoint_every: int = 50,
         max_line_bytes: int = 1_048_576,
         stderr_read_delay_s: float = 0.0,
+        session: Optional[profile_dirs.LaunchSession] = None,
+        isolation_roots: Optional[isolation.TrustedRoots] = None,
+        identity_checker: Optional[netpolicy.IdentityChecker] = None,
     ) -> None:
         self.project_root = Path(os.path.abspath(str(project_root)))
         self._env: Dict[str, str] = dict(os.environ if env is None else env)
@@ -681,6 +793,7 @@ class OpenCodeDriver:
         self._resolver_factory = resolver_factory
         self._proc = proc
         self._clock = clock
+        self._swept: Set[str] = set()
         self._monotonic = monotonic
         self._platform = platform
         self._poll_s = poll_s
@@ -698,6 +811,21 @@ class OpenCodeDriver:
         # Guards record writes made before any handle exists (reconciliation
         # and blocked resumes). Never taken from a signal handler.
         self._record_lock = threading.Lock()
+        # The one profile this process may use; a stamped launcher root in the
+        # driver's environment pre-claims it.
+        self._session = session if session is not None else profile_dirs.LaunchSession.from_launcher_env(self._env)
+        # Constructor-only: no environment variable, flag or project value can
+        # set either, so a profile cannot attest or approve itself.
+        self._isolation_roots_injected = isolation_roots
+        self._identity_checker_injected = identity_checker
+
+    def _isolation_roots(self) -> isolation.TrustedRoots:
+        roots = self._isolation_roots_injected
+        return roots if roots is not None else isolation.TrustedRoots.system()
+
+    def _identity_checker(self) -> netpolicy.IdentityChecker:
+        checker = self._identity_checker_injected
+        return checker if checker is not None else netpolicy.SystemIdentityChecker()
 
     # ------------------------------------------------------------- probe
 
@@ -707,7 +835,11 @@ class OpenCodeDriver:
     @property
     def state_root(self) -> Path:
         """The adapter state directory this driver resolves."""
-        return adapter_paths.state_dir(self._config_env(), self._home)
+        return profile_dirs.adapter_root(self._env, self._home)
+
+    def profile_state_root(self, profile: str) -> Path:
+        """The storage root of one profile under the adapter state directory."""
+        return profile_dirs.profile_root(self.state_root, profile)
 
     def _read_version(self, binary: str) -> Optional[str]:
         try:
@@ -756,7 +888,7 @@ class OpenCodeDriver:
             self._record_refusal(state, exc)
             raise
         except launch_env.LaunchRefused as exc:
-            refusal = PrepareRefused(exc.category, exc.code, exc.message, state.run_id)
+            refusal = PrepareRefused(exc.category, exc.code, exc.message, state.run_id, detail=getattr(exc, "detail", None))
             self._record_refusal(state, refusal)
             raise refusal from None
 
@@ -770,6 +902,8 @@ class OpenCodeDriver:
             "code": exc.code,
             "message": shown(exc.message),
         }
+        if exc.detail is not None:
+            record["refusal"]["detail"] = exc.detail
         now = _iso(self._clock)
         if state.resume:
             attempts = record.get("attempts") or []
@@ -783,8 +917,8 @@ class OpenCodeDriver:
         except (OSError, runstore.RunStoreError):
             pass
 
-    def _refusal(self, category: str, code: str, message: str) -> PrepareRefused:
-        return PrepareRefused(category, code, message)
+    def _refusal(self, category: str, code: str, message: str, *, detail: Optional[str] = None) -> PrepareRefused:
+        return PrepareRefused(category, code, message, detail=detail)
 
     def _prepare(
         self, request: RunRequest, resume_run_id: Optional[str], state: _PrepareState
@@ -836,21 +970,27 @@ class OpenCodeDriver:
                 if existing is None:
                     raise refuse("workflow-validation", "resume-run-missing", "the run to resume has no record")
                 state.run_id = resume_run_id
+                state.record = existing
                 stored = existing.get("request") or {}
-                same = (
+                same_except_profile = (
                     stored.get("task") == task
                     and stored.get("stage") == request.stage
                     and str(stored.get("phase", "")).replace("-", "_") == phase_id
-                    and stored.get("profile") == request.profile
                     and stored.get("workspace") == request_dict["workspace"]
                     and bool(stored.get("non_interactive")) == request.non_interactive
                 )
+                same = same_except_profile and stored.get("profile") == request.profile
+                if same_except_profile and not same:
+                    raise refuse(
+                        "workflow-validation", "resume-request-mismatch",
+                        "the request names a different profile than the run being resumed",
+                        detail="profile",
+                    )
                 if not same:
                     raise refuse(
                         "workflow-validation", "resume-request-mismatch",
                         "the request does not match the run being resumed",
                     )
-                state.record = existing
                 if workspace is not None and not os.path.isdir(str(workspace)):
                     raise refuse(
                         "workflow-validation", "workspace-missing",
@@ -867,6 +1007,14 @@ class OpenCodeDriver:
         if workspace is not None:
             workspace = self._check_workspace(workspace, root)
         run_cwd = workspace if workspace is not None else root
+
+        try:
+            self._session.check_profile(request.profile)
+        except profile_dirs.ProfileSwitch:
+            raise refuse(
+                "policy-denial", "profile-switch-in-process",
+                "this process already launched under another profile; start a new process to change profile",
+            ) from None
 
         # 2. platform
         if not getattr(self._proc, "SUPPORTED", False) or os.name != "posix":
@@ -911,6 +1059,17 @@ class OpenCodeDriver:
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(request.profile, cfg_env, base_redact)
+        # Only a workspace the caller supplied is checked beside the project root.
+        verdict = self._launch_policy(evaluation, root, workspace)
+        dirs = self._claim_profile_dirs(evaluation)
+        try:
+            profile_dirs.record_project(dirs, root)
+        except profile_dirs.ProfileDirUnsafe:
+            raise refuse(
+                "invalid-configuration", "profile-dir-unsafe",
+                "the profile storage directory cannot be used privately",
+            ) from None
+        sweep_summary = self._retention_sweep(evaluation, dirs, root, state.run_id, resume_run_id)
 
         # 7. compiled pair
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
@@ -957,8 +1116,9 @@ class OpenCodeDriver:
 
         # 10. configuration layers and environment
         redactor = launch_env.Redactor()
-        child_env = self._scan_and_build_env(
-            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, cwd=run_cwd
+        child_env, effective, scanned, observations = self._scan_and_build_env(
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, cwd=run_cwd,
+            version=version or "", verdict=verdict,
         )
 
         # 11. limits, hashes, revisions, argv
@@ -999,6 +1159,7 @@ class OpenCodeDriver:
             policy={
                 "profile": evaluation.profile,
                 "classification": evaluation.effective.classification,
+                "logging_content": profile_policy.view(evaluation.effective).logging_content,
                 "limits": limits,
                 "unqualified_models": list(fresh.sidecar.get("unqualified_models") or []),
             },
@@ -1008,9 +1169,12 @@ class OpenCodeDriver:
             repo_revisions=revisions,
             agent=agent,
             launch_env=child_env,
+            effective_config_digest=effective["digest"],
+            fetch_watch=self._fetch_watch(evaluation, scanned),
         )
 
         # 12. persist
+        credentials = launch_env.credential_kinds(fresh.sidecar, evaluation.effective.providers)
         record = state.record
         assert record is not None
         summary = {
@@ -1040,6 +1204,14 @@ class OpenCodeDriver:
             ),
             "effort_diagnostic": resolution.effort_diagnostic,
             "model_priced": _model_priced(fresh.document, effective_model),
+            "credentials": credentials,
+            "static_key_in_use": bool(credentials),
+            "profile_root": self._display_path(dirs.root),
+            "effective_config": effective,
+            # Observations change with every certificate rotation and DNS
+            # answer, so they sit beside the record, outside its digest.
+            "identity_check": observations,
+            "retention_sweep": sweep_summary,
         }
         record["prepared"] = summary
         record["refusal"] = None
@@ -1107,6 +1279,10 @@ class OpenCodeDriver:
         except adapter_paths.AdapterDataMissing:
             raise refuse("workflow-validation", "adapter-data-missing", "the packaged adapter data was not found; reinstall quoin") from None
 
+        # Refusals the evaluation alone decides come first, so a label-approved
+        # provider whose host is excluded refuses with the destination code
+        # rather than `compile-blocked`.
+        self._check_evaluation_policy(evaluation)
         if not compiler.launchable(evaluation):
             blockers = compiler.compile_blockers(evaluation)
             # A role blocked only because its model lacks a valid gateway
@@ -1125,6 +1301,218 @@ class OpenCodeDriver:
                 "a role model lacks a valid gateway qualification; run the qualification probe",
             )
         return evaluation
+
+    # ------------------------------------------------- launch policy checks
+    #
+    # Every step below either returns a value or raises `PrepareRefused`
+    # after the guarded call, never inside it. The guards catch `Exception`
+    # (not `BaseException`), re-raise a refusal untouched, and decide between
+    # refusing and continuing by what the profile requires, never by
+    # classification alone: an unexpected failure refuses when the profile
+    # requires the control the step enforces, and a requirement that cannot be
+    # computed counts as required.
+
+    @staticmethod
+    def _effective_isolation(effective: Any) -> str:
+        try:
+            entry = effective.values.get("policy.isolation")
+            return entry.value if entry is not None else "convenience"
+        except Exception:  # noqa: BLE001 - unreadable means required
+            return "managed"
+
+    def _policy_refusal(self, code: str, detail: Optional[str] = None) -> PrepareRefused:
+        text = netpolicy.REFUSAL_TEXT.get(code) or isolation.REFUSAL_TEXT[code]
+        return self._refusal(launch_codes.category(code), code, text, detail=detail)  # DYNAMIC: registered launch-policy code
+
+    def _raise_policy(self, refusal: Optional[netpolicy.NetRefusal]) -> None:
+        if refusal is not None:
+            raise self._policy_refusal(refusal.code, refusal.detail)
+
+    def _network_policy(self, step: Callable[[], Any], effective: Any) -> Any:
+        """Run one pure network step. It returns the step's value, or the
+        unavailable marker when the step failed unexpectedly and the profile
+        requires no network control, or raises `destination-not-approved`
+        (`policy-evaluation-failed`) when the profile requires one."""
+        try:
+            return step()
+        except (PrepareRefused, launch_env.LaunchRefused):
+            raise
+        except Exception:  # noqa: BLE001 - decided below by requirement
+            pass
+        try:
+            required = netpolicy.network_controls_required(
+                profile_policy.view(effective), self._effective_isolation(effective),
+            )
+        except Exception:  # noqa: BLE001
+            required = True
+        if required:
+            raise self._policy_refusal("destination-not-approved", netpolicy.POLICY_EVALUATION_FAILED)
+        return _NETWORK_UNAVAILABLE
+
+    def _check_evaluation_policy(self, evaluation: Any) -> None:
+        """Site A: the refusals the evaluation alone decides."""
+        result = self._network_policy(lambda: netpolicy.evaluation_refusal(evaluation.effective), evaluation.effective)
+        if result is not _NETWORK_UNAVAILABLE:
+            self._raise_policy(result)
+
+    def _is_launcher_snapshot(self, cwd: Any, root: Path, profile: str) -> bool:
+        """True for a directory the launcher made under this profile's
+        snapshots directory for this project, owned by this process."""
+        try:
+            real = os.path.realpath(str(cwd))
+            base = os.path.realpath(str(
+                profile_dirs.ProfileDirs.at(self.profile_state_root(profile)).snapshots
+                / adapter_paths.project_key(Path(os.path.realpath(str(root))))
+            ))
+            if os.path.dirname(real) != base:
+                return False
+            info = os.lstat(str(cwd))
+            return stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+        except (OSError, ValueError):
+            return False
+
+    def _checked_paths(self, root: Path, cwd: Any, profile: str) -> List[str]:
+        checked = [os.path.realpath(str(root))]
+        if cwd is not None:
+            real_cwd = os.path.realpath(str(cwd))
+            if real_cwd != checked[0] and not self._is_launcher_snapshot(cwd, root, profile):
+                checked.append(real_cwd)
+        return checked
+
+    def _check_repositories(
+        self, paths: Sequence[str], roots: Optional[Sequence[str]], approved: bool, isolation_value: str,
+    ) -> Optional[str]:
+        """The refusal code for these real paths, or None."""
+        if roots is not None:
+            real_roots = [os.path.realpath(str(r)) for r in roots]
+            for path in paths:
+                contained = False
+                for candidate in real_roots:
+                    try:
+                        contained = os.path.commonpath([path, candidate]) == candidate
+                    except ValueError:
+                        contained = False
+                    if contained:
+                        break
+                if not contained:
+                    return "repository-not-approved"
+        if not approved and isolation_value == "managed":
+            return "approved-repositories-unset"
+        return None
+
+    def _repositories_step(self, evaluation: Any, root: Path, cwd: Any) -> None:
+        effective = evaluation.effective
+        policy = profile_policy.view(effective)
+        isolation_value = self._effective_isolation(effective)
+        roots = policy.repository_roots
+        if roots is None and isolation_value != "managed":
+            return  # nothing is required, so nothing can fail
+        try:
+            code = self._check_repositories(
+                self._checked_paths(root, cwd, evaluation.profile), roots,
+                policy.approved("repositories.allowed_roots"), isolation_value,
+            )
+        except (PrepareRefused, launch_env.LaunchRefused):
+            raise
+        except Exception:  # noqa: BLE001 - the profile requires the control: refuse
+            code = None
+            failed = True
+        else:
+            failed = False
+        if failed:
+            raise self._policy_refusal("repository-not-approved", netpolicy.POLICY_EVALUATION_FAILED)
+        if code is not None:
+            raise self._policy_refusal(code)
+
+    def _isolation_verdict(self, evaluation: Any) -> isolation.IsolationVerdict:
+        try:
+            return isolation.evaluate(
+                self._isolation_roots(), profile=evaluation.profile, adapter_root=self.state_root,
+                profiles_dir=adapter_paths.profiles_dir(self._config_env(), self._home),
+            )
+        except Exception:  # noqa: BLE001 - a probe failure is a verdict, never a traceback
+            return isolation.unverified(("attestation-invalid",))
+
+    def _require_isolation(self, evaluation: Any, verdict: isolation.IsolationVerdict) -> None:
+        if self._effective_isolation(evaluation.effective) == "managed" and not verdict.verified:
+            raise self._policy_refusal(
+                "isolation-required-unverified", verdict.missing[0] if verdict.missing else "attestation-invalid",
+            )
+
+    def _launch_policy(self, evaluation: Any, root: Path, cwd: Any) -> isolation.IsolationVerdict:
+        """Repositories, then the isolation verdict, then the managed
+        requirement. Runs before profile directories are claimed, so a
+        refused launch creates nothing."""
+        self._repositories_step(evaluation, root, cwd)
+        verdict = self._isolation_verdict(evaluation)
+        self._require_isolation(evaluation, verdict)
+        return verdict
+
+    def _net_census(self, evaluation: Any, fresh: Any, layer_check: Any, ambient: Mapping[str, str],
+                    dirs: "profile_dirs.ProfileDirs") -> Any:
+        effective = evaluation.effective
+        return self._network_policy(
+            lambda: netpolicy.census(
+                effective=effective, compiled_doc=fresh.document, inventory=layer_check.inventory,
+                ambient=ambient, policy=profile_policy.view(effective), npm_userconfig=dirs.npm_userconfig,
+                fetch_dirs=list(layer_check.inventory.fetch_dirs),
+            ),
+            effective,
+        )
+
+    def _net_approve(self, evaluation: Any, census: netpolicy.Census) -> None:
+        effective = evaluation.effective
+        result = self._network_policy(
+            lambda: netpolicy.approve(census, profile_policy.view(effective), effective.classification), effective,
+        )
+        if result is not _NETWORK_UNAVAILABLE:
+            self._raise_policy(result)
+
+    def _net_identity(self, evaluation: Any, census: netpolicy.Census) -> List[Dict[str, Any]]:
+        effective = evaluation.effective
+        result = self._network_policy(
+            lambda: netpolicy.identity_check(census, profile_policy.view(effective), self._identity_checker()),
+            effective,
+        )
+        if result is _NETWORK_UNAVAILABLE:
+            return []
+        observations, refusal = result
+        self._raise_policy(refusal)
+        return observations
+
+    @staticmethod
+    def _as_refusal(exc: "PrepareRefused") -> launch_env.Refusal:
+        return launch_env.Refusal(
+            code=exc.code, category=exc.category, layer="launch-policy", token=exc.detail or "", message=exc.message,
+        )
+
+    def offline_launch_refusal(
+        self, profile: str, *, ambient_env: Optional[Mapping[str, str]] = None, evaluation: Any = None,
+        cwd: Any = None,
+    ) -> Optional[launch_env.Refusal]:
+        """The first launch-policy refusal a launch of this profile would raise
+        now, in prepare order, or None. Never runs the identity check, creates
+        nothing and resolves no credential. A refusal is always a return value,
+        so a caller's broad guard cannot swallow or rewrite one."""
+        ambient = dict(self._env if ambient_env is None else ambient_env)
+        cfg_env = {key: ambient[key] for key in _CONFIG_ENV_KEYS if key in ambient}
+        try:
+            if evaluation is None:
+                evaluation = compiler.evaluate(
+                    project_root=self.project_root, profile=profile, env=cfg_env, home=self._home,
+                    now=datetime.fromtimestamp(self._clock(), timezone.utc),
+                )
+        except (ConfigErrors, roles.AllowUnqualifiedRefused, adapter_paths.AdapterDataMissing, ValueError, OSError):
+            return None
+        try:
+            self._check_evaluation_policy(evaluation)
+            if not compiler.launchable(evaluation):
+                return None
+            self._launch_policy(evaluation, self.project_root, cwd)
+        except PrepareRefused as exc:
+            return self._as_refusal(exc)
+        pair = self.effective_preview(profile, ambient_env=ambient_env, evaluation=evaluation, cwd=cwd)
+        return pair[1].launch_refusal if pair is not None else None
 
     def _load_install(self, root: Path, redact: Any) -> Any:
         try:
@@ -1168,28 +1556,244 @@ class OpenCodeDriver:
 
     def _scan_and_build_env(
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
-        evaluation: Any, metadata: Any, redactor: Any, cwd: Optional[Path] = None,
+        evaluation: Any, metadata: Any, redactor: Any, dirs: "profile_dirs.ProfileDirs",
+        cwd: Optional[Path] = None, version: str = "", verdict: Optional[isolation.IsolationVerdict] = None,
+        surface: str = "headless",
     ) -> Any:
-        """Refuse on a configuration layer that would change the compiled
-        pair, then build the child environment. May raise `LaunchRefused`."""
+        """Refuse on a configuration source that would change the compiled
+        pair or that the profile does not allow, then run the destination
+        checks, then build the child environment and the
+        effective-configuration record. Returns ``(child_env, record,
+        inventory, identity_observations)``. May raise `LaunchRefused`."""
+        layer_check, hardening = self._layer_check(
+            root, cfg_env, config_path, fresh, evaluation, metadata, dirs, cwd=cwd,
+            ambient=self._env, capture=False,
+        )
+        if verdict is None:
+            verdict = self._isolation_verdict(evaluation)
+        # After the inventory refusal and before any credential is resolved.
+        census = self._net_census(evaluation, fresh, layer_check, self._env, dirs)
+        observations: List[Dict[str, Any]] = []
+        network_status = "planned"
+        if census is _NETWORK_UNAVAILABLE:
+            census, network_status = netpolicy.EMPTY_CENSUS, "unavailable"
+        else:
+            self._net_approve(evaluation, census)
+            observations = self._net_identity(evaluation, census)
+        child_env = launch_env.build_env(
+            ambient=self._env, compile_sidecar=fresh.sidecar,
+            providers=evaluation.effective.providers,
+            resolver=self._resolver_factory(self._env, platform=self._platform),
+            data_dir=dirs.data, config_path=config_path, redactor=redactor,
+            state_dir=dirs.root, profile_root=dirs.root, adapter_root=self.state_root,
+            storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
+        )
+        effective = self._effective_record(
+            layer_check, fresh, evaluation, dirs, version, child_env.names(), self._env, child_env.redactor,
+            verdict=verdict, census=census, network_status=network_status, surface=surface,
+        )
+        return child_env, effective, layer_check.inventory, observations
+
+    def _layer_check(
+        self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any, evaluation: Any,
+        metadata: Any, dirs: "profile_dirs.ProfileDirs", *, cwd: Optional[Path], ambient: Mapping[str, str],
+        capture: bool,
+    ) -> Tuple[Any, Dict[str, str]]:
         owned_agents = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "agent"}
         owned_commands = {r: rec["sha256"] for r, rec in metadata.owned.items() if rec["kind"] == "command"}
         scan_env = {"OPENCODE_CONFIG": str(config_path)}
         if "XDG_CONFIG_HOME" in cfg_env:
             scan_env["XDG_CONFIG_HOME"] = cfg_env["XDG_CONFIG_HOME"]
-        launch_env.check_config_layers(
+        classification = evaluation.effective.classification
+        sharing_entry = evaluation.effective.values.get("policy.sharing")
+        sharing = sharing_entry.value if sharing_entry is not None else "deny"
+        policy_view = profile_policy.view(evaluation.effective)
+        hardening = launch_env.hardening_env(
+            classification=classification, sharing=sharing, package_install=policy_view.package_install,
+            npm_cache=dirs.npm_cache, npm_userconfig=dirs.npm_userconfig,
+        )
+        expected = inventory.Expected.from_compiled(
+            fresh.document, {**owned_agents, **owned_commands}, policy_view
+        )
+        layer_check = launch_env.check_config_layers(
             cwd=cwd if cwd is not None else root, env=scan_env, home=self._home,
             compiled_doc=fresh.document,
             owned_agents=owned_agents, owned_commands=owned_commands,
+            data_dir=dirs.data, ambient_env=ambient, expected=expected,
+            hardening_names=tuple(hardening), capture=capture,
         )
-        data = launch_env.data_dir(cfg_env, self._home, evaluation.profile)
-        return launch_env.build_env(
-            ambient=self._env, compile_sidecar=fresh.sidecar,
-            providers=evaluation.effective.providers,
-            resolver=self._resolver_factory(self._env, platform=self._platform),
-            data_dir=data, config_path=config_path, redactor=redactor,
-            state_dir=self.state_root,
+        return layer_check, hardening
+
+    def _effective_record(
+        self, layer_check: Any, fresh: Any, evaluation: Any, dirs: "profile_dirs.ProfileDirs",
+        version: str, env_names: Sequence[str], ambient: Mapping[str, str], redactor: Any,
+        *, verdict: isolation.IsolationVerdict, census: netpolicy.Census, network_status: str,
+        surface: str = "headless",
+    ) -> Dict[str, Any]:
+        classification = evaluation.effective.classification
+        policy_view = profile_policy.view(evaluation.effective)
+        egress = verdict.egress_hosts if verdict.verified else None
+        child_names = set(env_names)
+        stripped = sorted(n for n in ambient if n.startswith("OPENCODE_") and n not in child_names)
+        other_dropped = sum(1 for n in ambient if not n.startswith("OPENCODE_") and n not in child_names)
+        effective = effective_record.build(
+            inventory=layer_check.inventory, verdicts=layer_check.verdicts,
+            profile=evaluation.profile, classification=classification,
+            opencode_version=version, compiled_digest=fresh.digest,
+            native_sha256=fresh.sidecar["native_sha256"],
+            env_names=list(env_names),
+            launcher_names=[n for n in launch_env.LAUNCHER_ENV_NAMES if n in child_names],
+            stripped_names=stripped, stripped_other_count=other_dropped,
+            dirs_display={
+                "data": self._display_path(dirs.data), "state": self._display_path(dirs.state),
+                "cache": self._display_path(dirs.cache), "tmp": self._display_path(dirs.tmp),
+            },
+            credentials=launch_env.credential_kinds(fresh.sidecar, evaluation.effective.providers),
+            policy=effective_record.policy_section(evaluation.effective),
+            redactor=redactor, surface=surface, effective=evaluation.effective,
+            isolation=isolation.record_section(verdict),
+            network=netpolicy.network_section(census, policy_view, status=network_status, egress_hosts=egress),
+            enforcement=netpolicy.enforcement_table(
+                policy_view, classification, verdict, census,
+                isolation=self._effective_isolation(evaluation.effective),
+                allowed_hosts_approved=netpolicy.hosts_approved(evaluation.effective),
+                network_status=network_status,
+            ),
         )
+        # Persist exactly the redacted form, so the stored object and its digest agree.
+        return json.loads(effective_record.serialise(effective, redactor).decode("utf-8"))
+
+    def effective_preview(
+        self, profile: str, *, ambient_env: Optional[Mapping[str, str]] = None, evaluation: Any = None,
+        cwd: Any = None,
+    ) -> Optional[Tuple[Dict[str, Any], Any]]:
+        """The effective-configuration record and layer check a launch of
+        this profile would produce now, or ``None`` when no launch could be
+        prepared (blocked configuration, missing install record, no pinned
+        runtime). Creates no directory, writes nothing and resolves no
+        credential, and never runs the identity check.
+
+        A launch-policy refusal never escapes: each shared step runs under its
+        own handler, the first refusal is kept as the layer check's
+        `launch_refusal`, and the remaining steps still run so the record is
+        complete. The isolation verdict is always computed; when the network
+        census itself could not be built the record carries the unavailable
+        network shape."""
+        ambient = dict(self._env if ambient_env is None else ambient_env)
+        cfg_env = {key: ambient[key] for key in _CONFIG_ENV_KEYS if key in ambient}
+        try:
+            version = qualification.pinned_version()
+            if evaluation is None:
+                evaluation = compiler.evaluate(
+                    project_root=self.project_root, profile=profile, env=cfg_env, home=self._home,
+                    now=datetime.fromtimestamp(self._clock(), timezone.utc),
+                )
+            if not compiler.launchable(evaluation):
+                return None
+            fresh = compiler.build(evaluation)
+            metadata = install.load_metadata(self.project_root)
+            if metadata is None:
+                return None
+            target = profile_dirs.compiled_dir(self.state_root, evaluation.profile, evaluation.project_root)
+            dirs = profile_dirs.ProfileDirs.at(profile_dirs.profile_root(self.state_root, evaluation.profile))
+        except (ConfigErrors, roles.AllowUnqualifiedRefused, adapter_paths.AdapterDataMissing,
+                install.InstallError, compiler.CompileBlocked, compiler.CompileGateError, ValueError, OSError):
+            return None
+        config_path = target / compiler.NATIVE_FILE
+        layer_check, hardening = self._layer_check(
+            self.project_root, cfg_env, config_path, fresh, evaluation, metadata, dirs,
+            cwd=None, ambient=ambient, capture=True,
+        )
+        names_ = launch_env.expected_env_names(
+            ambient=ambient, compile_sidecar=fresh.sidecar, providers=evaluation.effective.providers,
+            storage=profile_dirs.child_storage_env(dirs), hardening=hardening,
+        )
+        first: List[PrepareRefused] = []
+
+        def attempt(step: Callable[[], Any]) -> Any:
+            try:
+                return step()
+            except PrepareRefused as exc:
+                first.append(exc)
+                return None
+
+        attempt(lambda: self._check_evaluation_policy(evaluation))
+        attempt(lambda: self._repositories_step(evaluation, self.project_root, cwd))
+        verdict = self._isolation_verdict(evaluation)
+        attempt(lambda: self._require_isolation(evaluation, verdict))
+        census: Any = attempt(lambda: self._net_census(evaluation, fresh, layer_check, ambient, dirs))
+        network_status = "planned"
+        if census is None or census is _NETWORK_UNAVAILABLE:
+            census, network_status = netpolicy.EMPTY_CENSUS, "unavailable"
+        else:
+            attempt(lambda: self._net_approve(evaluation, census))
+        record = self._effective_record(
+            layer_check, fresh, evaluation, dirs, version, names_, ambient, launch_env.Redactor(),
+            verdict=verdict, census=census, network_status=network_status,
+        )
+        if first:
+            layer_check = dataclasses.replace(layer_check, launch_refusal=self._as_refusal(first[0]))
+        return record, layer_check
+
+    @staticmethod
+    def _fetch_watch(evaluation: Any, scanned: Any) -> Tuple[Tuple[str, str], ...]:
+        if profile_policy.view(evaluation.effective).package_install != "deny":
+            return ()
+        return tuple((str(path), layer) for path, layer in scanned.fetch_dirs)
+
+    def _retention_sweep(self, evaluation: Any, dirs: Any, root: Path, run_id: Optional[str],
+                         resume_run_id: Optional[str]) -> Dict[str, Any]:
+        """Age out old profile storage once per driver per profile, for new runs
+        only. Never refuses a launch."""
+        if resume_run_id is not None:
+            return {"status": "skipped", "reason": "resume"}
+        if evaluation.profile in self._swept:
+            return {"status": "skipped", "reason": "already-swept", "left": 0}
+        self._swept.add(evaluation.profile)
+        try:
+            policy = retention.RetentionPolicy.from_effective(evaluation.effective)
+            if policy.empty:
+                return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
+                        "failed": 0, "left": 0, "truncated": False}
+            return retention.sweep(
+                dirs=dirs, project_root=root, now=self._clock(), uid=os.getuid(),
+                policy=policy, profile=evaluation.profile, table=self._proc.snapshot(),
+                current_run=run_id,
+            )
+        except Exception:  # noqa: BLE001 - the sweep must not refuse a launch
+            return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
+                    "failed": 0, "left": 0, "truncated": False}
+
+    def _claim_profile_dirs(self, evaluation: Any) -> "profile_dirs.ProfileDirs":
+        """Latch this process to the evaluated profile and prepare its storage."""
+        refuse = self._refusal
+        classification = evaluation.effective.classification
+        try:
+            self._session.claim(evaluation.profile, classification)
+        except profile_dirs.ProfileSwitch:
+            raise refuse(
+                "policy-denial", "profile-switch-in-process",
+                "this process already launched under another profile or classification; "
+                "start a new process to change it",
+            ) from None
+        try:
+            return profile_dirs.prepare(self.state_root, evaluation.profile, classification)
+        except profile_dirs.StampMismatch:
+            raise refuse(
+                "policy-denial", "profile-stamp-mismatch",
+                "the profile storage directory was created for a different profile or classification",
+            ) from None
+        except profile_dirs.ProfileDirUnsafe:
+            raise refuse(
+                "invalid-configuration", "profile-dir-unsafe",
+                "the profile storage directory cannot be used privately",
+            ) from None
+
+    def _display_path(self, path: Path) -> str:
+        try:
+            return "~/" + str(Path(path).relative_to(self._home))
+        except ValueError:
+            return "<state>/" + Path(path).name
 
     def prepare_interactive(self, profile: str) -> "InteractiveLaunch":
         """Validate a profile for an interactive TUI session, or refuse.
@@ -1202,7 +1806,7 @@ class OpenCodeDriver:
         try:
             return self._prepare_interactive(profile)
         except launch_env.LaunchRefused as exc:
-            raise PrepareRefused(exc.category, exc.code, exc.message) from None
+            raise PrepareRefused(exc.category, exc.code, exc.message, detail=getattr(exc, "detail", None)) from None
 
     def _prepare_interactive(self, profile: str) -> "InteractiveLaunch":
         refuse = self._refusal
@@ -1214,16 +1818,28 @@ class OpenCodeDriver:
                 "workflow-validation", "adapter-data-missing",
                 "the packaged adapter data was not found; reinstall quoin",
             )
+        try:
+            self._session.check_profile(profile)
+        except profile_dirs.ProfileSwitch:
+            raise refuse(
+                "policy-denial", "profile-switch-in-process",
+                "this process already launched under another profile; start a new process to change profile",
+            ) from None
         binary, version = self._check_binary()
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(profile, cfg_env, base_redact)
+        verdict = self._launch_policy(evaluation, root, None)
+        dirs = self._claim_profile_dirs(evaluation)
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
         config_path = compiled_dir / compiler.NATIVE_FILE
         metadata = self._load_install(root, base_redact)
         self._verify_owned(root, metadata)
         redactor = launch_env.Redactor()
-        child_env = self._scan_and_build_env(root, cfg_env, config_path, fresh, evaluation, metadata, redactor)
+        child_env, effective, _scanned, _observations = self._scan_and_build_env(
+            root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, version=version or "",
+            verdict=verdict, surface="interactive",
+        )
         return InteractiveLaunch(
             binary=Path(binary),
             runtime_version=version or "",
@@ -1234,6 +1850,10 @@ class OpenCodeDriver:
             env_names=tuple(child_env.names()),
             launch_env=child_env,
             profile=evaluation.profile,
+            effective_config=effective,
+            effective_config_digest=effective["digest"],
+            profile_root=dirs.root,
+            retention=retention.RetentionPolicy.from_effective(evaluation.effective),
         )
 
     def _compile_pair(self, evaluation: Any, cfg_env: Mapping[str, str]) -> Tuple[Any, Path]:
@@ -1241,7 +1861,11 @@ class OpenCodeDriver:
         when it is missing or stale. Returns the fresh build and directory."""
         refuse = self._refusal
         try:
-            directory = compiler.resolve_output_dir(evaluation, output=None, env=cfg_env, home=self._home)
+            target = profile_dirs.compiled_dir(self.state_root, evaluation.profile, evaluation.project_root)
+        except ValueError:
+            raise refuse("invalid-configuration", "compiled-output-refused", "the compiled output location is invalid") from None
+        try:
+            directory = compiler.resolve_output_dir(evaluation, output=target, env=cfg_env, home=self._home)
         except compiler.OutputRefused as exc:
             raise refuse("invalid-configuration", "compiled-output-refused", str(exc)) from None
         except OSError:
@@ -1345,12 +1969,14 @@ class OpenCodeDriver:
                 prepared.run_id, number, redact=redactor, observed_clock=self._clock,
                 start_sequence=seed.start_sequence, deduper=seed.deduper,
                 max_line_bytes=self._max_line_bytes,
+                content=_logging_content(prepared),
             )
             driver_start = self._proc.start_time(os.getpid())
+            fetch_baseline = _fetch_baseline(prepared.fetch_watch)
             proc = subprocess.Popen(
                 list(argv), cwd=str(prepared.cwd), stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
-                env=prepared.launch_env.materialize(), close_fds=True,
+                env=prepared.launch_env.materialize(), close_fds=True, umask=0o077,
             )
         except BaseException as exc:
             if writer is not None:
@@ -1368,7 +1994,7 @@ class OpenCodeDriver:
             stderr_ring=collections.deque(maxlen=self._stderr_tail_lines),
             deadline=self._monotonic() + float(deadline_value),
             hashes_before=hashes_before, counters_base=dict(record.get("counters_total") or {}),
-            resume_mode=seed.resume_mode, native_session_id=seed.native_session_id,
+            fetch_baseline=fetch_baseline, resume_mode=seed.resume_mode, native_session_id=seed.native_session_id,
             ran_anything=seed.ran_anything, state_changing=set(seed.state_changing), start_sequence=seed.start_sequence,
             task=prepared.request.task, started_event=None, stdout_thread=None, stderr_thread=None,
         )
@@ -1384,6 +2010,7 @@ class OpenCodeDriver:
                     driver_pid=os.getpid(), driver_start=driver_start, resume_mode=seed.resume_mode,
                     state="running", started_at=_iso(self._clock), reason=None,
                     input_hashes_before=hashes_before,
+                    logging_content=_logging_content(prepared),
                 )
                 if entry is not staged:
                     attempts.append(entry)
@@ -1507,12 +2134,16 @@ class OpenCodeDriver:
                 text = chunk.decode("utf-8", "replace")
                 found = ev.parse_stderr_line(text.rstrip("\r\n"))
                 if found is not None:
+                    handle.stderr_signals.add(found.kind)
                     handle.signal_q.put(found)
                 # Redact the whole chunk first, then bound it, so a secret that
                 # straddles the bound is replaced before it can be cut.
                 shown = handle.redactor(text.rstrip("\r\n"))
                 shown = shown.encode("utf-8")[:bound].decode("utf-8", "ignore")
                 handle.stderr_ring.append(shown)
+                handle.stderr_lines += 1
+                handle.stderr_bytes += len(shown.encode("utf-8"))
+                handle.stderr_hash.update(shown.encode("utf-8") + b"\n")
         except (OSError, ValueError):
             return
 
@@ -1590,7 +2221,10 @@ class OpenCodeDriver:
             except queue.Empty:
                 return out
             if found.kind == "approval":
-                payload = ev.approval_from_stderr(found, redact=handle.redactor)
+                payload = ev.approval_from_stderr(
+                    found, redact=handle.redactor,
+                    content=_logging_content(handle.prepared),
+                )
                 event = self._emit_driver(handle, EventType.APPROVAL_REQUIRED, payload)
                 handle.facts.approval = True
                 if event is not None:
@@ -1713,6 +2347,12 @@ class OpenCodeDriver:
                 event = self._emit_driver(handle, EventType.ARTIFACT_REFERENCE, payload)
                 if event is not None:
                     out.append(event)
+        baseline = getattr(handle, "fetch_baseline", None)
+        if baseline:
+            layers = _fetched_layers(baseline)
+            if layers:
+                facts.executable_fetch = True
+                facts.executable_fetch_rows |= layers
         outcome = classify(facts)
         stopped = self._emit_driver(
             handle, EventType.STOPPED,
@@ -1811,12 +2451,22 @@ class OpenCodeDriver:
                 input_hashes_after=dict(after_hashes) if after_hashes is not None else None,
                 repo_revisions_after=[dict(r) for r in revisions] if revisions is not None else None,
             )
+            if handle.facts.executable_fetch_rows:
+                entry["executable_fetch_rows"] = sorted(handle.facts.executable_fetch_rows)
             record["counters_total"] = runstore.add_counters(handle.counters_base, handle.pipeline.counters)
             record["usage_totals"] = totals.to_dict()
             record["retry_usage"] = {
                 "tokens": usage.tokens, "cost": None if usage.cost is None else str(usage.cost),
             }
-            record["stderr_tail"] = handle.redactor("\n".join(list(handle.stderr_ring)))
+            logging_content = _logging_content(handle.prepared)
+            record["stderr_tail"] = (
+                handle.redactor("\n".join(list(handle.stderr_ring))) if logging_content == "summary" else ""
+            )
+            record["stderr_summary"] = {
+                "lines": handle.stderr_lines, "bytes": handle.stderr_bytes,
+                "sha256_prefix": handle.stderr_hash.hexdigest()[:12],
+                "signals": sorted(handle.stderr_signals), "discarded": handle.stderr_discarded,
+            }
             record["resume_blocked"] = outcome.resume_blocked
             record["outcome"] = {
                 "state": outcome.state, "evidence": outcome.evidence, "reason": outcome.reason,

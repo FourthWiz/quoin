@@ -234,14 +234,21 @@ def _pid_alive(pid: Any) -> bool:
     return True
 
 
-def _live_locks(root: str) -> FrozenSet[str]:
-    memory = os.path.join(root, ARTIFACT_ROOT, "memory")
+def live_task_locks(project_root, *, strict: bool = False) -> FrozenSet[str]:
+    """Tasks whose supervisor pid file names a live process. With `strict`, a
+    memory directory that exists but cannot be scanned raises `OSError`
+    instead of reading as "no locks"."""
+    memory = os.path.join(str(project_root), ARTIFACT_ROOT, "memory")
     prefix, suffix = "run-supervisor-", ".pid"
     try:
         found = sorted(
             e.name for e in os.scandir(memory) if e.name.startswith(prefix) and e.name.endswith(suffix)
         )
+    except FileNotFoundError:
+        return frozenset()
     except OSError:
+        if strict:
+            raise
         return frozenset()
     live = set()
     for name in found[:_MAX_LOCKS]:
@@ -258,6 +265,10 @@ def _live_locks(root: str) -> FrozenSet[str]:
         if isinstance(data, dict) and _pid_alive(data.get("pid")):
             live.add(task)
     return frozenset(live)
+
+
+def _live_locks(root: str) -> FrozenSet[str]:
+    return live_task_locks(root)
 
 
 def take_listing(

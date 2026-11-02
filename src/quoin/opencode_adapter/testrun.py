@@ -30,7 +30,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
-from . import jsonio, launch_env, paths, runstore
+from . import jsonio, launch_env, paths, profile_dirs, runstore
 from .errors import ConfigErrors
 
 DEFAULT_TIMEOUT_S = 600
@@ -217,7 +217,52 @@ def command_env(environ: Mapping[str, str]) -> Dict[str, str]:
         if launched and not launch_env.allowed_ambient(name):
             continue
         out[name] = value
+    root = paths.launcher_state_dir(environ) if launched else None
+    if root is not None:
+        out.update(profile_dirs.child_storage_env(profile_dirs.ProfileDirs.at(root)))
+        userconfig = profile_dirs.ProfileDirs.at(root).npm_userconfig
+        if environ.get("npm_config_userconfig") == str(userconfig):
+            out["npm_config_userconfig"] = str(userconfig)
+        else:
+            out.pop("npm_config_userconfig", None)
+        if environ.get("npm_config_offline") == "true":
+            out["npm_config_offline"] = "true"
+        else:
+            out.pop("npm_config_offline", None)
     return out
+
+
+def recorded_profile(project_root, task: str) -> Tuple[Optional[str], Optional[str]]:
+    """The profile a task recorded and where it came from, as `(name, source)`.
+
+    Order: the coordinator's `settings.workflow.profile`, the legacy
+    `settings.profile`, then the latest run's prepared or requested profile.
+    `(None, None)` when nothing names one (including a run with no profile:
+    choosing a storage root never falls back to a default) and
+    `(None, "unreadable")` when the store or a record cannot be read. Never
+    creates anything."""
+    try:
+        directory = runstore.inspect_store(project_root)
+        if directory is None:
+            return None, None
+        state = runstore.load_workflow_state(directory, task)
+        settings = (state or {}).get("settings") or {}
+        block = settings.get("workflow")
+        if isinstance(block, Mapping) and isinstance(block.get("profile"), str):
+            return block["profile"], "workflow-state"
+        if isinstance(settings.get("profile"), str):
+            return settings["profile"], "workflow-state"
+        pointer = runstore.load_pointer(directory, task)
+        if pointer is None:
+            return None, None
+        record = runstore.load_record(directory, pointer["run_id"]) or {}
+        for section in ("prepared", "request"):
+            value = (record.get(section) or {}).get("profile")
+            if isinstance(value, str):
+                return value, "run-record"
+        return None, None
+    except (runstore.RunStoreError, OSError, ValueError, KeyError, TypeError):
+        return None, "unreadable"
 
 
 def _stage_name(stage: Optional[int]) -> str:

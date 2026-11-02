@@ -22,13 +22,15 @@ import copy
 import functools
 import ipaddress
 import json
+import os
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 from urllib.parse import urlsplit, urlunsplit
 
-from . import jsonio, paths, schema_check
+from . import jsonio, paths, profile_policy, schema_check
 from . import secrets as credential_refs
 from .errors import (
     SECRET_SHAPE_RE,
@@ -43,6 +45,7 @@ from .install import PROFILE_RE
 ENDPOINT_KEYS = ("providers", "models", "default_model", "auxiliary_model")
 PROJECT_LABEL = ".quoin/runtime.json"
 MANAGED_LABEL = "managed policy"
+TRUSTED_MANAGED_LABEL = "trusted managed policy"
 
 _PLACEHOLDER_MARKERS = ("REPLACE_WITH_", "${", "{env:", "{file:")
 _LABEL_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
@@ -72,6 +75,33 @@ class LoadedConfig:
     profile: Layer
     project: Optional[Layer]
     managed: Optional[Layer]
+    # The root-owned managed policy: its content when the file is present
+    # (valid in every non-absent state) and how far it is trusted. Defaulted so
+    # a direct construction without it keeps meaning "no trusted file".
+    trusted_managed: Optional[Layer] = None
+    trusted_state: str = "absent"
+
+
+@dataclass(frozen=True)
+class TrustedSource:
+    """Where the trusted managed policy is read from and who may own it. The
+    production value takes nothing from the environment."""
+
+    path: Path
+    owner_uid: int
+    invoking_uid: int
+    top: Path
+
+    @classmethod
+    def system(cls) -> "TrustedSource":
+        return cls(paths.trusted_policy_path(), 0, os.getuid(), Path("/"))
+
+
+@dataclass(frozen=True)
+class ManagedLayers:
+    managed: Optional[Layer]
+    trusted_managed: Optional[Layer]
+    trusted_state: str
 
 
 def provider_env_name(provider_id: str) -> str:
@@ -209,6 +239,22 @@ def host_key(host: str) -> str:
     if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
         return str(address.ipv4_mapped)
     return address.compressed
+
+
+def url_is_unambiguous(url: Any) -> bool:
+    """True when every URL parser reads the same host from `url`: printable
+    ASCII only, no whitespace, no backslash (a JavaScript parser reads it as a
+    path separator) and no percent-escape in the host and port. Userinfo may
+    carry percent-escapes (an encoded proxy password is the normal form); no
+    parser reads it as the host."""
+    if not isinstance(url, str) or not url:
+        return False
+    if any(ord(c) <= 32 or ord(c) > 126 for c in url) or "\\" in url:
+        return False
+    try:
+        return "%" not in urlsplit(url).netloc.rpartition("@")[2]
+    except ValueError:
+        return False
 
 
 def _check_base_url(url: str, path: Tuple[Any, ...], label: str) -> Optional[ConfigError]:
@@ -405,6 +451,84 @@ def _semantic(
                         make_error("invalid-type", label, ("policy", list_name, index), "wrong-type")
                     )
     errs += _ident_errors(_dict(data.get("integrations")).get("backend"), ("integrations", "backend"), label)
+    errs += _isolation_errors(policy, label)
+    return errs
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _isolation_errors(policy: Dict[str, Any], label: str) -> List[ConfigError]:
+    """Semantic checks for the isolation policy fields, shared by every layer."""
+    errs: List[ConfigError] = []
+    for kind, value in _dict(policy.get("retention")).items():
+        if _is_int(value) and not 1 <= value <= 3650:
+            errs.append(
+                make_error(
+                    "invalid-limit", label, ("policy", "retention", kind), "retention-out-of-range"
+                )
+            )
+    addresses = _dict(policy.get("network")).get("allowed_addresses")
+    if isinstance(addresses, list):
+        for index, item in enumerate(addresses):
+            if not isinstance(item, str):
+                continue
+            try:
+                ipaddress.ip_network(item, strict=True)
+            except ValueError:
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("policy", "network", "allowed_addresses", index),
+                        "wrong-type",
+                    )
+                )
+    roots = _dict(policy.get("repositories")).get("allowed_roots")
+    if isinstance(roots, list):
+        for index, item in enumerate(roots):
+            if not isinstance(item, str):
+                continue
+            if not (
+                item.startswith("/")
+                and "\x00" not in item
+                and len(item) <= 4096
+                and posixpath.normpath(item) == item
+            ):
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("policy", "repositories", "allowed_roots", index),
+                        "wrong-type",
+                    )
+                )
+    for group, ids, verified, unverifiable in (
+        ("lsp", profile_policy.LSP_BUILTIN_IDS, profile_policy.LSP_ALLOWLIST_VERIFIED,
+         "lsp-allowlist-unverifiable"),
+        ("formatter", profile_policy.FORMATTER_BUILTIN_IDS, profile_policy.FORMATTER_ALLOWLIST_VERIFIED,
+         "formatter-allowlist-unverifiable"),
+    ):
+        section = _dict(policy.get(group))
+        if section.get("mode") == "allow-listed" and not verified:
+            errs.append(make_error("invalid-type", label, ("policy", group, "mode"), unverifiable))
+        allowed = section.get("allowed")
+        if not isinstance(allowed, list):
+            continue
+        for index, item in enumerate(allowed):
+            if isinstance(item, str) and item not in ids:
+                errs.append(
+                    make_error(
+                        "invalid-type", label, ("policy", group, "allowed", index), "unknown-builtin-id"
+                    )
+                )
+        if group == "formatter":
+            named = {item for item in allowed if isinstance(item, str)}
+            for pair in profile_policy.FORMATTER_PAIRED_IDS:
+                if 0 < len(named & set(pair)) < len(pair):
+                    errs.append(
+                        make_error(
+                            "formatter-allowlist-invalid", label, ("policy", "formatter", "allowed"),
+                            "formatter-allowlist-invalid",
+                        )
+                    )
     return errs
 
 
@@ -489,6 +613,42 @@ def load_managed(env: Mapping[str, str]) -> Optional[Layer]:
     return load_layer(path, "managed", file_label=MANAGED_LABEL)
 
 
+def load_trusted_managed(source: TrustedSource) -> Tuple[Optional[Layer], str]:
+    """Read the trusted managed policy.
+
+    The state is ``absent``, ``trusted`` or ``untrusted:TOKEN`` with TOKEN in
+    `errors.TRUST_TOKENS`. The first failing check wins in the order chain,
+    file, invoking user. The content is validated in every non-absent state,
+    so an invalid file refuses whether or not it is trusted.
+    """
+    tree, token = jsonio.read_trusted_json(
+        source.path, file_label=TRUSTED_MANAGED_LABEL, owner_uid=source.owner_uid
+    )
+    if token == "absent":
+        return None, "absent"
+    layer = validate_layer_data(tree, "managed", file_label=TRUSTED_MANAGED_LABEL)
+    failure = jsonio.check_root_owned_chain(
+        source.path, owner_uid=source.owner_uid, top=source.top
+    )
+    if failure is None:
+        failure = token
+    if failure is None and source.invoking_uid == source.owner_uid:
+        failure = "invoking-user-is-root"
+    if failure is not None:
+        return layer, "untrusted:" + failure
+    return layer, "trusted"
+
+
+def load_managed_layers(
+    env: Mapping[str, str], trusted: Optional[TrustedSource] = None
+) -> ManagedLayers:
+    """Both managed layers, loaded together so no caller can merge without the
+    trusted one. `trusted=None` means the production location."""
+    managed = load_managed(env)
+    layer, state = load_trusted_managed(trusted if trusted is not None else TrustedSource.system())
+    return ManagedLayers(managed, layer, state)
+
+
 # ------------------------------------------------------ cross-layer step
 
 
@@ -558,6 +718,7 @@ def load_all(
     profile: Optional[str] = None,
     env: Mapping[str, str],
     home: Path,
+    trusted: Optional[TrustedSource] = None,
 ) -> LoadedConfig:
     """Load the project, profile and managed layers.
 
@@ -574,8 +735,14 @@ def load_all(
             [make_error("profile-not-found", "profiles/", "$", "no-profile-selected")]
         )
     selected = load_profile(name, env=env, home=home)
-    managed = load_managed(env)
+    managed_layers = load_managed_layers(env, trusted)
     errs = check_cross_layer(selected, project)
     if errs:
         raise ConfigErrors(errs)
-    return LoadedConfig(selected, project, managed)
+    return LoadedConfig(
+        selected,
+        project,
+        managed_layers.managed,
+        managed_layers.trusted_managed,
+        managed_layers.trusted_state,
+    )

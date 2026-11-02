@@ -30,6 +30,9 @@ class CoordDriver(rh.ScriptedDriver):
         self.arguments: List[str] = []
         self.default = rh.outcome()
 
+    def profile_state_root(self, profile: str) -> Path:
+        return self.state_root
+
     def prepare(self, request: Any, *, resume_run_id: Optional[str] = None) -> Any:
         prepared = super().prepare(request, resume_run_id=resume_run_id)
         self.requests.append(request)

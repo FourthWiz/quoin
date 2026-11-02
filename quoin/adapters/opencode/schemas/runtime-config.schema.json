@@ -216,6 +216,180 @@
         "cross_profile_fallback": {
           "type": "boolean",
           "const": false
+        },
+        "fallback": {
+          "type": "string",
+          "enum": [
+            "stop",
+            "same-profile"
+          ]
+        },
+        "web_tools": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "allow"
+          ]
+        },
+        "package_install": {
+          "type": "string",
+          "enum": [
+            "deny",
+            "allow"
+          ]
+        },
+        "mcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "local": {
+              "type": "string",
+              "enum": [
+                "deny",
+                "allow-listed",
+                "any"
+              ]
+            },
+            "remote": {
+              "type": "string",
+              "enum": [
+                "deny",
+                "allow-listed",
+                "any"
+              ]
+            },
+            "allowed": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/entry_name"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "lsp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "deny",
+                "allow-listed",
+                "builtin"
+              ]
+            },
+            "allowed": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/builtin_id"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "formatter": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mode": {
+              "type": "string",
+              "enum": [
+                "deny",
+                "allow-listed",
+                "builtin"
+              ]
+            },
+            "allowed": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/builtin_id"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "identity_check": {
+              "type": "string",
+              "enum": [
+                "required",
+                "off"
+              ]
+            },
+            "allowed_addresses": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            },
+            "pins": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "uniqueItems": true
+            }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "content": {
+              "type": "string",
+              "enum": [
+                "metadata",
+                "summary"
+              ]
+            }
+          }
+        },
+        "retention": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "runs_days": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "cache_days": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "logs_days": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "crash_days": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "exports_days": {
+              "type": "integer",
+              "minimum": 1
+            }
+          }
+        },
+        "repositories": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "allowed_roots": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "uniqueItems": true
+            }
+          }
         }
       }
     },
@@ -374,6 +548,14 @@
           "$ref": "#/$defs/limits"
         }
       }
+    },
+    "entry_name": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"
+    },
+    "builtin_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$"
     }
   }
 }

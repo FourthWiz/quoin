@@ -28,7 +28,7 @@ from typing import Dict, List, Optional, Tuple
 
 from quoin import __about__
 
-from . import frontmatter, generate, install, manifest, names
+from . import frontmatter, generate, install, inventory, manifest, names
 
 SCHEMA_VERSION = 1
 
@@ -114,7 +114,21 @@ MESSAGES: Dict[str, str] = {
     "runtime-gateway-unqualified": "a role's model has no valid gateway qualification",
     "runtime-compile-blocked": "the profile cannot be compiled for OpenCode (%(names)s)",
     "runtime-profile-launchable": "the profile's configuration compiles and is launchable",
+    "inventory-refused": "a launch of this profile would be refused: %(name)s (layer %(path)s)",
+    "inventory-clean": "the configuration sources a launch would read hold %(count)s entries, none of them refused",
+    "isolation-verified": "profile isolation for this profile is attested by a root-owned declaration (%(names)s)",
+    "isolation-unverified": "profile isolation for this profile is not attested by a root-owned declaration (%(names)s)",
+    "isolation-required-unverified": "the profile requires managed isolation, which no root-owned declaration attests",
+    "egress-shell-not-enforced": "commands started by a shell tool are not restricted to the approved network destinations",
+    "enforcement-layers": "the layers that enforce profile isolation on this machine, and the ones that do not (%(names)s)",
+    "launch-refused": "a launch of this profile would be refused before any model request: %(name)s",
+    "approved-repositories-unset": "the profile approves no repository roots, so any project can be launched under it",
+    "launch-check-unavailable": "the launch policy checks could not be evaluated offline; a launch of this profile may still refuse",
 }
+
+# The launchable finding keeps its id and severity; beside a launch refusal
+# its text only claims what is true.
+_LAUNCHABLE_WITH_REFUSAL = "the profile's configuration compiles; a launch policy refusal is reported separately"
 
 _REMEDIATIONS: Dict[str, str] = {
     "smoke-render": "run `quoin install --runtime opencode --check` to see the generation error",
@@ -149,6 +163,15 @@ _REMEDIATIONS: Dict[str, str] = {
     "runtime-adapter-data-missing": "reinstall quoin",
     "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the pinned OpenCode version",
     "runtime-compile-blocked": "run `quoin opencode config explain --profile PROFILE` to see the blocking findings",
+    "inventory-refused": "run `quoin opencode config explain --profile PROFILE` to see the refused entry and its layer, then remove it from that layer",
+    "isolation-verified": "the declaration describes how the profile was set up; it does not prove the operating system enforces it",
+    "isolation-unverified": "ask an administrator for a root-owned isolation declaration, or run the profile as a convenience profile",
+    "isolation-required-unverified": "install the root-owned isolation declaration, or set the profile isolation to convenience",
+    "egress-shell-not-enforced": "route shell commands through a network control outside OpenCode if they must not reach other destinations",
+    "enforcement-layers": "run `quoin opencode config explain --profile PROFILE` to see which settings are enforced",
+    "launch-refused": "run `quoin opencode config explain --profile PROFILE` to see the launch policy refusal and what approves the destination, repository or isolation it names",
+    "approved-repositories-unset": "list the repository roots the profile may work in under policy.repositories.allowed_roots",
+    "launch-check-unavailable": "run `quoin opencode config explain --profile PROFILE`; a failing check is not worked around by editing the profile",
     "permission-loosened": "a generated role's own permission can override a stricter user config while that role runs directly; narrow the role's own permission map instead of the user config",
 }
 
@@ -173,38 +196,25 @@ def make_finding(id: str, severity: str, path: Optional[str] = None, remediation
     return Finding(id=id, severity=severity, message=message, path=path, remediation=remediation)
 
 
-def display_path(p, roots: List[Tuple[str, str]]) -> str:
-    """Render `p` under the longest matching root in `roots`.
+# The discovery helpers live in `inventory`; the old private names stay so
+# existing callers and tests keep working.
+display_path = inventory.display_path
+_ConfigUnreadable = inventory.ConfigUnreadable
+_strip_jsonc = inventory.strip_jsonc
+_load_config_file = inventory.load_config_file
+_xdg_config_dir = inventory.xdg_config_dir
+_worktree_root = inventory.worktree_root
+_dir_chain = inventory.dir_chain
+_build_roots = inventory.build_roots
+_project_config_dirs = inventory.project_config_dirs
 
-    `roots` is a list of `(prefix, rendered_name)` pairs. Every root and
-    `p` are normalized with `os.path.abspath` (never realpath) and matched
-    by path components, so a sibling that merely shares a string prefix
-    (`/t/ocd-x` against root `/t/ocd`) does not match. When no root
-    matches, `p` is printed absolute (never realpath-resolved).
-    """
-    norm_p = os.path.abspath(str(p))
-    p_parts = Path(norm_p).parts
-    best_parts: Optional[Tuple[str, ...]] = None
-    best_name: Optional[str] = None
-    for prefix, rendered_name in roots:
-        norm_prefix = os.path.abspath(str(prefix))
-        prefix_parts = Path(norm_prefix).parts
-        if len(prefix_parts) > len(p_parts):
-            continue
-        if p_parts[: len(prefix_parts)] != prefix_parts:
-            continue
-        if best_parts is None or len(prefix_parts) > len(best_parts):
-            best_parts = prefix_parts
-            best_name = rendered_name
-    if best_parts is None:
-        return norm_p
-    rest = "/".join(p_parts[len(best_parts):])
-    name = best_name or ""
-    if not rest:
-        return name
-    if name.endswith("/"):
-        return name + rest
-    return name + "/" + rest
+
+def _read_config_files(root: Path, worktree: Path, env, home, roots) -> Tuple[List[Tuple[Path, dict]], List[Finding]]:
+    docs, unreadable = inventory.read_config_files(root, worktree, env, home)
+    findings = [
+        make_finding("config-unreadable", "warn", path=display_path(path, roots)) for path in unreadable
+    ]
+    return docs, findings
 
 
 def report_status(findings: List[Finding]) -> str:
@@ -518,6 +528,7 @@ def run_doctor(
     profile=None,
     config_env=None,
     now=None,
+    isolation_roots=None,
 ) -> int:
     """Run the doctor and print a report to `out`. `env`, `home`, `which`
     and `version_runner` default at call time (not at definition time), so
@@ -543,6 +554,7 @@ def run_doctor(
                 profile=profile,
                 config_env=config_env,
                 now=now,
+                isolation_roots=isolation_roots,
             )
     except (ValueError, OSError, RecursionError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         # Last-resort boundary: nothing here may reach `out`/`err` except
@@ -557,11 +569,6 @@ def run_doctor(
     text = render_json(findings, status) if as_json else render_text(findings, status)
     print(text, end="", file=out)
     return exit_code(status)
-
-
-class _ConfigUnreadable(Exception):
-    """Internal sentinel: a config file exists but could not be read or
-    parsed as a JSONC object. Never escapes this module."""
 
 
 _LEGACY_TRUTHY = frozenset(("true", "1"))
@@ -600,60 +607,6 @@ def _flag_set(env, name: str) -> bool:
         return False
     truthy = _LEGACY_TRUTHY if name in _LEGACY_FLAGS else _RUNTIME_TRUTHY
     return value.lower() in truthy
-
-
-def _xdg_config_dir(env, home) -> Path:
-    base = env.get("XDG_CONFIG_HOME") or str(Path(home) / ".config")
-    return Path(base) / "opencode"
-
-
-def _worktree_root(root) -> Path:
-    """Nearest ancestor of `root` holding `.git` (file or dir); the
-    filesystem root if none is found, matching OpenCode's non-git worktree
-    fallback (project/project.ts L217)."""
-    current = Path(os.path.abspath(str(root)))
-    while True:
-        # `os.path.lexists` (unlike `Path.exists()`) swallows any `OSError`
-        # — including `EACCES` on Python 3.10-3.13, where `Path.exists()`
-        # re-raises a permission error instead of treating it as absent.
-        if os.path.lexists(str(current / ".git")):
-            return current
-        parent = current.parent
-        if parent == current:
-            return current
-        current = parent
-
-
-def _dir_chain(worktree: Path, root: Path) -> List[Path]:
-    """`root`, its parent, ... up to and including `worktree` (nearest
-    first). `root` must be `worktree` or one of its descendants."""
-    chain: List[Path] = []
-    current = Path(root)
-    worktree = Path(worktree)
-    while True:
-        chain.append(current)
-        if current == worktree:
-            break
-        parent = current.parent
-        if parent == current:
-            break
-        current = parent
-    return chain
-
-
-def _build_roots(root, env, home) -> List[Tuple[str, str]]:
-    roots: List[Tuple[str, str]] = [(str(root), ".")]
-    config_dir = env.get("OPENCODE_CONFIG_DIR")
-    if config_dir:
-        roots.append((config_dir, "$OPENCODE_CONFIG_DIR"))
-    xdg = env.get("XDG_CONFIG_HOME")
-    if xdg:
-        roots.append((xdg, "$XDG_CONFIG_HOME"))
-    roots.append((str(home), "~"))
-    config_file = env.get("OPENCODE_CONFIG")
-    if config_file:
-        roots.append((config_file, "$OPENCODE_CONFIG"))
-    return roots
 
 
 def _install_state_findings(root: Path, rendered, source_dir, roots) -> List[Finding]:
@@ -816,181 +769,6 @@ def _binary_findings(which, version_runner, source_dir) -> List[Finding]:
     return [make_finding("opencode-version", "info", version=match.group(0), expected=pinned)]
 
 
-def _strip_jsonc(text: str) -> str:
-    """Strip `//` and `/* */` comments outside string literals, then strip
-    a trailing comma before a closing `}` or `]`."""
-    out: List[str] = []
-    in_string = False
-    escape = False
-    i = 0
-    n = len(text)
-    while i < n:
-        c = text[i]
-        if in_string:
-            out.append(c)
-            if escape:
-                escape = False
-            elif c == "\\":
-                escape = True
-            elif c == '"':
-                in_string = False
-            i += 1
-            continue
-        if c == '"':
-            in_string = True
-            out.append(c)
-            i += 1
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "/":
-            j = text.find("\n", i)
-            i = n if j == -1 else j
-            continue
-        if c == "/" and i + 1 < n and text[i + 1] == "*":
-            j = text.find("*/", i + 2)
-            i = n if j == -1 else j + 2
-            continue
-        out.append(c)
-        i += 1
-    stripped = "".join(out)
-
-    # Strip a trailing comma before a closing `}` or `]`, outside string
-    # literals only: the naive whole-text regex this replaced would also
-    # strip a `,}`/`,]` substring sitting inside a JSON string *value*
-    # (comments are already gone above, so this second string-aware pass
-    # only has to track quoting, not comments too).
-    result: List[str] = []
-    in_string = False
-    escape = False
-    j = 0
-    m = len(stripped)
-    while j < m:
-        c = stripped[j]
-        if in_string:
-            result.append(c)
-            if escape:
-                escape = False
-            elif c == "\\":
-                escape = True
-            elif c == '"':
-                in_string = False
-            j += 1
-            continue
-        if c == '"':
-            in_string = True
-            result.append(c)
-            j += 1
-            continue
-        if c == ",":
-            k = j + 1
-            while k < m and stripped[k] in " \t\r\n":
-                k += 1
-            if k < m and stripped[k] in "}]":
-                j += 1
-                continue  # drop the trailing comma; the closing brace/bracket is appended on its own turn
-        result.append(c)
-        j += 1
-    return "".join(result)
-
-
-def _load_config_file(path: Path) -> Optional[dict]:
-    """`None` when the file does not exist. Raises `_ConfigUnreadable` when
-    it exists but cannot be read or parsed as a JSON object."""
-    try:
-        st = os.lstat(str(path))
-    except FileNotFoundError:
-        return None
-    except OSError:
-        raise _ConfigUnreadable()
-    if not stat.S_ISREG(st.st_mode) and not stat.S_ISLNK(st.st_mode):
-        raise _ConfigUnreadable()
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
-        raise _ConfigUnreadable()
-    try:
-        payload = json.loads(_strip_jsonc(text))
-    except (json.JSONDecodeError, ValueError, RecursionError):
-        # `ValueError` also covers a bare int-string-conversion limit error
-        # (a huge integer literal, e.g. `subagent_depth` with thousands of
-        # digits) that `json.loads` can raise outside `JSONDecodeError` —
-        # not a parse error by class, but this config file is equally
-        # unreadable either way.
-        raise _ConfigUnreadable()
-    if not isinstance(payload, dict):
-        raise _ConfigUnreadable()
-    return payload
-
-
-def _project_config_dirs(worktree: Path, root: Path) -> List[Path]:
-    """Worktree first, project root last: later files override earlier
-    ones, so the directory nearest `root` wins."""
-    return list(reversed(_dir_chain(worktree, root)))
-
-
-def _read_config_files(root: Path, worktree: Path, env, home, roots) -> Tuple[List[Tuple[Path, dict]], List[Finding]]:
-    docs: List[Tuple[Path, dict]] = []
-    findings: List[Finding] = []
-
-    def _try(path: Path) -> None:
-        try:
-            payload = _load_config_file(path)
-        except _ConfigUnreadable:
-            findings.append(make_finding("config-unreadable", "warn", path=display_path(path, roots)))
-            return
-        if payload is not None:
-            docs.append((path, payload))
-
-    g_xdg = _xdg_config_dir(env, home)
-    for name in ("config.json", "opencode.json", "opencode.jsonc"):
-        _try(g_xdg / name)
-
-    config_file_env = env.get("OPENCODE_CONFIG")
-    if config_file_env:
-        _try(Path(config_file_env))
-
-    project_disabled = _flag_set(env, "OPENCODE_DISABLE_PROJECT_CONFIG")
-    project_dirs: List[Path] = []
-    if not project_disabled:
-        project_dirs = _project_config_dirs(worktree, root)
-        for d in project_dirs:
-            _try(d / "opencode.json")
-            _try(d / "opencode.jsonc")
-
-    # `project_dirs` are worktree-chain directories that each need their own
-    # `.opencode` subdir appended. `home_opencode` and `config_dir_env`, by
-    # contrast, already name a `.opencode`-suffixed (or override) directory
-    # and must be read directly — appending another `.opencode` under them
-    # reads a directory OpenCode never does (`config/paths.ts` L23-39: the
-    # walked-up home entry stops at `home`, so it is exactly `home/.opencode`;
-    # `config/config.ts` L438-448 reads `opencode.json(c)` directly from any
-    # directory in that list whose name already ends in `.opencode`, or that
-    # equals `OPENCODE_CONFIG_DIR`, with no extra subdir appended).
-    dotted_dirs: List[Path] = list(project_dirs)  # each dir's own `.opencode` subdir, appended below
-    already_dotted: set = set()
-    home_opencode = Path(home) / ".opencode"
-    # `os.path.isdir` (unlike `Path.is_dir()`) swallows any `OSError` —
-    # including `EACCES` on Python 3.10-3.13 for an unreadable parent dir.
-    if os.path.isdir(str(home_opencode)):
-        dotted_dirs.append(home_opencode)
-        already_dotted.add(os.path.abspath(str(home_opencode)))
-    config_dir_env = env.get("OPENCODE_CONFIG_DIR")
-    if config_dir_env:
-        dotted_dirs.append(Path(config_dir_env))
-        already_dotted.add(os.path.abspath(str(config_dir_env)))
-
-    seen: set = set()
-    for d in dotted_dirs:
-        candidate = d if os.path.abspath(str(d)) in already_dotted else d / ".opencode"
-        norm = os.path.abspath(str(candidate))
-        if norm in seen:
-            continue
-        seen.add(norm)
-        _try(candidate / "opencode.json")
-        _try(candidate / "opencode.jsonc")
-
-    return docs, findings
-
-
 def _subagent_depth_findings(docs: List[Tuple[Path, dict]], roots) -> List[Finding]:
     findings: List[Finding] = []
     for path, payload in docs:
@@ -1131,16 +909,52 @@ def _runtime_findings(root: Path, env, home, roots, proc_snapshot=None) -> List[
     return findings
 
 
-def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> List[Finding]:
+def _isolation_verdict_for(profile, ambient, config_env, home, isolation_roots):
+    """The isolation verdict doctor reports. A probe failure is a verdict
+    (`attestation-invalid`), never an exception."""
+    from . import isolation, profile_dirs  # noqa: PLC0415
+    from . import paths as adapter_paths  # noqa: PLC0415
+
+    try:
+        roots = isolation_roots if isolation_roots is not None else isolation.TrustedRoots.system()
+        merged = dict(ambient or {})
+        return isolation.evaluate(
+            roots, profile=profile, adapter_root=profile_dirs.adapter_root(merged, home),
+            profiles_dir=adapter_paths.profiles_dir({**merged, **dict(config_env or {})}, home),
+        )
+    except Exception:  # noqa: BLE001
+        return isolation.unverified(("attestation-invalid",))
+
+
+def _isolation_finding(verdict, unverified_severity: str) -> Finding:
+    tokens = list(verdict.evidence if verdict.verified else verdict.missing) or ["none"]
+    if verdict.verified:
+        return make_finding("isolation-verified", "ok", names=", ".join(tokens))
+    return make_finding("isolation-unverified", unverified_severity, names=", ".join(tokens))
+
+
+def _profile_findings(
+    root: Path, profile: str, config_env, home, now=None, ambient_env=None, isolation_roots=None,
+) -> List[Finding]:
     """Evaluate one profile's configuration the way a phase run does and
     report what would refuse it. Opt-in, configuration only: credentials are
     never resolved, and the text is built only from closed sets (class names,
-    finding codes, counts), never from a configuration value."""
+    finding codes, counts), never from a configuration value.
+
+    Every run carries exactly one isolation finding for the profile."""
     from datetime import datetime, timezone  # noqa: PLC0415
 
     from . import categories, compiler, roles  # noqa: PLC0415
     from . import paths as adapter_paths  # noqa: PLC0415
     from .errors import ConfigErrors  # noqa: PLC0415
+
+    ambient = ambient_env if ambient_env is not None else config_env
+
+    def early(findings: List[Finding]) -> List[Finding]:
+        # The classification is unknown on these paths, so the isolation
+        # finding is informational.
+        verdict = _isolation_verdict_for(profile, ambient, config_env, home, isolation_roots)
+        return findings + [_isolation_finding(verdict, "info")]
 
     try:
         evaluation = compiler.evaluate(
@@ -1163,29 +977,109 @@ def _profile_findings(root: Path, profile: str, config_env, home, now=None) -> L
                 "runtime-config-policy-denied" if policy else "runtime-config-invalid",
                 "error", name=cls, count=by_class[cls],
             ))
-        return found
+        return early(found)
     except roles.AllowUnqualifiedRefused:
-        return [make_finding("runtime-config-policy-denied", "error", name="allow-unqualified-refused", count=1)]
+        return early([make_finding("runtime-config-policy-denied", "error", name="allow-unqualified-refused", count=1)])
     except adapter_paths.AdapterDataMissing:
-        return [make_finding("runtime-adapter-data-missing", "error")]
+        return early([make_finding("runtime-adapter-data-missing", "error")])
 
-    if compiler.launchable(evaluation):
-        return [make_finding("runtime-profile-launchable", "ok")]
-    blockers = compiler.compile_blockers(evaluation)
-    unqualified = all(
-        f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
-        for f in blockers
-    )
-    if blockers and not unqualified:
-        return [make_finding(
-            "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
-        )]
-    return [make_finding("runtime-gateway-unqualified", "error")]
+    out: List[Finding] = []
+    verdict = _isolation_verdict_for(profile, ambient, config_env, home, isolation_roots)
+    effective = evaluation.effective
+    isolation_entry = effective.values.get("policy.isolation")
+    managed = isolation_entry is not None and isolation_entry.value == "managed"
+    work = effective.classification == "work"
+    out.append(_isolation_finding(verdict, "warn" if (work or managed) else "info"))
+
+    refusal, drv, unavailable = None, None, False
+    try:
+        clock = (lambda: now.timestamp()) if now is not None else None
+        kw = {"clock": clock} if clock is not None else {}
+        from . import driver  # noqa: PLC0415 - the driver imports this module at its top
+
+        drv = driver.OpenCodeDriver(
+            root, env=dict(ambient or {}), home=home, isolation_roots=isolation_roots, **kw,
+        )
+        refusal = drv.offline_launch_refusal(profile, ambient_env=dict(ambient or {}), evaluation=evaluation)
+    except Exception:  # noqa: BLE001 - a failing check is reported, never silent
+        unavailable = True
+        out.append(make_finding("launch-check-unavailable", "warn"))
+
+    launchable = compiler.launchable(evaluation)
+    if refusal is not None:
+        out.append(make_finding("launch-refused", "error", name=refusal.code))
+    if not launchable:
+        blockers = compiler.compile_blockers(evaluation)
+        unqualified = all(
+            f.code == "role-blocked" and len(f.subject) > 1 and f.subject[1].startswith("qualification-")
+            for f in blockers
+        )
+        if blockers and not unqualified:
+            out.append(make_finding(
+                "runtime-compile-blocked", "error", names=", ".join(sorted({f.code for f in blockers}))
+            ))
+        else:
+            out.append(make_finding("runtime-gateway-unqualified", "error"))
+        return out
+
+    launchable_finding = make_finding("runtime-profile-launchable", "ok")
+    if refusal is not None:
+        launchable_finding = Finding(
+            id=launchable_finding.id, severity=launchable_finding.severity, message=_LAUNCHABLE_WITH_REFUSAL,
+            path=launchable_finding.path, remediation=launchable_finding.remediation,
+        )
+    out.append(launchable_finding)
+    if managed and not verdict.verified and (refusal is None or refusal.code != "isolation-required-unverified") \
+            and not unavailable:
+        out.append(make_finding("isolation-required-unverified", "error"))
+    policy = None
+    try:
+        from . import profile_policy  # noqa: PLC0415
+
+        policy = profile_policy.view(effective)
+    except Exception:  # noqa: BLE001
+        policy = None
+    if policy is not None and work and not managed and not policy.approved("repositories.allowed_roots"):
+        out.append(make_finding("approved-repositories-unset", "warn"))
+    out.extend(_inventory_findings(drv, profile, evaluation, ambient, work or managed))
+    return out
+
+
+def _inventory_findings(drv, profile: str, evaluation, ambient, strict: bool = False) -> List[Finding]:
+    """What the launch's configuration inventory says about this profile: the
+    first refusal, else a count of the entries it inspected; then the
+    enforcement layers the record lists. `strict` makes the missing shell
+    egress control a warning (work or managed profiles)."""
+    if drv is None:
+        return []
+    try:
+        preview = drv.effective_preview(profile, ambient_env=dict(ambient or {}), evaluation=evaluation)
+    except Exception:  # noqa: BLE001 - the inventory finding is advisory; the other findings stand
+        return []
+    if preview is None:
+        return []
+    record, layer_check = preview
+    found: List[Finding] = []
+    refusal = layer_check.refusal
+    if refusal is not None:
+        found.append(make_finding("inventory-refused", "error", path=refusal.layer, name=refusal.code))
+    else:
+        entries = record.get("entries")
+        count = len(entries) if isinstance(entries, list) else int((entries or {}).get("count", 0))
+        found.append(make_finding("inventory-clean", "ok", count=count))
+    rows = record.get("enforcement")
+    if isinstance(rows, list) and rows:
+        names = ", ".join("%s=%s" % (r.get("control"), r.get("status")) for r in rows if isinstance(r, dict))
+        found.append(make_finding("enforcement-layers", "info", names=names))
+        shell = next((r for r in rows if isinstance(r, dict) and r.get("control") == "shell-egress"), None)
+        if shell is not None and shell.get("status") != "delegated-verified":
+            found.append(make_finding("egress-shell-not-enforced", "warn" if strict else "info"))
+    return found
 
 
 def run_host(
     project_root, source_dir, env, home, which, version_runner, *,
-    proc_snapshot=None, profile=None, config_env=None, now=None,
+    proc_snapshot=None, profile=None, config_env=None, now=None, isolation_roots=None,
 ) -> List[Finding]:
     """Host-environment checks: install state, manifest drift, config,
     rules fallback, skill-discovery census, flags and PATH/binary, and the
@@ -1225,7 +1119,13 @@ def run_host(
     findings.extend(_binary_findings(which, version_runner, source_dir))
     findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
     if profile is not None:
-        findings.extend(_profile_findings(root, profile, config_env or {}, Path(home), now))
+        findings.extend(_profile_findings(
+            root, profile, config_env or {}, Path(home), now, ambient_env=env, isolation_roots=isolation_roots,
+        ))
+    else:
+        findings.append(_isolation_finding(
+            _isolation_verdict_for(None, env, config_env or {}, Path(home), isolation_roots), "info",
+        ))
 
     return findings
 

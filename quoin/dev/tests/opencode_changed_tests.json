@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "base_ref": "origin/main",
+  "task_branch": "feat/ivg-274-opencode-m3a-profile-isolation",
+  "changed": {
+    "quoin/dev/tests/test_opencode_runtime_config.py": "config validation reads the cited built-in id sets from profile_policy, which imports nothing from the adapter, so the import allow-list gains exactly that module",
+    "quoin/dev/tests/test_opencode_config_errors.py": "two new finding codes and their closed subject set join the shape table and the token-safety loop",
+    "quoin/dev/tests/test_opencode_config_merge.py": "merge calls the policy helpers and the managed-layer combination in profile_policy, so the import allow-list gains exactly that module",
+    "quoin/dev/tests/test_opencode_driver_workspace.py": "the launcher-owned name tuple now lists the hardening flags, and the child state variable names the profile root while XDG_STATE_HOME points at its state directory; the setup also builds its driver with fixture trusted roots and a fake identity checker and approves the project root and the workspace parent as repository roots",
+    "quoin/dev/tests/_opencode_workflow_helpers.py": "the scripted coordinator driver exposes profile_state_root returning its own state root, so tests that pin under that root still meet the hook",
+    "quoin/dev/tests/test_opencode_boundary_runs.py": "the test-run pin is configured under the profile root, which is the state root a run and its child now use",
+    "quoin/dev/tests/test_opencode_workflow_cli.py": "the coordinator keeps the test pin under the profile root inside the driver state root, so the expected pin location gains the profile directory",
+    "quoin/dev/tests/test_opencode_test_run.py": "a command launched from an agent shell now receives the profile's state, cache and temp locations, so the expected launched environment lists them; a reserved profile name now exits as a refusal",
+    "quoin/dev/tests/test_opencode_config_cli.py": "two new tests cover the default compile and explain location when run inside a launched child; no existing test changed",
+    "quoin/dev/tests/test_opencode_start.py": "one new test covers the private umask at exec and its restore after a failed exec, and another covers the restore when a non-OS error escapes before exec; the dry-run key-set assertion gains effective_config_digest, and new tests cover the start record file, its modes, a write failure and a refused start",
+    "quoin/dev/tests/test_opencode_workflow_e2e.py": "the real-child test-run case also asserts the child created no run store under the profile's state directory; no existing assertion changed",
+    "quoin/dev/tests/test_opencode_compiler.py": "the work document gains lsp, formatter and the web-denial permission blocks (top level and per owned role), the compiler imports profile_policy, and the protected-key list names the three new keys",
+    "quoin/dev/tests/test_opencode_native_schema.py": "the native subset schema gains the optional lsp, formatter and permission keys, so the required-equals-properties check becomes required-plus-optional and the work goldens list the new keys after experimental",
+    "quoin/dev/tests/fakes/fake_opencode.py": "the managed-writes scenario writes the dependency install (lock file and node_modules) only when the child environment is not offline, with an offline_env option to force the old behaviour; new npm_fetch and empty_node_modules scenarios and a make_dir step; network verbs provider_call, shell_net, shell_net_proxy, read_and_send and npm_install modelling only cited behaviour, with a fake-side egress allowlist read from the scenario file",
+    "quoin/dev/tests/test_opencode_snapshot_runs.py": "the managed-launch-writes case now expects the bookkeeping files only (the work profile runs offline), and a sibling case with offline_env false keeps the four-file assertion",
+    "quoin/dev/tests/_opencode_workflow_e2e_helpers.py": "the workflow test project also patches the CLI policy evaluator to evaluate against the test world's configuration, because the CLI reads the process environment, which does not carry the world's profile",
+    "quoin/dev/tests/test_opencode_driver_prepare.py": "the test setup builds its driver with fixture trusted roots and a fake identity checker and approves its project root as a repository root, because a work launch now refuses without an attestation, an approved repository root and a checkable destination",
+    "quoin/dev/tests/_opencode_run_helpers.py": "the installed-project world builds its driver with the same fixture trusted roots and fake identity checker and approves its project root, for the same reason as the prepare test setup; and its resolver can return a test-chosen secret and counts its calls, for the secret scan and the refused-launch checks",
+    "quoin/dev/tests/test_opencode_binary_contract.py": "the real-binary work driver now needs fixture trusted roots, a fake identity checker and an approved repository root, like every other work-launch test",
+    "quoin/dev/tests/test_opencode_workflow_binary_tier.py": "the real-binary work driver now needs fixture trusted roots, a fake identity checker and an approved repository root, like every other work-launch test",
+    "quoin/dev/tests/test_fake_opencode.py": "the stray-process check matches the worker base directory followed by a path separator, so one xdist worker no longer counts another worker's live fake as stray",
+    "quoin/dev/tests/test_probe_gateway.py": "the self-check's per-file dict gains a row for the new deployment document"
+  }
+}

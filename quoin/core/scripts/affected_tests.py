@@ -1312,6 +1312,62 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/fixtures/runtime-config/valid/project-work.json",
         "quoin/dev/tests/test_opencode_runtime_config.py",
     ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-bad-mcp-mode.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-bad-pin.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-cidr-host-bits.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-formatter-pair-split.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-malformed-cidr.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-relative-root.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-retention-too-long.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-retention-zero.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-unknown-key-mcp.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-unknown-lsp-id.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/invalid/policy-unnormalised-root.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/managed-isolation.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/profile-work-isolation.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
+    (
+        "quoin/adapters/opencode/fixtures/runtime-config/valid/project-work-isolation.json",
+        "quoin/dev/tests/test_opencode_runtime_config.py",
+    ),
     # Fixtures that exercise merging and role resolution as well as loading.
     (
         "quoin/adapters/opencode/fixtures/runtime-config/invalid/allowlist-broadening-host.json",
@@ -1391,6 +1447,14 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
     (
         "quoin/adapters/opencode/compatibility.md",
         "quoin/dev/tests/test_opencode_native_schema.py",
+    ),
+    (
+        "quoin/adapters/opencode/managed-work-deployment.md",
+        "quoin/dev/tests/test_opencode_deployment_doc.py",
+    ),
+    (
+        "quoin/adapters/opencode/managed-work-deployment.md",
+        "quoin/dev/tests/test_opencode_docs.py",
     ),
     (
         "quoin/adapters/opencode/decisions.md",

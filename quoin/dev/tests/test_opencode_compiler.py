@@ -92,7 +92,7 @@ def test_work_document_shape_and_order(work):
     doc = compiler.build(work.evaluate()).document
     assert list(doc) == [
         "$schema", "model", "small_model", "agent", "share", "autoupdate",
-        "enabled_providers", "provider", "experimental",
+        "enabled_providers", "provider", "experimental", "lsp", "formatter", "permission",
     ]
     assert doc["$schema"] == "https://opencode.ai/config.json"
     assert doc["share"] == "disabled" and doc["autoupdate"] is False
@@ -101,7 +101,12 @@ def test_work_document_shape_and_order(work):
     assert list(doc["agent"]) == [names.role_agent_name(r) for r in ROLES] + ["title", "compaction"]
     assert doc["agent"]["title"] == {"model": doc["small_model"]}
     assert doc["agent"]["compaction"] == {"model": doc["small_model"]}
-    assert doc["agent"]["quoin-implementer"] == {"model": "quoin-corp-gw/example-vendor/example-coder"}
+    assert doc["agent"]["quoin-implementer"] == {
+        "model": "quoin-corp-gw/example-vendor/example-coder",
+        "permission": {"webfetch": "deny", "websearch": "deny"},
+    }
+    assert doc["lsp"] is False and doc["formatter"] is False
+    assert doc["permission"] == {"webfetch": "deny"}
     assert "summary" not in doc["agent"] and "summary" not in dumped(doc)
     assert "max" not in json.dumps(doc)
 
@@ -373,8 +378,8 @@ def test_module_imports_are_limited():
         elif isinstance(node, ast.Import):
             external |= {a.name for a in node.names}
     assert relative <= {
-        "config", "errors", "jsonio", "merge", "names", "paths", "qualification", "roles",
-        "schema_check", "generate",
+        "config", "errors", "jsonio", "merge", "names", "paths", "profile_policy", "qualification",
+        "roles", "schema_check", "generate",
     }
     assert external <= {
         "__future__", "functools", "hashlib", "json", "os", "re", "dataclasses", "pathlib", "typing",
@@ -699,7 +704,7 @@ def test_sidecar_fields_and_privacy(work):
         "config_path_env": "OPENCODE_CONFIG",
         "protected_keys": [
             "$schema", "model", "small_model", "agent", "share", "autoupdate",
-            "enabled_providers", "provider", "experimental.policies",
+            "enabled_providers", "provider", "experimental.policies", "lsp", "formatter", "permission",
         ],
         "credential_env_required": True,
     }

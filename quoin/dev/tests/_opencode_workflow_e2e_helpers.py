@@ -100,8 +100,19 @@ class WorkflowProject(InstalledProject):
         monkeypatch.setattr(cli, "_make_opencode_driver", self.make_driver)
         monkeypatch.setattr(cli, "_opencode_backoff", lambda n: 0)
         monkeypatch.setattr(cli, "_handoff_evaluator", lambda root: (lambda profile: hh.fixed_scope()))
+        monkeypatch.setattr(cli, "_handoff_policy_evaluator", self._policy_evaluator)
         self.last_driver: Any = None
         self.last_err = ""
+
+    def _policy_evaluator(self, root: Any) -> Callable[[Any], Dict[str, Any]]:
+        """The real policy evaluation against the test world's configuration
+        (the process environment does not carry it)."""
+        from _opencode_merge_helpers import NOW
+        from quoin.opencode_adapter import handoff
+
+        env = {k: v for k, v in self.world.env.items() if k in cli.CONFIG_ENV_KEYS}
+        return lambda profile: handoff.policy_for_profile(
+            root, profile, env=env, home=self.world.home, clock=NOW.timestamp)
 
     def make_driver(self, root: Any) -> Any:
         self.last_driver = self.driver_factory()(root)

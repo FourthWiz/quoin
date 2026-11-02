@@ -246,7 +246,7 @@ def test_a_fresh_run_under_a_fixed_driver_clock_is_not_partial(make, capsys):
 
 
 def configure(proj, command=("sh", "-c", "true")):
-    testrun.configure(proj.root, TASK, command=list(command), state_root=proj.state_root)
+    testrun.configure(proj.root, TASK, command=list(command), state_root=proj.state_root / "work")
 
 
 BOOT = (

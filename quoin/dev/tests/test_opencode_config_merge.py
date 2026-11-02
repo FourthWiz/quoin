@@ -694,4 +694,4 @@ def test_merge_imports_are_limited():
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.level == 1:
             relative |= {node.module} if node.module else {a.name for a in node.names}
-    assert relative <= {"config", "errors", "generate", "install", "jsonio"}
+    assert relative <= {"config", "errors", "generate", "install", "jsonio", "profile_policy"}

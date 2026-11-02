@@ -62,7 +62,20 @@ FINDING_CATEGORIES.update(
 )
 FINDING_CATEGORIES.update(_table("unqualified-gateway", "runtime-gateway-unqualified"))
 FINDING_CATEGORIES.update(
-    _table("policy-denial", "runtime-config-policy-denied", "runtime-plugin-directory-present")
+    _table(
+        "policy-denial",
+        "runtime-config-policy-denied",
+        "runtime-plugin-directory-present",
+        "inventory-refused",
+        "isolation-verified",
+        "isolation-unverified",
+        "isolation-required-unverified",
+        "egress-shell-not-enforced",
+        "enforcement-layers",
+        "launch-refused",
+        "approved-repositories-unset",
+        "launch-check-unavailable",
+    )
 )
 FINDING_CATEGORIES.update(
     _table(
@@ -111,6 +124,7 @@ FINDING_CATEGORIES.update(
         "runtime-stale-lock",
         "runtime-command-agent-not-primary",
         "runtime-profile-launchable",
+        "inventory-clean",
         "runtime-adapter-data-missing",
     )
 )
@@ -144,6 +158,7 @@ _OTHER_CONFIG_CLASSES = (
     "limit-above-ceiling",
     "unknown-key",
     "invalid-type",
+    "formatter-allowlist-invalid",
     "dangling-reference",
     "env-name-collision",
     "missing-classification",

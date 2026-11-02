@@ -162,6 +162,25 @@
           "type": "string",
           "pattern": "^quoin-(low|medium|high)$",
           "$comment": "core/src/v1/config/agent.ts L15-17; applies only with the agent's own model, session/prompt.ts L646-654."
+        },
+        "permission": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "webfetch": {
+              "enum": [
+                "deny"
+              ],
+              "$comment": "Web fetch denial (compatibility.md row webfetch-permission)."
+            },
+            "websearch": {
+              "enum": [
+                "deny"
+              ],
+              "$comment": "Web search denial, same permission map as webfetch (compatibility.md row agent-permission-merge)."
+            }
+          },
+          "$comment": "Per-agent permission block: only webfetch and websearch denials are emitted (compatibility.md rows webfetch-permission and agent-permission-merge); the permission map is core/src/v1/config/agent.ts and config.ts."
         }
       },
       "$comment": "Agent entry: core/src/v1/config/agent.ts L12-17."
@@ -300,6 +319,61 @@
             }
           },
           "$comment": "core/src/v1/config/config.ts L185-187 (experimental block; only policies is emitted)."
+        },
+        "lsp": {
+          "type": [
+            "boolean",
+            "object"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "disabled"
+            ],
+            "properties": {
+              "disabled": {
+                "enum": [
+                  true
+                ]
+              }
+            }
+          },
+          "$comment": "Language servers: false disables all, true enables built-ins, an object disables the named built-ins (compatibility.md rows lsp-default-off and lsp-custom-command); top-level field of core/src/v1/config/config.ts (line numbers unverified: the source was not available when this entry was written)."
+        },
+        "formatter": {
+          "type": [
+            "boolean",
+            "object"
+          ],
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "disabled"
+            ],
+            "properties": {
+              "disabled": {
+                "enum": [
+                  true
+                ]
+              }
+            }
+          },
+          "$comment": "Formatters: same shape as lsp (compatibility.md rows formatter-default-off and formatter-ruff-uv-pair); top-level field of core/src/v1/config/config.ts (line numbers unverified)."
+        },
+        "permission": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "webfetch": {
+              "enum": [
+                "deny"
+              ],
+              "$comment": "Web fetch denial (compatibility.md row webfetch-permission)."
+            }
+          },
+          "$comment": "Top-level permission block: only the webfetch denial is emitted (compatibility.md rows webfetch-permission and permission-last-match); top-level field of core/src/v1/config/config.ts (line numbers unverified)."
         }
       },
       "$comment": "Entry point: the top-level keys the compiler emits."

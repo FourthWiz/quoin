@@ -24,7 +24,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import (
-    driver, evidence, gate, handoff, phase_loop, run_hooks, runstore, snapshot, testrun, window,
+    driver, evidence, gate, handoff, phase_loop, profile_dirs, run_hooks, runstore, snapshot, testrun,
+    window,
 )
 
 DEFAULT_MAX_CRITIC_ROUNDS = 2
@@ -59,6 +60,7 @@ class WorkflowOptions:
     test_command: Optional[Sequence[str]] = None
     test_include: Sequence[str] = ()
     test_timeout: Optional[float] = None
+    accept_unverified_policy: bool = False
 
     def critic_cap(self) -> int:
         value = self.max_critic_rounds
@@ -273,8 +275,10 @@ class Coordinator:
         self, drv: Any, project_root, task: str, options: WorkflowOptions, *, source_dir,
         cancel: phase_loop.CancelToken, scope: Mapping[str, Any], scope_source: str,
         backoff_fn: Optional[Callable[[int], float]] = None, clock: Callable[[], float] = time.time,
+        requested_policy: Optional[Mapping[str, Any]] = None,
     ) -> None:
         self.drv = drv
+        self.requested_policy = requested_policy
         self.project_root = Path(project_root)
         self.task = runstore.check_task_name(task)
         self.options = options
@@ -284,7 +288,12 @@ class Coordinator:
         self.scope_source = scope_source
         self.backoff_fn = backoff_fn
         self.clock = clock
-        self.state_root = drv.state_root
+        try:
+            self.state_root = profile_dirs.state_root_for(drv, options.profile)
+        except ValueError:
+            self.state_root = None
+        if self.state_root is None:
+            raise WorkflowRefused("profile-unknown", "the profile storage root cannot be resolved")
         self.window = window.WindowStore(self.state_root, self.project_root, self.task)
         self.errors: List[str] = []
         self.seeded: List[Tuple[str, Optional[int]]] = []
@@ -781,6 +790,8 @@ class Coordinator:
         `--rerun-from` and `--adopt`. Raises `WorkflowRefused`."""
         opts = self.options
         state = self.load_state()
+        if opts.accept_unverified_policy and not opts.continue_:
+            raise WorkflowRefused("continue-required", "--accept-unverified-policy needs --continue", 2)
         if not opts.continue_:
             if opts.rerun_from or opts.adopt:
                 raise WorkflowRefused("continue-required", "--rerun-from and --adopt need --continue")
@@ -804,12 +815,24 @@ class Coordinator:
 
     def _begin_continue(self, state: Optional[Dict[str, Any]]) -> None:
         opts = self.options
+        accepted = ((state or {}).get("settings") or {}).get("policy_unverified_accepted")
+        stored_run = accepted.get("run_id") if isinstance(accepted, Mapping) else None
+        outcome: Dict[str, Any] = {}
         try:
             record = handoff.load_for_continuation(
                 self.project_root, self.task, source_dir=self.source_dir, requested_scope=self.scope,
+                requested_policy=self.requested_policy,
+                accept_unverified=True if opts.accept_unverified_policy else stored_run,
+                resume_hint=self.resume_hint(), outcome=outcome, policy_profile=opts.profile,
             )
         except handoff.HandoffRefused as exc:
             raise WorkflowRefused(exc.code, exc.message) from None
+        accepted_run = outcome.get("unverified_accepted")
+        if accepted_run is not None and accepted_run != stored_run:
+            self.errors.append(
+                "policy-unverified: the policy of run %s is accepted as unknown (--accept-unverified-policy)"
+                % accepted_run
+            )
         foreign = record.get("origin_runtime") != handoff.ORIGIN_RUNTIME
         if not foreign and has_workflow_state(state):
             problems = handoff.state_agreement(record, state, allow_lag=True)
@@ -824,6 +847,8 @@ class Coordinator:
         else:
             self._seed(record)
         state = self.load_state() or runstore.new_workflow_state(self.task, self.clock)
+        if accepted_run is not None and accepted_run != stored_run:
+            state["settings"]["policy_unverified_accepted"] = {"run_id": accepted_run}
         block = workflow_block(state)
         if block is None:
             pairs = {(c["phase"], c.get("stage")) for c in record.get("completed") or []}

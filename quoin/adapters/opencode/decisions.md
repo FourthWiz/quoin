@@ -156,6 +156,118 @@ Status: deferred
 Decision: binary contract tests stay opt-in and skip with a reason when no pinned executable is present.
 Rationale: installing the pinned release in CI is a distribution choice for the maintainer, tracked with the release and install channel decision.
 
+### Isolation attestation and trust rule
+
+Status: decided
+Decision: managed isolation is attested by one root-owned JSON file at a fixed path beside
+the trusted managed policy. It counts only when the file and every directory above it are
+root-owned and not group or world writable, the invoking user is not root, the declaration
+is current and complete, an independent corroboration agrees with the declared
+environment, and no other profile is visible to this one.
+Rationale: a profile, a project file or an environment variable that could supply the
+declaration could attest itself. Every probe turns an operating-system failure into a
+missing-evidence token, so a launch never crashes inside the check.
+Scope: the declaration describes a setup and does not prove enforcement; wording stays
+"attested". Whether an administrator may trust a docker-group writer of the file is left
+to the deployment.
+
+### Enforcement layers without a launcher-owned proxy
+
+Status: decided
+Decision: Quoin enforces destination approval at configuration and launch time (host
+approval, proxy route, remote MCP hosts, web tools, registry) and a launch-time identity
+check. It provides no launcher proxy and no brokered registry; shell egress, redirects and
+DNS after launch are delegated to the managed boundary and recorded as such.
+Rationale: a proxy that sits between the child and the network would be a second security
+boundary to build and attest. Recording each control with its layer and status keeps the
+record from claiming more than was checked.
+Scope: a control that could not run is recorded as not enforced.
+
+### Launch-time destination identity check
+
+Status: decided
+Decision: the check connects to each provider endpoint, verifies the approved host name
+against the configured CA, optionally pins the leaf certificate, and refuses a mismatch.
+Observations are stored beside the effective-configuration record, not inside its digest.
+Rationale: certificates rotate and DNS answers change, so inside the digest they would make
+every comparison unstable and make the offline preview disagree with the launch.
+Scope: through a proxy the name is checked end to end but address ranges are not; whether
+the child honours the proxy stays unverified.
+
+### Metadata-only event logging for work profiles
+
+Status: decided
+Decision: under a work classification Quoin's event sidecar, run record and checkpoint store the
+length and a 12-hex digest of redacted text in place of text parts, reasoning, tool titles, tool
+errors, provider error messages and approval patterns. The string form sits inside the existing
+fields so the event schema does not change.
+Rationale: a work profile's default logs must not hold prompts, retrieved messages or tool output.
+The digest covers the redacted text and is not a secrecy control; a short or guessable text can be
+confirmed offline.
+Scope: OpenCode's own log and session database are not controlled by this setting.
+
+### Classification-keyed defaults
+
+Status: decided
+Decision: a profile's classification (work or personal) chooses the defaults for logging
+content, retention days, identity check, web tools, package installs and which inventory
+entries are refused. The work values are strict; the personal values record and allow more.
+An explicit profile or trusted managed policy value overrides a default; a project file can
+only tighten.
+Rationale: one switch keeps a work profile safe without per-key configuration, and a personal
+profile keeps working without work-grade refusals.
+Scope: defaults are local to this adapter; the maintainer retention and egress decisions
+below are unchanged.
+
+### Executable-fetch prevention
+
+Status: decided
+Decision: a work profile runs offline for package installs and the launcher refuses a launch
+whose configuration would make OpenCode fetch code (a plugin package, a dependency install
+for an owned directory) when the network policy cannot rule the fetch out, using
+`executable-fetch-detected` and `executable-fetch-possible`.
+Rationale: fetched code runs with the child's access, and a network policy alone cannot tell
+which request carries code.
+Scope: detection reads configuration and the offline policy; it does not observe what the
+child fetches afterwards.
+
+### Configuration inventory allowlist
+
+Status: decided
+Decision: before every launch the driver reads every configuration source OpenCode would read
+and admits an entry only when it is on a short allowlist (declared providers and models,
+allow-listed MCP servers defined in a file the user controls, owned agents and commands).
+Anything that could change which models run, add code or widen permissions is refused with an
+`inventory-*` code under a work profile and recorded under a personal one.
+Rationale: later configuration layers can override compiled keys, so the launcher verifies the
+merged inventory rather than trusting its own output.
+Scope: the inventory covers what OpenCode reads at start; it does not cover files a tool writes
+later.
+
+### Retention sweep scope and evidence
+
+Status: decided
+Decision: a sweep at launch removes aged units per class, never the session database or
+credentials, and keeps units that an unfinished task, a live lock, an active run or an unreadable
+store may still need. A task is finished only after its folder moved under a finalized directory.
+Rationale: the workflow state cannot tell a finished multi-stage task from one paused between
+stages, so keeping more is the safe direction. Cache is removed as whole package units because a
+partly removed package can break a session that offline policy cannot repair.
+Scope: the 30-day work values are local defaults; the maintainer retention decision below is
+unchanged. The worst-case walk is bounded by per-class budgets of 50000 entries plus three per
+indexed project; a unit too large to measure within its budget is kept and needs a purge.
+
+### Purge scope and kept credentials
+
+Status: decided
+Decision: purge removes every top-level entry of a profile directory except the stamp, the project
+index and the credential files, plus the profile's run sidecars in every project it touched, and
+needs an explicit confirmation flag.
+Rationale: the session database cannot be recovered, so an accidental re-run must not delete. The
+npm registry file can hold tokens and the MCP auth file is uncited, so both are kept.
+Scope: purge refuses while a run or lock of the profile is active; an open interactive session is
+not detected.
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.
@@ -197,10 +309,15 @@ Design limits of role boundaries, snapshot runs and test runs that are accepted
 rather than open questions:
 
 - A write through an absolute path is detected after the run, not prevented.
+  It is prevented only when isolation is verified and the managed boundary
+  mounts the project read-only for the reviewer roles; otherwise it stays a
+  residual.
 - `.workspaces/` is outside the listing.
 - Include directories given to the test command are shared with the real
   tree and are writable.
-- There is no network isolation for snapshot or test runs.
+- There is no network isolation for snapshot or test runs of its own. Egress
+  from them is denied only when isolation is verified and the managed boundary
+  denies egress; otherwise it stays a residual.
 - Run-store files written during a run (current and prior run records, the
   pointer, the lock and result files) are excluded by exact path and trusted to
   their schema-checked loaders; the boundary check does not re-verify their
@@ -229,8 +346,9 @@ rather than open questions:
 - A passing test result attests only to what the code in the copied tree
   reported: test-run runs implementer-written code unprompted with the user's
   privileges. The coordinator runs it after every implement, and
-  `--test-command` is the operator's opt-in. An OS sandbox that confines writes
-  to the workspace is the follow-up.
+  `--test-command` is the operator's opt-in. Confinement of writes and egress
+  holds only when isolation is verified and the managed boundary mounts the
+  project read-only and denies egress; otherwise the run stays a residual.
 - The test workspace build is not capped: the binary diff is held in memory and
   untracked files are copied without a size limit, outside the test timeout.
 - The overlay residue test checks "MUST run finalization" rather than "run

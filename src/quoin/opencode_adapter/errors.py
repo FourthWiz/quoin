@@ -25,6 +25,7 @@ LOAD_CLASSES = frozenset(
         "duplicate-key",
         "unknown-key",
         "invalid-type",
+        "formatter-allowlist-invalid",
         "invalid-url",
         "dangling-reference",
         "unresolved-placeholder",
@@ -81,6 +82,7 @@ CLASS_PRIORITY: Tuple[str, ...] = (
     "cross-profile-fallback-enabled",
     "unknown-key",
     "invalid-type",
+    "formatter-allowlist-invalid",
     "dangling-reference",
     "env-name-collision",
     "personal-profile-for-work",
@@ -280,6 +282,30 @@ MESSAGES: Dict[str, Tuple[str, str]] = {
         "a personal provider kind cannot be used for work",
         "use a provider kind allowed for work",
     ),
+    "retention-out-of-range": (
+        "retention must be a whole number of days between 1 and 3650",
+        "use a value in that range",
+    ),
+    "unknown-builtin-id": (
+        "the id is not a built-in id of the pinned OpenCode release",
+        "use a built-in id, or remove the entry",
+    ),
+    "lsp-allowlist-unverifiable": (
+        "an allow-listed language server mode cannot be used because the built-in id set is not verified for the pinned release",
+        "set the language server mode to deny",
+    ),
+    "formatter-allowlist-unverifiable": (
+        "an allow-listed formatter mode cannot be used because the built-in id set is not verified for the pinned release",
+        "set the formatter mode to deny",
+    ),
+    "formatter-allowlist-invalid": (
+        "the formatter allow list names only one of two formatters that OpenCode disables together",
+        "name both members of the pair, or neither",
+    ),
+    "trusted-policy-unreadable": (
+        "the trusted managed policy file could not be read safely",
+        "make it a regular readable file that is not a symbolic link, or remove it",
+    ),
 }
 
 MESSAGE_CLASS: Dict[str, str] = {
@@ -329,6 +355,12 @@ MESSAGE_CLASS: Dict[str, str] = {
     "override-dangling-model": "dangling-reference",
     "limit-above-ceiling": "limit-above-ceiling",
     "personal-provider-kind-for-work": "personal-provider-kind-for-work",
+    "retention-out-of-range": "invalid-limit",
+    "unknown-builtin-id": "invalid-type",
+    "lsp-allowlist-unverifiable": "invalid-type",
+    "formatter-allowlist-unverifiable": "invalid-type",
+    "formatter-allowlist-invalid": "formatter-allowlist-invalid",
+    "trusted-policy-unreadable": "invalid-json",
 }
 
 _LB = r"(?<![A-Za-z0-9_-])"
@@ -367,6 +399,17 @@ SECRET_SHAPE_RE = re.compile(
 )
 
 _SAFE_KEY_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+
+def is_plain_token(text: str) -> bool:
+    """True when `text` may be shown as a name: a short identifier that is
+    neither secret-shaped nor already a digest token. The inventory's refusal
+    text and the persisted record share this one rule."""
+    return bool(
+        _SAFE_KEY_RE.fullmatch(text or "")
+        and not SECRET_SHAPE_RE.search(text)
+        and not text.startswith("h-")
+    )
 
 # A provider model id may not contain whitespace or control characters: the
 # native reference splits at the first slash and reads the rest verbatim, so
@@ -499,6 +542,8 @@ FINDING_CODES = frozenset(
         "endpoint-family-unverified",
         "later-layers-can-override",
         "policies-supplementary",
+        "allowed-hosts-unset",
+        "trusted-policy-untrusted",
     }
 )
 
@@ -519,6 +564,8 @@ FINDING_MESSAGES: Dict[str, str] = {
     "native-ref-invalid": "the model id cannot be written as an OpenCode model reference; it must not contain whitespace or control characters",
     "endpoint-family-unverified": "this endpoint family is not verified for compiled configuration on the pinned runtime",
     "later-layers-can-override": "the compiled file is one of several OpenCode config layers; project files, .opencode files, inline config, markdown agent and mode files and organization config can override it; the effective configuration is verified at launch",
+    "allowed-hosts-unset": "a work profile has no allowed_hosts list in the profile or the trusted policy; network destinations are not restricted by configuration",
+    "trusted-policy-untrusted": "the trusted managed policy file failed an ownership or permission check; its restrictions apply but it grants nothing",
     "policies-supplementary": "provider policy statements are not evaluated on the pinned runtime's run path; the provider allowlist and per-provider model whitelists are the enforced controls",
 }
 
@@ -570,9 +617,35 @@ FIELD_TOKENS = frozenset(
         "integrations-enabled",
         "integrations-mode",
         "integrations-backend",
+        "fallback",
+        "web_tools",
+        "package_install",
+        "mcp-local",
+        "mcp-remote",
+        "lsp-mode",
+        "formatter-mode",
+        "network-identity_check",
+        "logging-content",
+        "retention-runs_days",
+        "retention-cache_days",
+        "retention-logs_days",
+        "retention-crash_days",
+        "retention-exports_days",
     }
 )
-LAYER_TOKENS = ("default", "profile", "project", "override", "managed")
+# Why the trusted managed policy file was not trusted: the closed subject set
+# of the `trusted-policy-untrusted` finding.
+TRUST_TOKENS = frozenset(
+    {
+        "chain-not-directory",
+        "chain-not-owned",
+        "chain-writable",
+        "file-not-owned",
+        "file-writable",
+        "invoking-user-is-root",
+    }
+)
+LAYER_TOKENS = ("default", "profile", "project", "override", "managed", "trusted-managed")
 
 
 @dataclass(frozen=True)
@@ -598,6 +671,8 @@ def make_finding(
             or SECRET_SHAPE_RE.search(element)
         ):
             raise ValueError("finding subject must be a plain identifier token")
+    if code == "trusted-policy-untrusted" and (len(subject) != 1 or subject[0] not in TRUST_TOKENS):
+        raise ValueError("finding subject must be a trust token")
     return Finding(code, bool(blocking), tuple(subject), error)
 
 

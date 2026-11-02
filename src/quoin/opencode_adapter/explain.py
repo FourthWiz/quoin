@@ -25,6 +25,14 @@ REDACTED = "***"
 # Sentinel: build the result here (only when nothing blocks compilation).
 AUTO = object()
 
+# Sentinel for `effective`: a live preview was attempted and none is available.
+NO_PREVIEW = object()
+# Passed as `launch_refusal` when the offline launch-policy check itself failed.
+LAUNCH_CHECK_UNAVAILABLE = object()
+NO_RECORD_NOTE = (
+    "not available: the configuration cannot be launched or the project has no Quoin install record"
+)
+
 REASON_TEXT: Dict[str, str] = {
     "not-allowed": "the provider is not on an allow list",
     "denied": "the provider is on a deny list",
@@ -67,7 +75,13 @@ DIAGNOSTIC_TEXT: Dict[str, str] = {
 
 SUMMARY_NOTE = "not used by the pinned runtime; not emitted"
 NO_MANAGED_TEXT = "no managed policy"
-_HOST_LIST_KEYS = ("policy.allowed_hosts", "policy.denied_hosts")
+_HOST_LIST_KEYS = (
+    "policy.allowed_hosts",
+    "policy.denied_hosts",
+    "policy.repositories.allowed_roots",
+    "policy.network.allowed_addresses",
+    "policy.network.pins",
+)
 
 
 def _redact_url(url: str) -> str:
@@ -128,6 +142,52 @@ def _resolution_dict(ev: compiler.Evaluation, res: roles.RoleResolution) -> Dict
     return out
 
 
+def inventory_rows(record: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """One row per inventory entry of an effective-configuration record; a
+    bounded record carries counts instead of rows."""
+    entries = record.get("entries")
+    if not isinstance(entries, list):
+        return []
+    return [
+        {"kind": e.get("kind"), "layer": e.get("layer"), "name": e.get("name"),
+         "verdict": e.get("verdict"), "code": e.get("code")}
+        for e in entries
+    ]
+
+
+def launch_refusal_view(launch_refusal: Any) -> Optional[Dict[str, Any]]:
+    """The launch-policy refusal as code and detail tokens only, never its
+    message; ``unavailable`` when the offline check could not run."""
+    if launch_refusal is None:
+        return None
+    if launch_refusal is LAUNCH_CHECK_UNAVAILABLE:
+        return {"code": "unavailable"}
+    view = {"code": launch_refusal.code}
+    if launch_refusal.token:
+        view["detail"] = launch_refusal.token
+    return view
+
+
+def effective_section(record: Dict[str, Any], refusal: Any = None, launch_refusal: Any = False) -> Dict[str, Any]:
+    """The ``effective_config`` key for a record. ``refusal`` is the launch
+    check's `Refusal` (or None); only its code, layer token and entry token
+    are shown, never its message. ``launch_refusal`` is the launch-policy
+    refusal; left at its default the key is absent (a persisted run record
+    has none to show)."""
+    out: Dict[str, Any] = {
+        "record": record,
+        "inventory": inventory_rows(record),
+        "first_refusal": refusal.code if refusal is not None else None,
+    }
+    if launch_refusal is not False:
+        out["launch_refusal"] = launch_refusal_view(launch_refusal)
+    if refusal is not None:
+        out["first_refusal_layer"] = refusal.layer
+        if refusal.token:
+            out["first_refusal_entry"] = refusal.token
+    return out
+
+
 def explain_document(
     ev: compiler.Evaluation,
     *,
@@ -135,6 +195,8 @@ def explain_document(
     compile_result: Any = AUTO,
     output_dir: Optional[Path] = None,
     gate_failure: Optional[str] = None,
+    effective: Any = None,
+    launch_refusal: Any = None,
 ) -> Dict[str, Any]:
     if compile_result is AUTO:
         compile_result, gate_failure = try_build(ev)
@@ -181,7 +243,8 @@ def explain_document(
     for key, item in sorted(eff.values.items()):
         shown = _plain(item.value)
         if redact and key in _HOST_LIST_KEYS:
-            shown = [REDACTED for _ in shown]
+            # An unset restriction list stays unset; only its members are masked.
+            shown = None if shown is None else [REDACTED for _ in shown]
         values[key] = {"value": shown, "origin": list(item.origin)}
 
     hosts_allowed = list(_plain(eff.values["policy.allowed_hosts"].value)) if "policy.allowed_hosts" in eff.values else []
@@ -229,7 +292,7 @@ def explain_document(
     else:
         location = str(output_dir)
 
-    return {
+    doc = {
         "explain_format": EXPLAIN_FORMAT,
         "profile": {"name": eff.profile_name, "classification": eff.profile_classification},
         "project": {"state": eff.project_state, "file": ".quoin/runtime.json"},
@@ -247,9 +310,109 @@ def explain_document(
         "launchable": bool(compile_result is not None and compile_result.launchable),
         "output_location": location,
     }
+    if effective is NO_PREVIEW:
+        doc["effective_config"] = {"record": None, "note": NO_RECORD_NOTE}
+        doc["effective_config"]["launch_refusal"] = launch_refusal_view(launch_refusal)
+    elif effective is not None:
+        record, layer_check = effective
+        shown = launch_refusal if launch_refusal is not None else getattr(layer_check, "launch_refusal", None)
+        doc["effective_config"] = effective_section(record, layer_check.refusal, shown)
+    return doc
 
 
 # ------------------------------------------------------------------ text
+
+
+def _count_lines(record: Dict[str, Any]) -> List[str]:
+    entries = record.get("entries")
+    counts: Dict[Tuple[str, str], int] = {}
+    if isinstance(entries, list):
+        for e in entries:
+            key = (str(e.get("kind")), str(e.get("verdict")))
+            counts[key] = counts.get(key, 0) + 1
+        return ["%s %s: %d" % (kind, verdict, n) for (kind, verdict), n in sorted(counts.items())]
+    if isinstance(entries, dict):
+        return ["%s: %d" % (kind, n) for kind, n in sorted((entries.get("by_kind") or {}).items())]
+    return []
+
+
+def _launch_line(view: Any) -> str:
+    return "launch policy refusal: %s" % (view["code"] if view else "none")
+
+
+def _isolation_lines(record: Dict[str, Any]) -> List[str]:
+    iso = record.get("isolation") or {}
+    if iso.get("status") in (None, "pending"):
+        return ["isolation: pending"]
+    return ["isolation: %s (evidence: %s; missing: %s)" % (
+        iso.get("status"), ", ".join(iso.get("evidence") or []) or "none", ", ".join(iso.get("missing") or []) or "none",
+    )]
+
+
+def _network_lines(record: Dict[str, Any]) -> List[str]:
+    net = record.get("network") or {}
+    if net.get("status") == "unavailable":
+        return ["network: unavailable (destination checks could not be evaluated; no destination control enforced)"]
+    return [
+        "destination %s %s %s approved_by=%s identity=%s" % (
+            d.get("role"), d.get("host"), d.get("kind"), d.get("approved_by"), d.get("identity"),
+        )
+        for d in net.get("destinations") or []
+    ]
+
+
+def record_lines(section: Dict[str, Any]) -> List[str]:
+    """The text form of an ``effective_config`` section."""
+    record = section.get("record")
+    if record is None:
+        lines = ["effective configuration record: %s" % section.get("note", NO_RECORD_NOTE)]
+        if "launch_refusal" in section:
+            lines.append(_launch_line(section["launch_refusal"]))
+        return lines
+    out: List[str] = ["Effective-config record", "-----------------------"]
+    out.append("digest: %s" % record.get("digest"))
+    out.append("profile: %s (%s)" % (record.get("profile"), record.get("classification")))
+    out.append("runtime version: %s" % record.get("opencode_version"))
+    out.append("pending sections: %s" % (", ".join(record.get("pending_sections") or []) or "none"))
+    for line in _count_lines(record):
+        out.append("entries %s" % line)
+    out.extend(_isolation_lines(record))
+    out.extend(_network_lines(record))
+    for row in record.get("enforcement") or []:
+        out.append("enforcement %s %s %s" % (row.get("control"), row.get("layer"), row.get("status")))
+    for cred in record.get("credentials") or []:
+        out.append("credential: %s (%s)" % (cred.get("ref_masked", cred.get("provider")), cred.get("kind")))
+    env = record.get("env") or {}
+    out.append("environment names: %s" % (", ".join(env.get("names") or []) or "none"))
+    dirs = record.get("dirs") or {}
+    for key in sorted(dirs):
+        out.append("%s directory: %s" % (key, dirs[key]))
+    out.append("")
+    out.append("Inventory")
+    out.append("---------")
+    rows = section.get("inventory") or []
+    for row in rows:
+        out.append(
+            "%s %s %s %s%s"
+            % (row["verdict"], row["kind"], row["layer"], row["name"], " [%s]" % row["code"] if row["code"] else "")
+        )
+    if not rows:
+        out.append("none")
+    if section.get("first_refusal"):
+        extra = " (layer %s%s)" % (
+            section.get("first_refusal_layer", ""),
+            ", entry %s" % section["first_refusal_entry"] if section.get("first_refusal_entry") else "",
+        )
+        out.append("first refusal: %s%s" % (section["first_refusal"], extra))
+    else:
+        out.append("first refusal: none")
+    if "launch_refusal" in section:
+        out.append(_launch_line(section["launch_refusal"]))
+    return out
+
+
+def render_record_text(record: Dict[str, Any]) -> str:
+    return "\n".join(record_lines(effective_section(record))) + "\n"
 
 
 def _text(doc: Dict[str, Any]) -> str:
@@ -347,6 +510,10 @@ def _text(doc: Dict[str, Any]) -> str:
     add("digest: %s" % (doc["digest"] if doc["digest"] else "null (%s)" % doc["digest_note"]))
     add("launchable: %s" % ("true" if doc["launchable"] else "false"))
     add("compiled output location: %s" % (doc["output_location"] or "not applicable"))
+    if "effective_config" in doc:
+        add()
+        for line in record_lines(doc["effective_config"]):
+            add(line)
     return "\n".join(lines) + "\n"
 
 
@@ -358,10 +525,12 @@ def render(
     compile_result: Any = AUTO,
     output_dir: Optional[Path] = None,
     gate_failure: Optional[str] = None,
+    effective: Any = None,
+    launch_refusal: Any = None,
 ) -> str:
     doc = explain_document(
         ev, redact=redact, compile_result=compile_result, output_dir=output_dir,
-        gate_failure=gate_failure,
+        gate_failure=gate_failure, effective=effective, launch_refusal=launch_refusal,
     )
     if as_json:
         return json.dumps(doc, indent=2, ensure_ascii=False) + "\n"

@@ -684,5 +684,5 @@ def test_five_repeated_scenario_runs_leave_no_stray_processes(make, tmp_path_fac
     base = str(tmp_path_factory.getbasetemp())
     listing = subprocess.run(["ps", "-A", "-o", "pid=,stat=,command="], capture_output=True, text=True).stdout
     stray = [l for l in listing.splitlines()
-             if base in l and not l.split(None, 2)[1].startswith("Z")]
+             if (base + os.sep) in l and not l.split(None, 2)[1].startswith("Z")]
     assert not stray, stray
