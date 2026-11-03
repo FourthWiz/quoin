@@ -14,6 +14,7 @@ The cache lives under `.workflow_artifacts/cache/`. Three rules govern all skill
 ├── <repo-name>/
 │   ├── _index.md                 ← Repo summary: purpose, stack, entry points, key patterns
 │   ├── _deps.md                  ← External deps + internal cross-module deps
+│   ├── repo-map.md               ← Generated ranked symbol map (repo_map.py; refreshed by /discover, not write-through)
 │   └── <directory>/
 │       ├── _index.md             ← Module/directory summary: purpose, exports, patterns
 │       └── <file-stem>.md        ← Per-file summary (key files only)

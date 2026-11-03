@@ -84,6 +84,10 @@ Plus the knowledge cache tree:
   per-file summary, created only for key files (entry points, API route
   definitions, model/schema definitions, configuration files, files with
   non-trivial business logic).
+- `.workflow_artifacts/cache/<repo-name>/repo-map.md` — generated, token-
+  budgeted symbol map ranked by cross-file references (`repo_map.py`,
+  budget `QUOIN_REPOMAP_TOKENS`, default 1000). Best effort: a failed
+  generation is skipped, never an error.
 
 The cost-ledger row at `.workflow_artifacts/<task-name>/cost-ledger.md` is
 written ONLY when a task context is active for this invocation (see

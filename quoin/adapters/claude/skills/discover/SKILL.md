@@ -503,6 +503,16 @@ For each repo that was scanned (not skipped), check that `.workflow_artifacts/ca
 
 Report the warning counts in the "After scanning" summary (see below).
 
+### Repo map (ranked symbol map)
+
+For each repo that was scanned (not skipped), generate a token-budgeted, reference-ranked symbol map. It needs no Serena; it uses tree-sitter grammars when installed and a standard-library parser otherwise:
+
+```
+python3 __QUOIN_HOME__/scripts/repo_map.py --repo "<repo path>" --name "<repo-name>" --out ".workflow_artifacts/cache/<repo-name>/repo-map.md"
+```
+
+Budget: `QUOIN_REPOMAP_TOKENS` (default 1000). Non-blocking, fail-OPEN: a non-zero exit or a missing script means skip silently and leave any previous map in place. Skipped repos keep their existing map; it is refreshed on the next scan of that repo.
+
 ### Incremental cache updates
 
 When `/discover` runs incrementally (some repos skipped because HEAD unchanged):
