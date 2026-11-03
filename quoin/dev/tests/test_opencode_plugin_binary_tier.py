@@ -26,7 +26,7 @@ import pytest
 
 import _opencode_helpers as helpers
 from quoin.opencode_adapter import events as ev
-from quoin.opencode_adapter import manifest, plugin_events
+from quoin.opencode_adapter import plugin_events
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PLUGIN_JS = REPO_ROOT / "quoin" / "adapters" / "opencode" / "plugin" / "quoin-opencode-plugin.js"
@@ -34,17 +34,9 @@ RUN_ID = "oc-20261102T120000Z-0a1b2c3d"
 
 
 def _skip_reason():
-    binary = shutil.which("opencode")
-    if binary is None:
-        return "no 'opencode' binary on PATH"
-    pinned = manifest.read_pinned_version(REPO_ROOT / "quoin")
-    try:
-        reported = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10).stdout
-    except (OSError, subprocess.TimeoutExpired):
-        reported = ""
-    if pinned not in reported:
-        return "'opencode --version' did not report the pinned release %r" % pinned
-    return None
+    import test_opencode_binary_contract as contract
+
+    return contract.skip_reason(contract._OPENCODE_BIN, contract._QUALIFIED_VERSIONS, contract._BINARY_VERSION)  # noqa: SLF001
 
 
 pytestmark = pytest.mark.skipif(_skip_reason() is not None, reason=_skip_reason() or "")

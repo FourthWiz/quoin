@@ -1,13 +1,25 @@
 # OpenCode compatibility
 
-## Pinned release
+## Qualified releases
 
 ```
-Version: 1.18.32
+Qualified: 1.18.32
+Floor: 1.18.32
+Evidence release: 1.18.32
 Install channel: latest
 Verified on: 2026-09-24
 Upstream repository: https://github.com/anomalyco/opencode
 ```
+
+The qualified list is kept in `qualified-versions.json`; the `Qualified:` and
+`Floor:` lines here mirror it and a drift check fails when they disagree. The
+floor is the lowest qualified release: older releases are refused for every
+profile. A release newer than the highest qualified one launches on personal
+profiles with a warning and is refused on work profiles; the full policy is in
+`release-acceptance.md`, Version policy. The evidence release is the release
+the rows below were verified against, and "the pinned release" in those rows
+means it. A new release is qualified by rechecking the rows against its tag
+(`release-acceptance.md`, Upgrade qualification).
 
 ## Evidence rule
 
@@ -32,7 +44,7 @@ Two active release lines exist upstream as of the verification date.
 | 1.18.x | 1.18.32 (published 2026-09-21) | GitHub Releases (changelog per release) | unversioned `opencode.ai/docs` |
 | 2.0.x | 2.0.16 (tagged 2026-09-24) | git tags only — no GitHub Release published for this line yet | versioned `opencode.ai/v2/docs` |
 
-**Chosen line: 1.18.x, pinned at 1.18.32.**
+**Chosen line: 1.18.x, floor and evidence release 1.18.32.**
 
 Evidence for the choice, applying the pin criteria in order:
 

@@ -358,7 +358,7 @@ def test_pinned_version_maps_manifest_errors(monkeypatch):
     def broken(source_dir):
         raise manifest.ManifestLoadError("boom")
 
-    monkeypatch.setattr(manifest, "read_pinned_version", broken)
+    monkeypatch.setattr(manifest, "read_qualified_versions", broken)
     with pytest.raises(paths.AdapterDataMissing):
         qualification.pinned_version()
 

@@ -1,10 +1,12 @@
 """An optional, offline-by-default check of the generated assets against a
-real OpenCode binary, when one happens to be on PATH and pinned to the
-version this adapter targets. Every other opencode_adapter test exercises
+real OpenCode binary, when one happens to be on PATH and reports one of the
+qualified releases this adapter targets. Every other opencode_adapter test exercises
 the generator, installer and doctor against the rendered files directly;
 this module is the one place that asks the actual binary to load them.
 
-Never runs in CI (no pytest step invokes it there) and is not part of
+Runs in CI only in the manual OpenCode qualification workflow, which installs
+a candidate release and adds it to the qualified list in its own checkout
+first. It is not part of
 `quoin doctor --runtime opencode --smoke`. It collects and skips on any
 machine without a matching binary, which is the expected case almost
 everywhere this suite runs.
@@ -14,6 +16,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -53,27 +56,37 @@ def _pinned_version() -> Optional[str]:
         return None
 
 
+def _qualified_versions() -> Optional[list]:
+    try:
+        return manifest.read_qualified_versions(SOURCE_DIR)
+    except manifest.ManifestLoadError:
+        return None
+
+
 _BINARY_VERSION = _binary_version()
 _PINNED_VERSION = _pinned_version()
+_QUALIFIED_VERSIONS = _qualified_versions()
 
 def skip_reason(binary_path, pinned, reported) -> Optional[str]:
     """Why this module cannot run against the binary found, or None to run.
 
     `binary_path` is the executable found on PATH (None when absent),
-    `pinned` the release the adapter targets and `reported` what
-    `opencode --version` printed.
+    `pinned` the qualified release, or list of qualified releases, the
+    adapter targets and `reported` what `opencode --version` printed.
     """
     if binary_path is None:
         return "no 'opencode' binary on PATH"
-    if pinned is None or reported is None or pinned not in reported:
+    accepted = [pinned] if isinstance(pinned, str) else list(pinned or ())
+    found = re.search(r"\d+\.\d+\.\d+", reported or "")
+    if not accepted or found is None or found.group(0) not in accepted:
         return (
-            "'opencode --version' did not report the pinned release "
-            f"({pinned!r}); saw {reported!r}"
+            "'opencode --version' did not report a qualified release "
+            f"({', '.join(accepted) or None!r}); saw {reported!r}"
         )
     return None
 
 
-_SKIP_REASON = skip_reason(_OPENCODE_BIN, _PINNED_VERSION, _BINARY_VERSION)
+_SKIP_REASON = skip_reason(_OPENCODE_BIN, _QUALIFIED_VERSIONS, _BINARY_VERSION)
 
 pytestmark = pytest.mark.skipif(_SKIP_REASON is not None, reason=_SKIP_REASON or "")
 

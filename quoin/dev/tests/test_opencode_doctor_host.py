@@ -460,8 +460,14 @@ def test_version_runner_match_differ_timeout_garbage(fixture):
     assert pinned in versioned.message
 
     findings = _run_host(project, source_dir, env, home, which=which_opencode, version_runner=lambda _p: "9.9.9")
-    versioned = [f for f in findings if f.id == "opencode-version"][0]
-    assert "9.9.9" in versioned.message and pinned in versioned.message
+    newer = [f for f in findings if f.id == "opencode-version-newer"][0]
+    assert newer.severity == "warn"
+    assert "9.9.9" in newer.message and pinned in newer.message and "newer than qualified" in newer.message
+    plugin = [f for f in findings if f.id == "runtime-lifecycle-plugin-untested"][0]
+    assert "9.9.9" in plugin.message and pinned in plugin.message
+
+    findings = _run_host(project, source_dir, env, home, which=which_opencode, version_runner=lambda _p: "1.0.0")
+    assert [f.severity for f in findings if f.id == "opencode-version-below-floor"] == ["warn"]
 
     findings = _run_host(project, source_dir, env, home, which=which_opencode, version_runner=lambda _p: None)
     assert [f.id for f in findings if f.id == "opencode-version-unknown"]

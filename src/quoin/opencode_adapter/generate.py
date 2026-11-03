@@ -459,12 +459,13 @@ def load_inputs(source_dir) -> GeneratorInputs:
     try:
         catalog = manifest.load_catalog(source_dir)
         manifest_data = manifest.load_manifest(source_dir)
-        pinned_version = manifest.read_pinned_version(source_dir)
+        qualified = manifest.read_qualified_versions(source_dir)
+        pinned_version = qualified[-1]
     except manifest.ManifestLoadError as exc:
         raise GenerationError(str(exc)) from exc
 
     try:
-        findings = manifest.check_manifest(manifest_data, catalog, pinned_version)
+        findings = manifest.check_manifest(manifest_data, catalog, qualified)
     except RecursionError as exc:
         raise GenerationError("manifest is nested too deeply to check") from exc
     if findings:

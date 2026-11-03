@@ -31,7 +31,18 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
 BENCHMARK_DIR = Path(__file__).resolve().parent.parent
 QUALIFICATION_SPEC = BENCHMARK_DIR / "opencode-qualification.json"
 
-PINNED_OPENCODE_VERSION = "1.18.32"
+QUALIFIED_VERSIONS_FILE = BENCHMARK_DIR.parent / "adapters" / "opencode" / "qualified-versions.json"
+
+
+def _qualified_opencode_versions() -> List[str]:
+    data = json.loads(QUALIFIED_VERSIONS_FILE.read_text(encoding="utf-8"))
+    return sorted(data["qualified"], key=lambda v: tuple(int(p) for p in v.split(".")))
+
+
+# Read from the adapter's qualified list so a benchmark never names a release
+# the adapter does not; the highest entry is the reference release.
+QUALIFIED_OPENCODE_VERSIONS = tuple(_qualified_opencode_versions())
+PINNED_OPENCODE_VERSION = QUALIFIED_OPENCODE_VERSIONS[-1]
 OPENCODE_CELLS = ("simple-opencode", "quoin-opencode")
 
 ENV_MODEL = "QUOIN_BENCH_OPENCODE_MODEL"
@@ -558,7 +569,7 @@ def invoke_opencode(
         return refuse("endpoint-not-in-config")
     if redact_endpoint(actual) != redact_endpoint(env[ENV_BASE_URL]):
         return refuse("endpoint-mismatch")
-    if version != PINNED_OPENCODE_VERSION:
+    if version not in QUALIFIED_OPENCODE_VERSIONS:
         extra["runtime_version_unqualified"] = True
 
     result["prompt"] = prompt = build_prompt(task_spec, quoin_enabled)

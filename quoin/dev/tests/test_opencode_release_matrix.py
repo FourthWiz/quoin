@@ -90,18 +90,12 @@ def test_thresholds_and_pins_match_their_sources():
     for t in spec["thresholds"]:
         if "required_runs" in t:
             assert "at least %d of %d" % (t["min_successes"], t["required_runs"]) in text, t["id"]
-    compat = (REPO_ROOT / "quoin" / "adapters" / "opencode" / "compatibility.md").read_text(encoding="utf-8")
-    pin = re.search(r"pinned at (\d+\.\d+\.\d+)", compat).group(1)
     plugin = (REPO_ROOT / "src" / "quoin" / "opencode_adapter" / "plugin_artifact.py").read_text(encoding="utf-8")
     plugin_version = re.search(r'^PLUGIN_VERSION = "([^"]+)"', plugin, re.M).group(1)
     rows = {row["Component"]: row for row in _table(_section(text, "Compatibility matrix"))}
-    assert rows["OpenCode"]["Qualified version"] == pin
-    assert rows["Quoin lifecycle plugin"]["Qualified version"] == plugin_version
-    # Every other place the runtime pin is recorded moves with it.
-    from quoin.benchmarks.harness.opencode_cells import PINNED_OPENCODE_VERSION
-    from quoin.opencode_adapter.paths import NATIVE_SCHEMA_FILE
-    from quoin.opencode_adapter.plugin_artifact import PLUGIN_OPENCODE_VERSION
+    from quoin.opencode_adapter import manifest
 
-    assert PINNED_OPENCODE_VERSION == pin
-    assert PLUGIN_OPENCODE_VERSION == pin
-    assert NATIVE_SCHEMA_FILE == "opencode-%s-config.subset.schema.json" % pin
+    qualified = manifest.read_qualified_versions(REPO_ROOT / "quoin")
+    assert rows["OpenCode"]["Qualified version"] == ", ".join(qualified)
+    assert rows["OpenCode"]["Source of truth"] == "`qualified-versions.json`"
+    assert rows["Quoin lifecycle plugin"]["Qualified version"] == plugin_version

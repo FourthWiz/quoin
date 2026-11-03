@@ -34,8 +34,8 @@ backend.
 Two commands take a project from nothing to an interactive session:
 
 - `quoin opencode setup [--profile NAME] [--project-root PATH] [--yes]` finds
-  OpenCode on PATH and, when it is missing or not the pinned release, offers
-  to install the pinned release with the official installer into
+  OpenCode on PATH and, when it is missing or not an accepted release, offers
+  to install the highest qualified release with the official installer into
   `~/.opencode/bin` (never system-wide). It then writes the project scaffold,
   creates or reuses a personal profile from `quoin models` (each provider
   model id is confirmed interactively), classifies an unclassified project as
@@ -45,7 +45,7 @@ Two commands take a project from nothing to an interactive session:
   nothing. `--yes` accepts the install offer and the project classification
   and reuses model id confirmations you already gave for this project; it never
   confirms a new model id. Work profiles and work projects never get an
-  automatic install and accept only the pinned release. Setup never writes a
+  automatic install and accept only qualified releases. Setup never writes a
   credential: it names the environment variable or keychain entry the
   profile expects. The profile defaults to the project's last one, else
   `personal`. Exit 0 when nothing remains, 1 otherwise, 2 for usage errors.
@@ -200,7 +200,7 @@ normally and `info` when the matching disable flag is already set):
 | Severity | Finding ids |
 |---|---|
 | error | `smoke-render`, `smoke-roundtrip`, `smoke-names`, `smoke-frontmatter`, `smoke-digests`, `smoke-bundle`, `smoke-read-only-roles`, `smoke-task-graph`, `smoke-forbidden-output`, `smoke-script-refs`, `smoke-config`, `render-failed`, `manifest-drift`, `manifest-unreadable`, `install-metadata-invalid`, `project-config-disabled` |
-| warn | `install-absent`, `owned-missing`, `owned-modified`, `owned-stale`, `owned-not-installed`, `owned-unreadable`, `rules-global-claude-md`, `rules-project-claude-md`, `config-unreadable`, `subagent-depth-raised`, `quoin-not-on-path`, `skill-duplicate`, `skill-duplicate-unnamed`, `quoin-skill-outside-project`, `legacy-claude-skills` |
+| warn | `opencode-version-newer`, `opencode-version-unqualified`, `opencode-version-below-floor`, `install-absent`, `owned-missing`, `owned-modified`, `owned-stale`, `owned-not-installed`, `owned-unreadable`, `rules-global-claude-md`, `rules-project-claude-md`, `config-unreadable`, `subagent-depth-raised`, `quoin-not-on-path`, `skill-duplicate`, `skill-duplicate-unnamed`, `quoin-skill-outside-project`, `legacy-claude-skills` |
 | info | `temp-leftover`, `rules-agents-md-present`, `flags-set`, `config-env-set`, `opencode-binary-absent`, `opencode-version`, `opencode-version-unknown`, `install-version-differs`, `census-unverified`, `skills-url-not-scanned`, `skills-path-missing`, `census-truncated`, `permission-loosened` |
 | ok | `smoke-ok`, `install-current` |
 
@@ -1019,8 +1019,15 @@ guessed. Text output names the remedy for a dead lock, a lost driver or a
 blocked resume. A run that a later run replaced is shown as superseded, with
 nothing to resume.
 
-`quoin opencode start` runs the same checks as a phase run (binary, pinned
-version, configuration, gateway qualification, installed files unchanged,
+OpenCode versions follow a floor and a qualified list
+(`qualified-versions.json`; policy in `release-acceptance.md`, Version policy).
+Older than the floor is refused for every profile. A newer or otherwise
+unqualified release launches on a personal profile with a warning, recorded as
+`unqualified_runtime: true` beside the runtime version in the run record, and
+is refused on a work profile (`opencode-version-unqualified`).
+
+`quoin opencode start` runs the same checks as a phase run (binary, version
+policy, configuration, gateway qualification, installed files unchanged,
 configuration layers) and then replaces the `quoin` process with the OpenCode
 interface, started in the project directory with the compiled configuration
 and an isolated data directory. Nothing is captured: there is no event
@@ -1060,7 +1067,7 @@ slugs as run refusals so a finding and a refusal about one problem agree:
 | Category | Label | Example finding ids |
 |---|---|---|
 | `missing-binary` | missing binary | `opencode-binary-absent` |
-| `unsupported-version` | unsupported version | `opencode-version`, `opencode-version-unknown`, `runtime-lifecycle-plugin`, `runtime-lifecycle-plugin-incompatible` |
+| `unsupported-version` | unsupported version | `opencode-version`, `opencode-version-newer`, `opencode-version-unqualified`, `opencode-version-below-floor`, `opencode-version-unknown`, `runtime-lifecycle-plugin`, `runtime-lifecycle-plugin-untested`, `runtime-lifecycle-plugin-incompatible` |
 | `invalid-configuration` | invalid configuration | `config-unreadable`, `runtime-config-invalid`, `runtime-compile-blocked` |
 | `unqualified-gateway` | unqualified gateway | `runtime-gateway-unqualified` |
 | `policy-denial` | policy denial | `runtime-config-policy-denied`, `runtime-plugin-directory-present` |
@@ -1070,9 +1077,9 @@ slugs as run refusals so a finding and a refusal about one problem agree:
 Host checks now also report process-group support, an unusable run store,
 orphaned runs, a stale OpenCode task lock, a phase command whose agent is not
 primary, plugin directories, and the packaged lifecycle plugin's version, whether
-it matches the pinned build and the OpenCode release it was qualified against
-(`runtime-lifecycle-plugin`, `runtime-lifecycle-plugin-incompatible`,
-`runtime-lifecycle-plugin-invalid`). With `--profile NAME` (not with `--smoke`)
+it matches the packaged build, and the OpenCode release it was tested with next
+to the runtime's (`runtime-lifecycle-plugin`, `runtime-lifecycle-plugin-untested`,
+`runtime-lifecycle-plugin-incompatible`, `runtime-lifecycle-plugin-invalid`). With `--profile NAME` (not with `--smoke`)
 the doctor also evaluates that profile's configuration without resolving any
 credential and reports whether it can launch. A role blocked by a provider
 exclusion is reported as compile-blocked, exactly as the run refusal reports

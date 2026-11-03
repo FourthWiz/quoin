@@ -500,3 +500,15 @@ def test_run_help_lists_the_new_flags(capsys):
     text = capsys.readouterr().out
     for flag in ("--runtime", "--profile", "--phase", "--stage", "--new-run"):
         assert flag in text
+
+
+def test_a_run_on_an_unqualified_release_shows_its_warning(capsys):
+    seen = []
+    hook = cli._opencode_prepared_hook(seen.append)  # noqa: SLF001
+    import types
+
+    hook(types.SimpleNamespace(runtime_warning="OpenCode 99.0.0 is newer than the qualified releases"))
+    hook(types.SimpleNamespace(runtime_warning=None))
+    assert len(seen) == 2
+    assert capsys.readouterr().err == "quoin: warning: OpenCode 99.0.0 is newer than the qualified releases\n"
+    cli._opencode_prepared_hook(None)(types.SimpleNamespace(runtime_warning=None))  # noqa: SLF001

@@ -42,15 +42,21 @@ class QualificationResult:
     probed_at: Optional[str] = None
 
 
-def pinned_version() -> str:
-    """The runtime version the adapter is pinned to."""
+def qualified_versions() -> list:
+    """The qualified OpenCode releases, lowest (the floor) first."""
     data_dir = paths.adapter_data_dir()
     if data_dir is None:
         raise paths.AdapterDataMissing("adapter data directory not found")
     try:
-        return manifest.read_pinned_version(data_dir.parent.parent)
+        return manifest.read_qualified_versions(data_dir.parent.parent)
     except manifest.ManifestLoadError:
-        raise paths.AdapterDataMissing("pinned runtime version not found") from None
+        raise paths.AdapterDataMissing("qualified runtime versions not found") from None
+
+
+def pinned_version() -> str:
+    """The reference runtime version: the highest qualified release.
+    Capability records are measured against it."""
+    return qualified_versions()[-1]
 
 
 def _dict(value: Any) -> dict:

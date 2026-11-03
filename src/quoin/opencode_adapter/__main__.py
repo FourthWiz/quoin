@@ -54,13 +54,17 @@ def _run_check_manifest(source_dir_arg: Optional[str]) -> int:
     try:
         data = _manifest.load_manifest(source_dir)
         catalog = _manifest.load_catalog(source_dir)
-        pinned_version = _manifest.read_pinned_version(source_dir)
+        pinned_version = _manifest.read_qualified_versions(source_dir)
     except _manifest.ManifestLoadError as exc:
         print("opencode manifest: %s" % exc, file=sys.stderr)
         return 2
 
     try:
         errors = _manifest.check_manifest(data, catalog, pinned_version, _manifest.repo_root_for(source_dir))
+        errors += _manifest.qualified_drift(source_dir, pinned_version)
+    except _manifest.ManifestLoadError as exc:
+        print("opencode manifest: %s" % exc, file=sys.stderr)
+        return 2
     except RecursionError:
         print("opencode manifest: manifest is nested too deeply to check", file=sys.stderr)
         return 2

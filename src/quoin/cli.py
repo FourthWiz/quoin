@@ -2516,6 +2516,18 @@ def _exec_tui(argv, cwd, env) -> int:
 _opencode_tui_launcher = _exec_tui
 
 
+def _opencode_prepared_hook(hook):
+    """Wrap a prepared-run callback so a run on an unqualified OpenCode
+    release shows its warning before the phase starts."""
+    def announce(prepared):
+        warning = getattr(prepared, "runtime_warning", None)
+        if warning:
+            print("quoin: warning: %s" % warning, file=sys.stderr)
+        if hook is not None:
+            hook(prepared)
+    return announce
+
+
 def _cmd_opencode_start(args: argparse.Namespace) -> int:
     """`quoin opencode start`: open the OpenCode TUI with the compiled profile.
 
@@ -2537,6 +2549,8 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
     except Exception as exc:  # noqa: BLE001 - an operator command never shows a traceback
         print("quoin: opencode start failed: %s" % type(exc).__name__, file=sys.stderr)
         return 3
+    if launch.runtime_warning:
+        print("quoin: warning: %s" % redact(launch.runtime_warning), file=sys.stderr)
     if args.dry_run:
         print(json.dumps({
             "argv": [redact(a) for a in launch.argv],
@@ -2544,6 +2558,7 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
             "config_path": redact(str(launch.config_path)),
             "env_names": list(launch.env_names),
             "runtime_version": launch.runtime_version,
+            "unqualified_runtime": launch.unqualified_runtime,
             "effective_config_digest": launch.effective_config_digest,
             "lifecycle_plugin": launch.run_id is not None,
         }, sort_keys=True))
@@ -2889,7 +2904,7 @@ def _cmd_run_opencode(args: argparse.Namespace) -> int:
                     result = phase_loop.run_phase(
                         drv, request, max_relaunch=args.max_relaunch, cancel=cancel,
                         new_run=args.new_run, backoff_fn=_opencode_backoff,
-                        on_prepared=on_prepared,
+                        on_prepared=_opencode_prepared_hook(on_prepared),
                     )
                 except Exception as exc:  # noqa: BLE001
                     result = phase_loop.PhaseResult(

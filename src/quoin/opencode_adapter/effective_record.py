@@ -226,6 +226,7 @@ def build(
     surface: str = "headless",
     effective: Optional[Any] = None,
     plugin: Optional[Mapping[str, Any]] = None,
+    unqualified_runtime: bool = False,
 ) -> Dict[str, Any]:
     """The record. When all of `isolation`, `network` and `enforcement` are
     given the three sections are filled and none is pending; otherwise each
@@ -236,6 +237,9 @@ def build(
     record: Dict[str, Any] = {
         "record_format": RECORD_FORMAT,
         "opencode_version": opencode_version,
+        # True when a personal profile launched on an OpenCode release that
+        # is not in the qualified list.
+        "unqualified_runtime": bool(unqualified_runtime),
         "profile": profile,
         "classification": classification,
         "sources": sources,

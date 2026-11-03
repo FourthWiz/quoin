@@ -258,6 +258,9 @@ def test_wheel_contents_include_opencode_adapter_assets(built_wheel):
         "quoin/opencode_adapter/import_preview.py",
         "quoin/opencode_adapter/retry.py",
         "quoin/data/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json",
+        # the qualified OpenCode release list and the policy that reads it
+        "quoin/data/adapters/opencode/qualified-versions.json",
+        "quoin/opencode_adapter/versions.py",
         "quoin/data/adapters/opencode/fixtures/compiled/work.opencode.json",
         "quoin/data/adapters/opencode/fixtures/compiled/work-variants.opencode.json",
         "quoin/data/adapters/opencode/fixtures/compiled/personal.opencode.json",

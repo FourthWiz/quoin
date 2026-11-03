@@ -90,7 +90,10 @@ MESSAGES: Dict[str, str] = {
     "subagent-depth-raised": "a config file sets a subagent depth of %(number)s",
     "quoin-not-on-path": "the quoin command was not found on PATH",
     "opencode-binary-absent": "the opencode binary was not found on PATH",
-    "opencode-version": "the opencode binary reports version %(version)s (pinned %(expected)s)",
+    "opencode-version": "the opencode binary reports version %(version)s, a qualified release (qualified %(expected)s)",
+    "opencode-version-newer": "the opencode binary reports version %(version)s, newer than qualified (qualified %(expected)s); personal profiles launch with a warning and work profiles refuse it",
+    "opencode-version-unqualified": "the opencode binary reports version %(version)s, which is not a qualified release (qualified %(expected)s); personal profiles launch with a warning and work profiles refuse it",
+    "opencode-version-below-floor": "the opencode binary reports version %(version)s, older than the supported floor (qualified %(expected)s); every profile refuses it",
     "opencode-version-unknown": "the opencode binary's version could not be determined",
     "census-unverified": "%(count)s SKILL.md file(s) could not have their name read with certainty and were left out of the duplicate and legacy checks",
     "skill-duplicate": "the skill '%(name)s' is defined by more than one file: %(names)s",
@@ -108,8 +111,9 @@ MESSAGES: Dict[str, str] = {
     "runtime-stale-lock": "the supervisor lock for task %(name)s names an OpenCode run that is no longer alive",
     "runtime-command-agent-not-primary": "an installed phase command does not select an installed primary agent",
     "runtime-plugin-directory-present": "an OpenCode plugin directory holds plugin files, so phase runs are refused while it does",
-    "runtime-lifecycle-plugin": "the Quoin lifecycle plugin %(version)s is qualified for OpenCode %(expected)s",
-    "runtime-lifecycle-plugin-incompatible": "the Quoin lifecycle plugin is qualified for OpenCode %(version)s, but the adapter is pinned to %(expected)s",
+    "runtime-lifecycle-plugin": "the Quoin lifecycle plugin %(version)s was tested with OpenCode %(expected)s (runtime %(name)s)",
+    "runtime-lifecycle-plugin-untested": "the Quoin lifecycle plugin %(version)s was tested with OpenCode %(expected)s, but the runtime is %(name)s; it loads with a warning",
+    "runtime-lifecycle-plugin-incompatible": "the Quoin lifecycle plugin was tested with OpenCode %(version)s, which is not a qualified release (qualified %(expected)s)",
     "runtime-lifecycle-plugin-invalid": "the packaged Quoin lifecycle plugin is %(name)s, so a profile that enables it cannot start an interactive session",
     "runtime-config-invalid": "the profile's configuration has %(count)s error(s) of class %(name)s",
     "runtime-config-policy-denied": "the profile's configuration was refused by policy (class %(name)s, %(count)s occurrence(s))",
@@ -160,13 +164,17 @@ _REMEDIATIONS: Dict[str, str] = {
     "runtime-orphan-run": "run `quoin opencode status --task TASK` for the process ids, stop any child that is still alive, then start over with --new-run",
     "runtime-stale-lock": "re-run the phase with `quoin run --runtime opencode ...`, which reclaims a dead lock, or remove the lock file",
     "runtime-command-agent-not-primary": "re-run `quoin install --runtime opencode` to restore the command and agent files",
-    "runtime-lifecycle-plugin-incompatible": "reinstall quoin so the plugin and the pinned OpenCode release come from the same build",
-    "runtime-lifecycle-plugin-invalid": "reinstall quoin; the launcher loads the plugin only when it matches the pinned build",
+    "opencode-version-newer": "install a qualified OpenCode release for work profiles, or qualify this one (release-acceptance.md, Upgrade qualification)",
+    "opencode-version-unqualified": "install a qualified OpenCode release for work profiles, or qualify this one (release-acceptance.md, Upgrade qualification)",
+    "opencode-version-below-floor": "upgrade OpenCode to a qualified release; `quoin opencode setup` offers to install one for personal profiles",
+    "runtime-lifecycle-plugin-untested": "qualify this OpenCode release with the plugin (release-acceptance.md, Upgrade qualification), or install the release the plugin was tested with",
+    "runtime-lifecycle-plugin-incompatible": "reinstall quoin so the plugin and the qualified OpenCode releases come from the same build",
+    "runtime-lifecycle-plugin-invalid": "reinstall quoin; the launcher loads the plugin only when it matches the packaged build",
     "runtime-plugin-directory-present": "move the plugin files out of the OpenCode plugin directories for the duration of a run, or run with a separate XDG_CONFIG_HOME; the launcher refuses rather than trust plugin code with the approval flow",
     "runtime-config-invalid": "run `quoin opencode config explain --profile PROFILE` to see where each value comes from",
     "runtime-config-policy-denied": "run `quoin opencode config explain --profile PROFILE`; a policy refusal is not worked around by editing the profile",
     "runtime-adapter-data-missing": "reinstall quoin",
-    "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the pinned OpenCode version",
+    "runtime-gateway-unqualified": "run `quoin opencode probe` to qualify the gateway for the reference OpenCode release",
     "runtime-compile-blocked": "run `quoin opencode config explain --profile PROFILE` to see the blocking findings",
     "inventory-refused": "run `quoin opencode config explain --profile PROFILE` to see the refused entry and its layer, then remove it from that layer",
     "isolation-verified": "the declaration describes how the profile was set up; it does not prove the operating system enforces it",
@@ -760,38 +768,79 @@ def _default_version_runner(path: str) -> Optional[str]:
     return proc.stdout.decode("utf-8", "replace")
 
 
-def _binary_findings(which, version_runner, source_dir) -> List[Finding]:
+_VERSION_FINDINGS = {
+    "qualified": ("opencode-version", "info"),
+    "newer": ("opencode-version-newer", "warn"),
+    "unqualified": ("opencode-version-unqualified", "warn"),
+    "below-floor": ("opencode-version-below-floor", "warn"),
+}
+
+
+def _runtime_version(which, version_runner) -> Tuple[Optional[str], Optional[str]]:
+    """(binary path, version) of the opencode on PATH; either may be None."""
     path = which("opencode")
     if path is None:
-        return [make_finding("opencode-binary-absent", "info")]
+        return None, None
     runner = version_runner or _default_version_runner
     output = runner(path)
     match = _VERSION_RE.search(output) if output else None
-    if match is None:
-        return [make_finding("opencode-version-unknown", "info")]
+    return path, match.group(0) if match else None
+
+
+def _qualified_or_none(source_dir) -> Optional[List[str]]:
     try:
-        pinned = manifest.read_pinned_version(source_dir)
+        return manifest.read_qualified_versions(source_dir)
     except manifest.ManifestLoadError:
-        pinned = "unknown"
-    return [make_finding("opencode-version", "info", version=match.group(0), expected=pinned)]
+        return None
 
 
-def _lifecycle_plugin_findings(source_dir) -> List[Finding]:
-    """The packaged lifecycle plugin's version, whether it matches the pinned
-    build, and whether it was qualified against the pinned OpenCode release."""
-    from . import plugin_artifact  # noqa: PLC0415
+def _binary_findings(which, version_runner, source_dir) -> List[Finding]:
+    return _version_findings(*_runtime_version(which, version_runner), source_dir)
+
+
+def _version_findings(path: Optional[str], version: Optional[str], source_dir) -> List[Finding]:
+    if path is None:
+        return [make_finding("opencode-binary-absent", "info")]
+    if version is None:
+        return [make_finding("opencode-version-unknown", "info")]
+    qualified = _qualified_or_none(source_dir)
+    if qualified is None:
+        return [make_finding("opencode-version", "info", version=version, expected="unknown")]
+    from . import versions  # noqa: PLC0415
+
+    verdict = versions.judge(version, qualified)
+    finding_id, severity = _VERSION_FINDINGS[verdict.status]
+    return [make_finding(finding_id, severity, version=version, expected=", ".join(qualified))]
+
+
+def _lifecycle_plugin_findings(source_dir, runtime_version: Optional[str] = None) -> List[Finding]:
+    """The packaged lifecycle plugin's version, whether it matches the
+    packaged build, the OpenCode release it was tested with, and that release
+    next to the runtime's version. A runtime that is not a qualified release
+    loads the plugin with a warning."""
+    from . import plugin_artifact, versions  # noqa: PLC0415
 
     found = plugin_artifact.status()
     if found.state != "ok":
         return [make_finding("runtime-lifecycle-plugin-invalid", "warn", name=found.state)]
-    try:
-        pinned = manifest.read_pinned_version(source_dir)
-    except manifest.ManifestLoadError:
-        pinned = "unknown"
-    qualified = plugin_artifact.PLUGIN_OPENCODE_VERSION
-    if pinned not in (qualified, "unknown"):
-        return [make_finding("runtime-lifecycle-plugin-incompatible", "warn", version=qualified, expected=pinned)]
-    return [make_finding("runtime-lifecycle-plugin", "info", version=found.version or "unknown", expected=qualified)]
+    tested = plugin_artifact.PLUGIN_OPENCODE_VERSION
+    qualified = _qualified_or_none(source_dir)
+    if qualified is not None and tested not in qualified:
+        return [make_finding(
+            "runtime-lifecycle-plugin-incompatible", "warn", version=tested, expected=", ".join(qualified),
+        )]
+    runtime = runtime_version or "unknown"
+    if (
+        qualified is not None and runtime_version is not None
+        and versions.judge(runtime_version, qualified).unqualified_runtime
+    ):
+        return [make_finding(
+            "runtime-lifecycle-plugin-untested", "warn",
+            version=found.version or "unknown", expected=tested, name=runtime,
+        )]
+    return [make_finding(
+        "runtime-lifecycle-plugin", "info", version=found.version or "unknown", expected=tested, name=runtime,
+    )]
 
 
 def _subagent_depth_findings(docs: List[Tuple[Path, dict]], roots) -> List[Finding]:
@@ -1141,8 +1190,9 @@ def run_host(
     findings.extend(_rules_findings(root, worktree, env, home, roots))
     findings.extend(_flag_findings(env))
     findings.extend(_path_findings(which))
-    findings.extend(_binary_findings(which, version_runner, source_dir))
-    findings.extend(_lifecycle_plugin_findings(source_dir))
+    opencode_path, opencode_version = _runtime_version(which, version_runner)
+    findings.extend(_version_findings(opencode_path, opencode_version, source_dir))
+    findings.extend(_lifecycle_plugin_findings(source_dir, opencode_version))
     findings.extend(_runtime_findings(root, env, home, roots, proc_snapshot))
     if profile is not None:
         findings.extend(_profile_findings(

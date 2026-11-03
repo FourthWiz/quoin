@@ -128,6 +128,11 @@ def _copy_source_tree(tmp_path):
         SOURCE_DIR / "core" / "workflow" / "skills.json",
         dest / "core" / "workflow" / "skills.json",
     )
+    shutil.copy(
+        SOURCE_DIR / "adapters" / "opencode" / "qualified-versions.json",
+        dest / "adapters" / "opencode" / "qualified-versions.json",
+    )
+    shutil.copytree(SOURCE_DIR / "adapters" / "opencode" / "schemas", dest / "adapters" / "opencode" / "schemas")
     return dest
 
 
@@ -341,14 +346,33 @@ def test_drift_unknown_agent_role(tmp_path):
     assert any("architect" in e and "agent_role" in e for e in errs), errs
 
 
-def test_drift_version_mismatch_after_editing_compat_pin(tmp_path):
+def _write_qualified(dest, qualified):
+    path = dest / "adapters" / "opencode" / "qualified-versions.json"
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["qualified"] = qualified
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_drift_manifest_version_not_qualified(tmp_path):
     dest = _copy_source_tree(tmp_path)
-    compat_path = dest / "adapters" / "opencode" / "compatibility.md"
-    text = compat_path.read_text(encoding="utf-8")
-    text = text.replace("Version: 1.18.32", "Version: 1.18.33")
-    compat_path.write_text(text, encoding="utf-8")
+    _write_qualified(dest, ["1.18.33"])
     errs = manifest.check_source_dir(dest)
     assert any("opencode_version" in e for e in errs), errs
+
+
+def test_drift_compatibility_lines_and_schema_follow_the_qualified_list(tmp_path):
+    dest = _copy_source_tree(tmp_path)
+    assert manifest.check_source_dir(dest) == []
+    # A newer release without its documentation or schema subset is drift;
+    # the manifest may keep naming an older qualified release.
+    _write_qualified(dest, ["1.18.32", "1.19.0"])
+    errs = manifest.check_source_dir(dest)
+    assert any("'Qualified:'" in e and "1.19.0" in e for e in errs), errs
+    assert any("native schema subset" in e and "1.19.0" in e for e in errs), errs
+    assert not any("opencode_version" in e for e in errs), errs
+    # Raising the floor without moving the documented floor is drift too.
+    _write_qualified(dest, ["1.18.33"])
+    assert any("'Floor:'" in e for e in manifest.check_source_dir(dest))
 
 
 def test_drift_forced_collision_names_both_ids(tmp_path):
@@ -443,7 +467,7 @@ def test_missing_compat_file_raises_manifest_load_error(tmp_path):
 
 def test_non_utf8_compat_file_raises_manifest_load_error_not_traceback(tmp_path):
     dest = _copy_source_tree(tmp_path)
-    (dest / "adapters" / "opencode" / "compatibility.md").write_bytes(b"## Pinned release\n\xff\xfe not utf-8\n")
+    (dest / "adapters" / "opencode" / "compatibility.md").write_bytes(b"## Qualified releases\n\xff\xfe not utf-8\n")
     raised = False
     try:
         manifest.check_source_dir(dest)

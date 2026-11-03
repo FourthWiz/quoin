@@ -1,7 +1,7 @@
 """Load the OpenCode catalog manifest and check it for drift.
 
 Pure, stdlib-only functions. `check_manifest` compares the manifest against
-the portable skill catalog (`skills.json`) and the compatibility pin, and
+the portable skill catalog (`skills.json`) and the reference OpenCode release, and
 returns a deterministic list of offender-naming error strings — empty when
 the manifest matches. Used by the CI drift check in `__main__.py`, and by
 the doctor in a later stage.
@@ -13,7 +13,7 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
-from quoin.opencode_adapter import names
+from quoin.opencode_adapter import names, versions
 
 MANIFEST_PARTS = ("adapters", "opencode", "feature-manifest.json")
 CATALOG_PARTS = ("core", "workflow", "skills.json")
@@ -42,9 +42,6 @@ REQUIRED_TOP_KEYS = (
     "catalog_entries",
 )
 
-_VERSION_RE = re.compile(r"^Version:\s*(\d+\.\d+\.\d+)", re.MULTILINE)
-_PINNED_SECTION_RE = re.compile(r"^## Pinned release\s*$", re.MULTILINE)
-_NEXT_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
 
 
 class ManifestLoadError(Exception):
@@ -80,7 +77,37 @@ def load_manifest(source_dir) -> dict:
     return data
 
 
+def read_qualified_versions(source_dir) -> List[str]:
+    """The qualified OpenCode releases, lowest (the floor) first."""
+    try:
+        return versions.read_qualified(source_dir)
+    except versions.QualifiedVersionsError as exc:
+        raise ManifestLoadError(str(exc)) from exc
+
+
 def read_pinned_version(source_dir) -> str:
+    """The reference OpenCode release: the highest qualified one. It is what
+    the manifest, install metadata, plugin build and capability records name;
+    which runtimes may launch is decided by the whole qualified list."""
+    return read_qualified_versions(source_dir)[-1]
+
+
+_QUALIFIED_SECTION_RE = re.compile(r"^## Qualified releases\s*$", re.MULTILINE)
+_NEXT_HEADING_RE = re.compile(r"^## ", re.MULTILINE)
+
+
+def _documented_line(body: str, label: str) -> Optional[List[str]]:
+    match = re.search(r"^%s:\s*(.+?)\s*$" % re.escape(label), body, re.MULTILINE)
+    return [v.strip() for v in match.group(1).split(",")] if match else None
+
+
+def qualified_drift(source_dir, qualified: List[str]) -> List[str]:
+    """Errors naming every place in the adapter data that disagrees with the
+    qualified list: the `Qualified:` and `Floor:` lines of compatibility.md
+    and a native schema subset for each qualified release."""
+    from quoin.opencode_adapter import paths  # noqa: PLC0415 - paths imports install, which imports this module
+
+    errs: List[str] = []
     path = Path(source_dir).joinpath(*COMPAT_PARTS)
     try:
         text = path.read_text(encoding="utf-8")
@@ -88,16 +115,30 @@ def read_pinned_version(source_dir) -> str:
         raise ManifestLoadError("cannot read %s: %s" % (path, exc)) from exc
     except UnicodeDecodeError as exc:
         raise ManifestLoadError("cannot decode %s as UTF-8: %s" % (path, exc)) from exc
-    section_match = _PINNED_SECTION_RE.search(text)
-    if not section_match:
-        raise ManifestLoadError("%s has no '## Pinned release' section" % path)
-    rest = text[section_match.end():]
-    next_heading = _NEXT_HEADING_RE.search(rest)
-    section_body = rest[: next_heading.start()] if next_heading else rest
-    version_match = _VERSION_RE.search(section_body)
-    if not version_match:
-        raise ManifestLoadError("%s has no 'Version:' line in its Pinned release section" % path)
-    return version_match.group(1)
+    section = _QUALIFIED_SECTION_RE.search(text)
+    if not section:
+        errs.append("compatibility.md has no '## Qualified releases' section")
+    else:
+        rest = text[section.end():]
+        following = _NEXT_HEADING_RE.search(rest)
+        body = rest[: following.start()] if following else rest
+        listed = _documented_line(body, "Qualified")
+        if listed is None or sorted(listed, key=lambda v: versions.parse(v) or (0, 0, 0)) != qualified:
+            errs.append(
+                "compatibility.md 'Qualified:' lists %s but qualified-versions.json lists %s"
+                % (", ".join(listed or ["nothing"]), ", ".join(qualified))
+            )
+        floor = _documented_line(body, "Floor")
+        if floor != [qualified[0]]:
+            errs.append(
+                "compatibility.md 'Floor:' is %s but the lowest qualified release is %s"
+                % (", ".join(floor or ["missing"]), qualified[0])
+            )
+    schemas = Path(source_dir).joinpath("adapters", "opencode", "schemas")
+    for version in qualified:
+        if not (schemas / paths.native_schema_file(version)).is_file():
+            errs.append("qualified release %s has no native schema subset %s" % (version, paths.native_schema_file(version)))
+    return errs
 
 
 def repo_root_for(source_dir) -> Optional[Path]:
@@ -132,9 +173,12 @@ def _evidence_errors(rid: str, evidence: list, repo_root: Path) -> List[str]:
 
 
 def check_manifest(
-    manifest: dict, catalog: List[dict], pinned_version: str, repo_root: Optional[Path] = None,
+    manifest: dict, catalog: List[dict], pinned_version, repo_root: Optional[Path] = None,
 ) -> List[str]:
+    """`pinned_version` is one release or the list of qualified releases;
+    the manifest's `opencode_version` must be one of them."""
     errs: List[str] = []
+    accepted = [pinned_version] if isinstance(pinned_version, str) else list(pinned_version)
 
     for key in REQUIRED_TOP_KEYS:
         if key not in manifest:
@@ -143,10 +187,10 @@ def check_manifest(
         errs.append("schema_version is %r, expected 2" % (manifest.get("schema_version"),))
     if manifest.get("adapter") != "opencode":
         errs.append("adapter is %r, expected 'opencode'" % (manifest.get("adapter"),))
-    if manifest.get("opencode_version") != pinned_version:
+    if manifest.get("opencode_version") not in accepted:
         errs.append(
-            "opencode_version is %r, compatibility.md pins %r"
-            % (manifest.get("opencode_version"), pinned_version)
+            "opencode_version is %r, which is not a qualified release (%s)"
+            % (manifest.get("opencode_version"), ", ".join(accepted))
         )
 
     milestones = manifest.get("milestones")
@@ -402,5 +446,7 @@ def _check_integration_skills(manifest: dict, catalog_pairs: list, repo_root: Op
 def check_source_dir(source_dir) -> List[str]:
     manifest = load_manifest(source_dir)
     catalog = load_catalog(source_dir)
-    pinned_version = read_pinned_version(source_dir)
-    return check_manifest(manifest, catalog, pinned_version, repo_root_for(source_dir))
+    qualified = read_qualified_versions(source_dir)
+    return check_manifest(manifest, catalog, qualified, repo_root_for(source_dir)) + qualified_drift(
+        source_dir, qualified
+    )

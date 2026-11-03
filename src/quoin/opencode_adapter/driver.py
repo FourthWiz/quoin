@@ -29,9 +29,9 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Set, Tuple
 
 from . import compiler, doctor, effective_record, frontmatter, install, inventory, isolation, jsonio, launch_codes, launch_env
-from . import manifest, names, netpolicy, plugin_artifact
+from . import manifest, names, netpolicy, plugin_artifact, schema_check
 from . import paths as adapter_paths
-from . import profile_dirs, profile_policy, proctree, qualification, retention, retry, roles, runstore
+from . import profile_dirs, profile_policy, proctree, qualification, retention, retry, roles, runstore, versions
 from . import events as ev
 from . import secrets as credential_refs
 from .errors import ConfigErrors
@@ -175,6 +175,7 @@ class RunRequest:
 class RuntimeCapabilities:
     binary: Optional[Path]
     version: Optional[str]
+    # True only for a qualified release; `version_status` says why not.
     version_supported: bool
     json_events: str = "verified"
     native_stop_event: str = "absent"
@@ -184,6 +185,7 @@ class RuntimeCapabilities:
     step_settling: str = "unverified"
     process_groups: str = "unsupported"
     descendant_reaping: str = "unsupported"
+    version_status: str = versions.UNKNOWN
 
 
 @dataclass(frozen=True)
@@ -212,6 +214,10 @@ class PreparedRun:
     # (absolute directory, layer token) of every scanned configuration
     # directory; in memory only, filled only when package installs are denied.
     fetch_watch: Tuple[Tuple[str, str], ...] = ()
+    # Set when a personal profile launches on an OpenCode release that is not
+    # qualified; the warning is shown to the operator and kept in the record.
+    unqualified_runtime: bool = False
+    runtime_warning: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -257,6 +263,8 @@ class InteractiveLaunch:
     # plugin tags its records with and the log it appends them to.
     run_id: Optional[str] = None
     plugin_log: Optional[Path] = field(default=None, repr=False, compare=False)
+    unqualified_runtime: bool = False
+    runtime_warning: Optional[str] = None
 
     def write_record(self, profile_root: Optional[Path] = None) -> Path:
         """Write the effective-configuration record under the profile's
@@ -879,9 +887,9 @@ class OpenCodeDriver:
         path = self._which("opencode")
         version = self._read_version(path) if path else None
         try:
-            pinned: Optional[str] = qualification.pinned_version()
+            verdict: Optional[versions.Verdict] = versions.judge(version, qualification.qualified_versions())
         except adapter_paths.AdapterDataMissing:
-            pinned = None
+            verdict = None
         posix = bool(getattr(self._proc, "SUPPORTED", False))
         reaping = "unsupported"
         if posix:
@@ -889,7 +897,8 @@ class OpenCodeDriver:
         return RuntimeCapabilities(
             binary=Path(path) if path else None,
             version=version,
-            version_supported=bool(version and pinned and version == pinned),
+            version_supported=bool(verdict is not None and verdict.status == versions.QUALIFIED),
+            version_status=verdict.status if verdict is not None else versions.UNKNOWN,
             step_settling="verified" if STEP_SETTLING_VERIFIED else "unverified",
             process_groups="supported" if posix else "unsupported",
             descendant_reaping=reaping,
@@ -1078,12 +1087,13 @@ class OpenCodeDriver:
         command_name = names.normalize(phase_id)
 
         # 4. binary and version
-        binary, version = self._check_binary()
+        binary, version, version_verdict = self._check_binary()
 
         # 5. evaluate configuration, 6. launchable
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(request.profile, cfg_env, base_redact)
+        runtime_warning = self._check_runtime_policy(version_verdict, evaluation)
         # Only a workspace the caller supplied is checked beside the project root.
         verdict = self._launch_policy(evaluation, root, workspace)
         dirs = self._claim_profile_dirs(evaluation)
@@ -1098,6 +1108,7 @@ class OpenCodeDriver:
 
         # 7. compiled pair
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
+        self._check_schema_subset(version_verdict, fresh.document)
         native_sha = fresh.sidecar["native_sha256"]
         config_path = compiled_dir / compiler.NATIVE_FILE
 
@@ -1143,7 +1154,7 @@ class OpenCodeDriver:
         redactor = launch_env.Redactor()
         child_env, effective, scanned, observations = self._scan_and_build_env(
             root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, cwd=run_cwd,
-            version=version or "", verdict=verdict,
+            version=version or "", verdict=verdict, unqualified_runtime=version_verdict.unqualified_runtime,
         )
 
         # 11. limits, hashes, revisions, argv
@@ -1196,6 +1207,8 @@ class OpenCodeDriver:
             launch_env=child_env,
             effective_config_digest=effective["digest"],
             fetch_watch=self._fetch_watch(evaluation, scanned),
+            unqualified_runtime=version_verdict.unqualified_runtime,
+            runtime_warning=runtime_warning,
         )
 
         # 12. persist
@@ -1205,6 +1218,8 @@ class OpenCodeDriver:
         summary = {
             "binary": str(binary),
             "runtime_version": version,
+            "unqualified_runtime": version_verdict.unqualified_runtime,
+            "runtime_warning": runtime_warning,
             "role": role,
             "agent": agent,
             "command": command_name,
@@ -1265,24 +1280,59 @@ class OpenCodeDriver:
 
     # ------------------------------------------- steps shared with start
 
-    def _check_binary(self) -> Tuple[str, Optional[str]]:
-        """The resolved executable and its version, refusing when it is
-        missing or is not the pinned release."""
+    def _check_binary(self) -> Tuple[str, Optional[str], "versions.Verdict"]:
+        """The resolved executable, its version and the version verdict,
+        refusing when it is missing, reports no version or is older than the
+        qualified floor. Whether an unqualified newer release may launch
+        depends on the profile and is decided by `_check_runtime_policy`."""
         refuse = self._refusal
         binary = self._which("opencode")
         if not binary:
             raise refuse("missing-binary", "opencode-binary-absent", "the opencode executable was not found on PATH")
         version = self._read_version(binary)
         try:
-            pinned = qualification.pinned_version()
+            verdict = versions.judge(version, qualification.qualified_versions())
         except adapter_paths.AdapterDataMissing:
-            raise refuse("workflow-validation", "adapter-data-missing", "the pinned runtime version was not found; reinstall quoin") from None
-        if version != pinned:
             raise refuse(
-                "unsupported-version", "opencode-version",
-                "the opencode executable reports %s; this adapter is pinned to %s" % (version or "no version", pinned),
+                "workflow-validation", "adapter-data-missing",
+                "the qualified runtime versions were not found; reinstall quoin",
+            ) from None
+        if verdict.status in (versions.UNKNOWN, versions.BELOW_FLOOR):
+            raise refuse("unsupported-version", "opencode-version", versions.refusal_message(verdict, "every"))
+        return binary, version, verdict
+
+    def _check_runtime_policy(self, verdict: "versions.Verdict", evaluation: Any) -> Optional[str]:
+        """Refuse an unqualified runtime unless the effective profile is
+        personal; return the warning a permitted unqualified launch carries."""
+        classification = evaluation.effective.classification
+        if not verdict.launches(classification):
+            raise self._refusal(
+                "unsupported-version", "opencode-version-unqualified",
+                versions.refusal_message(verdict, classification),
             )
-        return binary, version
+        return verdict.warning()
+
+    def _check_schema_subset(self, verdict: "versions.Verdict", document: Mapping[str, Any]) -> None:
+        """An unqualified release between two qualified ones runs against the
+        nearest lower qualified schema subset; the compiled document, built
+        for the highest qualified release, must also satisfy that subset."""
+        if not verdict.unqualified_runtime or verdict.schema_version == verdict.highest:
+            return
+        refuse = self._refusal
+        try:
+            schema = json.loads(adapter_paths.native_schema_path(verdict.version).read_text(encoding="utf-8"))
+        except (adapter_paths.AdapterDataMissing, OSError, ValueError):
+            raise refuse(
+                "workflow-validation", "adapter-data-missing",
+                "the native configuration schema for OpenCode %s was not found; reinstall quoin" % verdict.schema_version,
+            ) from None
+        if schema_check.validate(dict(document), schema, "config"):
+            raise refuse(
+                "unsupported-version", "opencode-version-unqualified",
+                "the compiled configuration does not fit the native configuration schema of OpenCode %s, "
+                "the nearest qualified release below %s; install a qualified release"
+                % (verdict.schema_version, verdict.version),
+            )
 
     def _evaluate_launchable(self, profile: str, cfg_env: Mapping[str, str], base_redact: Any) -> Any:
         """Evaluate the configuration for a profile and refuse unless it can
@@ -1583,7 +1633,7 @@ class OpenCodeDriver:
         self, root: Path, cfg_env: Mapping[str, str], config_path: Path, fresh: Any,
         evaluation: Any, metadata: Any, redactor: Any, dirs: "profile_dirs.ProfileDirs",
         cwd: Optional[Path] = None, version: str = "", verdict: Optional[isolation.IsolationVerdict] = None,
-        surface: str = "headless", plugin: Optional["LifecyclePlugin"] = None,
+        surface: str = "headless", plugin: Optional["LifecyclePlugin"] = None, unqualified_runtime: bool = False,
     ) -> Any:
         """Refuse on a configuration source that would change the compiled
         pair or that the profile does not allow, then run the destination
@@ -1621,6 +1671,7 @@ class OpenCodeDriver:
             layer_check, fresh, evaluation, dirs, version, child_env.names(), self._env, child_env.redactor,
             verdict=verdict, census=census, network_status=network_status, surface=surface,
             plugin=plugin.record_section() if plugin is not None else None,
+            unqualified_runtime=unqualified_runtime,
         )
         return child_env, effective, layer_check.inventory, observations
 
@@ -1659,7 +1710,7 @@ class OpenCodeDriver:
         self, layer_check: Any, fresh: Any, evaluation: Any, dirs: "profile_dirs.ProfileDirs",
         version: str, env_names: Sequence[str], ambient: Mapping[str, str], redactor: Any,
         *, verdict: isolation.IsolationVerdict, census: netpolicy.Census, network_status: str,
-        surface: str = "headless", plugin: Optional[Mapping[str, Any]] = None,
+        surface: str = "headless", plugin: Optional[Mapping[str, Any]] = None, unqualified_runtime: bool = False,
     ) -> Dict[str, Any]:
         classification = evaluation.effective.classification
         policy_view = profile_policy.view(evaluation.effective)
@@ -1670,7 +1721,7 @@ class OpenCodeDriver:
         effective = effective_record.build(
             inventory=layer_check.inventory, verdicts=layer_check.verdicts,
             profile=evaluation.profile, classification=classification,
-            opencode_version=version, compiled_digest=fresh.digest,
+            opencode_version=version, unqualified_runtime=unqualified_runtime, compiled_digest=fresh.digest,
             native_sha256=fresh.sidecar["native_sha256"],
             env_names=list(env_names),
             launcher_names=[n for n in launch_env.LAUNCHER_ENV_NAMES if n in child_names],
@@ -1860,13 +1911,15 @@ class OpenCodeDriver:
                 "policy-denial", "profile-switch-in-process",
                 "this process already launched under another profile; start a new process to change profile",
             ) from None
-        binary, version = self._check_binary()
+        binary, version, version_verdict = self._check_binary()
         cfg_env = self._config_env()
         base_redact = launch_env.Redactor()
         evaluation = self._evaluate_launchable(profile, cfg_env, base_redact)
+        runtime_warning = self._check_runtime_policy(version_verdict, evaluation)
         verdict = self._launch_policy(evaluation, root, None)
         dirs = self._claim_profile_dirs(evaluation)
         fresh, compiled_dir = self._compile_pair(evaluation, cfg_env)
+        self._check_schema_subset(version_verdict, fresh.document)
         config_path = compiled_dir / compiler.NATIVE_FILE
         metadata = self._load_install(root, base_redact)
         self._verify_owned(root, metadata)
@@ -1880,6 +1933,7 @@ class OpenCodeDriver:
         child_env, effective, _scanned, _observations = self._scan_and_build_env(
             root, cfg_env, config_path, fresh, evaluation, metadata, redactor, dirs, version=version or "",
             verdict=verdict, surface="interactive", plugin=plugin,
+            unqualified_runtime=version_verdict.unqualified_runtime,
         )
         return InteractiveLaunch(
             binary=Path(binary),
@@ -1897,6 +1951,8 @@ class OpenCodeDriver:
             retention=retention.RetentionPolicy.from_effective(evaluation.effective),
             run_id=plugin.run_id if plugin is not None else None,
             plugin_log=plugin.log if plugin is not None else None,
+            unqualified_runtime=version_verdict.unqualified_runtime,
+            runtime_warning=runtime_warning,
         )
 
     def _lifecycle_plugin(self, dirs: "profile_dirs.ProfileDirs", fresh: Any, compiled_dir: Path) -> "LifecyclePlugin":
