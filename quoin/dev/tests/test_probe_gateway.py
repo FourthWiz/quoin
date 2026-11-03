@@ -1027,6 +1027,11 @@ def test_affected_tests_self_check():
         "test_opencode_runtime_config.py",
         "test_opencode_schema_check.py",
     }
+    per_file_expected["quoin/adapters/opencode/qualified-versions.json"] = {
+        "test_opencode_versions.py",
+        "test_opencode_manifest.py",
+        "test_opencode_driver_prepare.py",
+    }
     per_file_expected["quoin/adapters/opencode/schemas/opencode-1.18.32-config.subset.schema.json"] = {
         "test_opencode_native_schema.py",
         "test_opencode_schema_check.py",

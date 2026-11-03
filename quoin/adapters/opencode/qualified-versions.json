@@ -1,0 +1,8 @@
+{
+  "schema": "quoin.opencode.qualified-versions",
+  "schema_version": 1,
+  "description": "OpenCode releases that passed upgrade qualification. The lowest entry is the floor: older releases are refused for every profile. A release newer than the highest entry launches on personal profiles with a warning and is refused on work profiles. Every other place that names an OpenCode version reads this file or is checked against it by a drift test.",
+  "qualified": [
+    "1.18.32"
+  ]
+}

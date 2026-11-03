@@ -134,8 +134,20 @@ def test_module_never_exits():
 
 
 def test_native_schema_path_is_found_in_the_source_tree():
+    from quoin.opencode_adapter import qualification
+
     path = paths.native_schema_path()
-    assert path.name == paths.NATIVE_SCHEMA_FILE and path.parent.name == "schemas"
+    assert path.name == paths.native_schema_file(qualification.pinned_version()) and path.parent.name == "schemas"
+
+
+def test_native_schema_path_uses_the_nearest_lower_qualified_subset():
+    from quoin.opencode_adapter import qualification
+
+    floor = qualification.qualified_versions()[0]
+    assert paths.native_schema_path("99.0.0") == paths.native_schema_path()
+    assert paths.native_schema_path(floor).name == paths.native_schema_file(floor)
+    with pytest.raises(paths.AdapterDataMissing):
+        paths.native_schema_path("0.0.1")
 
 
 def test_native_schema_path_missing_data_raises(monkeypatch):

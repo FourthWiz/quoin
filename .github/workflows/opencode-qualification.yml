@@ -1,0 +1,163 @@
+name: OpenCode Qualification
+
+# Manual only. Installs one OpenCode release, adds it to the adapter's
+# qualified list in this run's checkout, runs the binary-tier tests against
+# it and, when they pass, opens a pull request proposing the addition. The
+# pull request is never merged here: a reviewer rechecks compatibility.md
+# against the new tag first (release-acceptance.md, Upgrade qualification).
+#
+# The job that installs and runs the upstream release has read-only access
+# and no persisted credentials; only the proposing job, which never runs
+# OpenCode, can push. Opening the pull request needs "Allow GitHub Actions to
+# create and approve pull requests" in the repository settings. A pull request
+# opened with the workflow token does not trigger other workflows, so rerun
+# the adapter checks on it (close and reopen, or push a commit).
+#
+# To also run it on a schedule, uncomment the block below; a scheduled run
+# qualifies the latest upstream release.
+on:
+  workflow_dispatch:
+    inputs:
+      opencode_version:
+        description: "OpenCode release to qualify (X.Y.Z); empty means the latest upstream release"
+        required: false
+        default: ""
+  # schedule:
+  #   - cron: "0 7 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  qualify:
+    name: Qualify an OpenCode release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      added: ${{ steps.add.outputs.added }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Choose the release
+        id: release
+        env:
+          REQUESTED: ${{ inputs.opencode_version }}
+        run: |
+          if [ -n "$REQUESTED" ]; then
+            version="$REQUESTED"
+          else
+            version="$(python3 quoin/dev/scripts/qualify_opencode.py latest)"
+          fi
+          if ! printf '%s' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "not an X.Y.Z release: $version" >&2
+            exit 2
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Add the release to the qualified list
+        id: add
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set +e
+          python3 quoin/dev/scripts/qualify_opencode.py add "$VERSION"
+          code=$?
+          set -e
+          if [ "$code" = 0 ]; then
+            echo "added=true" >> "$GITHUB_OUTPUT"
+          elif [ "$code" != 3 ]; then
+            exit "$code"
+          fi
+
+      - name: Install the release
+        if: steps.add.outputs.added == 'true'
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          npm install --global "opencode-ai@$VERSION"
+          opencode --version
+
+      - name: Install test runner
+        if: steps.add.outputs.added == 'true'
+        run: python3 -m pip install pytest
+
+      - name: Check the binary tier will run, not skip
+        if: steps.add.outputs.added == 'true'
+        working-directory: quoin/dev/tests
+        run: |
+          PYTHONPATH=../../../src:../../.. python3 -c "
+          import sys, test_opencode_binary_contract as c
+          reason = c._SKIP_REASON
+          print(reason or 'binary tier will run against', c._BINARY_VERSION)
+          sys.exit(1 if reason else 0)
+          "
+
+      - name: Run the binary-tier tests and the version drift checks
+        if: steps.add.outputs.added == 'true'
+        run: python3 -m pytest -rs quoin/dev/tests/test_opencode_binary_contract.py quoin/dev/tests/test_opencode_workflow_binary_tier.py quoin/dev/tests/test_opencode_security_binary_tier.py quoin/dev/tests/test_opencode_plugin_binary_tier.py quoin/dev/tests/test_opencode_versions.py quoin/dev/tests/test_opencode_release_matrix.py quoin/dev/tests/test_opencode_docs.py
+
+      - name: Check the qualified list is consistent
+        if: steps.add.outputs.added == 'true'
+        run: PYTHONPATH=src python3 -m quoin.opencode_adapter check-manifest --source-dir quoin
+
+      - name: Keep the proposed change
+        if: steps.add.outputs.added == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: qualified-release
+          path: |
+            quoin/adapters/opencode/qualified-versions.json
+            quoin/adapters/opencode/compatibility.md
+            quoin/adapters/opencode/release-acceptance.md
+            quoin/adapters/opencode/schemas/
+
+  propose:
+    name: Propose the release
+    needs: qualify
+    if: needs.qualify.outputs.added == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply the proposed change
+        uses: actions/download-artifact@v4
+        with:
+          name: qualified-release
+          path: quoin/adapters/opencode
+
+      - name: Open the pull request
+        env:
+          VERSION: ${{ needs.qualify.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch="opencode-qualify-$VERSION"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "branch $branch already exists; not proposing $VERSION again"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add quoin/adapters/opencode/qualified-versions.json quoin/adapters/opencode/compatibility.md quoin/adapters/opencode/release-acceptance.md quoin/adapters/opencode/schemas
+          git commit -m "feat(opencode): qualify OpenCode $VERSION" -m "The binary-tier tests passed against OpenCode $VERSION in the qualification workflow."
+          git push origin "$branch"
+          gh pr create --head "$branch" --title "feat(opencode): qualify OpenCode $VERSION" --body "The binary-tier tests passed against OpenCode $VERSION.
+
+          Before merging: recheck the compatibility.md rows against the v$VERSION tag, review the native schema subset (a copied subset is a starting point), requalify the lifecycle plugin and rerun the gateway probes if this becomes the reference release, and rerun the adapter checks on this pull request (a pull request opened by the workflow token does not start them). See release-acceptance.md, Upgrade qualification."

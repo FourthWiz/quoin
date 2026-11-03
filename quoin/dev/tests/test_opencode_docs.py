@@ -153,13 +153,13 @@ def _table_rows(section_text):
 
 def _parse_pin(compat_text):
     sections = _sections(compat_text, 2)
-    pin_block = sections["Pinned release"]
-    version = re.search(r"^Version:\s*(\d+)\.(\d+)\.(\d+)", pin_block, re.MULTILINE)
-    assert version, "no Version: line in ## Pinned release"
+    pin_block = sections["Qualified releases"]
+    version = re.search(r"^Evidence release:\s*(\d+)\.(\d+)\.(\d+)", pin_block, re.MULTILINE)
+    assert version, "no Evidence release: line in ## Qualified releases"
     repo_url = re.search(
         r"^Upstream repository:\s*https?://github\.com/([^/\s]+)/([^/\s]+)", pin_block, re.MULTILINE
     )
-    assert repo_url, "no Upstream repository: line in ## Pinned release"
+    assert repo_url, "no Upstream repository: line in ## Qualified releases"
     pinned_tuple = tuple(int(x) for x in version.groups())
     return pinned_tuple, repo_url.group(1), repo_url.group(2)
 
@@ -279,11 +279,15 @@ def test_parity_matrix_opencode_column():
         assert len(row) == len(semantics_header), row
 
 
-def test_compatibility_pinned_release():
+def test_compatibility_qualified_releases():
     text = COMPAT_PATH.read_text(encoding="utf-8")
     sections = _sections(text, 2)
-    pin = sections["Pinned release"]
-    assert re.search(r"^Version:\s*\d+\.\d+\.\d+\s*$", pin, re.MULTILINE)
+    pin = sections["Qualified releases"]
+    qualified = opencode_manifest.read_qualified_versions(REPO_ROOT / "quoin")
+    assert re.search(r"^Qualified:\s*%s\s*$" % re.escape(", ".join(qualified)), pin, re.MULTILINE)
+    assert re.search(r"^Floor:\s*%s\s*$" % re.escape(qualified[0]), pin, re.MULTILINE)
+    evidence = re.search(r"^Evidence release:\s*(\d+\.\d+\.\d+)\s*$", pin, re.MULTILINE)
+    assert evidence and evidence.group(1) in qualified
     channel = re.search(r"^Install channel:\s*(\S.*)$", pin, re.MULTILINE)
     assert channel and channel.group(1).strip()
     assert re.search(r"^Verified on:\s*\d{4}-\d{2}-\d{2}\s*$", pin, re.MULTILINE)

@@ -109,29 +109,68 @@ it passes again, the affected column reverts to `pending`.
 
 | Component | Qualified version | Source of truth |
 |---|---|---|
-| OpenCode | 1.18.32 | `compatibility.md` |
+| OpenCode | 1.18.32 | `qualified-versions.json` |
 | Quoin lifecycle plugin | 0.1.0 | `plugin/quoin-opencode-plugin.js` |
 | Python | 3.10 or newer | `pyproject.toml` |
-| Native configuration schema | subset for 1.18.32 | `schemas/opencode-1.18.32-config.subset.schema.json` |
+| Native configuration schema | one subset per qualified release | `schemas/opencode-<version>-config.subset.schema.json` |
 
-Only these combinations are tested. A different OpenCode version is
-unqualified until it passes the upgrade qualification below.
+The OpenCode row lists every qualified release; its lowest entry is the floor.
+`qualified-versions.json` is the only place the list is kept; every other
+place that names an OpenCode release reads it or is checked against it by
+`test_opencode_versions.py`.
+
+### Version policy
+
+| Runtime release | Personal profile | Work profile |
+|---|---|---|
+| Older than the floor | refused | refused |
+| A qualified release | launches | launches |
+| Newer than the highest qualified release | launches with a warning | refused |
+| Between two qualified releases, not itself qualified | launches with a warning | refused |
+
+A warned launch prints the warning, `quoin doctor --runtime opencode` reports
+the release as newer than qualified, and the run record stores the runtime
+version with `unqualified_runtime: true`. It runs against the native schema
+subset of the nearest lower qualified release, and the lifecycle plugin loads
+with a warning; the doctor shows the release the plugin was tested with next to
+the runtime's. Work profiles accept only qualified releases because their
+isolation rests on verified configuration and plugin loading behaviour, which an
+upstream release can change silently.
 
 ## Upgrade qualification
 
-1. Read the upstream release notes and recheck every row in
-   `compatibility.md` against the new tag; update rows that changed.
-2. Update the pin everywhere it is recorded, together: `compatibility.md`,
-   `feature-manifest.json`, the native schema subset and its file name in
-   `src/quoin/opencode_adapter/paths.py`, `PLUGIN_OPENCODE_VERSION` in
-   `src/quoin/opencode_adapter/plugin_artifact.py`, the plugin build project
-   under `quoin/dev/opencode-plugin/`, and `PINNED_OPENCODE_VERSION` in
-   `quoin/benchmarks/harness/opencode_cells.py`. Then run the deterministic suite
-   (`python3 -m pytest -n auto`) and `quoin doctor --runtime opencode`.
-3. Rebuild and requalify the lifecycle plugin against the new binary.
-4. Rerun the live qualification for every profile in use.
-5. Ship the new runtime, compiled configuration, generated scaffold and plugin
+1. Run the **OpenCode qualification** workflow (`.github/workflows/opencode-qualification.yml`,
+   manual only) with the release to qualify, or leave the input empty for the
+   latest. It installs that release, runs the binary-tier tests against it and,
+   when they pass, opens a pull request that adds the release to
+   `qualified-versions.json`. Locally, the same check is
+   `QUOIN_OPENCODE_QUALIFY_VERSION=X.Y.Z python3 -m pytest quoin/dev/tests/test_opencode_*binary*.py -rs`
+   with that binary first on PATH. The workflow proposes a release only when
+   every binary-tier test passes; a pull request it opens does not start the
+   other workflows, so rerun the adapter checks on it before merging.
+2. Before merging that pull request, read the upstream release notes and
+   recheck every row in `compatibility.md` against the new tag; update rows that
+   changed, and the `## Qualified releases` block there.
+3. When the native configuration changed, add a schema subset named
+   `schemas/opencode-<version>-config.subset.schema.json`; otherwise copy the
+   previous subset under the new name. A release without its own subset cannot
+   be qualified.
+4. When the reference release (the highest entry) changes, move
+   `feature-manifest.json`'s `opencode_version` with it, and rebuild and
+   requalify the lifecycle plugin against the new binary
+   (`PLUGIN_OPENCODE_VERSION` in `src/quoin/opencode_adapter/plugin_artifact.py`
+   and the build project under `quoin/dev/opencode-plugin/`). Gateway
+   qualification records are measured against the reference release, so a new
+   reference release leaves every model unqualified until
+   `quoin opencode probe` runs again for each profile. Then run the
+   deterministic suite (`python3 -m pytest -n auto`) and
+   `quoin doctor --runtime opencode`.
+5. Rerun the live qualification for every profile in use.
+6. Ship the new runtime, compiled configuration, generated scaffold and plugin
    as one bundle. Keep the previous bundle so rollback can restore it.
+
+Removing a release from the list is the way to retire it; removing the lowest
+entry raises the floor.
 
 ## Rollback
 

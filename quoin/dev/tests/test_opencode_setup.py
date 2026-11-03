@@ -218,16 +218,16 @@ def install_work_profile(world):
     target.write_text(json.dumps(fixture(PROFILE_WORK)), encoding="utf-8")
 
 
-@pytest.mark.parametrize("problem", ["missing", "wrong-version"])
+@pytest.mark.parametrize("problem", ["missing", "wrong-version", "newer-than-qualified"])
 def test_work_profile_never_installs_a_binary(world, problem):
     install_work_profile(world)
     if problem == "missing":
         (world.bin / "opencode").unlink()
     else:
-        world.version = "0.0.1"
+        world.version = "0.0.1" if problem == "wrong-version" else "99.0.0"
     assert world.setup(profile="work", yes=True) == 1
     assert world.installs == [] and world.asked == []
-    assert "work profiles accept only the qualified release" in world.err.getvalue()
+    assert "work profiles accept only qualified releases" in world.err.getvalue()
 
 
 def test_work_project_also_takes_the_strict_path(world):
@@ -236,7 +236,7 @@ def test_work_project_also_takes_the_strict_path(world):
     (world.bin / "opencode").unlink()
     assert world.setup(yes=True) == 1
     assert world.installs == []
-    assert "work profiles accept only the qualified release" in world.err.getvalue()
+    assert "work profiles accept only qualified releases" in world.err.getvalue()
 
 
 def test_unreadable_existing_profile_takes_the_strict_path(world):
@@ -313,6 +313,14 @@ def test_code_refuses_when_setup_is_incomplete(world, launched):
     assert code(world) == 1
     assert "run quoin opencode setup" in world.err.getvalue()
     assert launched == []
+
+
+def test_a_newer_release_is_accepted_for_a_personal_profile(world, launched):
+    world.version = "99.0.0"
+    assert world.setup() == 0
+    assert world.installs == []
+    assert code(world) == 0
+    assert len(launched) == 1
 
 
 def test_code_rejects_an_invalid_profile_label(world, launched):

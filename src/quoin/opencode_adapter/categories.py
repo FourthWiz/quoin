@@ -42,7 +42,8 @@ FINDING_CATEGORIES.update(_table("missing-binary", "opencode-binary-absent"))
 FINDING_CATEGORIES.update(
     _table(
         "unsupported-version", "opencode-version", "opencode-version-unknown",
-        "runtime-lifecycle-plugin", "runtime-lifecycle-plugin-incompatible",
+        "opencode-version-newer", "opencode-version-unqualified", "opencode-version-below-floor",
+        "runtime-lifecycle-plugin", "runtime-lifecycle-plugin-untested", "runtime-lifecycle-plugin-incompatible",
     )
 )
 FINDING_CATEGORIES.update(

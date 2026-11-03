@@ -103,7 +103,7 @@ def _by_key():
 
 def _pinned_version():
     text = COMPAT_PATH.read_text(encoding="utf-8")
-    match = re.search(r"^Version:\s*(\S+)", text, re.MULTILINE)
+    match = re.search(r"^Evidence release:\s*(\S+)", text, re.MULTILINE)
     assert match
     return match.group(1)
 

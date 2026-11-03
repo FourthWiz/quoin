@@ -84,8 +84,8 @@ def test_dry_run_prints_and_does_not_launch(world, capsys):
     assert start(world, "--dry-run") == 0
     out = json.loads(capsys.readouterr().out)
     assert set(out) == {"argv", "cwd", "config_path", "env_names", "runtime_version", "effective_config_digest",
-                        "lifecycle_plugin"}
-    assert out["lifecycle_plugin"] is False
+                        "lifecycle_plugin", "unqualified_runtime"}
+    assert out["lifecycle_plugin"] is False and out["unqualified_runtime"] is False
     assert out["argv"] == [str(world.shim), str(world.root)]
     assert "OPENCODE_CONFIG" in out["env_names"] and "ambient-provider-key-0000" not in json.dumps(out)
     assert world.calls == []
@@ -112,9 +112,13 @@ def test_missing_binary_is_refused(world, monkeypatch, capsys):
 
 
 def test_wrong_version_is_refused(world, capsys):
-    world.version = "9.9.9"
+    world.version = "1.0.0"
     assert start(world) == 3
     assert "(unsupported-version/opencode-version)" in refusal(capsys)
+    world.version = "99.0.0"
+    assert start(world) == 3
+    assert "(unsupported-version/opencode-version-unqualified)" in refusal(capsys)
+    assert world.calls == []
 
 
 def test_unqualified_gateway_is_refused(world, capsys):

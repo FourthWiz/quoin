@@ -29,7 +29,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence
 
-from . import compiler, install, jsonio, manifest, paths, profile_dirs
+from . import compiler, install, jsonio, manifest, paths, profile_dirs, versions
 from . import secrets as credentials
 from .errors import ConfigErrors
 
@@ -184,16 +184,22 @@ def _user_binary(host: Host) -> Path:
     return host.home.joinpath(*USER_BIN_DIR, "opencode")
 
 
-def _locate(host: Host, pinned: str):
-    """(binary, path_hint, found_text). `binary` is a pinned executable or
-    None; `path_hint` says how to fix PATH when the pinned one is not what
-    PATH resolves; `found_text` describes what PATH resolves otherwise."""
+def _accepts(qualified: Sequence[str], version: Optional[str], work: bool) -> bool:
+    """Whether a launch would accept this runtime: a qualified release for a
+    work profile; a qualified or newer-than-floor release for a personal one."""
+    return versions.judge(version, qualified).launches("work" if work else "personal")
+
+
+def _locate(host: Host, qualified: Sequence[str], work: bool = False):
+    """(binary, path_hint, found_text). `binary` is an acceptable executable
+    or None; `path_hint` says how to fix PATH when the acceptable one is not
+    what PATH resolves; `found_text` describes what PATH resolves otherwise."""
     on_path = host.which("opencode")
     path_version = _version_of(host, on_path) if on_path else None
-    if on_path and path_version == pinned:
+    if on_path and _accepts(qualified, path_version, work):
         return on_path, None, ""
     user = _user_binary(host)
-    if user.is_file() and os.access(str(user), os.X_OK) and _version_of(host, str(user)) == pinned:
+    if user.is_file() and os.access(str(user), os.X_OK) and _accepts(qualified, _version_of(host, str(user)), work):
         if on_path:
             hint = "put %s ahead of %s on PATH" % (user.parent, Path(on_path).parent)
         else:
@@ -272,9 +278,12 @@ def credential_hint(host: Host, profile: str) -> List[str]:
 
 
 def step_binary(host: Host, report: Report, *, work: bool, yes: bool) -> Optional[str]:
-    """Ensure the pinned OpenCode release is available. Returns its path."""
-    pinned = manifest.read_pinned_version(host.source_dir)
-    binary, hint, found = _locate(host, pinned)
+    """Ensure an acceptable OpenCode release is available (a qualified one for
+    work, a qualified or newer one for personal); offer to install the highest
+    qualified release otherwise. Returns its path."""
+    qualified = manifest.read_qualified_versions(host.source_dir)
+    pinned = qualified[-1]
+    binary, hint, found = _locate(host, qualified, work)
     if binary:
         if hint:
             report.todo(hint)
@@ -282,8 +291,8 @@ def step_binary(host: Host, report: Report, *, work: bool, yes: bool) -> Optiona
     if work:
         report.todo(
             "install OpenCode %s yourself and put it on PATH (opencode %s); work profiles "
-            "accept only the qualified release and setup never installs a binary for them"
-            % (pinned, found)
+            "accept only qualified releases (%s) and setup never installs a binary for them"
+            % (pinned, found, ", ".join(qualified))
         )
         return None
     answer = _confirm(
@@ -300,7 +309,7 @@ def step_binary(host: Host, report: Report, *, work: bool, yes: bool) -> Optiona
         return None
     print("installing OpenCode %s with %s" % (pinned, INSTALL_SCRIPT_URL), file=host.out)
     code = host.installer(pinned, host.environ)
-    binary, hint, _ = _locate(host, pinned)
+    binary, hint, _ = _locate(host, qualified, work)
     if code != 0 or binary is None:
         report.todo("install OpenCode %s and put it on PATH (the installer did not produce it)" % pinned)
         return None
@@ -510,7 +519,7 @@ def _guard(report: Report, func, *args, **kwargs):
     except paths.AdapterDataMissing:
         report.todo("packaged adapter data not found; reinstall quoin")
     except manifest.ManifestLoadError:
-        report.todo("the pinned OpenCode release could not be read; reinstall quoin")
+        report.todo("the qualified OpenCode releases could not be read; reinstall quoin")
     except jsonio.UnsafeDirectoryError as exc:
         report.todo("a configuration directory is not private enough: %s" % exc)
     except _import_refused() as exc:
@@ -594,12 +603,19 @@ def prepare_code(host: Host, project_root, profile: str) -> int:
     Returns 0 when the session can start."""
     root = Path(project_root).resolve()
     report = Report()
-    pinned = _guard(report, manifest.read_pinned_version, host.source_dir)
+    qualified = _guard(report, manifest.read_qualified_versions, host.source_dir)
     binary = host.which("opencode")
     if binary is None:
         report.todo("OpenCode is not on PATH; run quoin opencode setup")
-    elif pinned is not None and _version_of(host, binary) != pinned:
-        report.todo("OpenCode on PATH is not the pinned release %s; run quoin opencode setup" % pinned)
+    elif qualified is not None:
+        work = is_work(host, root, profile)
+        verdict = versions.judge(_version_of(host, binary), qualified)
+        if not verdict.launches("work" if work else "personal"):
+            report.todo(
+                "OpenCode on PATH reports %s, which the %s profile does not accept (qualified: %s); "
+                "run quoin opencode setup"
+                % (verdict.version or "no version", "work" if work else "personal", ", ".join(qualified))
+            )
     sink = io.StringIO()
     if install.run_install(root, host.source_dir, None, True, sink, sink) != 0:
         report.todo("the project scaffold is missing or out of date; run quoin opencode setup")

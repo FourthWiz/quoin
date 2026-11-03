@@ -1062,6 +1062,20 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/opencode/schemas/runtime-config.schema.json",
         "quoin/dev/tests/test_opencode_schema_jsonschema_crosscheck.py",
     ),
+    # The qualified OpenCode release list: the version policy, its drift
+    # checks and the driver gate that reads it.
+    (
+        "quoin/adapters/opencode/qualified-versions.json",
+        "quoin/dev/tests/test_opencode_versions.py",
+    ),
+    (
+        "quoin/adapters/opencode/qualified-versions.json",
+        "quoin/dev/tests/test_opencode_manifest.py",
+    ),
+    (
+        "quoin/adapters/opencode/qualified-versions.json",
+        "quoin/dev/tests/test_opencode_driver_prepare.py",
+    ),
     # The native configuration subset schema and the compiled reference
     # documents: a change re-runs the schema, compiler and closure tests.
     (

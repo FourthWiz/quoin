@@ -52,6 +52,7 @@ EXISTING_CODES: Dict[str, str] = {
     "not-launchable": "unqualified-gateway",
     "opencode-binary-absent": "missing-binary",
     "opencode-version": "unsupported-version",
+    "opencode-version-unqualified": "unsupported-version",
     "owned-file-drift": "workflow-validation",
     "phase-unsupported": "workflow-validation",
     "plugin-directory-present": "policy-denial",

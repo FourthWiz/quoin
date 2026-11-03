@@ -16,16 +16,16 @@ import pytest
 import test_opencode_binary_contract as contract
 from quoin import cli
 
-SKIP_REASON = contract.skip_reason(contract._OPENCODE_BIN, contract._PINNED_VERSION, contract._BINARY_VERSION)  # noqa: SLF001
+SKIP_REASON = contract.skip_reason(contract._OPENCODE_BIN, contract._QUALIFIED_VERSIONS, contract._BINARY_VERSION)  # noqa: SLF001
 
 
 def test_the_tier_names_why_it_is_skipped():
     """Always on: a machine without the pinned binary skips the tier with text,
     never silently."""
-    assert contract._PINNED_VERSION == "1.18.32"  # noqa: SLF001
-    assert "no 'opencode' binary" in contract.skip_reason(None, "1.18.32", None)
-    assert "1.18.32" in contract.skip_reason("/bin/opencode", "1.18.32", "1.0.0")
-    assert contract.skip_reason("/bin/opencode", "1.18.32", "opencode 1.18.32") is None
+    assert contract._PINNED_VERSION == contract._QUALIFIED_VERSIONS[-1]  # noqa: SLF001
+    assert "no 'opencode' binary" in contract.skip_reason(None, "7.7.7", None)
+    assert "7.7.7" in contract.skip_reason("/bin/opencode", "7.7.7", "1.0.0")
+    assert contract.skip_reason("/bin/opencode", "7.7.7", "opencode 7.7.7") is None
     assert SKIP_REASON is None or isinstance(SKIP_REASON, str)
 
 

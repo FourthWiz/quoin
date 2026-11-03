@@ -21,7 +21,7 @@ import _opencode_isolation_helpers as iso
 import test_opencode_binary_contract as contract
 from quoin.opencode_adapter import driver
 
-SKIP_REASON = contract.skip_reason(contract._OPENCODE_BIN, contract._PINNED_VERSION, contract._BINARY_VERSION)  # noqa: SLF001
+SKIP_REASON = contract.skip_reason(contract._OPENCODE_BIN, contract._QUALIFIED_VERSIONS, contract._BINARY_VERSION)  # noqa: SLF001
 
 pytestmark = pytest.mark.skipif(SKIP_REASON is not None, reason=SKIP_REASON or "")
 

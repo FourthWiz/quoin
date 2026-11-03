@@ -173,8 +173,27 @@ def test_phase_refusals(env):
 
 def test_binary_and_version(env):
     env.refused("opencode-binary-absent", "missing-binary", drv=env.driver(which=lambda n: None))
-    env.refused("opencode-version", "unsupported-version", drv=env.driver(version_runner=lambda p: "9.9.9"))
+    env.refused("opencode-version", "unsupported-version", drv=env.driver(version_runner=lambda p: "1.0.0"))
     env.refused("opencode-version", "unsupported-version", drv=env.driver(version_runner=lambda p: None))
+    # A work profile launches only qualified releases, newer ones included.
+    err = env.refused(
+        "opencode-version-unqualified", "unsupported-version", drv=env.driver(version_runner=lambda p: "99.0.0"),
+    )
+    assert "99.0.0" in str(err) and "qualify" in str(err)
+
+
+def test_a_personal_profile_launches_a_newer_runtime_with_a_warning(tmp_path, monkeypatch):
+    from _opencode_merge_helpers import PROFILE_PERSONAL
+
+    env = Setup(tmp_path, monkeypatch, profile=PROFILE_PERSONAL)
+    request = env.request(profile="personal")
+    env.refused("opencode-version", "unsupported-version", request=request,
+                drv=env.driver(version_runner=lambda p: "1.0.0"))
+    prepared = env.driver(version_runner=lambda p: "99.0.0").prepare(request)
+    assert prepared.unqualified_runtime and "99.0.0" in prepared.runtime_warning
+    summary = runstore.load_record(runstore.store_dir(env.root), prepared.run_id)["prepared"]
+    assert summary["runtime_version"] == "99.0.0" and summary["unqualified_runtime"] is True
+    assert summary["effective_config"]["unqualified_runtime"] is True
 
 
 def test_unknown_profile_is_an_invalid_configuration(env):

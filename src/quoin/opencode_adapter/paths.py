@@ -22,7 +22,12 @@ ENV_MANAGED_POLICY = "QUOIN_OPENCODE_MANAGED_POLICY"
 ENV_STATE_DIR = "QUOIN_OPENCODE_STATE_DIR"
 
 SCHEMA_FILE = "runtime-config.schema.json"
-NATIVE_SCHEMA_FILE = "opencode-1.18.32-config.subset.schema.json"
+# One native-config schema subset per qualified OpenCode release.
+NATIVE_SCHEMA_TEMPLATE = "opencode-%s-config.subset.schema.json"
+
+
+def native_schema_file(version: str) -> str:
+    return NATIVE_SCHEMA_TEMPLATE % version
 
 
 class AdapterDataMissing(RuntimeError):
@@ -162,11 +167,23 @@ def runtime_config_schema_path() -> Path:
     return path
 
 
-def native_schema_path() -> Path:
+def native_schema_path(version: Optional[str] = None) -> Path:
+    """The native-config schema subset for a runtime version: the version's
+    own subset when it is qualified, else the nearest lower qualified one.
+    Without a version, the subset of the highest qualified release."""
+    from . import versions  # noqa: PLC0415
+
     data_dir = adapter_data_dir()
     if data_dir is None:
         raise AdapterDataMissing("adapter data directory not found")
-    path = data_dir / "schemas" / NATIVE_SCHEMA_FILE
+    try:
+        qualified = versions.read_qualified(data_dir.parent.parent)
+    except versions.QualifiedVersionsError:
+        raise AdapterDataMissing("qualified OpenCode versions not found") from None
+    chosen = qualified[-1] if version is None else versions.nearest_qualified(version, qualified)
+    if chosen is None:
+        raise AdapterDataMissing("no native configuration schema applies to OpenCode %s" % version)
+    path = data_dir / "schemas" / native_schema_file(chosen)
     if not path.is_file():
         raise AdapterDataMissing("native configuration schema not found")
     return path
