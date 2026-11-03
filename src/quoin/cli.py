@@ -2558,6 +2558,53 @@ def _cmd_opencode_start(args: argparse.Namespace) -> int:
     return _opencode_tui_launcher(list(launch.argv), str(launch.cwd), env)
 
 
+def _opencode_setup_host(args: argparse.Namespace):
+    from quoin.opencode_adapter import setup  # noqa: PLC0415
+
+    return setup.default_host(
+        _resolve_source_dir(args.source_dir),
+        config_env=_opencode_config_env(),
+        now=datetime.now(timezone.utc),
+        platform=sys.platform,
+        interactive=sys.stdin.isatty(),
+        out=sys.stdout,
+        err=sys.stderr,
+    )
+
+
+def _cmd_opencode_setup(args: argparse.Namespace) -> int:
+    """`quoin opencode setup`: the individual OpenCode steps, composed and idempotent."""
+    from quoin.opencode_adapter import setup  # noqa: PLC0415
+
+    host = _opencode_setup_host(args)
+    profile = setup.resolve_code_profile(host, args.project_root, args.profile) or "personal"
+    return setup.run_setup(host, args.project_root, profile, yes=args.yes)
+
+
+def _cmd_code(args: argparse.Namespace) -> int:
+    """`quoin code`: fast checks, recompile when needed, then `quoin opencode start`."""
+    from quoin.opencode_adapter import setup  # noqa: PLC0415
+
+    host = _opencode_setup_host(args)
+    profile = setup.resolve_code_profile(host, args.project_root, args.profile)
+    if profile is not None and not setup.valid_profile(profile):
+        print("quoin: profile %r is not a valid profile label" % (profile,), file=sys.stderr)
+        return 2
+    if profile is None:
+        print(
+            "quoin: no profile given and none remembered for this project; "
+            "run quoin opencode setup or pass --profile",
+            file=sys.stderr,
+        )
+        return 2
+    code = setup.prepare_code(host, args.project_root, profile)
+    if code != 0:
+        return code
+    return _cmd_opencode_start(
+        argparse.Namespace(project_root=args.project_root, profile=profile, dry_run=False)
+    )
+
+
 def _purge_display(item_or_kept, plan_root: str) -> str:
     shown = getattr(item_or_kept, "display")
     if shown.startswith("oc-"):
@@ -3859,6 +3906,32 @@ def main(argv: list[str] | None = None) -> int:
     opencode_purge_p.add_argument("--yes", action="store_true", help="Confirm the deletion.")
     opencode_purge_p.add_argument("--json", action="store_true", help="Print the result as one JSON object.")
 
+    opencode_setup_p = opencode_sub.add_parser(
+        "setup",
+        description=(
+            "Set up a project for OpenCode in one step: find or install the pinned OpenCode "
+            "release, write the project scaffold, create or reuse a personal profile from "
+            "'quoin models', qualify its models, compile it and run the doctor. Safe to rerun: "
+            "only missing pieces are done. Never stores credentials."
+        ),
+        help="Set up OpenCode for a project in one step",
+    )
+    opencode_setup_p.add_argument(
+        "--project-root", default=".", help="Project to set up; defaults to the current directory."
+    )
+    opencode_setup_p.add_argument(
+        "--profile", default=None,
+        help="Runtime profile to create or reuse; defaults to the project's last profile, else 'personal'.",
+    )
+    opencode_setup_p.add_argument(
+        "--yes", action="store_true",
+        help=(
+            "Answer yes to the user-level OpenCode install offer and reuse model id confirmations "
+            "already given; never confirms a new model id."
+        ),
+    )
+    opencode_setup_p.add_argument("--source-dir", metavar="PATH", help="Override quoin data source directory.")
+
     opencode_start_p = opencode_sub.add_parser(
         "start",
         description=(
@@ -4200,6 +4273,19 @@ def main(argv: list[str] | None = None) -> int:
         help="Show CCR install state, config, proxy liveness, and active launch mode (read-only).",
     )
 
+    code_p = sub.add_parser(
+        "code",
+        description=(
+            "Start an OpenCode session in a project set up with 'quoin opencode setup': run the "
+            "fast checks, recompile the profile if it or the project changed, then open "
+            "'quoin opencode start'. Remembers the last profile used per project."
+        ),
+        help="Start an OpenCode session (after 'quoin opencode setup')",
+    )
+    code_p.add_argument("--profile", default=None, help="Runtime profile; defaults to this project's last profile.")
+    code_p.add_argument("--project-root", default=".", help="Project to open; defaults to the current directory.")
+    code_p.add_argument("--source-dir", metavar="PATH", help="Override quoin data source directory.")
+
     models_p = sub.add_parser(
         "models",
         description=(
@@ -4464,6 +4550,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_opencode_purge(args)
         if args.opencode_command == "start":
             return _cmd_opencode_start(args)
+        if args.opencode_command == "setup":
+            return _cmd_opencode_setup(args)
         if args.opencode_command == "gate":
             return _cmd_opencode_gate(args)
         if args.opencode_command == "adopt":
@@ -4501,6 +4589,8 @@ def main(argv: list[str] | None = None) -> int:
             return _router._cmd_router_status(args)
         router_p.print_help()
         return 1
+    elif args.command == "code":
+        return _cmd_code(args)
     elif args.command == "models":
         # Lazy import keeps quoin install path import-clean (R-05 / D-01).
         from quoin import models as _models

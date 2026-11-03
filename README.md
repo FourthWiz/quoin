@@ -22,6 +22,17 @@ Quoin now has two runtime paths:
 Quoin does not install global Codex commands, plugins, hooks, command files, or
 runtime extensions.
 
+**OpenCode** (personal pilot) takes two commands with stock, unmodified
+OpenCode:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...   # setup never stores credentials
+quoin opencode setup                  # binary, scaffold, profile, probe, compile, doctor
+quoin code                            # start a session
+```
+
+Details: `quoin/adapters/opencode/README.md`.
+
 ## Why Quoin?
 
 - **Persistent workflow state:** sessions share structured artifacts instead of

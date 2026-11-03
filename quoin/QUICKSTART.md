@@ -1,5 +1,7 @@
 # Quoin — Quickstart
 
+**OpenCode in two commands:** `quoin opencode setup` (finds or installs the pinned OpenCode release, writes the project scaffold, creates or reuses a personal profile from `quoin models`, qualifies and compiles it, then runs the doctor; safe to rerun) and `quoin code` (checks, recompiles if needed, opens the session with the last profile used in this project). Set `OPENROUTER_API_KEY` first; setup never stores credentials.
+
 ## Your commands
 
 | Command | What it does |

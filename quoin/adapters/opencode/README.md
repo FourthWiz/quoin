@@ -29,6 +29,39 @@ backend.
   with a support status, a target milestone, and the OpenCode asset names
   generated for it. See "Support classification" below.
 
+## Quick start
+
+Two commands take a project from nothing to an interactive session:
+
+- `quoin opencode setup [--profile NAME] [--project-root PATH] [--yes]` finds
+  OpenCode on PATH and, when it is missing or not the pinned release, offers
+  to install the pinned release with the official installer into
+  `~/.opencode/bin` (never system-wide). It then writes the project scaffold,
+  creates or reuses a personal profile from `quoin models` (each provider
+  model id is confirmed interactively), classifies an unclassified project as
+  personal, probes every model that is not qualified, compiles the profile
+  and runs the doctor, and prints exactly what remains. Each step is skipped
+  when it is already satisfied, so a rerun with nothing to do changes
+  nothing. `--yes` accepts the install offer and the project classification
+  and reuses model id confirmations you already gave for this project; it never
+  confirms a new model id. Work profiles and work projects never get an
+  automatic install and accept only the pinned release. Setup never writes a
+  credential: it names the environment variable or keychain entry the
+  profile expects. The profile defaults to the project's last one, else
+  `personal`. Exit 0 when nothing remains, 1 otherwise, 2 for usage errors.
+- `quoin code [--profile NAME] [--project-root PATH]` checks the binary,
+  scaffold, profile and credential, recompiles the profile when it or the
+  project changed, and then runs `quoin opencode start`. Without
+  `--profile` it uses the last profile used in this project. Exit 1 when a
+  check fails, with the step to fix it.
+
+Setup keeps its non-secret record (last profile, confirmed model ids) in the
+user's state directory, keyed by project, never in the project itself. The
+installer gets only `HOME` and `PATH` from the environment and does not edit
+shell files, so setup prints the PATH change to make. `quoin code` runs fast
+checks only; run setup again for the full doctor. Every step remains
+available as the individual commands below.
+
 ## Install, check and uninstall
 
 Three commands manage a project's repo-local `.opencode/` scaffold:
