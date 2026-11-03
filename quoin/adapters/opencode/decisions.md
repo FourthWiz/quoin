@@ -341,6 +341,64 @@ hand. Only Jira comments, Slack posts and Gmail sends are implemented, against s
 attachments are refused, and the idempotency markers (Slack metadata, Jira comment property, Gmail
 Message-ID) are unverified against live services. The CLI-versus-MCP comparison was not run and no MCP write tools exist.
 
+### Context-usage panel in the terminal interface
+
+Status: decided
+Decision: a Quoin context-usage panel is feasible in stock OpenCode as a terminal
+interface plugin, but none ships yet. The terminal interface plugin API can render into
+the session sidebar and read the session's messages and the provider's model limits
+(`tui-plugin-api`). Stock OpenCode already shows a built-in sidebar panel with context
+tokens, percent of the model's context limit and spend (`tui-builtin-context`), so a
+Quoin panel adds only two things: the limit declared by the profile instead of the
+model's, and a compaction count. The first depends on the context limits maintainer
+decision, which is still unset. The second cannot come from the interface's message
+state, which holds at most the last 100 messages of a session and marks a compaction as
+soon as it starts; the panel would count compaction events from its activation onward,
+or read a count recorded by the server plugin. Like the built-in panel, it shows the
+pre-compaction size until the next step finishes. When a panel ships, the launcher
+admits it like the lifecycle plugin:
+
+- the plugin is built as a single pre-compiled module for OpenTUI's Solid renderer that
+  exports `id` and leaves `solid-js` and `@opentui/solid` imports external; its SHA-256
+  digest and the tested OpenCode release are pinned in the package, and it is copied
+  into the profile and re-hashed before each launch;
+- the launcher writes a Quoin-owned `tui.json` in the profile's compiled directory whose
+  `plugin` list names only that copy (with the profile limit as a plugin option). The
+  file is written privately, read back and digest-compared like the interactive
+  configuration, and the child is pointed at it with `OPENCODE_TUI_CONFIG`, passed
+  explicitly and never inherited from the caller;
+- the existing `tui-plugin-present` check is unchanged: any `plugin` key in a user,
+  project or `.opencode` terminal interface file still refuses the launch, so the only
+  terminal interface plugin admitted at start is the one Quoin wrote;
+- the panel needs `policy.plugin.lifecycle` set to `allow`, because it loads only when
+  `OPENCODE_PURE` is unset (`pure-flag-readers`).
+
+These checks bound only what loads at start. During the session the built-in plugin
+manager, or any loaded plugin, can add another terminal interface plugin, which runs
+until exit; an installed one is refused at the next start (`tui-plugin-powers`). This is
+already true of every launch that leaves `OPENCODE_PURE` unset, panel or not. Quoin's
+`tui.json` may also set `plugin_enabled` to turn off `internal:plugin-manager`, but a
+toggle in the key-value store or a project file overrides it (`tui-plugin-enabled`).
+
+Rationale: the API is enough and digest admission reuses the server plugin's path, but
+a panel that mostly repeats the built-in one does not justify a second pinned artifact.
+Another option is a view that reads the server plugin's event log, outside OpenCode (an
+editor extension or a local page). It needs no terminal interface plugin, but that log
+records no token usage today, so it would need a new usage event first. An upstream
+extension-point proposal is not needed, because the slot API already exists.
+Scope: the API was read in the source at the evidence release; the terminal interface
+plugin API, the runtime loader and the built-in context panel are unchanged in 1.19.5.
+A probe plugin was written but not loaded in the binary, because the terminal interface
+needs a terminal (`tui-plugin-binary-load`).
+Upstream risks: the API still keeps the deprecated v1 command shape, marked for removal
+in v2 (`packages/plugin/src/tui.ts` L87-118 at the evidence release); the panel does not
+use it, but the API is still changing. A loaded terminal interface plugin runs in-process
+with the SDK client and the plugin-management calls (`tui-plugin-powers`).
+Follow-up: observe the binary load through a pseudo-terminal harness; record token usage
+and compactions from the server plugin; ship the panel once the context limits decision
+is set; when `OPENCODE_TUI_CONFIG` is passed to the child, update the child environment
+allowlist and the `pure-flag-readers` row.
+
 ## Gateway probe results
 
 Paste values from a probe run's `--output` record here; no probe has been run yet.
