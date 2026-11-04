@@ -296,7 +296,8 @@ re-run Step 6 once if code changed. Do not spawn a second review. Write a short
    `__QUOIN_HOME__/memory/clean-authored-content.md`: no artifact paths, finding
    IDs or review narration.
 3. If the task surfaced a reusable gotcha, append one entry to
-   `.workflow_artifacts/memory/lessons-learned.md`.
+   `.workflow_artifacts/memory/lessons-learned.md` by piping it into
+   `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
 4. Report in two or three sentences: what changed, test status, and the next step
    (`/pr` pushes the branch and opens a PR). For a staged task, report once after
    the last stage: one line per stage (repo, what changed, tests), and name every

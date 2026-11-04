@@ -287,7 +287,7 @@ Then ask:
 
 > "Want me to capture any lessons from this week?"
 
-If yes, append to `.workflow_artifacts/memory/lessons-learned.md`.
+If yes, append to `.workflow_artifacts/memory/lessons-learned.md` by piping each entry into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed).
 
 ## Handling sparse data
 

@@ -267,7 +267,7 @@ Write an entry when you encounter:
 - A workflow step that felt wrong or slow (mark `Applies to: workflow` — this becomes a Tier 3 suggestion at end of day)
 - Any moment you think "I wish I'd known this earlier in the session"
 
-**Write without asking the user first.** This is your scratchpad. Keep entries short (2-4 sentences). Tag each with `Promote?: yes | maybe | no` based on how reusable it seems across future sessions.
+**Write without asking the user first.** This is your scratchpad. Keep entries short (2-4 sentences). Tag each with `Promote?: yes | maybe | no`. Append via `__QUOIN_HOME__/scripts/append_artifact.py`, not Write/Edit.
 
 Do NOT use the insights scratchpad for task progress tracking — that belongs in `.workflow_artifacts/memory/sessions/<date>-<task>.md`.
 

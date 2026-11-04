@@ -306,7 +306,7 @@ contract yields exit 0 (fail-open). Exit 0/2/3 or script missing → proceed. Th
 COMPLEMENTS Step 3's `dedup_against_lessons` (which stays as-is): Step 3 catches
 keyword-overlapping repeats; the guard catches different-task verbatim copies.
 
-Then append to `.workflow_artifacts/memory/lessons-learned.md` in standard format:
+Then append to `.workflow_artifacts/memory/lessons-learned.md` in standard format, by piping the entry into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed):
 ```markdown
 ## <today> — <source task name, inferred from source_path>
 **What happened:** <entry text>
@@ -335,7 +335,7 @@ Soft-forget this entry? (moves to forgotten/ archive; recoverable via /sleep --r
 [y / n]
 ```
 
-On `y`: append to `.workflow_artifacts/memory/forgotten/<today>.md` in the required format:
+On `y`: append to `.workflow_artifacts/memory/forgotten/<today>.md` in the required format, by piping the block into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/forgotten/<today>.md"` (creates the file and folder when missing):
 ```
 > Source: <absolute-path-to-source-file>:<source_start_line>..<source_end_line>
 > Forgotten: <ISO timestamp>
