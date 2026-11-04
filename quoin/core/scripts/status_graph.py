@@ -361,6 +361,198 @@ def _render_compact(result: PhaseResult, task_name: str, active_node: str, label
 
 
 # ---------------------------------------------------------------------------
+# Multi-stage and autonomous-run position
+# ---------------------------------------------------------------------------
+
+# Phase strings in pipeline order; a later entry means the task got further.
+_PHASE_ORDER = [
+    "discover", "architecture", "planning", "plan-gated", "implement",
+    "implement-gated", "review", "review-gated", "done",
+]
+
+# Per-stage progress sentinels written by autonomous runs:
+#   {phase}.stage-N.done        -> the phase finished for stage N
+#   {phase}.stage-N.<sub>.done  -> part of the phase finished (e.g. tasks, fix1)
+_STAGE_SENTINEL_RE = re.compile(r"^([a-z_]+)\.stage-(\d+)(?:\.([\w-]+))?\.done$")
+_SENTINEL_DONE_PHASE = {
+    "thorough_plan": "plan-gated",
+    "implement": "implement-gated",
+    "review": "review-gated",
+}
+_SENTINEL_PARTIAL_PHASE = {
+    "thorough_plan": "planning",
+    "implement": "implement",
+    "review": "review",
+}
+
+# Run-state "start <phase>" -> the phase string shown while that phase runs.
+_IN_FLIGHT_PHASE = {
+    "discover": "discover",
+    "enrich": "discover",
+    "specify": "discover",
+    "fast_path_triage": "discover",
+    "architect": "architecture",
+    "thorough_plan": "planning",
+    "implement": "implement",
+    "review": "review",
+    "end_of_task": "review-gated",
+}
+
+_STAGE_DIR_RE = re.compile(r"^stage-(\d+)$")
+# Same stage-row and section patterns as path_resolve.py; keep them in sync.
+_ROW_RE = re.compile(r"^[0-9]+\.\s+(?:[✅✓✗⏳⛔⚠️\s])*S-([0-9]+):\s*(.+?)\s*$", re.MULTILINE)
+_SECTION_RE = re.compile(r"^## Stage decomposition\s*$", re.MULTILINE)
+_NEXT_H2_RE = re.compile(r"^## ", re.MULTILINE)
+
+
+@dataclass
+class RunPosition:
+    stage: Optional[int] = None   # current stage of a multi-stage task
+    stage_count: int = 0          # stages listed in architecture.md (0 if none)
+    next_action: Optional[str] = None  # from a fresh, active run-state record
+
+
+def _phase_rank(phase: str) -> int:
+    try:
+        return _PHASE_ORDER.index(phase)
+    except ValueError:
+        return -1
+
+
+def _stage_count(task_dir: Path) -> int:
+    try:
+        text = (task_dir / "architecture.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return 0
+    section = _SECTION_RE.search(text)
+    if not section:
+        return 0
+    body = text[section.end():]
+    next_h2 = _NEXT_H2_RE.search(body)
+    if next_h2:
+        body = body[:next_h2.start()]
+    return max((int(m.group(1)) for m in _ROW_RE.finditer(body)), default=0)
+
+
+def _sentinel_stage_phases(progress_dir: Path) -> dict:
+    """Return {stage: furthest phase} from stage-suffixed progress sentinels."""
+    phases: dict = {}
+    try:
+        names = [p.name for p in progress_dir.iterdir() if p.is_file()]
+    except (OSError, PermissionError):
+        return phases
+    for name in names:
+        m = _STAGE_SENTINEL_RE.match(name)
+        if not m:
+            continue
+        table = _SENTINEL_PARTIAL_PHASE if m.group(3) else _SENTINEL_DONE_PHASE
+        phase = table.get(m.group(1))
+        if phase is None:
+            continue
+        stage = int(m.group(2))
+        if _phase_rank(phase) > _phase_rank(phases.get(stage, "")):
+            phases[stage] = phase
+    return phases
+
+
+def _run_state_stale_days() -> int:
+    """Same knob and fallback as run_state.py; 0 or less means no age limit."""
+    try:
+        return int(os.environ.get("QUOIN_RUN_STATE_STALE_DAYS", "1"))
+    except ValueError:
+        return 1
+
+
+def _fresh_next_action(memory_dir: Path, task: str) -> Optional[str]:
+    """Return next_action from an active run-state record younger than the stale window."""
+    path = memory_dir / f"run-state-{task}.json"
+    try:
+        age = time.time() - path.stat().st_mtime
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("active") is not True:
+        return None
+    max_days = _run_state_stale_days()
+    if max_days > 0 and age > max_days * 86400:
+        return None
+    next_action = data.get("next_action")
+    if not isinstance(next_action, str):
+        return None
+    m = re.match(r"^start\s+([a-z_]+)\s*$", next_action.strip())
+    if not m or m.group(1) not in _IN_FLIGHT_PHASE:
+        return None
+    return next_action.strip()
+
+
+def resolve_position(
+    task_dir: Path, project_root: Path, base: PhaseResult, probe_git: bool = False,
+) -> tuple:
+    """Refine *base* (from detect_phase on the task root) with stage and run data.
+
+    Multi-stage tasks keep plans and reviews under stage-N/, and autonomous runs
+    record per-stage progress as stage-suffixed sentinels, so the task root alone
+    only shows "architecture". This picks the furthest stage with any evidence and
+    the furthest phase within it; a finished stage that is not the last one moves
+    the position to planning for the next stage. A fresh, active run-state record
+    then overrides the phase with the one it is running.
+
+    Returns (PhaseResult, RunPosition).
+    """
+    pos = RunPosition()
+    if base.phase == "done":
+        return base, pos
+
+    task = task_dir.name
+    memory_dir = project_root / ".workflow_artifacts" / "memory"
+    pos.stage_count = _stage_count(task_dir)
+
+    per_stage: dict = {}
+    if pos.stage_count:
+        try:
+            stage_dirs = [
+                d for d in task_dir.iterdir()
+                if d.is_dir() and _STAGE_DIR_RE.match(d.name) and not _is_drive_conflict(d.name)
+            ]
+        except (OSError, PermissionError):
+            stage_dirs = []
+        for d in stage_dirs:
+            n = int(_STAGE_DIR_RE.match(d.name).group(1))
+            stage_result = detect_phase(d, probe_git=probe_git)
+            if stage_result.phase != "discover":  # empty or pre-created stage dir
+                per_stage[n] = stage_result
+    for n, phase in _sentinel_stage_phases(memory_dir / f"autonomous-progress-{task}").items():
+        current = per_stage.get(n)
+        if current is None or _phase_rank(phase) > _phase_rank(current.phase):
+            rounds = (current.critic_rounds, current.review_rounds) if current else (0, 0)
+            per_stage[n] = PhaseResult(
+                phase=phase, critic_rounds=rounds[0], review_rounds=rounds[1],
+                task_dir=task_dir / f"stage-{n}",
+            )
+
+    result = base
+    if per_stage:
+        stage = max(per_stage)
+        result = per_stage[stage]
+        if result.phase == "review-gated" and stage < pos.stage_count:
+            stage += 1
+            result = PhaseResult(
+                phase="planning", critic_rounds=0, review_rounds=0,
+                task_dir=task_dir / f"stage-{stage}",
+            )
+        pos.stage = stage
+
+    pos.next_action = _fresh_next_action(memory_dir, task)
+    if pos.next_action:
+        in_flight = _IN_FLIGHT_PHASE[pos.next_action.split()[1]]
+        result = PhaseResult(
+            phase=in_flight, critic_rounds=result.critic_rounds,
+            review_rounds=result.review_rounds, task_dir=result.task_dir,
+        )
+    return result, pos
+
+
+# ---------------------------------------------------------------------------
 # Project root discovery
 # ---------------------------------------------------------------------------
 
@@ -472,6 +664,9 @@ def _run_once(args: argparse.Namespace, project_root: Path) -> tuple[str, int]:
         return "No active task found under .workflow_artifacts/", 0
 
     result = detect_phase(task_dir, probe_git=args.probe_git)
+    pos = RunPosition()
+    if not args.stage:
+        result, pos = resolve_position(task_dir, project_root, result, probe_git=args.probe_git)
     task_name = task_dir.name
 
     if args.json or args.emit_nodes:
@@ -481,6 +676,9 @@ def _run_once(args: argparse.Namespace, project_root: Path) -> tuple[str, int]:
             "critic_rounds": result.critic_rounds,
             "review_rounds": result.review_rounds,
             "stage": args.stage,
+            "current_stage": pos.stage,
+            "stage_count": pos.stage_count,
+            "next_action": pos.next_action,
             "task_dir": str(task_dir),
         }
         if args.emit_nodes:
@@ -488,6 +686,16 @@ def _run_once(args: argparse.Namespace, project_root: Path) -> tuple[str, int]:
         return json.dumps(data, indent=2), 0
 
     graph = render_graph(result, task_name, compact=args.compact)
+    extra: list[str] = []
+    if pos.stage is not None:
+        total = f"/{pos.stage_count}" if pos.stage_count else ""
+        extra.append(f"stage: {pos.stage}{total}")
+    if pos.next_action:
+        extra.append(f"next:  {pos.next_action}")
+    if extra:
+        if args.compact:
+            extra = [line[:40] for line in extra]
+        graph = graph + "\n" + "\n".join(extra)
     if not args.compact:
         footer = f"\n(showing {task_name}; use --task to pick another)"
         return graph + footer, 0

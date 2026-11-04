@@ -7,6 +7,7 @@ All tests are deterministic (no LLM calls, no live git). Fixtures build syntheti
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -471,3 +472,120 @@ class TestEmitNodes:
         nodes = self._nodes(task_dir)
         expected = ["discover", "architect", "thorough_plan", "implement", "review", "end_of_task"]
         assert [n["node"] for n in nodes] == expected
+
+
+# ---------------------------------------------------------------------------
+# Multi-stage position: stage dirs, stage-suffixed sentinels, run-state
+# ---------------------------------------------------------------------------
+
+_ARCH_6_STAGES = "# t\n## Stage decomposition\n" + "".join(
+    f"{i}. ⏳ S-0{i}: stage {i}\n" for i in range(1, 7)
+)
+
+
+def _make_multistage(tmp_path: Path, name: str = "ms-task") -> Path:
+    task_dir = make_task(tmp_path, name, [])
+    (task_dir / "architecture.md").write_text(_ARCH_6_STAGES)
+    return task_dir
+
+
+def _write_sentinels(tmp_path: Path, task: str, names: list) -> None:
+    d = tmp_path / ".workflow_artifacts" / "memory" / f"autonomous-progress-{task}"
+    d.mkdir(parents=True, exist_ok=True)
+    for n in names:
+        (d / n).write_text("")
+
+
+def _write_run_state(tmp_path: Path, task: str, **fields) -> Path:
+    d = tmp_path / ".workflow_artifacts" / "memory"
+    d.mkdir(parents=True, exist_ok=True)
+    record = {"schema": 1, "task": task, "active": True, "phase": "thorough_plan"}
+    record.update(fields)
+    path = d / f"run-state-{task}.json"
+    path.write_text(json.dumps(record))
+    return path
+
+
+def _status_json(tmp_path: Path, task: str, capsys) -> dict:
+    assert main(["--project-root", str(tmp_path), "--task", task, "--json"]) == 0
+    return json.loads(capsys.readouterr().out)
+
+
+class TestMultiStagePosition:
+    _REPRO_SENTINELS = [
+        "architect.done", "discover.done", "enrich.done", "fast_path_triage.done",
+        "specify.done",
+    ] + [
+        f"{p}.stage-{n}.done" for n in range(1, 5)
+        for p in ("thorough_plan", "implement", "review")
+    ] + [f"implement.stage-{n}.tasks.done" for n in range(1, 5)]
+
+    def test_stage_sentinels_and_fresh_run_state(self, tmp_path, capsys):
+        """Repro: stages 1-4 reviewed, run-state starting thorough_plan -> stage 5 planning."""
+        _make_multistage(tmp_path)
+        _write_sentinels(tmp_path, "ms-task", self._REPRO_SENTINELS)
+        _write_run_state(tmp_path, "ms-task", next_action="start thorough_plan")
+        data = _status_json(tmp_path, "ms-task", capsys)
+        assert data["phase"] == "planning"
+        assert data["current_stage"] == 5
+        assert data["stage_count"] == 6
+        assert data["next_action"] == "start thorough_plan"
+
+    def test_finished_stage_moves_to_planning_next_stage(self, tmp_path, capsys):
+        """Repro without run-state: stage 5 planning, not the architect node."""
+        _make_multistage(tmp_path)
+        _write_sentinels(tmp_path, "ms-task", self._REPRO_SENTINELS)
+        data = _status_json(tmp_path, "ms-task", capsys)
+        assert (data["current_stage"], data["phase"]) == (5, "planning")
+
+    def test_last_stage_finished_stays_review_gated(self, tmp_path, capsys):
+        _make_multistage(tmp_path)
+        _write_sentinels(tmp_path, "ms-task", ["review.stage-6.done", "thorough_plan.stage-6.fix1.done"])
+        data = _status_json(tmp_path, "ms-task", capsys)
+        assert (data["current_stage"], data["phase"]) == (6, "review-gated")
+
+    def test_stage_sentinels_without_run_state(self, tmp_path, capsys):
+        _make_multistage(tmp_path)
+        _write_sentinels(tmp_path, "ms-task", self._REPRO_SENTINELS + ["implement.stage-5.tasks.done"])
+        data = _status_json(tmp_path, "ms-task", capsys)
+        assert (data["current_stage"], data["phase"]) == (5, "implement")
+        assert data["next_action"] is None
+
+    def test_stage_dirs_without_sentinels(self, tmp_path, capsys):
+        task_dir = _make_multistage(tmp_path)
+        for f in ("stage-1/current-plan.md", "stage-1/review-1.md", "stage-2/current-plan.md"):
+            (task_dir / f).parent.mkdir(parents=True, exist_ok=True)
+            (task_dir / f).write_text("x")
+        (task_dir / "stage-3").mkdir()  # pre-created, no artifacts yet
+        data = _status_json(tmp_path, "ms-task", capsys)
+        assert (data["current_stage"], data["phase"]) == (2, "planning")
+
+    @pytest.mark.parametrize("fields,stale", [
+        ({"active": False, "next_action": "start review"}, False),
+        ({"next_action": "run complete"}, False),
+        ({"next_action": "start review"}, True),
+    ])
+    def test_inactive_terminal_or_stale_run_state_ignored(self, tmp_path, capsys, fields, stale):
+        _make_multistage(tmp_path)
+        _write_sentinels(tmp_path, "ms-task", ["thorough_plan.stage-1.done"])
+        path = _write_run_state(tmp_path, "ms-task", **fields)
+        if stale:
+            old = path.stat().st_mtime - 3 * 86400
+            os.utime(path, (old, old))
+        data = _status_json(tmp_path, "ms-task", capsys)
+        assert (data["current_stage"], data["phase"], data["next_action"]) == (1, "plan-gated", None)
+
+    def test_single_stage_task_unchanged(self, tmp_path, capsys):
+        make_task(tmp_path, "plain", ["architecture.md", "current-plan.md"])
+        data = _status_json(tmp_path, "plain", capsys)
+        assert (data["phase"], data["current_stage"]) == ("planning", None)
+
+    def test_text_output_shows_stage_and_next(self, tmp_path, capsys):
+        _make_multistage(tmp_path)
+        _write_sentinels(tmp_path, "ms-task", self._REPRO_SENTINELS)
+        _write_run_state(tmp_path, "ms-task", next_action="start thorough_plan")
+        assert main(["--project-root", str(tmp_path), "--task", "ms-task"]) == 0
+        out = capsys.readouterr().out
+        assert "[thorough_plan]" in out
+        assert "stage: 5/6" in out
+        assert "next:  start thorough_plan" in out
