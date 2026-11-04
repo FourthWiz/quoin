@@ -106,6 +106,14 @@ def test_both_maintainer_checklists_have_items():
         assert len(re.findall(r"^- \[ \] ", part, re.MULTILINE)) >= 3
 
 
+def test_checklist_refusal_items_name_the_managed_isolation_condition():
+    items = _bullets(_body(_doc(), 2, "Maintainer actions"))
+    refusals = [i for i in items if re.search(r"\brefuse[sd]?\b", i)]
+    assert len(refusals) >= 2
+    for item in refusals:
+        assert "`isolation: managed`" in item, item
+
+
 def test_named_codes_exist_in_the_registries():
     import sys
 
