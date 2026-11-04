@@ -75,6 +75,9 @@ pick_active_task = _status_graph.pick_active_task
 _EXCLUDED_NAMES = _status_graph._EXCLUDED_NAMES
 _max_artifact_mtime = _status_graph._max_artifact_mtime
 _PHASE_LABELS = _status_graph._PHASE_LABELS
+resolve_position = _status_graph.resolve_position
+_sentinel_stage_phases = _status_graph._sentinel_stage_phases
+_phase_rank = _status_graph._phase_rank
 
 task_path = _path_resolve.task_path
 _lookup_stage_by_name = _path_resolve._lookup_stage_by_name
@@ -268,6 +271,20 @@ def _stage_info(task_dir: Path) -> dict:
     if not SECTION_RE.search(arch_text):
         return {"is_multi_stage": False, "stages": []}
 
+    # For finalized tasks (<root>/.workflow_artifacts/finalized/<name>),
+    # task_dir.parent.parent is .workflow_artifacts/ — one level too deep.
+    # Detect finalized layout and go one extra level up.
+    if "finalized" in task_dir.parts:
+        _proj_root = task_dir.parent.parent.parent
+    else:
+        _proj_root = task_dir.parent.parent
+
+    # Autonomous runs record per-stage progress as stage-suffixed sentinels
+    # ({phase}.stage-N[.<sub>].done); they can be ahead of the stage folder.
+    sentinel_phases = _sentinel_stage_phases(
+        _proj_root / ".workflow_artifacts" / "memory" / f"autonomous-progress-{task_dir.name}"
+    )
+
     # Multi-stage: enumerate stages via ROW_RE
     stages = []
     for match in ROW_RE.finditer(arch_text):
@@ -275,18 +292,14 @@ def _stage_info(task_dir: Path) -> dict:
         stage_name = match.group(2).strip()
 
         try:
-            # For finalized tasks (<root>/.workflow_artifacts/finalized/<name>),
-            # task_dir.parent.parent is .workflow_artifacts/ — one level too deep.
-            # Detect finalized layout and go one extra level up.
-            if "finalized" in task_dir.parts:
-                _proj_root = task_dir.parent.parent.parent
-            else:
-                _proj_root = task_dir.parent.parent
             stage_dir = task_path(task_dir.name, stage=stage_n, project_root=_proj_root)
             phase_result = detect_phase(stage_dir)
             phase = phase_result.phase
             critic_rounds = phase_result.critic_rounds
             review_rounds = phase_result.review_rounds
+            sentinel_phase = sentinel_phases.get(stage_n)
+            if sentinel_phase and _phase_rank(sentinel_phase) > _phase_rank(phase):
+                phase = sentinel_phase
         except Exception:
             # If resolution fails, skip this stage
             phase = "unknown"
@@ -317,9 +330,20 @@ def _task_summary(
     """Assemble a single task summary.
 
     Includes: name, phase, phase_label, critic_rounds, review_rounds,
-    is_multi_stage, stage, last_activity, finalized, and cost.
+    is_multi_stage, stage, next_action, last_activity, finalized, and cost.
     """
     phase_result = detect_phase(task_dir)
+    # A multi-stage task root holds only architecture.md; refine with the
+    # stage folders, stage-suffixed sentinels and run-state, as /status does.
+    try:
+        phase_result, position = resolve_position(task_dir, root, phase_result)
+    except Exception:
+        print(
+            f"dashboard_model: stage position failed for '{task_name}'; "
+            f"using task-root phase",
+            file=sys.stderr,
+        )
+        position = None
     phase = phase_result.phase
     phase_label = _PHASE_LABELS.get(phase, phase)  # UNCONDITIONAL (per D-07)
 
@@ -379,10 +403,11 @@ def _task_summary(
     # Finalized: check if task_dir is under finalized/
     finalized = "finalized" in task_dir.parts
 
-    # Active stage (for multi-stage tasks): highest stage number, or None
+    # Current stage (multi-stage tasks only): the stage the run is on, or None
+    # before any stage has evidence.
     active_stage = None
-    if stage_info["is_multi_stage"] and stage_info["stages"]:
-        active_stage = max(s["n"] for s in stage_info["stages"])
+    if stage_info["is_multi_stage"] and position is not None:
+        active_stage = position.stage
 
     return {
         "name": task_name,
@@ -392,6 +417,7 @@ def _task_summary(
         "review_rounds": review_rounds,
         "is_multi_stage": stage_info["is_multi_stage"],
         "stage": active_stage,
+        "next_action": position.next_action if position is not None else None,
         "last_activity": last_activity,
         "finalized": finalized,
         "cost": cost,
@@ -524,6 +550,11 @@ def task_detail(
 
     # Add stage info
     summary["stages"] = _stage_info(task_dir)["stages"]
+    # The current stage row should not lag the task-level phase, which also
+    # counts a finished previous stage and the run-state's in-flight phase.
+    for row in summary["stages"]:
+        if row["n"] == summary["stage"] and _phase_rank(summary["phase"]) > _phase_rank(row["phase"]):
+            row["phase"] = summary["phase"]
 
     # Add ledger rows (non-finalized) or totals (finalized)
     rows = _read_ledger_rows(task_dir)
