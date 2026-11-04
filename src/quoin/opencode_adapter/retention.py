@@ -15,7 +15,7 @@ import stat
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Sequence, Set, Tuple
 
 from . import boundaries, handoff, install, jsonio, paths, profile_dirs, profile_policy, runstore
 
@@ -1102,13 +1102,18 @@ def plan_sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: 
     return Plan(profile, "sweep", tuple(remove), tuple(keep), (), (), any(b.truncated for b in budgets))
 
 
+def zero_summary(status: str, **extra: Any) -> Dict[str, Any]:
+    """A sweep summary that removed nothing, with the same keys as a completed sweep."""
+    return {"status": status, "removed": {}, "kept_evidence": 0, "kept_other": 0,
+            "failed": 0, "left": 0, "truncated": False, **extra}
+
+
 def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
           profile: Optional[str] = None, table=None, current_run: Optional[str] = None) -> Dict:
     """Plan and execute the at-launch sweep. Never raises."""
     try:
         if policy is None or policy.empty:
-            return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                    "failed": 0, "left": 0, "truncated": False}
+            return zero_summary("skipped")
         plan = plan_sweep(dirs=dirs, project_root=project_root, policy=policy, now=now, uid=uid,
                           profile=profile, table=table, current_run=current_run)
         result = execute(plan, uid=uid)
@@ -1124,8 +1129,7 @@ def sweep(*, dirs, project_root, policy: RetentionPolicy, now: float, uid: int,
                 "kept_other": len(plan.keep) - evidence, "failed": len(result.failed),
                 "left": len(result.left), "truncated": plan.truncated}
     except Exception:  # noqa: BLE001 - a sweep never refuses a launch
-        return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                "failed": 0, "left": 0, "truncated": False}
+        return zero_summary("error")
 
 
 # ---------------------------------------------------------------------------

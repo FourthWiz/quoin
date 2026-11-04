@@ -1829,23 +1829,21 @@ class OpenCodeDriver:
         """Age out old profile storage once per driver per profile, for new runs
         only. Never refuses a launch."""
         if resume_run_id is not None:
-            return {"status": "skipped", "reason": "resume"}
+            return retention.zero_summary("skipped", reason="resume")
         if evaluation.profile in self._swept:
-            return {"status": "skipped", "reason": "already-swept", "left": 0}
+            return retention.zero_summary("skipped", reason="already-swept")
         self._swept.add(evaluation.profile)
         try:
             policy = retention.RetentionPolicy.from_effective(evaluation.effective)
             if policy.empty:
-                return {"status": "skipped", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                        "failed": 0, "left": 0, "truncated": False}
+                return retention.zero_summary("skipped")
             return retention.sweep(
                 dirs=dirs, project_root=root, now=self._clock(), uid=os.getuid(),
                 policy=policy, profile=evaluation.profile, table=self._proc.snapshot(),
                 current_run=run_id,
             )
         except Exception:  # noqa: BLE001 - the sweep must not refuse a launch
-            return {"status": "error", "removed": {}, "kept_evidence": 0, "kept_other": 0,
-                    "failed": 0, "left": 0, "truncated": False}
+            return retention.zero_summary("error")
 
     def _claim_profile_dirs(self, evaluation: Any) -> "profile_dirs.ProfileDirs":
         """Latch this process to the evaluated profile and prepare its storage."""
