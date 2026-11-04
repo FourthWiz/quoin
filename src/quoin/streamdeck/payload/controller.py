@@ -154,6 +154,9 @@ def owner_from_title(e, config, title):
         try:
             if dict(sessions(socket)).get(name, False):
                 live.append(socket)
+        except subprocess.TimeoutExpired:
+            # Sockets left unasked could hold the same name; refuse rather than call one live server unique.
+            return None
         except Exception:
             continue
     # The same name live on two servers cannot be told apart from the title.
@@ -165,8 +168,8 @@ def project_of(e, config, socket, name):
     remembered = config.get('projects', {}).get(name)
     if _abs_dir(remembered):
         return remembered
-    # The current project belongs to the current session only; another tab's session never inherits it.
-    if config.get('session') == name and _abs_dir(config.get('project')):
+    # The current project belongs to the current session on its own server; another tab's session never inherits it.
+    if config.get('session') == name and config_socket(config) == socket and _abs_dir(config.get('project')):
         return config['project']
     records = [r for _, r, _ in deckenv.iter_records(e)
                if isinstance(r, dict) and r.get('session') == name and deckenv.record_socket(r, e) == socket

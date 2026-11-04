@@ -162,6 +162,10 @@ def transition(old, event):
         pending.pop("notification", None)
         state["status"] = "attention" if pending else "working"
         state["turn_done"] = False
+    elif name in ("PreCompact", "PostCompact") and event.get("trigger") == "manual":
+        # A manual /compact runs between turns and restarts no work, so status and turn_done stay as they were.
+        if not state.get("status"):
+            state["status"] = "idle"
     elif name in ("PreToolUse", "PreCompact", "PostCompact"):
         state["status"] = "attention" if pending else "working"
         # The main agent is acting again, for example after a background task woke it up.
@@ -175,7 +179,9 @@ def transition(old, event):
             state["status"] = "attention"
     elif name == "SessionStart" and event.get("source") == "compact":
         # Compaction restarts the session in the middle of a turn; nothing about the work has changed.
-        pass
+        # A record that starts here (hooks installed mid-session) has no status yet: the turn is running.
+        if not state.get("status"):
+            state["status"] = "working"
     elif name == "SessionStart":
         pending = {}
         subagents = {}

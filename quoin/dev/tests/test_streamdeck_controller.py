@@ -226,6 +226,36 @@ def test_title_fallback_refuses_a_name_live_on_two_servers(payload, tmp_path):
     assert de.get_surface(env, str(other), "adopted") is None
 
 
+def test_title_fallback_refuses_when_the_lookup_runs_out_of_time(payload, tmp_path):
+    import subprocess
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    other = tmp_path / "other-sock"
+    other.mkdir()
+    os.makedirs(env.socket_dir, exist_ok=True)
+
+    def sessions(socket=None):
+        if socket == str(other):
+            return [("adopted", True)]
+        raise subprocess.TimeoutExpired("budget", 0)
+    cfg = {"session": "x", "project": "/tmp", "socket": str(other), "projects": {}}
+    with patch.object(c, "sessions", sessions):
+        assert c.owner_from_title(env, cfg, "adopted | Claude Code") is None
+
+
+def test_current_project_is_not_inherited_by_a_same_named_session_on_another_server(payload, tmp_path):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    project = str(tmp_path / "proj")
+    os.makedirs(project)
+    cfg = {"session": "s", "project": project, "socket": str(tmp_path / "sock-a"), "projects": {}}
+    assert c.project_of(env, cfg, str(tmp_path / "sock-a"), "s") == project
+    with patch.object(c, "run", side_effect=RuntimeError("no server")):
+        assert c.project_of(env, cfg, str(tmp_path / "sock-b"), "s") is None
+
+
 def test_a_refusal_does_not_turn_the_next_press_into_a_stale_project_launch(payload, tmp_path):
     c = payload("controller")
     de = payload("deckenv")
