@@ -277,6 +277,7 @@ Under `AUTONOMOUS`, the completion of each of the 9 resumable phases below is re
   9. **end_of_task** (Phase 6) → writes `autonomous-progress-{task}/end_of_task.done`.
 - **Sub-phase granularity (optional):** a phase MAY additionally write `autonomous-progress-{task}/{phase}.{subphase}.done` for finer-grained progress within itself (e.g. a long `implement` phase checkpointing partial task batches). The counting glob `autonomous-progress-{task}/*.done` is the UNION of both forms.
   - `implement.tasks.done` is a completion marker ("tasks done, gate pending") written by the implement skill or by Phase 4's tasks-complete entry, and `implement.batch-N.done` markers may exist (written ad hoc by earlier runs; no current write site); both count toward the union glob, and neither is `implement.done`.
+- **Stage-suffixed sentinels (multi-stage tasks):** when `architecture.md` has a `## Stage decomposition`, the per-stage phases (`thorough_plan`, `implement`, `review`) record completion per stage as `autonomous-progress-{task}/{phase}.stage-N.done`, and finer progress inside a stage as `{phase}.stage-N.{subphase}.done` (e.g. `implement.stage-4.tasks.done`, `implement.stage-5.fix1.done`). Task-level phases (`discover`, `enrich`, `specify`, `fast_path_triage`, `architect`, `end_of_task`) keep the unsuffixed `{phase}.done` form. `implement.stage-N.tasks.done` is the per-stage completion marker and never substitutes for `implement.stage-N.done`. Runs that finalized each stage separately also left `end_of_task.stage-N.done`; it is accepted as evidence that stage N finished, never required. All of these match the counting glob. Older runs may instead have written a separate directory per stage, `autonomous-progress-{task}-stage-N/`, holding unsuffixed names; a resume reads only its `thorough_plan.done`, `implement.done`, `review.done` (and their sub-sentinels) as stage N's, and reads task-level phases only from `autonomous-progress-{task}/`.
 - **Marker:** `autonomous-run-{task}.marker`, written once at autonomous-span entry (Setup, right after `AUTONOMOUS` is set) — the read/re-establish-on-resume side of this contract is Stage-2 groundwork, documented alongside the later "Resume" section.
 - **Done sentinel:** `autonomous-done-{task}.md`, written by `end_of_task` LAST, after its other terminal side effects, outside the archived folder — same rationale as the halt-sentinel.
 
@@ -1409,6 +1410,22 @@ directory) for `<task-name>`:
   never from the marker alone. A resume into Phase 4 with no pending tasks is this supported
   path. A stored `step: gate-retry-1` is a retry-budget record read only at the Checkpoint C
   failure point, never a re-entry position.
+- **Multi-stage tasks** (`architecture.md` has a `## Stage decomposition`): task-level phases
+  are read from their unsuffixed `{phase}.done` as above, but `thorough_plan`, `implement` and
+  `review` are read per stage, from `{phase}.stage-N.done` (or `{phase}.done` inside a legacy
+  `autonomous-progress-{task}-stage-N/` directory). The absence of an unsuffixed
+  `thorough_plan.done`, `implement.done` or `review.done` does NOT mean those phases never ran;
+  conversely, unsuffixed per-stage sentinels left in `autonomous-progress-{task}/` by legacy runs
+  are not evidence for any particular stage, so those stages rely on their stage row.
+  - Stage N is finished when its row is marked ✅ or ✓, or `review.stage-N.done` or
+    `end_of_task.stage-N.done` exists. A finished stage whose row is not yet ✅ gets marked ✅.
+  - Resume at the lowest-numbered unfinished stage, whatever its glyph (⏳, ✗, ⚠️ or none), at the
+    first of `thorough_plan`, `implement`, `review` whose stage-N sentinel is absent. A ⛔ row is
+    a deliberate block: halt and report it rather than resuming past it.
+  - Stage-N sub-sentinels (`{phase}.stage-N.{subphase}.done`) follow the partial and
+    progress-marker rules above, so `implement.stage-N.tasks.done` without `implement.stage-N.done`
+    re-enters Phase 4 for stage N through its tasks-complete entry.
+  - Only when every stage is finished does the resume continue with `end_of_task`.
 - **Field invariant (stated once here, applies to every read of this record anywhere in this
   file):** `phase`'s meaning is keyed on `at_stage_boundary` — two cases, not one. At
   `at_stage_boundary: true`, `phase` names the LAST COMPLETED phase — every boundary write sets
@@ -1429,7 +1446,8 @@ directory) for `<task-name>`:
 - On an `at_stage_boundary: true` record, `step` is never a re-entry position; its only value
   today is Phase 4's `gate-retry-1` retry-budget marker, read solely at the Checkpoint C failure
   point.
-- If NO `autonomous-progress-{task}/` directory exists for the task (a resume that
+- If NO `autonomous-progress-{task}/` directory (and no legacy
+  `autonomous-progress-{task}-stage-N/` directory) exists for the task (a resume that
   predates the sentinel contract, or a non-autonomous run that never wrote one), check for
   a fresh active run-state record next: `python3 __QUOIN_HOME__/scripts/run_state.py --read
   --project-root "$PROJECT_ROOT" --task "{task}" --max-age-days "$_RUN_STATE_STALE_DAYS"

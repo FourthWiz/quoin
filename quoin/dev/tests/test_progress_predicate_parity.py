@@ -55,7 +55,10 @@ def test_pure_functions_agree_on_grid(sup, ar):
 
 def test_repair_pending_agrees(sup, ar, tmp_path):
     layouts = [[], ["implement.tasks.done"], ["implement.tasks.done", "implement.done"],
-               ["implement.batch-1.done", "review.tasks.done"]]
+               ["implement.batch-1.done", "review.tasks.done"],
+               ["implement.stage-2.tasks.done"],
+               ["implement.tasks.done", "implement.done", "implement.stage-2.tasks.done"],
+               ["implement.stage-2.tasks.done", "implement.stage-2.done", "implement.stage-3.fix1.done"]]
     for i, files in enumerate(layouts):
         d = tmp_path / f"d{i}"
         d.mkdir()
