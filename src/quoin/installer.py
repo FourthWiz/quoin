@@ -156,6 +156,7 @@ DEPLOYED_SCRIPTS = (
     "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "task_bookkeeping.py",  # task-folder bookkeeping classifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "fsops.py",  # file-operations helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "append_artifact.py",  # artifact append helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "plan_tasks.py",  # plan pending-task check wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "wait_for.py",  # detached-start and bounded foreground wait helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "child_watch.py",  # handed-off child observer wrapper (wrapped portable-core — also in CORE_SCRIPTS)
@@ -660,6 +661,7 @@ CORE_SCRIPTS = (
     "comment_cleanup.py",  # pre-PR comment cleanup core impl; required by the wrapper's parents[1] loader
     "task_bookkeeping.py",  # task-folder bookkeeping classifier core impl; required by ~/.claude/scripts/task_bookkeeping.py parents[1] loader
     "fsops.py",  # file-operations helper core impl; required by the wrapper's parents[1] loader
+    "append_artifact.py",  # artifact append helper core impl; required by the wrapper's parents[1] loader
     "plan_tasks.py",  # plan pending-task check core impl; required by the wrapper's parents[1] loader
     "wait_for.py",  # detached-start and bounded foreground wait helper core impl; required by the wrapper's parents[1] loader
     "child_watch.py",  # handed-off child observer core impl; required by the wrapper's parents[1] loader

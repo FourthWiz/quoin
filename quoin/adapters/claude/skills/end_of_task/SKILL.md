@@ -614,7 +614,9 @@ Spawn an Agent subagent:
        0/2/3 or script missing → proceed with the append (fail-OPEN).
 
        Otherwise append to lessons-learned.md, including the stage suffix in the
-       heading when `stage` is non-empty:
+       heading when `stage` is non-empty. Append by piping the entry into
+       `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"`
+       (stdin, quoted heredoc; no prior Read needed), not with the Write/Edit tools:
        ```
        ## <date> — <task_name>[ [stage-<stage>]]
        **What happened:** <lessons_text>

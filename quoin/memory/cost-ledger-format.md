@@ -2,7 +2,7 @@
 
 ## Row format
 
-**Ledger path:** `.workflow_artifacts/<task-name>/cost-ledger.md`. Create with header `# Cost Ledger — <task-name>` if new.
+**Ledger path:** `.workflow_artifacts/<task-name>/cost-ledger.md`. Create with header `# Cost Ledger — <task-name>` if new. Create it (and append rows) without the editor's Write/Edit tools, which fail on a file not read in this session: pipe the row into `python3 __QUOIN_HOME__/scripts/append_artifact.py "$LEDGER" --header "# Cost Ledger — <task-name>"` (the header is written only when the ledger is new or empty; the helper locks the file so concurrent subagents never interleave rows). The `>> "$LEDGER"` one-liners below remain the documented fallback and are equivalent once the ledger exists.
 
 **Row format — executable one-liner (7-column form):**
 

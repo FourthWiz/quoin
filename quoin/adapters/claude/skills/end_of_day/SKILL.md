@@ -480,7 +480,7 @@ Check for insights files `daily/insights-<DATE>.md` for every DATE in the proces
 
 **Pass 3 — Tier 3 check:**
 - Any entry with `Applies to: workflow` or type `workflow-friction` is a Tier 3 candidate
-- Append those to `.workflow_artifacts/memory/workflow-suggestions.md` in this format:
+- Append those to `.workflow_artifacts/memory/workflow-suggestions.md` through `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/workflow-suggestions.md"` (stdin, quoted heredoc; no prior Read) in this format:
   ```markdown
   ## <date> — <source-task>
   **Suggestion:** <what should change in the workflow>
@@ -511,7 +511,7 @@ AskUserQuestion(
 )
 ```
 
-After the user responds, append confirmed entries to `.workflow_artifacts/memory/lessons-learned.md`:
+After the user responds, append confirmed entries to `.workflow_artifacts/memory/lessons-learned.md` through `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (feed the entry on stdin with a quoted heredoc, `<<'ENTRY'` … `ENTRY` on their own lines, as in `/capture_insight`; no prior Read needed, never the Write/Edit tools):
 
 ```markdown
 ## <date> — <task-name>
@@ -592,7 +592,7 @@ AskUserQuestion(
 ```
 
 If the user selects "Nothing to add" or doesn't respond: skip silently.
-If the user selects "Yes, let me share" or uses the "Other" free-text option: capture their input and append it to `.workflow_artifacts/memory/lessons-learned.md` in the same format.
+If the user selects "Yes, let me share" or uses the "Other" free-text option: capture their input and append it to `.workflow_artifacts/memory/lessons-learned.md` in the same format, with the same append helper.
 
 Also: if any tasks were rolled back today, or if the critic-revise loop ran more than 3 rounds, auto-add a lesson capturing what made it difficult.
 

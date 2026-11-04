@@ -159,26 +159,21 @@ For **workflow-friction** type, always set `Promote?: yes` — these are surface
 # When referring to a sibling artifact's task or risk, use plain English (e.g., "the parent plan's T-04"), NOT a bare T-NN token. See format-kit.md §1 / glossary.md.
 Write `daily/insights-{date}.md` appends in v3 format per the §5.4 Class A writer mechanism. Reference files (apply HERE at the body-generation write-site, per format-kit.md §1 / lesson 2026-04-23): `__QUOIN_HOME__/memory/format-kit.md` (primitives + section set), `__QUOIN_HOME__/memory/glossary.md` (status glyphs + abbreviation whitelist), `__QUOIN_HOME__/memory/terse-rubric.md` (prose discipline inside the Insight body). Entry structure: each insight is a `## {HH:MM} — {task-context or "ad-hoc"}` heading followed by a YAML-style key/value block (Type / Insight / Applies to / Promote?) per the template below. The terse-rubric applies inside the multi-sentence Insight value only (caveman prose for "why" content). After appending, run `python3 __QUOIN_HOME__/scripts/validate_artifact.py {insights-path}` (auto-detection — file does not match a named-type prefix, falls through to `default`). On V-failure (rare for append-only structured entries): log a `format-kit-skipped` warning and continue (capture_insight is Haiku, must not block). No retry — append-only file already has the new entry.
 
-Append to `.workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md` (today's date). Create the file with a header if it doesn't exist yet:
+Append to `.workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md` (today's date) with the append helper, never with the Write/Edit tools: the helper needs no prior Read, creates the file (and its header) when missing, and is safe when parallel sessions append at once. Pass `--header` on every call; it is only written when the file is new or empty:
 
-```markdown
-# Daily Insights — <YYYY-MM-DD>
-
-Scratchpad for patterns, gotchas, and decisions captured during task work.
-Reviewed and promoted by /end_of_day.
-
----
-```
-
-Then append the entry:
-
-```markdown
+```bash
+python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line \
+  ".workflow_artifacts/memory/daily/insights-<YYYY-MM-DD>.md" \
+  --header "$(printf '# Daily Insights — %s\n\nScratchpad for patterns, gotchas, and decisions captured during task work.\nReviewed and promoted by /end_of_day.\n\n---' "<YYYY-MM-DD>")" <<'ENTRY'
 ## <HH:MM> — <task-context or "ad-hoc">
 **Type:** <pattern | gotcha | decision-rationale | surprise | workflow-friction>
 **Insight:** <the observation, 1-3 sentences>
 **Applies to:** <skill names, technology, or "general" — or "workflow" for Tier 3>
 **Promote?:** <yes | maybe | no>
+ENTRY
 ```
+
+If the helper is missing or exits non-zero, fall back to plain shell appends with a quoted heredoc (so `$(...)` or backticks in the insight are never run): write the header first only when the file is missing or empty (`[ -s "<insights-path>" ] || printf '# Daily Insights — %s\n\n...\n\n---\n' "<YYYY-MM-DD>" > "<insights-path>"`), then `cat >> "<insights-path>" <<'ENTRY'` with an empty first line followed by the entry and `ENTRY`.
 
 ### Step 4: Confirm
 
