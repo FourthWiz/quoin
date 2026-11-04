@@ -187,7 +187,11 @@ note the decomposition under Assumptions in the brief.
    the Overview saying why, rather than forcing the old plan.
 
 Continue to the next stage without asking unless an escalation condition hits.
-If this session's context is getting heavy after a few stages, stop after a
+Under `AUTONOMOUS`, run every remaining stage in this session (only stage N
+for `stage N of <task>`): never stop between stages
+to suggest a fresh session or `/run --resume` (the harness compacts long
+contexts); only an escalation condition ends the run early. Interactive only:
+if this session's context is getting heavy after a few stages, stop after a
 completed stage and tell the user to continue with `/run --resume <task>` in a
 fresh session; resume starts at the first ⏳ stage.
 

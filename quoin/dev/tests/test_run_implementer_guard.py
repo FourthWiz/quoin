@@ -1,7 +1,8 @@
 """Light /run pins implementation to Opus from any other session tier.
 
 Covers model_tier.py (tier comparison in both directions, CLI verdict) and
-pins the hand-authored implementer guard block in run/SKILL.md.
+pins the hand-authored implementer guard block in run/SKILL.md, plus the
+autonomous no-hand-off rule in the Step 4b staged loop just above it.
 """
 from __future__ import annotations
 
@@ -99,3 +100,12 @@ def test_model_tier_is_deployed(monkeypatch):
     from quoin.installer import DEPLOYED_SCRIPTS
 
     assert "model_tier.py" in DEPLOYED_SCRIPTS
+
+
+def test_autonomous_staged_run_never_hands_off_between_stages():
+    text = RUN_SKILL.read_text(encoding="utf-8")
+    start = text.index("Continue to the next stage without asking")
+    loop = text[start:text.index(GUARD_HEADING)]
+    assert "Under `AUTONOMOUS`, run every remaining stage in this session" in loop
+    # The fresh-session hand-off must be scoped to interactive runs only.
+    assert loop.index("Interactive only:") < loop.index("fresh session;")
