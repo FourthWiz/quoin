@@ -17,7 +17,8 @@ per-skill `SKILL.md` bodies carry the operative branches; this file is
 the single place that documents the whole surface in one pass.
 
 The default light `/run` also accepts `--autonomous`, but there it only means
-"never ask the user; record assumptions in the brief". It writes no marker,
+"never ask the user; record assumptions in the brief; run every stage of a
+staged task in one session". It writes no marker,
 arm, progress or done sentinel, has no supervisor and no Stop-hook
 continuation, so everything below describes `run_hard`.
 

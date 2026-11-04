@@ -34,8 +34,10 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
    each, with scope, dependencies and acceptance), confirm it with the
    user unless autonomous, then run steps 6–9 once per stage with a
    stage brief under `stage-N/`, one review and one commit per stage,
-   marking each stage done in `architecture.md`. `--resume` continues at
-   the first unfinished stage.
+   marking each stage done in `architecture.md`. Autonomous runs go
+   through every stage in one session, stopping early only on an
+   escalation condition. `--resume` continues at the first unfinished
+   stage.
 6. Implement, with no plan file, always on the strong (implementation)
    model: inline when the session already runs on it, otherwise in one
    delegated implementer on that model, given the brief, the context
