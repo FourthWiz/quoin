@@ -341,6 +341,52 @@ def test_task_summary_multi_stage_rounds_aggregated(tmp_path):
     assert summary["review_rounds"] == 1
 
 
+def _make_sentinel_run(root: Path, reviewed_stages: int, stage_count: int = 6) -> Path:
+    """Multi-stage task whose progress lives only in stage-suffixed sentinels."""
+    rows = "".join(f"{n}. ⏳ S-0{n}: stage {n}\n" for n in range(1, stage_count + 1))
+    task_dir = make_task(root, "ms-task", ["architecture.md"])
+    (task_dir / "architecture.md").write_text(f"# Arch\n\n## Stage decomposition\n\n{rows}")
+    progress = root / ".workflow_artifacts" / "memory" / "autonomous-progress-ms-task"
+    progress.mkdir(parents=True)
+    for n in range(1, reviewed_stages + 1):
+        for p in ("thorough_plan", "implement", "review"):
+            (progress / f"{p}.stage-{n}.done").write_text("")
+    return task_dir
+
+
+def test_task_summary_multi_stage_uses_stage_position(tmp_path):
+    """Task phase and stage follow stage sentinels and run-state, not the root's architecture.md."""
+    root = tmp_path / "project"
+    task_dir = _make_sentinel_run(root, reviewed_stages=4)
+
+    summary = _task_summary(root, task_dir, "ms-task", cost_provider=None)
+    assert (summary["stage"], summary["phase"], summary["next_action"]) == (5, "planning", None)
+
+    stages = _stage_info(task_dir)["stages"]
+    assert [s["phase"] for s in stages[:5]] == ["review-gated"] * 4 + ["discover"]
+
+    state = root / ".workflow_artifacts" / "memory" / "run-state-ms-task.json"
+    state.write_text(json.dumps({"active": True, "next_action": "start implement"}))
+    summary = _task_summary(root, task_dir, "ms-task", cost_provider=None)
+    assert (summary["stage"], summary["phase"], summary["next_action"]) == (
+        5, "implement", "start implement",
+    )
+    assert task_detail(root, "ms-task")["stages"][4]["phase"] == "implement"
+
+
+def test_task_summary_single_stage_follows_run_state(tmp_path):
+    """Like /status, a single-stage task shows the phase a fresh run-state is running."""
+    root = tmp_path / "project"
+    task_dir = make_task(root, "plain", ["current-plan.md"])
+    assert _task_summary(root, task_dir, "plain", cost_provider=None)["phase"] == "planning"
+
+    state = root / ".workflow_artifacts" / "memory" / "run-state-plain.json"
+    state.parent.mkdir(parents=True)
+    state.write_text(json.dumps({"active": True, "next_action": "start review"}))
+    summary = _task_summary(root, task_dir, "plain", cost_provider=None)
+    assert (summary["phase"], summary["stage"]) == ("review", None)
+
+
 def test_stage_info_single_stage(tmp_path):
     """Test single-stage task detection."""
     root, alpha_dir, _, _ = make_fixture_tree(tmp_path)
@@ -565,6 +611,7 @@ def test_task_detail_finalized(tmp_path):
     assert detail["name"] == "gamma"
     assert detail["finalized"] is True
     assert detail["phase"] == "done"
+    assert (detail["stage"], detail["next_action"]) == (None, None)
     assert "ledger_rows" not in detail  # Finalized doesn't include rows
     assert "totals" in detail  # Finalized includes totals only
     assert detail["totals"]["review"] == 1
@@ -573,10 +620,15 @@ def test_task_detail_finalized(tmp_path):
 def test_task_detail_phase_label(tmp_path):
     """Test that phase_label is a human label (MAJ-2 regression guard)."""
     root, _, _, _ = make_fixture_tree(tmp_path)
+    # Stage 1 planned and gated, so the phase has a label distinct from its name.
+    progress = root / ".workflow_artifacts" / "memory" / "autonomous-progress-beta"
+    progress.mkdir(parents=True)
+    (progress / "thorough_plan.stage-1.done").write_text("")
 
     detail = task_detail(root, "beta")
 
     assert "phase_label" in detail
+    assert detail["phase"] == "plan-gated"
     assert detail["phase_label"] != detail["phase"]  # Human label, not raw phase
     assert isinstance(detail["phase_label"], str)
 
