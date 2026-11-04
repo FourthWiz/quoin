@@ -536,8 +536,10 @@ def test_default_policy_skips_and_database_is_never_swept(tmp_path):
     _touch(dirs.data / "opencode" / "auth.json", age=400 * DAY)
     empty = rt.RetentionPolicy({k: None for k in ("runs_days", "cache_days", "logs_days", "crash_days", "exports_days")},
                                {k: None for k in ("runs_days", "cache_days", "logs_days", "crash_days", "exports_days")})
-    assert _run_sweep(dirs, project, empty)["status"] == "skipped"
-    _run_sweep(dirs, project, _policy(wide=1))
+    skipped = _run_sweep(dirs, project, empty)
+    assert skipped["status"] == "skipped"
+    done = _run_sweep(dirs, project, _policy(wide=1))
+    assert done["status"] == "done" and set(done) == set(skipped) == set(rt.zero_summary("x"))
     for suffix in ("", "-wal", "-shm"):
         assert db.with_name(db.name + suffix).exists()
     assert (dirs.data / "opencode" / "auth.json").exists()
@@ -596,13 +598,24 @@ def test_driver_sweeps_once_per_profile_and_not_on_resume(tmp_path, monkeypatch)
     d._proc = SimpleNamespace(snapshot=lambda: None)
     ev = SimpleNamespace(profile="work", effective=None)
     assert d._retention_sweep(ev, "dirs", tmp_path, "r1", None) == {"status": "done"}
-    assert d._retention_sweep(ev, "dirs", tmp_path, "r2", None) == {"status": "skipped", "reason": "already-swept", "left": 0}
+    swept = d._retention_sweep(ev, "dirs", tmp_path, "r2", None)
+    assert (swept["status"], swept["reason"]) == ("skipped", "already-swept")
     other = SimpleNamespace(profile="other", effective=None)
-    assert d._retention_sweep(other, "dirs", tmp_path, "r3", "oc-x")["reason"] == "resume"
+    resumed = d._retention_sweep(other, "dirs", tmp_path, "r3", "oc-x")
+    assert resumed["reason"] == "resume"
     assert len(calls) == 1 and calls[0]["current_run"] == "r1"
     monkeypatch.setattr(rt, "sweep", lambda **kw: (_ for _ in ()).throw(RuntimeError("x")))
     third = SimpleNamespace(profile="third", effective=None)
-    assert d._retention_sweep(third, "dirs", tmp_path, "r4", None)["status"] == "error"
+    errored = d._retention_sweep(third, "dirs", tmp_path, "r4", None)
+    assert errored["status"] == "error"
+    monkeypatch.setattr(rt.RetentionPolicy, "from_effective", classmethod(lambda cls, e: SimpleNamespace(empty=True)))
+    empty = d._retention_sweep(SimpleNamespace(profile="fourth", effective=None), "dirs", tmp_path, "r5", None)
+    assert empty["status"] == "skipped"
+    # Every non-done branch records the same keys as a completed sweep.
+    shape = set(rt.zero_summary("x"))
+    assert {"removed", "kept_evidence", "kept_other", "failed", "left", "truncated"} < shape
+    for out in (swept, resumed, errored, empty):
+        assert set(out) - {"reason"} == shape
 
 
 def test_start_sweep_is_best_effort(tmp_path, monkeypatch):
