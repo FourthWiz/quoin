@@ -256,6 +256,17 @@ each survives `/end_of_task`'s later move of that folder into
   `autonomous-progress-{task}/*.done` — the UNION of phase- and
   sub-phase-granular sentinels, so a phase spanning more than two
   relaunches with only sub-phase progress is not false-aborted.
+- **Stage-suffixed sentinels** — on a multi-stage task (`architecture.md`
+  has a `## Stage decomposition`), `thorough_plan`, `implement` and `review`
+  complete per stage: `{phase}.stage-N.done`, with in-stage progress as
+  `{phase}.stage-N.{subphase}.done` (e.g. `implement.stage-4.tasks.done`,
+  `implement.stage-5.fix1.done`). Task-level phases keep `{phase}.done`;
+  runs that finalized each stage may also have left `end_of_task.stage-N.done`.
+  The counting glob covers these too. Legacy runs wrote a separate
+  `autonomous-progress-{task}-stage-N/` directory with unsuffixed
+  per-stage names instead. The supervisor's repair rule treats `implement.stage-N.tasks.done`
+  without `implement.stage-N.done` like `implement.tasks.done` without
+  `implement.done`. Full resume rules: `run_hard/SKILL.md` `## Resume` Step 1.
 - **Done sentinel** — `autonomous-done-{task}.md`, written by
   `/end_of_task` LAST — after push, the lessons/cost sub-phase, and the
   archive move all complete — and outside the archived folder, so a

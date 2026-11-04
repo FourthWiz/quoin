@@ -177,6 +177,11 @@ def count_completion_sentinels(task: str, project_root: PathLike) -> int:
 #: the phase's work is finished and only its ``{phase}.done`` write is missing.
 COMPLETION_SIGNALS = {"implement": "tasks"}
 
+#: Per-stage progress sentinel written by multi-stage runs:
+#: ``{phase}.stage-N.done`` or ``{phase}.stage-N.<sub>.done``.
+#: Keep in sync with auto_resume.py and status_graph.py.
+STAGE_SENTINEL_RE = re.compile(r"^([a-z_]+)\.stage-(\d+)(?:\.([\w-]+))?\.done$")
+
 DEFAULT_REPAIR_RELAUNCHES = 2
 REPAIR_RELAUNCHES_ENV = "QUOIN_SUPERVISOR_REPAIR_RELAUNCHES"
 
@@ -248,19 +253,30 @@ def progress_made(
 
 
 def repair_pending_phases(progress_dir_path: PathLike) -> tuple:
-    """Phases that have their completion marker but not their ``.done``."""
+    """Phases that have their completion marker but not their ``.done``,
+    either unstaged (``implement.tasks.done``) or per stage
+    (``implement.stage-N.tasks.done`` without ``implement.stage-N.done``)."""
     d = Path(progress_dir_path)
     try:
-        return tuple(
-            sorted(
-                phase
-                for phase, sub in COMPLETION_SIGNALS.items()
-                if (d / f"{phase}.{sub}.done").is_file()
-                and not (d / f"{phase}.done").is_file()
-            )
-        )
+        names = {entry.name for entry in d.iterdir() if entry.is_file()}
     except OSError:
         return ()
+    pending = set()
+    for phase, sub in COMPLETION_SIGNALS.items():
+        if f"{phase}.{sub}.done" in names and f"{phase}.done" not in names:
+            pending.add(phase)
+            continue
+        for name in names:
+            m = STAGE_SENTINEL_RE.match(name)
+            if (
+                m
+                and m.group(1) == phase
+                and m.group(3) == sub
+                and f"{phase}.stage-{m.group(2)}.done" not in names
+            ):
+                pending.add(phase)
+                break
+    return tuple(sorted(pending))
 
 
 def next_streak(

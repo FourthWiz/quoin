@@ -74,6 +74,19 @@ def test_repair_pending_phases(tmp_path):
     assert sup.repair_pending_phases(d2) == ()
 
 
+def test_repair_pending_phases_stage_suffixed(tmp_path):
+    d = tmp_path / "p"
+    d.mkdir()
+    (d / "implement.stage-1.done").write_text("x")
+    (d / "implement.stage-1.tasks.done").write_text("x")
+    (d / "implement.stage-2.fix1.done").write_text("x")
+    assert sup.repair_pending_phases(d) == ()
+    (d / "implement.stage-2.tasks.done").write_text("x")
+    assert sup.repair_pending_phases(d) == ("implement",)
+    (d / "implement.stage-2.done").write_text("x")
+    assert sup.repair_pending_phases(d) == ()
+
+
 def test_next_streak_branches():
     assert sup.next_streak(True, ("implement",), 1, 2, 2) == (0, 0, "progress")
     assert sup.next_streak(False, ("implement",), 1, 0, 2) == (1, 1, "repair")

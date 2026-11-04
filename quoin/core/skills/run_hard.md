@@ -160,6 +160,17 @@ that folder's later archival:
   glob `autonomous-progress-{task}/*.done` is the union of both forms,
   so either kind of new sentinel counts as forward progress for a
   supervisor's no-progress guard.
+- **Stage-suffixed sentinels** — on a multi-stage task the per-stage
+  phases (thorough_plan, implement, review) write
+  `autonomous-progress-{task}/{phase}.stage-N.done`, and sub-phase
+  progress within a stage as `{phase}.stage-N.{subphase}.done`; the
+  task-level phases keep `{phase}.done`. Runs that finalized each
+  stage may also have left `end_of_task.stage-N.done`. Older runs used a
+  separate `autonomous-progress-{task}-stage-N/` directory with
+  unsuffixed per-stage names. Resume reads per-stage phases from these
+  forms, never from a missing unsuffixed `{phase}.done`, and continues at
+  the lowest-numbered unfinished stage of the stage decomposition, first
+  unfinished per-stage phase within it.
 - **Done sentinel** — `autonomous-done-{task}.md`, written last, after
   finalization's other side effects complete, so a relaunch after a
   kill mid-finalization can tell the span already reached its terminal

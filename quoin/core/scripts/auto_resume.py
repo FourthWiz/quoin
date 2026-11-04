@@ -318,6 +318,9 @@ def _count_done(memory_dir: Path, task: str) -> int:
 # ---------------------------------------------------------------------------
 
 COMPLETION_SIGNALS = {"implement": "tasks"}
+# Per-stage sentinel: {phase}.stage-N.done or {phase}.stage-N.<sub>.done.
+# Keep in sync with src/quoin/supervisor.py and status_graph.py.
+_STAGE_SENTINEL_RE = re.compile(r"^([a-z_]+)\.stage-(\d+)(?:\.([\w-]+))?\.done$")
 HEAD_PROBE_BUDGET_SECS = 5.0
 _SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 _TASK_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
@@ -343,18 +346,30 @@ def heads_changed(before, after) -> bool:
 
 
 def repair_pending_phases(progress_dir_path) -> tuple:
+    """Phases with a completion marker but no matching ``.done``, either
+    unstaged (``implement.tasks.done``) or per stage
+    (``implement.stage-N.tasks.done`` without ``implement.stage-N.done``)."""
     d = Path(progress_dir_path)
     try:
-        return tuple(
-            sorted(
-                phase
-                for phase, sub in COMPLETION_SIGNALS.items()
-                if (d / "{}.{}.done".format(phase, sub)).is_file()
-                and not (d / "{}.done".format(phase)).is_file()
-            )
-        )
+        names = {entry.name for entry in d.iterdir() if entry.is_file()}
     except OSError:
         return ()
+    pending = set()
+    for phase, sub in COMPLETION_SIGNALS.items():
+        if "{}.{}.done".format(phase, sub) in names and "{}.done".format(phase) not in names:
+            pending.add(phase)
+            continue
+        for name in names:
+            m = _STAGE_SENTINEL_RE.match(name)
+            if (
+                m
+                and m.group(1) == phase
+                and m.group(3) == sub
+                and "{}.stage-{}.done".format(phase, m.group(2)) not in names
+            ):
+                pending.add(phase)
+                break
+    return tuple(sorted(pending))
 
 
 def next_streak(progressed, repair_phases, streak, repairs_used, allowance) -> tuple:
