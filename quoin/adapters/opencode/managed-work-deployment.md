@@ -174,7 +174,8 @@ In-environment managed-isolation pass, run inside the real managed environment:
 - [ ] Install the attestation and corroboration and confirm `quoin opencode
   doctor` reports `isolation-verified` for the work profile.
 - [ ] Confirm the opposite profile is not visible from inside the environment
-  and that a launch refuses while it is.
+  and that a work profile with `isolation: managed` refuses to launch while it
+  is.
 - [ ] From a shell the agent can start, try a connection to an unapproved host
   and confirm the firewall or proxy blocks it, including after a redirect.
 - [ ] Confirm the child cannot write the Quoin profile files, the attestation or
@@ -187,6 +188,6 @@ Live corporate capture of zero personal requests:
 - [ ] Run a work launch with a network capture on the corporate side and confirm
   no request reaches a personal provider endpoint.
 - [ ] Repeat with the personal profile installed on the same account and confirm
-  the work launch refuses instead of running.
+  a work profile with `isolation: managed` refuses instead of running.
 - [ ] Record the capture result in the maintainer decisions and update the
   compatibility notes for any control the capture could not confirm.
