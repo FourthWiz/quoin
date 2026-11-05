@@ -1157,3 +1157,107 @@ class TestSelectorsFrom:
         p = tmp_path / "s"
         p.write_text("  /a/My Drive/t.py  \n\n/b/c d/u.py\n", encoding="utf-8")
         assert kr.read_selector_file(p) == ["/a/My Drive/t.py", "/b/c d/u.py"]
+
+
+# ---------------------------------------------------------------------------
+# TestAffectedWrapperOutput — the gate's affected-area capture
+# ---------------------------------------------------------------------------
+
+# Captured stdout of `affected_tests.py --format text --pytest-arg=-rA`: pytest's
+# own report (with a passing test whose captured stdout echoes a nested fixture
+# run, FAILED line and summary header included) followed by the helper's text
+# summary.
+_WRAPPER_OUTPUT = """\
+============================= test session starts ==============================
+platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/me/My Drive/proj/quoin
+collected 3 items
+
+quoin/dev/tests/test_a.py .F.                                            [100%]
+
+=================================== FAILURES ===================================
+__________________________________ test_known __________________________________
+
+    def test_known():
+>       assert False, "known baseline"
+E       AssertionError: known baseline
+
+quoin/dev/tests/test_a.py:5: AssertionError
+==================================== PASSES ====================================
+_________________________________ test_nested __________________________________
+----------------------------- Captured stdout call -----------------------------
+============================= test session starts ==============================
+collected 1 item
+
+test_src.py F                                                            [100%]
+
+=================================== FAILURES ===================================
+________________________________ test_src_fails ________________________________
+E       AssertionError: deliberate failure
+=========================== short test summary info ============================
+FAILED test_src.py::test_src_fails - AssertionError: deliberate failure
+============================== 1 failed in 0.02s ===============================
+
+- generated xml file: /tmp/quoin-affected-junit-x00qio2c/affected.xml -
+=========================== short test summary info ============================
+PASSED quoin/dev/tests/test_a.py::test_ok
+PASSED quoin/dev/tests/test_a.py::test_nested
+FAILED quoin/dev/tests/test_a.py::test_known - AssertionError: known baseline
+========================= 1 failed, 2 passed in 0.30s ==========================
+exit_reason: affected-red
+ran_pytest: True
+pytest_returncode: 1
+changed (1): quoin/dev/tests/test_a.py
+selectors (1): /Users/me/My Drive/proj/quoin/quoin/dev/tests/test_a.py
+interpreter: /Users/me/My Drive/proj/quoin/.venv/bin/python
+interpreter_reason: repo-venv
+pytest_timeout: 600 s (derived, 1 selected files)
+"""
+
+
+class TestAffectedWrapperOutput:
+    MANIFEST = '[[entry]]\nid = "quoin/dev/tests/test_a.py::test_known"\nreason = "r"\nadded = "2026-01-01"\n'
+
+    def _files(self, tmp_path):
+        man = tmp_path / "known-red.toml"
+        man.write_text(self.MANIFEST, encoding="utf-8")
+        out = tmp_path / "affected.txt"
+        out.write_text(_WRAPPER_OUTPUT, encoding="utf-8")
+        sel = tmp_path / "selectors"
+        sel.write_text("/Users/me/My Drive/proj/quoin/quoin/dev/tests/test_a.py\n", encoding="utf-8")
+        junit = tmp_path / "affected.xml"
+        junit.write_text(
+            '<testsuites><testsuite failures="1" errors="0" tests="3"/></testsuites>',
+            encoding="utf-8",
+        )
+        return man, out, sel, junit
+
+    def test_nested_fixture_lines_are_ignored(self):
+        passed, failed = kr.parse_pytest_report(_WRAPPER_OUTPUT)
+        assert failed == {"quoin/dev/tests/test_a.py::test_known"}
+        assert "test_src.py::test_src_fails" not in passed | failed
+
+    @pytest.mark.parametrize("with_junit", [False, True])
+    def test_manifest_only_red_downgrades(self, tmp_path, capsys, with_junit):
+        man, out, sel, junit = self._files(tmp_path)
+        argv = [
+            "--manifest", str(man), "--pytest-output", str(out),
+            "--selectors-from", str(sel), "--observed-rc", "1", "--format", "json",
+        ]
+        if with_junit:
+            argv += ["--junit", str(junit)]
+        rc = kr.main(argv)
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0, payload
+        assert payload["downgrade"] is True and payload["reconciled"] is True
+        assert [e["id"] for e in payload["known_red"]] == ["quoin/dev/tests/test_a.py::test_known"]
+
+    def test_missing_junit_falls_back_to_the_report(self, tmp_path, capsys):
+        man, out, sel, junit = self._files(tmp_path)
+        junit.unlink()
+        rc = kr.main([
+            "--manifest", str(man), "--pytest-output", str(out), "--junit", str(junit),
+            "--selectors-from", str(sel), "--observed-rc", "1", "--format", "json",
+        ])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0 and payload["downgrade"] is True

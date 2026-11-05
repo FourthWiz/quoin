@@ -3161,6 +3161,16 @@ def _format_text(sel: Selection) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _echo_file(path) -> None:
+    """Copy a captured report to stdout (best effort; never raises)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
 def _write_selectors_file(path, selectors) -> None:
     """Write selectors one per line (parent directories created as needed)."""
     target = Path(path)
@@ -3258,6 +3268,29 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--report-out",
+        metavar="PATH",
+        default=None,
+        dest="report_out",
+        help=(
+            "Write pytest's own output (with -rA added unless a -r option is "
+            "given) to PATH, then echo it to stdout.  This is the raw report "
+            "known_red.py --pytest-output expects, free of this helper's text "
+            "summary.  Emptied first so an early exit leaves no stale report."
+        ),
+    )
+    parser.add_argument(
+        "--junit-out",
+        metavar="PATH",
+        default=None,
+        dest="junit_out",
+        help=(
+            "Write the pytest junit-xml report to PATH (for known_red.py --junit) "
+            "instead of a temporary file.  Removed first so an early exit leaves "
+            "no stale report.  Not combinable with --pytest-arg=--junitxml."
+        ),
+    )
+    parser.add_argument(
         "--allow-unmatched",
         action="store_true",
         help=(
@@ -3337,11 +3370,26 @@ def main(argv: list[str] | None = None) -> int:
 
     fmt = args.format
 
-    if args.selectors_out and not args.print_interpreter:
+    if args.junit_out and any(
+        str(a).startswith(("--junitxml", "--junit-xml")) for a in args.pytest_args
+    ):
+        print("error: --junit-out cannot be combined with --pytest-arg=--junitxml", file=sys.stderr)
+        return 2
+
+    if not args.print_interpreter:
+        # Clear every output file up front: a caller reading them after an
+        # early exit must never see a previous run's selectors or report.
         try:
-            _write_selectors_file(args.selectors_out, [])
+            if args.selectors_out:
+                _write_selectors_file(args.selectors_out, [])
+            if args.report_out:
+                _write_selectors_file(args.report_out, [])
+            if args.junit_out:
+                junit_target = Path(args.junit_out)
+                junit_target.parent.mkdir(parents=True, exist_ok=True)
+                junit_target.unlink(missing_ok=True)
         except OSError as exc:
-            print(f"error: cannot write --selectors-out {args.selectors_out}: {exc}", file=sys.stderr)
+            print(f"error: cannot prepare an output file: {exc}", file=sys.stderr)
             return 2
 
     # --print-interpreter: early return, before repo resolution and every
@@ -3741,22 +3789,48 @@ def main(argv: list[str] | None = None) -> int:
 
     import tempfile
 
-    junit_dir = None
+    junit_path: Path | None = None
     junit_args: list[str] = []
-    if not any(str(a).startswith("--junitxml") or str(a).startswith("--junit-xml")
-               for a in args.pytest_args):
+    if args.junit_out:
+        junit_path = Path(args.junit_out).resolve()
+        junit_args = [f"--junitxml={junit_path}"]
+    elif not any(str(a).startswith("--junitxml") or str(a).startswith("--junit-xml")
+                 for a in args.pytest_args):
         import atexit
         import shutil
 
         junit_dir = Path(tempfile.mkdtemp(prefix="quoin-affected-junit-"))
         atexit.register(shutil.rmtree, str(junit_dir), True)
-        junit_args = [f"--junitxml={junit_dir / 'affected.xml'}"]
+        junit_path = junit_dir / "affected.xml"
+        junit_args = [f"--junitxml={junit_path}"]
+    report_args: list[str] = []
+    if args.report_out and not any(
+        str(a).startswith("-r") and not str(a).startswith("--") for a in args.pytest_args
+    ):
+        report_args = ["-rA"]
     try:
-        proc = subprocess.run(
-            [interp, "-m", "pytest", *selectors, *args.pytest_args, *junit_args],
-            cwd=str(repo_root),
-            timeout=pytest_bound,
-        )
+        if args.report_out:
+            # pytest writes straight into the report file; it is echoed below
+            # so the caller still sees the run, in the same order as before.
+            with open(args.report_out, "w", encoding="utf-8") as report_fh:
+                try:
+                    proc = subprocess.run(
+                        [interp, "-m", "pytest", *selectors, *args.pytest_args,
+                         *report_args, *junit_args],
+                        cwd=str(repo_root),
+                        timeout=pytest_bound,
+                        stdout=report_fh,
+                        stderr=subprocess.STDOUT,
+                    )
+                finally:
+                    report_fh.flush()
+                    _echo_file(args.report_out)
+        else:
+            proc = subprocess.run(
+                [interp, "-m", "pytest", *selectors, *args.pytest_args, *junit_args],
+                cwd=str(repo_root),
+                timeout=pytest_bound,
+            )
         rc = proc.returncode
     except FileNotFoundError:
         # pytest binary missing → exit 3 (undeterminable, non-blocking warn)
@@ -3831,8 +3905,8 @@ def main(argv: list[str] | None = None) -> int:
     # breaks collection still collects at the baseline and stays RED.
     if (
         code == 1
-        and junit_dir is not None
-        and _junit_only_collection_errors(junit_dir / "affected.xml")
+        and junit_path is not None
+        and _junit_only_collection_errors(junit_path)
         and _baseline_collects_nothing(repo_root, interp, selectors, pytest_bound)
     ):
         exit_reason = "test-environment-unusable"

@@ -692,8 +692,10 @@ def main(argv=None) -> int:
             junit_count = parse_junit_count(Path(args.junit).read_text(encoding="utf-8"))
             failed_or_error = drop_phantom_failures(args.observed_rc, failed_or_error, junit_count)
             reconcile_ok = len(failed_or_error) == junit_count
-        except ET.ParseError:
-            reconcile_ok = True  # oracle unavailable → trust the -rA parse at face value
+        except (ET.ParseError, OSError):
+            # oracle unavailable (malformed, or never written) → trust the -rA
+            # parse at face value
+            reconcile_ok = True
 
     reconciled = _reconcile(args.observed_rc, failed_or_error, reconcile_ok)
 

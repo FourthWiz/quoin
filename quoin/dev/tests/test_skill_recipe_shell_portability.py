@@ -250,10 +250,20 @@ def spaced_project(tmp_path):
     _git(repo, "config", "user.name", "T")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "base")
-    # Uncommitted change: the affected-area helper selects test_mod.py.
+    # Uncommitted change: the affected-area helper selects test_mod.py. One
+    # passing test echoes a nested pytest run, so the captured output carries
+    # a fixture's FAILED line and summary header ahead of the real summary.
     (tests / "test_mod.py").write_text(
+        "import subprocess\nimport sys\n\n\n"
         "def test_ok():\n    assert True\n\n\n"
-        "def test_known():\n    assert False, 'known baseline'\n",
+        "def test_known():\n    assert False, 'known baseline'\n\n\n"
+        "def test_nested(tmp_path):\n"
+        "    (tmp_path / 'test_src.py').write_text(\n"
+        "        \"def test_src_fails():\\n    assert False, 'deliberate failure'\\n\")\n"
+        "    r = subprocess.run([sys.executable, '-m', 'pytest', '-rA', '-p', 'no:cacheprovider',\n"
+        "                        str(tmp_path)], capture_output=True, text=True, cwd=tmp_path)\n"
+        "    print(r.stdout)\n"
+        "    assert r.returncode == 1\n",
         encoding="utf-8",
     )
     return project
@@ -281,6 +291,9 @@ def test_affected_area_recipe_downgrades_manifest_only_red(shell, flags, spaced_
     assert "## Known-baseline (downgraded)" in out, out
     assert "KR_RC=0" in out, out
     assert "UNRECONCILED" not in out, out
+    # known_red read the raw report the run wrote, not a second run's output.
+    assert "FAILED test_src.py::test_src_fails" in out, out
+    assert out.count("test session starts") == 2, out
 
 
 @pytest.mark.parametrize("shell,flags", _SHELLS)

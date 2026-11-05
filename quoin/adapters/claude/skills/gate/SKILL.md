@@ -292,20 +292,18 @@ Based on what exists and what's next, run the appropriate checks. Under autonomo
 - [ ] Affected-area test suite (BLOCKING hard precondition for APPROVED): run, in ONE Bash call:
   ```
   PROJECT_ROOT="$(pwd)"
-  mkdir -p "$PROJECT_ROOT/.workflow_artifacts/cache"
   AFF="$PROJECT_ROOT/.workflow_artifacts/cache/gate-affected-<date>"
-  python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --require-task-context --format text --pytest-arg=-rA --selectors-out "$AFF.selectors" > "$AFF.txt" 2>&1; AT_RC=$?
-  cat "$AFF.txt"
+  python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --require-task-context --format text --selectors-out "$AFF.selectors" --report-out "$AFF.txt" --junit-out "$AFF.xml"; AT_RC=$?
   echo "AT_RC=$AT_RC"
   if [ "$AT_RC" -eq 1 ]; then
-    python3 __QUOIN_HOME__/scripts/known_red.py --pytest-output "$AFF.txt" --selectors-from "$AFF.selectors" --observed-rc "$AT_RC" --project-root "$PROJECT_ROOT" --format text; KR_RC=$?
+    python3 __QUOIN_HOME__/scripts/known_red.py --pytest-output "$AFF.txt" --junit "$AFF.xml" --selectors-from "$AFF.selectors" --observed-rc "$AT_RC" --project-root "$PROJECT_ROOT" --format text; KR_RC=$?
     echo "KR_RC=$KR_RC"
   fi
   ```
   Run `--select-only` first; over 45 `selectors` use `wait_for.py`, else foreground with Bash `timeout` 600000. Recipes must run in bash and zsh from paths with spaces: quote expansions, pass lists as files, take `RC=$?` after a redirect, never `PIPESTATUS`. The helper resolves the git repo from `--project-root` itself (CRIT-1 fix: the outer project root is NOT a git repo; the caller does NOT run `git` directly). Result mapping:
   - exit 0 + `ran_pytest=true` → ✓ PASS: affected-area suite GREEN.
   - exit 0 + `ran_pytest=false` → ✓ PASS / N/A: no affected tests to run (docs-only changeset, clean tree, or changed tests missing on disk with `exit_reason: missing-tests-only` — no affected tests ran). Report "N/A — no affected tests" (not "tests green"); for `missing-tests-only` list the `missing_tests` paths in the annotation.
-  - exit 1 → affected tests RED. BEFORE blocking, the recipe runs the IVG-144 known-red consult on the SAME captured run (never a re-run — MAJ-3; no `--full-suite`). Branch on the result, keyed on the payload's `downgrade` field (never bare exit): exit 0 with `downgrade=true` (every affected red is known-baseline, reconciled) → ✓ PASS as **known-baseline WARN** (audit-log the downgrade name/reason/date VERBATIM); exit 1 (net-new) → ✗ BLOCKING FAIL: verdict MUST be FAIL; gate MUST NOT pass; exit 2 (malformed manifest) → ✗ BLOCKING-SURFACE (surface the stderr error; fail-CLOSED); exit 3 (reconcile-mismatch, CRIT-1) → ✗ BLOCKING-SURFACE (embed the `## Reconciliation` line; treat as blocking); script missing → ✗ BLOCKING FAIL as today (fail-CLOSED — no consult means no downgrade).
+  - exit 1 → affected tests RED. BEFORE blocking, the recipe consults `known_red.py` on the raw `-rA` report and junit the SAME run wrote (not the wrapper's text; never a re-run — MAJ-3; no `--full-suite`). Branch on the result, keyed on the payload's `downgrade` field (never bare exit): exit 0 with `downgrade=true` (every affected red is known-baseline, reconciled) → ✓ PASS as **known-baseline WARN** (audit-log the downgrade name/reason/date VERBATIM); exit 1 (net-new) → ✗ BLOCKING FAIL: verdict MUST be FAIL; gate MUST NOT pass; exit 2 (malformed manifest) → ✗ BLOCKING-SURFACE (surface the stderr error; fail-CLOSED); exit 3 (reconcile-mismatch, CRIT-1) → ✗ BLOCKING-SURFACE (embed the `## Reconciliation` line; treat as blocking); script missing → ✗ BLOCKING FAIL as today (fail-CLOSED — no consult means no downgrade).
   - exit 3 or 4 → ⚠️ BLOCKING-SURFACE: affected-area suite undeterminable / no affected tests found for changed `.py` sources. Surface to the user; do NOT auto-pass. The user must explicitly acknowledge before the gate can proceed (fail-CLOSED rule: detection failure does not silently green-light).
   - exit 3 with `exit_reason: test-environment-unusable` → the helper's pytest cannot collect these tests even without the change (wrong Python, or a project with its own test runner). Under autonomous only: ✓ PASS as **environment WARN** when the task's implement or review evidence records the project's own test command run on the final tree, green, including a test that exercises the change; quote the command and result line in the audit `## Warnings (non-blocking)`. Without that evidence, or when not autonomous, it is the BLOCKING-SURFACE row above.
   - exit 5 (exit_reason: no-quoin-task-context) → ✓ CLEAN SKIP / N/A — no active quoin task context (NOT a warning, NOT a gate FAIL; the affected-area check is not applicable in a non-quoin session).
