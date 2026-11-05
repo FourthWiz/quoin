@@ -37,6 +37,8 @@ A terminal-rendered report (chat message) showing:
 - Project lifetime cost.
 - Per-open-task cost (when active tasks exist).
 - A `fallback_fires` marker (when greater than zero for any task or lifetime total).
+- A per-stage breakdown under an open task whose ledger has rows tagged
+  with a stage (parallel stage runs tag their rows this way).
 
 No file artifacts are produced. The exact textual layout is not strictly
 contractual, but adapters SHOULD mirror the canonical four-block shape: heading

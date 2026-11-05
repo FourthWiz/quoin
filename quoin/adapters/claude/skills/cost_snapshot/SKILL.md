@@ -271,6 +271,8 @@ Project lifetime: $X.XX  (<N> sessions, <M> tasks)
 Open tasks:
   <task-name-1>    $X.XX  (<N> sessions)
   <task-name-2>    $X.XX  (<N> sessions)
+    S-01           $X.XX  (<N> rows)
+    S-02           $X.XX  (<N> rows)
 
 [<K> sessions unresolvable — col-8 marked unresolved, or ccusage/JSONL lookup failed/timed out]
 ```
@@ -278,6 +280,8 @@ Open tasks:
 Each `$X.XX` total is `resolved_total` for that scope. When the corresponding `unresolvable_count > 0`, prefix the total with `~` and append `(partial)` — e.g. `~$X.XX (partial)` — so a partial total is never rendered as if it were exact. Never fold an unresolvable row into $0 to keep a total looking precise.
 
 When today's fallback total (from `today_fallback_by_task`) is > 0 for a task, append ` (<K> fallback fires today)` after the session count for that task in the "Open tasks" block. When 0, no marker is shown. Similarly, if the lifetime 7th-column sum across all ledgers is > 0, append ` (<K> fallback fires)` after the lifetime session count. If today's total fallback fires across all tasks is > 0, append ` (<K> fallback fires today)` after the Today session count. Never print fallback-fire markers when the count is 0.
+
+**Per-stage breakdown.** For each open task whose ledger has a col-8 `stage=` key, run `python3 __QUOIN_HOME__/scripts/parallel_stages.py costs --ledger <ledger>`. It prints `{"stages": {"S-01": {"usd", "rows", "unresolved"}, ..., "untagged": {...}}}`. Indent one line per stage under that task, `untagged` last. The same `~`/`(partial)` rule applies when a stage has `unresolved > 0`. Omit the breakdown for tasks with no stage-tagged rows.
 
 Formatting rules:
 - Right-align the dollar amounts (pad task names to consistent width)

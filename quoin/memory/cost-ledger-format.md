@@ -49,7 +49,7 @@ if [ "${QUOIN_INLINE_COST_CAPTURE:-1}" != "0" ]; then
 fi
 ```
 
-**Rollout note (stage 3 → stage 4):** col-8-aware readers HAVE shipped (`cost_event.parse_row` tolerates 6/7/8 and reads col 8; `analyze_cost_ledger`, `dashboard_cost`, core `spend_monitor`, and `end_of_task` Sub-phase B all apply col-8 precedence). As of IVG-249 S-02 the flag is default ON — unset means capture is enabled. Opt out with `QUOIN_INLINE_COST_CAPTURE=0`; any other value (incl. unset) enables capture. Under opt-out, managed-phase rows revert to child self-writes sharing the parent session UUID, cohort-bucketed by `cohort_attribution` — per-phase attribution is unavailable. `run_hard` warns at Setup when the opt-out is explicit. The light `/run` writes no cost-ledger rows.
+**Rollout note (stage 3 → stage 4):** col-8-aware readers HAVE shipped (`cost_event.parse_row` tolerates 6/7/8 and reads col 8; `analyze_cost_ledger`, `dashboard_cost`, core `spend_monitor`, and `end_of_task` Sub-phase B all apply col-8 precedence). As of IVG-249 S-02 the flag is default ON — unset means capture is enabled. Opt out with `QUOIN_INLINE_COST_CAPTURE=0`; any other value (incl. unset) enables capture. Under opt-out, managed-phase rows revert to child self-writes sharing the parent session UUID, cohort-bucketed by `cohort_attribution` — per-phase attribution is unavailable. `run_hard` warns at Setup when the opt-out is explicit. The light `/run` writes no cost-ledger rows, except under `parallel:`: there it writes one on-behalf row per stage implementer and stage reviewer, with `;stage=S-0N` appended to `ATTR`.
 
 **6-column form** (for Conditional skills `/discover`, `/triage` that omit `fallback_fires`):
 
@@ -72,6 +72,7 @@ The 8th column (`attribution`) is likewise OPTIONAL and default-safe: existing 6
 Keys:
 - `usd` — optional float, a cost snapshot (≤6 decimal places).
 - `tok` — optional int, durable — store whenever known so the row can be re-priced later if the price table changes.
+- `stage` — optional stage id (`S-01`, …) that the row is attributed to. Parallel stage runs write it. `parallel_stages.py costs --ledger <path>` sums resolved `usd` per stage, and rows without it are counted under `untagged`.
 - `src` — required provenance tag on any row that carries an `attribution` value at all; concrete values: `nested_jsonl` (resolved from the runtime's nested session JSONL), `backfill_session` (resolved after the fact from a backfill pass), `unresolved` (cost could not be attributed — labeled-unresolvable, never a silent `$0`).
 
 Column 8 is OPTIONAL and default-safe. Absent means "no inline attribution" — never `$0`-with-confidence. A row whose `src` tag marks the cost as unresolvable is a labeled-unresolvable case (no `usd` value), not a silent zero.
