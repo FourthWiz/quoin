@@ -344,7 +344,7 @@ def _focus(record):
             raise
     config = c.load()
     config.update(session=session, socket=socket, project=record.get('project') or config['project'])
-    deckenv.remember_project(config, session, config['project'])
+    deckenv.remember_project(config, socket, session, config['project'])
     c.save(config)
 
 

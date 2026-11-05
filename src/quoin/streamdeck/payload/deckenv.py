@@ -326,16 +326,28 @@ def valid_session(name):
     return not any(ord(ch) < 32 or ord(ch) == 127 for ch in name)
 
 
-def remember_project(config, session, project, cap=PROJECTS_CAP):
-    """Insert or refresh a session -> project entry and keep only the newest `cap`."""
+def remember_project(config, socket, session, project, cap=PROJECTS_CAP):
+    """Insert or refresh a (socket, session) -> project entry and keep only the newest `cap`."""
     projects = config.get("projects")
     if not isinstance(projects, dict):
         projects = config["projects"] = {}
-    projects.pop(session, None)
-    projects[session] = project
+    key = surface_key(socket, session)
+    projects.pop(key, None)
+    projects[key] = project
     while len(projects) > cap:
         del projects[next(iter(projects))]
     return config
+
+
+def remembered_project(env, config, socket, session):
+    """Project remembered for a session on one server; name-only entries predate sockets and mean the default one."""
+    projects = config.get("projects")
+    if not isinstance(projects, dict):
+        return None
+    value = projects.get(surface_key(socket, session))
+    if value is None and socket == env.socket_dir:
+        value = projects.get(session)
+    return value
 
 
 def open_lock(path):
