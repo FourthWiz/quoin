@@ -1,7 +1,8 @@
 /**
  * Quoin lifecycle plugin for OpenCode.
  *
- * Appends one JSON record per selected lifecycle event to the log named by
+ * Appends one JSON record per selected lifecycle event, and one per finished
+ * model step with its token usage and cost, to the log named by
  * QUOIN_OPENCODE_PLUGIN_LOG, tagged with QUOIN_OPENCODE_RUN_ID. Quoin's Python
  * side owns translating that log into its runtime events; this plugin only
  * observes. It never changes a hook's output, never answers or vetoes a
@@ -20,15 +21,18 @@ import { appendFileSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import type { Hooks, Plugin, PluginInput } from "@opencode-ai/plugin";
 
-const PLUGIN_VERSION = "0.1.0";
+const PLUGIN_VERSION = "0.2.0";
 const RECORD_VERSION = 1;
 const RUN_ID_RE = /^oc-[0-9]{8}T[0-9]{6}Z-[0-9a-f]{8}$/;
 const MAX_TEXT = 500;
 const MAX_PATTERNS = 20;
+const REASON_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
-// Bus events worth recording. Everything else (message parts, status
-// heartbeats, catalogue refreshes) is either chatty or already covered.
+// Bus events worth recording. Everything else (status heartbeats, catalogue
+// refreshes) is either chatty or already covered. Message part updates fire
+// for every streamed delta, so only finished steps are kept from them.
 const RECORDED_EVENTS = new Set([
+  "message.part.updated",
   "session.created",
   "session.idle",
   "session.compacted",
@@ -67,8 +71,39 @@ function text(value: unknown): string | null {
   return s === null ? null : s.length > MAX_TEXT ? s.slice(0, MAX_TEXT) : s;
 }
 
-function eventData(type: string, props: Data): { data: Data; parent: string | null } {
+function count(value: unknown): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : null;
+}
+
+type EventRecord = { data: Data; parent: string | null; id?: string | null; session?: string | null };
+
+// The record for one recorded bus event, or null when the event is skipped.
+function eventData(type: string, props: Data): EventRecord | null {
   switch (type) {
+    case "message.part.updated": {
+      // Only the numbers of a finished step: the part id keys revisions when
+      // OpenCode re-emits the part, and its text is never copied.
+      const part = obj(props.part);
+      if (part.type !== "step-finish") return null;
+      const tokens = obj(part.tokens);
+      const cache = obj(tokens.cache);
+      return {
+        data: {
+          message_id: str(part.messageID),
+          reason: typeof part.reason === "string" && REASON_RE.test(part.reason) ? part.reason : null,
+          cost: typeof part.cost === "number" && Number.isFinite(part.cost) && part.cost >= 0 ? part.cost : null,
+          tokens: {
+            input: count(tokens.input),
+            output: count(tokens.output),
+            reasoning: count(tokens.reasoning),
+            cache: { read: count(cache.read), write: count(cache.write) },
+          },
+        },
+        parent: null,
+        id: str(part.id),
+        session: str(part.sessionID) ?? str(props.sessionID),
+      };
+    }
     case "session.created": {
       const info = obj(props.info);
       return { data: { version: str(info.version) }, parent: str(info.parentID) };
@@ -201,8 +236,11 @@ export const QuoinLifecycle: Plugin = async (input: PluginInput): Promise<Hooks>
         const type = str(e.type);
         if (type === null || !RECORDED_EVENTS.has(type)) return;
         const props = obj(e.properties);
-        const { data, parent } = eventData(type, props);
-        write("event", type, str(e.id), str(props.sessionID), parent, data);
+        const rec = eventData(type, props);
+        if (rec === null) return;
+        const id = rec.id !== undefined ? rec.id : str(e.id);
+        const session = rec.session ?? str(props.sessionID);
+        write("event", type, id, session, rec.parent, rec.data);
       });
     },
     "tool.execute.after": async (hookInput) => {

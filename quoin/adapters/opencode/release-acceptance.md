@@ -110,7 +110,7 @@ it passes again, the affected column reverts to `pending`.
 | Component | Qualified version | Source of truth |
 |---|---|---|
 | OpenCode | 1.18.32 | `qualified-versions.json` |
-| Quoin lifecycle plugin | 0.1.0 | `plugin/quoin-opencode-plugin.js` |
+| Quoin lifecycle plugin | 0.2.0 | `plugin/quoin-opencode-plugin.js` |
 | Python | 3.10 or newer | `pyproject.toml` |
 | Native configuration schema | one subset per qualified release | `schemas/opencode-<version>-config.subset.schema.json` |
 

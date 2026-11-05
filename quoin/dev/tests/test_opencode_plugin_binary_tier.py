@@ -26,7 +26,7 @@ import pytest
 
 import _opencode_helpers as helpers
 from quoin.opencode_adapter import events as ev
-from quoin.opencode_adapter import plugin_events
+from quoin.opencode_adapter import plugin_artifact, plugin_events
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PLUGIN_JS = REPO_ROOT / "quoin" / "adapters" / "opencode" / "plugin" / "quoin-opencode-plugin.js"
@@ -203,9 +203,10 @@ def test_real_plugin_log_translates_into_runtime_events(tmp_path):
     for expected in (
         "session.created", "permission.asked", "permission.replied", "tool.execute.after",
         "session.idle", "experimental.session.compacting", "session.compacted", "session.error",
+        "message.part.updated",
     ):
         assert expected in types, (expected, types)
-    assert all(r["plugin_version"] == "0.1.0" for r in read.records)
+    assert all(r["plugin_version"] == plugin_artifact.PLUGIN_VERSION for r in read.records)
 
     events = plugin_events.translate(read.records, run_id=RUN_ID)
     assert len(events) == len(read.records)
@@ -213,6 +214,16 @@ def test_real_plugin_log_translates_into_runtime_events(tmp_path):
         assert ev.RuntimeEvent.from_json(event.to_json()) == event
     asked, replied = [e.payload for e in events if getattr(e.payload, "kind", None) == "approval"]
     assert (asked.status, asked.tool, replied.status) == ("asked", "edit", "once")
+    # Only finished steps come through the message part channel, each with the
+    # fake provider's usage and keyed by its part id.
+    steps = [r for r in read.records if r["native_type"] == "message.part.updated"]
+    assert all(r["native_id"].startswith("prt_") and r["session_id"] for r in steps)
+    assert all(set(r["data"]) == {"message_id", "reason", "cost", "tokens"} for r in steps)
+    # No prompt or reply text from any message part reaches the log.
+    raw = log.read_text(encoding="utf-8")
+    assert "write hello" not in raw and "summary text" not in raw
+    usage = [e.payload for e in events if e.type is ev.EventType.USAGE]
+    assert len(usage) == len(steps) and all(u.input_tokens and u.output_tokens for u in usage)
     assert asked.request_id and asked.request_id == replied.request_id
     assert len({r["instance"] for r in read.records}) == 1
     error = next(e for e in events if e.type is ev.EventType.ERROR)

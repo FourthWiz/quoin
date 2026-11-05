@@ -354,7 +354,8 @@ model's, and a compaction count. The first depends on the context limits maintai
 decision, which is still unset. The second cannot come from the interface's message
 state, which holds at most the last 100 messages of a session and marks a compaction as
 soon as it starts; the panel would count compaction events from its activation onward,
-or read a count recorded by the server plugin. Like the built-in panel, it shows the
+or read the count from the server plugin's event log, which records every
+`session.compacted` event and the token usage and cost of each finished step. Like the built-in panel, it shows the
 pre-compaction size until the next step finishes. When a panel ships, the launcher
 admits it like the lifecycle plugin:
 
@@ -383,8 +384,8 @@ toggle in the key-value store or a project file overrides it (`tui-plugin-enable
 Rationale: the API is enough and digest admission reuses the server plugin's path, but
 a panel that mostly repeats the built-in one does not justify a second pinned artifact.
 Another option is a view that reads the server plugin's event log, outside OpenCode (an
-editor extension or a local page). It needs no terminal interface plugin, but that log
-records no token usage today, so it would need a new usage event first. An upstream
+editor extension or a local page). It needs no terminal interface plugin; the log now
+holds per-step usage (`plugin-step-finish`) and compactions. An upstream
 extension-point proposal is not needed, because the slot API already exists.
 Scope: the API was read in the source at the evidence release; the terminal interface
 plugin API, the runtime loader and the built-in context panel are unchanged in 1.19.5.
@@ -396,8 +397,7 @@ Upstream risks: the API still keeps the deprecated v1 command shape, marked for 
 in v2 (`packages/plugin/src/tui.ts` L87-118 at the evidence release); the panel does not
 use it, but the API is still changing. A loaded terminal interface plugin runs in-process
 with the SDK client and the plugin-management calls (`tui-plugin-powers`).
-Follow-up: record token usage
-and compactions from the server plugin; ship the panel once the context limits decision
+Follow-up: ship the panel once the context limits decision
 is set; when `OPENCODE_TUI_CONFIG` is passed to the child, update the child environment
 allowlist and the `pure-flag-readers` row.
 
@@ -458,6 +458,7 @@ release (synchronous or not, veto-capable or not, complete, stable):
 | `session.idle`, `session.status` | close a step: session state, handoff and cost capture |
 | `experimental.session.compacting`, `session.compacted` | keep the task context across compaction |
 | `tool.execute.after` | audit file writes and role boundaries as they happen |
+| `message.part.updated` (finished steps only) | per-step token usage and cost for context-usage views |
 | `session.error` | show failures instead of losing them |
 | permission requests, including from child sessions | record approvals raised in delegated work (observe only) |
 
