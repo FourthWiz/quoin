@@ -52,22 +52,55 @@ HTML_VOID = frozenset([
 ])
 
 # V-05: definition regex.
-# A line defines an ID when the ID is its first real token. Allowed decoration before the
-# ID: whitespace, table pipes, blockquote '>', list markers (-, *, +, 1., 1)), heading '#',
-# bold/italic/strikethrough markers (* _ ~), a task checkbox ([ ] / [x]), the four
-# canonical status glyphs (with or without the emoji variation selector U+FE0F), and an
-# optional label word ("Decision D-01:", "id: T-03"). The ID must not continue into a
-# longer token ("T-05-alpha"). A line holding nothing but a bare ID is a reference,
-# not a definition. Backticks are deliberately not allowed in the prefix:
-# a backticked ID is a cross-artifact reference, never a local definition.
-# Known limitation: a discussion bullet that starts with an ID ("- R-12 on line 455")
-# is also read as a definition; this keeps table cells and terse lists working.
+# A line defines an ID when the ID is its first real token and what follows it reads
+# like a definition rather than a sentence. Allowed decoration before the ID:
+# whitespace, table pipes, blockquote '>', list markers (-, *, +, 1., 1)), heading '#',
+# bold/italic/strikethrough markers (* _ ~), a task checkbox ([ ] / [x]) and the four
+# canonical status glyphs (with or without the emoji variation selector U+FE0F).
+# What may follow the ID (after optional closing * _ ~ markers):
+#   - on a heading or a status-glyph line: end of line or whitespace, so "### R-01",
+#     "### **Q-01** Which region?" and "⏳ D-01 adopt the cache" all define;
+#   - right after a plain ID: end of line, whitespace, ':' or '|' ("- T-01",
+#     "- D-07 The critic loop ...", "| T-02 |");
+#   - after closing markers: end of line, ':', '|' or a dash separator (" — ", " - ",
+#     " – "), so "- **D-01**: x" defines but "- **T-05** fixed" does not; a
+#     struck-through ID may be followed by anything ("- ~~T-13~~ dropped");
+#   - ". text" only right after a list marker ("- T-16. Write the migration").
+# A label word counts only with a colon after the ID ("Decision D-03:",
+# "- **Risk R-04:**"); a YAML key ("- id: T-15") needs nothing after the ID. So
+# "Task T-09 is still missing", "Risk R-07 mitigated by D-03", "- T-05, T-06 and
+# T-07 were dropped" and "T-05." are not definitions, and the IDs on those lines
+# are checked as references.
+# Known limitation: a plain ID followed by a space and prose ("- R-12 on line 455",
+# "T-09 is still missing") still reads as a definition. Many artifacts define IDs
+# exactly that way ("- D-07 The critic loop records ..."), so it stays accepted. The ID must not continue into a
+# longer token ("T-05-alpha"), and a line holding nothing but a bare ID is a
+# reference. Backticks are deliberately not allowed in the prefix: a backticked ID is
+# a cross-artifact reference, never a local definition.
+_V05_ID = r'[DTRFQS]-\d+(?![A-Za-z0-9\-`])'
+_V05_PREFIX = r'[\s|>*+#.\-\d✓✗⏳🚫\ufe0f_~)]*(?:\[[ xX]\][\s*_~]*)?'
+_V05_LOOSE_TAIL = r'[*_~]*(?:\s|$)'
+_V05_PLAIN_TAIL = r'(?:\s|$|[:|]|[*_~]+(?:\s*$|\s*[:|]|\s+[—–-]\s|\s*[—–]))'
 V05_DEF_RE = re.compile(
     r'^(?!\s*[DTRFQS]-\d+\s*$)'
-    r'[\s|>*+#.\-\d✓✗⏳🚫\ufe0f_~)]*'
-    r'(?:\[[ xX]\][\s*_~]*)?'
-    r'(?:(?i:decision|task|risk|finding|question|stage|id)\s*:?\s+[*_~]*)?'
-    r'([DTRFQS]-\d+)(?![A-Za-z0-9\-`])'
+    r'(?:'
+    # Heading or status-glyph line: whitespace after the ID is enough.
+    r'(?=\s*#|[\s|>*+.\-\d_~)]*[✓✗⏳🚫])' + _V05_PREFIX + r'(?=[*_~]*' + _V05_ID + _V05_LOOSE_TAIL + r')'
+    r'|' + _V05_PREFIX + r'(?:'
+    # Label word: only with a colon after the ID.
+    r'(?i:decision|task|risk|finding|question|stage)\s+[*_~]*(?=' + _V05_ID + r'[*_~]*\s*:)'
+    # YAML-style id key.
+    r'|(?i:id)\s*:\s*[*_~]*(?=' + _V05_ID + r'[*_~]*\s*$)'
+    # Struck-through ID followed by anything.
+    r'|(?<=~~)(?=' + _V05_ID + r'~~(?:\s|$))'
+    # "- T-16. Write the migration": period separator right after a list marker.
+    r'|(?:(?<=[-*+]\s)|(?<=\d[.)]\s))(?=' + _V05_ID + r'\.\s+\S)'
+    # Plain ID: whitespace, ':' or '|' right after it; after closing markers, only
+    # end of line, ':', '|' or a dash separator.
+    r'|(?=[*_~]*' + _V05_ID + _V05_PLAIN_TAIL + r')'
+    r')'
+    r')'
+    r'[*_~]*(' + _V05_ID + r')'
 )
 
 # V-05: body reference regex — any ID-shaped string in body text

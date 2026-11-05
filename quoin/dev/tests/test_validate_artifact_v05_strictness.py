@@ -119,13 +119,50 @@ NOT_DEFS = [
     ('mid-sentence', 'We followed T-05 here.'),
     ('id-prefix-of-longer-token', '- T-05-alpha build'),
     ('bare-id-alone-on-line', 'T-97'),
+    # Prose that starts with an ID, or with a label word but no colon after the ID.
+    ('label-word-without-colon', 'Task T-09 is still missing, see below.'),
+    ('label-word-prose', 'Risk R-07 mitigated by D-03'),
+    ('comma-list', '- T-05, T-06 and T-07 were dropped.'),
+    ('id-then-period-no-list', 'T-05.'),
+    ('bold-id-then-prose', '- **T-05** fixed'),
 ]
+
+PROSE_LINES = [line for label, line in NOT_DEFS if label in {
+    'label-word-without-colon', 'label-word-prose', 'comma-list',
+    'id-then-period-no-list', 'bold-id-then-prose',
+}]
 
 
 @pytest.mark.parametrize('label,line', NOT_DEFS, ids=[c[0] for c in NOT_DEFS])
 def test_def_regex_rejects_non_definitions(label, line):
     mod = _load_module()
     assert mod.V05_DEF_RE.match(line) is None, f'{label}: {line!r} wrongly treated as a def'
+
+
+@pytest.mark.parametrize('line', PROSE_LINES)
+def test_prose_line_does_not_define_its_id(line):
+    """An ID mentioned only in prose stays undefined, so a later reference fails."""
+    mod = _load_module()
+    failures = []
+    ref = mod.V05_REF_RE.search(line).group(1)
+    mod.check_v05(f'{line}\nWe depend on {ref} later.\n', failures)
+    assert any(f'reference {ref} at line 2' in f for f in failures), failures
+
+
+def test_label_word_prose_example_fails():
+    mod = _load_module()
+    failures = []
+    mod.check_v05('Task T-09 is still missing.\nWe depend on T-09 later.\n', failures)
+    assert any('T-09' in f for f in failures), failures
+
+
+def test_ids_on_comma_list_line_are_checked():
+    """A comma list is prose: each ID on it must resolve on its own."""
+    mod = _load_module()
+    failures = []
+    mod.check_v05('- T-05: kept\n- T-05, T-06 and T-07 were dropped.\n', failures)
+    flagged = {f.split()[3] for f in failures}
+    assert flagged == {'T-06', 'T-07'}, failures
 
 
 # ── Cross-artifact references ────────────────────────────────────────────────
