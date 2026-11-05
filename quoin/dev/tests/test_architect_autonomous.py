@@ -82,3 +82,20 @@ def test_dispatch_sites_fail_open_without_askuserquestion(arch_skill_text: str) 
     assert "<!-- §0doubleprime-end -->" in text
     # This task does not hand-edit the generated block; its autonomous fail-OPEN clause
     # is added uniformly by the T-23 generator-template change, not asserted here.
+
+
+def test_phase4_critic_spawn_failure_retries_once(arch_skill_text: str) -> None:
+    text = arch_skill_text
+    idx = text.index("if critic_spawn_failed(round):")
+    comment = text[text.rindex("# Spawn failure", 0, idx): idx]
+    block = text[idx: text.index("# Read from TASK ROOT", idx)]
+    assert "Retry ONCE" in comment
+    assert "never retry it" in comment
+    # One retry with the same prompt, then a nested second-failure check that stops
+    # the loop without an AskUserQuestion, so it also holds under [autonomous].
+    assert block.count("if critic_spawn_failed(round):") == 2
+    assert 'spawn_critic_subagent(model="opus", prompt=spawn_prompt)' in block
+    assert "including one retry" in block
+    assert "break" in block
+    assert "AskUserQuestion(" not in block
+    assert "**Critic failed.**" in text

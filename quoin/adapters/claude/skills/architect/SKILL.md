@@ -467,6 +467,7 @@ False positives on docs-only references are a feature, not a bug — recursive-s
 
 ```
 round = 1
+critic_failed = False
 while round <= max_rounds:
 
     if round == 2:
@@ -501,17 +502,47 @@ while round <= max_rounds:
     spawn_prompt = "Target: <ABS_PATH>/architecture.md — critique this architecture."
     if onbehalf:
         spawn_prompt = "[quoin-onbehalf] " + spawn_prompt
+    # Before each spawn, record the mtime of architecture-critic-{round}.md (or that
+    # it is absent): a file left by an earlier /architect run must not pass as output.
     spawn_critic_subagent(
         model="opus",
         prompt=spawn_prompt
     )
+    # Spawn failure = the Agent call errors, OR architecture-critic-{round}.md at the
+    # task root is missing, empty, or not newer than the mtime recorded before the
+    # spawn. Retry ONCE, immediately,
+    # with the same spawn_prompt: transient failures (model timeout, network blip,
+    # harness hiccup) usually clear on a second attempt. A REVISE verdict, including
+    # one that hits max_rounds, is a legitimate outcome, not a failure: never retry it.
+    # V-failures inside the critic's own write are handled by its writer, not here.
+    if critic_spawn_failed(round):
+        if onbehalf:
+            append_unknown_critic_fallback_row()   # the F-02 fallback row format below
+        spawn_critic_subagent(model="opus", prompt=spawn_prompt)
+        if critic_spawn_failed(round):
+            # Second failure: stop the loop. Same path interactive and [autonomous]
+            # (no AskUserQuestion).
+            if onbehalf:
+                append_unknown_critic_fallback_row()
+            # Plain append (not a re-run of Steps 1-6); create the section if absent:
+            append_open_question(architecture.md,
+                "Critic round " + round + " failed twice; architecture unreviewed past round " + (round - 1) + ".")
+            inform_user(
+                "Critic subagent failed in round " + round + " (including one retry). " +
+                "architecture.md is final-as-is, unreviewed this round. " +
+                "Check .workflow_artifacts/<task-name>/ for partial output. " +
+                "Re-run the critic manually with /critic --target=architecture.md, or proceed without it."
+            )
+            critic_failed = True
+            break
     # Read from TASK ROOT (NOT stage-N/ — D-03 corollary):
     read .workflow_artifacts/<task-name>/architecture-critic-{round}.md
 
     if onbehalf:
         # proc:agentid-capture (MAJ-1) — model-in-the-loop, NOT a shell capture:
         # AID = the `agentId` field from the Agent tool's return for the critic
-        # spawn above, transcribed literally by this orchestrator. TUID = this
+        # spawn that produced the file (the retry, when one ran), transcribed
+        # literally by this orchestrator. TUID = that
         # spawn's OWN Agent tool_use id (secondary key). Fallback (R-12, agentId
         # absent/empty/unparseable): AID = TUID if present, else
         # "<parent-session-uuid>-critic-<utc-ts>"; force ATTR="src=unresolved"
@@ -592,7 +623,7 @@ while round <= max_rounds:
     re_run_output_format_steps_1_to_6(feedback=architecture-critic-{round}.md)
     round += 1
 
-if verdict == REVISE and round > max_rounds:
+if not critic_failed and verdict == REVISE and round > max_rounds:
     inform_user(
         "Architecture critic reached max_rounds=" + max_rounds + " with REVISE verdict, " +
         "remaining concerns enumerated below. Architecture is final-as-is. " +
@@ -603,6 +634,7 @@ if verdict == REVISE and round > max_rounds:
 **Step P4: Convergence outcome.**
 
 - **PASS → done.** No CRITICAL or MAJOR issues — proceed to `## Save session state`.
+- **Critic failed.** The critic spawn failed twice in one round (the initial attempt plus its single retry) — failure message emitted above; `architecture.md` is final-as-is with the gap noted under `## Open questions`; proceed to `## Save session state`. Applies unchanged under `[autonomous]`.
 - **Max rounds reached.** Loop exited with REVISE verdict — max-rounds-reached message emitted above; proceed to `## Save session state`.
 - **Loop detected (strict mode only).** User chose "accept" at AskUserQuestion — architecture.md is final-as-is; proceed to `## Save session state`. **Under `[autonomous]`:** this AskUserQuestion never fires (see Step P3's autonomous branch above) — the loop instead continues revising up to `max_rounds`, so this outcome path is reached only via the max-rounds-reached outcome above, never via a user "accept" choice.
 
