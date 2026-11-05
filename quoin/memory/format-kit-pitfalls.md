@@ -13,12 +13,12 @@ Before composing this artifact's body: wrap bare `<word>` tokens in backticks.
 
 ## V-05
 
-`[DTRFQS]-NN` tokens are file-local; must resolve to a definition here. Use plain English for cross-file refs.
+`[DTRFQS]-NN` tokens must be defined here or in a sibling artifact.
 
-- GOOD: "the parent plan's task four"
-- BAD: a bare T-NN token when that ID is defined in another file
+- GOOD: "the parent plan's task four", a backticked ID, or a sibling-defined ID
+- BAD: a bare T-NN defined nowhere in the task folder
 
-Before composing this artifact's body: confirm every T-NN/D-NN/R-NN/Q-NN/S-NN/F-NN is defined here.
+Before composing this artifact's body: confirm every ID-shaped token is defined here or in a sibling.
 
 ## V-06
 
