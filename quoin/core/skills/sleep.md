@@ -34,12 +34,14 @@ by `/end_of_day` as its final step; also usable standalone.
 
 - Write boundary: this skill writes ONLY to `lessons-learned.md` and
   `forgotten/<date>.md`. It MUST NOT touch session files, daily-cache files, or
-  source files.
+  source files. After writes it refreshes the derived search index
+  (`memory_select.py --build-index`, under `memory/index/`).
 - Protected sources: entries matching patterns in `memory-maintenance.yaml` are
   skipped from promotion consideration.
 - Promotion is interactive: present candidates, user confirms which to keep.
 - Dry-run is safe: `--dry-run` MUST make no filesystem changes.
-- Subcommands: `--restore <pattern>` (copy from forgotten/ back to scratchpad),
+- Subcommands: `--restore <pattern>` (copy from forgotten/ back to scratchpad;
+  candidates via `memory_select.py --semantic --source forgotten`),
   `--purge --older-than 90d` (delete old forgotten entries permanently),
   `--escalate` (re-present middle-band entries for promotion decision).
 - `--skip-sleep` is not a subcommand of this skill — it is a flag on the end-of-day

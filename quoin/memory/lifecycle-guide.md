@@ -26,7 +26,9 @@ Subcommands:
 - `/sleep --purge --all --older-than Nd`: convenience — runs `forgotten/` purge then sentinel purge (scope flags are mutually exclusive; `--all` opts into both)
 - `/sleep --escalate`: re-examines middle-band candidates on Opus for deeper reasoning
 
-**Boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. Does NOT touch `~/.claude/projects/<hash>/memory/` (auto-memory). Distinct from `/end_of_day` (end-of-workday rollup).
+**Boundary:** `/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md` (the derived `memory/index/` cache is written only by `memory_select.py --build-index`). Does NOT touch `~/.claude/projects/<hash>/memory/` (auto-memory). Distinct from `/end_of_day` (end-of-workday rollup).
+
+**Semantic search index:** `memory/index/lessons-index.json` (git-ignored) is a derived cache over `lessons-learned.md` and `forgotten/`. Rebuild with `python3 __QUOIN_HOME__/scripts/memory_select.py --build-index` from the project root: it is incremental and idempotent, so rerunning is always safe. `/sleep` refreshes it on every non-dry run and after restore or escalate. The lessons bootstrap in plan, architect, critic, review and implement calls `memory_select.py --semantic`, which adds similar lessons when the index exists and is identical to lexical selection when it does not. Built-in embedder is stdlib-only; `QUOIN_EMBED_BACKEND=fastembed` opts into model embeddings if that package is installed.
 
 **Boundary summary:**
 - `/end_of_day` → end-of-workday only — daily rollup (`daily/`, `lessons-learned.md`) + auto-invokes `/sleep` and then `/cleanup --no-tasks` (Step 5b; opt out with `--no-cleanup`)

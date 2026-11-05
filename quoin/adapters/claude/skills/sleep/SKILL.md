@@ -183,7 +183,7 @@ description wording for every branch below: memory/dispatch-guide.md §0‴ verb
 
 `/sleep` is auto-invoked by `/end_of_day` as its Step 6. It can also be run standalone at any time. For the first 30 days after install, `/sleep` runs in `--dry-run` mode only (no writes) to allow calibration of importance weights.
 
-`/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md`. It does NOT touch auto-memory (`~/.claude/projects/<hash>/memory/`), session files, daily briefings, or any other path.
+`/sleep` writes ONLY to `lessons-learned.md` and `forgotten/<date>.md` (the derived `memory/index/` cache is written only by `memory_select.py --build-index`). It does NOT touch auto-memory (`~/.claude/projects/<hash>/memory/`), session files, daily briefings, or any other path.
 
 ## Invocation modes
 
@@ -348,6 +348,10 @@ On `y`: append to `.workflow_artifacts/memory/forgotten/<today>.md` in the requi
 
 If `forced_dry_run == true`: print decisions but make NO writes.
 
+### Step 5b: Refresh the search index
+
+Skip when `forced_dry_run == true` (dry-run makes no writes). Otherwise always run `python3 __QUOIN_HOME__/scripts/memory_select.py --build-index --file .workflow_artifacts/memory/lessons-learned.md`, even if nothing was promoted here: lessons appended by other skills get indexed too. It updates the local search index under `memory/index/` (only new or changed entries are embedded; an unchanged index is not rewritten). Ignore a failure: lessons bootstrap falls back to lexical selection without it.
+
 ### Step 6: Print summary
 
 ```
@@ -375,7 +379,7 @@ MIDDLE-BAND (K):
 
 ## --restore <pattern>
 
-Search all `forgotten/<date>.md` files for entries whose text contains `<pattern>` (substring match, case-insensitive). For each match:
+Find candidates with `python3 __QUOIN_HOME__/scripts/memory_select.py --semantic --source forgotten --task-text "<pattern>" --json`: blocks whose text contains `<pattern>` (substring match, case-insensitive), plus similar blocks when the search index exists. Each hit gives `source` (the archive file), `lineno` (block start) and `anchor` (the original location, the `> Source:` line step 1 reads). A hit with `score: 0` matched only by similarity: label it "similar, not exact" when asking the user to confirm. Process hits in descending `lineno` within each file, so removing one block does not shift the next. If the script is absent or errors, search all `forgotten/<date>.md` files for the substring yourself. For each match:
 
 1. Read the `> Source:` anchor line to get the original file path and line range.
 2. Restore target precedence:
@@ -383,7 +387,7 @@ Search all `forgotten/<date>.md` files for entries whose text contains `<pattern
    - **(2) Original source gone** → append to `.workflow_artifacts/memory/daily/insights-<today>.md` with prefix `> Restored from forgotten/<orig-date>.md`. Confirm with user before appending.
    - **(3) Neither writable** → abort: print entry text to stderr with message "Cannot restore — original path gone and today's insights file not writable. Entry text shown below."; exit non-zero.
 
-After successful restore: remove the entry block from its `forgotten/<date>.md` file (atomic rename pattern: write updated content to `<path>.tmp`, then `os.rename`).
+After successful restore: remove the entry block from its `forgotten/<date>.md` file (atomic rename pattern: write updated content to `<path>.tmp`, then `os.rename`). After all restores, refresh the search index once as in Step 5b.
 
 <!-- decision-gate: out-of-scope site=sleep-purge reason=user-invoked-destructive-requires-older-than -->
 ## --purge --older-than 90d
@@ -453,7 +457,7 @@ description: "sleep --escalate: Opus review of middle-band memory candidates"
 prompt: "Review these memory consolidation candidates and return promote/forget/middle decisions with brief rationale for each. No writes — return decisions only as JSON lines.\n\n<middle-band entries as JSON>"
 ```
 
-The Opus subagent returns revised decisions. Present each revised decision to the user with rationale. User confirms each. On confirm: execute the promote or soft-forget action (same write paths as Steps 4–5).
+The Opus subagent returns revised decisions. Present each revised decision to the user with rationale. User confirms each. On confirm: execute the promote or soft-forget action (same write paths as Steps 4–5), then refresh the search index as in Step 5b.
 
 NOTE: `[no-redispatch]` in the parent `/sleep` prompt guards against §0 re-dispatch of the current skill session. It does NOT prevent `/sleep` from spawning Opus children via `--escalate`. The Opus subagent is an explicit forward dispatch — not a tier-switch of the current session.
 
@@ -461,7 +465,7 @@ NOTE: `[no-redispatch]` in the parent `/sleep` prompt guards against §0 re-disp
 
 **HARD RULE: /sleep ONLY writes to `.workflow_artifacts/memory/lessons-learned.md` AND `.workflow_artifacts/memory/forgotten/<date>.md`.**
 
-Any other write path is a bug. This restriction is tested by `quoin/dev/tests/test_sleep_write_boundary.py`.
+The derived `memory/index/` search cache is written only by `memory_select.py --build-index` (Step 5b), never edited by /sleep. Any other write path is a bug. This restriction is tested by `quoin/dev/tests/test_sleep_write_boundary.py`.
 
 Prohibited write targets (non-exhaustive):
 - `~/.claude/projects/<hash>/memory/` (auto-memory) — NEVER
