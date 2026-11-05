@@ -273,11 +273,11 @@ python3 __QUOIN_HOME__/scripts/sleep_score.py \
 
 If the script is unavailable or exits non-zero: emit `[quoin-S-3: scoring unavailable; check sleep_score.py installation]` and exit 0 (fail-OPEN — do not abort a session over an optional consolidation step).
 
-Parse the NDJSON output into three lists: promote candidates, forget candidates, middle-band candidates.
+Parse the NDJSON output into three lists: promote candidates, forget candidates, middle-band candidates. Entries with `duplicate: true` are already in `lessons-learned.md`: keep them out of the middle-band list and only count them.
 
 ### Step 3: Dedup promote candidates
 
-Filter promote candidates: remove any entry whose text has ≥3-keyword overlap with any existing paragraph in `lessons-learned.md`. This dedup pass is performed inside `sleep_score.py` (the `dedup_against_lessons` function). Confirm the `bucket == "promote"` entries in the output already reflect dedup filtering.
+A promote candidate that already exists in `lessons-learned.md` (≥3 shared keywords and Jaccard similarity ≥0.3 with one paragraph) is demoted to `bucket: "middle"` with `duplicate: true`. This dedup pass is performed inside `sleep_score.py` (the `dedup_against_lessons` function), so the `bucket == "promote"` entries in the output already reflect it. Duplicates are demoted rather than dropped, so a wider scan window never yields fewer entries; count `duplicate: true` entries as already promoted, not as deferred.
 
 ### Step 4: Present promote candidates
 
@@ -304,7 +304,7 @@ Exit 1 → present "⚠️ suspected cross-project duplicate of `<matched-slug>`
 user decide (do not silently append). Indeterminable slug → the guard's None-slug
 contract yields exit 0 (fail-open). Exit 0/2/3 or script missing → proceed. This
 COMPLEMENTS Step 3's `dedup_against_lessons` (which stays as-is): Step 3 catches
-keyword-overlapping repeats; the guard catches different-task verbatim copies.
+near-duplicates (keyword overlap plus Jaccard similarity); the guard catches different-task verbatim copies.
 
 Then append to `.workflow_artifacts/memory/lessons-learned.md` in standard format, by piping the entry into `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line ".workflow_artifacts/memory/lessons-learned.md"` (no prior Read needed):
 ```markdown
@@ -355,8 +355,10 @@ Skip when `forced_dry_run == true` (dry-run makes no writes). Otherwise always r
 ### Step 6: Print summary
 
 ```
-/sleep complete: <N> promoted; <M> soft-forgotten; <K> deferred to middle band.
+/sleep complete: <N> promoted; <D> already in lessons-learned; <M> soft-forgotten; <K> deferred to middle band.
 ```
+
+`<D>` counts `duplicate: true` entries; `<K>` counts middle-band entries that are not duplicates.
 
 ## --dry-run mode
 

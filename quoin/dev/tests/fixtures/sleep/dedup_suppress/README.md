@@ -1,4 +1,5 @@
-Expected: dedup-suppressed. Candidate overlaps >=3 keywords with lessons-learned-fixture.md.
+Expected: dedup-suppressed (demoted to middle, flagged duplicate). Candidate shares >=3 keywords with
+lessons-learned-fixture.md and its Jaccard similarity (~0.33) clears the 0.3 threshold.
 
 The candidate entry in insights-2026-04-20.md (Insight 1) mentions "pyyaml", "import", "subprocess",
 "function", "body" — a cluster of keywords that overlap >= 3 words with the existing lesson in

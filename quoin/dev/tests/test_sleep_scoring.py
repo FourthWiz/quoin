@@ -149,7 +149,7 @@ def test_middle_band():
 
 
 def test_dedup_suppress():
-    """dedup_suppress/ fixture: overlapping candidate is removed from promote list after dedup."""
+    """dedup_suppress/ fixture: overlapping candidate is demoted out of promote by dedup."""
     with materialized_fixture("dedup_suppress") as fdir:
         lessons_fixture = fdir / "lessons-learned-fixture.md"
 
@@ -172,7 +172,10 @@ def test_dedup_suppress():
         lessons_text = lessons_fixture.read_text(encoding="utf-8")
         after = dedup_against_lessons(scored, lessons_text)
 
-        # After dedup: the pyyaml promote entry should be filtered out
+        # After dedup: the pyyaml promote entry should be demoted to middle
+        _assert(len(after) == len(scored), "dedup must demote duplicates, not drop them")
+        _assert(any(e.duplicate for e in after), "expected the pyyaml entry flagged duplicate")
+
         promote_after = [e for e in after if e.bucket == "promote"]
         _assert(
             len(promote_after) == 0,
@@ -338,3 +341,74 @@ def test_slug_from_path_cli_matches_module_fn():
         )
         assert run.returncode == 0, run.stderr
         assert run.stdout.strip() == _task_name_from_path(src) == "auth-refactor"
+
+
+# ---------------------------------------------------------------------------
+# --scan-days monotonicity: dedup demotes, never drops
+# ---------------------------------------------------------------------------
+
+def test_scan_days_window_is_monotonic(tmp_path):
+    """A wider --scan-days window never returns fewer entries.
+
+    A long lessons file shares a few common words with almost any entry. That
+    loose overlap must not remove fresh promote candidates, and a real
+    duplicate is demoted to middle instead of dropped.
+    """
+    import json
+    import subprocess
+    import time
+
+    daily = tmp_path / "daily"
+    daily.mkdir()
+    files = {
+        # age (days) -> (file name, entry text)
+        2: ("insights-2026-01-10.md",
+            "## 10:00 — pgrep waiter loop\n\nA background waiter using pgrep matched its own "
+            "shell command, so the waiter loop never exited. Bracket the first character "
+            "of the token in the pattern.\n\n**Promote?:** yes\n"),
+        20: ("insights-2026-01-01.md",
+             "## 09:00 — junit report path\n\nPass the junit report path under the cache "
+             "directory so parallel sessions never overwrite each other's report files.\n\n"
+             "**Promote?:** yes\n"),
+        40: ("insights-2025-12-01.md",
+             "## 08:00 — fixture mtimes\n\nCopied fixture files keep the checkout mtime, so "
+             "window-based collectors skip them; stamp the copies to the current time.\n\n"
+             "**Promote?:** maybe\n"),
+    }
+    now = time.time()
+    for age, (name, text) in files.items():
+        path = daily / name
+        path.write_text(text, encoding="utf-8")
+        os.utime(path, (now - age * 86400, now - age * 86400))
+
+    lessons = tmp_path / "lessons-learned.md"
+    lessons.write_text(
+        "## 2025-11-01 — unrelated\n"
+        "**What happened:** The background shell loop matched every session and the command "
+        "never exited; the pattern, token and character handling all needed review, along "
+        "with release notes, deploy scripts, version bumps, dashboard colours and docs.\n\n"
+        "## 2025-11-02 — junit reports\n"
+        "**What happened:** Pass the junit report path under the cache directory so parallel "
+        "sessions never overwrite each other's report files.\n",
+        encoding="utf-8",
+    )
+
+    script = Path(__file__).parent.parent.parent / "scripts" / "sleep_score.py"
+
+    def run(days: int) -> list:
+        out = subprocess.run(
+            [sys.executable, str(script), "--scan-dir", str(daily),
+             "--scan-days", str(days), "--lessons-file", str(lessons), "--output", "json",
+             "--signals-yaml", str(_SIGNALS_YAML)],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        return [json.loads(line) for line in out.splitlines() if line.strip()]
+
+    counts = {days: len(run(days)) for days in (7, 30, 45)}
+    assert counts == {7: 1, 30: 2, 45: 3}, counts
+
+    by_head = {e["text"].splitlines()[0]: e for e in run(30)}
+    fresh = by_head["## 10:00 — pgrep waiter loop"]
+    assert fresh["bucket"] == "promote" and fresh["duplicate"] is False, fresh
+    dup = by_head["## 09:00 — junit report path"]
+    assert dup["bucket"] == "middle" and dup["duplicate"] is True, dup

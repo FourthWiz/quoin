@@ -12,7 +12,7 @@ sleep_importance_signals:
     sub_threshold_cost: 1    # no cost-ledger row above $0.50 floor within ±2h
     stale_30days: 2          # older than 30 days with no new mentions
     user_marked_no: 5        # Promote?: no
-    duplicate: 3             # ≥3-keyword overlap with existing lessons-learned entry
+    duplicate: 3             # not used as a score weight; dedup_against_lessons demotes duplicates promote→middle
   thresholds:
     promote_min_score: 3     # sum of matched promote weights to qualify as Promote
     promote_max_forget: 0    # max forget signals allowed for Promote decision
