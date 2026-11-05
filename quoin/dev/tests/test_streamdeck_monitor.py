@@ -342,6 +342,23 @@ def test_compaction_restart_keeps_running_subagents_and_the_turn_state(payload):
     assert fresh["status"] == "idle" and fresh["subagents"] == {}
 
 
+def test_compact_restart_as_the_first_event_shows_working(payload):
+    m = payload("monitor")
+    assert _step(m, {}, "SessionStart", source="compact")["status"] == "working"
+
+
+def test_manual_compaction_after_a_finished_turn_keeps_its_status(payload):
+    m = payload("monitor")
+    s = _step(m, {}, "UserPromptSubmit")
+    s = _step(m, s, "Stop")
+    for name in ("PreCompact", "PostCompact"):
+        s = _step(m, s, name, trigger="manual")
+        assert s["status"] == "done" and s["turn_done"] is True
+    assert _step(m, {}, "PreCompact", trigger="manual")["status"] == "idle"
+    auto = _step(m, s, "PreCompact", trigger="auto")
+    assert auto["status"] == "working" and auto["turn_done"] is False
+
+
 def test_main_agent_activity_after_stop_ends_the_done_turn_state(payload):
     m = payload("monitor")
     s = _step(m, {}, "UserPromptSubmit")
