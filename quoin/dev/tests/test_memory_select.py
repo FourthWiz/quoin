@@ -139,7 +139,8 @@ def test_stdlib_only():
     tree = ast.parse(src)
     stdlib_mods = {
         "argparse", "json", "re", "sys", "math", "pathlib",
-        "dataclasses", "typing", "__future__",
+        "dataclasses", "typing", "__future__", "hashlib", "importlib",
+        "os", "zlib",
     }
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -521,3 +522,196 @@ def test_missing_file_exits_two():
         timeout=30,
     )
     assert result.returncode == 2, f"Expected exit 2 for missing file, got {result.returncode}"
+
+
+# ---------------------------------------------------------------------------
+# Semantic index (opt-in, fail-open)
+# ---------------------------------------------------------------------------
+
+# The fixture task lexically selects 7 entries, none about rate limiting. The
+# appended sentence paraphrases the api-rate-limiting lesson in other word forms
+# ("degrading"/"degraded", "limiters"/"limits", "breakers", "exponentially")
+# and shares no token with its header or Applies-to line, so only the vector
+# match can find it.
+PLAIN_TASK = FIXTURE_TASK.read_text(encoding="utf-8").strip()
+PARAPHRASE_TASK = PLAIN_TASK + (
+    " Services degrading once vendor limiters kick in need breakers and"
+    " exponentially growing retries."
+)
+RATE_LIMIT = "2026-01-14 — api-rate-limiting"
+
+FORGOTTEN_BLOCKS = (
+    "> Source: /abs/daily/insights-2026-01-02.md:3..5\n"
+    "> Forgotten: 2026-01-30T10:00:00Z\n"
+    "> Score: forget=4, promote=0\n"
+    "\n"
+    "## 10:00 — zellij pane flakiness\n"
+    "Zellij pane tests were flaky because of timing; poll instead of sleeping.\n"
+    "\n"
+    "---\n"
+    "\n"
+    "> Source: /abs/daily/insights-2026-01-03.md:7..8\n"
+    "> Forgotten: 2026-01-30T10:00:01Z\n"
+    "> Score: forget=5, promote=0\n"
+    "\n"
+    "## 11:00 — docs typo\n"
+    "Fixed a typo in the README heading.\n"
+    "---\n"
+    "A horizontal rule inside the verbatim text stays in the block.\n"
+    "\n"
+    "---\n"
+)
+
+
+@pytest.fixture
+def builtin_backend(monkeypatch):
+    monkeypatch.delenv("QUOIN_EMBED_BACKEND", raising=False)
+
+
+def _memory_dir(tmp_path: Path, with_forgotten: bool = False) -> Path:
+    mem = tmp_path / "memory"
+    mem.mkdir()
+    (mem / "lessons-learned.md").write_text(
+        FIXTURE_LESSONS.read_text(encoding="utf-8"), encoding="utf-8"
+    )
+    if with_forgotten:
+        (mem / "forgotten").mkdir()
+        (mem / "forgotten" / "2026-01-30.md").write_text(FORGOTTEN_BLOCKS, encoding="utf-8")
+    return mem
+
+
+def _run(capsys, *argv: str) -> tuple[int, str]:
+    rc = MS.main(list(argv))
+    return rc, capsys.readouterr().out
+
+
+def test_semantic_paraphrase_retrieves_lexical_miss(tmp_path, capsys, builtin_backend):
+    """A paraphrased task finds a lesson the lexical matcher misses; the plain
+    task (negative control) gets nothing beyond the lexical selection."""
+    lessons = str(_memory_dir(tmp_path) / "lessons-learned.md")
+    assert _run(capsys, "--build-index", "--file", lessons)[0] == 0
+
+    def ids(task, *extra):
+        return set(_run(capsys, *extra, "--task-text", task, "--file", lessons, "--ids-only")[1].splitlines())
+
+    lexical = ids(PARAPHRASE_TASK)
+    semantic = ids(PARAPHRASE_TASK, "--semantic")
+    assert RATE_LIMIT not in lexical
+    assert semantic == lexical | {RATE_LIMIT}
+    assert ids(PLAIN_TASK, "--semantic") == ids(PLAIN_TASK)
+
+
+def test_semantic_covers_entries_added_after_build(tmp_path):
+    """A stale index still covers new entries (embedded at query time)."""
+    lessons_path = _memory_dir(tmp_path) / "lessons-learned.md"
+    index = MS.default_index_path(lessons_path)
+    MS.build_index(lessons_path, index, MS.NgramBackend())
+    with lessons_path.open("a", encoding="utf-8") as fh:
+        fh.write("\n## 2026-02-01 — late-entry\n**Lesson:** zeppelin mooring knots\n")
+    entries = MS.parse_entries(lessons_path.read_text(encoding="utf-8"))
+    vectors = MS.load_index(index, MS.NgramBackend.id)
+    top = MS.semantic_rank(entries, "zeppelins moored", vectors, MS.NgramBackend())[0]
+    assert top[1].header == "2026-02-01 — late-entry"
+
+
+@pytest.mark.parametrize("index_state,mode", [
+    ("missing", ["--json"]), ("corrupt", ["--json"]), ("other-backend", ["--json"]),
+    ("missing", []), ("corrupt", ["--ids-only"]),
+])
+def test_semantic_without_usable_index_matches_lexical(tmp_path, capsys, index_state, mode):
+    """No usable index: --semantic output is byte-identical to the lexical path."""
+    lessons_path = _memory_dir(tmp_path) / "lessons-learned.md"
+    index = MS.default_index_path(lessons_path)
+    if index_state != "missing":
+        MS.build_index(lessons_path, index, MS.NgramBackend())
+        if index_state == "corrupt":
+            index.write_text("{not json", encoding="utf-8")
+        else:
+            data = json.loads(index.read_text(encoding="utf-8"))
+            data["backend"] = "some-other-model"
+            index.write_text(json.dumps(data), encoding="utf-8")
+    lessons = str(lessons_path)
+    base = ["--task-text", PARAPHRASE_TASK, "--file", lessons, *mode]
+    assert _run(capsys, "--semantic", *base) == _run(capsys, *base)
+
+
+def test_build_index_idempotent_and_incremental(tmp_path, capsys, builtin_backend):
+    """Rebuild is byte-stable; only new entries are embedded, removed ones dropped."""
+    mem = _memory_dir(tmp_path, with_forgotten=True)
+    lessons_path = mem / "lessons-learned.md"
+    index = MS.default_index_path(lessons_path)
+    first = MS.build_index(lessons_path, index, MS.NgramBackend())
+    assert first == {"entries": 18, "added": 18, "reused": 0, "removed": 0, "written": True}
+    assert (index.parent / ".gitignore").read_text(encoding="utf-8") == "*\n"
+    snapshot = index.read_bytes()
+
+    rc, out = _run(capsys, "--build-index", "--file", str(lessons_path))
+    assert rc == 0 and out.strip().endswith("added=0 reused=18 removed=0 unchanged")
+    assert index.read_bytes() == snapshot
+
+    original = lessons_path.read_text(encoding="utf-8")
+    lessons_path.write_text(
+        original + "\n## 2026-02-01 — new-entry\n**Lesson:** something new\n", encoding="utf-8"
+    )
+    grown = MS.build_index(lessons_path, index, MS.NgramBackend())
+    assert (grown["added"], grown["reused"], grown["removed"]) == (1, 18, 0)
+
+    lessons_path.write_text(original, encoding="utf-8")
+    shrunk = MS.build_index(lessons_path, index, MS.NgramBackend())
+    assert (shrunk["added"], shrunk["removed"]) == (0, 1)
+    assert index.read_bytes() == snapshot
+
+    # An edited entry (including a blockquote line) is re-embedded.
+    lessons_path.write_text(
+        original.replace("**Lesson:** Always back up", "> note\n**Lesson:** Always back up"),
+        encoding="utf-8",
+    )
+    edited = MS.build_index(lessons_path, index, MS.NgramBackend())
+    assert (edited["added"], edited["removed"]) == (1, 1)
+
+
+def test_parse_forgotten_blocks():
+    """forgotten/ archive blocks parse into entries carrying the Source anchor."""
+    entries = MS.parse_forgotten(FORGOTTEN_BLOCKS, "2026-01-30.md")
+    assert [e.header for e in entries] == ["forgotten/2026-01-30.md#1", "forgotten/2026-01-30.md#2"]
+    assert entries[0].applies_to == "/abs/daily/insights-2026-01-02.md:3..5"
+    assert "horizontal rule inside" in entries[1].body
+    assert entries[0].lineno == 1 and entries[1].lineno == 10
+    assert "> Source:" not in MS._embed_text(entries[0])
+
+
+def test_forgotten_search_substring_then_semantic(tmp_path, capsys, builtin_backend):
+    """--source forgotten: substring match without an index, vector hits with one."""
+    lessons = str(_memory_dir(tmp_path, with_forgotten=True) / "lessons-learned.md")
+    query = "flakiness"  # substring of block 1 only
+
+    _, plain = _run(capsys, "--source", "forgotten", "--task-text", "flaky timing", "--file", lessons, "--json")
+    assert json.loads(plain)["selected"] == []  # no literal substring match
+
+    _run(capsys, "--build-index", "--file", lessons)
+    _, sem = _run(
+        capsys, "--semantic", "--source", "forgotten", "--task-text", "flaky timing",
+        "--file", lessons, "--json",
+    )
+    hits = json.loads(sem)["selected"]
+    assert [h["header"] for h in hits] == ["forgotten/2026-01-30.md#1"]
+    assert hits[0]["source"] == "forgotten/2026-01-30.md"
+    assert hits[0]["anchor"] == "/abs/daily/insights-2026-01-02.md:3..5"
+
+    _, sub = _run(capsys, "--source", "forgotten", "--task-text", query, "--file", lessons, "--ids-only")
+    assert sub.splitlines() == ["forgotten/2026-01-30.md#1"]
+    # Metadata lines are not matched: every block has a "> Forgotten: 2026-01-30" line.
+    _, meta = _run(capsys, "--source", "forgotten", "--task-text", "2026-01-30T", "--file", lessons, "--ids-only")
+    assert meta == ""
+
+
+def test_task_text_still_required_without_build_index(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        MS.main(["--file", str(_memory_dir(tmp_path) / "lessons-learned.md")])
+    assert exc.value.code == 2
+
+
+def test_unavailable_optional_backend_falls_back_to_builtin(monkeypatch):
+    monkeypatch.setenv("QUOIN_EMBED_BACKEND", "fastembed")
+    monkeypatch.setitem(sys.modules, "fastembed", None)  # import raises ImportError
+    assert MS.active_backend().id == MS.NgramBackend.id
