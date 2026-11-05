@@ -662,6 +662,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--task",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Task name. In --project-root mode without --repo-root, use the task's "
+            "worktree under <project>/.workspaces/<slug>/ as the repo root when one "
+            "exists; otherwise resolve the main checkout as usual."
+        ),
+    )
+    parser.add_argument(
         "--derive-only",
         action="store_true",
         help="Print derived steps as JSON/text and exit WITHOUT running them.",
@@ -723,10 +733,16 @@ def main(argv: list[str] | None = None) -> int:
             _emit(res, fmt)
             return 5
         # An explicit --repo-root names the checkout to diff (a task's git
-        # worktree, say) instead of the repo the depth-1 scan finds.
+        # worktree, say) instead of the repo the depth-1 scan finds. --task
+        # derives that worktree when --repo-root is not given; on a torn deploy
+        # whose affected_tests lacks the resolver, the main checkout is used.
+        repo_arg = args.repo_root
+        _task_wt = getattr(affected, "task_worktree", None)
+        if repo_arg is None and args.task and _task_wt is not None:
+            repo_arg = _task_wt(args.project_root, args.task)
         try:
-            if args.repo_root is not None:
-                root = args.repo_root.expanduser().resolve()
+            if repo_arg is not None:
+                root = repo_arg.expanduser().resolve()
                 repo = root if (root / ".git").exists() else None
             else:
                 repo = affected.resolve_repo(args.project_root)
@@ -743,8 +759,8 @@ def main(argv: list[str] | None = None) -> int:
         if repo is None:
             print(json.dumps({
                 "error": (
-                    f"No git repo found at --repo-root {args.repo_root}"
-                    if args.repo_root is not None
+                    f"No git repo found at --repo-root {repo_arg}"
+                    if repo_arg is not None
                     else f"No git repo found under --project-root {args.project_root}"
                 ),
                 "exit_reason": "undeterminable-no-repo",

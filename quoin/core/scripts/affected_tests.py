@@ -87,10 +87,12 @@ Git-root resolution note (CRIT-1 / IVG-70 remedy):
   all git commands INSIDE that repo.  The caller (gate/review) NEVER runs git
   directly — the helper owns the resolution + diff-basis fallback.
   The scan only ever sees the main checkout.  When the task's code lives in a
-  linked git worktree (e.g. <project>/.workspaces/<branch>/quoin), pass
+  linked git worktree (e.g. <project>/.workspaces/<slug>/<repo>), pass
   --repo-root <worktree> as well: that worktree is then the repo whose branch
   diff (plus its own uncommitted changes) forms the changed set, and the main
-  checkout's dirty tree is ignored.
+  checkout's dirty tree is ignored.  --task <name> derives it instead: the
+  worktree workspace.py made under <project>/.workspaces/<slug>/ is used when
+  there is one, and the main checkout otherwise.
 
 Diff-basis fallback chain (F-01 fix — no-upstream committed-branch gap):
   1. If upstream exists: git -C <repo> diff --name-only @{u}...HEAD (three-dot).
@@ -2681,6 +2683,45 @@ def explicit_repo(repo_root: Path) -> Path | None:
     return root if (root / ".git").exists() else None
 
 
+def task_worktree(project_root: Path, task: str | None) -> Path | None:
+    """Return the task's linked worktree under <project>/.workspaces/<slug>/, or None.
+
+    workspace.py creates one worktree per repo at .workspaces/<slug>/<repo>,
+    using the slug rule repeated here. A single worktree is taken as is; with
+    several, the one named like the repo the depth-1 scan finds wins. No task,
+    no workspace or an ambiguous one returns None, and the caller keeps
+    resolving the main checkout; when .workspaces/ exists but yields no match
+    (a workspace made under another name, say), a note on stderr says so.
+    """
+    lowered = re.sub(r"[^a-z0-9-]", "-", (task or "").lower())
+    slug = re.sub(r"-+", "-", lowered).strip("-")
+    if not slug:
+        return None
+    if not (project_root / ".workspaces").is_dir():
+        return None
+    try:
+        trees = sorted(
+            p for p in (project_root / ".workspaces" / slug).iterdir()
+            if p.is_dir() and (p / ".git").exists()
+        )
+    except OSError:
+        trees = []
+    if len(trees) > 1:
+        try:
+            main = resolve_repo(project_root)
+        except RuntimeError:
+            main = None
+        trees = [p for p in trees if main is not None and p.name == main.name]
+    if len(trees) == 1:
+        return trees[0].resolve()
+    print(
+        f"note: no single worktree for task {task!r} under .workspaces/{slug}/; "
+        "using the main checkout",
+        file=sys.stderr,
+    )
+    return None
+
+
 # Infra folders under .workflow_artifacts/ that do NOT count as an active task
 # context — they exist regardless of whether any task is in flight (IVG-151).
 _TASK_CONTEXT_INFRA: frozenset[str] = frozenset({"memory", "cache", "finalized", "trash"})
@@ -3278,6 +3319,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--task",
+        metavar="NAME",
+        default=None,
+        help=(
+            "Task name.  In --project-root mode without --repo-root, use the "
+            "task's worktree under <project>/.workspaces/<slug>/ as the repo "
+            "root when one exists; otherwise resolve the main checkout as usual."
+        ),
+    )
+    parser.add_argument(
         "--select-only",
         action="store_true",
         help="Print resolved test selectors as JSON and exit WITHOUT running pytest.",
@@ -3493,10 +3544,14 @@ def main(argv: list[str] | None = None) -> int:
         # --repo-root names the checkout to diff (a task's git worktree, say),
         # so the depth-1 scan, which only ever finds the main checkout, is
         # skipped and the changed set comes from that worktree's branch.
+        # --task derives that worktree when --repo-root is not given.
+        repo_arg = args.repo_root
+        if repo_arg is None and args.task:
+            repo_arg = task_worktree(args.project_root, args.task)
         try:
             repo = (
-                explicit_repo(args.repo_root)
-                if args.repo_root is not None
+                explicit_repo(repo_arg)
+                if repo_arg is not None
                 else resolve_repo(args.project_root)
             )
         except RuntimeError as exc:
@@ -3513,7 +3568,7 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         if repo is None:
             where = (
-                f"at --repo-root {args.repo_root}" if args.repo_root is not None
+                f"at --repo-root {repo_arg}" if repo_arg is not None
                 else f"under --project-root {args.project_root}"
             )
             print(json.dumps({

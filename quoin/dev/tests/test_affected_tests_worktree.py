@@ -9,7 +9,8 @@ Layout under test (real git repos, built in tmp_path):
 `--project-root <project>` alone finds only the main checkout. With
 `--repo-root <worktree>` the changed set must come from the worktree: its
 branch diff against the merge-base plus its own uncommitted edits, and none of
-the main checkout's dirty files.
+the main checkout's dirty files. `--task <name>` derives the same worktree from
+`.workspaces/<slug>/` so callers need not pass `--repo-root` by hand.
 """
 
 from __future__ import annotations
@@ -144,5 +145,47 @@ def test_ci_mirror_repo_root_drives_changed_set(layout):
 def test_ci_mirror_project_root_alone_resolves_main_checkout(layout):
     project, _main, _worktree = layout
     rc, out = _capture(_ci.main, ["--project-root", str(project), "--derive-only"])
+    assert rc == 0, out
+    assert json.loads(out)["changed"] == ["test_main_dirty.py"]
+
+
+def test_task_derives_worktree_for_both_helpers(layout):
+    project, _main, _worktree = layout
+    rc, out = _capture(_at.main, [
+        "--project-root", str(project), "--task", "Feat", "--select-only",
+    ])
+    assert rc == 0, out
+    assert json.loads(out)["changed"] == ["test_base.py", "test_branch.py"]
+    rc, out = _capture(_ci.main, [
+        "--project-root", str(project), "--task", "feat", "--derive-only",
+    ])
+    assert rc == 0, out
+    assert json.loads(out)["changed"] == ["test_base.py", "test_branch.py"]
+
+
+def test_task_without_workspace_keeps_main_checkout(layout, capsys):
+    project, _main, _worktree = layout
+    rc, out = _capture(_at.main, [
+        "--project-root", str(project), "--task", "the-task", "--select-only",
+    ])
+    assert rc == 0, out
+    assert json.loads(out)["changed"] == ["test_main_dirty.py"]
+    assert "using the main checkout" in capsys.readouterr().err
+
+
+def test_task_worktree_picks_repo_named_like_main_checkout(layout):
+    project, main, worktree = layout
+    other = project / ".workspaces" / "feat" / "other"
+    _git("worktree", "add", "-b", "feat-other", str(other), cwd=main)
+    assert _at.task_worktree(project, "feat") == worktree.resolve()
+    assert _at.task_worktree(project, "") is None
+
+
+def test_explicit_repo_root_wins_over_task(layout, capsys):
+    project, main, _worktree = layout
+    rc, out = _capture(_at.main, [
+        "--project-root", str(project), "--repo-root", str(main),
+        "--task", "feat", "--select-only",
+    ])
     assert rc == 0, out
     assert json.loads(out)["changed"] == ["test_main_dirty.py"]
