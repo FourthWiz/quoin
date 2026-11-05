@@ -2450,3 +2450,36 @@ class TestNewDocRows:
         selectors, unmatched, _ignored = _at.map_changed_to_tests([src], repo)
         assert any(s.endswith(expected) for s in selectors), (src, expected)
         assert unmatched == []
+
+
+# ---------------------------------------------------------------------------
+# --selectors-out: hand selectors to known_red.py through a file
+# ---------------------------------------------------------------------------
+
+
+class TestSelectorsOut:
+    def test_select_only_writes_one_selector_per_line(self, fake_repo, capsys):
+        out = fake_repo / "My Drive" / "sel.txt"
+        rc = _cli(["--select-only", "--files", "foo.py", "bar.py",
+                   "--repo-root", str(fake_repo), "--selectors-out", str(out)])
+        printed = json.loads(capsys.readouterr().out)
+        assert rc == 0
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert lines == printed["selectors"] and lines
+
+    def test_early_exit_empties_a_stale_file(self, fake_repo, capsys):
+        out = fake_repo / "sel.txt"
+        out.write_text("/stale/test_old.py\n", encoding="utf-8")
+        rc = _cli(["--select-only", "--files", "README.md",
+                   "--repo-root", str(fake_repo), "--selectors-out", str(out)])
+        capsys.readouterr()
+        assert rc == 0
+        assert out.read_text(encoding="utf-8") == ""
+
+    def test_print_interpreter_leaves_file_alone(self, fake_repo, capsys):
+        out = fake_repo / "sel.txt"
+        out.write_text("keep\n", encoding="utf-8")
+        rc = _cli(["--print-interpreter", "--selectors-out", str(out)])
+        capsys.readouterr()
+        assert rc == 0
+        assert out.read_text(encoding="utf-8") == "keep\n"

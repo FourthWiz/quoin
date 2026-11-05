@@ -3161,6 +3161,13 @@ def _format_text(sel: Selection) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _write_selectors_file(path, selectors) -> None:
+    """Write selectors one per line (parent directories created as needed)."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("".join(f"{s}\n" for s in selectors), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
@@ -3236,6 +3243,19 @@ def main(argv: list[str] | None = None) -> int:
         "--select-only",
         action="store_true",
         help="Print resolved test selectors as JSON and exit WITHOUT running pytest.",
+    )
+    parser.add_argument(
+        "--selectors-out",
+        metavar="PATH",
+        default=None,
+        dest="selectors_out",
+        help=(
+            "Write the resolved selectors to PATH, one per line, so a caller can "
+            "hand them to known_red.py --selectors-from without relying on shell "
+            "word-splitting.  Written in every mode once selection is computed "
+            "(with or without --select-only); emptied first so an early exit "
+            "never leaves a previous run's list behind."
+        ),
     )
     parser.add_argument(
         "--allow-unmatched",
@@ -3316,6 +3336,13 @@ def main(argv: list[str] | None = None) -> int:
         return int(exc.code) if exc.code is not None else 2
 
     fmt = args.format
+
+    if args.selectors_out and not args.print_interpreter:
+        try:
+            _write_selectors_file(args.selectors_out, [])
+        except OSError as exc:
+            print(f"error: cannot write --selectors-out {args.selectors_out}: {exc}", file=sys.stderr)
+            return 2
 
     # --print-interpreter: early return, before repo resolution and every
     # other early-exit path, so nothing can swallow it. It may be given alone,
@@ -3500,6 +3527,13 @@ def main(argv: list[str] | None = None) -> int:
         "pytest_timeout_basis": pytest_basis,
         "pytest_timeout_warning": _pytest_budget_warning(pytest_bound),
     }
+
+    if args.selectors_out:
+        try:
+            _write_selectors_file(args.selectors_out, selectors)
+        except OSError as exc:
+            print(f"error: cannot write --selectors-out {args.selectors_out}: {exc}", file=sys.stderr)
+            return 2
 
     # ------------------------------------------------------------------
     # Step 3: --select-only path — print and exit without running pytest

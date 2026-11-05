@@ -271,6 +271,24 @@ def _cmd_check(args: argparse.Namespace) -> int:
         return 3
 
 
+def _exit_code(value: str) -> int:
+    """argparse type for an exit code; an empty value gets a pointed hint.
+
+    An empty string almost always means the caller read the code from bash's
+    PIPESTATUS under zsh (which only has lowercase, 1-indexed ``pipestatus``),
+    so say how to capture it portably instead of a bare "invalid int value".
+    """
+    if not value.strip():
+        raise argparse.ArgumentTypeError(
+            "empty exit code: capture it with RC=$? on the line right after a "
+            "redirected command (cmd > file; RC=$?), never through PIPESTATUS"
+        )
+    try:
+        return int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid exit code: {value!r}") from None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Gate full-suite freshness sidecar (record + check). "
@@ -281,8 +299,8 @@ def main(argv: list[str] | None = None) -> int:
 
     p_record = sub.add_parser("record", help="Record a full-suite run's verdict")
     p_record.add_argument("--project-root", required=True)
-    p_record.add_argument("--rc", required=True, type=int)
-    p_record.add_argument("--known-red-exit", required=True, type=int, dest="known_red_exit")
+    p_record.add_argument("--rc", required=True, type=_exit_code)
+    p_record.add_argument("--known-red-exit", required=True, type=_exit_code, dest="known_red_exit")
     p_record.add_argument("--task-profile", required=True, choices=["small", "medium", "large"], dest="task_profile")
     p_record.add_argument("--run-token", default=None, dest="run_token")
     p_record.add_argument("--gate-phase", default=None, choices=["post-implement", "post-review"], dest="gate_phase")

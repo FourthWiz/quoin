@@ -334,3 +334,15 @@ def test_derive_verdict_pure_function_matrix():
     assert sidecar.derive_verdict(0, 0, "small") == "PASS"
     assert sidecar.derive_verdict(0, 1, "small") == "FAIL"
     assert sidecar.derive_verdict(0, 1, "medium") == "FAIL"
+
+
+@pytest.mark.parametrize("flag", ["--rc", "--known-red-exit"])
+def test_empty_exit_code_names_the_portable_capture(tmp_path, capsys, flag):
+    # An empty value is what a bash-only PIPESTATUS read yields under zsh.
+    argv = ["record", "--project-root", str(tmp_path), "--rc", "1",
+            "--known-red-exit", "0", "--task-profile", "medium"]
+    argv[argv.index(flag) + 1] = ""
+    rc = sidecar.main(argv)
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "RC=$?" in err and "PIPESTATUS" in err

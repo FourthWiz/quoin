@@ -593,6 +593,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--junit", help="junit-xml file (OPTIONAL count oracle for reconciliation)")
     p.add_argument("--observed-rc", type=int, help="caller's observed pytest return code")
     p.add_argument("--selectors", nargs="*", default=None, help="file-prefix filter over the parsed sets")
+    p.add_argument(
+        "--selectors-from",
+        default=None,
+        metavar="FILE",
+        help=(
+            "read the selector filter from FILE, one selector per line or "
+            "NUL-separated ('-' reads stdin); combines with --selectors. Use this "
+            "instead of expanding a shell variable, which zsh does not word-split "
+            "and bash splits inside paths with spaces"
+        ),
+    )
     p.add_argument("--full-suite", action="store_true", help="enable staleness counting")
     p.add_argument("--run-token", default=None, help="per-session dedup token for staleness")
     p.add_argument("--project-root", default=None, help="project root for manifest/counter defaults")
@@ -602,8 +613,31 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def read_selector_file(path) -> list[str]:
+    """Read a selector list written one per line or NUL-separated.
+
+    Blank entries are dropped and surrounding whitespace (including a CR from a
+    CRLF file) is stripped, but spaces inside a path are kept, so a project path
+    such as ``.../My Drive/...`` survives intact.
+    """
+    if str(path) == "-":
+        raw = sys.stdin.read()
+    else:
+        raw = Path(path).read_text(encoding="utf-8")
+    parts = raw.split("\0") if "\0" in raw else raw.splitlines()
+    return [p.strip() for p in parts if p.strip()]
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.selectors_from is not None:
+        try:
+            from_file = read_selector_file(args.selectors_from)
+        except OSError as exc:
+            print(f"usage error: cannot read --selectors-from {args.selectors_from}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        args.selectors = list(args.selectors or []) + from_file
 
     report_flags = (
         args.junit is not None

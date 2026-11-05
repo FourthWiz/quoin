@@ -1085,3 +1085,75 @@ class TestNodeIdEndToEnd:
         entry = {"id": target, "reason": "r", "added": "d"}
         known, net_new = kr.match_failures(ids, [entry])
         assert net_new == [] and [k["id"] for k in known] == [target], (known, net_new)
+
+
+# ---------------------------------------------------------------------------
+# TestSelectorsFrom — list input from a file, never through shell splitting
+# ---------------------------------------------------------------------------
+
+
+class TestSelectorsFrom:
+    MANIFEST = '[[entry]]\nid = "quoin/dev/tests/test_sleep_scoring.py"\nreason = "r"\nadded = "2026-01-01"\n'
+    REPORT = (
+        "FAILED quoin/dev/tests/test_sleep_scoring.py::test_a - boom\n"
+        "FAILED quoin/dev/tests/test_other.py::test_b - boom\n"
+    )
+
+    def _setup(self, tmp_path):
+        base = tmp_path / "My Drive"
+        base.mkdir()
+        man = base / "known-red.toml"
+        man.write_text(self.MANIFEST, encoding="utf-8")
+        ra = base / "ra.txt"
+        ra.write_text(self.REPORT, encoding="utf-8")
+        return base, man, ra
+
+    def _run(self, man, ra, *extra):
+        return kr.main([
+            "--manifest", str(man), "--pytest-output", str(ra),
+            "--observed-rc", "1", "--format", "json", *extra,
+        ])
+
+    @pytest.mark.parametrize("sep", ["\n", "\r\n", "\0"])
+    def test_selector_file_with_space_in_path_downgrades(self, tmp_path, capsys, sep):
+        base, man, ra = self._setup(tmp_path)
+        sel = base / "selectors"
+        sel.write_text(
+            sep.join([str(base / "quoin/dev/tests/test_sleep_scoring.py"), ""]),
+            encoding="utf-8",
+        )
+        rc = self._run(man, ra, "--selectors-from", str(sel))
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0 and out["downgrade"] is True, out
+        assert out["net_new"] == []
+
+    def test_selector_file_combines_with_inline_selectors(self, tmp_path, capsys):
+        base, man, ra = self._setup(tmp_path)
+        sel = base / "selectors"
+        sel.write_text(str(base / "quoin/dev/tests/test_sleep_scoring.py") + "\n", encoding="utf-8")
+        rc = self._run(
+            man, ra, "--selectors", "quoin/dev/tests/test_other.py",
+            "--selectors-from", str(sel),
+        )
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert out["net_new"] == ["quoin/dev/tests/test_other.py::test_b"]
+
+    def test_empty_selector_file_keeps_fail_closed_semantics(self, tmp_path, capsys):
+        base, man, ra = self._setup(tmp_path)
+        sel = base / "selectors"
+        sel.write_text("", encoding="utf-8")
+        rc = self._run(man, ra, "--selectors-from", str(sel))
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 3 and out["reconciled"] is False
+
+    def test_missing_selector_file_is_usage_error(self, tmp_path, capsys):
+        base, man, ra = self._setup(tmp_path)
+        rc = self._run(man, ra, "--selectors-from", str(base / "absent"))
+        assert rc == 64
+        assert "--selectors-from" in capsys.readouterr().err
+
+    def test_read_selector_file_keeps_inner_spaces(self, tmp_path):
+        p = tmp_path / "s"
+        p.write_text("  /a/My Drive/t.py  \n\n/b/c d/u.py\n", encoding="utf-8")
+        assert kr.read_selector_file(p) == ["/a/My Drive/t.py", "/b/c d/u.py"]
