@@ -1293,18 +1293,25 @@ def _settings_backup_keep() -> int:
     return max(value, 1)
 
 
-def _settings_backup_path(settings_path: pathlib.Path) -> pathlib.Path:
+def _settings_backup_path(settings_path: pathlib.Path, kind: str = "bak") -> pathlib.Path:
+    """Timestamped sibling path for a copy of settings_path.
+
+    kind="bak" names the routine pre-change backups, which pruning rotates.
+    kind="broken" names the copy of an unparseable file that the installer is
+    about to replace with a fresh one; that copy may be the user's only record
+    of their settings, so pruning never matches it.
+    """
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return settings_path.parent / f"{settings_path.name}.bak-{ts}"
+    return settings_path.parent / f"{settings_path.name}.{kind}-{ts}"
 
 
 def _prune_settings_backups(settings_path: pathlib.Path, keep: int) -> int:
     """Delete all but the newest `keep` installer backups of settings_path.
 
     Only files named exactly ``<name>.bak-YYYYMMDDTHHMMSSZ`` (the installer's
-    own pattern) are considered; hand-made backups with other suffixes are
-    never touched. The UTC timestamp sorts lexically, so name order is age
-    order. Returns the number of files removed.
+    own pattern) are considered; hand-made backups with other suffixes, and
+    the ``<name>.broken-<ts>`` copies of unparseable files, are never touched.
+    The UTC timestamp sorts lexically, so name order is age order. Returns the number of files removed.
     """
     pattern = re.compile(re.escape(settings_path.name) + r"\.bak-\d{8}T\d{6}Z")
     try:
@@ -1372,11 +1379,14 @@ def deploy_hooks(
             settings = json.loads(original_text)
         except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
             original_text = None
-            # Back up the broken file with a timestamp so prior backups are preserved
-            backup = _settings_backup_path(settings_path)
+            # Keep the unparseable file under a name pruning never matches:
+            # the fresh settings written below replace it, so this copy may be
+            # the only remaining record of the user's settings.
+            backup = _settings_backup_path(settings_path, kind="broken")
             shutil.copyfile(settings_path, backup)
             print(
-                f"quoin: settings.json parse error ({exc}); backed up to {backup} and starting fresh",
+                f"quoin: settings.json parse error ({exc}); saved the unparseable file "
+                f"to {backup} (never pruned) and starting fresh",
                 file=sys.stderr,
             )
             settings = {}

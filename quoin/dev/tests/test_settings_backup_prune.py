@@ -2,9 +2,11 @@
 many are kept.
 
 The installer backs up a valid settings.json only when the merge changes it,
-backs up an unparseable one before starting fresh, and keeps only the newest
-N backups that match its own ``settings.json.bak-<UTC timestamp>`` naming
-(default 5, overridable with QUOIN_SETTINGS_BACKUP_KEEP).
+saves an unparseable one as ``settings.json.broken-<UTC timestamp>`` before
+starting fresh (never pruned, since it may be the only copy of the user's
+settings), and keeps only the newest N backups that match its own
+``settings.json.bak-<UTC timestamp>`` naming (default 5, overridable with
+QUOIN_SETTINGS_BACKUP_KEEP).
 """
 import json
 from pathlib import Path
@@ -56,12 +58,35 @@ def test_idempotent_reinstall_adds_no_backup(dest):
     assert _backups(dest) == []
 
 
-def test_corrupt_settings_still_backed_up(dest):
+def _broken(dest: Path) -> list[str]:
+    return sorted(p.name for p in dest.glob("settings.json.broken-*"))
+
+
+def test_corrupt_settings_saved_as_broken_copy(dest):
     (dest / "settings.json").write_text("{not json")
     deploy_hooks(QUOIN_SRC, dest)
-    backups = _backups(dest)
-    assert len(backups) == 1
-    assert (dest / backups[0]).read_text() == "{not json"
+    assert _backups(dest) == []
+    broken = _broken(dest)
+    assert len(broken) == 1
+    assert (dest / broken[0]).read_text() == "{not json"
+
+
+def test_broken_copy_survives_many_changing_installs(dest):
+    (dest / "settings.json").write_text("{not json")
+    deploy_hooks(QUOIN_SRC, dest)
+    broken = _broken(dest)
+    assert len(broken) == 1
+    # Each install below changes settings.json, so each writes a .bak- copy
+    # and prunes; seeding older .bak- files forces pruning past the default 5.
+    _seed_old_backups(dest, 5)
+    for i in range(7):
+        settings = json.loads((dest / "settings.json").read_text())
+        settings["marker"] = i
+        (dest / "settings.json").write_text(json.dumps(settings))
+        deploy_hooks(QUOIN_SRC, dest)
+    assert len(_backups(dest)) == 5
+    assert _broken(dest) == broken
+    assert (dest / broken[0]).read_text() == "{not json"
 
 
 def test_prunes_to_default_five_keeping_newest(dest):

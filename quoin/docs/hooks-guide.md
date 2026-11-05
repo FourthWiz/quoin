@@ -32,7 +32,7 @@ Runtime hooks parse stdin JSON via `jq`. If `jq` is absent, hooks fail-OPEN sile
 
 ## R-09 mitigation (settings.json corruption)
 
-`installer.py::deploy_hooks` backs up `~/.claude/settings.json` to `settings.json.bak-<timestamp>` and starts fresh if the existing file fails to parse as JSON, so a corrupted settings file cannot abort the merge silently. It also writes a `settings.json.bak-<timestamp>` copy of a valid file before rewriting it, only when the merge changes the content, and then keeps the newest 5 such backups (set `QUOIN_SETTINGS_BACKUP_KEEP` to keep a different number, minimum 1). Files with other names, such as hand-made `settings.json.bak-smoke`, are never pruned.
+`installer.py::deploy_hooks` copies `~/.claude/settings.json` to `settings.json.broken-<timestamp>` and starts fresh if the existing file fails to parse as JSON, so a corrupted settings file cannot abort the merge silently. That copy may be the only record of your old settings, so the installer never prunes `.broken-` files; delete them yourself once recovered. It also writes a `settings.json.bak-<timestamp>` copy of a valid file before rewriting it, only when the merge changes the content, and then keeps the newest 5 such backups (set `QUOIN_SETTINGS_BACKUP_KEEP` to keep a different number, minimum 1). Files with other names, such as `.broken-` copies or hand-made `settings.json.bak-smoke`, are never pruned.
 
 ## WorktreeCreate hook (`worktreecreate.sh`, IVG-116)
 
