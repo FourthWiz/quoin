@@ -27,7 +27,8 @@ Covers T-03..T-07 plus the round-1/2/3 regression cases:
     outer project root (IVG-254) — direct hit, nested layout, no-.git guard,
     absent-everywhere, deterministic ordering, worktree `.git` file, iterdir OSError.
   - TestHumanBlock: text output lists downgrade + stale + reconciliation line.
-  - TestNodeIdEndToEnd: real emitted node-id for test_sleep_scoring.py == manifest id.
+  - TestNodeIdEndToEnd: real emitted node-id for test_sleep_scoring.py matches the
+    whole-file manifest id form.
 """
 from __future__ import annotations
 
@@ -104,13 +105,20 @@ class TestLoad:
         via_internal = kr.load_manifest(_write(tmp_path, VALID_TOML))
         assert via_internal == via_tomllib
 
-    def test_committed_manifest_seed(self):
+    def test_committed_manifest_entries_are_well_formed(self):
+        # The committed manifest may legitimately be empty, so check its shape
+        # rather than any particular entry. Every id must point at a test file
+        # that still exists: an entry for a deleted file can never go red again
+        # and is never flagged stale either, so it would linger forever.
+        repo_root = Path(__file__).resolve().parents[3]  # <proj>/quoin
         entries = kr.load_manifest(_MANIFEST)
-        ids = {e["id"] for e in entries}
-        assert "quoin/dev/tests/test_sleep_scoring.py" in ids
-        seed = next(e for e in entries if e["id"] == "quoin/dev/tests/test_sleep_scoring.py")
-        assert "::" not in seed["id"]  # whole-file grain
-        assert seed["reason"] and seed["added"]
+        ids = [e["id"] for e in entries]
+        assert len(ids) == len(set(ids)), "duplicate manifest ids"
+        for e in entries:
+            assert e["reason"] and e["added"], e
+            path = e["id"].split("::", 1)[0]
+            assert path.startswith("quoin/"), e["id"]
+            assert (repo_root / path).is_file(), f"manifest id points at a missing file: {e['id']}"
 
     def test_absent_path_returns_empty(self, tmp_path):
         assert kr.load_manifest(tmp_path / "nope.toml") == []
@@ -1063,8 +1071,9 @@ class TestNodeIdEndToEnd:
         # Run the file with -rA from the repo root and parse the ACTUAL emitted
         # node-ids via parse_pytest_report — the same identity surface production
         # uses. This asserts the real emitted node-id FORM (repo-root-relative,
-        # 'quoin/'-prefixed) matches the whole-file manifest id, independent of
-        # whether the file currently passes or fails.
+        # 'quoin/'-prefixed) matches the whole-file id form the manifest
+        # documents, independent of whether the file currently passes or fails
+        # and of whether it is listed in the committed manifest.
         run = subprocess.run(
             [sys.executable, "-m", "pytest", "-rA", "-p", "no:cacheprovider", target],
             capture_output=True, text=True, cwd=str(repo_root), timeout=120,
@@ -1072,6 +1081,7 @@ class TestNodeIdEndToEnd:
         passed, failed = kr.parse_pytest_report(run.stdout)
         ids = passed | failed
         assert ids, f"no node-ids parsed: {run.stdout[-800:]!r}\n{run.stderr[-400:]!r}"
-        manifest = kr.load_manifest(_MANIFEST)
-        seed = next(e for e in manifest if e["id"] == target)
-        assert all(nid.split("::", 1)[0] == seed["id"] for nid in ids), ids
+        assert all(nid.split("::", 1)[0] == target for nid in ids), ids
+        entry = {"id": target, "reason": "r", "added": "d"}
+        known, net_new = kr.match_failures(ids, [entry])
+        assert net_new == [] and [k["id"] for k in known] == [target], (known, net_new)
