@@ -1300,27 +1300,43 @@ def _settings_backup_path(settings_path: pathlib.Path, kind: str = "bak") -> pat
     kind="broken" names the copy of an unparseable file that the installer is
     about to replace with a fresh one; that copy may be the user's only record
     of their settings, so pruning never matches it.
+
+    The timestamp has one-second resolution, so a second copy within the
+    same second gets a ``-1``, ``-2``... suffix instead of overwriting the
+    first one.
     """
     ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return settings_path.parent / f"{settings_path.name}.{kind}-{ts}"
+    base = f"{settings_path.name}.{kind}-{ts}"
+    candidate = settings_path.parent / base
+    n = 0
+    while candidate.exists() or candidate.is_symlink():
+        n += 1
+        candidate = settings_path.parent / f"{base}-{n}"
+    return candidate
 
 
 def _prune_settings_backups(settings_path: pathlib.Path, keep: int) -> int:
     """Delete all but the newest `keep` installer backups of settings_path.
 
-    Only files named exactly ``<name>.bak-YYYYMMDDTHHMMSSZ`` (the installer's
-    own pattern) are considered; hand-made backups with other suffixes, and
-    the ``<name>.broken-<ts>`` copies of unparseable files, are never touched.
-    The UTC timestamp sorts lexically, so name order is age order. Returns the number of files removed.
+    Only files named exactly ``<name>.bak-YYYYMMDDTHHMMSSZ``, optionally with
+    a same-second ``-N`` suffix (the installer's own pattern), are considered;
+    hand-made backups with other suffixes, and the ``<name>.broken-<ts>``
+    copies of unparseable files, are never touched. Age order is the UTC
+    timestamp, then the numeric suffix (no suffix first). Returns the number
+    of files removed.
     """
-    pattern = re.compile(re.escape(settings_path.name) + r"\.bak-\d{8}T\d{6}Z")
+    pattern = re.compile(
+        re.escape(settings_path.name) + r"\.bak-(\d{8}T\d{6}Z)(?:-(\d+))?"
+    )
+    keyed = []
     try:
-        candidates = sorted(
-            p for p in settings_path.parent.iterdir()
-            if pattern.fullmatch(p.name) and p.is_file() and not p.is_symlink()
-        )
+        for p in settings_path.parent.iterdir():
+            m = pattern.fullmatch(p.name)
+            if m and p.is_file() and not p.is_symlink():
+                keyed.append(((m.group(1), int(m.group(2) or 0)), p))
     except OSError:
         return 0
+    candidates = [p for _, p in sorted(keyed)]
     removed = 0
     for old in candidates[:-keep] if keep > 0 else candidates:
         try:

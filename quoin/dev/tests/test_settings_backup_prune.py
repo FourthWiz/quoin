@@ -9,6 +9,7 @@ settings), and keeps only the newest N backups that match its own
 QUOIN_SETTINGS_BACKUP_KEEP).
 """
 import json
+import types
 from pathlib import Path
 
 import pytest
@@ -149,3 +150,45 @@ def test_foreign_backup_names_are_never_pruned(dest, monkeypatch):
         if n.startswith("settings.json.bak-2") and len(n) == len("settings.json.bak-20260501T120000Z")
     ]
     assert len(installer_backups) == 1
+
+
+def test_same_second_backups_do_not_overwrite(dest, monkeypatch):
+    import datetime as real_datetime
+    from quoin import installer
+
+    fixed = real_datetime.datetime(2026, 11, 5, 12, 0, 0, tzinfo=real_datetime.timezone.utc)
+
+    class FrozenDatetime(real_datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fixed
+
+    # Replace only the installer's module reference, not the stdlib class.
+    monkeypatch.setattr(
+        installer,
+        "datetime",
+        types.SimpleNamespace(datetime=FrozenDatetime, timezone=real_datetime.timezone),
+    )
+    originals = []
+    for i in range(3):
+        text = json.dumps({"marker": i})
+        originals.append(text)
+        (dest / "settings.json").write_text(text)
+        deploy_hooks(QUOIN_SRC, dest)
+    base = "settings.json.bak-20261105T120000Z"
+    assert _backups(dest) == [base, base + "-1", base + "-2"]
+    assert [(dest / n).read_text() for n in (base, base + "-1", base + "-2")] == originals
+
+
+def test_prune_orders_suffixed_backups_by_age(dest, monkeypatch):
+    monkeypatch.setenv("QUOIN_SETTINGS_BACKUP_KEEP", "3")
+    ts = "20260501T120000Z"
+    # Lexically "-10" sorts before "-2"; age order must still put -10 last.
+    names = [f"settings.json.bak-{ts}"] + [f"settings.json.bak-{ts}-{i}" for i in (1, 2, 10)]
+    names.append("settings.json.bak-20260502T120000Z")
+    for name in names:
+        (dest / name).write_text("{}\n")
+    deploy_hooks(QUOIN_SRC, dest)
+    assert _backups(dest) == sorted(
+        [f"settings.json.bak-{ts}-2", f"settings.json.bak-{ts}-10", "settings.json.bak-20260502T120000Z"]
+    )

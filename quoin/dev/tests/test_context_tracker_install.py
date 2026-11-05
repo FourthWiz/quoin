@@ -381,7 +381,7 @@ def shared(tmp_path_factory):
 def _normalised(dest: Path) -> dict[str, bytes]:
     out = {}
     for rel, data in _snapshot(dest).items():
-        if re.fullmatch(r"settings\.json\.bak-\d{8}T\d{6}Z", rel):
+        if re.fullmatch(r"settings\.json\.bak-\d{8}T\d{6}Z(?:-\d+)?", rel):
             # The installer backs up settings.json when a reinstall at a new
             # path rewrites its hook paths; the backup is not deployed state.
             continue
