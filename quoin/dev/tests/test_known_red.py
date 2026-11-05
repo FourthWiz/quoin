@@ -27,7 +27,8 @@ Covers T-03..T-07 plus the round-1/2/3 regression cases:
     outer project root (IVG-254) — direct hit, nested layout, no-.git guard,
     absent-everywhere, deterministic ordering, worktree `.git` file, iterdir OSError.
   - TestHumanBlock: text output lists downgrade + stale + reconciliation line.
-  - TestNodeIdEndToEnd: real emitted node-id for test_sleep_scoring.py == manifest id.
+  - TestNodeIdEndToEnd: real emitted node-id for test_sleep_scoring.py matches the
+    whole-file manifest id form.
 """
 from __future__ import annotations
 
@@ -104,13 +105,20 @@ class TestLoad:
         via_internal = kr.load_manifest(_write(tmp_path, VALID_TOML))
         assert via_internal == via_tomllib
 
-    def test_committed_manifest_seed(self):
+    def test_committed_manifest_entries_are_well_formed(self):
+        # The committed manifest may legitimately be empty, so check its shape
+        # rather than any particular entry. Every id must point at a test file
+        # that still exists: an entry for a deleted file can never go red again
+        # and is never flagged stale either, so it would linger forever.
+        repo_root = Path(__file__).resolve().parents[3]  # <proj>/quoin
         entries = kr.load_manifest(_MANIFEST)
-        ids = {e["id"] for e in entries}
-        assert "quoin/dev/tests/test_sleep_scoring.py" in ids
-        seed = next(e for e in entries if e["id"] == "quoin/dev/tests/test_sleep_scoring.py")
-        assert "::" not in seed["id"]  # whole-file grain
-        assert seed["reason"] and seed["added"]
+        ids = [e["id"] for e in entries]
+        assert len(ids) == len(set(ids)), "duplicate manifest ids"
+        for e in entries:
+            assert e["reason"] and e["added"], e
+            path = e["id"].split("::", 1)[0]
+            assert path.startswith("quoin/"), e["id"]
+            assert (repo_root / path).is_file(), f"manifest id points at a missing file: {e['id']}"
 
     def test_absent_path_returns_empty(self, tmp_path):
         assert kr.load_manifest(tmp_path / "nope.toml") == []
@@ -1063,8 +1071,9 @@ class TestNodeIdEndToEnd:
         # Run the file with -rA from the repo root and parse the ACTUAL emitted
         # node-ids via parse_pytest_report — the same identity surface production
         # uses. This asserts the real emitted node-id FORM (repo-root-relative,
-        # 'quoin/'-prefixed) matches the whole-file manifest id, independent of
-        # whether the file currently passes or fails.
+        # 'quoin/'-prefixed) matches the whole-file id form the manifest
+        # documents, independent of whether the file currently passes or fails
+        # and of whether it is listed in the committed manifest.
         run = subprocess.run(
             [sys.executable, "-m", "pytest", "-rA", "-p", "no:cacheprovider", target],
             capture_output=True, text=True, cwd=str(repo_root), timeout=120,
@@ -1072,6 +1081,183 @@ class TestNodeIdEndToEnd:
         passed, failed = kr.parse_pytest_report(run.stdout)
         ids = passed | failed
         assert ids, f"no node-ids parsed: {run.stdout[-800:]!r}\n{run.stderr[-400:]!r}"
-        manifest = kr.load_manifest(_MANIFEST)
-        seed = next(e for e in manifest if e["id"] == target)
-        assert all(nid.split("::", 1)[0] == seed["id"] for nid in ids), ids
+        assert all(nid.split("::", 1)[0] == target for nid in ids), ids
+        entry = {"id": target, "reason": "r", "added": "d"}
+        known, net_new = kr.match_failures(ids, [entry])
+        assert net_new == [] and [k["id"] for k in known] == [target], (known, net_new)
+
+
+# ---------------------------------------------------------------------------
+# TestSelectorsFrom — list input from a file, never through shell splitting
+# ---------------------------------------------------------------------------
+
+
+class TestSelectorsFrom:
+    MANIFEST = '[[entry]]\nid = "quoin/dev/tests/test_sleep_scoring.py"\nreason = "r"\nadded = "2026-01-01"\n'
+    REPORT = (
+        "FAILED quoin/dev/tests/test_sleep_scoring.py::test_a - boom\n"
+        "FAILED quoin/dev/tests/test_other.py::test_b - boom\n"
+    )
+
+    def _setup(self, tmp_path):
+        base = tmp_path / "My Drive"
+        base.mkdir()
+        man = base / "known-red.toml"
+        man.write_text(self.MANIFEST, encoding="utf-8")
+        ra = base / "ra.txt"
+        ra.write_text(self.REPORT, encoding="utf-8")
+        return base, man, ra
+
+    def _run(self, man, ra, *extra):
+        return kr.main([
+            "--manifest", str(man), "--pytest-output", str(ra),
+            "--observed-rc", "1", "--format", "json", *extra,
+        ])
+
+    @pytest.mark.parametrize("sep", ["\n", "\r\n", "\0"])
+    def test_selector_file_with_space_in_path_downgrades(self, tmp_path, capsys, sep):
+        base, man, ra = self._setup(tmp_path)
+        sel = base / "selectors"
+        sel.write_text(
+            sep.join([str(base / "quoin/dev/tests/test_sleep_scoring.py"), ""]),
+            encoding="utf-8",
+        )
+        rc = self._run(man, ra, "--selectors-from", str(sel))
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 0 and out["downgrade"] is True, out
+        assert out["net_new"] == []
+
+    def test_selector_file_combines_with_inline_selectors(self, tmp_path, capsys):
+        base, man, ra = self._setup(tmp_path)
+        sel = base / "selectors"
+        sel.write_text(str(base / "quoin/dev/tests/test_sleep_scoring.py") + "\n", encoding="utf-8")
+        rc = self._run(
+            man, ra, "--selectors", "quoin/dev/tests/test_other.py",
+            "--selectors-from", str(sel),
+        )
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert out["net_new"] == ["quoin/dev/tests/test_other.py::test_b"]
+
+    def test_empty_selector_file_keeps_fail_closed_semantics(self, tmp_path, capsys):
+        base, man, ra = self._setup(tmp_path)
+        sel = base / "selectors"
+        sel.write_text("", encoding="utf-8")
+        rc = self._run(man, ra, "--selectors-from", str(sel))
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 3 and out["reconciled"] is False
+
+    def test_missing_selector_file_is_usage_error(self, tmp_path, capsys):
+        base, man, ra = self._setup(tmp_path)
+        rc = self._run(man, ra, "--selectors-from", str(base / "absent"))
+        assert rc == 64
+        assert "--selectors-from" in capsys.readouterr().err
+
+    def test_read_selector_file_keeps_inner_spaces(self, tmp_path):
+        p = tmp_path / "s"
+        p.write_text("  /a/My Drive/t.py  \n\n/b/c d/u.py\n", encoding="utf-8")
+        assert kr.read_selector_file(p) == ["/a/My Drive/t.py", "/b/c d/u.py"]
+
+
+# ---------------------------------------------------------------------------
+# TestAffectedWrapperOutput — the gate's affected-area capture
+# ---------------------------------------------------------------------------
+
+# Captured stdout of `affected_tests.py --format text --pytest-arg=-rA`: pytest's
+# own report (with a passing test whose captured stdout echoes a nested fixture
+# run, FAILED line and summary header included) followed by the helper's text
+# summary.
+_WRAPPER_OUTPUT = """\
+============================= test session starts ==============================
+platform darwin -- Python 3.14.6, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/me/My Drive/proj/quoin
+collected 3 items
+
+quoin/dev/tests/test_a.py .F.                                            [100%]
+
+=================================== FAILURES ===================================
+__________________________________ test_known __________________________________
+
+    def test_known():
+>       assert False, "known baseline"
+E       AssertionError: known baseline
+
+quoin/dev/tests/test_a.py:5: AssertionError
+==================================== PASSES ====================================
+_________________________________ test_nested __________________________________
+----------------------------- Captured stdout call -----------------------------
+============================= test session starts ==============================
+collected 1 item
+
+test_src.py F                                                            [100%]
+
+=================================== FAILURES ===================================
+________________________________ test_src_fails ________________________________
+E       AssertionError: deliberate failure
+=========================== short test summary info ============================
+FAILED test_src.py::test_src_fails - AssertionError: deliberate failure
+============================== 1 failed in 0.02s ===============================
+
+- generated xml file: /tmp/quoin-affected-junit-x00qio2c/affected.xml -
+=========================== short test summary info ============================
+PASSED quoin/dev/tests/test_a.py::test_ok
+PASSED quoin/dev/tests/test_a.py::test_nested
+FAILED quoin/dev/tests/test_a.py::test_known - AssertionError: known baseline
+========================= 1 failed, 2 passed in 0.30s ==========================
+exit_reason: affected-red
+ran_pytest: True
+pytest_returncode: 1
+changed (1): quoin/dev/tests/test_a.py
+selectors (1): /Users/me/My Drive/proj/quoin/quoin/dev/tests/test_a.py
+interpreter: /Users/me/My Drive/proj/quoin/.venv/bin/python
+interpreter_reason: repo-venv
+pytest_timeout: 600 s (derived, 1 selected files)
+"""
+
+
+class TestAffectedWrapperOutput:
+    MANIFEST = '[[entry]]\nid = "quoin/dev/tests/test_a.py::test_known"\nreason = "r"\nadded = "2026-01-01"\n'
+
+    def _files(self, tmp_path):
+        man = tmp_path / "known-red.toml"
+        man.write_text(self.MANIFEST, encoding="utf-8")
+        out = tmp_path / "affected.txt"
+        out.write_text(_WRAPPER_OUTPUT, encoding="utf-8")
+        sel = tmp_path / "selectors"
+        sel.write_text("/Users/me/My Drive/proj/quoin/quoin/dev/tests/test_a.py\n", encoding="utf-8")
+        junit = tmp_path / "affected.xml"
+        junit.write_text(
+            '<testsuites><testsuite failures="1" errors="0" tests="3"/></testsuites>',
+            encoding="utf-8",
+        )
+        return man, out, sel, junit
+
+    def test_nested_fixture_lines_are_ignored(self):
+        passed, failed = kr.parse_pytest_report(_WRAPPER_OUTPUT)
+        assert failed == {"quoin/dev/tests/test_a.py::test_known"}
+        assert "test_src.py::test_src_fails" not in passed | failed
+
+    @pytest.mark.parametrize("with_junit", [False, True])
+    def test_manifest_only_red_downgrades(self, tmp_path, capsys, with_junit):
+        man, out, sel, junit = self._files(tmp_path)
+        argv = [
+            "--manifest", str(man), "--pytest-output", str(out),
+            "--selectors-from", str(sel), "--observed-rc", "1", "--format", "json",
+        ]
+        if with_junit:
+            argv += ["--junit", str(junit)]
+        rc = kr.main(argv)
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0, payload
+        assert payload["downgrade"] is True and payload["reconciled"] is True
+        assert [e["id"] for e in payload["known_red"]] == ["quoin/dev/tests/test_a.py::test_known"]
+
+    def test_missing_junit_falls_back_to_the_report(self, tmp_path, capsys):
+        man, out, sel, junit = self._files(tmp_path)
+        junit.unlink()
+        rc = kr.main([
+            "--manifest", str(man), "--pytest-output", str(out), "--junit", str(junit),
+            "--selectors-from", str(sel), "--observed-rc", "1", "--format", "json",
+        ])
+        payload = json.loads(capsys.readouterr().out)
+        assert rc == 0 and payload["downgrade"] is True

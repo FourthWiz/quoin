@@ -39,7 +39,9 @@ def _env(world, tmp_path, **extra):
     for path in xdg.values():
         Path(path).mkdir(parents=True, exist_ok=True)
     home.mkdir(exist_ok=True)
-    return {**os.environ, **world.env, **xdg, "HOME": str(home), "OPENCODE_DISABLE_AUTOUPDATE": "1",
+    # The world's own config and state dirs win over the scratch ones: they
+    # hold the work profile and its qualification records.
+    return {**os.environ, **xdg, **world.env, "HOME": str(home), "OPENCODE_DISABLE_AUTOUPDATE": "1",
             "QUOIN_CORP_GW_API_KEY": "loopback-only-value", **extra}
 
 
@@ -48,6 +50,11 @@ def _world(tmp_path, monkeypatch, guard):
                                          else "http://127.0.0.1:%d/v1" % guard.work.port,
                                          git=driver.NON_GIT_DISCOVERY_VERIFIED is not True)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: world.home))
+    # Anything that resolves the profile from the process environment must
+    # see the isolated dirs too, not the caller's.
+    for key, value in world.env.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("HOME", str(world.home))
     iso.launch_ready(world)
     return world, root
 

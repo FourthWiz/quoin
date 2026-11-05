@@ -86,6 +86,11 @@ Git-root resolution note (CRIT-1 / IVG-70 remedy):
   depth-1 discover_repos-style scan (mirroring branch_hygiene.py), then runs
   all git commands INSIDE that repo.  The caller (gate/review) NEVER runs git
   directly — the helper owns the resolution + diff-basis fallback.
+  The scan only ever sees the main checkout.  When the task's code lives in a
+  linked git worktree (e.g. <project>/.workspaces/<branch>/quoin), pass
+  --repo-root <worktree> as well: that worktree is then the repo whose branch
+  diff (plus its own uncommitted changes) forms the changed set, and the main
+  checkout's dirty tree is ignored.
 
 Diff-basis fallback chain (F-01 fix — no-upstream committed-branch gap):
   1. If upstream exists: git -C <repo> diff --name-only @{u}...HEAD (three-dot).
@@ -2661,6 +2666,21 @@ def resolve_repo(project_root: Path) -> Path | None:
     return repos[0]
 
 
+def explicit_repo(repo_root: Path) -> Path | None:
+    """Return repo_root resolved when it is the top of a git work tree, else None.
+
+    A linked worktree (``git worktree add``) carries a ``.git`` FILE rather than
+    a directory, so existence is the test. A subdirectory of a repo is refused
+    rather than walked up: the caller asked for this exact root, and test
+    discovery and the pytest cwd are anchored at it too.
+    """
+    try:
+        root = repo_root.expanduser().resolve()
+    except OSError:
+        return None
+    return root if (root / ".git").exists() else None
+
+
 # Infra folders under .workflow_artifacts/ that do NOT count as an active task
 # context — they exist regardless of whether any task is in flight (IVG-151).
 _TASK_CONTEXT_INFRA: frozenset[str] = frozenset({"memory", "cache", "finalized", "trash"})
@@ -2751,6 +2771,8 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
       2. Base-branch merge-base: <base>...HEAD where <base> is resolved via
          _resolve_base_branch() — this handles the committed-clean no-upstream
          case (the canonical /review + /gate state before /end_of_task push).
+         Steps 1 and 2 also add the tree's uncommitted tracked changes
+         (HEAD ∪ cached), so a dirty task worktree is covered too.
       3. Worktree + staged fallback (handles uncommitted dirty trees)
       4. no-changes (genuinely clean)
       Fail-CLOSED: if no base resolves AND no upstream AND tree is clean but
@@ -2770,6 +2792,25 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
     """
     repo_str = str(repo.resolve())
 
+    def _uncommitted() -> set[str] | None:
+        """Tracked files changed in the work tree or index vs HEAD; None on git error."""
+        out: set[str] = set()
+        for extra in (["HEAD"], ["--cached"]):
+            diff_out, _err, diff_rc = _run(
+                ["git", "-C", repo_str, "diff", "--name-only", *extra]
+            )
+            if diff_rc != 0:
+                return None
+            out.update(line.strip() for line in diff_out.splitlines() if line.strip())
+        return out
+
+    def _with_uncommitted(files: list[str], reason: str) -> tuple[list[str], str]:
+        # A branch diff alone misses edits not yet committed in this tree.
+        dirty = _uncommitted()
+        if dirty is None:
+            return [], "git-error"
+        return sorted(set(files) | dirty), reason
+
     # Step 1: try upstream three-dot diff
     ups_out, ups_err, ups_rc = _run(
         ["git", "-C", repo_str, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
@@ -2782,7 +2823,7 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
             return [], "git-error"
         files = [f for f in diff_out.splitlines() if f.strip()]
         if files:
-            return files, "upstream-diff"
+            return _with_uncommitted(files, "upstream-diff")
         # Empty upstream diff — fall through to base-branch step
 
     # Step 2 (F-01 fix): base-branch merge-base diff — handles the committed-clean
@@ -2803,28 +2844,13 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
                 return [], "git-error"
             files = [f for f in diff_out.splitlines() if f.strip()]
             if files:
-                return files, "base-branch-diff"
+                return _with_uncommitted(files, "base-branch-diff")
             # Empty base-branch diff — fall through to worktree fallback
 
     # Step 3: worktree + staged fallback
-    head_out, head_err, head_rc = _run(
-        ["git", "-C", repo_str, "diff", "--name-only", "HEAD"]
-    )
-    if head_rc != 0:
+    combined = _uncommitted()
+    if combined is None:
         return [], "git-error"
-    cached_out, cached_err, cached_rc = _run(
-        ["git", "-C", repo_str, "diff", "--name-only", "--cached"]
-    )
-    if cached_rc != 0:
-        return [], "git-error"
-
-    combined: set[str] = set()
-    for line in head_out.splitlines():
-        if line.strip():
-            combined.add(line.strip())
-    for line in cached_out.splitlines():
-        if line.strip():
-            combined.add(line.strip())
 
     if not combined:
         # Step 4: genuinely clean tree
@@ -3161,6 +3187,23 @@ def _format_text(sel: Selection) -> str:
 # CLI
 # ---------------------------------------------------------------------------
 
+def _echo_file(path) -> None:
+    """Copy a captured report to stdout (best effort; never raises)."""
+    try:
+        text = Path(path).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    sys.stdout.write(text)
+    sys.stdout.flush()
+
+
+def _write_selectors_file(path, selectors) -> None:
+    """Write selectors one per line (parent directories created as needed)."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("".join(f"{s}\n" for s in selectors), encoding="utf-8")
+
+
 def main(argv: list[str] | None = None) -> int:
     """CLI entry point.
 
@@ -3228,14 +3271,52 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Root for test-file discovery and the pytest invocation.  "
-            "In --project-root mode this is set automatically to the resolved git repo.  "
-            "Optional override for --files-from / --files modes."
+            "With --project-root it also names the git checkout whose changes are "
+            "diffed (e.g. a task's git worktree) instead of the repo found under "
+            "the project root; it must be the top of a work tree.  Defaults to "
+            "the resolved repo in --project-root mode and to cwd otherwise."
         ),
     )
     parser.add_argument(
         "--select-only",
         action="store_true",
         help="Print resolved test selectors as JSON and exit WITHOUT running pytest.",
+    )
+    parser.add_argument(
+        "--selectors-out",
+        metavar="PATH",
+        default=None,
+        dest="selectors_out",
+        help=(
+            "Write the resolved selectors to PATH, one per line, so a caller can "
+            "hand them to known_red.py --selectors-from without relying on shell "
+            "word-splitting.  Written in every mode once selection is computed "
+            "(with or without --select-only); emptied first so an early exit "
+            "never leaves a previous run's list behind."
+        ),
+    )
+    parser.add_argument(
+        "--report-out",
+        metavar="PATH",
+        default=None,
+        dest="report_out",
+        help=(
+            "Write pytest's own output (with -rA added unless a -r option is "
+            "given) to PATH, then echo it to stdout.  This is the raw report "
+            "known_red.py --pytest-output expects, free of this helper's text "
+            "summary.  Emptied first so an early exit leaves no stale report."
+        ),
+    )
+    parser.add_argument(
+        "--junit-out",
+        metavar="PATH",
+        default=None,
+        dest="junit_out",
+        help=(
+            "Write the pytest junit-xml report to PATH (for known_red.py --junit) "
+            "instead of a temporary file.  Removed first so an early exit leaves "
+            "no stale report.  Not combinable with --pytest-arg=--junitxml."
+        ),
     )
     parser.add_argument(
         "--allow-unmatched",
@@ -3317,6 +3398,28 @@ def main(argv: list[str] | None = None) -> int:
 
     fmt = args.format
 
+    if args.junit_out and any(
+        str(a).startswith(("--junitxml", "--junit-xml")) for a in args.pytest_args
+    ):
+        print("error: --junit-out cannot be combined with --pytest-arg=--junitxml", file=sys.stderr)
+        return 2
+
+    if not args.print_interpreter:
+        # Clear every output file up front: a caller reading them after an
+        # early exit must never see a previous run's selectors or report.
+        try:
+            if args.selectors_out:
+                _write_selectors_file(args.selectors_out, [])
+            if args.report_out:
+                _write_selectors_file(args.report_out, [])
+            if args.junit_out:
+                junit_target = Path(args.junit_out)
+                junit_target.parent.mkdir(parents=True, exist_ok=True)
+                junit_target.unlink(missing_ok=True)
+        except OSError as exc:
+            print(f"error: cannot prepare an output file: {exc}", file=sys.stderr)
+            return 2
+
     # --print-interpreter: early return, before repo resolution and every
     # other early-exit path, so nothing can swallow it. It may be given alone,
     # so args.project_root can legally be None here, hence the Path.cwd() guard.
@@ -3386,9 +3489,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(json.dumps(sel.to_dict(), indent=2))
             return 5
-        # --project-root mode: resolve git repo, compute diff
+        # --project-root mode: resolve git repo, compute diff. An explicit
+        # --repo-root names the checkout to diff (a task's git worktree, say),
+        # so the depth-1 scan, which only ever finds the main checkout, is
+        # skipped and the changed set comes from that worktree's branch.
         try:
-            repo = resolve_repo(args.project_root)
+            repo = (
+                explicit_repo(args.repo_root)
+                if args.repo_root is not None
+                else resolve_repo(args.project_root)
+            )
         except RuntimeError as exc:
             print(json.dumps({
                 "error": str(exc),
@@ -3402,8 +3512,12 @@ def main(argv: list[str] | None = None) -> int:
             }), file=sys.stderr)
             return 3
         if repo is None:
+            where = (
+                f"at --repo-root {args.repo_root}" if args.repo_root is not None
+                else f"under --project-root {args.project_root}"
+            )
             print(json.dumps({
-                "error": f"No git repo found under --project-root {args.project_root}",
+                "error": f"No git repo found {where}",
                 "exit_reason": "undeterminable-no-repo",
                 "ran_pytest": False,
                 "pytest_returncode": None,
@@ -3414,9 +3528,7 @@ def main(argv: list[str] | None = None) -> int:
             }), file=sys.stderr)
             return 3
 
-        # Set repo_root if not explicitly overridden
-        if repo_root is None:
-            repo_root = repo
+        repo_root = repo
 
         files, reason = changed_files(repo)
         if reason == "git-error":
@@ -3500,6 +3612,13 @@ def main(argv: list[str] | None = None) -> int:
         "pytest_timeout_basis": pytest_basis,
         "pytest_timeout_warning": _pytest_budget_warning(pytest_bound),
     }
+
+    if args.selectors_out:
+        try:
+            _write_selectors_file(args.selectors_out, selectors)
+        except OSError as exc:
+            print(f"error: cannot write --selectors-out {args.selectors_out}: {exc}", file=sys.stderr)
+            return 2
 
     # ------------------------------------------------------------------
     # Step 3: --select-only path — print and exit without running pytest
@@ -3707,22 +3826,48 @@ def main(argv: list[str] | None = None) -> int:
 
     import tempfile
 
-    junit_dir = None
+    junit_path: Path | None = None
     junit_args: list[str] = []
-    if not any(str(a).startswith("--junitxml") or str(a).startswith("--junit-xml")
-               for a in args.pytest_args):
+    if args.junit_out:
+        junit_path = Path(args.junit_out).resolve()
+        junit_args = [f"--junitxml={junit_path}"]
+    elif not any(str(a).startswith("--junitxml") or str(a).startswith("--junit-xml")
+                 for a in args.pytest_args):
         import atexit
         import shutil
 
         junit_dir = Path(tempfile.mkdtemp(prefix="quoin-affected-junit-"))
         atexit.register(shutil.rmtree, str(junit_dir), True)
-        junit_args = [f"--junitxml={junit_dir / 'affected.xml'}"]
+        junit_path = junit_dir / "affected.xml"
+        junit_args = [f"--junitxml={junit_path}"]
+    report_args: list[str] = []
+    if args.report_out and not any(
+        str(a).startswith("-r") and not str(a).startswith("--") for a in args.pytest_args
+    ):
+        report_args = ["-rA"]
     try:
-        proc = subprocess.run(
-            [interp, "-m", "pytest", *selectors, *args.pytest_args, *junit_args],
-            cwd=str(repo_root),
-            timeout=pytest_bound,
-        )
+        if args.report_out:
+            # pytest writes straight into the report file; it is echoed below
+            # so the caller still sees the run, in the same order as before.
+            with open(args.report_out, "w", encoding="utf-8") as report_fh:
+                try:
+                    proc = subprocess.run(
+                        [interp, "-m", "pytest", *selectors, *args.pytest_args,
+                         *report_args, *junit_args],
+                        cwd=str(repo_root),
+                        timeout=pytest_bound,
+                        stdout=report_fh,
+                        stderr=subprocess.STDOUT,
+                    )
+                finally:
+                    report_fh.flush()
+                    _echo_file(args.report_out)
+        else:
+            proc = subprocess.run(
+                [interp, "-m", "pytest", *selectors, *args.pytest_args, *junit_args],
+                cwd=str(repo_root),
+                timeout=pytest_bound,
+            )
         rc = proc.returncode
     except FileNotFoundError:
         # pytest binary missing → exit 3 (undeterminable, non-blocking warn)
@@ -3797,8 +3942,8 @@ def main(argv: list[str] | None = None) -> int:
     # breaks collection still collects at the baseline and stays RED.
     if (
         code == 1
-        and junit_dir is not None
-        and _junit_only_collection_errors(junit_dir / "affected.xml")
+        and junit_path is not None
+        and _junit_only_collection_errors(junit_path)
         and _baseline_collects_nothing(repo_root, interp, selectors, pytest_bound)
     ):
         exit_reason = "test-environment-unusable"

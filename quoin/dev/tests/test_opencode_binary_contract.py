@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -31,6 +32,18 @@ SOURCE_DIR = REPO_ROOT / "quoin"
 
 _OPENCODE_BIN = shutil.which("opencode")
 
+# `opencode --version` boots the whole runtime and has been seen to take over
+# 15 seconds on a cold start, so a short bound skips the tier at random.
+# QUOIN_OPENCODE_VERSION_TIMEOUT overrides it (seconds).
+_DEFAULT_VERSION_TIMEOUT_S = 30.0
+
+
+def _version_timeout() -> float:
+    try:
+        return float(os.environ.get("QUOIN_OPENCODE_VERSION_TIMEOUT", _DEFAULT_VERSION_TIMEOUT_S))
+    except ValueError:
+        return _DEFAULT_VERSION_TIMEOUT_S
+
 
 def _binary_version() -> Optional[str]:
     if _OPENCODE_BIN is None:
@@ -40,7 +53,7 @@ def _binary_version() -> Optional[str]:
             [_OPENCODE_BIN, "--version"],
             capture_output=True,
             text=True,
-            timeout=5,
+            timeout=_version_timeout(),
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
@@ -135,29 +148,45 @@ def _run_opencode(args, cwd, env, timeout=60):
 def test_binary_sees_the_generated_skills_and_agents(installed_project):
     """`opencode debug skill` lists every generated quoin-* skill.
 
-    Prints one JSON object per discovered skill (cli/cmd/debug/skill.ts).
+    The qualified release prints one indented JSON array of skill objects;
+    one object per line is also accepted (cli/cmd/debug/skill.ts).
     """
     project_root, env = installed_project
-    result = _run_opencode(["debug", "skill"], project_root, env)
+    # The binary exits before a pipe drains, cutting its output at 64 KiB,
+    # so stdout goes to a file.
+    out_path = project_root.parent / "debug-skill.out"
+    with open(out_path, "wb") as out:
+        result = subprocess.run(
+            [_OPENCODE_BIN, "debug", "skill"], cwd=str(project_root), env=env,
+            stdout=out, stderr=subprocess.PIPE, text=True, timeout=60,
+        )
     assert result.returncode == 0, result.stderr
+    stdout = out_path.read_text(encoding="utf-8")
 
+    try:
+        decoded = json.loads(stdout)
+        records = decoded if isinstance(decoded, list) else [decoded]
+    except json.JSONDecodeError:
+        records = [json.loads(line) for line in stdout.splitlines() if line.strip()]
     skill_names = set()
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        record = json.loads(line)
+    for record in records:
         name = record.get("name")
         if isinstance(name, str) and name.startswith(names.PREFIX):
             skill_names.add(name)
 
-    expected = {
+    loaded = manifest.load_manifest(SOURCE_DIR)
+    catalog = {
         entry["opencode"]["skill"]
-        for entry in manifest.load_manifest(SOURCE_DIR)["catalog_entries"]
+        for entry in loaded["catalog_entries"]
         if entry["status"] == "supported"
     }
-    assert expected == skill_names, (skill_names, expected)
-    assert len(skill_names) == 12
+    integrations = {
+        entry["skill"]
+        for entry in loaded.get("integration_skills") or []
+        if entry["status"] == "supported"
+    }
+    assert catalog | integrations == skill_names, (skill_names, catalog | integrations)
+    assert len(catalog) == 12
 
 
 def test_binary_sees_the_generated_agents(installed_project):
@@ -265,6 +294,9 @@ def _driver_world(tmp_path, base_url, git):
     if git:
         (root / ".git").mkdir()
     world = merge_helpers.World(tmp_path, profile=profile, agents=False, root=root)
+    # These runs launch against the wall clock, so the fixed fixture date
+    # would age the qualification records past their validity window.
+    world.write_records(now=datetime.now(timezone.utc))
     code = install.run_install(str(root), SOURCE_DIR, None, False, io.StringIO(), io.StringIO())
     assert code == 0
     return world, root

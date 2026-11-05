@@ -11,6 +11,7 @@ Invariants implemented:
   V-03  Markdown tables have a separator row
   V-04  XML tags balance (outside fenced code blocks and inline-code spans)
   V-05  ID references (D-NN, T-NN, R-NN, F-NN, Q-NN, S-NN) resolve to definitions
+        in the artifact or its sibling artifacts (ambiguous cases warn, exit unaffected)
   V-06  ## For human section present, first, ≤12 non-blank lines (Class B only)
   V-07  Required sections (per format-kit.sections.json) are present
 
@@ -50,19 +51,83 @@ HTML_VOID = frozenset([
     'link', 'meta', 'param', 'source', 'track', 'wbr',
 ])
 
-# V-05: definition regex (widened per round-4 empirical patch)
-# Matches: table-row | heading | bullet | numbered-list | blockquote definitions
-# char class: whitespace, |, >, *, +, #, ., -, digits (for numbered-list 1., 10.)
-# trailing: whitespace, :, or | (accepts space-after-ID for table cells like "| R-01 | x |")
-# Known limitation (MIN-4-R3): trailing \s also accepts discussion-bullet false-positive defs
-# e.g. "   - **R-12 on line 455**:" produces a false-positive def for R-12
-# This was accepted as a known limitation because tightening to [:|] breaks table-row matching.
-# Round-2 update: leading char class extended with status glyphs (✓ ✗ ⏳ 🚫) per parent Stage 3
-# smoke issue 2 — writers using format-kit canonical "1. ⏳ T-NN: ..." form were tripping V-05.
-V05_DEF_RE = re.compile(r'^[\s|>*+#.\-\d✓✗⏳🚫]*([DTRFQS]-\d+)[\s:|]')
+# V-05: definition regex.
+# A line defines an ID when the ID is its first real token and what follows it reads
+# like a definition rather than a sentence. Allowed decoration before the ID:
+# whitespace, table pipes, blockquote '>', list markers (-, *, +, 1., 1)), heading '#',
+# bold/italic/strikethrough markers (* _ ~), a task checkbox ([ ] / [x]) and the four
+# canonical status glyphs (with or without the emoji variation selector U+FE0F).
+# What may follow the ID (after optional closing * _ ~ markers):
+#   - on a heading or a status-glyph line: end of line or whitespace, so "### R-01",
+#     "### **Q-01** Which region?" and "⏳ D-01 adopt the cache" all define;
+#   - right after a plain ID: end of line, whitespace, ':' or '|' ("- T-01",
+#     "- D-07 The critic loop ...", "| T-02 |");
+#   - after closing markers: end of line, ':', '|' or a dash separator (" — ", " - ",
+#     " – "), so "- **D-01**: x" defines but "- **T-05** fixed" does not; a
+#     struck-through ID may be followed by anything ("- ~~T-13~~ dropped");
+#   - ". text" only right after a list marker ("- T-16. Write the migration").
+# A label word counts only with a colon after the ID ("Decision D-03:",
+# "- **Risk R-04:**"); a YAML key ("- id: T-15") needs nothing after the ID. So
+# "Task T-09 is still missing", "Risk R-07 mitigated by D-03", "- T-05, T-06 and
+# T-07 were dropped" and "T-05." are not definitions, and the IDs on those lines
+# are checked as references.
+# Known limitation: a plain ID followed by a space and prose ("- R-12 on line 455",
+# "T-09 is still missing") still reads as a definition. Many artifacts define IDs
+# exactly that way ("- D-07 The critic loop records ..."), so it stays accepted. The ID must not continue into a
+# longer token ("T-05-alpha"), and a line holding nothing but a bare ID is a
+# reference. Backticks are deliberately not allowed in the prefix: a backticked ID is
+# a cross-artifact reference, never a local definition.
+_V05_ID = r'[DTRFQS]-\d+(?![A-Za-z0-9\-`])'
+_V05_PREFIX = r'[\s|>*+#.\-\d✓✗⏳🚫\ufe0f_~)]*(?:\[[ xX]\][\s*_~]*)?'
+_V05_LOOSE_TAIL = r'[*_~]*(?:\s|$)'
+_V05_PLAIN_TAIL = r'(?:\s|$|[:|]|[*_~]+(?:\s*$|\s*[:|]|\s+[—–-]\s|\s*[—–]))'
+V05_DEF_RE = re.compile(
+    r'^(?!\s*[DTRFQS]-\d+\s*$)'
+    r'(?:'
+    # Heading or status-glyph line: whitespace after the ID is enough.
+    r'(?=\s*#|[\s|>*+.\-\d_~)]*[✓✗⏳🚫])' + _V05_PREFIX + r'(?=[*_~]*' + _V05_ID + _V05_LOOSE_TAIL + r')'
+    r'|' + _V05_PREFIX + r'(?:'
+    # Label word: only with a colon after the ID.
+    r'(?i:decision|task|risk|finding|question|stage)\s+[*_~]*(?=' + _V05_ID + r'[*_~]*\s*:)'
+    # YAML-style id key.
+    r'|(?i:id)\s*:\s*[*_~]*(?=' + _V05_ID + r'[*_~]*\s*$)'
+    # Struck-through ID followed by anything.
+    r'|(?<=~~)(?=' + _V05_ID + r'~~(?:\s|$))'
+    # "- T-16. Write the migration": period separator right after a list marker.
+    r'|(?:(?<=[-*+]\s)|(?<=\d[.)]\s))(?=' + _V05_ID + r'\.\s+\S)'
+    # Plain ID: whitespace, ':' or '|' right after it; after closing markers, only
+    # end of line, ':', '|' or a dash separator.
+    r'|(?=[*_~]*' + _V05_ID + _V05_PLAIN_TAIL + r')'
+    r')'
+    r')'
+    r'[*_~]*(' + _V05_ID + r')'
+)
 
 # V-05: body reference regex — any ID-shaped string in body text
 V05_REF_RE = re.compile(r'\b([DTRFQS]-\d+)\b')
+
+# V-05: an ID introduced mid-sentence with a label and a colon/dash
+# ("... we took decision D-07: keep the cache"). Ambiguous as a definition, so
+# references to IDs that are only introduced this way are reported as warnings.
+V05_SOFT_DEF_RE = re.compile(
+    r'(?i:\b(?:decision|task|risk|finding|question|stage))\s+[*_]*([DTRFQS]-\d+)[*_]*\s*[:—–]'
+)
+
+# V-05: text that, when it immediately precedes an ID, marks the ID as an explicit
+# reference into another artifact: "plan.md#T-03", "current-plan.md T-04",
+# "see architecture D-02", "the parent plan's T-06", "stage-1 T-02".
+V05_QUALIFIER_RE = re.compile(
+    r'(?:[\w./-]+\.md(?:#|\s*§?\s*)'
+    r'|(?i:\b(?:architecture|arch|current-plan|plan|spec|brief|critic-response|critic'
+    r'|review|gate|parent|sibling|upstream|previous|prior|stage[- ]?\d+))'
+    r'(?:[\'’]s)?\s+'
+    r'(?:(?i:plan|task|decision|risk|finding|question|stage|spec|doc)\s+)?)$'
+)
+
+# V-05: sibling-artifact scanning limits (keeps the check cheap and bounded)
+V05_SIBLING_MAX_FILES = 500
+V05_SIBLING_MAX_BYTES = 2 * 1024 * 1024
+V05_STAGE_DIR_RE = re.compile(r'^stage-\d+$')
 
 # V-06: ## For human heading
 FOR_HUMAN_RE = re.compile(r'^## For human\s*$', re.MULTILINE)
@@ -305,16 +370,16 @@ def check_v04(text, failures):
         )
 
 
-def check_v05(text, failures):
-    """V-05: ID references resolve to definitions."""
-    lines = text.split('\n')
+def collect_v05_defs(text):
+    """Return (defs, soft_defs, def_line_indices) for an artifact body.
+
+    Fenced code blocks are skipped. def_line_indices are 0-based.
+    """
+    defs = set()
+    soft_defs = set()
+    def_line_indices = set()
     in_fence = False
-
-    defs = set()  # IDs that have a definition line
-    def_line_indices = set()  # 0-based line indices that are definition lines
-
-    # First pass: collect definitions
-    for idx, line in enumerate(lines):
+    for idx, line in enumerate(text.split('\n')):
         stripped = line.rstrip('\r')
         if stripped.startswith('```'):
             in_fence = not in_fence
@@ -325,10 +390,86 @@ def check_v05(text, failures):
         if m:
             defs.add(m.group(1))
             def_line_indices.add(idx)
+            continue
+        for sm in V05_SOFT_DEF_RE.finditer(strip_inline_code(stripped)):
+            soft_defs.add(sm.group(1))
+    return defs, soft_defs, def_line_indices
 
-    # Second pass: collect body references (skip def lines and fenced blocks)
+
+def _v05_base_name(name):
+    """Strip writer temp suffixes: current-plan.md.body.tmp -> current-plan.md."""
+    while True:
+        if name.endswith('.tmp'):
+            name = name[:-4]
+        elif name.endswith('.body'):
+            name = name[:-5]
+        else:
+            return name
+
+
+def collect_sibling_defs(artifact_path):
+    """IDs defined in sibling artifacts of the same task (or stage) folder.
+
+    Only applies inside a .workflow_artifacts tree, where a folder holds one task's
+    artifacts. For a stage-N folder the task root is scanned too (architecture.md
+    lives there); other stage folders are not. The previous version of the artifact
+    being validated (current-plan.md when validating current-plan.md.tmp) and temp
+    files are excluded. Unreadable files are skipped, which can only make the check
+    stricter, never silently looser.
+    """
+    abs_path = os.path.abspath(artifact_path)
+    if '.workflow_artifacts' not in abs_path.split(os.sep):
+        return set()
+    own_dir = os.path.dirname(abs_path)
+    dirs = [own_dir]
+    if V05_STAGE_DIR_RE.match(os.path.basename(own_dir)):
+        dirs.append(os.path.dirname(own_dir))
+    own_name = os.path.basename(abs_path)
+    base_name = _v05_base_name(own_name)
+
+    defs = set()
+    scanned = 0
+    for d in dirs:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for name in names:
+            if not name.endswith('.md') or name in (own_name, base_name):
+                continue
+            if scanned >= V05_SIBLING_MAX_FILES:
+                return defs
+            path = os.path.join(d, name)
+            try:
+                if not os.path.isfile(path) or os.path.getsize(path) > V05_SIBLING_MAX_BYTES:
+                    continue
+                with open(path, encoding='utf-8', errors='replace') as f:
+                    sibling_text = f.read()
+            except OSError:
+                continue
+            scanned += 1
+            defs |= collect_v05_defs(sibling_text)[0]
+    return defs
+
+
+def check_v05(text, failures, warnings=None, external_defs=None):
+    """V-05: ID references resolve to definitions.
+
+    A bare reference resolves against definitions in this artifact or in
+    external_defs (sibling artifacts of the same task folder). Unresolved
+    references fail, except two ambiguous cases that are reported as warnings:
+    an ID only introduced mid-sentence ("decision D-07: ..."), and an explicitly
+    qualified cross-artifact reference ("plan.md#T-03", "see architecture D-02").
+    """
+    if warnings is None:
+        warnings = []
+    external_defs = external_defs or set()
+    defs, soft_defs, def_line_indices = collect_v05_defs(text)
+    known = defs | external_defs
+
     in_fence = False
-    for idx, line in enumerate(lines):
+    warned = set()
+    for idx, line in enumerate(text.split('\n')):
         stripped = line.rstrip('\r')
         if stripped.startswith('```'):
             in_fence = not in_fence
@@ -336,19 +477,32 @@ def check_v05(text, failures):
         if in_fence:
             continue
         if idx in def_line_indices:
-            # Drop ALL ref-collection on def lines (interpretation (a) per MIN-2-R2)
+            # References on a definition line are not checked.
             continue
-        # IVG-78: strip inline-code spans before scanning for refs so that backtick-quoted
-        # cross-artifact IDs (e.g. `T-05` citing a sibling plan) are exempt from V-05.
-        # Bare undefined IDs still fail. V-04 already uses the same helper; reusing it
-        # keeps span-parsing semantics identical and inherits CommonMark multi-backtick handling.
+        # Backtick-quoted IDs are explicit cross-artifact references and are exempt.
         scan_line = strip_inline_code(stripped)
         for m in V05_REF_RE.finditer(scan_line):
             ref_id = m.group(1)
-            if ref_id not in defs:
-                failures.append(
-                    f'FAIL V-05: reference {ref_id} at line {idx + 1} has no definition'
+            if ref_id in known:
+                continue
+            if ref_id in soft_defs:
+                key = (ref_id, 'soft')
+                if key not in warned:
+                    warned.add(key)
+                    warnings.append(
+                        f'WARN V-05: {ref_id} is only introduced mid-sentence '
+                        f'(first seen near line {idx + 1}); prefer a list, table or heading definition'
+                    )
+                continue
+            if V05_QUALIFIER_RE.search(scan_line[:m.start()]):
+                warnings.append(
+                    f'WARN V-05: qualified reference {ref_id} at line {idx + 1} '
+                    f'is not defined in this task folder'
                 )
+                continue
+            failures.append(
+                f'FAIL V-05: reference {ref_id} at line {idx + 1} has no definition'
+            )
 
 
 def check_v06(text, artifact_class, failures):
@@ -479,15 +633,19 @@ def main():
     required_sections = type_config.get('required_sections', [])
 
     failures = []
+    warnings = []
 
     # Run all invariants independently
     check_v01(text, failures)
     check_v02(text, allowed_sections, failures)
     check_v03(text, failures)
     check_v04(text, failures)
-    check_v05(text, failures)
+    check_v05(text, failures, warnings, collect_sibling_defs(artifact_path))
     check_v06(text, artifact_class, failures)
     check_v07(text, required_sections, failures)
+
+    for line in warnings:
+        print(line, file=sys.stderr)
 
     if failures:
         for line in failures:

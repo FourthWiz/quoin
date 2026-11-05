@@ -134,6 +134,18 @@ def test_archive_skips_if_target_already_exists(eot_text: str) -> None:
     assert "create the target dir with `mkdir -p`" not in section
 
 
+def test_archive_removes_empty_shell_left_at_old_location(eot_text: str) -> None:
+    idx = eot_text.index("**Step 8: Dispatch Sub-phase C")
+    end = eot_text.index("## Important behaviors")
+    section = eot_text[idx:end]
+    archive = section[section.index("**Archive (idempotent)**"):]
+    archive = archive[: archive.index("5. Print the final report")]
+    assert 'fsops.py rmdir-empty "<task_dir>"' in archive
+    # Runs after the move and also on the already-archived skip path.
+    assert archive.index("fsops.py mv --parents") < archive.index("fsops.py rmdir-empty")
+    assert "in both cases" in archive
+
+
 # ---------------------------------------------------------------------------
 # (d) done-sentinel written LAST, after archive + report, outside archive
 # ---------------------------------------------------------------------------

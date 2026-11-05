@@ -969,3 +969,76 @@ def test_customised_layout_file_is_used_untouched(tmp_path, rt_dir):
     assert res.rc == 0, res.text
     assert _captured_layout_path(res) == _fixed_layout_file(tmp_path)
     assert _fixed_layout_file(tmp_path).read_text() == "layout {\n}\n"
+
+
+# ── Collision prompt: a new nth session offers the layout picker ─────────────
+
+def _save_layout(tmp_path, value):
+    state = _state_file(tmp_path)
+    state.parent.mkdir(parents=True, exist_ok=True)
+    state.write_text(f"name:deck-1={value}\n")
+
+
+def test_collision_new_session_offers_layout_picker(tmp_path, rt_dir):
+    # The base session saved a layout; without the picker the new session
+    # would silently reuse it.
+    _save_layout(tmp_path, "claude+shell")
+    env = _env(tmp_path, rt_dir, sessions=["deck-1"], extra={"AGENTDESK_DASHBOARD": "0"})
+    res = _run_pty(["--name", "deck-1"], env, tmp_path, rt_dir, input_text="n\n4\n")
+    assert res.rc == 0, res.text
+    assert COLLISION_PROMPT in res.text
+    assert PICKER_PROMPT in res.text
+    assert REUSE_NOTICE not in res.text
+    _assert_created(res, "deck-1_1")
+    assert _kdl(res.cap)[2] == ["Claude Code", "Codex", "Shell"]
+
+
+def test_collision_new_session_picker_default_uses_standard(tmp_path, rt_dir):
+    _save_layout(tmp_path, "claude+shell")
+    env = _env(tmp_path, rt_dir, sessions=["deck-1"], extra={"AGENTDESK_DASHBOARD": "0"})
+    res = _run_pty(["--name", "deck-1"], env, tmp_path, rt_dir, input_text="n\n\n")
+    assert res.rc == 0, res.text
+    assert PICKER_PROMPT in res.text
+    _assert_created(res, "deck-1_1")
+    assert "name:deck-1=__FIXED__" in _state_file(tmp_path).read_text()
+
+
+@pytest.mark.parametrize("layout_args, panes", [
+    (["--mode", "duo"], ["Claude Code", "Shell"]),
+    (["--mode", "trio"], ["Claude Code", "Codex", "Shell"]),
+    (["--panes", "codex,shell"], ["Codex", "Shell"]),
+])
+def test_collision_new_session_with_layout_flag_skips_picker(
+    tmp_path, rt_dir, layout_args, panes,
+):
+    _save_layout(tmp_path, "claude+claude+shell")
+    env = _env(tmp_path, rt_dir, sessions=["deck-1"], extra={"AGENTDESK_DASHBOARD": "0"})
+    res = _run_pty(["--name", "deck-1", *layout_args], env, tmp_path, rt_dir,
+                   input_text="n\n")
+    assert res.rc == 0, res.text
+    assert COLLISION_PROMPT in res.text
+    assert PICKER_PROMPT not in res.text
+    _assert_created(res, "deck-1_1")
+    assert _kdl(res.cap)[2] == panes
+
+
+def test_collision_if_exists_new_flag_keeps_saved_layout(tmp_path, rt_dir):
+    # Flag-driven "new" is unchanged: no picker, the saved layout is reused.
+    _save_layout(tmp_path, "claude+shell")
+    env = _env(tmp_path, rt_dir, sessions=["deck-1"], extra={"AGENTDESK_DASHBOARD": "0"})
+    res = _run_pty(["--name", "deck-1", "--if-exists", "new"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert PICKER_PROMPT not in res.text
+    assert REUSE_NOTICE in res.text
+    _assert_created(res, "deck-1_1")
+    assert _kdl(res.cap)[2] == ["Claude Code", "Shell"]
+
+
+def test_collision_non_tty_new_session_keeps_saved_layout(tmp_path, rt_dir):
+    _save_layout(tmp_path, "claude+shell")
+    env = _env(tmp_path, rt_dir, sessions=["deck-1"])
+    res = _run_pipe(["--name", "deck-1"], env, tmp_path, rt_dir)
+    assert res.rc == 0, res.text
+    assert PICKER_PROMPT not in res.text
+    _assert_created(res, "deck-1_1")
+    assert _kdl(res.cap)[2] == ["Claude Code", "Shell"]

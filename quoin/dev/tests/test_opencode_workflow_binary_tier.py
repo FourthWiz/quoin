@@ -42,6 +42,11 @@ def test_workflow_discover_launches_the_pinned_binary(tmp_path, monkeypatch, cap
     with server_module.FakeProviderServer() as server:
         world, root = contract._driver_world(tmp_path, server.base_url, git=driver.NON_GIT_DISCOVERY_VERIFIED is not True)  # noqa: SLF001
         monkeypatch.setattr(Path, "home", classmethod(lambda cls: world.home))
+        # The CLI resolves the profile from the process environment, not the
+        # driver's, so the isolated config dirs must be visible there too.
+        for key, value in world.env.items():
+            monkeypatch.setenv(key, value)
+        monkeypatch.setenv("HOME", str(world.home))
         iso.launch_ready(world)
         seams = iso.seams(tmp_path)
         env = {**os.environ, **world.env, "HOME": str(world.home),
@@ -55,7 +60,7 @@ def test_workflow_discover_launches_the_pinned_binary(tmp_path, monkeypatch, cap
         summary = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
         # a scripted model may not write valid discover files, so the gate verdict is not asserted
         assert summary["mode"] == "workflow", summary
-        assert summary["phases"] and summary["phases"][0]["phase"] == "discover", summary
+        assert summary["phases"] and summary["phases"][0]["phase"] == "discover", json.dumps(summary)
         run_ids = summary["phases"][0]["run_ids"]
         assert run_ids, summary
         record = runstore.load_record(runstore.store_dir(root), run_ids[0])

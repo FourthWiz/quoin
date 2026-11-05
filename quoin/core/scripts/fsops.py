@@ -41,6 +41,13 @@ Subcommands
       when that name is taken. Directories and links are accepted. A missing
       path is reported (exit 1) and the remaining paths are still moved.
 
+  rmdir-empty PATH
+      Remove the directory PATH when it holds nothing but (nested) empty
+      directories, deepest first. A missing path is not an error. A tree that
+      still holds a file or link is left untouched (exit 3), and so is any
+      directory outside a workflow-artifacts tree, the workflow-artifacts
+      directory itself, and its `memory/` directory.
+
   finalize SRC DST --cleanup PATH...
       Rename SRC over DST, then always remove the --cleanup paths (missing ones
       are ignored), even when the rename failed. Exits non-zero if the rename
@@ -276,6 +283,28 @@ def trash(base: str, paths: list[str]) -> int:
     return code
 
 
+def rmdir_empty(path: str) -> int:
+    p = _strip_seps(path)
+    if not os.path.lexists(p):
+        return EXIT_OK
+    if not _is_real_dir(p):
+        return _fail("rmdir-empty", "{}: not a directory".format(p), EXIT_REFUSED)
+    if not is_confined(os.path.realpath(p)):
+        return _fail("rmdir-empty", "{}: refusing to remove outside {} (or inside its {}/)".format(p, _ROOT_NAME, _GUARDED_CHILD), EXIT_REFUSED)
+    dirs = []
+    for root, subdirs, files in os.walk(p):
+        # os.walk lists links to directories under subdirs; count them as content.
+        if files or any(os.path.islink(os.path.join(root, d)) for d in subdirs):
+            return _fail("rmdir-empty", "{}: not empty, left in place".format(p), EXIT_REFUSED)
+        dirs.append(root)
+    try:
+        for d in reversed(dirs):
+            os.rmdir(d)
+    except OSError as exc:
+        return _fail("rmdir-empty", _os_message(p, exc), EXIT_ERROR)
+    return EXIT_OK
+
+
 def finalize(src: str, dst: str, cleanup: list[str]) -> int:
     src = _strip_seps(src)
     dst = _strip_seps(dst)
@@ -332,6 +361,9 @@ def _build_parser() -> argparse.ArgumentParser:
     p_tr.add_argument("--base", required=True, metavar="DIR")
     p_tr.add_argument("paths", nargs="+", metavar="PATH")
 
+    p_re = subs.add_parser("rmdir-empty", help="remove a directory tree that holds no files")
+    p_re.add_argument("path", metavar="PATH")
+
     p_fi = subs.add_parser("finalize", help="rename SRC over DST, then remove cleanup paths")
     p_fi.add_argument("src", metavar="SRC")
     p_fi.add_argument("dst", metavar="DST")
@@ -349,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
         return write_atomic(args.dst, args.parents)
     if args.command == "trash":
         return trash(args.base, args.paths)
+    if args.command == "rmdir-empty":
+        return rmdir_empty(args.path)
     return finalize(args.src, args.dst, args.cleanup)
 
 

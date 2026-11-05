@@ -2450,3 +2450,147 @@ class TestNewDocRows:
         selectors, unmatched, _ignored = _at.map_changed_to_tests([src], repo)
         assert any(s.endswith(expected) for s in selectors), (src, expected)
         assert unmatched == []
+
+
+# ---------------------------------------------------------------------------
+# --selectors-out: hand selectors to known_red.py through a file
+# ---------------------------------------------------------------------------
+
+
+class TestSelectorsOut:
+    def test_select_only_writes_one_selector_per_line(self, fake_repo, capsys):
+        out = fake_repo / "My Drive" / "sel.txt"
+        rc = _cli(["--select-only", "--files", "foo.py", "bar.py",
+                   "--repo-root", str(fake_repo), "--selectors-out", str(out)])
+        printed = json.loads(capsys.readouterr().out)
+        assert rc == 0
+        lines = out.read_text(encoding="utf-8").splitlines()
+        assert lines == printed["selectors"] and lines
+
+    def test_early_exit_empties_a_stale_file(self, fake_repo, capsys):
+        out = fake_repo / "sel.txt"
+        out.write_text("/stale/test_old.py\n", encoding="utf-8")
+        rc = _cli(["--select-only", "--files", "README.md",
+                   "--repo-root", str(fake_repo), "--selectors-out", str(out)])
+        capsys.readouterr()
+        assert rc == 0
+        assert out.read_text(encoding="utf-8") == ""
+
+    def test_print_interpreter_leaves_file_alone(self, fake_repo, capsys):
+        out = fake_repo / "sel.txt"
+        out.write_text("keep\n", encoding="utf-8")
+        rc = _cli(["--print-interpreter", "--selectors-out", str(out)])
+        capsys.readouterr()
+        assert rc == 0
+        assert out.read_text(encoding="utf-8") == "keep\n"
+
+
+# ---------------------------------------------------------------------------
+# --report-out / --junit-out: raw pytest report + junit for known_red.py
+# ---------------------------------------------------------------------------
+
+_KR_PATH = Path(__file__).resolve().parents[2] / "core" / "scripts" / "known_red.py"
+
+_NESTED_TEST = '''\
+import subprocess
+import sys
+
+
+def test_ok():
+    assert True
+
+
+def test_known():
+    assert False, "known baseline"
+
+
+def test_nested(tmp_path):
+    (tmp_path / "test_src.py").write_text(
+        "def test_src_fails():\\n    assert False, 'deliberate failure'\\n"
+    )
+    r = subprocess.run(
+        [sys.executable, "-m", "pytest", "-rA", "-p", "no:cacheprovider", str(tmp_path)],
+        capture_output=True, text=True, cwd=tmp_path,
+    )
+    print(r.stdout)
+    assert r.returncode == 1
+'''
+
+
+class TestReportAndJunitOut:
+    def _repo(self, tmp_path):
+        repo = tmp_path / "My Drive" / "repo"
+        repo.mkdir(parents=True)
+        (repo / "test_a.py").write_text(_NESTED_TEST, encoding="utf-8")
+        return repo
+
+    def test_real_run_feeds_known_red_without_a_second_run(self, tmp_path):
+        repo = self._repo(tmp_path)
+        out = tmp_path / "My Drive" / "cache"
+        report, junit, sel = out / "aff.txt", out / "aff.xml", out / "aff.selectors"
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("QUOIN_", "PYTEST_"))}
+        env["QUOIN_PYTHON"] = sys.executable
+        proc = subprocess.run(
+            [sys.executable, str(_CORE_PATH), "--files", "test_a.py", "--repo-root", str(repo),
+             "--format", "text", "--selectors-out", str(sel),
+             "--report-out", str(report), "--junit-out", str(junit),
+             "--pytest-arg=-p", "--pytest-arg=no:cacheprovider"],
+            capture_output=True, text=True, env=env, timeout=300,
+        )
+        assert proc.returncode == 1, proc.stdout + proc.stderr
+        raw = report.read_text(encoding="utf-8")
+        # The report is pytest's own -rA output, echoed to stdout ahead of the
+        # helper's summary, and carries none of that summary.
+        assert "PASSED test_a.py::test_ok" in raw
+        assert "FAILED test_src.py::test_src_fails" in raw  # nested fixture echo
+        assert "exit_reason:" not in raw
+        assert proc.stdout.index("short test summary info") < proc.stdout.index("exit_reason:")
+        assert junit.is_file()
+
+        manifest = tmp_path / "known-red.toml"
+        manifest.write_text(
+            '[[entry]]\nid = "test_a.py::test_known"\nreason = "r"\nadded = "2026-01-01"\n',
+            encoding="utf-8",
+        )
+        kr = subprocess.run(
+            [sys.executable, str(_KR_PATH), "--manifest", str(manifest),
+             "--pytest-output", str(report), "--junit", str(junit),
+             "--selectors-from", str(sel), "--observed-rc", "1", "--format", "json"],
+            capture_output=True, text=True, timeout=60,
+        )
+        payload = json.loads(kr.stdout)
+        assert kr.returncode == 0, kr.stdout + kr.stderr
+        assert payload["downgrade"] is True and payload["reconciled"] is True
+
+    def test_early_exit_clears_stale_report_and_junit(self, fake_repo, capsys):
+        report, junit = fake_repo / "r.txt", fake_repo / "j.xml"
+        report.write_text("FAILED old::test\n", encoding="utf-8")
+        junit.write_text("<testsuites/>", encoding="utf-8")
+        rc = _cli(["--files", "README.md", "--repo-root", str(fake_repo),
+                   "--report-out", str(report), "--junit-out", str(junit)])
+        capsys.readouterr()
+        assert rc == 0
+        assert report.read_text(encoding="utf-8") == ""
+        assert not junit.exists()
+
+    def test_junit_out_conflicts_with_junitxml_pytest_arg(self, fake_repo, capsys):
+        rc = _cli(["--files", "foo.py", "--repo-root", str(fake_repo),
+                   "--junit-out", str(fake_repo / "j.xml"),
+                   "--pytest-arg=--junitxml=other.xml"])
+        assert rc == 2
+        assert "--junit-out" in capsys.readouterr().err
+
+    def test_report_out_adds_rA_unless_a_report_option_is_given(self, fake_repo, tmp_path):
+        calls = []
+
+        def fake_run(cmd, **kw):
+            calls.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        for extra in ([], ["--pytest-arg=-ra"]):
+            with mock.patch.object(_at.subprocess, "run", side_effect=fake_run):
+                _cli(["--files", "foo.py", "--repo-root", str(fake_repo),
+                      "--report-out", str(tmp_path / "r.txt"), *extra])
+        pytest_calls = [c for c in calls if "pytest" in c]
+        assert "-rA" in pytest_calls[0]
+        assert "-rA" not in pytest_calls[1] and "-ra" in pytest_calls[1]

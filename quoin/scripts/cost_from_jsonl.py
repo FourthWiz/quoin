@@ -266,10 +266,53 @@ def project_hash(project_path: str) -> str:
     return re.sub(r'[^A-Za-z0-9-]', '-', project_path)
 
 
+def _session_age_guard():
+    """Load the sibling session_age_guard module, or None if unavailable.
+
+    Loaded by file path so it works whether this module was imported normally,
+    via importlib from another directory, or from the deployed scripts dir.
+    """
+    mod = sys.modules.get("session_age_guard")
+    if mod is not None:
+        return mod
+    path = pathlib.Path(__file__).resolve().parent / "session_age_guard.py"
+    try:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("session_age_guard", path)
+        if spec is None or spec.loader is None:
+            return None
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    except (ImportError, OSError, SyntaxError):
+        return None
+    sys.modules["session_age_guard"] = mod
+    return mod
+
+
 def jsonl_path_for(uuid: str, proj_hash: str,
                    home: pathlib.Path = None) -> pathlib.Path:
+    """Return the transcript path for a session UUID.
+
+    The cwd-hash project dir wins when it holds <uuid>.jsonl. Otherwise the
+    UUID is looked up across every project dir (newest by mtime when several
+    hold it), which covers sessions run from a git worktree or subdirectory
+    whose cwd hash differs from the dir where the session was started. The
+    lookup is keyed on the UUID only; there is no newest-file fallback. When
+    nothing matches, the cwd-hash path is returned so callers' .exists()
+    check reports the session as unresolved.
+    """
     home = home or pathlib.Path.home()
-    return home / ".claude" / "projects" / proj_hash / f"{uuid}.jsonl"
+    projects_base = home / ".claude" / "projects"
+    exact = projects_base / proj_hash / f"{uuid}.jsonl"
+    if exact.exists():
+        return exact
+    sag = _session_age_guard()
+    # Shape check before the UUID is joined into a glob pattern; ledger rows
+    # can carry placeholder ids such as unknown-<phase>-<timestamp>.
+    if sag is None or not sag._UUID_RE.match(uuid or ""):
+        return exact
+    found = sag._find_uuid_jsonl(projects_base, projects_base / proj_hash, uuid)
+    return found if found is not None else exact
 
 
 def cost_for_entry(model: str, usage: dict) -> tuple:

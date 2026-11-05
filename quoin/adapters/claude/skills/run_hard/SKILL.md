@@ -982,6 +982,17 @@ Spawn `/implement` as a subagent session, passing path to `<task_dir>/current-pl
 
 Emit the dispatch envelope (above), skill: `implement`, `return: envelope` — placed after the sentinel prefix zone per the fast-route ordering rule below.
 
+**Test runs in the spawn prompt.** Every `/implement` spawn prompt (primary and fix re-dispatches) includes, verbatim: "Run every test command in the FOREGROUND with an explicit Bash `timeout: 600000`, and pass `--junitxml` (or `--junit-out` for affected_tests.py) a path under `.workflow_artifacts/cache/` containing the token `impl-<task>-<stamp>`. Never end your turn while a test run is pending; read its result first." The explicit timeout is load-bearing: without it the harness moves any call past ~120 s to the background, the subagent's turn ends, and nobody is re-invoked when the suite exits.
+
+**Watchdog.** Your notification fires when the subagent's turn ends, not when its test process exits. If `/implement` returns waiting on tests (a run still pending, no result), do not wait for the user: start this waiter with Bash `run_in_background: true`, filling in the token from the subagent's junit path (ask it with SendMessage if it did not say):
+
+```bash
+i=0; while pgrep -f "[i]mpl-<task>-<stamp>" >/dev/null && [ "$i" -lt 360 ]; do sleep 10; i=$((i+1)); done
+if pgrep -f "[i]mpl-<task>-<stamp>" >/dev/null; then echo "WAITER|timeout"; else echo "WAITER|exited"; fi
+```
+
+The bracketed first character keeps the pattern from matching the waiter's own command line; never key on a bare `pgrep -f pytest`, which matches other sessions' runs. The wait is bounded at one hour. When the waiter re-invokes you, nudge the subagent with SendMessage: `WAITER|exited` → "your test run finished; read its result from <junit path> and close the commit boundary"; `WAITER|timeout` → "the run is still going after an hour; stop it and report a failed verification". This needs no user prompt, under `AUTONOMOUS` or not. A headless child must not end its turn on a background waiter: run the same loop in the FOREGROUND with Bash `timeout: 600000`, with `54` in place of `360`, and repeat the call until it prints `WAITER|exited` or an hour has passed.
+
 **On the fast route,** dispatch this spawn with model opus, and the spawn prompt's FIRST token must be bare `[no-redispatch]` — any `[autonomous]` / `[no-interactive]` / `[quoin-onbehalf]` markers follow it, in that order. This order is load-bearing: `implement/SKILL.md`'s §0 conditions on the prompt "starting with" a `[no-redispatch]` form, and §0‴ likewise — the wrong order lets `/implement` silently down-dispatch to Sonnet while every mechanical check still passes. On the full path, dispatch this spawn with model sonnet and no forced sentinel (see "Name the model on every phase spawn" under Subagent session management).
 
 **Small-profile cost honesty.** This Opus dispatch is unconditional on the fast route regardless of

@@ -367,6 +367,95 @@ def apply_selector_filter(passed, failed_or_error, selectors) -> tuple[set, set]
     return p, f
 
 
+def _manifest_repo_root(manifest_path):
+    """Repo root implied by a manifest at `<repo>/quoin/dev/tests/known-red.toml`.
+
+    Returns None for any other manifest location (a project-level manifest
+    under `.workflow_artifacts/` names no repo, so there is nothing to
+    normalize against).
+    """
+    path = Path(manifest_path).absolute()
+    rel_parts = _MANIFEST_REL.parts
+    if path.parts[-len(rel_parts):] != rel_parts:
+        return None
+    return path.parents[len(rel_parts) - 1]
+
+
+class NodeIdNormalizer:
+    """Rewrite observed node-ids into the manifest's repo-relative form.
+
+    When pytest runs from a directory above the repo (the gate's full suite
+    runs `pytest quoin/` from the outer project root), pytest 9 still picks the
+    repo as rootdir but prints node-ids relative to the invocation directory,
+    so every id carries a leading `<child>/` segment that repo-relative
+    manifest entries never match. This strips that segment.
+
+    The child folder can share its name with the package inside it (quoin's
+    own layout is `<proj>/quoin/quoin/...`), so a repo-relative id also starts
+    with `<child>/`. A string test alone cannot tell the two apart, so an id is
+    only rewritten when its file does not exist under the repo root as written
+    but does once the prefix is removed. Ids that are themselves manifest
+    entries are never rewritten, so manifests written in either form keep
+    matching.
+    """
+
+    def __init__(self, repo_root=None, invocation_dir=None, manifest_ids=()):
+        self.repo_root = None
+        self.prefix: tuple = ()
+        self.manifest_ids = frozenset(manifest_ids)
+        if repo_root is None:
+            return
+        repo_root = Path(repo_root).resolve()
+        base = Path(invocation_dir if invocation_dir is not None else Path.cwd()).resolve()
+        try:
+            rel = repo_root.relative_to(base)
+        except ValueError:
+            return
+        if rel.parts:
+            self.repo_root = repo_root
+            self.prefix = PurePosixPath(rel.as_posix()).parts
+
+    @classmethod
+    def for_manifest(cls, manifest_path, invocation_dir, entries):
+        return cls(
+            _manifest_repo_root(manifest_path),
+            invocation_dir,
+            (e["id"] for e in entries),
+        )
+
+    def _strip_path(self, path_str: str):
+        """Return the de-prefixed path, or None when it must stay as-is."""
+        if not self.prefix or self.repo_root is None:
+            return None
+        parts = PurePosixPath(path_str).parts
+        n = len(self.prefix)
+        if PurePosixPath(path_str).is_absolute() or len(parts) <= n or parts[:n] != self.prefix:
+            return None
+        stripped = PurePosixPath(*parts[n:])
+        if (self.repo_root / path_str).exists():
+            return None
+        if not (self.repo_root / stripped).exists():
+            return None
+        return stripped.as_posix()
+
+    def nodeid(self, nodeid: str) -> str:
+        if nodeid in self.manifest_ids or _file_prefix(nodeid) in self.manifest_ids:
+            return nodeid
+        file_part, sep, rest = nodeid.partition("::")
+        stripped = self._strip_path(file_part)
+        return nodeid if stripped is None else stripped + sep + rest
+
+    def nodeids(self, ids) -> set:
+        return {self.nodeid(n) for n in ids}
+
+    def selector(self, sel: str) -> str:
+        if sel in self.manifest_ids:
+            return sel
+        trailing = "/" if sel.endswith("/") else ""
+        stripped = self._strip_path(sel.rstrip("/") or sel)
+        return sel if stripped is None else stripped + trailing
+
+
 # ---------------------------------------------------------------------------
 # T-06 — staleness counter (full-suite-only, dedup)
 # ---------------------------------------------------------------------------
@@ -593,6 +682,17 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--junit", help="junit-xml file (OPTIONAL count oracle for reconciliation)")
     p.add_argument("--observed-rc", type=int, help="caller's observed pytest return code")
     p.add_argument("--selectors", nargs="*", default=None, help="file-prefix filter over the parsed sets")
+    p.add_argument(
+        "--selectors-from",
+        default=None,
+        metavar="FILE",
+        help=(
+            "read the selector filter from FILE, one selector per line or "
+            "NUL-separated ('-' reads stdin); combines with --selectors. Use this "
+            "instead of expanding a shell variable, which zsh does not word-split "
+            "and bash splits inside paths with spaces"
+        ),
+    )
     p.add_argument("--full-suite", action="store_true", help="enable staleness counting")
     p.add_argument("--run-token", default=None, help="per-session dedup token for staleness")
     p.add_argument("--project-root", default=None, help="project root for manifest/counter defaults")
@@ -602,8 +702,31 @@ def _build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def read_selector_file(path) -> list[str]:
+    """Read a selector list written one per line or NUL-separated.
+
+    Blank entries are dropped and surrounding whitespace (including a CR from a
+    CRLF file) is stripped, but spaces inside a path are kept, so a project path
+    such as ``.../My Drive/...`` survives intact.
+    """
+    if str(path) == "-":
+        raw = sys.stdin.read()
+    else:
+        raw = Path(path).read_text(encoding="utf-8")
+    parts = raw.split("\0") if "\0" in raw else raw.splitlines()
+    return [p.strip() for p in parts if p.strip()]
+
+
 def main(argv=None) -> int:
     args = _build_parser().parse_args(argv)
+
+    if args.selectors_from is not None:
+        try:
+            from_file = read_selector_file(args.selectors_from)
+        except OSError as exc:
+            print(f"usage error: cannot read --selectors-from {args.selectors_from}: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        args.selectors = list(args.selectors or []) + from_file
 
     report_flags = (
         args.junit is not None
@@ -648,8 +771,15 @@ def main(argv=None) -> int:
 
     report_text = Path(args.pytest_output).read_text(encoding="utf-8")
     passed, failed_or_error = parse_pytest_report(report_text)
+    # Node-ids from a run started above the repo carry a `<child>/` prefix;
+    # map them (and relative selectors) to the manifest's repo-relative form so
+    # matching, filtering and staleness all see one spelling.
+    normalizer = NodeIdNormalizer.for_manifest(manifest_path, args.project_root, entries)
+    passed = normalizer.nodeids(passed)
+    failed_or_error = normalizer.nodeids(failed_or_error)
     if args.selectors is not None:
-        passed, failed_or_error = apply_selector_filter(passed, failed_or_error, args.selectors)
+        selectors = [normalizer.selector(s) for s in args.selectors]
+        passed, failed_or_error = apply_selector_filter(passed, failed_or_error, selectors)
 
     # junit count oracle (reconciliation only).
     reconcile_ok = True
@@ -658,8 +788,10 @@ def main(argv=None) -> int:
             junit_count = parse_junit_count(Path(args.junit).read_text(encoding="utf-8"))
             failed_or_error = drop_phantom_failures(args.observed_rc, failed_or_error, junit_count)
             reconcile_ok = len(failed_or_error) == junit_count
-        except ET.ParseError:
-            reconcile_ok = True  # oracle unavailable → trust the -rA parse at face value
+        except (ET.ParseError, OSError):
+            # oracle unavailable (malformed, or never written) → trust the -rA
+            # parse at face value
+            reconcile_ok = True
 
     reconciled = _reconcile(args.observed_rc, failed_or_error, reconcile_ok)
 

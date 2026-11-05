@@ -42,7 +42,7 @@ This file is the abbreviation whitelist for all quoin skills. It extends `terse-
 
 - term: T-NN / D-NN / R-NN / F-NN / Q-NN / S-NN
   expand: file-local cross-reference IDs (Tasks, Decisions, Risks, Findings, Questions, Stages)
-  rule: file-local namespace — references resolve only within the same artifact. Cross-artifact references are exempt from V-05 when wrapped in inline-code backticks (e.g. writing `T-05` to cite a sibling plan's task). Note the exemption is content-blind — any ID inside backticks is exempt, including a genuinely-undefined one, so writers own the correctness of backticked refs. A bare cross-artifact token (e.g. T-05 without backticks) still fails V-05. Plain English (e.g., "the parent Stage 3 smoke task") remains acceptable too. The validate_artifact.py V-05 invariant flags any bare reference without a local definition.
+  rule: references resolve within the same artifact plus its sibling artifacts in the same task folder (task root included for stage-N folders). Backtick-wrapped IDs (e.g. `T-05`) are exempt from V-05 and content-blind, so writers own their correctness. Qualified IDs (plan.md#T-03, "see architecture D-02") and IDs only introduced mid-sentence warn instead of failing. A bare ID defined nowhere in the artifact or its task folder fails V-05. Plain English (e.g., "the parent Stage 3 smoke task") remains acceptable too.
 
 ---
 

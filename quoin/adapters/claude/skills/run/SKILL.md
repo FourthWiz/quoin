@@ -218,19 +218,49 @@ wrap the whole of `/run` in one subagent.
    see this file). It tells the agent to do those two steps, not to commit
    and not to spawn subagents, and to return the files changed, the tests
    added, the verification result (command and pass/fail) and any blocker.
+   It also says, verbatim: "Run every test command in the FOREGROUND with an
+   explicit Bash `timeout: 600000`, and pass `--junitxml` (or `--junit-out`
+   for affected_tests.py) a path under `.workflow_artifacts/cache/` containing
+   the token `impl-<task>-<stamp>`. Never end your turn while a test run
+   is pending; read its result first." The explicit timeout is load-bearing:
+   without it the harness moves any call past ~120 s to the background, and
+   the agent's turn then ends with the result unread.
    Its verification is Step 6's result. On this path you never edit project
    source files yourself. If it reports a blocker or failing verification,
    send it back once with SendMessage; if it still fails, that counts as two
    failed attempts under Escalation. Never fix it inline.
-4. **Review fixes.** After the Step 7 review, send the blockers and
+4. **Watchdog.** Your notification fires when the implementer's turn ends,
+   not when its test process exits, so nobody is re-invoked when a
+   backgrounded suite finishes. If the implementer returns waiting on tests
+   (a run still pending, no result), do not wait for the user. Start this
+   waiter with Bash `run_in_background: true`, filling in the `impl-...`
+   token from its junit path (ask it with SendMessage if it did not say):
+
+   ```bash
+   i=0; while pgrep -f "[i]mpl-<task>-<stamp>" >/dev/null && [ "$i" -lt 360 ]; do sleep 10; i=$((i+1)); done
+   if pgrep -f "[i]mpl-<task>-<stamp>" >/dev/null; then echo "WAITER|timeout"; else echo "WAITER|exited"; fi
+   ```
+
+   Write the token with its first character in brackets (`[i]mpl-...`) so the
+   pattern never matches the waiter's own command line. Never key on a bare
+   `pgrep -f pytest`, which matches other sessions' runs. The wait is bounded
+   at one hour. When the waiter re-invokes you, nudge the implementer with
+   SendMessage: `WAITER|exited` → "your test run finished; read its result
+   from <junit path> and finish Step 6"; `WAITER|timeout` → "the run is
+   still going after an hour; stop it and report a failed verification".
+   Under `AUTONOMOUS` this runs with no user prompt at all. A headless child
+   must not end its turn on a background waiter: run the same loop in the
+   FOREGROUND with Bash `timeout: 600000`, with `54` in place of `360`, and
+   repeat the call until it prints `WAITER|exited` or an hour has passed.
+5. **Review fixes.** After the Step 7 review, send the blockers and
    should-fixes to the same implementer with SendMessage (load it through
    ToolSearch if it is deferred). If SendMessage fails, spawn one more Opus
    Agent with the brief, the findings and the diff instead; if that spawn
-   errors, apply item 6. The implementer applies the fixes, re-runs Step 6
+   errors, apply item 7. The implementer applies the fixes, re-runs Step 6
    once and reports back. There is still only one review.
-5. **Staged tasks.** Apply the guard per stage: one Opus implementer per
+6. **Staged tasks.** Apply the guard per stage: one Opus implementer per
    stage, given the stage brief.
-6. **Fail-open** (only when the Agent spawn itself errors). Classify the
+7. **Fail-open** (only when the Agent spawn itself errors). Classify the
    error in this order:
    - **Autonomous-class** (`AUTONOMOUS`): never ask. Print
      `[quoin-run-impl-autonomous: opus implementer dispatch failed; implementing inline at current tier]`,
@@ -258,7 +288,8 @@ duplicate coverage across files, and do not build fixtures larger than the chang
 ## Step 6 — Verify (inline)
 
 Run the tests that cover the change once, using the test command from the
-context pack. For a Python project you may instead use the affected-test helper:
+context pack, in the FOREGROUND with an explicit Bash `timeout: 600000` (see
+the dispatch rule above; inline runs follow it too). For a Python project you may instead use the affected-test helper:
 
 ```bash
 python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$(pwd)" --format text

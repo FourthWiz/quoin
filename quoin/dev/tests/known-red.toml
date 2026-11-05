@@ -20,13 +20,6 @@
 # rejected as malformed (fail-closed → the CLI exits 2, never exempt-all).
 
 [[entry]]
-id = "quoin/dev/tests/test_sleep_scoring.py"
-reason = "time-dependent; fails under Drive-mount clock skew (IVG-116)"
-added = "2026-07-29"
-issue = "IVG-116"
-owner = "ivgo"
-
-[[entry]]
 id = "quoin/dev/tests/test_agentdesk_layout_live.py::test_two_agents_and_strip_proportions"
 reason = "flaky live zellij test; fails on main too; forkpty-in-threaded-process deadlock warning"
 added = "2026-10-23"
