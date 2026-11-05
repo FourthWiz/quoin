@@ -508,6 +508,47 @@ fi
 ```
 Serena config and memories are machine-local; they should not be committed to the project repo by default.
 
+### Step 6.6: Offer desktop-commander setup
+
+desktop-commander is an MCP server that gives Claude terminal-process and filesystem tools (long-running processes, REPLs, file search). Never skip this step silently: either it is configured, the user opted out, or the user is asked.
+
+**Read `.workflow_artifacts/.desktop-commander-skip` first.** If this sentinel exists, the user previously chose "Never ask again" for this project: print `[quoin: desktop-commander setup skipped per prior choice]` and proceed to Step 6.7.
+
+Otherwise detect it. It counts as configured if ANY of these hits:
+- `ToolSearch select:mcp__desktop-commander__get_config` returns a schema;
+- `claude mcp list 2>/dev/null | grep -qi desktop-commander` exits 0 (covers user, local and project scopes);
+- the project `.mcp.json` has a `desktop-commander` key under `mcpServers`.
+
+If configured: print `[quoin: desktop-commander configured]` and proceed to Step 6.7.
+
+If not configured and the incoming prompt carries the `[autonomous]` sentinel: do not ask. Print `[quoin: desktop-commander not configured — skipped under autonomous]`, write no sentinel, and proceed to Step 6.7. Otherwise ask once:
+
+```
+<!-- decision-gate: best-effort site=init_workflow-prompt-4 -->
+AskUserQuestion(
+  header="Desktop Cmdr",
+  question="desktop-commander gives Claude terminal-process and filesystem tools. It isn't configured. Set it up?",
+  multiSelect=false,
+  options=[
+    {label: "Install now",       description: "Show me the install command (requires Node.js/npx)."},
+    {label: "Skip for now",      description: "Skip this time; ask again on the next /init_workflow run."},
+    {label: "Never ask again",   description: "Don't offer desktop-commander for this project again."}
+  ]
+)
+```
+
+On **"Install now"**: print these instructions (quoin does not run the install itself, it changes the user's MCP config):
+
+1. Run in a terminal: `claude mcp add desktop-commander -- npx -y @wonderwhy-er/desktop-commander`
+2. Docs and alternative setups: https://github.com/wonderwhy-er/DesktopCommanderMCP
+3. **⚠️ SESSION RESTART REQUIRED.** MCP servers load only at session start; restart Claude Code before the tools appear.
+
+On **"Skip for now"**: print `[quoin: desktop-commander setup skipped for this run]` and write no sentinel.
+
+On **"Never ask again"**: write `.workflow_artifacts/.desktop-commander-skip` (empty is fine) so this step short-circuits on any re-run, and print `[quoin: desktop-commander setup skipped per user choice]`.
+
+Then proceed to Step 6.7.
+
 ### Step 6.7: Seed the repo main spec
 
 **Idempotency/grandfather gate FIRST:** if `.workflow_artifacts/spec.md` already exists, do NOT re-prompt from scratch — print one line noting a repo spec is already present and skip this step (a refresh is offered by `/discover` when run standalone). Only proceed when `.workflow_artifacts/spec.md` is absent.
