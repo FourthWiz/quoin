@@ -436,6 +436,50 @@ def test_finalize_missing_source_still_cleans_up_with_one_error_line(fsops, root
     assert len(err.strip().splitlines()) == 1 and err.startswith("fsops finalize: ")
 
 
+# ---------------------------------------------------------------- rmdir-empty
+
+
+def test_rmdir_empty_removes_a_shell_of_empty_dirs(fsops, root):
+    shell = root / ".workflow_artifacts" / "my-task"
+    (shell / "stage-1" / "deep").mkdir(parents=True)
+    (shell / "stage-2").mkdir()
+    assert fsops.main(["rmdir-empty", str(shell)]) == 0
+    assert not shell.exists()
+    assert (root / ".workflow_artifacts").is_dir()
+
+
+def test_rmdir_empty_missing_path_is_ok(fsops, root):
+    assert fsops.main(["rmdir-empty", str(root / ".workflow_artifacts" / "gone")]) == 0
+
+
+def test_rmdir_empty_leaves_a_tree_with_a_file(fsops, root, capsys):
+    task = root / ".workflow_artifacts" / "my-task"
+    (task / "empty").mkdir(parents=True)
+    _write(task / "stage-1" / ".hidden", "x")
+    assert fsops.main(["rmdir-empty", str(task)]) == 3
+    assert (task / "empty").is_dir() and (task / "stage-1" / ".hidden").exists()
+    err = capsys.readouterr().err
+    assert len(err.strip().splitlines()) == 1 and err.startswith("fsops rmdir-empty: ")
+
+
+def test_rmdir_empty_treats_a_dir_symlink_as_content(fsops, root):
+    task = root / ".workflow_artifacts" / "my-task"
+    task.mkdir(parents=True)
+    target = root / "elsewhere"
+    target.mkdir()
+    os.symlink(str(target), str(task / "link"))
+    assert fsops.main(["rmdir-empty", str(task)]) == 3
+    assert (task / "link").is_symlink() and target.is_dir()
+
+
+@pytest.mark.parametrize("rel", [".workflow_artifacts", ".workflow_artifacts/memory", "outside"])
+def test_rmdir_empty_refuses_unconfined_dirs(fsops, root, rel):
+    d = root / rel
+    d.mkdir(parents=True)
+    assert fsops.main(["rmdir-empty", str(d)]) == 3
+    assert d.is_dir()
+
+
 # ---------------------------------------------------------------- contract
 
 
@@ -572,6 +616,10 @@ def test_every_subcommand_runs_under_a_real_python_38(tmp_path):
     assert run38(["rm", "-r", d]).returncode == 0
     assert not d.exists()
     assert run38(["rm", "-r", work / ".workflow_artifacts"]).returncode == 3
+    shell = work / ".workflow_artifacts" / "shell" / "stage-1"
+    shell.mkdir(parents=True)
+    assert run38(["rmdir-empty", shell.parent]).returncode == 0
+    assert not shell.parent.exists()
 
 
 # ---------------------------------------------------------------- registry

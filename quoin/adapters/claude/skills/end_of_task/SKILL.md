@@ -768,6 +768,12 @@ Spawn an Agent subagent:
        a kill-after-archive-before-done-sentinel resume). If it exists, SKIP the move as a
        no-op (do not double-move or error) and note "already archived" in the report.
        Otherwise move the folder: `python3 __QUOIN_HOME__/scripts/fsops.py mv --parents "<task_dir>" "<target>"` (the target is the final path; `--parents` creates only its parent).
+       Then, in both cases (moved now or already archived), remove any empty shell left
+       at the old location (a folder re-created by a hook or a resumed session after the
+       move): `python3 __QUOIN_HOME__/scripts/fsops.py rmdir-empty "<task_dir>"`. It
+       removes the folder only when it holds nothing but empty subfolders; exit 0 means
+       gone or never there. Exit 3 means files appeared there after the move: leave them,
+       and name the folder in the report as "files left at <task_dir> after archive".
     5. Print the final report:
        ```
        Task finalized: <task_name>
