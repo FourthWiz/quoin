@@ -1039,7 +1039,9 @@ are stored beside headless ones and are visible to the same profile.
 **Lifecycle plugin.** When the profile's effective `policy.plugin.lifecycle` is
 `allow` (the personal default; a work profile defaults to `deny` and must set
 it), `quoin opencode start` loads Quoin's own lifecycle plugin, which records
-session start, idle, compaction, tool completion, approval prompts and errors.
+session start, idle, compaction, tool completion, approval prompts and errors,
+and the token usage and cost of each finished model step (only the numbers of a
+step-finish message part; no message text).
 The launcher checks the packaged plugin against the digest pinned in this
 release, copies it into the profile's private state directory and writes an
 interactive variant of the compiled configuration whose `plugin` list names

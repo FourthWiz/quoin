@@ -1,16 +1,19 @@
 """Translate the Quoin OpenCode plugin's event log into runtime events.
 
 The plugin (built into ``quoin/adapters/opencode/plugin/``) runs inside OpenCode
-and appends one JSON record per lifecycle event to a log file. It only
+and appends one JSON record per lifecycle event, and one per finished model
+step with its token usage and cost, to a log file. It only
 observes; this module owns the meaning of those records. Reading is tolerant
 (a bad line is counted and skipped, never raised), and translation goes
 through the same ``Deduper`` the headless pipeline uses, so a record repeated
 by a re-read log or a redelivered notification is dropped, and a changed
-record under the same native id becomes a new revision.
+record under the same native id becomes a new revision. A finished step is
+keyed by its part id, so a step OpenCode re-emits with new numbers becomes a
+revision of the same usage event rather than a second one.
 
 A record looks like::
 
-    {"v": 1, "plugin_version": "0.1.0", "run_id": "oc-...", "instance": "1a2b3c4d", "seq": 0,
+    {"v": 1, "plugin_version": "0.2.0", "run_id": "oc-...", "instance": "1a2b3c4d", "seq": 0,
      "ts": "2026-11-02T12:00:00.000Z", "source": "event" | "hook",
      "native_type": "session.idle", "native_id": "evt_..." | null,
      "session_id": "ses_..." | null, "parent_id": "ses_..." | null,
@@ -35,6 +38,7 @@ _SESSION_STATUS = {
     "session.compacted": "compacted",
 }
 PLUGIN_NATIVE_TYPES = tuple(_SESSION_STATUS) + (
+    "message.part.updated",
     "session.error",
     "permission.asked",
     "permission.replied",
@@ -138,6 +142,19 @@ def _payload(record: Mapping[str, Any], redact: Redactor) -> Optional[Tuple[ev.E
             raw_type=native_type,
             status=ident(data.get("reply")) or "unknown",
             request_id=ident(data.get("permission_id")),
+        )
+    if native_type == "message.part.updated":
+        # Only finished steps are logged; the numbers map like a headless step_finish.
+        tokens = ev._mapping(data.get("tokens"))
+        cache = ev._mapping(tokens.get("cache"))
+        return ev.EventType.USAGE, ev.UsagePayload(
+            input_tokens=ev._count(tokens.get("input")),
+            output_tokens=ev._count(tokens.get("output")),
+            reasoning_tokens=ev._count(tokens.get("reasoning")),
+            cache_read_tokens=ev._count(cache.get("read")),
+            cache_write_tokens=ev._count(cache.get("write")),
+            cost=ev._decimal_text(data.get("cost")),
+            finish_reason=ident(data.get("reason")),
         )
     if native_type == "tool.execute.after":
         return ev.EventType.PROGRESS, ev.ProgressPayload(

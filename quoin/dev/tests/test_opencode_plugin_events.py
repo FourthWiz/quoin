@@ -38,15 +38,22 @@ def test_real_plugin_fixture_translates_into_valid_events():
         assert event.origin == "native" and event.revision == 1
         assert ev.RuntimeEvent.from_json(event.to_json()) == event
     summary = [(e.type.value, getattr(e.payload, "status", None)) for e in events]
-    assert summary[:8] == [
+    assert summary[:11] == [
         ("progress", "created"),
         ("progress", "asked"),
         ("progress", "once"),
         ("progress", "completed"),
+        ("usage", None),
+        ("usage", None),
         ("progress", "idle"),
         ("progress", "compacting"),
+        ("usage", None),
         ("progress", "compacted"),
         ("progress", "idle"),
+    ]
+    usage = [e.payload for e in events if e.type is ev.EventType.USAGE]
+    assert [(u.input_tokens, u.output_tokens, u.finish_reason) for u in usage] == [
+        (10, 5, "tool-calls"), (10, 5, "stop"), (10, 5, "stop"),
     ]
     # An approval prompt is progress, correlated with its reply, and never the
     # terminal approval_required event the headless driver halts on.
@@ -68,6 +75,26 @@ def test_a_reread_or_redelivered_log_adds_nothing():
     assert deduper.dropped_duplicates == 2 * len(records)
     # A deduper rebuilt from persisted events recognises the same records.
     assert pe.translate(records, run_id=RUN_ID, deduper=ev.Deduper.from_events(first)) == []
+
+
+def test_a_finished_step_becomes_usage_and_a_reemitted_step_a_revision():
+    step = {
+        "v": 1, "plugin_version": "0.2.0", "run_id": RUN_ID, "instance": "0f7e423f", "seq": 0,
+        "ts": "2026-11-05T12:00:00.000Z", "source": "event", "native_type": "message.part.updated",
+        "native_id": "prt_step1", "session_id": "ses_a", "parent_id": None,
+        "data": {"message_id": "msg_a", "reason": "stop", "cost": 0.0125,
+                 "tokens": {"input": 10, "output": 5, "reasoning": 0, "cache": {"read": 3, "write": 0}}},
+    }
+    redone = json.loads(json.dumps(step))
+    redone["seq"], redone["data"]["tokens"]["output"] = 1, 7
+    deduper = ev.Deduper()
+    first, second = pe.translate([step, redone], run_id=RUN_ID, deduper=deduper)
+    assert first.type is ev.EventType.USAGE and first.session_id == "ses_a"
+    assert first.payload == ev.UsagePayload(
+        input_tokens=10, output_tokens=5, reasoning_tokens=0, cache_read_tokens=3,
+        cache_write_tokens=0, cost="0.0125", finish_reason="stop",
+    )
+    assert (second.native.id, second.revision, second.payload.output_tokens) == ("prt_step1", 2, 7)
 
 
 def test_a_changed_record_under_the_same_native_id_is_a_revision():
@@ -168,7 +195,7 @@ def test_artifact_is_pinned_and_matches_the_package():
 
 def _recorded_events(text):
     block = text.split("RECORDED_EVENTS", 1)[1].split("]", 1)[0]
-    return set(re.findall(r'"((?:session|permission)\.[a-z]+)"', block))
+    return set(re.findall(r'"((?:session|permission|message)\.[a-z.]+)"', block))
 
 
 def test_recorded_types_match_what_python_translates():

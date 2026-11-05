@@ -27,8 +27,8 @@ from .launch_env import PLUGIN_ENV_NAMES
 PLUGIN_FILE = "quoin-opencode-plugin.js"
 # Pinned identity of the shipped artifact. A test keeps both in step with the
 # file, so a rebuild must update them deliberately.
-PLUGIN_VERSION = "0.1.0"
-PLUGIN_SHA256 = "f8e29d5cbb1842db0680f8dcc21bd73a77d2269d051e364f24242720546f2490"
+PLUGIN_VERSION = "0.2.0"
+PLUGIN_SHA256 = "106dfba1e8d01d0680dd678b3f14195d79e8d858ca209f1b6393f95992a92915"
 # The OpenCode release the plugin's hooks were qualified against.
 PLUGIN_OPENCODE_VERSION = "1.18.32"
 
