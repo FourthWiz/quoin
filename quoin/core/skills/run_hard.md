@@ -92,6 +92,12 @@ be honored when locating per-stage artifacts.
   completes so that a resume invocation can identify the next phase
   without rerunning completed work.
 - Cost-ledger writes are mandatory when a task context is active.
+- The implementation phase's subagent MUST run tests in the foreground
+  with an explicit long tool timeout and MUST NOT end its turn with a run
+  pending. If it does anyway, the orchestrator MUST start its own bounded
+  waiter keyed on that subagent's specific test process (a unique token in
+  its report path), and when the waiter re-invokes it, prompt the subagent
+  to read the result, with no user prompt.
 
 ## Out of scope
 

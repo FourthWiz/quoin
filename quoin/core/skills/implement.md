@@ -170,6 +170,12 @@ This loop runs per task, not once per implementation session, so it must
 scope its checks to the current task's changes rather than the full
 accumulated diff of a multi-task run.
 
+A task's commit boundary is closed only when the result of its test run
+has been read in the same turn. The skill MUST NOT end a turn, hand back to
+a parent, mark the task complete or commit while a test run is still
+pending in the background; long runs are waited on in the foreground with an
+explicit, sufficiently long tool timeout.
+
 ## Out of scope
 
 - The specific model tier used for code generation — adapter-specific.

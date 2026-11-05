@@ -551,15 +551,11 @@ REPO_ROOT=""
 if git -C "$PROJECT_ROOT" rev-parse --show-toplevel >/dev/null 2>&1; then
   REPO_ROOT="$(git -C "$PROJECT_ROOT" rev-parse --show-toplevel)"
 else
-  # depth-1 scan for the single directory holding .git — mirrors
-  # affected_tests.py's own resolve_repo()/discover_repos() depth-1 scan;
-  # do not re-derive new resolution logic.
-  candidates=()
-  for d in "$PROJECT_ROOT"/*/; do
-    [ -d "${d}.git" ] && candidates+=("${d%/}")
-  done
-  if [ "${#candidates[@]}" -eq 1 ]; then
-    REPO_ROOT="${candidates[0]}"
+  # depth-1 scan for the single directory holding .git, as affected_tests.py's
+  # discover_repos() does; find, not a glob or array, so bash and zsh agree.
+  GITS="$(find "$PROJECT_ROOT" -mindepth 2 -maxdepth 2 -name .git -type d 2>/dev/null)"
+  if [ -n "$GITS" ] && [ "$(printf '%s\n' "$GITS" | wc -l)" -eq 1 ]; then
+    REPO_ROOT="$(dirname "$GITS")"
   else
     echo "[quoin-verify: ambiguous or missing git repo under PROJECT_ROOT; skipping verify-fix loop for this task]"
     # skip the verify-fix loop entirely for this task (degrade, do NOT retry)
@@ -571,17 +567,21 @@ This is a single-repo-scope boundary: 0 or >1 candidate `.git` directories under
 
 **Step 3 — Retry loop (only when REPO_ROOT resolved).**
 
+Each attempt's run step is one Bash call (re-assign `PROJECT_ROOT`/`REPO_ROOT` first; each call is a fresh shell):
+
+```bash
+T="$PROJECT_ROOT/.workflow_artifacts/cache/verify-touched.txt"; mkdir -p "$(dirname "$T")"
+{ git -C "$REPO_ROOT" diff --name-only HEAD; git -C "$REPO_ROOT" diff --name-only --cached
+  git -C "$REPO_ROOT" ls-files --others --exclude-standard; } | sort -u > "$T"
+if [ -s "$T" ]; then python3 __QUOIN_HOME__/scripts/affected_tests.py --files-from "$T" --repo-root "$REPO_ROOT" --format text; echo "VERIFY_RC=$?"
+else echo "[quoin-verify: no touched files detected; skipping]"; fi
+```
+
 ```
 attempt = 0
 while attempt <= QUOIN_VERIFY_RETRIES:
-    tracked   = git -C "$REPO_ROOT" diff --name-only HEAD
-    staged    = git -C "$REPO_ROOT" diff --name-only --cached
-    untracked = git -C "$REPO_ROOT" ls-files --others --exclude-standard
-    touched   = dedup(tracked + staged + untracked)
-
-    if touched is empty:
-        echo "[quoin-verify: no touched files detected; skipping]"
-        break   # nothing to verify — distinct from a degrade/failure note
+    run the step above (Bash `timeout: 600000`)
+    if it printed the skip note: break   # nothing to verify — distinct from a degrade/failure note
 
     # best-effort linter (fail-OPEN, D-03)
     if a linter is discoverable (config file present AND binary importable/on PATH):
@@ -589,8 +589,7 @@ while attempt <= QUOIN_VERIFY_RETRIES:
     else:
         echo "[quoin-verify: no linter configured; skipping lint]"   # once per task
 
-    run: python3 __QUOIN_HOME__/scripts/affected_tests.py --files "${touched[@]}" --repo-root "$REPO_ROOT" --format text
-    code=$?
+    code = VERIFY_RC
 
     if code == 0:       # affected suite green / docs-only / clean tree / missing-tests-only
         break            # mark task ✓, commit, proceed
@@ -612,6 +611,8 @@ while attempt <= QUOIN_VERIFY_RETRIES:
     echo "[quoin-verify: affected_tests.py exit <code> (<exit_reason>); degrading to current behavior]"
     break
 ```
+
+**Same-turn commit boundary.** A task's commit boundary closes only when its suite result is read in the same turn. Give every test call (the run step, any pytest) an explicit Bash `timeout: 600000`: without one the harness moves a call past ~120 s to the background. Never end a turn, return to a parent or commit while a test run is pending; if one was backgrounded anyway, wait for it and read its result first (headless: the `wait_for.py` loop in `memory/autonomous-mode.md` `### Headless children never yield with pending work`).
 
 **Exit-code map (D-02):** exit `0` → suite green (or docs-only/clean tree, or changed tests missing on disk with `exit_reason: missing-tests-only`) → proceed to mark the task ✓. Exit `1` → affected suite RED → the only code that enters the retry loop above. Exit `2`/`3`/`4` (argparse error, undeterminable git state such as a stacked branch with no upstream, unmatched sources, or a missing/timed-out pytest) → emit the one-line fail-OPEN warning above and degrade — do NOT consume a retry; the post-implement `/gate` remains the hard backstop. `affected_tests.py` missing entirely (`FileNotFoundError`) → same fail-OPEN degrade path.
 

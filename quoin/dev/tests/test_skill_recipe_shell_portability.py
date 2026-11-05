@@ -34,8 +34,10 @@ LINTED = [
     SKILLS / "gate" / "SKILL.md",
     SKILLS / "review" / "SKILL.md",
     SKILLS / "run" / "SKILL.md",
+    SKILLS / "implement" / "SKILL.md",
     PKG / "memory" / "autonomous-mode.md",
 ]
+IMPLEMENT_SKILL = SKILLS / "implement" / "SKILL.md"
 
 # ---------------------------------------------------------------------------
 # Lint: quote-aware scan of shell snippets
@@ -305,3 +307,50 @@ def test_full_suite_recipe_records_integer_exit_codes(shell, flags, spaced_proje
     assert "## Known-baseline (downgraded)" in out, out
     assert "SIDECAR_RC=0" in out, out
     assert "invalid" not in out, out
+
+
+# ---------------------------------------------------------------------------
+# implement's verify-loop recipes under bash and zsh
+# ---------------------------------------------------------------------------
+
+def _implement_block(marker: str) -> str:
+    blocks = [b for b in _fenced_blocks(IMPLEMENT_SKILL.read_text(encoding="utf-8")) if marker in b]
+    assert len(blocks) == 1, f"expected one implement recipe containing {marker!r}, found {len(blocks)}"
+    return blocks[0]
+
+
+@pytest.mark.parametrize("shell,flags", _SHELLS)
+@pytest.mark.parametrize("repos,expected", [
+    ((), "ambiguous"),
+    (("repo one",), "repo one"),
+    (("a", "b"), "ambiguous"),
+])
+def test_implement_repo_root_scan(shell, flags, repos, expected, tmp_path):
+    """The depth-1 scan must not die on an empty glob (zsh) or index arrays."""
+    project = tmp_path / "My Drive" / "proj"
+    project.mkdir(parents=True)
+    (project / ".workflow_artifacts").mkdir()
+    for name in repos:
+        (project / name / ".git").mkdir(parents=True)
+    script = f'PROJECT_ROOT="{project}"\n' + _implement_block("GITS=") + '\necho "REPO_ROOT=[$REPO_ROOT]"\n'
+    out = _run_recipe(shell, flags, script, project)
+    assert "no matches found" not in out, out
+    if expected == "ambiguous":
+        assert "ambiguous or missing git repo" in out and "REPO_ROOT=[]" in out, out
+    else:
+        assert f"REPO_ROOT=[{project / expected}]" in out, out
+
+
+@pytest.mark.parametrize("shell,flags", _SHELLS)
+def test_implement_touched_set_run_step(shell, flags, spaced_project):
+    repo = spaced_project / "quoin"
+    block = _materialize(_implement_block("verify-touched.txt"))
+    script = f'PROJECT_ROOT="{spaced_project}"; REPO_ROOT="{repo}"\n' + block
+    out = _run_recipe(shell, flags, script, spaced_project)
+    touched = (spaced_project / ".workflow_artifacts" / "cache" / "verify-touched.txt").read_text()
+    assert touched.split() == ["quoin/dev/tests/test_mod.py"], touched
+    assert "VERIFY_RC=1" in out, out  # test_known fails in the fixture
+
+    _git(repo, "checkout", "--", ".")
+    out = _run_recipe(shell, flags, script, spaced_project)
+    assert "no touched files detected; skipping" in out and "VERIFY_RC" not in out, out

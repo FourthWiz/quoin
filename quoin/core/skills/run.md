@@ -51,7 +51,12 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
    extending existing files.
 7. Verify, in the same place as step 6: run affected tests once; if the
    environment cannot be built, record that and continue without retry
-   loops.
+   loops. Test runs happen in the foreground with an explicit long tool
+   timeout, and a delegated implementer never ends its turn with a run
+   pending. If it does anyway, the parent starts its own bounded waiter on
+   that specific test process (keyed on a unique token in its report path,
+   never on any test process) so it is re-invoked when the run exits, then
+   prompts the implementer to read the result. No user prompt is needed.
 8. Review, delegated, one pass, strong model, given only the brief, the
    diff and the test result. Fixes are applied where step 6 ran (the
    same implementer when delegated); no second review.
