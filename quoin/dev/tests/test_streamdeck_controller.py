@@ -115,7 +115,7 @@ def test_plus_agent_run_argv_uses_stable_entry(payload, deck_home, tmp_path):
     pr = str(tmp_path / "pr")
     os.makedirs(pr)
     de.set_surface(env, "/sock/x", "wanted", "surf")
-    cfg = {"session": "wanted", "socket": "/sock/x", "project": pr, "projects": {"wanted": pr}}
+    cfg = {"session": "wanted", "socket": "/sock/x", "project": pr, "projects": {"/sock/x\twanted": pr}}
     for action in ("claude", "codex", "shell", "git"):
         with patch.object(c, "apple", return_value="surf"), patch.object(c, "sessions", return_value=[("wanted", True)]), \
                 patch.object(c, "run") as run:
@@ -174,7 +174,7 @@ def test_adopted_tab_takes_its_project_from_the_agent_record(payload, tmp_path):
         c.execute("codex", cfg)
     argv = run.call_args.args[0]
     assert argv[argv.index("--cwd") + 1] == project and argv[-1] == project
-    assert cfg["projects"]["adopted"] == project and save.called
+    assert cfg["projects"][env.socket_dir + "\tadopted"] == project and save.called
 
 
 def test_adopted_tab_falls_back_to_the_pane_cwd_and_never_to_the_stale_project(payload, tmp_path):
@@ -254,6 +254,24 @@ def test_current_project_is_not_inherited_by_a_same_named_session_on_another_ser
     assert c.project_of(env, cfg, str(tmp_path / "sock-a"), "s") == project
     with patch.object(c, "run", side_effect=RuntimeError("no server")):
         assert c.project_of(env, cfg, str(tmp_path / "sock-b"), "s") is None
+
+
+def test_remembered_project_is_not_inherited_by_a_same_named_session_on_another_server(payload, tmp_path):
+    c = payload("controller")
+    de = payload("deckenv")
+    env = de.current()
+    project = str(tmp_path / "proj")
+    os.makedirs(project)
+    other = str(tmp_path / "sock-b")
+    # A name-only entry predates sockets and belongs to the default server only.
+    cfg = {"session": None, "project": "/tmp", "projects": {"s": project}}
+    assert c.project_of(env, cfg, env.socket_dir, "s") == project
+    with patch.object(c, "run", side_effect=RuntimeError("no server")):
+        assert c.project_of(env, cfg, other, "s") is None
+        de.remember_project(cfg, env.socket_dir, "t", project)
+        assert c.project_of(env, cfg, other, "t") is None
+    de.remember_project(cfg, other, "t", str(tmp_path))
+    assert c.project_of(env, cfg, other, "t") == str(tmp_path)
 
 
 def test_a_refusal_does_not_turn_the_next_press_into_a_stale_project_launch(payload, tmp_path):
@@ -395,8 +413,10 @@ def test_invalid_session_names_are_refused(payload, bad):
 
 def test_projects_map_is_capped_at_200_newest(payload):
     c = payload("controller")
+    de = payload("deckenv")
     config = {"projects": {"s%d" % i: "/p" for i in range(200)}, "project": "/tmp"}
     with patch.object(c, "sessions", return_value=[("fresh", True)]), patch.object(c, "choose", return_value="fresh • active"), \
             patch.object(c, "folder", return_value="/proj"), patch.object(c, "save"):
         assert c.select(config) is True
-    assert len(config["projects"]) == 200 and "s0" not in config["projects"] and config["projects"]["fresh"] == "/proj"
+    key = de.surface_key(de.current().socket_dir, "fresh")
+    assert len(config["projects"]) == 200 and "s0" not in config["projects"] and config["projects"][key] == "/proj"

@@ -422,11 +422,11 @@ def test_valid_session(de, name, ok):
 def test_remember_project_caps_and_refreshes(de):
     config = {"projects": {}}
     for i in range(205):
-        de.remember_project(config, "s%d" % i, "/p%d" % i)
+        de.remember_project(config, "/sock", "s%d" % i, "/p%d" % i)
     assert len(config["projects"]) == 200
-    assert "s0" not in config["projects"] and "s204" in config["projects"]
-    de.remember_project(config, "s5", "/new")
-    assert list(config["projects"])[-1] == "s5" and config["projects"]["s5"] == "/new"
+    assert "/sock\ts0" not in config["projects"] and "/sock\ts204" in config["projects"]
+    de.remember_project(config, "/sock", "s5", "/new")
+    assert list(config["projects"])[-1] == "/sock\ts5" and config["projects"]["/sock\ts5"] == "/new"
     bare = {}
-    de.remember_project(bare, "a", "/a")
-    assert bare == {"projects": {"a": "/a"}}
+    de.remember_project(bare, "/sock", "a", "/a")
+    assert bare == {"projects": {"/sock\ta": "/a"}}

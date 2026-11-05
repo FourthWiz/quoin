@@ -101,13 +101,13 @@ def select(config):
     if not picked:
         return False
     name = check_session(available[labels.index(picked)][0])
-    project = config.get('projects', {}).get(name)
+    project = deckenv.remembered_project(env(), config, socket, name)
     if not project:
         project = folder()
         if not project:
             return False
     config.update(session=name, project=project, socket=socket)
-    deckenv.remember_project(config, name, project)
+    deckenv.remember_project(config, socket, name, project)
     save(config)
     return True
 
@@ -165,7 +165,7 @@ def owner_from_title(e, config, title):
 
 def project_of(e, config, socket, name):
     """Project folder of a session: remembered, else its agents' records, else a pane's working directory."""
-    remembered = config.get('projects', {}).get(name)
+    remembered = deckenv.remembered_project(e, config, socket, name)
     if _abs_dir(remembered):
         return remembered
     # The current project belongs to the current session on its own server; another tab's session never inherits it.
@@ -239,7 +239,7 @@ def execute(action, config):
         else:
             name = 'quoin-deck-' + time.strftime('%m%d-%H%M%S')
             config.update(session=name, socket=e.socket_dir)
-            deckenv.remember_project(config, name, config['project'])
+            deckenv.remember_project(config, e.socket_dir, name, config['project'])
             save(config)
             terminal('new', config, e.socket_dir)
         return
@@ -265,7 +265,7 @@ def execute(action, config):
             raise RuntimeError('Could not tell which project ' + owner[1] + ' belongs to. Press the key of one of its agents first.')
         if adopted:
             deckenv.set_surface(e, owner[0], owner[1], surface)
-            deckenv.remember_project(config, owner[1], project)
+            deckenv.remember_project(config, owner[0], owner[1], project)
         config['project'] = project
         config['socket'], config['session'] = owner
         if adopted:
