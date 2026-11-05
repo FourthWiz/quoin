@@ -1700,7 +1700,11 @@ HELP
   local interactive=""
   if [ -t 0 ] && [ -z "$noprompt" ]; then interactive=1; fi
 
-  local resolved_name policy
+  # Set when the user answers the collision prompt with "new": that launch
+  # creates a fresh session, so it offers the layout picker exactly like
+  # --pick instead of silently reusing the base session's saved layout.
+  # Explicit --mode/tokens/--panes still win (they resolve before the picker).
+  local resolved_name policy pick_for_new=""
   resolved_name="$(_agentdesk_next_session_name "$session_name")"
   if [ "$resolved_name" != "$session_name" ]; then
     # $session_name is currently a live Zellij session (collision).
@@ -1728,6 +1732,7 @@ HELP
         [Nn]|[Nn][Ee][Ww])
           echo "Starting new session '$resolved_name'."
           session_name="$resolved_name"
+          pick_for_new=1
           ;;
         *)
           # Default (bare Enter, 'a', 'attach', or anything else): attach.
@@ -1827,8 +1832,9 @@ HELP
     # shellcheck disable=SC2064
     trap "rm -f ${(q)layout_tmp}" EXIT INT TERM
 
-  elif [ -n "$force_pick" ]; then
-    # Branch 2: --pick or AGENTDESK_PICK=1 — force interactive picker
+  elif [ -n "$force_pick" ] || [ -n "$pick_for_new" ]; then
+    # Branch 2: --pick, AGENTDESK_PICK=1, or a new session chosen at the
+    # collision prompt — force interactive picker.
     # --pick is inert when --mode/tokens are given (branch 1 wins above).
     if [ -n "$interactive" ]; then
       # TTY: show picker
