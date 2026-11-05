@@ -1271,6 +1271,59 @@ def _clear_env(settings: dict) -> int:
     return removed
 
 
+SETTINGS_BACKUP_KEEP_DEFAULT = 5
+SETTINGS_BACKUP_KEEP_ENV = "QUOIN_SETTINGS_BACKUP_KEEP"
+
+
+def _settings_backup_keep() -> int:
+    """Return how many settings.json backups to keep (env override, min 1)."""
+    raw = os.environ.get(SETTINGS_BACKUP_KEEP_ENV, "").strip()
+    if not raw:
+        return SETTINGS_BACKUP_KEEP_DEFAULT
+    try:
+        value = int(raw)
+    except ValueError:
+        print(
+            f"quoin: ignoring {SETTINGS_BACKUP_KEEP_ENV}={raw!r} (not an integer); "
+            f"keeping {SETTINGS_BACKUP_KEEP_DEFAULT} backups",
+            file=sys.stderr,
+        )
+        return SETTINGS_BACKUP_KEEP_DEFAULT
+    # Never prune the backup this run may have just written.
+    return max(value, 1)
+
+
+def _settings_backup_path(settings_path: pathlib.Path) -> pathlib.Path:
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return settings_path.parent / f"{settings_path.name}.bak-{ts}"
+
+
+def _prune_settings_backups(settings_path: pathlib.Path, keep: int) -> int:
+    """Delete all but the newest `keep` installer backups of settings_path.
+
+    Only files named exactly ``<name>.bak-YYYYMMDDTHHMMSSZ`` (the installer's
+    own pattern) are considered; hand-made backups with other suffixes are
+    never touched. The UTC timestamp sorts lexically, so name order is age
+    order. Returns the number of files removed.
+    """
+    pattern = re.compile(re.escape(settings_path.name) + r"\.bak-\d{8}T\d{6}Z")
+    try:
+        candidates = sorted(
+            p for p in settings_path.parent.iterdir()
+            if pattern.fullmatch(p.name) and p.is_file() and not p.is_symlink()
+        )
+    except OSError:
+        return 0
+    removed = 0
+    for old in candidates[:-keep] if keep > 0 else candidates:
+        try:
+            old.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def deploy_hooks(
     source_dir: pathlib.Path,
     dest_root: pathlib.Path,
@@ -1311,14 +1364,16 @@ def deploy_hooks(
     settings_path = dest_root / "settings.json"
 
     # Load existing settings or start fresh
+    original_text: str | None = None
     if settings_path.exists():
         try:
             with open(settings_path) as f:
-                settings = json.load(f)
-        except (json.JSONDecodeError, OSError) as exc:
+                original_text = f.read()
+            settings = json.loads(original_text)
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            original_text = None
             # Back up the broken file with a timestamp so prior backups are preserved
-            ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-            backup = settings_path.parent / f"{settings_path.name}.bak-{ts}"
+            backup = _settings_backup_path(settings_path)
             shutil.copyfile(settings_path, backup)
             print(
                 f"quoin: settings.json parse error ({exc}); backed up to {backup} and starting fresh",
@@ -1415,10 +1470,20 @@ def deploy_hooks(
             print(f"Set {', '.join(parts)} in {settings_path}['env']")
     # else: default path — the env key is never created, never read, never removed
 
+    new_text = json.dumps(settings, indent=2) + "\n"
+    # Back up a valid existing file before rewriting it, but only when the
+    # content actually changes, so idempotent re-installs add no backups.
+    if original_text is not None and original_text != new_text:
+        backup = _settings_backup_path(settings_path)
+        shutil.copyfile(settings_path, backup)
+        print(f"Backed up {settings_path} to {backup}")
+
     settings_path.parent.mkdir(parents=True, exist_ok=True)
     with open(settings_path, "w") as f:
-        json.dump(settings, f, indent=2)
-        f.write("\n")
+        f.write(new_text)
+    pruned = _prune_settings_backups(settings_path, _settings_backup_keep())
+    if pruned:
+        print(f"Pruned {pruned} old settings.json backup(s) next to {settings_path}")
     print(f"Merged {_stanza_count[0]} hook stanzas into {settings_path}")
     if added:
         print(f"Added {added} rm -rf/rm -fr deny rule(s) to {settings_path}")
