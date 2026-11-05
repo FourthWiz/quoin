@@ -37,7 +37,16 @@ Task artifacts live under `.workflow_artifacts/<task-name>/`.
    marking each stage done in `architecture.md`. Autonomous runs go
    through every stage in one session, stopping early only on an
    escalation condition. `--resume` continues at the first unfinished
-   stage.
+   stage. With the `parallel:` tag, stages are grouped by their declared
+   dependencies into waves (capped by `QUOIN_PARALLEL_MAX`, default 2, and
+   dropped to one at a time once the optional daily spend budget
+   `QUOIN_PARALLEL_BUDGET_USD` is reached). A stage with no declared
+   dependency line waits for the one before it. The
+   stages of a wave run concurrently, each in its own worktree on a temporary
+   stage branch, and are then merged into the task branch one at a time,
+   followed by one integration test run. A conflicting or refused merge is
+   aborted with the task branch left at its pre-merge commit, and recovery is
+   offered: resolve by hand, re-run the stage sequentially, or roll back.
 6. Implement, with no plan file, always on the strong (implementation)
    model: inline when the session already runs on it, otherwise in one
    delegated implementer on that model, given the brief, the context
@@ -75,4 +84,7 @@ automatically.
 `.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`.
 Staged tasks add `architecture.md` at the task root and `brief.md`,
 `review.md` (and `context.md` when needed) under each `stage-N/`. No
-cost ledger, run-state record, checkpoints or progress sentinels.
+run-state record, checkpoints or progress sentinels. No cost ledger,
+except that parallel stages record one row per stage implementer and
+reviewer, tagged with the stage, so cost reports can break costs down by
+stage.

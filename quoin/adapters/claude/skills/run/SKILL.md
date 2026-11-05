@@ -21,7 +21,7 @@ behalf. It never pushes and never opens a PR.
 
 Scan the input before anything else. The task name is the first token that is
 not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
-`hard:`, `strict:`, `small:` and the like; a leading `[no-redispatch]` is
+`hard:`, `strict:`, `small:`, `parallel:` and the like; a leading `[no-redispatch]` is
 stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
 input unchanged apart from removing `hard:`.
 
@@ -44,6 +44,9 @@ input unchanged apart from removing `hard:`.
    select heavy-pipeline profiles and have no effect here. If the user wrote
    `large:` interactively, mention in one line that `/run hard:` runs the full
    pipeline, then continue on the light path.
+5. **`parallel:`** → strip it and set `PARALLEL=true`. It only changes how a
+   staged task runs its stages (Step 4b, "Parallel waves"); a single-shape
+   task ignores it. It combines with `--autonomous` and `--resume`.
 
 ## Step 1 — Setup (inline)
 
@@ -176,6 +179,9 @@ note the decomposition under Assumptions in the brief.
    it must provide or may rely on.
 2. In the stage's repo, make sure the task branch exists (the same branch name in
    every repo, created as in Step 1 the first time a stage touches that repo).
+   Under `PARALLEL`, a stage in a multi-stage wave instead works on a
+   temporary stage branch in its own worktree, merged back into the task
+   branch (see "Parallel waves").
 3. If the stage's repo or area is not covered by the task's context pack, run
    Step 4 for the stage brief and save it to `stage-N/context.md`.
 4. Steps 5–8 as written, with the stage brief in place of the task brief: the
@@ -185,6 +191,88 @@ note the decomposition under Assumptions in the brief.
 5. Mark the stage ✅ in `architecture.md` (replace ⏳). If the stage showed the
    decomposition was wrong, update the later stages and add a one-line note to
    the Overview saying why, rather than forcing the old plan.
+
+**Parallel waves (`PARALLEL` only).** Stages run in dependency waves instead
+of strict file order. Below, `PS` means
+`python3 __QUOIN_HOME__/scripts/parallel_stages.py`. Each command prints one
+JSON object. Double-quote every path, branch and task value you substitute.
+
+1. **Plan the next wave.** If `QUOIN_PARALLEL_BUDGET_USD` (a dollar budget
+   for today's project spend) is set, read `today_usd` from
+   `python3 __QUOIN_HOME__/scripts/spend_monitor.py --once --json --scope project`
+   and pass it as `--spent-usd`. Then run
+   `PS plan --task-dir ".workflow_artifacts/<task>" [--spent-usd <usd>]`.
+   - It groups the ⏳ stages into `waves`, at most `cap` stages each
+     (`QUOIN_PARALLEL_MAX`, default 2).
+   - Only an explicit `Depends on: none` makes a stage independent. A stage
+     with no such line waits for the stage before it.
+   - Once the budget is reached the cap is 1, so the run carries on
+     sequentially.
+   - Run only `waves[0]`, then re-plan, because ✅ marks and spend change.
+   - Exit 2 (unknown dependency or cycle): fix the `Depends on:` lines if the
+     mistake is obvious, else escalate.
+2. **One-stage wave:** run it exactly as the sequential loop above.
+3. **Multi-stage wave.**
+   - For each stage, do sub-steps 1–3 above in this session, then run
+     `PS worktree --repo "<repo>" --task-branch "<task branch>" --stage S-0N`.
+     It prints `branch`, `path` and `base`. The worktree goes inside the repo
+     under `.claude/worktrees/`, which is kept out of `git status`. On resume
+     it reuses an existing stage branch or worktree and prints
+     `status: exists`.
+   - Spawn one Opus implementer per stage, all in a single message so they
+     run concurrently. Use the implementer tier guard's dispatch prompt (even
+     on Opus), and add four rules:
+     - work and run tests only inside `path`, never in the main checkout;
+     - use the junit token `impl-<task>-S-0N-<stamp>`;
+     - commit on the stage branch with a conventional message;
+     - return the commit SHA.
+   - Review each stage (Step 7) on `git diff <base>...<stage branch>`, send
+     fixes to that stage's implementer, and write `stage-N/review.md`.
+4. **Cost rows.** When `QUOIN_INLINE_COST_CAPTURE` is not `0`, append one
+   on-behalf row per stage implementer and per stage reviewer to
+   `.workflow_artifacts/<task>/cost-ledger.md`. Follow the recipe in
+   `__QUOIN_HOME__/memory/cost-ledger-format.md`:
+   - `AID` and `TUID` are that agent's `agentId` and tool-use id;
+   - PHASE is `implement` or `review`;
+   - NOTE is `on-behalf: <phase> via /run (stage S-0N)`;
+   - append `;stage=S-0N` to `ATTR`.
+
+   Write the implementer's row only after its fix pass, so that row covers
+   the fixes too. These are the only ledger rows the light run writes, and
+   `/cost_snapshot` uses them for its per-stage breakdown.
+5. **Integrate one stage at a time, in file order.** From the main checkout,
+   on the task branch, run
+   `PS merge --repo "<repo>" --into "<task branch>" --branch "<stage branch>"`.
+   `.workflow_artifacts/` edits never block a merge.
+   - **Exit 0 (merged):** run
+     `PS cleanup --repo "<repo>" --into "<task branch>" --branch "<stage branch>"`
+     and mark that stage ✅ at once. If cleanup reports `partial`, note the
+     leftover worktree in the report and carry on.
+   - **Integration gate:** after the wave's last merge, run Step 6 once on the
+     task branch. Fix any failure in a separate commit.
+   - **Exit 3 (`dirty-tree` or `wrong-branch`):** nothing was merged.
+     Interactive: show the files and ask whether to commit, stash or stop.
+     Autonomous: stop and escalate.
+   - **Exit 4:** the merge was aborted.
+     - If `restored` is false, stop at once and report `pre_merge`. Do not
+       touch the tree.
+     - Otherwise the task branch is back at `pre_merge`. `reason` is
+       `conflict` (files are listed in `conflicts`) or `merge-failed` (git
+       refused before merging; `detail` says why, for example an untracked
+       file in the way).
+     - Interactive: ask once (`AskUserQuestion`) with three options:
+       - resolve it by hand (merge the stage branch yourself, then
+         `/run --resume <task>`);
+       - re-run the stage sequentially on top of the task branch (`PS cleanup`
+         with `--discard`; the stage stays ⏳);
+       - undo with `/rollback`.
+     - Autonomous: keep the worktree and branch, end the run, and report the
+       reason, the files and those options.
+   - **Exit 2 from merge:** stop and report the error.
+
+   Never resolve a conflict silently, and never use `-X ours`/`-X theirs`.
+   On `--resume`, re-plan first. A ⏳ stage whose stage branch already has a
+   commit goes straight to review and merge.
 
 Continue to the next stage without asking unless an escalation condition hits.
 Under `AUTONOMOUS`, run every remaining stage in this session (only stage N
@@ -259,7 +347,8 @@ wrap the whole of `/run` in one subagent.
    errors, apply item 7. The implementer applies the fixes, re-runs Step 6
    once and reports back. There is still only one review.
 6. **Staged tasks.** Apply the guard per stage: one Opus implementer per
-   stage, given the stage brief.
+   stage, given the stage brief. Multi-stage `PARALLEL` waves always use
+   one Opus implementer per stage, even when this session is on Opus.
 7. **Fail-open** (only when the Agent spawn itself errors). Classify the
    error in this order:
    - **Autonomous-class** (`AUTONOMOUS`): never ask. Print
