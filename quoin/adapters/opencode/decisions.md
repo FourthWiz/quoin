@@ -388,13 +388,15 @@ records no token usage today, so it would need a new usage event first. An upstr
 extension-point proposal is not needed, because the slot API already exists.
 Scope: the API was read in the source at the evidence release; the terminal interface
 plugin API, the runtime loader and the built-in context panel are unchanged in 1.19.5.
-A probe plugin was written but not loaded in the binary, because the terminal interface
-needs a terminal (`tui-plugin-binary-load`).
+A pre-compiled probe plugin named in a `tui.json` passed with `OPENCODE_TUI_CONFIG`
+loads in the 1.18.32 binary under a pseudo-terminal, with its `solid-js` and
+`@opentui/solid` imports resolved against the host, and draws into `sidebar_content`
+(`tui-plugin-binary-load`).
 Upstream risks: the API still keeps the deprecated v1 command shape, marked for removal
 in v2 (`packages/plugin/src/tui.ts` L87-118 at the evidence release); the panel does not
 use it, but the API is still changing. A loaded terminal interface plugin runs in-process
 with the SDK client and the plugin-management calls (`tui-plugin-powers`).
-Follow-up: observe the binary load through a pseudo-terminal harness; record token usage
+Follow-up: record token usage
 and compactions from the server plugin; ship the panel once the context limits decision
 is set; when `OPENCODE_TUI_CONFIG` is passed to the child, update the child environment
 allowlist and the `pure-flag-readers` row.
