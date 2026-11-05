@@ -367,7 +367,7 @@ This is a diff-independent hard precondition, parallel to Step 6a's branch-place
 ```
 PROJECT_ROOT="$(pwd)"
 AFF="$PROJECT_ROOT/.workflow_artifacts/cache/review-affected-<date>"
-python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --require-task-context --format text --selectors-out "$AFF.selectors" --report-out "$AFF.txt" --junit-out "$AFF.xml"; AT_RC=$?
+python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$PROJECT_ROOT" --task "<task-name>" --require-task-context --format text --selectors-out "$AFF.selectors" --report-out "$AFF.txt" --junit-out "$AFF.xml"; AT_RC=$?
 echo "AT_RC=$AT_RC"
 if [ "$AT_RC" -eq 1 ]; then
   python3 __QUOIN_HOME__/scripts/known_red.py --pytest-output "$AFF.txt" --junit "$AFF.xml" --selectors-from "$AFF.selectors" --observed-rc "$AT_RC" --project-root "$PROJECT_ROOT" --format text; KR_RC=$?
