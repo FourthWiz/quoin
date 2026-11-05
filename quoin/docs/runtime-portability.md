@@ -6,6 +6,8 @@ This document defines the boundary for the first migration pass. It is intention
 
 For the current evidence-based feature-by-feature status, see
 `quoin/docs/runtime-parity-matrix.md`.
+For the cross-runtime packaging proposal (an Agent Skills / Agent Plugins
+bundle with thin per-runtime overlays), see `quoin/docs/agent-plugin-standard.md`.
 
 For the Phase 29 benchmark design, see `quoin/benchmarks/`. The benchmark
 framework compares simple Claude, Quoin + Claude, simple Codex, and Quoin +
