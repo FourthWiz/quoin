@@ -655,9 +655,10 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         default=None,
         help=(
-            "Root for deliverable detection and step execution. In --project-root mode "
-            "this is set automatically to the resolved git repo. Optional override for "
-            "--files-from / --files modes."
+            "Root for deliverable detection and step execution. With --project-root it "
+            "also names the git checkout whose changes are diffed (e.g. a task's git "
+            "worktree); it must be the top of a work tree. Defaults to the resolved "
+            "repo in --project-root mode and to cwd otherwise."
         ),
     )
     parser.add_argument(
@@ -721,8 +722,14 @@ def main(argv: list[str] | None = None) -> int:
             )
             _emit(res, fmt)
             return 5
+        # An explicit --repo-root names the checkout to diff (a task's git
+        # worktree, say) instead of the repo the depth-1 scan finds.
         try:
-            repo = affected.resolve_repo(args.project_root)
+            if args.repo_root is not None:
+                root = args.repo_root.expanduser().resolve()
+                repo = root if (root / ".git").exists() else None
+            else:
+                repo = affected.resolve_repo(args.project_root)
         except RuntimeError as exc:
             print(json.dumps({
                 "error": str(exc),
@@ -735,7 +742,11 @@ def main(argv: list[str] | None = None) -> int:
             return 3
         if repo is None:
             print(json.dumps({
-                "error": f"No git repo found under --project-root {args.project_root}",
+                "error": (
+                    f"No git repo found at --repo-root {args.repo_root}"
+                    if args.repo_root is not None
+                    else f"No git repo found under --project-root {args.project_root}"
+                ),
                 "exit_reason": "undeterminable-no-repo",
                 "ran_steps": False,
                 "changed": [],
@@ -744,8 +755,7 @@ def main(argv: list[str] | None = None) -> int:
             }), file=sys.stderr)
             return 3
 
-        if repo_root is None:
-            repo_root = repo
+        repo_root = repo
 
         files, reason = affected.changed_files(repo)
         if reason == "git-error":

@@ -86,6 +86,11 @@ Git-root resolution note (CRIT-1 / IVG-70 remedy):
   depth-1 discover_repos-style scan (mirroring branch_hygiene.py), then runs
   all git commands INSIDE that repo.  The caller (gate/review) NEVER runs git
   directly — the helper owns the resolution + diff-basis fallback.
+  The scan only ever sees the main checkout.  When the task's code lives in a
+  linked git worktree (e.g. <project>/.workspaces/<branch>/quoin), pass
+  --repo-root <worktree> as well: that worktree is then the repo whose branch
+  diff (plus its own uncommitted changes) forms the changed set, and the main
+  checkout's dirty tree is ignored.
 
 Diff-basis fallback chain (F-01 fix — no-upstream committed-branch gap):
   1. If upstream exists: git -C <repo> diff --name-only @{u}...HEAD (three-dot).
@@ -2661,6 +2666,21 @@ def resolve_repo(project_root: Path) -> Path | None:
     return repos[0]
 
 
+def explicit_repo(repo_root: Path) -> Path | None:
+    """Return repo_root resolved when it is the top of a git work tree, else None.
+
+    A linked worktree (``git worktree add``) carries a ``.git`` FILE rather than
+    a directory, so existence is the test. A subdirectory of a repo is refused
+    rather than walked up: the caller asked for this exact root, and test
+    discovery and the pytest cwd are anchored at it too.
+    """
+    try:
+        root = repo_root.expanduser().resolve()
+    except OSError:
+        return None
+    return root if (root / ".git").exists() else None
+
+
 # Infra folders under .workflow_artifacts/ that do NOT count as an active task
 # context — they exist regardless of whether any task is in flight (IVG-151).
 _TASK_CONTEXT_INFRA: frozenset[str] = frozenset({"memory", "cache", "finalized", "trash"})
@@ -2751,6 +2771,8 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
       2. Base-branch merge-base: <base>...HEAD where <base> is resolved via
          _resolve_base_branch() — this handles the committed-clean no-upstream
          case (the canonical /review + /gate state before /end_of_task push).
+         Steps 1 and 2 also add the tree's uncommitted tracked changes
+         (HEAD ∪ cached), so a dirty task worktree is covered too.
       3. Worktree + staged fallback (handles uncommitted dirty trees)
       4. no-changes (genuinely clean)
       Fail-CLOSED: if no base resolves AND no upstream AND tree is clean but
@@ -2770,6 +2792,25 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
     """
     repo_str = str(repo.resolve())
 
+    def _uncommitted() -> set[str] | None:
+        """Tracked files changed in the work tree or index vs HEAD; None on git error."""
+        out: set[str] = set()
+        for extra in (["HEAD"], ["--cached"]):
+            diff_out, _err, diff_rc = _run(
+                ["git", "-C", repo_str, "diff", "--name-only", *extra]
+            )
+            if diff_rc != 0:
+                return None
+            out.update(line.strip() for line in diff_out.splitlines() if line.strip())
+        return out
+
+    def _with_uncommitted(files: list[str], reason: str) -> tuple[list[str], str]:
+        # A branch diff alone misses edits not yet committed in this tree.
+        dirty = _uncommitted()
+        if dirty is None:
+            return [], "git-error"
+        return sorted(set(files) | dirty), reason
+
     # Step 1: try upstream three-dot diff
     ups_out, ups_err, ups_rc = _run(
         ["git", "-C", repo_str, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]
@@ -2782,7 +2823,7 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
             return [], "git-error"
         files = [f for f in diff_out.splitlines() if f.strip()]
         if files:
-            return files, "upstream-diff"
+            return _with_uncommitted(files, "upstream-diff")
         # Empty upstream diff — fall through to base-branch step
 
     # Step 2 (F-01 fix): base-branch merge-base diff — handles the committed-clean
@@ -2803,28 +2844,13 @@ def changed_files(repo: Path) -> tuple[list[str], str]:
                 return [], "git-error"
             files = [f for f in diff_out.splitlines() if f.strip()]
             if files:
-                return files, "base-branch-diff"
+                return _with_uncommitted(files, "base-branch-diff")
             # Empty base-branch diff — fall through to worktree fallback
 
     # Step 3: worktree + staged fallback
-    head_out, head_err, head_rc = _run(
-        ["git", "-C", repo_str, "diff", "--name-only", "HEAD"]
-    )
-    if head_rc != 0:
+    combined = _uncommitted()
+    if combined is None:
         return [], "git-error"
-    cached_out, cached_err, cached_rc = _run(
-        ["git", "-C", repo_str, "diff", "--name-only", "--cached"]
-    )
-    if cached_rc != 0:
-        return [], "git-error"
-
-    combined: set[str] = set()
-    for line in head_out.splitlines():
-        if line.strip():
-            combined.add(line.strip())
-    for line in cached_out.splitlines():
-        if line.strip():
-            combined.add(line.strip())
 
     if not combined:
         # Step 4: genuinely clean tree
@@ -3245,8 +3271,10 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "Root for test-file discovery and the pytest invocation.  "
-            "In --project-root mode this is set automatically to the resolved git repo.  "
-            "Optional override for --files-from / --files modes."
+            "With --project-root it also names the git checkout whose changes are "
+            "diffed (e.g. a task's git worktree) instead of the repo found under "
+            "the project root; it must be the top of a work tree.  Defaults to "
+            "the resolved repo in --project-root mode and to cwd otherwise."
         ),
     )
     parser.add_argument(
@@ -3461,9 +3489,16 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(json.dumps(sel.to_dict(), indent=2))
             return 5
-        # --project-root mode: resolve git repo, compute diff
+        # --project-root mode: resolve git repo, compute diff. An explicit
+        # --repo-root names the checkout to diff (a task's git worktree, say),
+        # so the depth-1 scan, which only ever finds the main checkout, is
+        # skipped and the changed set comes from that worktree's branch.
         try:
-            repo = resolve_repo(args.project_root)
+            repo = (
+                explicit_repo(args.repo_root)
+                if args.repo_root is not None
+                else resolve_repo(args.project_root)
+            )
         except RuntimeError as exc:
             print(json.dumps({
                 "error": str(exc),
@@ -3477,8 +3512,12 @@ def main(argv: list[str] | None = None) -> int:
             }), file=sys.stderr)
             return 3
         if repo is None:
+            where = (
+                f"at --repo-root {args.repo_root}" if args.repo_root is not None
+                else f"under --project-root {args.project_root}"
+            )
             print(json.dumps({
-                "error": f"No git repo found under --project-root {args.project_root}",
+                "error": f"No git repo found {where}",
                 "exit_reason": "undeterminable-no-repo",
                 "ran_pytest": False,
                 "pytest_returncode": None,
@@ -3489,9 +3528,7 @@ def main(argv: list[str] | None = None) -> int:
             }), file=sys.stderr)
             return 3
 
-        # Set repo_root if not explicitly overridden
-        if repo_root is None:
-            repo_root = repo
+        repo_root = repo
 
         files, reason = changed_files(repo)
         if reason == "git-error":
