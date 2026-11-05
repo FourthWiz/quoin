@@ -12,7 +12,8 @@ Public API (importable):
   load_config(claude_md_path: str = None, *, signals_yaml_path: str = None) -> dict
   collect_entries(scan_dir: str, scan_days: int = 30) -> List[RawEntry]
   score_entries(entries: List[RawEntry], config: dict) -> List[ScoredEntry]
-  dedup_against_lessons(entries: List[ScoredEntry], lessons_text: str) -> List[ScoredEntry]
+  dedup_against_lessons(entries: List[ScoredEntry], lessons_text: str,
+                        min_jaccard: float = 0.3) -> List[ScoredEntry]
   RawEntry  (dataclass)
   ScoredEntry  (dataclass)
 
@@ -94,6 +95,7 @@ class ScoredEntry:
     forget_score: int
     bucket: str         # "promote" | "forget" | "middle"
     protected: bool = False  # S-3: carried from RawEntry; demotes "forget" → "middle"
+    duplicate: bool = False  # already in lessons-learned; demoted "promote" → "middle"
 
 
 # ---------------------------------------------------------------------------
@@ -674,21 +676,36 @@ def _bucket(p_score: int, f_score: int, promote_min: int, promote_max_forget: in
 # dedup_against_lessons
 # ---------------------------------------------------------------------------
 
-def dedup_against_lessons(entries: List[ScoredEntry], lessons_text: str) -> List[ScoredEntry]:
-    """Filter out promote-bucket entries with ≥3-keyword overlap with lessons_text.
+DEDUP_MIN_SHARED = 3
+DEDUP_MIN_JACCARD = 0.3
+
+
+def dedup_against_lessons(entries: List[ScoredEntry], lessons_text: str,
+                          min_jaccard: float = DEDUP_MIN_JACCARD) -> List[ScoredEntry]:
+    """Demote promote-bucket entries that already exist in lessons_text.
 
     Overlap check: tokenize each entry's text and each paragraph of lessons_text
-    into lowercase word sets (≥4 chars). If the intersection has ≥3 words,
-    the entry is considered a duplicate and removed from the promote list.
+    into lowercase word sets (≥4 chars). An entry is a duplicate when some
+    paragraph shares at least DEDUP_MIN_SHARED words with it AND the Jaccard
+    similarity of the two sets is at least ``min_jaccard``. A bare shared-word
+    count is not enough: against a long lessons file nearly every entry shares
+    a handful of common words with some paragraph.
 
-    Non-promote entries are returned unchanged.
+    Duplicates are kept, moved to the "middle" bucket and flagged
+    ``duplicate=True``. Never dropping entries keeps the output size equal to
+    the collected corpus, so a wider --scan-days window can never return fewer
+    entries than a narrower one.
+
+    Non-promote entries are returned unchanged. Duplicates are updated in
+    place: the returned list holds the same objects that were passed in.
 
     Args:
         entries: list of ScoredEntry objects.
         lessons_text: full text of lessons-learned.md.
+        min_jaccard: similarity threshold for the duplicate test.
 
     Returns:
-        filtered list (dedup-suppressed promote entries removed).
+        list of the same length as ``entries``.
     """
     def _kws(text: str) -> set:
         return set(w.lower() for w in re.findall(r"\b[a-zA-Z_-]{4,}\b", text))
@@ -697,17 +714,19 @@ def dedup_against_lessons(entries: List[ScoredEntry], lessons_text: str) -> List
     paragraphs = re.split(r"\n{2,}", lessons_text)
     lessons_kw_sets = [_kws(p) for p in paragraphs if len(p.strip()) >= 10]
 
+    def _is_dup(entry_kws: set) -> bool:
+        for lkws in lessons_kw_sets:
+            shared = len(entry_kws & lkws)
+            if shared >= DEDUP_MIN_SHARED and shared / len(entry_kws | lkws) >= min_jaccard:
+                return True
+        return False
+
     result = []
     for entry in entries:
-        if entry.bucket != "promote":
-            result.append(entry)
-            continue
-
-        entry_kws = _kws(entry.text)
-        is_dup = any(len(entry_kws & lkws) >= 3 for lkws in lessons_kw_sets)
-        if not is_dup:
-            result.append(entry)
-        # Else: drop (duplicate of existing lesson)
+        if entry.bucket == "promote" and _is_dup(_kws(entry.text)):
+            entry.bucket = "middle"
+            entry.duplicate = True
+        result.append(entry)
 
     return result
 
@@ -733,6 +752,7 @@ def _entry_to_dict(entry: ScoredEntry) -> dict:
         "promote_score": entry.promote_score,
         "forget_score": entry.forget_score,
         "bucket": entry.bucket,
+        "duplicate": entry.duplicate,
     }
 
 
@@ -866,7 +886,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         if middle:
             print(f"\nMIDDLE-BAND ({len(middle)}):")
             for i, e in enumerate(middle, 1):
-                print(f"  {i}. [score: P={e.promote_score}, F={e.forget_score}] {_preview(e.text)}")
+                dup = " [already in lessons-learned]" if e.duplicate else ""
+                print(f"  {i}. [score: P={e.promote_score}, F={e.forget_score}]{dup} {_preview(e.text)}")
 
         if not scored:
             print("No entries scored.")
