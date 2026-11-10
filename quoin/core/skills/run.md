@@ -10,6 +10,9 @@ commit. It adds four things over a plain session: a precise task brief,
 a context pack gathered before coding, proportionate tests, and one
 independent review. It does not run multi-round planning, critique
 loops, architecture rounds or a separate gate; those live in `run_hard`.
+Small, well-localized tasks skip the context pack and review through a
+direct route, because on easy fixes they add cost and latency without a
+measurable gain in resolution.
 
 ## Sequence
 
@@ -21,6 +24,19 @@ task); markers change no behaviour and are never committed.
 1. Route: `hard:`/`strict:` input, or a resume of a task the heavy
    pipeline started, hands off to `run_hard` unchanged.
 2. Setup: task folder, fresh branch, relevant lessons.
+2b. Size, inline (no helper, no extra model call): take the direct route
+   only for a concrete defect or change with clear expected behaviour
+   that should touch one module plus its tests and involves no public
+   API, schema or migration, security-sensitive, dependency or
+   cross-repo change; otherwise, or when unsure, the light route. The
+   `direct:` and `light:` tags force a route, also in autonomous mode.
+   The decision and a one-line reason go into `brief.md` (`route:`,
+   `reason:`). The direct route writes a minimal brief (goal, route,
+   reason, verification result), implements on the strong model,
+   verifies and commits, skipping discovery (3), the context pack (5)
+   and the review (8). It escalates one way to the light route, keeping the work
+   done, when the diff outgrows one module, verification fails twice, or
+   the change falls into an excluded category.
 3. Discover, delegated, only when discovery memory is missing or older
    than the staleness threshold (7 days by default). A benchmark-only
    lean profile (`QUOIN_RUN_PROFILE=bench-lean`, set by the benchmark
@@ -88,7 +104,7 @@ automatically.
 ## Artifacts
 
 `.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`,
-`phases.log`.
+`phases.log` (a direct-route task writes only `brief.md` and `phases.log`).
 Staged tasks add `architecture.md` at the task root and `brief.md`,
 `review.md` (and `context.md` when needed) under each `stage-N/`. No
 run-state record, checkpoints or progress sentinels. No cost ledger,

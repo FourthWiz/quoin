@@ -736,6 +736,54 @@ def test_quoin_rows_without_a_plan_are_invalid_and_excluded(tmp_path):
     assert "Quoin route" in md
 
 
+def _routed(run_path, task_id, route, **kw):
+    _quoin_row(run_path, task_id, plan=True, extra={"workflow_route": {"route": route, "profile": None}}, **kw)
+
+
+def test_direct_route_rows_are_valid_and_reported_by_route_and_tier(tmp_path):
+    run_dir, run_id, suite_path = build_tiered_run(tmp_path)
+    run_path = run_dir / run_id
+    _routed(run_path, "e1", "direct", cost=0.50, wall=6)
+    _routed(run_path, "e2", "direct", verdict="fail", cost=0.30, wall=4)
+    _routed(run_path, "m1", "light", cost=3.00, wall=30)
+    _quoin_row(run_path, "m2", plan=False)                       # invalid: left out of the split
+    aggregate.aggregate_run(run_dir, run_id)
+    t = json.loads((run_path / "summary.json").read_text())["tiered"]
+
+    v = t["validity"]
+    assert v["invalid_quoin_rows"] == ["m2"]
+    assert v["quoin_route_counts"] == {"direct": 2, "light": 1, "fast": 0, "full": 0, "unknown": 1}
+
+    easy = t["by_route"]["tiers"]["easy"]
+    assert list(easy) == ["direct"]
+    q, p = easy["direct"][QUOIN_CELL], easy["direct"][PLAIN_CELL]
+    assert (q["n"], q["passes"], q["pass_at_1"]) == (2, 1, 0.5)
+    assert q["usd"]["mean"] == pytest.approx(0.40)
+    assert q["wall_clock_s"]["mean"] == pytest.approx(5.0)
+    assert (p["n"], p["pass_at_1"]) == (2, 0.5)                  # plain on the same tasks
+    assert p["usd"]["mean"] == pytest.approx(1.50)
+
+    medium = t["by_route"]["tiers"]["medium"]
+    assert list(medium) == ["light"]
+    assert medium["light"][QUOIN_CELL]["pass_at_1"] == 1.0
+    assert medium["light"][PLAIN_CELL]["pass_at_1"] == 0.0       # plain m1 timed out
+    assert set(t["by_route"]["overall"]) == {"direct", "light"}
+
+    mix = t["by_route"]["route_by_tier"]
+    assert mix["easy"]["counts"]["direct"] == 2 and mix["easy"]["direct_share"] == 1.0
+    assert mix["medium"]["n"] == 1 and mix["medium"]["direct_share"] == 0.0
+    assert mix["large"] == {"n": 0, "counts": dict.fromkeys(tiered_report.QUOIN_ROUTES, 0),
+                            "direct_share": None}
+
+    md = (run_path / "summary.md").read_text()
+    assert "### Quoin results by route" in md and "### Quoin route by tier" in md
+    assert "Quoin routes: direct 2, light 1, fast 0, full 0, unknown 1" in md
+    route_rows = [line for line in md.splitlines() if line.startswith("| easy") and "direct" in line]
+    assert route_rows and "50.0%" in route_rows[0] and "$0.40" in route_rows[0]
+    mix_rows = [line.replace(" ", "") for line in md.splitlines() if line.replace(" ", "").startswith("|easy|2|2|")]
+    assert mix_rows and mix_rows[0].endswith("|100.0%|")
+
+
 def test_post_plan_stop_alone_is_not_invalid(tmp_path):
     run_dir, run_id, suite_path = build_tiered_run(tmp_path)
     run_path = run_dir / run_id
