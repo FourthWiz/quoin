@@ -175,6 +175,18 @@ def write_run_result(result: RunResult, run_dir: Path) -> Path:
     if result.tokens_cache_write is not None:
         metrics_data["tokens_cache_write"] = result.tokens_cache_write
     metrics_data.update(result.extra)
+    if result.cell == "quoin-claude":
+        # Per-phase breakdown of the /run session; a parse failure never
+        # blocks writing the row.
+        try:
+            from .phase_report import build_phase_report
+
+            phase = build_phase_report(
+                out_dir, {**metrics_data, "cost_runtime_usd": result.cost_runtime_usd})
+        except Exception as exc:  # noqa: BLE001
+            phase = {"error": f"{type(exc).__name__}: {exc}"[:200]}
+        if phase is not None:
+            metrics_data["phase_report"] = phase
     (out_dir / "metrics.json").write_text(
         json.dumps(metrics_data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",

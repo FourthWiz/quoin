@@ -23,6 +23,7 @@ from .cost import (
 )
 from .cost import _CODEX_MODEL_PREFIXES as CODEX_MODEL_PREFIXES
 from . import patch_size as _patch_size
+from . import phase_report as _phase_report
 from .session_state import (
     INVALID_REASONS, is_judge_pending, pipeline_invalid_reason,
 )
@@ -741,6 +742,14 @@ def build_tiered_report(run_path, suite, manifest, suite_sha=None):
     except (TypeError, ValueError):
         retries = 0
 
+    phase_reports = {t["id"]: _phase_report_of(run_path / QUOIN_CELL / t["id"], pricing) for t in scoped}
+    phase_breakdown = {
+        tier: _phase_report.summarize(
+            [phase_reports[t["id"]] for t in scoped if (t.get("tier") or "unknown") == tier])
+        for tier in tiers
+    }
+    phase_breakdown["overall"] = _phase_report.summarize(list(phase_reports.values()))
+
     report = {
         "schema_version": 1,
         "arms": {"plain": PLAIN_CELL, "quoin": QUOIN_CELL},
@@ -765,8 +774,23 @@ def build_tiered_report(run_path, suite, manifest, suite_sha=None):
             for arm in ARMS
         },
         "caveat": _caveat(len(scoped), counts, overall),
+        "phase_breakdown": phase_breakdown,
     }
     return report
+
+
+def _phase_report_of(task_dir, pricing):
+    """The row's stored per-phase report, else one rebuilt from its transcript."""
+    if not task_dir.is_dir():
+        return None
+    metrics = _read_json(task_dir / "metrics.json") or {}
+    stored = metrics.get("phase_report")
+    if isinstance(stored, dict) and isinstance(stored.get("phases"), dict):
+        return stored
+    try:
+        return _phase_report.build_phase_report(task_dir, metrics, pricing)
+    except Exception:  # noqa: BLE001 - one bad transcript must not sink the summary
+        return None
 
 
 def _caveat(n_tasks, counts, overall):
@@ -899,6 +923,12 @@ def render_tiered_markdown(report, format_table):
     lines.append(table_text(table))
     lines.append("_Unavailable values count as 0 in sums and means._")
     lines.append("")
+    breakdown = report.get("phase_breakdown") or {}
+    phase_lines = _phase_report.render_markdown(
+        [(label, breakdown.get(label)) for label, _ in groups], table_text)
+    if phase_lines:
+        lines.extend(phase_lines)
+        lines.append("")
     for arm in ARMS:
         stats = report["overall"][arm]
         cap = "no cap recorded" if stats["cap_usd"] is None else "cap $%.2f per task" % stats["cap_usd"]

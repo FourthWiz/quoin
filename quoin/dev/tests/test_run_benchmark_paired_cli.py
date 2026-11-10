@@ -198,6 +198,25 @@ def test_skip_judge_complete_run_exits_zero(monkeypatch, capsys, tmp_path, arm_r
     _no_leftovers(sandbox_parent)
 
 
+def test_lean_route_is_recorded_in_the_manifest(monkeypatch, tmp_path, arm_repo, auth, standin,
+                                                paired_arm_stubs, sandbox_parent):
+    monkeypatch.setenv("QUOIN_BENCH_QUOIN_ROUTE", "lean")
+    _complete(monkeypatch)
+    assert _main(monkeypatch, *_args(tmp_path, arm_repo, suite=standin["suite"]), "--skip-judge") == 0
+    manifest = read_manifest(tmp_path / "runs" / "R")
+    assert manifest["quoin_route"] == "lean" and manifest["quoin_run_profile"] == "bench-lean"
+    keys = json.loads(manifest["session_env_keys"])
+    assert "QUOIN_RUN_PROFILE" in keys["quoin-claude"]
+    assert "QUOIN_RUN_PROFILE" not in keys["simple-claude"]
+
+
+def test_unknown_route_refuses(monkeypatch, capsys, tmp_path, arm_repo, auth, standin, sandbox_parent):
+    monkeypatch.setenv("QUOIN_BENCH_QUOIN_ROUTE", "fast")
+    assert _main(monkeypatch, *_args(tmp_path, arm_repo, suite=standin["suite"]), "--skip-judge") == 2
+    assert "REFUSED: route" in capsys.readouterr().err
+    _no_leftovers(sandbox_parent)
+
+
 def test_skip_judge_abort_exits_one(monkeypatch, tmp_path, arm_repo, auth, standin,
                                     paired_arm_stubs, sandbox_parent):
     _complete(monkeypatch, paired_run.PairedOutcome(stop_reason="abort", abort_detail=["auth-failure"]))
@@ -484,6 +503,21 @@ def test_quiet_skip_judge_run_prints_no_deferred_line(monkeypatch, capsys, tmp_p
     doc = json.loads(standin["suite"].read_text())
     assert run_benchmark._paired_main(args, standin["suite"], doc, quiet_deferred_hint=True) == 0
     assert "Judging deferred" not in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("stored,requested,refused", [
+    (None, "default", False),
+    (None, "lean", True),
+    ("lean", "lean", False),
+    ("lean", "default", True),
+    ("hard", "lean", True),
+])
+def test_resume_refuses_a_different_quoin_route(tmp_path, monkeypatch, stored, requested, refused):
+    _manifest_args(tmp_path, monkeypatch, extra={} if stored is None else {"quoin_route": stored})
+    why = run_benchmark._check_resume_route(tmp_path / "runs", "R", requested)
+    assert (why is not None) == refused
+    if refused:
+        assert requested in why and "--run-id" in why
 
 
 def _widen_check(tmp_path, monkeypatch, stored, requested):

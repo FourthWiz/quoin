@@ -112,3 +112,37 @@ class HarnessConfig:
         if run_dir := os.environ.get("QUOIN_BENCH_RUN_DIR"):
             cfg.run_dir = Path(run_dir)
         return cfg
+
+
+# Which /run route the quoin arm takes. "default" is light /run, "hard" the heavy
+# pipeline, "lean" light /run without discovery and without the lessons append.
+QUOIN_ROUTE_ENV = "QUOIN_BENCH_QUOIN_ROUTE"
+QUOIN_ROUTES = ("default", "hard", "lean")
+# Benchmark-only switch the quoin arm's session reads in /run Step 0.
+RUN_PROFILE_ENV = "QUOIN_RUN_PROFILE"
+LEAN_RUN_PROFILE = "bench-lean"
+# Silences the session-start hook's "run /discover" banner, which would
+# otherwise contradict the lean profile's skipped discovery step.
+DISCOVERY_REFRESH_DISABLE_ENV = "QUOIN_DISCOVERY_REFRESH_DISABLE"
+
+
+def quoin_route(environ=None) -> str:
+    """The configured quoin-arm route; ValueError for an unknown value."""
+    environ = os.environ if environ is None else environ
+    value = (environ.get(QUOIN_ROUTE_ENV) or "").strip().lower() or "default"
+    if value not in QUOIN_ROUTES:
+        raise ValueError(
+            f"{QUOIN_ROUTE_ENV}={value!r} is not one of {', '.join(QUOIN_ROUTES)}"
+        )
+    return value
+
+
+def quoin_route_or_default(environ=None) -> str:
+    """`quoin_route`, with an unknown value read as the default route.
+
+    For callers past the paired preflight, which refuses unknown values.
+    """
+    try:
+        return quoin_route(environ)
+    except ValueError:
+        return "default"

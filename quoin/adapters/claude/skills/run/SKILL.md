@@ -17,6 +17,21 @@ benchmarks showed they multiply cost and wall time without improving resolution.
 **You ARE an explicit user invocation.** `/run` may commit locally on the user's
 behalf. It never pushes and never opens a PR.
 
+**Phase markers.** At the start of each step, append a marker:
+`python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" <phase>`, with phase one of
+`setup`, `discover`, `frame`, `context`, `decompose`, `implement`, `verify`,
+`review`, `review-fixes`, `commit`. Add `--skipped` when the step is skipped, and
+`--stage N` for steps run inside stage N of a staged task. Chain it onto a Bash
+call the step already makes rather than spending a separate call where you can,
+and put `;` after the marker (never `&&`) so the step's own command runs even if
+the marker cannot. The marker only appends to `.workflow_artifacts/<task>/phases.log`,
+which benchmark runs read to split cost and time by phase; it changes nothing
+else, a failure is only a warning, and the log is never staged or committed.
+When the implementer tier guard dispatches, you write `implement` before the
+spawn and `review-fixes` before sending it the findings; it writes none. (The
+phase report counts a subagent's messages under the phase that spawned it, so
+fixes made through that implementer show up as `implement`.)
+
 ## Step 0 — Route
 
 Scan the input before anything else. The task name is the first token that is
@@ -47,10 +62,19 @@ input unchanged apart from removing `hard:`.
 5. **`parallel:`** → strip it and set `PARALLEL=true`. It only changes how a
    staged task runs its stages (Step 4b, "Parallel waves"); a single-shape
    task ignores it. It combines with `--autonomous` and `--resume`.
+6. **`QUOIN_RUN_PROFILE=bench-lean`** in the environment → set `LEAN=true`.
+   This is a benchmark-only switch, never a tag: the benchmark harness sets it
+   for its quoin arm to measure /run without discovery. Read it from the
+   `profile=` line the Step 1 setup marker prints; a `--resume` that skips
+   Step 1 reads it with `printenv QUOIN_RUN_PROFILE`. Under `LEAN`, Step 2 only
+   logs its marker as skipped and Step 8 skips the lessons-learned append;
+   every other step runs as written.
 
 ## Step 1 — Setup (inline)
 
-1. Derive a kebab-case task name; create `.workflow_artifacts/<task>/`.
+1. Derive a kebab-case task name; create the task folder and log the first
+   marker in one call:
+   `mkdir -p ".workflow_artifacts/<task>" && python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" setup`
 2. Git: if the tree has uncommitted changes (ignore untracked
    `.workflow_artifacts/`), ask what to do with them (interactive) or leave them
    alone and work on top of them (autonomous). Then create a fresh task branch,
@@ -68,11 +92,14 @@ Discovery memory is refreshed when it is missing or older than 7 days
 (`QUOIN_DISCOVERY_STALE_DAYS`):
 
 ```bash
-find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1
+if [ -n "$(find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1)" ]; then echo recent; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover --skipped; else echo stale; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover; fi
 ```
 
-- Non-empty output (recent) → skip and say so in one line.
-- Empty output (missing or older than 7 days) → spawn one subagent on **opus**
+- Under `LEAN`, do not run that check: log
+  `run_phase.py "<task>" discover --skipped` and go on to Step 3. The context
+  pack explores the repository itself.
+- `recent` → skip and say so in one line.
+- `stale` (missing or older than 7 days) → spawn one subagent on **opus**
   whose prompt starts with `[no-redispatch]` and runs `/discover` for the project
   root (the prefix stops `/discover` from re-dispatching itself into a second
   subagent). Wait for it; its output files are the project memory the next steps
@@ -80,7 +107,7 @@ find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-hea
 
 ## Step 3 — Frame (inline)
 
-Write `.workflow_artifacts/<task>/brief.md`, at most about 40 lines:
+Marker: `frame`. Write `.workflow_artifacts/<task>/brief.md`, at most about 40 lines:
 
 ```markdown
 # <task name>
@@ -122,8 +149,8 @@ record the assumption and continue.
 
 ## Step 4 — Context pack (subagent)
 
-Spawn one read-only subagent (Explore type, sonnet) with the brief's text and the
-paths of the discovery memory files. Its job is to return the pack below (at
+Marker: `context`. Spawn one read-only subagent (Explore type, sonnet) with the brief's text and the
+paths of the discovery memory files (none under `LEAN`: it explores the repo from scratch). Its job is to return the pack below (at
 most about 60 lines), which you then save as `.workflow_artifacts/<task>/context.md`
 (the subagent is read-only):
 
@@ -142,7 +169,7 @@ its summary in context.
 
 ## Step 4b — Decompose (staged tasks only, inline)
 
-Using the brief and the context pack, write `.workflow_artifacts/<task>/architecture.md`
+Marker: `decompose`. Using the brief and the context pack, write `.workflow_artifacts/<task>/architecture.md`
 (at most about 60 lines). Keep the stage rows in exactly this form, which the
 stage resolver parses:
 
@@ -364,7 +391,7 @@ wrap the whole of `/run` in one subagent.
 
 ## Step 5 — Implement (inline)
 
-Implement the brief in this session (or, when the implementer tier guard
+Marker: `implement`. Implement the brief in this session (or, when the implementer tier guard
 dispatched, in the Opus implementer), using the context pack. Plan in your own
 reasoning; do not write a plan file. Keep the diff minimal: no drive-by refactors,
 no speculative abstractions.
@@ -376,7 +403,7 @@ duplicate coverage across files, and do not build fixtures larger than the chang
 
 ## Step 6 — Verify (inline)
 
-Run the tests that cover the change once, using the test command from the
+Marker: `verify` (chain it before the test command). Run the tests that cover the change once, using the test command from the
 context pack, in the FOREGROUND with an explicit Bash `timeout: 600000` (see
 the dispatch rule above; inline runs follow it too). For a Python project you may instead use the affected-test helper:
 
@@ -395,7 +422,7 @@ outside the project, or install packages globally.
 
 ## Step 7 — Review (subagent, one pass)
 
-Spawn one general-purpose review subagent on **opus**. Give it only the brief, the
+Marker: `review` (chain it onto the `git add -N` call below). Spawn one general-purpose review subagent on **opus**. Give it only the brief, the
 full diff of the task against its base, and the verification result. The work is
 not committed yet, so first mark new files with `git add -N <new files>` and pass
 `git diff <base>` (base = the commit the task branch started from); a plain
@@ -406,12 +433,14 @@ yours. Ask it for at most about 10 findings, each with `path:line`, severity
 against the acceptance criteria, missed call sites, security issues, and whether
 the tests are proportionate (flag both missing and excessive tests).
 
-Then, inline on Opus (or through the Opus implementer when the guard
-dispatched): apply blockers and should-fixes, skip nits unless trivial, and
+Then log `review-fixes` and, inline on Opus (or through the Opus implementer when the guard
+dispatched), apply blockers and should-fixes, skip nits unless trivial, and
 re-run Step 6 once if code changed. Do not spawn a second review. Write a short
 `.workflow_artifacts/<task>/review.md` listing each finding and what you did with it.
 
 ## Step 8 — Commit (inline)
+
+Marker: `commit` (chain it onto the `git add` call).
 
 1. Stage the changed files by name, never with `git add -A`. Never stage
    `.workflow_artifacts/` content into a project that does not track it.
@@ -419,7 +448,7 @@ re-run Step 6 once if code changed. Do not spawn a second review. Write a short
    The message is plain engineering prose per
    `__QUOIN_HOME__/memory/clean-authored-content.md`: no artifact paths, finding
    IDs or review narration.
-3. If the task surfaced a reusable gotcha, append one entry to
+3. Unless `LEAN`, if the task surfaced a reusable gotcha, append one entry to
    `.workflow_artifacts/memory/lessons-learned.md` by piping it into
    `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
 4. Report in two or three sentences: what changed, test status, and the next step

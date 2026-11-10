@@ -60,6 +60,18 @@ def test_route_env_selects_heavy_pipeline_prefix(monkeypatch):
     assert quoin_claude._run_prefix().startswith("/run --autonomous hard: small: ")
 
 
+def test_lean_route_keeps_light_prompt_and_rejects_unknown_routes(monkeypatch):
+    from quoin.benchmarks.harness.config import quoin_route
+
+    monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, "Lean")
+    assert quoin_claude._run_prefix() == quoin_claude.QUOIN_RUN_PREFIX
+    assert quoin_route() == "lean"
+    monkeypatch.delenv(quoin_claude.ENV_BENCH_ROUTE)
+    assert quoin_route() == "default"
+    with pytest.raises(ValueError):
+        quoin_route({quoin_claude.ENV_BENCH_ROUTE: "fast"})
+
+
 def test_light_route_detected_from_brief(tmp_path):
     task = tmp_path / "fix-thing"
     task.mkdir()
