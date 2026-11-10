@@ -39,8 +39,10 @@ def test_quoin_prompt_is_the_run_slash_command_plus_the_base_prompt(tmp_path):
     base = _build_prompt(TASK)
     assert argv[-1] == quoin_claude.QUOIN_RUN_PREFIX + base
     assert argv[-1].startswith("/run --autonomous This session")
-    assert "the /run pipeline is required" in argv[-1]
-    assert "do not fix the issue directly" in argv[-1]
+    assert "follow /run's own routing" in argv[-1]
+    assert "direct route" in argv[-1]
+    assert "do not fix the issue outside /run" in argv[-1]
+    assert "even if the fix looks trivial" not in argv[-1]
     assert argv[-1].endswith(base)
     assert "Use /run --autonomous end-to-end" not in argv[-1]
 
@@ -48,7 +50,8 @@ def test_quoin_prompt_is_the_run_slash_command_plus_the_base_prompt(tmp_path):
 def test_quoin_prefix_carries_no_run_control_tokens():
     # /run strips these from anywhere in its input; the prefix must not add any.
     body = quoin_claude.QUOIN_RUN_PREFIX[len("/run --autonomous "):]
-    for token in ("hard:", "small:", "fast:", "strict:", "medium:", "large:", "max_rounds:", "--resume", "["):
+    for token in ("hard:", "small:", "fast:", "strict:", "medium:", "large:", "max_rounds:", "--resume", "[",
+                  "direct:", "light:", "parallel:"):
         assert token not in body
 
 
@@ -141,6 +144,37 @@ def test_light_brief_counts_as_the_plan(tmp_path):
     got = _capture(tmp_path, {"task/brief.md": "# task\n## Goal\nfix it\n"})
     assert got["has_current_plan_md"] is True
     assert got["pipeline_started"] is True
+    assert got["workflow_route"]["route"] == "light"
+
+
+def test_direct_route_brief_is_the_direct_route_and_a_valid_plan(tmp_path):
+    got = _capture(tmp_path, {"task/brief.md": (
+        "# task\n## Goal\nfix it\n## Size\nroute: direct\nreason: one-line fix in one module\n"
+        "## Verification\npytest tests/test_x.py — pass\n"
+    )})
+    assert got["has_current_plan_md"] is True
+    assert got["workflow_route"] == {"route": "direct", "profile": None}
+
+
+def test_stray_route_line_before_the_size_section_is_ignored(tmp_path):
+    got = _capture(tmp_path, {"task/brief.md": (
+        "# task\n## Goal\nfix the resolver\nroute: api_view\n## Size\nroute: direct\nreason: x\n"
+    )})
+    assert got["workflow_route"]["route"] == "direct"
+
+
+def test_escalated_direct_brief_reads_as_light(tmp_path):
+    got = _capture(tmp_path, {"task/brief.md": (
+        "# task\n## Size\nroute: light\nescalated: from direct — diff outgrew one module\n"
+    )})
+    assert got["workflow_route"]["route"] == "light"
+
+
+def test_task_root_brief_route_wins_over_stage_briefs(tmp_path):
+    got = _capture(tmp_path, {
+        "task/brief.md": "# task\n## Size\nroute: light\n",
+        "task/stage-1/brief.md": "# stage\nroute: direct\n",
+    })
     assert got["workflow_route"]["route"] == "light"
 
 

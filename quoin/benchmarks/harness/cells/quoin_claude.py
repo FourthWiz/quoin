@@ -12,10 +12,11 @@ Key differences from simple_claude.py:
      subprocess environment. Both must be set for /gate to auto-approve.
   3. Starts the prompt with the slash command `/run --autonomous` (or
      `/run --autonomous hard: small:` under QUOIN_BENCH_QUOIN_ROUTE=hard) and a
-     line saying the pipeline is required, so the CLI expands the run skill
-     itself (a prose request to "use /run" left a session free to skip the
-     pipeline, and the bare slash command still let a session decide an easy
-     issue was too small for it and fix it directly). `/run`'s
+     line saying the task must go through /run and follow its own routing
+     (direct route included), so the CLI expands the run skill itself (a prose
+     request to "use /run" left a session free to skip the pipeline, and the
+     bare slash command still let a session decide an easy issue was too small
+     for it and fix it outside the skill). `/run`'s
      SKILL.md has no non-interactive path of its own for gates, so
      `--autonomous` is required: a `--print` session cannot answer its
      checkpoints. `--autonomous` is present in both arms' `run/SKILL.md` and
@@ -84,16 +85,18 @@ ENV_GATE_AUTO_APPROVE = "QUOIN_GATE_AUTO_APPROVE"
 ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 
 # The slash command alone still let a session judge an easy issue too small for
-# the pipeline and fix it directly, so the arm also states that the pipeline is
-# the thing under test. The default is the light /run route; setting
+# /run and fix it outside the skill, so the arm also states that /run is the
+# thing under test. /run sizes the task itself and may take its direct route
+# for a small fix; that route is part of the workflow being measured, so the
+# prefix defers to /run's own routing rather than forcing every step. Setting
 # QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
 # `small:` (one plan pass, implement, review), as the earlier suites did, and
 # =lean keeps this prompt but sets QUOIN_RUN_PROFILE=bench-lean for the session.
 QUOIN_RUN_PREFIX = (
     "/run --autonomous "
-    "This session benchmarks the quoin workflow, so the /run pipeline is required: "
-    "follow its steps (brief, context, implement, review) even if the fix looks "
-    "trivial, and do not fix the issue directly outside the pipeline.\n\n"
+    "This session benchmarks the quoin workflow, so the task must go through /run: "
+    "follow /run's own routing, including its Size step and the direct route when "
+    "it picks that route, and do not fix the issue outside /run.\n\n"
 )
 QUOIN_HARD_RUN_PREFIX = (
     "/run --autonomous hard: small: "
@@ -217,6 +220,7 @@ PHASE_FILE_PATTERNS = (
     "review-*.md", "cost-ledger.md", "brief.md", "context.md", "review.md",
 )
 _ROUTE_LINE = re.compile(r"^\s*route\s*:\s*(\w+)", re.IGNORECASE | re.MULTILINE)
+BRIEF_ROUTES = ("direct", "light")
 _PROFILE_LINE = re.compile(r"Task profile:\**\s*\**\s*([A-Za-z]+)", re.IGNORECASE)
 
 
@@ -225,6 +229,24 @@ def _read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8", errors="replace")
     except OSError:
         return ""
+
+
+def brief_route(dest: Path) -> str:
+    """The light-/run route a captured task recorded in its brief.
+
+    /run writes `route: direct` or `route: light` in the brief's Size section;
+    a brief without that line (an older run, or an escalated direct run whose
+    line now says light) is a light run. The task-root brief is preferred over
+    a staged task's stage briefs.
+    """
+    briefs = sorted(dest.rglob("brief.md"), key=lambda p: (len(p.parts), str(p)))
+    for brief in briefs:
+        # A stray `route:` line elsewhere in the brief (an issue about URL
+        # routing) must not hide the Size section's line.
+        for match in _ROUTE_LINE.finditer(_read_text(brief)):
+            if match.group(1).lower() in BRIEF_ROUTES:
+                return match.group(1).lower()
+    return "light"
 
 
 def _pipeline_diagnostics(dest: Path) -> dict:
@@ -253,7 +275,7 @@ def _pipeline_diagnostics(dest: Path) -> dict:
         if match and match.group(1).lower() in ("fast", "full"):
             route = match.group(1).lower()
     if route == "unknown" and not plans and any(dest.rglob("brief.md")):
-        route = "light"
+        route = brief_route(dest)
     if route == "unknown" and plans:
         plan_text = _read_text(plans[0])
         route = "fast" if re.search(r"^provenance:\s*fast-path-triage\s*$", plan_text, re.MULTILINE) else "full"
@@ -296,7 +318,8 @@ def _capture_workflow_artifacts(
         "artifacts_path": str | None,
         "phase_files": [str],
         "pipeline_started": bool,
-        "workflow_route": {"route": "light" | "fast" | "full" | "unknown", "profile": str | None},
+        "workflow_route": {"route": "direct" | "light" | "fast" | "full" | "unknown",
+                           "profile": str | None},
       }
     """
     empty = {
@@ -319,8 +342,8 @@ def _capture_workflow_artifacts(
         # Evidence exists but could not be preserved: the plan is unknown, not absent.
         return {**empty, "copy_failed": True}
 
-    # Validate: look for architecture.md and a plan in any subfolder. The light
-    # /run route plans in its brief instead of writing current-plan.md.
+    # Validate: look for architecture.md and a plan in any subfolder. Light /run
+    # (direct route included) plans in its brief instead of current-plan.md.
     has_arch = any(dest.rglob("architecture.md"))
     has_plan = any(dest.rglob("current-plan.md")) or any(dest.rglob("brief.md"))
 

@@ -1,6 +1,6 @@
 ---
 name: run
-description: "Default pipeline: brief, context pack, implement on Opus, one review, local commit. Use for: /run, 'do this task'. Tags: hard: (full pipeline), --autonomous."
+description: "Default pipeline: size, then a direct fix or brief, context pack, Opus implement, one review; local commit. Use for: /run, 'do this task'. Tags: hard:, direct:/light: (force route), --autonomous."
 model: opus
 ---
 
@@ -36,9 +36,9 @@ fixes made through that implementer show up as `implement`.)
 
 Scan the input before anything else. The task name is the first token that is
 not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
-`hard:`, `strict:`, `small:`, `parallel:` and the like; a leading `[no-redispatch]` is
+`hard:`, `strict:`, `small:`, `parallel:`, `direct:`, `light:` and the like; a leading `[no-redispatch]` is
 stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
-input unchanged apart from removing `hard:`.
+input unchanged apart from removing `hard:`, `direct:` and `light:`.
 
 1. **`hard:`** or **`strict:`** anywhere in the input → this task wants the full
    heavy pipeline. Invoke the `run_hard` skill with the input unchanged (keep
@@ -48,7 +48,9 @@ input unchanged apart from removing `hard:`.
    started by the heavy pipeline: invoke `run_hard` with the input unchanged and
    stop. Otherwise resume the light run: read `.workflow_artifacts/<task>/brief.md`,
    check `git status`/`git log` on the task branch, and continue from the first
-   step whose output is missing. If `.workflow_artifacts/<task>/architecture.md`
+   step whose output is missing. A brief whose `## Size` section says
+   `route: direct` resumes on the Direct route instead; one with no `## Size`
+   section is a light run. If `.workflow_artifacts/<task>/architecture.md`
    exists, the task is staged: continue at the first stage still marked ⏳, from
    the first step of that stage whose output under `stage-N/` is missing.
    **`stage N of <task>`** works the same way but runs only stage N.
@@ -69,6 +71,12 @@ input unchanged apart from removing `hard:`.
    Step 1 reads it with `printenv QUOIN_RUN_PROFILE`. Under `LEAN`, Step 2 only
    logs its marker as skipped and Step 8 skips the lessons-learned append;
    every other step runs as written.
+7. **`direct:`** / **`light:`** → recognised only as whitespace-delimited
+   tokens among the leading flags and tags, before the task text (so
+   `redirect:` or a tag quoted in an issue body never counts). Strip them and
+   remember the override for Step 1b: `direct:` forces the Direct route,
+   `light:` forces the light pipeline (if both appear, `light:` wins). They
+   apply under `--autonomous` too.
 
 ## Step 1 — Setup (inline)
 
@@ -85,6 +93,68 @@ input unchanged apart from removing `hard:`.
    stage there starts (Step 4b).
 3. Read `.workflow_artifacts/memory/lessons-learned.md` if present, keeping only
    entries relevant to this task.
+
+## Step 1b — Size (inline)
+
+Decide the route yourself, from the request and at most a quick targeted look
+at the code (a Grep or one file read). No subagent, no extra model call. Take
+the **direct** route only when all of these hold:
+
+- a concrete defect or change with clear expected behaviour (a failing case, an
+  error message, a named function and what it should do);
+- the fix should touch one module plus its tests;
+- no public API change, schema or migration, security-sensitive code (auth,
+  permissions, crypto, input sanitising), dependency change or cross-repo change.
+
+Otherwise, and whenever you are unsure, take the **light** route. A `direct:` or
+`light:` tag from Step 0 decides instead of the criteria. Under `AUTONOMOUS` the
+same rule applies; never ask. Record the decision in the brief as:
+
+```markdown
+## Size
+route: <direct | light>
+reason: <one line; "forced by direct:" or "forced by light:" when a tag decided>
+```
+
+Light → continue at Step 2 and keep this section in the Step 3 brief.
+Direct → follow the Direct route below: skip Steps 2, 3, 4, 4b and 7; run the
+implementer tier guard, then Steps 5, 6 and 8 as the Direct route describes.
+
+## Direct route (inline)
+
+The direct route has no discovery, no context-pack subagent and no review
+subagent. The implementer tier guard still applies: on Opus you implement
+inline; otherwise one Opus implementer gets this brief in place of a context
+pack.
+
+Phase markers: log `discover`, `context` and `review` as `--skipped` and then
+`frame` in one Bash call before writing the brief; `implement`, `verify` and
+`commit` are logged at their steps as usual.
+
+1. **Brief.** Write `.workflow_artifacts/<task>/brief.md`, about ten lines:
+   `# <task>`, `## Goal` (one or two sentences), the `## Size` section, and
+   `## Verification` (`pending` until step 3). Under `AUTONOMOUS`, add
+   `## Assumptions` if you made any.
+2. **Implement.** Find the code, the tests covering it and the command that
+   runs them with targeted Grep/Read; that command is Step 6's test command
+   and goes to a dispatched implementer in place of the context-pack path.
+   Change the code following Step 5: minimal diff, about one focused
+   regression test.
+3. **Verify.** Step 6 as written. Replace `pending` with the command and its
+   result (`pass`, `fail` or `not run: <why>`).
+4. **Commit.** Step 8 as written, including the report.
+
+**Escalate to light** (one way, never back) when the diff outgrows one module
+plus its tests, verification fails twice, or the change turns out to need an
+excluded category (that last trigger does not apply when `direct:` forced the
+route). Two failed verifications here mean this escalation, not the
+`/run hard:` recommendation under Escalation, which applies only to failures on
+the light pipeline. Keep the working tree as it is: no reset, no stash. Rewrite
+the brief in one write as the full Step 3 brief, its Size section saying
+`route: light` plus `escalated: from direct — <trigger>`, and drop
+`## Verification`. Then continue at Step 2. Steps 5–7 build on the existing
+diff (through the same Opus implementer, via SendMessage, when the guard
+dispatched) and the review covers all of it.
 
 ## Step 2 — Discover (subagent, conditional)
 
@@ -123,6 +193,9 @@ Marker: `frame`. Write `.workflow_artifacts/<task>/brief.md`, at most about 40 l
 - <none, or the questions asked and their answers>
 ## Shape
 <single | staged> — <one-line reason>
+## Size
+route: light
+reason: <the one-line reason from Step 1b>
 ```
 
 This replaces `/enrich` and `/specify` on the light path. Restate the request
@@ -312,6 +385,8 @@ fresh session; resume starts at the first ⏳ stage.
 
 ## Implementer tier guard (before Step 5)
 
+On the Direct route the guard runs before Direct step 2.
+
 Steps 5–6 and the Step 7 fix pass always run on **opus**. Everything else
 (Steps 0–4, the review spawn, Step 8 and every user question) stays in this
 session, so discovery, the context pack and the review keep working: never
@@ -469,14 +544,15 @@ recommendation in the final report (autonomous), when:
 A task that spans several repos or needs a few stages is not by itself a reason
 to escalate: the staged path in Step 4b handles it.
 
-Never switch to the heavy pipeline on your own.
+Never switch to the heavy pipeline on your own. Escalating from the Direct
+route to the light pipeline is a separate, one-way step (see Step 1b).
 
 ## Important behaviours
 
 - One session from start to finish. Subagents only for discovery, the context
   pack and the review (steps whose job is to read a lot and return a conclusion,
   or to give a fresh read), plus the Opus implementer when the session is not
-  on Opus.
+  on Opus. The Direct route uses none of them except that implementer.
 - No cost-ledger rows, run-state records, checkpoints or progress sentinels: those
   belong to the heavy pipeline's multi-session orchestration.
 - Never write quoin's own files (for example `quoin/dev/tests/...`) into another

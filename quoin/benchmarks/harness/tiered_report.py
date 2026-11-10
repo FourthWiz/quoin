@@ -34,6 +34,7 @@ QUOIN_CELL = "quoin-claude"
 ARMS = (PLAIN_CELL, QUOIN_CELL)
 DEFAULT_TIER_ORDER = ("easy", "medium", "large")
 OUTCOMES = ("pass", "fail", "error", "timeout", "budget_stopped", "not_run", "invalid")
+QUOIN_ROUTES = ("direct", "light", "fast", "full", "unknown")
 IDENTITY_TRIP_REASONS = frozenset({
     "plain-arm-contaminated", "quoin-arm-missing-quoin", "quoin-arm-contaminated",
 })
@@ -595,12 +596,10 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
     post_plan_budget = [
         t["id"] for t, r in quoin_rows if r["post_plan_stop"] and r["verdict"] == "budget_stopped"
     ]
-    route_counts = {"fast": 0, "full": 0, "unknown": 0}
+    route_counts = {route: 0 for route in QUOIN_ROUTES}
     for _task, r in quoin_rows:
-        if not r["ran"]:
-            continue
-        route = (r["workflow_route"] or {}).get("route")
-        route_counts[route if route in ("fast", "full") else "unknown"] += 1
+        if r["ran"]:
+            route_counts[_route_of(r)] += 1
 
     unexpected = []
     for arm in ARMS:
@@ -696,6 +695,65 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
     return out
 
 
+def _route_of(row):
+    route = (row.get("workflow_route") or {}).get("route")
+    return route if route in QUOIN_ROUTES else "unknown"
+
+
+def _counted(row):
+    """A row that belongs in pass@1, cost and time figures."""
+    return row["ran"] and row["verdict"] not in ("invalid", "not_run")
+
+
+def _route_cell(rows):
+    n = len(rows)
+    passes = sum(1 for r in rows if r["first_attempt_pass"])
+    return {
+        "n": n,
+        "passes": passes,
+        "pass_at_1": passes / n if n else None,
+        "usd": _sum_mean(sum(r["usd"] for r in rows), n),
+        "wall_clock_s": _sum_mean(sum(r["wall_clock_s"] for r in rows), n),
+    }
+
+
+def _route_group(tasks, rows):
+    """Quoin figures per route over `tasks`, each beside the plain arm on the
+    same tasks, so a route's cost can be read against plain Claude's."""
+    out = {}
+    for route in QUOIN_ROUTES:
+        quoin = [rows[QUOIN_CELL][t["id"]] for t in tasks]
+        picked = [t for t, r in zip(tasks, quoin) if _counted(r) and _route_of(r) == route]
+        if not picked:
+            continue
+        plain = [rows[PLAIN_CELL][t["id"]] for t in picked]
+        out[route] = {
+            QUOIN_CELL: _route_cell([rows[QUOIN_CELL][t["id"]] for t in picked]),
+            PLAIN_CELL: _route_cell([r for r in plain if _counted(r)]),
+        }
+    return out
+
+
+def route_breakdown(order, scoped, rows):
+    """Quoin pass@1, cost and time split by tier and route, plus how often each
+    tier took each route. Only rows that ran and are not invalid count."""
+    by_tier = {}
+    mix = {}
+    for tier in order:
+        in_tier = [t for t in scoped if (t.get("tier") or "unknown") == tier]
+        if not in_tier:
+            continue
+        by_tier[tier] = _route_group(in_tier, rows)
+        counted = [rows[QUOIN_CELL][t["id"]] for t in in_tier if _counted(rows[QUOIN_CELL][t["id"]])]
+        counts = {route: sum(1 for r in counted if _route_of(r) == route) for route in QUOIN_ROUTES}
+        mix[tier] = {
+            "n": len(counted),
+            "counts": counts,
+            "direct_share": counts["direct"] / len(counted) if counted else None,
+        }
+    return {"tiers": by_tier, "overall": _route_group(scoped, rows), "route_by_tier": mix}
+
+
 def _plain_component(task_id):
     return (
         isinstance(task_id, str) and task_id not in (".", "..")
@@ -761,6 +819,7 @@ def build_tiered_report(run_path, suite, manifest, suite_sha=None):
         "tiers": tiers,
         "overall": overall,
         "complete_pairs": _complete_pairs(entries),
+        "by_route": route_breakdown(order, scoped, rows),
         "pairs": entries,
         "validity": _validity(
             run_path, manifest, suite_sha, {t["id"] for t in all_tasks}, scoped, rows, entries,
@@ -871,6 +930,49 @@ def _route_text(quoin_entry):
     return route["route"] + (" (%s)" % route["profile"] if route.get("profile") else "")
 
 
+def _rate_text(rate):
+    return "n/a" if rate is None else _pct(rate)
+
+
+def _means_text(cell):
+    if not cell["n"]:
+        return ["n/a", "n/a"]
+    return ["$%.2f" % cell["usd"]["mean"], "%.1f" % cell["wall_clock_s"]["mean"]]
+
+
+def _render_by_route(by_route, table_text):
+    lines = ["### Quoin results by route", ""]
+    lines.append(
+        "pass@1, cost and time of the quoin arm split by the route /run took, with the plain arm "
+        "on the same tasks. Invalid and not-run rows are left out."
+    )
+    lines.append("")
+    header = ["Tier", "Route", "N", "Quoin pass@1", "Quoin USD mean", "Quoin wall s mean",
+              "Plain N", "Plain pass@1", "Plain USD mean", "Plain wall s mean"]
+    table = [header, ["---"] * len(header)]
+    groups = list(by_route["tiers"].items()) + [("overall", by_route["overall"])]
+    for label, group in groups:
+        for route, cell in group.items():
+            q, p = cell[QUOIN_CELL], cell[PLAIN_CELL]
+            table.append([
+                label, route, str(q["n"]), _rate_text(q["pass_at_1"]), *_means_text(q),
+                str(p["n"]), _rate_text(p["pass_at_1"]), *_means_text(p),
+            ])
+    lines.append(table_text(table))
+
+    lines.append("### Quoin route by tier")
+    lines.append("")
+    header = ["Tier", "N", *QUOIN_ROUTES, "Direct share"]
+    table = [header, ["---"] * len(header)]
+    for tier, mix in by_route["route_by_tier"].items():
+        table.append([
+            tier, str(mix["n"]), *[str(mix["counts"][r]) for r in QUOIN_ROUTES],
+            _rate_text(mix["direct_share"]),
+        ])
+    lines.append(table_text(table))
+    return lines
+
+
 def render_tiered_markdown(report, format_table):
     """Render the tiered section; `format_table` is the shared Markdown table helper."""
     validity = report["validity"]
@@ -947,6 +1049,10 @@ def render_tiered_markdown(report, format_table):
         + "  "
     )
     lines.append("")
+
+    by_route = report.get("by_route")
+    if by_route and by_route["overall"]:
+        lines.extend(_render_by_route(by_route, table_text))
 
     cp = report["complete_pairs"]
     if cp["pairs_not_run"] > 0 or cp["pairs_invalid"] > 0:
@@ -1100,7 +1206,7 @@ def render_tiered_markdown(report, format_table):
         suffix = ": %s" % ", ".join(items) if items else ""
         lines.append("%s: %d%s  " % (key, len(items), suffix))
     rc = validity["quoin_route_counts"]
-    lines.append("Quoin routes: fast %d, full %d, unknown %d  " % (rc["fast"], rc["full"], rc["unknown"]))
+    lines.append("Quoin routes: %s  " % ", ".join("%s %d" % (k, rc.get(k, 0)) for k in QUOIN_ROUTES))
     if not validity["model_mismatch_checked"]:
         lines.append("Model mismatch check: not recorded in this run's manifest  ")
     lines.append("Note: %s  " % validity["estimate_lower_bound_note"])
