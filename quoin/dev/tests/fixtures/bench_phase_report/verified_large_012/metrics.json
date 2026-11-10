@@ -1,0 +1,11 @@
+{
+  "task_id": "verified_large_012",
+  "wall_clock_seconds": 791.9649892080342,
+  "model_usage_totals": {
+    "input": 124,
+    "output": 49882,
+    "cache_read": 2246136,
+    "cache_write": 217393,
+    "cost_usd": 2.6639312
+  }
+}

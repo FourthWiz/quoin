@@ -39,6 +39,12 @@ For the `quoin-claude` cell, "Quoin" means:
    `/run --autonomous hard: small:` prompt, where `small:` selects the heavy
    pipeline's single-pass path (plan, implement, review) for every tier, since
    each task is one SWE-bench issue; `small:` does nothing on the light route.
+   `QUOIN_BENCH_QUOIN_ROUTE=lean` keeps the light prompt but sets the
+   benchmark-only `QUOIN_RUN_PROFILE=bench-lean` in this arm's session, which
+   drops `/run`'s discovery step and its lessons-learned append; everything
+   from the brief through the post-review fixes runs as on the light route.
+   The route is recorded in the manifest and a resume with another route is
+   refused, so one run id never mixes routes.
    The plain arm's prompt is unchanged. The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
    state is picked up. `--autonomous` is needed because a `--print` session
    cannot answer the run skill's checkpoints.
@@ -195,6 +201,19 @@ individual task) to avoid systematically killing only quoin cells.
 
 Sources: Aider polyglot leaderboard [4] for SWE-bench cost baseline; T-15
 calibration for observed per-task cost before T-17 full run.
+
+### Phase breakdown
+
+The quoin arm's cost and time are also split by `/run` phase. Each light-route
+step writes a timestamped marker to `phases.log`; the harness assigns every
+deduplicated transcript message to the phase active when it was sent (a
+subagent's messages to the phase that spawned it), prices each message, and
+scales the phase costs to the billed total because per-message usage
+undercounts it. Durations come from the gaps between transcript timestamps,
+with the largest gaps cut first whenever their sum exceeds the measured wall
+clock. Runs recorded before the markers fall back to inference from the Agent
+calls' descriptions and are labelled `inferred`. The breakdown is an estimate
+for locating overhead, not a billed figure.
 
 ### Secondary measures
 

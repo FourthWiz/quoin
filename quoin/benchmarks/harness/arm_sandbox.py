@@ -20,6 +20,9 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from .cells.simple_claude import BENCH_MODELS
+from .config import (
+    DISCOVERY_REFRESH_DISABLE_ENV, LEAN_RUN_PROFILE, RUN_PROFILE_ENV, quoin_route_or_default,
+)
 from .repo_prep import BENCH_GIT_IDENTITY
 
 SANDBOX_PREFIX = "qbench_sandbox_"
@@ -220,6 +223,11 @@ def build_session_env(sandbox_or_none: Optional[Sandbox], cell: str, run_id: str
         env["QUOIN_GATE_AUTO_APPROVE"] = "1"
         env["QUOIN_AUTO_RESUME"] = "0"
         env["QUOIN_BENCHMARK_RUN"] = run_id
+        # The lean route reaches /run only through this benchmark-only profile.
+        # An unknown route is refused by the run's preflight, not here.
+        if quoin_route_or_default(environ) == "lean":
+            env[RUN_PROFILE_ENV] = LEAN_RUN_PROFILE
+            env[DISCOVERY_REFRESH_DISABLE_ENV] = "1"
     return env
 
 

@@ -264,7 +264,16 @@ command `/run --autonomous` (the light route) and a line saying the pipeline is
 required (a pilot with the bare slash command still saw a session call an easy
 issue a one-line fix and skip the pipeline). `QUOIN_BENCH_QUOIN_ROUTE=hard`
 restores the earlier `/run --autonomous hard: small:` prompt, which runs the
-heavy pipeline's single-pass path; `small:` has no effect on the light route. The
+heavy pipeline's single-pass path; `small:` has no effect on the light route.
+`QUOIN_BENCH_QUOIN_ROUTE=lean` keeps the light prompt and sets
+`QUOIN_RUN_PROFILE=bench-lean` in the quoin arm's session environment only
+(the plain arm never sees it). That benchmark-only profile makes `/run` skip its
+Step 2 `/discover` refresh (the context pack explores the repository itself) and
+the lessons-learned append before the commit; the brief, context pack,
+implementation, tests, review and the post-review fixes all still run, so lean
+rows pass the same pipeline check through `brief.md`. The lean session also gets
+`QUOIN_DISCOVERY_REFRESH_DISABLE=1`, so the session-start hook does not tell it
+to run `/discover`. A paired run refuses any other route value before it starts. The
 harness records on-disk evidence that the pipeline ran,
 and treats a quoin session that left no plan as an `invalid` row (see "Invalid
 rows" below). The test suite exercises the whole path offline with a fake
@@ -567,7 +576,10 @@ python3 quoin/benchmarks/scripts/run_benchmark.py --suite tiered-small \
 Re-running the same `quoin bench tiered` command continues an interrupted
 run: sessions already recorded are kept, the pilot is not repeated once the
 full leg has started, and a resume may add tiers to a run but never drop one. The manifest's
-`started_at` reflects the latest leg.
+`started_at` reflects the latest leg. The manifest also records the quoin
+route (`quoin_route`, plus `quoin_run_profile` for lean), and a resume with a
+different `QUOIN_BENCH_QUOIN_ROUTE` is refused, so lean, light and hard rows never
+mix in one run id (a manifest without the key counts as the default route).
 
 `--resume` never re-pays for a recorded session, including one stopped by the
 budget (`budget_stopped`). A row whose spawn was interrupted or that hit an
@@ -604,11 +616,50 @@ installed set.
 - per-task pairs, including whether both arms started from the same tree;
 - an overshoot line per arm (the per-task cap, the total spent above it and
   the rows over it) and the permission denials per arm;
+- a per-phase table for the quoin arm, per tier and overall: mean dollars
+  per task, share of cost, mean seconds per task, share of time, and the
+  number of sessions where each `/run` phase ran (see "Phase report" below);
 - the validity block: it says whether the run is valid, whether results are
   final or provisional (rows awaiting judging count as errors until judged),
   the suite and manifest hashes, the models seen, and every flagged row.
 
 With nine tasks, treat differences as directional.
+
+### Phase report
+
+Light `/run` appends one line per step to
+`.workflow_artifacts/<task>/phases.log` (`<UTC time> <phase> [skipped]`, with
+an `N:` stage prefix inside a staged task) through `run_phase.py`. The phases are
+setup, discover, frame, context, decompose, implement, verify, review,
+review-fixes and commit. The quoin cell copies that file with the rest of the
+workflow evidence, and `harness/phase_report.py` joins it with the row's
+`transcript.jsonl`:
+
+- assistant messages are deduplicated by message id; a main-session message
+  belongs to the phase active at its timestamp, and a subagent message belongs
+  to the phase that spawned it, even when the subagent runs in the background;
+- each message is priced from `pricing.json`. The reconstructed total runs
+  well under the billed `modelUsage` total (about half on the light-route run),
+  so phase costs are also scaled to the billed total and labelled as an
+  estimate. Both totals are kept;
+- time is split by the gaps between transcript timestamps. When those gaps add
+  up to more than the measured wall clock (a suspended machine or out-of-order
+  timestamps), the largest gaps are cut first until the sum equals it.
+
+The result is stored as `metrics.json["phase_report"]` for each quoin row
+(`source: markers`). Rows without a `phases.log`, which is every run before the
+markers existed, are inferred from the Agent calls' descriptions (`source:
+inferred`), and the summary is rebuilt from the transcript when the stored
+report is missing. Inferred rows cannot tell verify from implement or see the
+commit step. `python3 -m quoin.benchmarks.harness.phase_report <run dir>` prints
+the overall table for an existing run.
+
+Limits: the markers for the frame, context and implement steps have no earlier
+Bash call to share, so each adds one short tool turn to a quoin session, a small
+cost that rows from before the markers did not pay. When a non-Opus session hands
+implementation to an Opus subagent, the review fixes it sends to that subagent
+count as `implement`, because subagent messages stay with the phase that spawned
+them. Stages running in parallel interleave their markers, so their phases blur.
 
 ### Limits
 

@@ -55,7 +55,7 @@ from typing import Optional
 
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
-from ..config import BudgetSpec
+from ..config import LEAN_RUN_PROFILE, RUN_PROFILE_ENV, BudgetSpec, quoin_route_or_default
 from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
@@ -87,7 +87,8 @@ ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 # the pipeline and fix it directly, so the arm also states that the pipeline is
 # the thing under test. The default is the light /run route; setting
 # QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
-# `small:` (one plan pass, implement, review), as the earlier suites did.
+# `small:` (one plan pass, implement, review), as the earlier suites did, and
+# =lean keeps this prompt but sets QUOIN_RUN_PROFILE=bench-lean for the session.
 QUOIN_RUN_PREFIX = (
     "/run --autonomous "
     "This session benchmarks the quoin workflow, so the /run pipeline is required: "
@@ -104,7 +105,7 @@ ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
 
 
 def _run_prefix() -> str:
-    route = os.environ.get(ENV_BENCH_ROUTE, "").strip().lower()
+    route = quoin_route_or_default()
     return QUOIN_HARD_RUN_PREFIX if route == "hard" else QUOIN_RUN_PREFIX
 
 
@@ -518,6 +519,8 @@ def invoke(
 
     # Build subprocess environment with gate auto-approve
     env = dict(session_env) if session_env is not None else os.environ.copy()
+    if session_env is None and quoin_route_or_default() == "lean":
+        env[RUN_PROFILE_ENV] = LEAN_RUN_PROFILE
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
 

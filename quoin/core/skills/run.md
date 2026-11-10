@@ -13,13 +13,19 @@ loops, architecture rounds or a separate gate; those live in `run_hard`.
 
 ## Sequence
 
-Task artifacts live under `.workflow_artifacts/<task-name>/`.
+Task artifacts live under `.workflow_artifacts/<task-name>/`. Each step
+starts by appending a timestamped phase marker to `phases.log` (with
+`skipped` when the step is skipped and a stage prefix inside a staged
+task); markers change no behaviour and are never committed.
 
 1. Route: `hard:`/`strict:` input, or a resume of a task the heavy
    pipeline started, hands off to `run_hard` unchanged.
 2. Setup: task folder, fresh branch, relevant lessons.
 3. Discover, delegated, only when discovery memory is missing or older
-   than the staleness threshold (7 days by default).
+   than the staleness threshold (7 days by default). A benchmark-only
+   lean profile (`QUOIN_RUN_PROFILE=bench-lean`, set by the benchmark
+   harness, never a user tag) skips this step and the closing
+   lessons-learned append; every other step runs unchanged.
 4. Frame, inline: write `brief.md` (goal, acceptance criteria,
    non-goals, assumptions, shape). Ask the user when the request is
    unclear in a way that changes the work; never ask in autonomous mode.
@@ -81,7 +87,8 @@ automatically.
 
 ## Artifacts
 
-`.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`.
+`.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`,
+`phases.log`.
 Staged tasks add `architecture.md` at the task root and `brief.md`,
 `review.md` (and `context.md` when needed) under each `stage-N/`. No
 run-state record, checkpoints or progress sentinels. No cost ledger,
