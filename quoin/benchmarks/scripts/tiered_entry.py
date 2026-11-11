@@ -11,6 +11,10 @@ the arms, runs the remaining tiers on the same run id and ledger, then judges th
 sessions or prints the command that does it on a host with Docker. Running it
 again with the same options continues an interrupted run.
 
+`--tiers` limits a run to some tiers of the suite, and `--repeat N` runs the
+selection N times as sibling run ids `<run-id>-r1` ... `<run-id>-rN`, each an
+ordinary run with its own manifest, ledger, summary and judging.
+
 Every spend guard is the one `run_benchmark.py` already applies: each leg is a
 normal paired run built from the same argument parser.
 """
@@ -64,6 +68,16 @@ def _rb():
 
 
 # --- options ---------------------------------------------------------------
+
+def _positive_int(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not an integer")
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"{text!r} must be at least 1")
+    return value
+
 
 def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
     from quoin.benchmarks.scripts import spend_ledger
@@ -135,6 +149,12 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
                         help="Commit the quoin arm must run, passed to every leg")
     parser.add_argument("--repo-root", type=Path, default=CHECKOUT_ROOT,
                         help="Quoin checkout root (default: %(default)s)")
+    parser.add_argument("--tiers", default=None,
+                        help="Comma-separated tiers to run (default: every tier of the suite); "
+                             "the pilot runs only when its tier is selected")
+    parser.add_argument("--repeat", type=_positive_int, default=None,
+                        help="Run the selected tasks N times as run ids <run-id>-r1 ... <run-id>-rN; "
+                             "re-running the same command continues the unfinished repeats")
     parser.add_argument("--clean", action="store_true",
                         help="Delete this run's leftovers after listing them and asking once")
     parser.add_argument("--clean-mirrors", action="store_true",
@@ -148,7 +168,7 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
 RUN_ONLY_OPTIONS = (
     "--ignore-parity", "--judge-emulation", "--parity-min-gap", "--parity-min-ratio",
     "--skip-judge", "--pilot-tier", "--wall-clock-seconds", "--arm-root",
-    "--expected-quoin-commit", "--accept-invalid-pilot",
+    "--expected-quoin-commit", "--accept-invalid-pilot", "--tiers", "--repeat",
 )
 
 
@@ -172,7 +192,7 @@ class Resolved:
     doc: dict
     tasks: list
     tier_names: list
-    pilot_tier: str
+    pilot_tier: Optional[str]
     run_id: str
     repo_root: Path
     run_dir: Path
@@ -181,6 +201,8 @@ class Resolved:
     cap: float
     authorised: float
     arms: list = field(default_factory=lambda: PAIR.split(","))
+    # The --tiers value passed to every leg; None runs every tier of the suite.
+    tiers_arg: Optional[str] = None
 
 
 def resolve(args):
@@ -209,6 +231,11 @@ def resolve(args):
         )
     if not RUN_ID_RE.match(args.run_id) or ".." in args.run_id:
         return rb._refuse("run-id", f"{args.run_id!r} is not a valid run id")
+    selected = select_tiers(tier_names, args.tiers)
+    if isinstance(selected, str):
+        return rb._refuse("tiers", selected)
+    tasks = [t for t in doc["tasks"] if t.get("tier") in selected]
+    pilot_tier = args.pilot_tier if args.pilot_tier in selected else None
     repo_root = Path(args.repo_root).resolve()
     run_dir = Path(
         args.run_dir or repo_root / ".workflow_artifacts" / "quoin-benchmarks" / "runs"
@@ -228,24 +255,41 @@ def resolve(args):
     except argparse.ArgumentTypeError as exc:
         return rb._refuse("suite", f"spend figure is not a positive finite number: {exc}")
     return Resolved(
-        args=args, suite_path=suite_path, alias_used=alias_used, doc=doc, tasks=doc["tasks"],
-        tier_names=tier_names, pilot_tier=args.pilot_tier, run_id=args.run_id,
+        args=args, suite_path=suite_path, alias_used=alias_used, doc=doc, tasks=tasks,
+        tier_names=selected, pilot_tier=pilot_tier, run_id=args.run_id,
         repo_root=repo_root, run_dir=run_dir, run_path=run_dir / args.run_id, ledger=ledger,
         cap=cap, authorised=authorised,
+        tiers_arg=",".join(selected) if args.tiers else None,
     )
+
+
+def select_tiers(tier_names: list, tiers_arg: Optional[str]):
+    """The selected tiers in suite order, or the reason the selection is refused."""
+    if tiers_arg is None:
+        return list(tier_names)
+    wanted = [t.strip() for t in tiers_arg.split(",") if t.strip()]
+    unknown = [t for t in wanted if t not in tier_names]
+    if not wanted or unknown:
+        return (f"unknown tier {', '.join(unknown) or repr(tiers_arg)}; "
+                f"known tiers: {', '.join(tier_names)}")
+    return [t for t in tier_names if t in wanted]
 
 
 def check_pilot_tier(res: Resolved) -> Optional[int]:
     """Refuse a pilot tier that differs from the one a partly run pilot recorded."""
     from quoin.benchmarks.harness.tiered_report import read_manifest
 
+    if res.pilot_tier is None:
+        return None
     stored = set(read_manifest(res.run_path).get("tiers") or [])
     if not stored or stored == set(res.tier_names) or stored == {res.pilot_tier}:
         return None
     if len(stored) == 1:
-        advice = f"re-run with --pilot-tier {next(iter(stored))} or start a new --run-id"
+        only = next(iter(stored))
+        advice = (f"re-run with --pilot-tier {only}, or with --tiers {only} if it was started "
+                  "with --tiers, or start a new --run-id")
     else:
-        advice = "start a new --run-id"
+        advice = "re-run with the --tiers it was started with, or start a new --run-id"
     return _rb()._refuse(
         "pilot-tier", f"this run's pilot recorded tiers {sorted(stored)}; {advice}",
     )
@@ -275,6 +319,7 @@ def leg_argv(res: Resolved, *, tiers: Optional[str] = None, skip_judge: bool,
         "--spend-ledger", str(res.ledger), "--authorised-usd", repr(res.authorised),
         "--repo-root", str(res.repo_root), "--max-parallel", "1", "--resume",
     ]
+    tiers = tiers or res.tiers_arg
     if tiers:
         argv += ["--tiers", tiers]
     if skip_judge:
@@ -328,14 +373,20 @@ def check_invalid_pilot(res: Resolved) -> Optional[int]:
 
 # --- estimate and confirmation ----------------------------------------------
 
-def estimate_rows(doc: dict, run_dir: Path, run_id: str, pilot_tier: str):
-    """(rows still to spawn overall, rows still to spawn in the pilot tier), or None."""
+def estimate_rows(doc: dict, run_dir: Path, run_id: str, pilot_tier: Optional[str],
+                  tasks: Optional[list] = None):
+    """(rows still to spawn overall, rows still to spawn in the pilot tier), or None.
+
+    `tasks` is the selected part of the suite (default: all of it); a pilot
+    tier of None means the pilot is skipped, so it has no rows.
+    """
     rb = _rb()
     arms = PAIR.split(",")
-    rows_all = rb._paired_rows_to_spawn(Path(run_dir), run_id, doc["tasks"], arms)
+    tasks = doc["tasks"] if tasks is None else tasks
+    rows_all = rb._paired_rows_to_spawn(Path(run_dir), run_id, tasks, arms)
     if rows_all is None:
         return None
-    pilot_tasks = [t for t in doc["tasks"] if t.get("tier") == pilot_tier]
+    pilot_tasks = [t for t in tasks if pilot_tier is not None and t.get("tier") == pilot_tier]
     rows_pilot = rb._paired_rows_to_spawn(Path(run_dir), run_id, pilot_tasks, arms)
     if rows_pilot is None:
         return None
@@ -347,8 +398,11 @@ def print_estimate(res: Resolved, rows_all: int, rows_pilot: int, suite_ceiling:
     from quoin.benchmarks.scripts import spend_ledger
 
     worst = paired_spend.worst_case(res.cap, rows_all, 1)
-    print(f"estimate: worst case ${worst:.2f} for {rows_all} sessions still to spawn "
-          f"(pilot {rows_pilot}, rest {rows_all - rows_pilot})")
+    split = (f"pilot {rows_pilot}, rest {rows_all - rows_pilot}" if res.pilot_tier
+             else "pilot skipped")
+    print(f"estimate: worst case ${worst:.2f} for {rows_all} sessions still to spawn ({split})")
+    if res.tiers_arg:
+        print(f"  tiers: {res.tiers_arg} ({len(res.tasks)} tasks)")
     print(f"  per-session cap: ${res.cap:.2f}")
     print(f"  suite ceiling: ${suite_ceiling:.2f}")
     print(f"  authorised ceiling: ${res.authorised:.2f}")
@@ -500,6 +554,8 @@ def deferred_command(res: Resolved) -> str:
         "python3", str(Path(rb.__file__).resolve()), "--suite", suite, "--cells", PAIR,
         "--run-dir", str(res.run_dir), "--run-id", res.run_id, "--judge-only",
     ]
+    if res.tiers_arg:
+        argv += ["--tiers", res.tiers_arg]
     if res.args.judge_emulation:
         argv.append("--judge-emulation")
     return shlex.join(argv)
@@ -622,6 +678,8 @@ def pilot_phase(res: Resolved, rows_pilot: int) -> bool:
     """True while the pilot tier is the only thing this run has started."""
     from quoin.benchmarks.harness.tiered_report import read_manifest
 
+    if res.pilot_tier is None:
+        return False
     stored = set(read_manifest(res.run_path).get("tiers") or [])
     return (not stored or stored == {res.pilot_tier}) and rows_pilot > 0
 
@@ -660,7 +718,13 @@ def _judge_pending_or_defer(res: Resolved) -> int:
     return rc
 
 
-def orchestrate(args) -> int:
+def orchestrate(args, confirmed: Optional[float] = None) -> int:
+    """Run one paired run end to end.
+
+    `confirmed` is a worst case the caller already had the user approve (the
+    repeat confirmation); the first prompt is then skipped, and the run still
+    asks again if what is left to spawn grows past it.
+    """
     rb = _rb()
     res = resolve(args)
     if isinstance(res, int):
@@ -671,7 +735,10 @@ def orchestrate(args) -> int:
     rc = check_resume_ledger(res)
     if rc is not None:
         return rc
-    rows = estimate_rows(res.doc, res.run_dir, res.run_id, res.pilot_tier)
+    if res.pilot_tier is None:
+        print(f"pilot: skipped (pilot tier {res.args.pilot_tier} is not among --tiers "
+              f"{res.tiers_arg}), and the denial-parity check with it")
+    rows = estimate_rows(res.doc, res.run_dir, res.run_id, res.pilot_tier, res.tasks)
     if rows is None:
         return 2
     rows_all, rows_pilot = rows
@@ -685,7 +752,7 @@ def orchestrate(args) -> int:
         return rc
 
     in_pilot = pilot_phase(res, rows_pilot)
-    if not in_pilot and not args.ignore_parity:
+    if not in_pilot and not args.ignore_parity and res.pilot_tier is not None:
         verdict = report_parity(res)
         if verdict.stop or verdict.missing:
             print_parity_next_steps(verdict)
@@ -707,10 +774,14 @@ def orchestrate(args) -> int:
     if isinstance(pre, int):
         return pre
     worst = print_estimate(res, pre.n_spawns, rows_pilot, pre.suite_ceiling)
-    rc = confirm(worst, yes=args.yes)
-    if rc is not None:
-        return rc
-    confirmed_worst = res.cap * pre.n_spawns
+    if confirmed is not None and worst <= confirmed:
+        print("confirmed with the repeats above")
+        confirmed_worst = confirmed
+    else:
+        rc = confirm(worst, yes=args.yes)
+        if rc is not None:
+            return rc
+        confirmed_worst = res.cap * pre.n_spawns
     pilot_rows_before_leg = rows_pilot if in_pilot else 0
 
     if in_pilot:
@@ -772,6 +843,87 @@ def orchestrate(args) -> int:
     return finish(res, rc)
 
 
+def repeat_run_ids(run_id: str, repeat: int) -> list:
+    """Sibling run ids for --repeat: `<run-id>-r1` ... `<run-id>-rN`."""
+    return [f"{run_id}-r{i}" for i in range(1, repeat + 1)]
+
+
+def report_command(res: Resolved, run_ids: list) -> str:
+    script = Path(__file__).resolve().with_name("multi_run_report.py")
+    return shlex.join(["python3", str(script)] + [str(res.run_dir / rid) for rid in run_ids])
+
+
+def orchestrate_repeats(args) -> int:
+    """Run the selection once per repeat run id, in order, after one spend confirmation.
+
+    Each repeat is an ordinary run, so a repeat that already finished only
+    re-reports (and judges what is still pending), and an interrupted one
+    resumes where it stopped.
+    """
+    import copy
+
+    from quoin.benchmarks.harness import paired_spend
+
+    from quoin.benchmarks.scripts import spend_ledger
+
+    run_ids = repeat_run_ids(args.run_id, args.repeat)
+    plans = []
+    for run_id in run_ids:
+        sub = copy.copy(args)
+        sub.run_id, sub.repeat = run_id, None
+        res = resolve(sub)
+        if isinstance(res, int):
+            return res
+        rc = check_pilot_tier(res)
+        if rc is None:
+            rc = check_resume_ledger(res)
+        if rc is not None:
+            return rc
+        rows = estimate_rows(res.doc, res.run_dir, run_id, res.pilot_tier, res.tasks)
+        if rows is None:
+            return 2
+        plans.append((sub, res, rows[0]))
+    first = plans[0][1]
+    total = sum(rows for _sub, _res, rows in plans)
+    print(f"repeat: {len(run_ids)} runs of {len(first.tasks)} tasks each")
+    for _sub, res, rows in plans:
+        state = f"{rows} sessions still to spawn" if rows else "no sessions left to spawn"
+        print(f"  {res.run_id}: {state}; ledger {res.ledger}")
+    worst = paired_spend.worst_case(first.cap, total, 1)
+    shared = len({res.ledger for _sub, res, _rows in plans}) == 1
+    if total:
+        print(f"estimate: worst case ${worst:.2f} for {total} sessions across all repeats")
+        print(f"  per-session cap: ${first.cap:.2f}")
+        if shared:
+            recorded = spend_ledger.recorded_total(first.ledger)
+            print(f"  authorised ceiling: ${first.authorised:.2f} for the shared ledger "
+                  f"(recorded ${recorded:.2f})")
+            if recorded + worst > first.authorised:
+                return _rb()._refuse(
+                    "authorised-ceiling",
+                    f"recorded ${recorded:.2f} + planned ${worst:.2f} across the repeats exceeds "
+                    f"the ${first.authorised:.2f} authorised for the shared ledger {first.ledger}",
+                )
+        else:
+            print(f"  authorised ceiling: ${first.authorised:.2f} per repeat, each on its own ledger")
+        rc = confirm(worst, yes=args.yes)
+        if rc is not None:
+            return rc
+    final = 0
+    for index, (sub, res, rows) in enumerate(plans, start=1):
+        print(f"repeat {index}/{len(plans)}: run id {res.run_id}")
+        rc = orchestrate(sub, confirmed=res.cap * rows)
+        if rc == EXIT_UNPRICED:
+            final = rc
+            continue
+        if rc:
+            print(f"repeat: stopped at {res.run_id}; {RERUN_HINT}")
+            return rc
+    print("report: compare the arms across the repeats with")
+    print(report_command(plans[0][1], run_ids))
+    return final
+
+
 def main(argv=None, prog: str = "quoin bench tiered") -> int:
     argv = sys.argv[1:] if argv is None else list(argv)
     args = build_parser(prog).parse_args(argv)
@@ -789,7 +941,7 @@ def main(argv=None, prog: str = "quoin bench tiered") -> int:
             print("interrupted")
             return 1
     try:
-        return orchestrate(args)
+        return orchestrate_repeats(args) if args.repeat else orchestrate(args)
     except KeyboardInterrupt:
         print("interrupted")
         print(RERUN_HINT)
