@@ -225,7 +225,11 @@ concurrent session work — most commonly to let `/run` (or a manually-started
 task) work on one feature while another session owns the main tree. The user
 explicitly invokes `/workspace create|status|takeover|teardown`.
 
-This skill is **never auto-invoked** by any orchestrator or skill.
+This skill is **never auto-invoked** by any orchestrator or skill. `/run` may
+call the `workspace.py` script itself (through `run_isolation.py`) when a
+second live run would share a checkout or `isolate:` is given; those
+workspaces live under `QUOIN_WORKTREE_ROOT` (default `~/.quoin/worktrees`),
+and `status`/`teardown <task>` find them through their record.
 
 ## Session bootstrap
 

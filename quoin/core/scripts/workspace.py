@@ -65,6 +65,10 @@ Env:
       the fallback (freshest-of-all-signals; architecture.md D-04).
   QUOIN_WORKSPACE_HEARTBEAT — sessionstart.sh opt-in gate (=1 enables the
       owner-only last_seen heartbeat shell-out; default off, Q-06).
+  QUOIN_WORKTREE_ROOT — parent folder for workspaces created outside the
+      project (``--workspaces-root``); default ``~/.quoin/worktrees``. Teardown
+      and status follow a record's ``workspace_path`` only when it lies under
+      this root, so an edited record can never point a removal elsewhere.
   QUOIN_WORKSPACE_DISABLE_GH — when truthy, ``_gh_pr_merged`` always returns
       None (gh-free path only) — an escape hatch (risk R-08) and the
       deterministic switch for the gh-free tests.
@@ -165,6 +169,44 @@ def slugify(feature: str) -> str:
     if not collapsed:
         raise ValueError(f"slugify({feature!r}) produced an empty slug")
     return collapsed
+
+
+def worktree_root() -> Path:
+    """Parent folder for out-of-project workspaces (``QUOIN_WORKTREE_ROOT``)."""
+    raw = os.environ.get("QUOIN_WORKTREE_ROOT", "").strip()
+    return Path(raw).expanduser() if raw else Path.home() / ".quoin" / "worktrees"
+
+
+def resolve_workspace_root(
+    project_root: Path,
+    slug: str,
+    workspaces_root: Path | None = None,
+    record: dict | None = None,
+) -> Path:
+    """Folder that holds a workspace's per-repo worktrees.
+
+    An explicit ``workspaces_root`` wins. Otherwise the in-project default
+    ``<project>/.workspaces/<slug>`` is used, unless it is absent and the
+    ownership record names exactly ``<worktree_root()>/<repo>/<slug>`` (a
+    workspace that ``/run`` created outside the project). The record is
+    untrusted, so any other recorded path, including a shallower folder that
+    holds other tasks' workspaces, is ignored.
+    """
+    if workspaces_root is not None:
+        return Path(workspaces_root).expanduser() / slug
+    default = project_root / ".workspaces" / slug
+    if default.exists() or not isinstance(record, dict):
+        return default
+    recorded = record.get("workspace_path")
+    if isinstance(recorded, str) and recorded:
+        cand = Path(recorded)
+        try:
+            exact = cand.resolve().parent.parent == worktree_root().resolve()
+        except OSError:
+            exact = False
+        if exact and cand.name == slug and cand.is_dir() and not cand.is_symlink():
+            return cand
+    return default
 
 
 def _atomic_write_json(path: Path, obj: Any) -> bool:
@@ -559,15 +601,25 @@ def create_workspace(
     named_repos: list[str] | None = None,
     base: str | None = None,
     session_uuid: str | None = None,
+    workspaces_root: Path | None = None,
+    branch: str | None = None,
+    repo_paths: list[Path] | None = None,
 ) -> CreateResult:
     """Create (or idempotently refresh) a feature workspace across selected repos.
 
     Sequence is load-bearing (D-03): collision check -> discover -> gitignore
     -> worktrees FIRST -> finalize record only after >=1 worktree succeeds.
+
+    Optional overrides (defaults keep the ``/workspace`` behaviour): put the
+    workspace under ``workspaces_root`` instead of ``<project>/.workspaces``
+    (no ``.gitignore`` edit then, since nothing lands in the project), check out
+    ``branch`` instead of a branch named after the feature, and use
+    ``repo_paths`` instead of discovering repos under the project root.
     """
     slug = slugify(feature)
     project_root = project_root.resolve()
-    ws_root = project_root / ".workspaces" / slug
+    ws_root = resolve_workspace_root(project_root, slug, workspaces_root)
+    branch_name = branch or feature
 
     # Step a: identity resolution — caller-authoritative, derive only if None (MAJ-2).
     identity_authoritative = session_uuid is not None
@@ -604,10 +656,13 @@ def create_workspace(
         # else: no-live-conflict (stale record OR self) -> proceed / adopt-refresh
 
     # Step c: repo discovery (raises ValueError on unknown named repo).
-    repos = discover_workspace_repos(project_root, named_repos)
+    if repo_paths:
+        repos = [Path(p).resolve() for p in repo_paths]
+    else:
+        repos = discover_workspace_repos(project_root, named_repos)
 
     # Step d: cwd-as-repo .gitignore edge (D-07 / AC-8) — BEFORE adding worktrees.
-    if (project_root / ".git").exists():
+    if workspaces_root is None and (project_root / ".git").exists():
         _ensure_gitignore_wholeline(project_root, ".workspaces/")
 
     # Step e: WORKTREES FIRST.
@@ -615,10 +670,10 @@ def create_workspace(
     branches: dict[str, str] = {}
     for repo in repos:
         dest = ws_root / repo.name
-        result = add_worktree(repo, feature, dest, base)
+        result = add_worktree(repo, branch_name, dest, base)
         results.append(result)
         if result.created or result.skipped:
-            branches[repo.name] = feature
+            branches[repo.name] = branch_name
 
     # Step f: finalize record ONLY IF at least one worktree succeeded.
     if any(r.created or r.skipped for r in results):
@@ -897,6 +952,7 @@ def takeover_workspace(
     session_uuid: str | None = None,
     force: bool = False,
     home: str | None = None,
+    workspaces_root: Path | None = None,
 ) -> TakeoverResult:
     """Non-destructively reassign a feature workspace's ownership record (D-05).
 
@@ -914,7 +970,9 @@ def takeover_workspace(
     """
     slug = slugify(feature)
     project_root = project_root.resolve()
-    ws_root = project_root / ".workspaces" / slug
+    ws_root = resolve_workspace_root(
+        project_root, slug, workspaces_root, _read_record_safe(project_root, slug)
+    )
     record_path = _record_path(project_root, slug)
 
     # Identity resolution — caller-authoritative, derive only if None (MAJ-2).
@@ -1067,7 +1125,10 @@ def _render_unsafe(statuses: list[WorktreeStatus]) -> str:
 
 
 def teardown_workspace(
-    feature: str, project_root: Path, force: bool = False
+    feature: str,
+    project_root: Path,
+    force: bool = False,
+    workspaces_root: Path | None = None,
 ) -> TeardownResult:
     """Tear down a feature workspace: guard, remove worktrees, prune, clean up.
 
@@ -1078,10 +1139,11 @@ def teardown_workspace(
     """
     slug = slugify(feature)
     project_root = project_root.resolve()
-    ws_root = project_root / ".workspaces" / slug
-    # Record is advisory (discovery is deterministic); read only for the
-    # dangling-record cleanup below and never load-bearing for discovery.
-    _read_record_safe(project_root, slug)
+    # Record is advisory: it only locates a workspace outside the project, and
+    # only under worktree_root() (see resolve_workspace_root).
+    ws_root = resolve_workspace_root(
+        project_root, slug, workspaces_root, _read_record_safe(project_root, slug)
+    )
 
     worktrees = discover_workspace_worktrees(ws_root)
 
@@ -1167,6 +1229,25 @@ def teardown_workspace(
             partial_failure=True,
             message=f"partial teardown; re-run (failed: {', '.join(failed)})",
         )
+
+    # A workspace outside the project is removed only when nothing but its
+    # worktrees and marker lives there, so a misplaced root never takes
+    # unrelated folders with it.
+    if ws_root != project_root / ".workspaces" / slug:
+        known = {str(Path(s.worktree)) for s in statuses} | {str(ws_root / ".quoin-workspace.json")}
+        try:
+            leftover = [c.name for c in ws_root.iterdir() if str(c) not in known]
+        except OSError:
+            leftover = []
+        if leftover:
+            return TeardownResult(
+                slug=slug,
+                workspace_path=str(ws_root),
+                per_repo=statuses,
+                forced=force,
+                partial_failure=True,
+                message=f"worktrees removed; folder kept (unexpected entries: {', '.join(sorted(leftover))})",
+            )
 
     # CLEANUP (all removals succeeded): rmtree folder+marker, CONFIRM removal,
     # unlink record ONLY IF folder confirmed gone (critic MIN-4) — keeps the
@@ -1265,7 +1346,9 @@ class WorkspaceStatusView:
         }
 
 
-def collect_status(project_root: Path) -> list[WorkspaceStatusView]:
+def collect_status(
+    project_root: Path, workspaces_root: Path | None = None
+) -> list[WorkspaceStatusView]:
     """Read-only enumeration + classification of every known workspace.
 
     READ-ONLY INVARIANT: this never writes, deletes, or mutates any file or
@@ -1282,7 +1365,7 @@ def collect_status(project_root: Path) -> list[WorkspaceStatusView]:
         record = _read_ownership_record_with_mtime(project_root, slug)
         record = record if isinstance(record, dict) else None
         live = _owner_is_live(record) if record else False
-        ws_root = project_root / ".workspaces" / slug
+        ws_root = resolve_workspace_root(project_root, slug, workspaces_root, record)
         worktrees = discover_workspace_worktrees(ws_root)
 
         wt_views: list[WorktreeStatusView] = []
@@ -1334,6 +1417,10 @@ def collect_status(project_root: Path) -> list[WorkspaceStatusView]:
 # T-06: CLI + main (create / teardown / takeover / heartbeat / status subcommands)
 # ---------------------------------------------------------------------------
 
+def _opt_path(raw: str | None) -> Path | None:
+    return Path(raw).expanduser() if raw else None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Manage per-repo git worktree feature workspaces.",
@@ -1368,6 +1455,18 @@ def main(argv: list[str] | None = None) -> int:
         "--json", dest="json_output", action="store_true", default=True,
         help="Emit the CreateResult as JSON (default: on).",
     )
+    create_parser.add_argument(
+        "--branch", default=None,
+        help="Branch to check out (default: the feature name).",
+    )
+    create_parser.add_argument(
+        "--repo-path", dest="repo_paths", action="append", default=None,
+        help="Repo path to use instead of discovering repos (repeatable).",
+    )
+    create_parser.add_argument(
+        "--workspaces-root", dest="workspaces_root", default=None,
+        help="Folder holding workspaces (default: <project>/.workspaces).",
+    )
 
     # takeover — non-destructive ownership-record flip (D-05).
     takeover_parser = subparsers.add_parser("takeover", help="Reassign a stale/owned workspace record.")
@@ -1383,6 +1482,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     # TEST-ONLY seam so subprocess JSONL-liveness tests can inject a fake home.
     takeover_parser.add_argument("--home", default=None, help=argparse.SUPPRESS)
+    takeover_parser.add_argument(
+        "--workspaces-root", dest="workspaces_root", default=None,
+        help="Folder holding workspaces (default: <project>/.workspaces).",
+    )
     takeover_parser.add_argument(
         "--json", dest="json_output", action="store_true", default=True,
         help="Emit the TakeoverResult as JSON (default: on).",
@@ -1420,6 +1523,10 @@ def main(argv: list[str] | None = None) -> int:
         "--json", dest="json_output", action="store_true", default=True,
         help="Emit the TeardownResult as JSON (default: on).",
     )
+    teardown_parser.add_argument(
+        "--workspaces-root", dest="workspaces_root", default=None,
+        help="Folder holding workspaces (default: <project>/.workspaces).",
+    )
 
     status_parser = subparsers.add_parser(
         "status", aliases=["list"],
@@ -1432,6 +1539,10 @@ def main(argv: list[str] | None = None) -> int:
     status_parser.add_argument(
         "--json", dest="json_output", action="store_true", default=True,
         help="Emit the status list as JSON (default: on).",
+    )
+    status_parser.add_argument(
+        "--workspaces-root", dest="workspaces_root", default=None,
+        help="Folder holding workspaces (default: <project>/.workspaces).",
     )
 
     try:
@@ -1453,6 +1564,9 @@ def main(argv: list[str] | None = None) -> int:
                 named_repos=named_or_none,
                 base=args.base,
                 session_uuid=args.session_uuid,
+                workspaces_root=_opt_path(args.workspaces_root),
+                branch=args.branch,
+                repo_paths=[Path(p) for p in args.repo_paths] if args.repo_paths else None,
             )
         except ValueError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -1478,6 +1592,7 @@ def main(argv: list[str] | None = None) -> int:
             session_uuid=args.session_uuid,
             force=args.force,
             home=args.home,
+            workspaces_root=_opt_path(args.workspaces_root),
         )
         print(json.dumps(result.to_dict(), indent=2))
         print(f"[workspace] takeover {args.feature}: {result.message}", file=sys.stderr)
@@ -1504,6 +1619,7 @@ def main(argv: list[str] | None = None) -> int:
                 feature=args.feature,
                 project_root=project_root,
                 force=args.force,
+                workspaces_root=_opt_path(args.workspaces_root),
             )
         except ValueError as exc:
             print(json.dumps({"error": str(exc)}, indent=2))
@@ -1528,7 +1644,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command in ("status", "list"):
         project_root = Path(args.project_root) if args.project_root else Path.cwd()
-        views = collect_status(project_root)
+        views = collect_status(project_root, _opt_path(args.workspaces_root))
 
         print(json.dumps({"workspaces": [v.to_dict() for v in views]}, indent=2))
         for v in views:

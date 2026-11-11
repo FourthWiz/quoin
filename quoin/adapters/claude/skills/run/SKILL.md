@@ -36,9 +36,9 @@ fixes made through that implementer show up as `implement`.)
 
 Scan the input before anything else. The task name is the first token that is
 not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
-`hard:`, `strict:`, `small:`, `parallel:`, `direct:`, `light:` and the like; a leading `[no-redispatch]` is
+`hard:`, `strict:`, `small:`, `parallel:`, `direct:`, `light:`, `isolate:` and the like; a leading `[no-redispatch]` is
 stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
-input unchanged apart from removing `hard:`, `direct:` and `light:`.
+input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolate:`).
 
 1. **`hard:`** or **`strict:`** anywhere in the input → this task wants the full
    heavy pipeline. Invoke the `run_hard` skill with the input unchanged (keep
@@ -46,8 +46,9 @@ input unchanged apart from removing `hard:`, `direct:` and `light:`.
 2. **`--resume`** (task name as above) → if `.workflow_artifacts/memory/run-state-<task>.json` or
    `.workflow_artifacts/memory/autonomous-run-<task>.marker` exists, the task was
    started by the heavy pipeline: invoke `run_hard` with the input unchanged and
-   stop. Otherwise resume the light run: read `.workflow_artifacts/<task>/brief.md`,
-   check `git status`/`git log` on the task branch, and continue from the first
+   stop. Otherwise resume the light run: run Step 1's claim (item 2; it
+   returns the task's worktree if it has one), read `.workflow_artifacts/<task>/brief.md`,
+   check `git status`/`git log` on the task branch in `WT`, and continue from the first
    step whose output is missing. A brief whose `## Size` section says
    `route: direct` resumes on the Direct route instead; one with no `## Size`
    section is a light run, and a light or staged run (also
@@ -77,13 +78,34 @@ input unchanged apart from removing `hard:`, `direct:` and `light:`.
    remember the override for Step 1b: `direct:` forces the Direct route,
    `light:` forces the light pipeline (if both appear, `light:` wins). They
    apply under `--autonomous` too.
+8. **`isolate:`** → recognised the same way as `direct:`/`light:`. Strip it and
+   set `ISOLATE=true`: Step 1 works in a worktree even when no other run holds
+   the checkout.
 
 ## Step 1 — Setup (inline)
 
 1. Derive a kebab-case task name; create the task folder and log the first
    marker in one call:
    `mkdir -p ".workflow_artifacts/<task>" && python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" setup`
-2. Git: if the tree has uncommitted changes (ignore untracked
+2. Isolation. Pick the task branch name and claim the checkout of the repo
+   the change lands in:
+   `python3 "__QUOIN_HOME__/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`
+   (`<repo>` is the main checkout, never `WT`), plus `--isolate` under
+   `ISOLATE`. Set `WT` to the `worktree` it prints.
+   - `mode: main`: `WT` is the checkout itself; go on to item 3.
+   - `mode: worktree`: another live run holds the checkout (`blocking`) or
+     `isolate:` asked for it; the task branch is already checked out at
+     `WT`. Skip item 3; the checkout's changes belong to the other run.
+   - Exit 3: print its `error` and stop.
+   - Script missing or any other failure: print
+     `[quoin-run: run isolation unavailable; working in this checkout]` and
+     go on with `WT` = the checkout.
+
+   From here on all git, edits, tests and commits happen in `WT` (`git -C
+   "<WT>"`, `(cd "<WT>" && <test command>)`, absolute paths), and every
+   subagent gets `WT` as its absolute path. This session's cwd stays at the
+   project root, with `.workflow_artifacts/` and the phase markers.
+3. Git: if the tree has uncommitted changes (ignore untracked
    `.workflow_artifacts/`), ask what to do with them (interactive) or leave them
    alone and work on top of them (autonomous). Then create a fresh task branch,
    never committing to main/master: from an up-to-date default branch when a
@@ -91,7 +113,7 @@ input unchanged apart from removing `hard:`, `direct:` and `light:`.
    fixture with no remote). In a multi-repo project, do this in the repo the
    change lands in; a staged task creates the branch in each repo when its first
    stage there starts (Step 4b, in the light pipeline file).
-3. Read `.workflow_artifacts/memory/lessons-learned.md` if present, keeping only
+4. Read `.workflow_artifacts/memory/lessons-learned.md` if present, keeping only
    entries relevant to this task.
 
 ## Step 1b — Size (inline)
@@ -189,7 +211,7 @@ wrap the whole of `/run` in one subagent.
    dispatches.
 3. **Dispatch.** Spawn one general-purpose Agent with `model: "opus"`. Its
    prompt starts with `[no-redispatch]` and gives the brief text, the context
-   pack path, the relevant lessons-learned entries, the repo path and task
+   pack path, the relevant lessons-learned entries, the absolute `WT` path and task
    branch, the test command, and the text of Steps 5 and 6 below (it cannot
    see this file). It tells the agent to do those two steps, not to commit
    and not to spawn subagents, and to return the files changed, the tests
@@ -260,7 +282,7 @@ context pack, in the FOREGROUND with an explicit Bash `timeout: 600000` (see
 the dispatch rule above; inline runs follow it too). For a Python project you may instead use the affected-test helper:
 
 ```bash
-python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$(pwd)" --format text
+python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$(pwd)" --repo-root "<WT>" --format text
 ```
 
 It only understands pytest: if it reports `ran_pytest=false`, no tests ran, so
@@ -317,6 +339,11 @@ Marker: `commit` (chain it onto the `git add` call).
    (`/pr` pushes the branch and opens a PR). For a staged task, report once after
    the last stage: one line per stage (repo, what changed, tests), and name every
    repo whose branch needs a PR.
+6. Release the claim: a single task now, a staged task once after its last
+   stage, for each repo it claimed (also when the run stops early):
+   `python3 "__QUOIN_HOME__/scripts/run_isolation.py" release --task "<task>" --repo "<repo>"`.
+   In worktree mode the report also names `WT` and the branch. Both stay;
+   `/workspace teardown <task>` removes them after its safety checks.
 
 ## Escalation
 
@@ -330,6 +357,9 @@ recommendation in the final report (autonomous), when:
 
 A task that spans several repos or needs a few stages is not by itself a reason
 to escalate: the staged path in Step 4b (light pipeline file) handles it.
+
+Before stopping, release the claim (Step 8 item 6) and, in worktree mode,
+name `WT` and the branch: `/run hard:` does not isolate, so run it from `WT`.
 
 Never switch to the heavy pipeline on your own. Escalating from the Direct
 route to the light pipeline is a separate, one-way step (see Step 1b).

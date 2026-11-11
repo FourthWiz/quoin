@@ -146,6 +146,7 @@ DEPLOYED_SCRIPTS = (
     "cost_ledger_summary.py",        # finalize-time ledger re-pricing + token-mix estimates (adapter-only, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors agent_transcript_cost.py)
     "known_red.py",  # IVG-144: known-red manifest reader/matcher (wrapped portable-core — also in CORE_SCRIPTS)
     "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper
+    "run_isolation.py",  # /run per-checkout run registry + worktree isolation (wrapped portable-core — also in CORE_SCRIPTS)
     "plan_path_lint.py",  # IVG-143: cited-path resolver/linter wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "authored_content_lint.py",  # advisory authored-content lint wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "footprint_report.py",  # IVG-162 T-01: corpus byte-footprint report (standalone, DEPLOYED_SCRIPTS-only — no CORE_SCRIPTS twin, mirrors sleep_score.py)
@@ -663,6 +664,7 @@ CORE_SCRIPTS = (
     "compaction_telemetry.py",      # IVG-258 stage 5: compaction-telemetry sink reader core impl; required by ~/.claude/scripts/compaction_telemetry.py parents[1] loader
     "known_red.py",  # IVG-144: known-red manifest reader/matcher core impl (wrapped portable-core — also in DEPLOYED_SCRIPTS)
     "workspace.py",  # IVG-158: parallel-feature-isolation workspace create core+wrapper
+    "run_isolation.py",  # /run per-checkout run registry + worktree isolation (wrapped portable-core — also in DEPLOYED_SCRIPTS)
     "plan_path_lint.py",  # IVG-143: wrapped impl; required by ~/.claude/scripts/plan_path_lint.py parents[1] loader
     "authored_content_lint.py",  # advisory authored-content lint core impl (wrapped portable-core)
     "gate_fullsuite_sidecar.py",  # IVG-249 stage-3 gate full-suite freshness sidecar (wrapped portable-core — also in CORE_SCRIPTS)
