@@ -25,7 +25,12 @@ unpushed unless the caller proves it merged or forces the removal).
   session created.
 - A workspace's work has landed (merged) and it should be cleaned up.
 - Always explicitly invoked by the user. Never auto-invoked by any skill or
-  orchestrator.
+  orchestrator. One exception covers the script, not this skill: the light
+  run pipeline calls `workspace.py` (through `run_isolation.py`) to give a run
+  its own worktree when another live run already holds the checkout, or when
+  `isolate:` asks for one. Those workspaces sit outside the project, under
+  `QUOIN_WORKTREE_ROOT` (default under `~/.quoin/worktrees/<repo>/<task>/`), and
+  `status`/`teardown <task>` find them through their ownership record.
 
 ## Inputs
 

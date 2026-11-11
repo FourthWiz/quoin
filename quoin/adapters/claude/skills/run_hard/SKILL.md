@@ -1580,7 +1580,7 @@ Each phase runs as a separate subagent session — never inline. This keeps the 
 
 ## Parallel tasks
 
-Multiple `/run` sessions can operate simultaneously on different tasks — each uses its own `.workflow_artifacts/<task-name>/` subfolder. Start each in a separate chat session to avoid shared context. There is no interference as long as tasks target different repos or non-overlapping files.
+Each task keeps its artifacts in its own `.workflow_artifacts/<task-name>/` subfolder, but `/run hard:` does not isolate working trees yet: every session works in the project's checkout. Two heavy runs in the same repo therefore switch branches under each other and mix commits and review diffs. Run concurrent heavy tasks only in different repos, or create a worktree first with `/workspace create <task>` and start the session there. Light `/run` isolates itself: a second live run in the same checkout gets its own worktree.
 
 ## Cost estimate
 

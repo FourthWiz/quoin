@@ -23,7 +23,15 @@ task); markers change no behaviour and are never committed.
 
 1. Route: `hard:`/`strict:` input, or a resume of a task the heavy
    pipeline started, hands off to `run_hard` unchanged.
-2. Setup: task folder, fresh branch, relevant lessons.
+2. Setup: task folder, fresh branch, relevant lessons. Before branching,
+   the run claims the checkout in a per-checkout registry under an
+   exclusive lock (`run_isolation.py`). When another live run already
+   holds it, or the `isolate:` tag asks, the run gets its own git
+   worktree on the task branch outside the project folder and does all
+   later git, edit, test, review and commit work there; artifacts stay at
+   the project root. A resume returns to the same worktree; the run
+   releases its claim at the end and leaves the worktree and branch for
+   workspace teardown. Without the helper the run works in place.
 2b. Size, inline (no helper, no extra model call): take the direct route
    only for a concrete defect or change with clear expected behaviour
    that should touch one module plus its tests and involves no public

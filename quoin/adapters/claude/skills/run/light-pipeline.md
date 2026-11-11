@@ -88,7 +88,7 @@ record the assumption and continue.
 
 ## Step 4 — Context pack (subagent)
 
-Marker: `context`. Spawn one read-only subagent (Explore type, sonnet) with the brief's text and the
+Marker: `context`. Spawn one read-only subagent (Explore type, sonnet) with the brief's text, `WT` (the tree to explore) and the
 paths of the discovery memory files (none under `LEAN`: it explores the repo from scratch). Its job is to return the pack below (at
 most about 60 lines), which you then save as `.workflow_artifacts/<task>/context.md`
 (the subagent is read-only):
@@ -152,13 +152,16 @@ one Opus implementer per stage, even when this session is on Opus.
    acceptance criteria, non-goals (the other stages' scope), and the interfaces
    it must provide or may rely on.
 2. In the stage's repo, make sure the task branch exists (the same branch name in
-   every repo, created as in Step 1 the first time a stage touches that repo).
+   every repo). The first time a stage touches a repo, run Step 1 items 2–3
+   for it (claim; create the branch only in `mode: main`), and do the
+   stage's git, test and commit work in that repo's `WT`.
    Under `PARALLEL`, a stage in a multi-stage wave instead works on a
    temporary stage branch in its own worktree, merged back into the task
    branch (see "Parallel waves").
 3. If the stage's repo or area is not covered by the task's context pack, run
    Step 4 for the stage brief and save it to `stage-N/context.md`.
-4. Steps 5–8 as written, with the stage brief in place of the task brief: the
+4. Steps 5–8 as written (Step 8 item 6, the release, waits for the last
+   stage), with the stage brief in place of the task brief: the
    review gets the stage brief, the `## Interfaces between stages` section and
    the stage's diff only (base = the commit the stage started from), and its
    notes go to `stage-N/review.md`. One commit per stage.
@@ -170,6 +173,9 @@ one Opus implementer per stage, even when this session is on Opus.
 of strict file order. Below, `PS` means
 `python3 __QUOIN_HOME__/scripts/parallel_stages.py`. Each command prints one
 JSON object. Double-quote every path, branch and task value you substitute.
+`<repo>` below is the stage repo's task working tree: `WT` from that repo's
+Step 1 claim, which is an isolated worktree when the run was isolated. Stage
+worktrees then branch from that tree.
 
 1. **Plan the next wave.** If `QUOIN_PARALLEL_BUDGET_USD` (a dollar budget
    for today's project spend) is set, read `today_usd` from
@@ -214,8 +220,8 @@ JSON object. Double-quote every path, branch and task value you substitute.
    Write the implementer's row only after its fix pass, so that row covers
    the fixes too. These are the only ledger rows the light run writes, and
    `/cost_snapshot` uses them for its per-stage breakdown.
-5. **Integrate one stage at a time, in file order.** From the main checkout,
-   on the task branch, run
+5. **Integrate one stage at a time, in file order.** From the task working
+   tree (`<repo>`), on the task branch, run
    `PS merge --repo "<repo>" --into "<task branch>" --branch "<stage branch>"`.
    `.workflow_artifacts/` edits never block a merge.
    - **Exit 0 (merged):** run
