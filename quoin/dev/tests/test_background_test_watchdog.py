@@ -68,7 +68,7 @@ def test_dispatch_template_mandates_explicit_timeout(region):
 
 def test_run_step6_inline_runs_use_explicit_timeout():
     text = RUN.read_text(encoding="utf-8")
-    step6 = _flat(_between(text, "## Step 6 — Verify", "## Step 7"))
+    step6 = _flat(_between(text, "## Step 6 — Verify", "## Step 8"))
     assert MANDATE in step6
 
 

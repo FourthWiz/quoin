@@ -111,6 +111,7 @@ def scan_text(relpath: str, text: str) -> list:
 def corpus_files() -> list:
     patterns = (
         "quoin/adapters/claude/skills/*/SKILL.md",
+        "quoin/adapters/claude/skills/run/light-pipeline.md",
         "quoin/core/skills/*.md",
         "quoin/memory/*.md",
     )

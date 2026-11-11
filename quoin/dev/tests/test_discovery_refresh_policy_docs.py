@@ -89,8 +89,11 @@ def test_build_preambles_check_exits_0() -> None:
 
 def test_discovery_dirty_marker_contract() -> None:
     """/run writes and reads the marker, guards lessons, and /discover clears it."""
-    run = (_SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
-    step2 = run.split("## Step 2 — Discover", 1)[1].split("## Step 3", 1)[0]
+    run_dir = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run"
+    run = (run_dir / "SKILL.md").read_text(encoding="utf-8")
+    # Step 2 is a light-route step, kept in the reference file /run reads on that route.
+    light = (run_dir / "light-pipeline.md").read_text(encoding="utf-8")
+    step2 = light.split("## Step 2 — Discover", 1)[1].split("## Step 3", 1)[0]
     step8 = run.split("## Step 8 — Commit", 1)[1].split("## Escalation", 1)[0]
     assert "discovery-dirty" in step2
     assert "discovery-dirty" in step8

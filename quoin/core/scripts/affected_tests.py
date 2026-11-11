@@ -595,6 +595,36 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_handoff_producer_conformance.py",
     ),
+    # run keeps its light-route steps in light-pipeline.md, read on demand;
+    # these tests pin the split and the text that moved there.
+    (
+        "quoin/adapters/claude/skills/run/light-pipeline.md",
+        "quoin/dev/tests/test_run_light_pipeline_split.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/light-pipeline.md",
+        "quoin/dev/tests/test_run_size_route.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/light-pipeline.md",
+        "quoin/dev/tests/test_path_resolve.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/light-pipeline.md",
+        "quoin/dev/tests/test_run_implementer_guard.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/light-pipeline.md",
+        "quoin/dev/tests/test_skill_recipe_shell_portability.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/SKILL.md",
+        "quoin/dev/tests/test_run_light_pipeline_split.py",
+    ),
+    (
+        "src/quoin/installer.py",
+        "quoin/dev/tests/test_run_light_pipeline_split.py",
+    ),
     # This stage's envelope-versus-inline-summary branch and its
     # extended guard touch implement, review and thorough_plan's summary
     # sections — without these rows a Standard gate on any of the three

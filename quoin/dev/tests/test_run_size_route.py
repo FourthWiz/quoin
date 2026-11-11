@@ -13,7 +13,10 @@ from pathlib import Path
 from quoin.benchmarks.harness.cells.quoin_claude import brief_route
 
 QUOIN = Path(__file__).resolve().parents[2]
-SKILL = (QUOIN / "adapters" / "claude" / "skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
+RUN_DIR = QUOIN / "adapters" / "claude" / "skills" / "run"
+SKILL = (RUN_DIR / "SKILL.md").read_text(encoding="utf-8")
+# Steps only the light route runs (2, 3, 4, 4b, 7) live in this reference file.
+LIGHT = (RUN_DIR / "light-pipeline.md").read_text(encoding="utf-8")
 INTENT = (QUOIN / "core" / "skills" / "run.md").read_text(encoding="utf-8")
 QUICKSTART = (QUOIN / "QUICKSTART.md").read_text(encoding="utf-8")
 
@@ -22,9 +25,9 @@ EXISTING_TAGS = ("small:", "medium:", "large:", "fast:", "hard:", "strict:", "pa
 ROUTE_TAGS = ("direct:", "light:")
 
 
-def _raw_section(heading):
+def _raw_section(heading, text=SKILL):
     """The text under a `## ` heading, up to the next one outside a code fence."""
-    lines = SKILL[SKILL.index(heading):].splitlines()
+    lines = text[text.index(heading):].splitlines()
     out, fenced = [lines[0]], False
     for line in lines[1:]:
         if line.startswith("```"):
@@ -69,7 +72,10 @@ def test_run_hard_handoff_drops_route_tags():
 
 def test_size_step_sits_between_routing_and_discover_and_is_not_called_triage():
     size = SKILL.index("## Step 1b — Size (inline)")
-    assert SKILL.index("## Step 0 — Route") < size < SKILL.index("## Step 2 — Discover")
+    assert SKILL.index("## Step 0 — Route") < size < SKILL.index("## Direct route (inline)")
+    assert size < SKILL.index("## Light pipeline")
+    # Discover is the first step of the light pipeline file.
+    assert LIGHT.index("## Step 2 — Discover") < LIGHT.index("## Step 3 — Frame")
     heading_line = SKILL[size:SKILL.index("\n", size)]
     assert "triage" not in heading_line.lower()
 
@@ -109,7 +115,7 @@ def test_harness_reads_the_route_from_the_brief_format_run_writes(tmp_path):
 
 
 def test_light_brief_template_carries_the_size_section():
-    frame = _raw_section("## Step 3 — Frame (inline)")
+    frame = _raw_section("## Step 3 — Frame (inline)", LIGHT)
     assert "## Size\nroute: light\nreason: " in frame
 
 

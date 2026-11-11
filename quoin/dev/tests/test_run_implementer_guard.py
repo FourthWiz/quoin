@@ -18,6 +18,7 @@ PKG_DIR = Path(__file__).resolve().parents[2]  # quoin/quoin/
 REPO_ROOT = PKG_DIR.parent
 SCRIPT = PKG_DIR / "scripts" / "model_tier.py"
 RUN_SKILL = PKG_DIR / "adapters" / "claude" / "skills" / "run" / "SKILL.md"
+RUN_LIGHT = RUN_SKILL.with_name("light-pipeline.md")
 GUARD_HEADING = "## Implementer tier guard (before Step 5)"
 
 _spec = importlib.util.spec_from_file_location("model_tier_under_test", SCRIPT)
@@ -103,9 +104,10 @@ def test_model_tier_is_deployed(monkeypatch):
 
 
 def test_autonomous_staged_run_never_hands_off_between_stages():
-    text = RUN_SKILL.read_text(encoding="utf-8")
+    # The staged loop closes Step 4b in the light pipeline file.
+    text = RUN_LIGHT.read_text(encoding="utf-8")
     start = text.index("Continue to the next stage without asking")
-    loop = text[start:text.index(GUARD_HEADING)]
+    loop = text[start:text.index("## Step 7 — Review", start)]
     assert "Under `AUTONOMOUS`, run every remaining stage in this session" in loop
     # The fresh-session hand-off must be scoped to interactive runs only.
     assert loop.index("Interactive only:") < loop.index("fresh session;")
