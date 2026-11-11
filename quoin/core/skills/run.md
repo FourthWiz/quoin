@@ -49,9 +49,9 @@ task); markers change no behaviour and are never committed.
    than the staleness threshold (7 days by default), or marked out of
    date by an earlier task's `discovery-dirty` marker (step 9). A benchmark-only
    lean profile (`QUOIN_RUN_PROFILE=bench-lean`, set by the benchmark
-   harness, never a user tag) skips this step, the closing
-   lessons-learned append and the dirty marker; every other step runs
-   unchanged.
+   harness, never a user tag) skips this step, the isolation claim and
+   release, the lessons-learned read and append, and the dirty marker;
+   every other step runs unchanged.
 4. Frame, inline: write `brief.md` (goal, acceptance criteria,
    non-goals, assumptions, shape). Ask the user when the request is
    unclear in a way that changes the work; never ask in autonomous mode.

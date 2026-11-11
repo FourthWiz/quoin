@@ -66,12 +66,11 @@ input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolat
    pipeline file); a single-shape
    task ignores it. It combines with `--autonomous` and `--resume`.
 6. **`QUOIN_RUN_PROFILE=bench-lean`** in the environment → set `LEAN=true`.
-   This is a benchmark-only switch, never a tag: the benchmark harness sets it
-   for its quoin arm to measure /run without discovery. Read it from the
+   Benchmark-only, never a tag: the harness sets it for its quoin arm. Read it from the
    `profile=` line the Step 1 setup marker prints; a `--resume` that skips
-   Step 1 reads it with `printenv QUOIN_RUN_PROFILE`. Under `LEAN`, Step 2 only
-   logs its marker as skipped and Step 8 skips the lessons-learned append
-   and the discovery-dirty marker; every other step runs as written.
+   Step 1 reads it with `printenv QUOIN_RUN_PROFILE`. Under `LEAN`, skip
+   isolation, lessons and the dirty marker (Step 1 items 2 and 4, Step 8 items
+   3, 4 and 6); Step 2 only logs its marker as skipped; all else as written.
 7. **`direct:`** / **`light:`** → recognised only as whitespace-delimited
    tokens among the leading flags and tags, before the task text (so
    `redirect:` or a tag quoted in an issue body never counts). Strip them and
@@ -91,7 +90,8 @@ input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolat
    the change lands in:
    `python3 "__QUOIN_HOME__/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`
    (`<repo>` is the main checkout, never `WT`), plus `--isolate` under
-   `ISOLATE`. Set `WT` to the `worktree` it prints.
+   `ISOLATE`. Set `WT` to the `worktree` it prints. `LEAN`: no claim,
+   `WT` is the checkout.
    - `mode: main`: `WT` is the checkout itself; go on to item 3.
    - `mode: worktree`: another live run holds the checkout (`blocking`) or
      `isolate:` asked for it; the task branch is already checked out at
@@ -113,8 +113,8 @@ input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolat
    fixture with no remote). In a multi-repo project, do this in the repo the
    change lands in; a staged task creates the branch in each repo when its first
    stage there starts (Step 4b, in the light pipeline file).
-4. Read `.workflow_artifacts/memory/lessons-learned.md` if present, keeping only
-   entries relevant to this task.
+4. Unless `LEAN`, read `.workflow_artifacts/memory/lessons-learned.md` if
+   present, keeping only entries relevant to this task.
 
 ## Step 1b — Size (inline)
 
