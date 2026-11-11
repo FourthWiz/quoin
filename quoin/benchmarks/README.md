@@ -579,6 +579,63 @@ python3 quoin/benchmarks/scripts/run_benchmark.py --suite tiered-small \
   --cells simple-claude,quoin-claude --run-id RUN --judge-only
 ```
 
+### Tier selection and repeated runs
+
+`--tiers` runs only some tiers of the suite (a comma list, for example
+`--tiers large` or `--tiers medium,large`). The estimate and the worst-case
+prompt count only the selected tasks, and the run's manifest records only the
+selected tiers. The pilot runs only when `--pilot-tier` is among the selected
+tiers; otherwise the command prints a note and skips the pilot, and the
+denial-parity check with it.
+
+`--repeat N` runs the selected tasks N times, one after another, as sibling
+run ids `<run-id>-r1` ... `<run-id>-rN`. Each repeat is an ordinary run with
+its own manifest, default spend ledger (`<run-dir>/<run-id>-rK.spend-ledger.jsonl`),
+summary, judging and paired order, so the per-run summary, `--judge-only` and
+`--clean --run-id <run-id>-rK` work on a repeat as on any run. The command
+prints the sessions still to spawn per repeat and asks once for all of them.
+`--authorised-usd` applies to each repeat's own ledger; pass `--spend-ledger`
+to share one ledger, and one ceiling, across the repeats. Re-running the same
+command continues the unfinished repeats: finished ones only re-report (and
+judge rows still pending), and an interrupted one resumes where it stopped.
+A run started with `--tiers` keeps that selection: re-run it with the same
+`--tiers`, since adding the pilot tier to it later is refused.
+
+Large tier, three repeats, lean route:
+
+```bash
+QUOIN_BENCH_QUOIN_ROUTE=lean quoin bench tiered --suite tiered-balanced \
+  --tiers large --repeat 3 --run-id lean-large
+```
+
+Then compare the arms across the repeats (the command prints this line when it
+finishes):
+
+```bash
+RUNS=.workflow_artifacts/quoin-benchmarks/runs
+python3 quoin/benchmarks/scripts/multi_run_report.py \
+  $RUNS/lean-large-r1 $RUNS/lean-large-r2 $RUNS/lean-large-r3 --json lean-large.json
+```
+
+`multi_run_report.py` takes any run directories of the same suite, repeats or
+not. A run counts for a task only when both arms ran it and neither row is
+invalid. The report gives:
+
+- per task and arm, passes / runs, the pass-rate difference (quoin minus
+  plain) and the route the quoin arm took (`mixed` when it differed between
+  runs);
+- per tier and overall, each arm's mean per-task pass rate, the mean per-task
+  difference, an exact sign test and an exact Wilcoxon signed-rank test over
+  the per-task differences (two-sided; tasks with no difference are dropped);
+- stability: the tasks each arm solved in every run, in none, and in some;
+- the same figures per quoin route, when the runs record one per task.
+
+It refuses runs whose suite sha, plain or quoin model, or quoin route differ
+(a manifest without a recorded route counts as the default route), and lists
+each differing value per run; `--allow-mixed` combines them anyway
+and marks the report as mixed. With a handful of tasks the tests have little
+power: read a large p-value as "not shown", not as "no difference".
+
 ### Resume and interruption
 
 Re-running the same `quoin bench tiered` command continues an interrupted

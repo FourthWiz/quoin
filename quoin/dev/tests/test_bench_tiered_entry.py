@@ -329,6 +329,43 @@ def test_leg_argv_parses_with_the_benchmark_parser(tw):
     assert ns.spend_ledger == res.ledger and ns.run_dir == res.run_dir
 
 
+def test_estimate_counts_only_the_selected_tiers(tmp_path):
+    doc = json.loads((REPO / "quoin" / "benchmarks" / "suite-tiered-balanced.json").read_text())
+    large = [t for t in doc["tasks"] if t["tier"] == "large"]
+    sessions = 2 * len(large)
+    assert tiered_entry.estimate_rows(doc, tmp_path / "runs", "x", None, large) == (sessions, 0)
+    assert tiered_entry.estimate_rows(doc, tmp_path / "runs", "x", "large", large) == (
+        sessions, sessions)
+
+
+@pytest.mark.parametrize("tiers,pilot,selected,expected_pilot", [
+    ("medium", "easy", ["medium"], None),
+    ("medium,easy", "easy", ["easy", "medium"], "easy"),
+    ("medium", "medium", ["medium"], "medium"),
+])
+def test_tiers_scope_tasks_and_decide_the_pilot(tw, tiers, pilot, selected, expected_pilot):
+    w = tw
+    res = tiered_entry.resolve(_parsed(*_argv(w, "--tiers", tiers, "--pilot-tier", pilot)))
+    assert res.tier_names == selected and res.pilot_tier == expected_pilot
+    assert {t["tier"] for t in res.tasks} == set(selected)
+    assert res.tiers_arg == ",".join(selected)
+    ns = run_benchmark.build_parser().parse_args(tiered_entry.leg_argv(res, skip_judge=True))
+    assert ns.tiers == ",".join(selected)
+
+
+def test_unknown_tier_is_refused(tw, capsys):
+    w = tw
+    assert tiered_entry.resolve(_parsed(*_argv(w, "--tiers", "huge"))) == 2
+    assert "REFUSED: tiers: unknown tier huge" in capsys.readouterr().err
+
+
+def test_repeat_run_ids_are_numbered_siblings():
+    assert tiered_entry.repeat_run_ids("lean-large", 3) == [
+        "lean-large-r1", "lean-large-r2", "lean-large-r3"]
+    with pytest.raises(SystemExit):
+        _parsed("--repeat", "0")
+
+
 # --- parity ----------------------------------------------------------------------
 
 def _rows(res, spec):
@@ -446,7 +483,7 @@ def test_bench_tiered_forwards_the_remaining_arguments(cli_path, monkeypatch):
 FLAGS = ["--yes", "--run-id", "--run-dir", "--spend-ledger", "--authorised-usd",
          "--max-budget-usd-per-task", "--parity-min-gap", "--parity-min-ratio",
          "--ignore-parity", "--judge-emulation", "--clean", "--clean-mirrors",
-         "--clean-explicit-ledger"]
+         "--clean-explicit-ledger", "--tiers", "--repeat"]
 
 
 def test_bench_tiered_help_lists_the_options(cli_path, capsys):
@@ -525,6 +562,69 @@ def test_fresh_run_goes_prepare_estimate_confirm_pilot_parity_full_judge(tw, cap
     assert "results: final" in out and "summary:" in out
     assert len(w["judged"]) == 6
     _no_leftovers(w)
+
+
+def test_tiers_without_the_pilot_tier_skip_the_pilot_and_parity(tw, capsys):
+    w = tw
+    assert _go(w, "--yes", "--tiers", "medium") == 0
+    out = capsys.readouterr().out
+    assert "pilot: skipped (pilot tier easy is not among --tiers medium)" in out
+    assert "worst case $11.00 for 2 sessions still to spawn (pilot skipped)" in out
+    assert "parity:" not in out
+    assert w["calls"] == [{"tiers": "medium", "skip_judge": False, "quiet": False}]
+    assert len(_starts(w)) == 2
+    assert read_manifest(w["runs"] / "R")["tiers"] == ["medium"]
+
+
+def test_tiers_with_the_pilot_tier_run_the_pilot_first(tw, capsys):
+    w = tw
+    assert _go(w, "--yes", "--tiers", "easy") == 0
+    out = capsys.readouterr().out
+    assert "worst case $22.00 for 4 sessions still to spawn (pilot 4, rest 0)" in out
+    assert "parity: plain" in out
+    assert w["calls"][0] == {"tiers": "easy", "skip_judge": True, "quiet": True}
+    assert len(_starts(w)) == 4
+    assert read_manifest(w["runs"] / "R")["tiers"] == ["easy"]
+
+
+def test_repeat_runs_sibling_ids_and_continues_unfinished_repeats(tw, capsys):
+    w = tw
+    assert _go(w, "--yes", "--tiers", "medium", "--repeat", "1") == 0
+    capsys.readouterr()
+    assert len(_starts(w)) == 2
+
+    assert _go(w, "--yes", "--tiers", "medium", "--repeat", "2") == 0
+    out = capsys.readouterr().out
+    assert "R-r1: no sessions left to spawn" in out and "R-r2: 2 sessions still to spawn" in out
+    assert "worst case $11.00 for 2 sessions across all repeats" in out
+    assert out.index("repeat 1/2: run id R-r1") < out.index("repeat 2/2: run id R-r2")
+    assert len(_starts(w)) == 4
+    for run_id in ("R-r1", "R-r2"):
+        assert read_manifest(w["runs"] / run_id)["tiers"] == ["medium"]
+        assert (w["runs"] / f"{run_id}.spend-ledger.jsonl").is_file()
+        assert (w["runs"] / run_id / "summary.json").is_file()
+    assert not (w["runs"] / "R").exists()
+    assert "multi_run_report.py" in out and str(w["runs"] / "R-r2") in out
+
+
+def test_declining_the_repeat_confirmation_spawns_nothing(tw, capsys, monkeypatch):
+    w = tw
+    monkeypatch.setattr(sys, "stdin", Tty("n\n"))
+    assert _go(w, "--tiers", "medium", "--repeat", "2") == 1
+    out = capsys.readouterr().out
+    assert "worst case $22.00 for 4 sessions across all repeats" in out and "declined" in out
+    assert _starts(w) == [] and not (w["runs"] / "R-r1").exists()
+
+
+def test_shared_ledger_too_small_for_all_repeats_is_refused_up_front(tw, capsys):
+    w = tw
+    shared = w["runs"] / "shared.jsonl"
+    rc = _go(w, "--yes", "--tiers", "medium", "--repeat", "3", "--spend-ledger", str(shared),
+             "--authorised-usd", "30")
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "REFUSED: authorised-ceiling" in err and "$33.00 across the repeats" in err
+    assert _starts(w) == []
 
 
 def test_prepare_runs_when_mirrors_are_missing(tw, capsys):
