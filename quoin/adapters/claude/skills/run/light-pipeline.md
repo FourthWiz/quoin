@@ -96,7 +96,7 @@ most about 60 lines), which you then save as `.workflow_artifacts/<task>/context
 - the files and symbols the change most likely touches, with `path:line`;
 - the existing tests covering them, and the command that runs those tests;
 - conventions the change must follow (error handling, naming, similar prior code);
-- relevant lessons-learned entries;
+- relevant lessons-learned entries (none under `LEAN`);
 - anything surprising (generated files, duplicated logic, a second call site).
 
 Tell the subagent to start from `.workflow_artifacts/cache/<repo>/repo-map.md`
