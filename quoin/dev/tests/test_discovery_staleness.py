@@ -93,6 +93,20 @@ def test_verdict_absent_no_artifacts(tmp_path, monkeypatch):
     assert report["age_days"] is None
 
 
+def test_dirty_marker_forces_stale(tmp_path, monkeypatch):
+    """A discovery-dirty marker makes recent discovery stale (exit 10)."""
+    monkeypatch.delenv("QUOIN_DISCOVERY_REFRESH_DISABLE", raising=False)
+    monkeypatch.delenv("QUOIN_DISCOVERY_STALE_DAYS", raising=False)
+    root = _make_project(tmp_path)
+    _make_staleness_md(root / ".workflow_artifacts" / "cache" / "_staleness.md", NOW_UTC - timedelta(days=1))
+    (root / ".workflow_artifacts" / "memory" / "discovery-dirty").write_text("2026-11-11 task-x\n", encoding="utf-8")
+
+    mod = _load_module()
+    report = mod.staleness_report(root, now=NOW_UTC)
+    assert report["verdict"] == "stale", report
+    assert report["signal_source"] == "discovery_dirty_marker"
+
+
 def test_threshold_env_override(tmp_path, monkeypatch):
     """Updated = now-4d with QUOIN_DISCOVERY_STALE_DAYS=3 → stale."""
     monkeypatch.delenv("QUOIN_DISCOVERY_REFRESH_DISABLE", raising=False)

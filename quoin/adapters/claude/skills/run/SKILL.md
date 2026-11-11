@@ -69,8 +69,8 @@ input unchanged apart from removing `hard:`, `direct:` and `light:`.
    for its quoin arm to measure /run without discovery. Read it from the
    `profile=` line the Step 1 setup marker prints; a `--resume` that skips
    Step 1 reads it with `printenv QUOIN_RUN_PROFILE`. Under `LEAN`, Step 2 only
-   logs its marker as skipped and Step 8 skips the lessons-learned append;
-   every other step runs as written.
+   logs its marker as skipped and Step 8 skips the lessons-learned append
+   and the discovery-dirty marker; every other step runs as written.
 7. **`direct:`** / **`light:`** → recognised only as whitespace-delimited
    tokens among the leading flags and tags, before the task text (so
    `redirect:` or a tag quoted in an issue body never counts). Strip them and
@@ -158,22 +158,24 @@ dispatched) and the review covers all of it.
 
 ## Step 2 — Discover (subagent, conditional)
 
-Discovery memory is refreshed when it is missing or older than 7 days
-(`QUOIN_DISCOVERY_STALE_DAYS`):
+Discovery memory is refreshed when it is missing, older than 7 days
+(`QUOIN_DISCOVERY_STALE_DAYS`), or marked out of date by an earlier task
+(`.workflow_artifacts/memory/discovery-dirty`, written in Step 8):
 
 ```bash
-if [ -n "$(find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1)" ]; then echo recent; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover --skipped; else echo stale; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover; fi
+if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow_artifacts/cache/_staleness.md .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null | head -1)" ]; then echo recent; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover --skipped; else echo stale; python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" discover; fi
 ```
 
-- Under `LEAN`, do not run that check: log
+- Under `LEAN`, do not run that check (nor read the dirty marker): log
   `run_phase.py "<task>" discover --skipped` and go on to Step 3. The context
   pack explores the repository itself.
 - `recent` → skip and say so in one line.
-- `stale` (missing or older than 7 days) → spawn one subagent on **opus**
-  whose prompt starts with `[no-redispatch]` and runs `/discover` for the project
-  root (the prefix stops `/discover` from re-dispatching itself into a second
-  subagent). Wait for it; its output files are the project memory the next steps
-  read.
+- `stale` (missing, older than 7 days, or marked dirty) → spawn one subagent
+  on **opus** whose prompt starts with `[no-redispatch]` and runs `/discover` for
+  the project root (the prefix stops `/discover` from re-dispatching itself into
+  a second subagent). Wait for it; its output files are the project memory the
+  next steps read. `/discover` deletes the dirty marker when it finishes; if it
+  failed, leave the marker so the next run retries.
 
 ## Step 3 — Frame (inline)
 
@@ -347,7 +349,9 @@ JSON object. Double-quote every path, branch and task value you substitute.
    - **Exit 0 (merged):** run
      `PS cleanup --repo "<repo>" --into "<task branch>" --branch "<stage branch>"`
      and mark that stage ✅ at once. If cleanup reports `partial`, note the
-     leftover worktree in the report and carry on.
+     leftover worktree in the report and carry on. The stage implementer
+     committed on its own branch, so run Step 8 items 3 and 4 here for that
+     stage, on `git diff --name-status <base>..HEAD` (base from `PS worktree`).
    - **Integration gate:** after the wave's last merge, run Step 6 once on the
      task branch. Fix any failure in a separate commit.
    - **Exit 3 (`dirty-tree` or `wrong-branch`):** nothing was merged.
@@ -523,10 +527,35 @@ Marker: `commit` (chain it onto the `git add` call).
    The message is plain engineering prose per
    `__QUOIN_HOME__/memory/clean-authored-content.md`: no artifact paths, finding
    IDs or review narration.
-3. Unless `LEAN`, if the task surfaced a reusable gotcha, append one entry to
-   `.workflow_artifacts/memory/lessons-learned.md` by piping it into
+3. Unless `LEAN`, if the task surfaced a reusable gotcha, record one entry in
+   `.workflow_artifacts/memory/lessons-learned.md` in the standard form
+   (`## <date> — <task>`, then **What happened**, **Lesson**, **Applies to**).
+   Skip it if an entry for this task is already there
+   (`grep -q "^## .* — <task>$"`). Otherwise write it to a temp file and run
+   `python3 __QUOIN_HOME__/scripts/lessons_guard.py --candidate-file <tmp> --lessons-file .workflow_artifacts/memory/lessons-learned.md --candidate-slug <task> --no-strict-attrib`
+   (`--no-strict-attrib` so entries from this project's own earlier tasks
+   count). Exit 1 means an existing entry is near-verbatim the same (it prints
+   that entry's slug): skip the append and name it in the report, or, if this
+   task adds something the old entry lacks, append with a first line
+   `> Related: <matched slug>`. The guard only catches near-verbatim copies,
+   so also skip a lesson you already saw, reworded, in Step 1's relevant
+   entries. Any other exit, or a missing script, means append: pipe the temp
+   file into
    `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
-4. Report in two or three sentences: what changed, test status, and the next step
+4. Unless `LEAN`, mark discovery memory out of date when the commit changed
+   the project's structure: it added, removed or renamed a top-level directory
+   or package; changed a dependency manifest (`pyproject.toml`, `setup.py`,
+   `requirements*.txt`, `package.json`, `go.mod`, `Cargo.toml`, `pom.xml`,
+   `build.gradle*`, `Gemfile` and the like, not lockfiles alone); or changed a
+   public interface other code or repos consume (an exported API, CLI, schema
+   or service endpoint). Check with `git show --name-status --format= HEAD`, or
+   `git diff --name-status <base>..HEAD` when the task or stage made more than
+   one commit. If so, append one line,
+   `<date> <task>: <reason>`, to `.workflow_artifacts/memory/discovery-dirty`;
+   the next run's Step 2 refreshes discovery and `/discover` removes the
+   marker. Never stage the marker. Internal edits, tests and docs alone do not
+   count.
+5. Report in two or three sentences: what changed, test status, and the next step
    (`/pr` pushes the branch and opens a PR). For a staged task, report once after
    the last stage: one line per stage (repo, what changed, tests), and name every
    repo whose branch needs a PR.

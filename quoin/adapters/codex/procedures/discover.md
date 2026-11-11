@@ -28,7 +28,10 @@ and optional structured discovery map under project-root `.workflow_artifacts/`.
    - `.workflow_artifacts/memory/dependencies-map.md`
    - `.workflow_artifacts/memory/git-log.md`
 3. Enumerate repositories from the project root and compare git HEAD values with
-   the staleness files. Treat missing files as no prior signal.
+   the staleness files. Treat missing files as no prior signal. If
+   `.workflow_artifacts/memory/discovery-dirty` exists, scan every repo
+   regardless of HEAD, and delete the marker once every repo scanned
+   successfully.
 4. Scan source repositories read-only. Use Codex native search and file-read
    behavior, and continue scanning other repos when one repo has a local error.
 5. Write the required markdown artifacts:

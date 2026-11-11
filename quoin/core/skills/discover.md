@@ -177,6 +177,11 @@ fails; the markdown outputs remain the authoritative source.
   staleness file MUST be rewritten on every run (including for skipped
   repos — their existing HEAD value is preserved). The legacy
   `repo-heads.md` MUST also be rewritten for backward compatibility.
+- While `.workflow_artifacts/memory/discovery-dirty` exists (left by the run
+  skill after a commit that changed the project's structure), the scan MUST
+  ignore the HEAD-unchanged skip and fully scan every repo. After a scan in
+  which every repo succeeded it MUST delete the marker; after a partial
+  failure it MUST leave it.
 - **Clock-reset invariant (D-06): the `Updated` column in `_staleness.md` MUST be
   set to the current run timestamp for ALL repos on every run, including skipped
   (HEAD-unchanged) repos.** This resets the staleness clock so the session-start

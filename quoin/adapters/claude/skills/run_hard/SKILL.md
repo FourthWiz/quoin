@@ -504,9 +504,9 @@ The fail-closed decision-gate block a spawned phase already emits on a hard stop
 
 ## Phase 1 — Discover (conditional)
 
-**Skip condition:** Check if `.workflow_artifacts/cache/_staleness.md` exists AND its modification time is less than 7 days old. Fall back to `.workflow_artifacts/memory/repo-heads.md` if `_staleness.md` does not exist:
+**Skip condition:** Check that `.workflow_artifacts/memory/discovery-dirty` does not exist (a light `/run` writes it after a commit that changed the project's structure) AND `.workflow_artifacts/cache/_staleness.md` exists with a modification time less than 7 days old. Fall back to `.workflow_artifacts/memory/repo-heads.md` if `_staleness.md` does not exist:
 ```bash
-find .workflow_artifacts/cache/_staleness.md -mtime -7 2>/dev/null || find .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null
+[ ! -f .workflow_artifacts/memory/discovery-dirty ] && { find .workflow_artifacts/cache/_staleness.md -mtime -7 2>/dev/null || find .workflow_artifacts/memory/repo-heads.md -mtime -7 2>/dev/null; }
 ```
 Also check for `repos-inventory.md` (plural) as secondary confirmation.
 
