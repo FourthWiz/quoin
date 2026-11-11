@@ -10,7 +10,7 @@ CLI:
 Exit codes:
     0  — fresh or disabled
     2  — invocation error
-    10 — discovery stale
+    10 — discovery stale (older than the threshold, or a discovery-dirty marker exists)
     11 — discovery absent (no discovery artifacts found)
     12 — Serena present-but-stale (discovery fresh, serena marker exists AND is stale)
 
@@ -30,6 +30,10 @@ from pathlib import Path
 
 _DEFAULT_DISCOVERY_STALE_DAYS = 7
 _DEFAULT_SERENA_STALE_DAYS = 30
+
+# Marker in .workflow_artifacts/memory/ written by /run when a task changed the
+# project's structure; its presence makes discovery stale regardless of age.
+DISCOVERY_DIRTY_MARKER = "discovery-dirty"
 
 # Memory artifacts (fallback signal sources d)
 _MEMORY_ARTIFACT_NAMES = (
@@ -253,7 +257,14 @@ def staleness_report(
     serena = _serena_subreport(project_root, now)
 
     # ── Combined verdict ─────────────────────────────────────────────────────
-    if age_days > threshold_days:
+    # A task that changed the project's structure leaves a discovery-dirty
+    # marker; the next /discover run deletes it. Until then the memory is
+    # out of date whatever its age.
+    dirty = (memory_dir / DISCOVERY_DIRTY_MARKER).is_file()
+    if dirty:
+        verdict = "stale"           # exit 10
+        source = "discovery_dirty_marker"
+    elif age_days > threshold_days:
         verdict = "stale"           # exit 10
     elif serena["present_marker"] and serena["stale"]:
         verdict = "serena_stale"    # exit 12 (present-but-stale only)

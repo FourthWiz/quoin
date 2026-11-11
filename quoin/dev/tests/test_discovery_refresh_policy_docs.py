@@ -85,3 +85,15 @@ def test_build_preambles_check_exits_0() -> None:
     assert result.returncode == 0, (
         f"build_preambles.py --check failed (exit {result.returncode}): {result.stderr.decode()}"
     )
+
+
+def test_discovery_dirty_marker_contract() -> None:
+    """/run writes and reads the marker, guards lessons, and /discover clears it."""
+    run = (_SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
+    step2 = run.split("## Step 2 — Discover", 1)[1].split("## Step 3", 1)[0]
+    step8 = run.split("## Step 8 — Commit", 1)[1].split("## Escalation", 1)[0]
+    assert "discovery-dirty" in step2
+    assert "discovery-dirty" in step8
+    assert "lessons_guard.py" in step8 and "--no-strict-attrib" in step8
+    discover = _ADAPTER_DISCOVER.read_text(encoding="utf-8")
+    assert "rm -f" in discover and "discovery-dirty" in discover

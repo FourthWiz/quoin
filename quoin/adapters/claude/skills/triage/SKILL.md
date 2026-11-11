@@ -175,7 +175,7 @@ Run the following checks. All are **best-effort and read-only** — if a command
 | No daily cache for today AND no session file for today | Daily cache absent + `ls .workflow_artifacts/memory/sessions/$(date +%Y-%m-%d)-*.md 2>/dev/null` absent | `/start_of_day` +2 | — |
 | Active session file with status `in_progress` | `awk 'FILENAME ~ /-orchestrator\.md$/{nextfile} FNR==1{s=0} /^## Status: in_progress/{print FILENAME; nextfile} s&&NF{if($0=="in_progress")print FILENAME; s=0} /^## Status$/{s=1}' .workflow_artifacts/memory/sessions/$(date +%Y-%m-%d)-*.md 2>/dev/null` non-empty | `/implement` +1, `/review` +1 | `/init_workflow` −2 |
 | It's Friday (local date) | `date +%u 2>/dev/null` == 5 (uses local timezone — correct; `date +%u` respects the system clock) | `/weekly_review` +1 | — |
-| Knowledge cache stale (>7 days) | `stat -f %m .workflow_artifacts/cache/_staleness.md 2>/dev/null` (macOS) or `stat -c %Y` (Linux) > 7 days, or file absent | `/discover` +1 | — |
+| Knowledge cache stale (>7 days, or marked dirty) | `stat -f %m .workflow_artifacts/cache/_staleness.md 2>/dev/null` (macOS) or `stat -c %Y` (Linux) > 7 days, or file absent, or `.workflow_artifacts/memory/discovery-dirty` exists | `/discover` +1 | — |
 
 ### Step 3: Classify against the skill catalog
 

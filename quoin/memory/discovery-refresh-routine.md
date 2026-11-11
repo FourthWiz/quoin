@@ -63,6 +63,12 @@ or Serena MCP, the routine will complete silently with no meaningful updates.
 The session-start banner (S-5) handles interactive staleness detection.
 ```
 
+Besides age, a `.workflow_artifacts/memory/discovery-dirty` marker makes discovery
+stale immediately. Light `/run` writes it after a commit that changed the project's
+structure (top-level directories or packages, dependency manifests, public
+interfaces); the next `/run` refreshes discovery, the S-5 banner and
+`/start_of_day` report it as stale, and `/discover` deletes it.
+
 ## Schedule
 
 Default cron expression: `0 6 * * 1` (weekly, every Monday at 06:00 local time).

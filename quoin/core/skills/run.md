@@ -37,11 +37,13 @@ task); markers change no behaviour and are never committed.
    and the review (8). It escalates one way to the light route, keeping the work
    done, when the diff outgrows one module, verification fails twice, or
    the change falls into an excluded category.
-3. Discover, delegated, only when discovery memory is missing or older
-   than the staleness threshold (7 days by default). A benchmark-only
+3. Discover, delegated, only when discovery memory is missing, older
+   than the staleness threshold (7 days by default), or marked out of
+   date by an earlier task's `discovery-dirty` marker (step 9). A benchmark-only
    lean profile (`QUOIN_RUN_PROFILE=bench-lean`, set by the benchmark
-   harness, never a user tag) skips this step and the closing
-   lessons-learned append; every other step runs unchanged.
+   harness, never a user tag) skips this step, the closing
+   lessons-learned append and the dirty marker; every other step runs
+   unchanged.
 4. Frame, inline: write `brief.md` (goal, acceptance criteria,
    non-goals, assumptions, shape). Ask the user when the request is
    unclear in a way that changes the work; never ask in autonomous mode.
@@ -91,7 +93,12 @@ task); markers change no behaviour and are never committed.
 8. Review, delegated, one pass, strong model, given only the brief, the
    diff and the test result. Fixes are applied where step 6 ran (the
    same implementer when delegated); no second review.
-9. Commit locally. Never push or open a PR.
+9. Commit locally. Never push or open a PR. A reusable lesson is
+   checked against `lessons-learned.md` with the duplicate guard before it
+   is appended. When the commit changed the project's structure (top-level
+   directories or packages, dependency manifests, public interfaces), a
+   line goes into `.workflow_artifacts/memory/discovery-dirty` so the next
+   run refreshes discovery; discovery deletes the marker.
 
 ## Escalation
 
