@@ -691,7 +691,7 @@ def test_cli_print_project_root_from_workspace(tmp_path):
 def test_light_run_stage_template_resolves_by_name():
     """The architecture.md template in the light /run skill must stay parseable."""
     skill = (Path(__file__).parent.parent.parent / "adapters" / "claude" / "skills"
-             / "run" / "SKILL.md").read_text(encoding="utf-8")
+             / "run" / "light-pipeline.md").read_text(encoding="utf-8")
     blocks = re.findall(r"```markdown\n(.*?)```", skill, re.DOTALL)
     template = next(b for b in blocks if "## Stage decomposition" in b)
     names = iter(["add billing schema", "wire billing api"])

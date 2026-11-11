@@ -585,12 +585,18 @@ def deploy_quickstart(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None
 
 # ── T-05 ──────────────────────────────────────────────────────────────────────
 
+# Optional files deployed next to a skill's SKILL.md when its source folder has
+# them: preamble.md for subagent spawn targets, and reference files a skill
+# reads on demand (run's light-pipeline steps, loaded only on the light route).
+SKILL_COMPANION_FILES = ("preamble.md", "light-pipeline.md")
+
+
 def deploy_skills(source_dir: pathlib.Path, dest_root: pathlib.Path) -> int:
     """Copy Claude skills to dest_root/skills/. Returns count copied.
 
     Skill sources live at source_dir/adapters/claude/skills/<name>/: SKILL.md is
-    required, and preamble.md is copied alongside it when present (subagent
-    spawn targets only).
+    required, and each SKILL_COMPANION_FILES entry is copied alongside it when
+    present.
     """
     src_adapter = source_dir / "adapters" / "claude" / "skills"
     dst_skills = dest_root / "skills"
@@ -609,9 +615,10 @@ def deploy_skills(source_dir: pathlib.Path, dest_root: pathlib.Path) -> int:
         dst_skill = dst_skills / skill_name
         dst_skill.mkdir(parents=True, exist_ok=True)
         _copy_with_substitution(skill_md, dst_skill / "SKILL.md", dest_root)
-        preamble = skill_dir / "preamble.md"
-        if preamble.exists():
-            _copy_with_substitution(preamble, dst_skill / "preamble.md", dest_root)
+        for companion in SKILL_COMPANION_FILES:
+            src_companion = skill_dir / companion
+            if src_companion.exists():
+                _copy_with_substitution(src_companion, dst_skill / companion, dest_root)
         count += 1
     print(f"Copied {count} skills to {dest_root}/skills/")
     return count
@@ -1069,8 +1076,8 @@ def compute_drift(
     """Return the list of deployed files that drifted from source_dir (T-02).
 
     Iterates the SAME manifest tuples the deploy functions use — TIER1_MEMORY_FILES,
-    CANONICAL_SKILLS (adapter SKILL.md, + preamble.md when the adapter skill folder
-    carries one), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
+    CANONICAL_SKILLS (adapter SKILL.md, + each SKILL_COMPANION_FILES entry the adapter
+    skill folder carries), DEPLOYED_SCRIPTS, CORE_SCRIPTS, CORE_WORKFLOW_FILES, and (only when the opt-in
     context-tracker mod is installed) CONTEXT_TRACKER_FILES — and compares each deployed file
     under dest_root against expected_deployed_content(src, dest_root). Per file:
       * deployed copy absent            -> DriftEntry(..., reason="missing")
@@ -1120,9 +1127,10 @@ def compute_drift(
         dst_skills = dest_root / "skills"
         for name in CANONICAL_SKILLS:
             _check("skills", src_adapter / name / "SKILL.md", dst_skills / name / "SKILL.md")
-            preamble = src_adapter / name / "preamble.md"
-            if preamble.exists():
-                _check("skills", preamble, dst_skills / name / "preamble.md")
+            for companion in SKILL_COMPANION_FILES:
+                src_companion = src_adapter / name / companion
+                if src_companion.exists():
+                    _check("skills", src_companion, dst_skills / name / companion)
 
     if "scripts" in selected:
         src_scripts = source_dir / "scripts"
