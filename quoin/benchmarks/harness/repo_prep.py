@@ -35,9 +35,16 @@ CLONE_PREFIX = "qbench_verified_"
 
 BENCH_GIT_IDENTITY = {"name": "quoin-bench", "email": "quoin-bench@localhost.invalid"}
 
+from .sources import PRO_INSTANCE_ID_PATTERN, is_repo_task
+
 PATCH_EXCLUDES = (".workflow_artifacts", ".claude", "CLAUDE.md", "AGENTS.md")
 
-_INSTANCE_ID = re.compile(r"^[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-[0-9]+$")
+# Verified ids end in a PR number; Pro ids are `instance_<owner>__<repo>-<fix
+# sha>[-v<env sha>]`. Both are safe as ref names and path components.
+_INSTANCE_ID = re.compile(
+    r"^(?:[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-[0-9]+"
+    r"|" + PRO_INSTANCE_ID_PATTERN + r")$"
+)
 _REPO_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 
@@ -147,7 +154,8 @@ def mirror_path(cache_root, repo: str) -> Path:
 
 
 def _is_verified(task: dict) -> bool:
-    return task.get("source") == "swebench_verified"
+    """A task prepared from a mirror at a pinned commit (Verified or Pro)."""
+    return is_repo_task(task)
 
 
 def prepare_mirrors(

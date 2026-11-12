@@ -1,0 +1,487 @@
+{
+  "repo": "scaleapi/SWE-bench_Pro-os",
+  "commit": "66f92766bba642462d4bbe5479e83f91f9211862",
+  "note": "sha256 of each task's verifier files; the judge fetches and checks them",
+  "tasks": {
+    "instance_ansible__ansible-11c1777d56664b1acb56b387a1ad6aeadef1391d-v0f01c69f1e2528b935359cfe578530722bca2c59": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "6266fd04d263adc7fe7356680ccc934e5a1d9668898e553c54671104487dc0f8",
+        "parser.py": "5bd3590c174898489d8bf55c60c7938cb8b32806ce812ad6e192651419396b6c",
+        "config.json": "002dbf9ad4d71dc77f5c79a6265bde400d981011913623d016a78f595ec342a2",
+        "test_patch.patch": "1c2adef73bb3781335c33f8c8fb5f6f2adde609880cb9f4813ddad7d206233bf"
+      },
+      "solution": {
+        "gold_patch.diff": "687e5dcba5c6b58c7beaf88b42618175bf5bd1fc63acc07a39e696eccc8d985f"
+      }
+    },
+    "instance_ansible__ansible-164881d871964aa64e0f911d03ae270acbad253c-v390e508d27db7a51eece36bb6d9698b63a5b638a": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "9cb6b5eaa80e44f78790edb0366869a436c0e95dbcbdec9730e38fdab261aad5",
+        "parser.py": "0ad85c886278e14022e44b64f2913a02e477ce5f817a9531a50e779d0d59cd62",
+        "config.json": "c83af03458b7edf6a5a6eb2d48f7775e250c765f0ae82842d6c5860a96ec9ff9",
+        "test_patch.patch": "14b1b95a70a56ea85d44bcfe7ad7fd6ab78a0fd4f759f24d4284f7603a155e52"
+      },
+      "solution": {
+        "gold_patch.diff": "40e9ad258ffbd4171e88bca870b48132922b33c9127cae2c504d6caf68f08f9b"
+      }
+    },
+    "instance_ansible__ansible-29aea9ff3466e4cd2ed00524b9e56738d568ce8b-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "4194d6f1b638b5475c58b11a36cda2637b7001993d5171233ef11aab6bf726f9",
+        "parser.py": "3bb7f471aa61ea90f7c8992cb901f61c14efc2a703dee9a14cd682840006c2dd",
+        "config.json": "a6c9f1efad9889d37d58879b8551fad599002c451067d842379a16d3a600ac3d",
+        "test_patch.patch": "94d478db60bb6d23cacd042391393eac3883b17f598efeb1ede6cd73303a8880"
+      },
+      "solution": {
+        "gold_patch.diff": "4a8240fbbf481045fe51fee349fd5eaf8746f3bc2f1233db5a0c1d0dce7dcc5a"
+      }
+    },
+    "instance_ansible__ansible-379058e10f3dbc0fdcaf80394bd09b18927e7d33-v1055803c3a812189a1133297f7f5468579283f86": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "e8c61cf1ba381c6f91c5457d248152cf1b0339d52252d0af0d1ea60c2ba483b7",
+        "parser.py": "3bb7f471aa61ea90f7c8992cb901f61c14efc2a703dee9a14cd682840006c2dd",
+        "config.json": "67c65d6e4d21aa671c16b0a736fd3ce86fd758d3f8f9c3c6b294e3df312ce9a7",
+        "test_patch.patch": "37c4e47f19c8f07bacf7b4755e2b765ef26d73a498f4e48c79ba7ba82670534b"
+      },
+      "solution": {
+        "gold_patch.diff": "0734d3ab148cde3555a5b4af1b61057527bb20e674461b57a3ec3119f02cc8d3"
+      }
+    },
+    "instance_ansible__ansible-5f4e332e3762999d94af27746db29ff1729252c1-v0f01c69f1e2528b935359cfe578530722bca2c59": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "6266fd04d263adc7fe7356680ccc934e5a1d9668898e553c54671104487dc0f8",
+        "parser.py": "5bd3590c174898489d8bf55c60c7938cb8b32806ce812ad6e192651419396b6c",
+        "config.json": "5500368cc7596c5dd78cd8d4169f959e3df0a386a4db9643227ac01ae2bbb586",
+        "test_patch.patch": "7d239056408b3787851565fcb5d6363a2828e4dc8aff415a761ace9f9b8b3a15"
+      },
+      "solution": {
+        "gold_patch.diff": "001ff6c8cff0214b005e792a707e1b981860739bba357f418c8982edccfcdab6"
+      }
+    },
+    "instance_ansible__ansible-7e1a347695c7987ae56ef1b6919156d9254010ad-v390e508d27db7a51eece36bb6d9698b63a5b638a": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "9cb6b5eaa80e44f78790edb0366869a436c0e95dbcbdec9730e38fdab261aad5",
+        "parser.py": "0ad85c886278e14022e44b64f2913a02e477ce5f817a9531a50e779d0d59cd62",
+        "config.json": "0ab09ec6ce9ddb8fd5dc5d90beb289a284280b52bff4e7cc31bfc686d1f4dc7a",
+        "test_patch.patch": "32f87e5565a6c1516c912834b9b34438c76dbf6ff44ab0a558da3371bd335cc6"
+      },
+      "solution": {
+        "gold_patch.diff": "325050215f2245753216859f035f93e99992f1a5f2f322678c026d01c85b0e55"
+      }
+    },
+    "instance_ansible__ansible-8127abbc298cabf04aaa89a478fc5e5e3432a6fc-v30a923fb5c164d6cd18280c02422f75e611e8fb2": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "285a6163b889a7867388525f28f4a8c445f2a9a8adaf7cb7addb8cb7909d3453",
+        "parser.py": "0f4ab63305c466c87689bd5d1581f6601666a4175269db58830014464111f761",
+        "config.json": "1d4ed4649c3bb44b46e98f566b1052b0d279ebf59126c26590735ce7b13fca34",
+        "test_patch.patch": "311c1f085da6faa691d766e5324d574d70fa9da290ac9dd9f6b38f54870a42a2"
+      },
+      "solution": {
+        "gold_patch.diff": "343f577a83cf66e5326bd774693d6cb7a33362bdfafc3df5adce234412fc80a9"
+      }
+    },
+    "instance_ansible__ansible-949c503f2ef4b2c5d668af0492a5c0db1ab86140-v0f01c69f1e2528b935359cfe578530722bca2c59": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "6266fd04d263adc7fe7356680ccc934e5a1d9668898e553c54671104487dc0f8",
+        "parser.py": "5bd3590c174898489d8bf55c60c7938cb8b32806ce812ad6e192651419396b6c",
+        "config.json": "9c1c3b30a7ffefd55c8a2b4eb80a1fd895a010cc59dda5921a49392902a922a7",
+        "test_patch.patch": "97429cbb2f2384c1dfc7d1aff0e9043b68ba06e290d7cbbabf2942f69eea0dd5"
+      },
+      "solution": {
+        "gold_patch.diff": "c0920706a547f6236808aa22bce296f04bf81dfd85a62296d42733eb70553fb8"
+      }
+    },
+    "instance_ansible__ansible-9759e0ca494de1fd5fc2df2c5d11c57adbe6007c-v1055803c3a812189a1133297f7f5468579283f86": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "e8c61cf1ba381c6f91c5457d248152cf1b0339d52252d0af0d1ea60c2ba483b7",
+        "parser.py": "3bb7f471aa61ea90f7c8992cb901f61c14efc2a703dee9a14cd682840006c2dd",
+        "config.json": "33da6bb38972671be15ed7849dcf7a0ca7a5c9e717cc1e54fe1bbfe4b17c1245",
+        "test_patch.patch": "685518a3b549402606a6de88dba6bd0c57224878fb80e572dc38b2c043d1ff72"
+      },
+      "solution": {
+        "gold_patch.diff": "283f329bbeb63d6988861431a84a92ccc4d4f6394c98f53127d8a8edba1f4d40"
+      }
+    },
+    "instance_ansible__ansible-be2c376ab87e3e872ca21697508f12c6909cf85a-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "4194d6f1b638b5475c58b11a36cda2637b7001993d5171233ef11aab6bf726f9",
+        "parser.py": "3bb7f471aa61ea90f7c8992cb901f61c14efc2a703dee9a14cd682840006c2dd",
+        "config.json": "d176c61764a7b1ef3744d6feca9bf0cb89f2798ef1745e6eb8242ff6615c1aa3",
+        "test_patch.patch": "b02094484aae6bf53802c04e68653c272917336012fa1a84d6cc28382d4e78f9"
+      },
+      "solution": {
+        "gold_patch.diff": "3f96d8a6270dc2112927820a8eaeadaa1b346fe27236219ad8d6ee623d3aeb44"
+      }
+    },
+    "instance_ansible__ansible-de5858f48dc9e1ce9117034e0d7e76806f420ca8-v1055803c3a812189a1133297f7f5468579283f86": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "e8c61cf1ba381c6f91c5457d248152cf1b0339d52252d0af0d1ea60c2ba483b7",
+        "parser.py": "3bb7f471aa61ea90f7c8992cb901f61c14efc2a703dee9a14cd682840006c2dd",
+        "config.json": "359ee0d41b364c4997ecd0021a1a050c195933e82f1a05b8f014b2cba820f6c3",
+        "test_patch.patch": "917eb4a1e1682ef089c6402244dc5cc6bfd7434470c18bb4041947c084160d80"
+      },
+      "solution": {
+        "gold_patch.diff": "f984e4a44cf8ce42671e5a4740656f99da379f829d312c6885f9d13ffb875c22"
+      }
+    },
+    "instance_internetarchive__openlibrary-0d13e6b4bf80bced6c0946b969b9a1b6963f6bce-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "d4011b8d4b47f73837052d3eb727229d8ef9b56677f2a441a511d7c67b5e1cd7",
+        "parser.py": "8e36a42695a433a040902aac9a40bc7911f3c47b940556c41c0ed5ed4a600436",
+        "config.json": "e90df340f05b8d84464b7eb3a6e87c3057d2d6b5d415460c704aa8ec3c4e912f",
+        "test_patch.patch": "c055604628628ff3661cda22e9f64cda2d8e27070c6e52470959b46a09f7723a"
+      },
+      "solution": {
+        "gold_patch.diff": "8801827197ecd5352179d4bc37edc2c0c31c5c2b1dd9c5e101751f6d3aeb1095"
+      }
+    },
+    "instance_internetarchive__openlibrary-111347e9583372e8ef91c82e0612ea437ae3a9c9-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "2b0d5c5faa75910185f2e082fd90567f6cde67eb252b446174a6421795c01b1c",
+        "parser.py": "86c163ab2b1732bc41c95ffec34ea221086a1e0e8d64981aed4310daafbfc241",
+        "config.json": "2eafd287e30fbee7365b1cdfdfd833dbb8fd0c0fbb8d2b581e43d773c493904b",
+        "test_patch.patch": "df13d792a2bf1f7b900829c2a210e65eccf09c9e9ec9071f6514e2ec30f2b007"
+      },
+      "solution": {
+        "gold_patch.diff": "6e6caf39b67f4f0b57940e2cdeaa83c244261ee283cf4a0ee6f98abb812387f7"
+      }
+    },
+    "instance_internetarchive__openlibrary-25858f9f0c165df25742acf8309ce909773f0cdd-v13642507b4fc1f8d234172bf8129942da2c2ca26": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "fb718e857bfa0f770097ed6a1278935ccb52c256db782f13b8e70ae9db4a5b9f",
+        "parser.py": "303ceda2c97816c27383b767baa9e2f28f8e9b0cebed4dd5d6159c6760770b66",
+        "config.json": "85ccb129ce9d0ce667149f701916b4e4524f238a1ca8e3abbb948b46d08bba24",
+        "test_patch.patch": "f6d473f27aff7c48276c9818c48dbddf662f99730e99b63dad8d8fade7eb0440"
+      },
+      "solution": {
+        "gold_patch.diff": "36b06da2be09b9d53f1c781adae612e69820f68827990d4d55877778af1fb8f2"
+      }
+    },
+    "instance_internetarchive__openlibrary-3c48b4bb782189e0858e6c3fc7956046cf3e1cfb-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "2b0d5c5faa75910185f2e082fd90567f6cde67eb252b446174a6421795c01b1c",
+        "parser.py": "86c163ab2b1732bc41c95ffec34ea221086a1e0e8d64981aed4310daafbfc241",
+        "config.json": "d85ab81b9fe2186111fe53c72343d1d35959913c8aeec0f57cd94d0d5acf5a06",
+        "test_patch.patch": "76b10396ef117fbe783b5a43ad3a9e67852bd0bdc96ac834666aadf1e4628327"
+      },
+      "solution": {
+        "gold_patch.diff": "50741a3d3a587318353f64ba3fd3a5d8cd489c543ea2d789ba51d5653ee47f44"
+      }
+    },
+    "instance_internetarchive__openlibrary-5069b09e5f64428dce59b33455c8bb17fe577070-v8717e18970bcdc4e0d2cea3b1527752b21e74866": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "8a43909c3157a88a04f00c7b51f4654d37dcd871f87e2bc5230a1e852a2fc037",
+        "parser.py": "49c07e90908c820ff0b128ec7fabec34321685b1965f3e4dd37274ba729485c3",
+        "config.json": "5998e09894f7e41154b8140ddc17a0b738c7785b0a9b49f2da92426be821a6a2",
+        "test_patch.patch": "b0786f6bada33e3d0376d3a7a96e5604b6edab6a726a654f9f03a3b855df7b51"
+      },
+      "solution": {
+        "gold_patch.diff": "4dcdbe6cb243ce8edca0ed79431a6075f03f9a3f2499ee5972e7fa83165b4016"
+      }
+    },
+    "instance_internetarchive__openlibrary-53e02a22972e9253aeded0e1981e6845e1e521fe-vfa6ff903cb27f336e17654595dd900fa943dcd91": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "780b23d4db1a0cf34c19de2bca36daf06f52ef0715736ce245c4aa94e7af19ac",
+        "parser.py": "7903ec52b2cc4c0328af0501531bf2e90f18fd4a354376813b90054070afbdb1",
+        "config.json": "a0b7c3b2d9ddf7189cd186913e4ef6c49644fa00ec99f769bcbedadb1ceb62d8",
+        "test_patch.patch": "e392f8803a55bd661270f4a644b4d4389a3ef9630551322cd4969d81e5b1c69a"
+      },
+      "solution": {
+        "gold_patch.diff": "55411ccbf695cb34138978ab3939f5e39357e87a6e2c481440d50a41ad5f0407"
+      }
+    },
+    "instance_internetarchive__openlibrary-5c6c22f3d2edf2f1b10f5dc335e32cb6a5f40341-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "d4011b8d4b47f73837052d3eb727229d8ef9b56677f2a441a511d7c67b5e1cd7",
+        "parser.py": "8e36a42695a433a040902aac9a40bc7911f3c47b940556c41c0ed5ed4a600436",
+        "config.json": "05ed23ba825cd284cd411c5ef353646cb9e005ab93fb277b0d50401d4da501b9",
+        "test_patch.patch": "9e4ce22679da4e3ff63d29e0605acf67eaa17f93d6096f4e1b7edada63961fcd"
+      },
+      "solution": {
+        "gold_patch.diff": "54c5edee290f2654faf3f93d2abae744a23a60e57c9913b0cf3df1166bcfd54e"
+      }
+    },
+    "instance_internetarchive__openlibrary-6afdb09df692223c3a31df65cfa92f15e5614c01-v08d8e8889ec945ab821fb156c04c7d2e2810debb": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "9426c5d3b174c487acc5d90873a7461c604cc23682c3809b418a50c0c3066875",
+        "parser.py": "954c0a68c4cd45d6848774a59b093b825333b2f8bc51b8393ebac77bd4ff91ca",
+        "config.json": "857e1a645162723f3f84f1e9ab508b30f58ce2b0d11debdb3817517e57a07802",
+        "test_patch.patch": "16850070af656be92a6dd84735cc6d00a869edd7f7b8435f515504cf87ff0e06"
+      },
+      "solution": {
+        "gold_patch.diff": "1706657372328a92e38a85a5fa8cdca8eb88eb4e5c2c8dbfa7f7242e46bdf2b3"
+      }
+    },
+    "instance_internetarchive__openlibrary-6fdbbeee4c0a7e976ff3e46fb1d36f4eb110c428-v08d8e8889ec945ab821fb156c04c7d2e2810debb": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "9426c5d3b174c487acc5d90873a7461c604cc23682c3809b418a50c0c3066875",
+        "parser.py": "954c0a68c4cd45d6848774a59b093b825333b2f8bc51b8393ebac77bd4ff91ca",
+        "config.json": "1dfe5903b9c5e9dc4e4d875831b9f688a955a2e14175f8338c3dd6dade4bca45",
+        "test_patch.patch": "f96c56fddd514165056451b6605f81502d25bf9baad36154e01aee25289e6ee9"
+      },
+      "solution": {
+        "gold_patch.diff": "e3154ba6d50927d3c5bc1c8793639a3936682babbb7637d2f7219509ed2305c4"
+      }
+    },
+    "instance_internetarchive__openlibrary-910b08570210509f3bcfebf35c093a48243fe754-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "7b1c1159e658aa0f60bc1fb7ff73dcd6d5f261e99e55b93520131b74443a451d",
+        "parser.py": "14451c49d5f347978407553041b1de3dba0d63be6b8bd6abeaa7aaf807e6e613",
+        "config.json": "a2a8c19671c4232607234101a0151a95880aac9d93b961e99661c349bc078a7e",
+        "test_patch.patch": "894d8a566a5ba65e9481799dc9da05d891d9f46a4d062bf4fcd053c1b6ea91f0"
+      },
+      "solution": {
+        "gold_patch.diff": "9c49d3fb02d0ed9753b2f8ec7b5be044d46984a10b1ebb3a9fff755794e6864d"
+      }
+    },
+    "instance_internetarchive__openlibrary-92db3454aeaa02f89b4cdbc3103f7e95c9759f92-v2c55207218fb8a0138425cbf7d9675272e240b90": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "f4dbd34292dd12502397a0ac8a4e41b01be3f29198b0f7cf8521706922883602",
+        "parser.py": "cabba9daa9156e6bda3a0252dc73ef0f15b681693af90dd9f911961df43a190d",
+        "config.json": "d952290fc2b3568f19a0183714afd6d87206459edb203c2d5f44e08ad312835e",
+        "test_patch.patch": "e25e449ed6ebdb0b4a97e2cdcc21bdb85fe4cdbe635f91a276787eb51a5fb494"
+      },
+      "solution": {
+        "gold_patch.diff": "f9c55706d4777b34f621fd9b44e71d82ebd2c2b170bed4b0114cdede14aa5f42"
+      }
+    },
+    "instance_internetarchive__openlibrary-9bdfd29fac883e77dcbc4208cab28c06fd963ab2-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "d4011b8d4b47f73837052d3eb727229d8ef9b56677f2a441a511d7c67b5e1cd7",
+        "parser.py": "8e36a42695a433a040902aac9a40bc7911f3c47b940556c41c0ed5ed4a600436",
+        "config.json": "d35aac1281e305539706bfeff561a37812d67be7e1f24ce97b33273e5dc3ae46",
+        "test_patch.patch": "c12860fe3c857a23b5e14c8c00c7f1c78454baab15f02610d31f7ca2fe51869b"
+      },
+      "solution": {
+        "gold_patch.diff": "a2785ac56a63f53ce2645c2a96266c5c56a028d4e3a01ab5362c8712a7dfc939"
+      }
+    },
+    "instance_internetarchive__openlibrary-c8996ecc40803b9155935fd7ff3b8e7be6c1437c-ve8fc82d8aae8463b752a211156c5b7b59f349237": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "18cf2d05b19061b07db82320384d944ed492776eca7a63368be64c58436dff01",
+        "parser.py": "737bcaea4da0f3632f5521144170b59bc988ac6db7d1a7eef7d5e4c3c575c05c",
+        "config.json": "2c38b4bfbb35e4d62dce7cdca27613ef94f6568632379e6628085353bb3dc5aa",
+        "test_patch.patch": "3df4a31a64e4bdca6349bc453b56580980466d94b4d761b64eb5ef807487d81e"
+      },
+      "solution": {
+        "gold_patch.diff": "d06597eafb60c3c336eea545eb36b956274a02c8dfdf2147cc64d5c00ab1ea3f"
+      }
+    },
+    "instance_internetarchive__openlibrary-d109cc7e6e161170391f98f9a6fa1d02534c18e4-ve8c8d62a2b60610a3c4631f5f23ed866bada9818": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "1ca04a777141fde51b2ddc9f35171f7df3531645c4909954d73febe6f89cd6d2",
+        "parser.py": "d8167fbf57e7abc29ea6f97708fbf74bdc559a695cf254cf32206eca0726d549",
+        "config.json": "f3d89e1bb0d6cce4626a6aff97495dc6c90f105d3ac17e2c070f2a62194e4050",
+        "test_patch.patch": "6033266f1c8513bd619c42173fb4fa97d65fb8f0867551e63c4b04261ea0fc86"
+      },
+      "solution": {
+        "gold_patch.diff": "0fdd0773512e7f2829832dbd935ae58c156e36d028a6d3eef115760b1eef910c"
+      }
+    },
+    "instance_internetarchive__openlibrary-e1e502986a3b003899a8347ac8a7ff7b08cbfc39-v08d8e8889ec945ab821fb156c04c7d2e2810debb": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "9426c5d3b174c487acc5d90873a7461c604cc23682c3809b418a50c0c3066875",
+        "parser.py": "954c0a68c4cd45d6848774a59b093b825333b2f8bc51b8393ebac77bd4ff91ca",
+        "config.json": "d89a2d384f6f648dc0c0daf481bb7ba1c244ec0205ea6749b8774eb67cce20f3",
+        "test_patch.patch": "8ccc573a25a15c8157996f2c46bdc818b160cabb8930e040fd0472efc8e64bee"
+      },
+      "solution": {
+        "gold_patch.diff": "ac60bdc74c0d8550ea2457caff00d594375478a180704f971f6972bb482f38a9"
+      }
+    },
+    "instance_internetarchive__openlibrary-f3b26c2c0721f8713353fe4b341230332e30008d-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "7b1c1159e658aa0f60bc1fb7ff73dcd6d5f261e99e55b93520131b74443a451d",
+        "parser.py": "14451c49d5f347978407553041b1de3dba0d63be6b8bd6abeaa7aaf807e6e613",
+        "config.json": "5142a5d9f2dcc827286a0ce775259f1180487697b09681caf1aedd0140ea0163",
+        "test_patch.patch": "f5b1b9ffa7706c71119d488cba7bc71ebb1ee321bb9deb1a26cde3992ea3020d"
+      },
+      "solution": {
+        "gold_patch.diff": "a8e0f03d74529d3a16b07cf6d1b458f07feeba93658753a3c7fef290c72f8848"
+      }
+    },
+    "instance_internetarchive__openlibrary-fdbc0d8f418333c7e575c40b661b582c301ef7ac-v13642507b4fc1f8d234172bf8129942da2c2ca26": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "fb718e857bfa0f770097ed6a1278935ccb52c256db782f13b8e70ae9db4a5b9f",
+        "parser.py": "303ceda2c97816c27383b767baa9e2f28f8e9b0cebed4dd5d6159c6760770b66",
+        "config.json": "b50dc9b98201fbb41c40abf0cc9ded46f7aa1a12b867d9c069b899e686744e82",
+        "test_patch.patch": "8b824ba12bffdd8432e2add0a86b75ff7ad8c4e26de86ef0761a92d5788dc049"
+      },
+      "solution": {
+        "gold_patch.diff": "f2621321d45a65c074ec924f87c7afcef78e0ee5be1f6e01defc281eb60d15df"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-305e7c96d5e2fdb3b248b27dfb21042fb2b7e0b8-v2ef375ac784985212b1805e1d0431dc8f1b3c171": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "3d56cf4e07b5f0fe2f78edc6c759fa2bcb9d2422af64d51b91dc0d676c8f1505",
+        "parser.py": "eedbb04d9f71f140c4af38043d3bddb0fc6374799d2b84c95c5b8c8214efd4d6",
+        "config.json": "a17852ca542652569978cb6428400db62f9b5becf6572f35e16b5d7479749735",
+        "test_patch.patch": "cce73b008f4ef46d258b92c7f97fd5846e76b6d12483222ebd4ea253a810f314"
+      },
+      "solution": {
+        "gold_patch.diff": "11b3f6d846dcf12c34d0b143395385511cfcc9b7b546683b98e266d39fe3150d"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-70248f256f93ed9b1984494d0a1a919ddd774892-v2ef375ac784985212b1805e1d0431dc8f1b3c171": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "3d56cf4e07b5f0fe2f78edc6c759fa2bcb9d2422af64d51b91dc0d676c8f1505",
+        "parser.py": "eedbb04d9f71f140c4af38043d3bddb0fc6374799d2b84c95c5b8c8214efd4d6",
+        "config.json": "83d97b58ca4409b91981bfc318dcdaaded0cf65ce7347bc5a1bbbb8813fd3150",
+        "test_patch.patch": "c5836788c092ee5154d91b2bb12c93f30a46c3ef4c32c21a3fbe6106618df79a"
+      },
+      "solution": {
+        "gold_patch.diff": "2ebd4f651e9630af940c1938ecb8d9c6ca954cb9845d573a331c44e7b60552d5"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-8d05f0282a271bfd45e614238bd1b555c58b3fc1-v35616345bb8052ea303186706cec663146f0f184": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "871f9256d3ea1953a617ba07e7ea738f05e41cb53c9966be5575c88721ac20ac",
+        "parser.py": "dd9e16f9758617a0147b23dca25de01e1b8879c2f2cea60f07ea3bde80f56bdd",
+        "config.json": "ccea601dcafab8e317b328d959b511400c50834f981df4bd46ae21ef440bf700",
+        "test_patch.patch": "4fc0f9207d9ef08bf7715a37721d8ac6b48908aa3cd162f2336a210532a567f9"
+      },
+      "solution": {
+        "gold_patch.diff": "5fa7bdd2e4d306ee635ce73442f847a10756a5cdcce3a18221aa2cff437bccb6"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-a84ecfb80a00f8ab7e341372560458e3f9cfffa2-v2ef375ac784985212b1805e1d0431dc8f1b3c171": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "3d56cf4e07b5f0fe2f78edc6c759fa2bcb9d2422af64d51b91dc0d676c8f1505",
+        "parser.py": "eedbb04d9f71f140c4af38043d3bddb0fc6374799d2b84c95c5b8c8214efd4d6",
+        "config.json": "e9945ee378668ca5f3f2abda72a4e4580306086942f49d809f5597e0dd80f356",
+        "test_patch.patch": "173960581324dc66f59996eb967fff8eaf9b741aed0c56346e894004e62bd642"
+      },
+      "solution": {
+        "gold_patch.diff": "31579603cfc79b9e9ffa028ace19b2396400c002d4eea273b58bc8f85b557882"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-c0be28ebee3e1837aaf3f30ec534ccd6d038f129-v9f8e9d96c85c85a605e382f1510bd08563afc566": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "a321582c8c32b726dec1e4df67ca0fdd26c69a20262d023622072bd70e67e85b",
+        "parser.py": "4a1f537ce46faf1b056064a9e9318ac27a001fd53d9fa3c7767d3138d7067e42",
+        "config.json": "62108b1b1236645d291671458ab232fda3035034df220b8505711f0c7a3710e5",
+        "test_patch.patch": "65c417855c3dd193084ad3c51372ac2e9a95bebc2484f982a53c5ca1cfb11fc5"
+      },
+      "solution": {
+        "gold_patch.diff": "0e7227239014dc27f8c93f932eba167d1b9f80376a3a788d029a0173201d40f7"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-de4a1c1a2839b5b49c3d4ce21d39de48d24e2091-v2ef375ac784985212b1805e1d0431dc8f1b3c171": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "1ba6363d624c7cc35b4747c42e9dc24e88d8492ca3787b7e5efc0261c912abde",
+        "parser.py": "eedbb04d9f71f140c4af38043d3bddb0fc6374799d2b84c95c5b8c8214efd4d6",
+        "config.json": "666fb75081dc57cabd61852eeb14e940760d4c0ca08116bb45962d3059231f7e",
+        "test_patch.patch": "ce81641f65549fce49840f8d70d42ed4868672d44ab5f41f4ef0ba4593125799"
+      },
+      "solution": {
+        "gold_patch.diff": "d437217418e5b5022961560ce1388a647e460daeecb3e27d99a3e4cd6f0c8179"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-deeb15d6f009b3ca0c3bd503a7cef07462bd16b4-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "b37fbfccd022046cd034c3797f0d3c1f65fb79c6ba9b9aa90e48a552e2556d84",
+        "parser.py": "dd9e16f9758617a0147b23dca25de01e1b8879c2f2cea60f07ea3bde80f56bdd",
+        "config.json": "ee083210e9e7afb2110e77ef2b05e5abb318757bc75686cc5cc344bf44ad051e",
+        "test_patch.patch": "23ad77108e04855a30bee4f585906b88b98315a25ceade3ea53c99398aeb8676"
+      },
+      "solution": {
+        "gold_patch.diff": "798fc7d0f70fd2e6c3559cfbb1f581e56255dfbd19b6746e6c2b2827db039e05"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-ec2dcfce9eee9f808efc17a1b99e227fc4421dea-v5149fcda2a9a6fe1d35dfed1bade1444a11ef271": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "7fc86bf343f5527c3e1dc7551c95ae4f63aa4fb661a7384da0d1f84cfec06e1e",
+        "parser.py": "dd9e16f9758617a0147b23dca25de01e1b8879c2f2cea60f07ea3bde80f56bdd",
+        "config.json": "5c6dc05abb5aad3d0a726b492f2da4835ebce207dd15f3a983cc02b7f4f74276",
+        "test_patch.patch": "20006e54fdfd96e2805a434434f857ee94f6ace69f738c182b939038fa3f905f"
+      },
+      "solution": {
+        "gold_patch.diff": "a75880e0063453efbdbd6bb45caf0a2cb18e9b3ea3d77b6d07269ea6e840c706"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-ed19d7f58b2664bb310c7cb6b52c5b9a06ea60b2-v059c6fdc75567943479b23ebca7c07b5e9a7f34c": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "ed4dc888c27901447e2065a5c09f7702909dfcd7c6aa2f02cc19fde3535fcfc8",
+        "parser.py": "4a1f537ce46faf1b056064a9e9318ac27a001fd53d9fa3c7767d3138d7067e42",
+        "config.json": "d0ea3d09aefd12242e5e64167f54d194d004f7f3e6e4e1ab43a33c9173d12da1",
+        "test_patch.patch": "aab82f0f5c3c770de550e8f5e5e4f3b04bd1bf39fbfa80987ebf32fee1e7f39a"
+      },
+      "solution": {
+        "gold_patch.diff": "92c29b8678686a2ba846347e5fa922717fee4690a5cb49fd4cdfe8c0e829fb89"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-f631cd4422744160d9dcf7a0455da532ce973315-v35616345bb8052ea303186706cec663146f0f184": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "871f9256d3ea1953a617ba07e7ea738f05e41cb53c9966be5575c88721ac20ac",
+        "parser.py": "dd9e16f9758617a0147b23dca25de01e1b8879c2f2cea60f07ea3bde80f56bdd",
+        "config.json": "974e69a17fbae822400818a41347880046e042fef8d63a8cc1f712a9d8d5395c",
+        "test_patch.patch": "7be795a5d2c23077d35d0e15f575d99bccef662fc56504188631af474c9a9e9a"
+      },
+      "solution": {
+        "gold_patch.diff": "9f0f2e51392af8badaaab483c1f9c147995fbed5eded1c71087d767810ddc61f"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-f91ace96223cac8161c16dd061907e138fe85111-v059c6fdc75567943479b23ebca7c07b5e9a7f34c": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "ed4dc888c27901447e2065a5c09f7702909dfcd7c6aa2f02cc19fde3535fcfc8",
+        "parser.py": "4a1f537ce46faf1b056064a9e9318ac27a001fd53d9fa3c7767d3138d7067e42",
+        "config.json": "692bfd4a6e407d1f1ed5d80f18ae448110881a9816f29efe7e1e2defcd4e7c16",
+        "test_patch.patch": "c1c1d81302bcfd0dfd4a28fa3c6863036061c1c1b1d2e3ea247bfe03b91220a3"
+      },
+      "solution": {
+        "gold_patch.diff": "905cefcda5fc64e740e928d283fe1173b18b529c9191e97fc67848a540f85a80"
+      }
+    },
+    "instance_qutebrowser__qutebrowser-ff1c025ad3210506fc76e1f604d8c8c27637d88e-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d": {
+      "files": {
+        "test.sh": "b6f26eecd87c1696a3702ee115d31f9d42f4704cf2116419cd879f66b60976d0",
+        "run_script.sh": "b37fbfccd022046cd034c3797f0d3c1f65fb79c6ba9b9aa90e48a552e2556d84",
+        "parser.py": "dd9e16f9758617a0147b23dca25de01e1b8879c2f2cea60f07ea3bde80f56bdd",
+        "config.json": "03501bc74c52432372cb0884f8e450cf1313bfb0ce1c76f38adc3c8f0d7685a6",
+        "test_patch.patch": "e274438b656557e25ae9ccccd42c939187c3c2b286ac96d87f9abc58ceaca855"
+      },
+      "solution": {
+        "gold_patch.diff": "c56d853614f05edebcb1ef2da91d77a5d568ed131a9e57a4f433f1879a224c42"
+      }
+    }
+  }
+}

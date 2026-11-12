@@ -124,8 +124,9 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
                         help="Per-session spend cap (default: the suite's documented cap)")
     parser.add_argument("--yes", action="store_true",
                         help="Skip the spend prompt; needed for unattended runs")
-    parser.add_argument("--pilot-tier", default="easy",
-                        help="Tier run first and checked for denial parity (default: %(default)s)")
+    parser.add_argument("--pilot-tier", default=None,
+                        help="Tier run first and checked for denial parity (default: the suite's "
+                             "tiered.pilot_tier, else easy)")
     parser.add_argument("--parity-min-gap", type=int, default=3,
                         help="Stop when the arms differ by at least this many permission denials "
                              "(and the ratio test also holds) (default: %(default)s)")
@@ -224,6 +225,8 @@ def resolve(args):
         return rb._refuse("suite", "quoin bench tiered needs a paired tiered suite")
     tiered = doc["tiered"]
     tier_names = list((tiered.get("tiers") or {}).keys())
+    if args.pilot_tier is None:
+        args.pilot_tier = tiered.get("pilot_tier") or "easy"
     if args.pilot_tier not in tier_names:
         return rb._refuse(
             "pilot-tier",
@@ -532,17 +535,20 @@ def print_parity_next_steps(verdict: Verdict) -> None:
 
 # --- judging ----------------------------------------------------------------
 
-def judge_possible(args) -> tuple:
+def judge_possible(args, tasks=None) -> tuple:
     """(can judge here, reason it cannot)."""
     from quoin.benchmarks.harness import judge
 
     if args.skip_judge:
         return False, "--skip-judge"
-    ok, clause, detail, _version = _rb()._judge_prereqs()
+    ok, clause, detail, _version = _rb()._judge_prereqs(tasks)
     if not ok:
         return False, f"{clause}: {detail}"
     x86 = platform.machine().lower() in {"x86_64", "amd64"}
-    if x86 or os.environ.get(judge.SWEBENCH_NAMESPACE_ENV) == "" or args.judge_emulation:
+    # A local swebench image build helps only Verified; Pro images are amd64 only.
+    local_build = os.environ.get(judge.SWEBENCH_NAMESPACE_ENV) == "" and (
+        tasks is None or any(t.get("source") == "swebench_verified" for t in tasks))
+    if x86 or local_build or args.judge_emulation:
         return True, ""
     return False, "arm64 host without local image build or --judge-emulation"
 
@@ -700,7 +706,7 @@ def _emulate_x86(res: Resolved) -> bool:
 def _judge_pending_or_defer(res: Resolved) -> int:
     rb = _rb()
     pending = pending_rows(res)
-    ok, why = judge_possible(res.args)
+    ok, why = judge_possible(res.args, res.tasks)
     rc = 0
     if pending and ok:
         rc = rb._judge_only_main(
@@ -767,7 +773,7 @@ def orchestrate(args, confirmed: Optional[float] = None) -> int:
             return 2
         print("prepare: done")
 
-    judge_ok, why = judge_possible(args)
+    judge_ok, why = judge_possible(args, res.tasks)
     # The estimate needs only the spawn count; judging was probed just above, and the
     # full leg's own preflight checks it again before anything is spent.
     pre = rb._paired_preflight(leg_namespace(res, skip_judge=True), res.suite_path, res.doc)
@@ -820,7 +826,7 @@ def orchestrate(args, confirmed: Optional[float] = None) -> int:
 
     if in_pilot:
         # The pilot can take long enough for the daemon to go away, so look again.
-        judge_ok, why = judge_possible(args)
+        judge_ok, why = judge_possible(args, res.tasks)
     judged = False
     if remaining:
         print(f"full: {remaining} sessions")

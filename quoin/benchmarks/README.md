@@ -277,7 +277,10 @@ the lessons-learned append before the commit; the brief, context pack,
 implementation, tests, review and the post-review fixes all still run, so lean
 rows pass the same pipeline check through `brief.md`. The lean session also gets
 `QUOIN_DISCOVERY_REFRESH_DISABLE=1`, so the session-start hook does not tell it
-to run `/discover`. A paired run refuses any other route value before it starts. The
+to run `/discover`. `QUOIN_BENCH_QUOIN_ROUTE=memory` sets
+`QUOIN_RUN_PROFILE=bench-memory` instead, which skips only run isolation and
+keeps discovery and the lessons read and append (see "Sequence suite" below).
+A paired run refuses any other route value before it starts. The
 harness records on-disk evidence that the pipeline ran,
 and treats a quoin session that left no plan as an `invalid` row (see "Invalid
 rows" below). The test suite exercises the whole path offline with a fake
@@ -642,7 +645,7 @@ Re-running the same `quoin bench tiered` command continues an interrupted
 run: sessions already recorded are kept, the pilot is not repeated once the
 full leg has started, and a resume may add tiers to a run but never drop one. The manifest's
 `started_at` reflects the latest leg. The manifest also records the quoin
-route (`quoin_route`, plus `quoin_run_profile` for lean), and a resume with a
+route (`quoin_route`, plus `quoin_run_profile` for lean and memory), and a resume with a
 different `QUOIN_BENCH_QUOIN_ROUTE` is refused, so lean, light and hard rows never
 mix in one run id (a manifest without the key counts as the default route).
 
@@ -655,6 +658,86 @@ and the remaining tasks still run. Ctrl-C, SIGTERM and SIGHUP stop the run
 cleanly: the running session is killed with its process group, the spend
 ledger is settled, the sandboxes are removed, and the manifest records the
 signal for a later `--resume`.
+
+### Sequence suite (SWE-Bench-CL): memory across tasks
+
+On the tiered suites every task starts from an empty `.workflow_artifacts/`,
+so nothing quoin remembers can help a later task. `suite-cl-sequences.json`
+measures that: 36 SWE-bench Verified tasks in three per-repository
+chronological sequences of 12 (django, sympy, sphinx) taken from SWE-Bench-CL.
+Provenance, the task list and the budget are in
+`suite-cl-sequences-provenance.md`. Repo preparation, prompt and judge are
+the Verified ones.
+
+The suite sets `tiered.sequence_mode`. Its tiers are the sequences, run in
+order, each task on a fresh checkout at its own base commit. For the quoin
+arm on the memory route, the previous task's `.workflow_artifacts/memory/` (lessons learned,
+discovery files, daily insights; never session state such as run-state or
+checkpoints) is copied into the next checkout before the session starts;
+code, branches, `cache/`, sessions and the arm's auto memory never carry. The
+plain arm stays stateless. After each quoin task the row directory gets
+`memory-snapshot/` and `memory-carry.json` (what it inherited, from which
+task, lessons inherited and written); a resume seeds the next task from the
+nearest earlier snapshot in the run. The pilot is the first sequence
+(`tiered.pilot_tier`), so it also runs in order.
+
+Run the memory arm and, as the ablation, the lean arm (no carry: each task
+starts empty) as separate run ids over the same suite:
+
+```bash
+QUOIN_BENCH_QUOIN_ROUTE=memory quoin bench tiered --suite cl-sequences --run-id cl-memory
+QUOIN_BENCH_QUOIN_ROUTE=lean quoin bench tiered --suite cl-sequences --run-id cl-lean
+```
+
+Each run's worst case is $2,520 (36 tasks x 2 arms x $35, ceiling $2,780;
+pilot $840). Expected spend from the tiered-balanced easy and medium sessions
+is about $160 for the memory run and $145 for the lean run, about $305 for
+both. `--tiers` and `--repeat` work as on the other suites; `--tiers` keeps
+whole sequences.
+
+Report by sequence position:
+
+```bash
+RUNS=.workflow_artifacts/quoin-benchmarks/runs
+python3 quoin/benchmarks/scripts/sequence_report.py $RUNS/cl-memory \
+  --lean-run $RUNS/cl-lean --json cl-sequences.json
+```
+
+It gives, per arm (plain, memory, lean), pass rate, mean cost and mean time
+over the first, middle and last third of the sequences and the slope of each
+against relative position; the paired per-task differences memory minus lean
+and memory minus plain with a sign test; and per task what memory the memory
+arm inherited and how many lessons it wrote. It reads no model and costs
+nothing. `multi_run_report.py` still compares repeats of one route.
+
+### SWE-bench Pro suite: larger tasks
+
+Verified fixes are mostly single-file. `suite-pro-balanced.json` holds 40
+Python tasks from SWE-bench Pro V2 (Scale AI; ansible, openlibrary,
+qutebrowser) in three tiers by reference patch size: 10 small (22-49 changed
+lines), 15 medium (50-104), 15 large (104 and up, median across Pro Python
+69 lines over 3 files). Provenance, the task list and the budget are in
+`suite-pro-balanced-provenance.md`. Repo preparation is the Verified one
+(`source: swebench_pro`); the prompt is Scale's standard instruction (problem
+statement, requirements, new interfaces; template `pro-v1`); the judge runs
+the task's official verifier in its public image, fetched at judge time from a
+pinned harness commit and hash-checked. It needs Docker, not swebench; the
+images are amd64 only, so pass `--judge-emulation` on an arm64 host, and allow
+about 1.25 GB of Docker disk per task.
+
+```bash
+quoin bench tiered --suite pro-balanced --run-id pro-r1 --judge-emulation
+RUNS=.workflow_artifacts/quoin-benchmarks/runs
+python3 quoin/benchmarks/scripts/multi_run_report.py $RUNS/pro-r1 --json pro-r1.json
+```
+
+Worst case $2,800 (40 tasks x 2 arms x $35, ceiling $3,170; small-tier pilot
+$700). No Pro session has been costed yet; assuming quoin sessions near the
+tiered-balanced large tier ($6 to $11) and plain about $1, expect roughly $300
+to $480 per run. `QUOIN_BENCH_QUOIN_ROUTE`, `--tiers` and `--repeat` work as
+on the Verified suites. A live judge check of one real instance (reference
+patch passes, empty patch fails) runs with
+`QUOIN_BENCH_PRO_LIVE=1 python3 -m pytest quoin/dev/tests/test_swebench_pro.py -k live`.
 
 ### What each arm sees
 

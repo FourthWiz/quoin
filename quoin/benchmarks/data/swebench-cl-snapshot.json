@@ -1,0 +1,2858 @@
+{
+  "dataset": "SWE-Bench-CL",
+  "source_repo": "https://github.com/thomasjoshi/agents-never-forget",
+  "revision": "74a38a90baace25635f3827ee2f98caff24b3768",
+  "source_file": "data/SWE-Bench-CL-Curriculum.json",
+  "source_file_sha256": "91bc39a769b6218419bd44308650e5d2c846ecd3e6f7a6c086f74a37b6db90f7",
+  "source_file_size": 5862595,
+  "license": "MIT",
+  "fetched_on": "2026-11-12",
+  "generated_by": "quoin/benchmarks/scripts/pick_subset.py --refresh-cl-snapshot",
+  "fields": [
+    "instance_id",
+    "base_commit",
+    "created_at",
+    "difficulty",
+    "cl_position",
+    "modified_files"
+  ],
+  "task_count": 273,
+  "sequences": [
+    {
+      "id": "django_django_sequence",
+      "repo": "django/django",
+      "tasks": [
+        {
+          "instance_id": "django__django-9296",
+          "base_commit": "84322a29ce9b0940335f8ab3d60e55192bef1e50",
+          "created_at": "2017-10-27T11:10:04+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "django/core/paginator.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-10097",
+          "base_commit": "b9cf764be62e77b4777b3a75ec256f6209a57671",
+          "created_at": "2018-06-26T23:30:51+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "django/core/validators.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-10880",
+          "base_commit": "838e432e3e5519c5383d12018e6c78f8ec7833c1",
+          "created_at": "2019-01-21T00:22:36+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "django/db/models/aggregates.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-10914",
+          "base_commit": "e7fd69d051eaa67cb17f172a39b57253e9cb831a",
+          "created_at": "2019-01-30T13:13:20+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "django/conf/global_settings.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-10999",
+          "base_commit": "36300ef336e3f130a0dadc1143163ff3d23dc843",
+          "created_at": "2019-02-16T07:44:50+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "django/utils/dateparse.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11066",
+          "base_commit": "4b45b6c8e4d7c9701a332e80d3b1c84209dc36e2",
+          "created_at": "2019-03-09T13:03:14+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 6,
+          "modified_files": [
+            "django/contrib/contenttypes/management/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11099",
+          "base_commit": "d26b2424437dabeeca94d7900b37d2df4410da0c",
+          "created_at": "2019-03-20T03:46:18+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 7,
+          "modified_files": [
+            "django/contrib/auth/validators.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11119",
+          "base_commit": "d4df5e1b0b1c643fe0fc521add0236764ec8e92a",
+          "created_at": "2019-03-24T21:17:05+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 8,
+          "modified_files": [
+            "django/template/engine.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11133",
+          "base_commit": "879cc3da6249e920b8d54518a0ae06de835d7373",
+          "created_at": "2019-03-27T06:48:09+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 9,
+          "modified_files": [
+            "django/http/response.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11163",
+          "base_commit": "e6588aa4e793b7f56f4cadbfa155b581e0efc59a",
+          "created_at": "2019-04-02T21:46:42+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 10,
+          "modified_files": [
+            "django/forms/models.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11179",
+          "base_commit": "19fc6376ce67d01ca37a91ef2f55ef769f50513a",
+          "created_at": "2019-04-05T15:54:39+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 11,
+          "modified_files": [
+            "django/db/models/deletion.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11239",
+          "base_commit": "d87bd29c4f8dfcdf3f4a4eb8340e6770a2416fe3",
+          "created_at": "2019-04-16T09:44:54+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 12,
+          "modified_files": [
+            "django/db/backends/postgresql/client.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11299",
+          "base_commit": "6866c91b638de5368c18713fa851bfe56253ea55",
+          "created_at": "2019-04-28T11:15:08+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 13,
+          "modified_files": [
+            "django/db/models/sql/query.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11433",
+          "base_commit": "21b1d239125f1228e579b1ce8d94d4d5feadd2a6",
+          "created_at": "2019-05-31T17:06:20+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 14,
+          "modified_files": [
+            "django/forms/models.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11451",
+          "base_commit": "e065b293878b1e3ea56655aa9d33e87576cd77ff",
+          "created_at": "2019-06-08T19:11:42+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 15,
+          "modified_files": [
+            "django/contrib/auth/backends.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11490",
+          "base_commit": "a7038adbd02c916315b16939b835f021c2ee8880",
+          "created_at": "2019-06-19T07:47:46+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 16,
+          "modified_files": [
+            "django/db/models/sql/compiler.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11555",
+          "base_commit": "8dd5877f58f84f2b11126afbd0813e24545919ed",
+          "created_at": "2019-07-10T18:07:07+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 17,
+          "modified_files": [
+            "django/db/models/sql/compiler.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11603",
+          "base_commit": "f618e033acd37d59b536d6e6126e6c5be18037f6",
+          "created_at": "2019-07-28T18:14:23+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 18,
+          "modified_files": [
+            "django/db/models/aggregates.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11820",
+          "base_commit": "c2678e49759e5c4c329bff0eeca2886267005d21",
+          "created_at": "2019-09-26T08:37:14+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 19,
+          "modified_files": [
+            "django/db/models/base.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11880",
+          "base_commit": "06909fe084f87a65459a83bd69d7cdbe4fce9a7c",
+          "created_at": "2019-10-07T19:10:59+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 20,
+          "modified_files": [
+            "django/forms/fields.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11951",
+          "base_commit": "312049091288dbba2299de8d07ea3e3311ed7238",
+          "created_at": "2019-10-21T09:35:46+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 21,
+          "modified_files": [
+            "django/db/models/query.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-11964",
+          "base_commit": "fc2b1cc926e34041953738e58fa6ad3053059b22",
+          "created_at": "2019-10-23T14:16:45+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 22,
+          "modified_files": [
+            "django/db/models/enums.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12125",
+          "base_commit": "89d41cba392b759732ba9f1db4ff29ed47da6a56",
+          "created_at": "2019-11-22T12:55:45+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 23,
+          "modified_files": [
+            "django/db/migrations/serializer.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12193",
+          "base_commit": "3fb7c12158a2402f0f80824f6778112071235803",
+          "created_at": "2019-12-08T01:38:25+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 24,
+          "modified_files": [
+            "django/forms/widgets.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12209",
+          "base_commit": "5a68f024987e6d16c2626a31bf653a2edddea579",
+          "created_at": "2019-12-12T04:11:05+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 25,
+          "modified_files": [
+            "django/db/models/base.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12276",
+          "base_commit": "53d8646f799de7f92ab9defe9dc56c6125448102",
+          "created_at": "2020-01-05T08:04:40+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 26,
+          "modified_files": [
+            "django/forms/widgets.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12304",
+          "base_commit": "4c1b401e8250f9f520b3c7dc369554477ce8b15a",
+          "created_at": "2020-01-09T15:43:51+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 27,
+          "modified_files": [
+            "django/db/models/enums.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12308",
+          "base_commit": "2e0f04507b17362239ba49830d26fec504d46978",
+          "created_at": "2020-01-12T04:21:15+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 28,
+          "modified_files": [
+            "django/contrib/admin/utils.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12419",
+          "base_commit": "7fa1a93c6c8109010a6ff3f604fda83b604e0e97",
+          "created_at": "2020-02-05T10:02:56+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 29,
+          "modified_files": [
+            "django/conf/global_settings.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-12741",
+          "base_commit": "537d422942b53bc0a2b6a51968f379c0de07793c",
+          "created_at": "2020-04-17T22:35:55+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 30,
+          "modified_files": [
+            "django/core/management/commands/flush.py",
+            "django/db/backends/base/operations.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13023",
+          "base_commit": "f83b44075dafa429d59e8755aa47e15577cc49f9",
+          "created_at": "2020-06-04T20:40:44+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 31,
+          "modified_files": [
+            "django/db/models/fields/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13089",
+          "base_commit": "27c09043da52ca1f02605bf28600bfd5ace95ae4",
+          "created_at": "2020-06-20T07:36:10+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 32,
+          "modified_files": [
+            "django/core/cache/backends/db.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13109",
+          "base_commit": "fbe82f82555bc25dccb476c749ca062f0b522be3",
+          "created_at": "2020-06-25T08:36:45+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 33,
+          "modified_files": [
+            "django/db/models/fields/related.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13112",
+          "base_commit": "09914ccf688974e068941f55412b930729bafa06",
+          "created_at": "2020-06-26T04:51:38+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 34,
+          "modified_files": [
+            "django/db/models/fields/related.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13297",
+          "base_commit": "8954f255bbf5f4ee997fd6de62cb50fc9b5dd697",
+          "created_at": "2020-08-12T11:20:33+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 35,
+          "modified_files": [
+            "django/views/generic/base.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13363",
+          "base_commit": "76e0151ea0e0f56dca66cee846a78b89346d2c4c",
+          "created_at": "2020-08-29T18:59:41+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 36,
+          "modified_files": [
+            "django/db/models/functions/datetime.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13406",
+          "base_commit": "84609b3205905097d7d3038d32e6101f012c0619",
+          "created_at": "2020-09-10T12:38:11+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 37,
+          "modified_files": [
+            "django/db/models/query.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13410",
+          "base_commit": "580a4341cb0b4cbfc215a70afc004875a7e815f4",
+          "created_at": "2020-09-11T09:58:41+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 38,
+          "modified_files": [
+            "django/core/files/locks.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13417",
+          "base_commit": "71ae1ab0123582cc5bfe0f7d5f4cc19a9412f396",
+          "created_at": "2020-09-14T07:49:15+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 39,
+          "modified_files": [
+            "django/db/models/query.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13512",
+          "base_commit": "b79088306513d5ed76d31ac40ab3c15f858946ea",
+          "created_at": "2020-10-08T13:52:57+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 40,
+          "modified_files": [
+            "django/contrib/admin/utils.py",
+            "django/forms/fields.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13551",
+          "base_commit": "7f9e4524d6b23424cf44fbe1bf1f4e70f6bb066e",
+          "created_at": "2020-10-17T17:22:01+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 41,
+          "modified_files": [
+            "django/contrib/auth/tokens.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13741",
+          "base_commit": "d746f28949c009251a8741ba03d156964050717f",
+          "created_at": "2020-12-02T10:52:52+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 42,
+          "modified_files": [
+            "django/contrib/auth/forms.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13794",
+          "base_commit": "fe886eee36be8022f34cfe59aa61ff1c21fe01d9",
+          "created_at": "2020-12-19T20:09:34+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 43,
+          "modified_files": [
+            "django/utils/functional.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13807",
+          "base_commit": "89fc144dedc737a79929231438f035b1d4a993c9",
+          "created_at": "2020-12-23T21:09:32+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 44,
+          "modified_files": [
+            "django/db/backends/sqlite3/base.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13821",
+          "base_commit": "e64c1d8055a3e476122633da141f16b50f0c4a2d",
+          "created_at": "2020-12-29T15:16:10+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 45,
+          "modified_files": [
+            "django/db/backends/sqlite3/base.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-13933",
+          "base_commit": "42e8cf47c7ee2db238bf91197ea398126c546741",
+          "created_at": "2021-01-26T03:58:23+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 46,
+          "modified_files": [
+            "django/forms/models.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-14089",
+          "base_commit": "d01709aae21de9cd2565b9c52f32732ea28a2d98",
+          "created_at": "2021-03-06T20:51:08+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 47,
+          "modified_files": [
+            "django/utils/datastructures.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-14315",
+          "base_commit": "187118203197801c6cb72dc8b06b714b23b6dd3d",
+          "created_at": "2021-04-26T12:39:01+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 48,
+          "modified_files": [
+            "django/db/backends/base/client.py",
+            "django/db/backends/postgresql/client.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-14373",
+          "base_commit": "b1a4b1f0bdf05adbd3dc4dde14228e68da54c1a3",
+          "created_at": "2021-05-10T14:40:32+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 49,
+          "modified_files": [
+            "django/utils/dateformat.py"
+          ]
+        },
+        {
+          "instance_id": "django__django-14376",
+          "base_commit": "d06c5b358149c02a62da8a5469264d05f29ac659",
+          "created_at": "2021-05-10T20:42:18+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 50,
+          "modified_files": [
+            "django/db/backends/mysql/base.py",
+            "django/db/backends/mysql/client.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sympy_sympy_sequence",
+      "repo": "sympy/sympy",
+      "tasks": [
+        {
+          "instance_id": "sympy__sympy-12096",
+          "base_commit": "d7c3045115693e887bcd03599b7ca4650ac5f2cb",
+          "created_at": "2017-01-25T13:40:24+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "sympy/core/function.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-12481",
+          "base_commit": "c807dfe7569692cad24f02a08477b70c1679a4dd",
+          "created_at": "2017-04-03T01:52:33+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "sympy/combinatorics/permutations.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13372",
+          "base_commit": "30379ea6e225e37833a764ac2da7b7fadf5fe374",
+          "created_at": "2017-09-30T16:05:48+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "sympy/core/evalf.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13480",
+          "base_commit": "f57fe3f4b3f2cab225749e1b3b38ae1bf80b62f0",
+          "created_at": "2017-10-18T17:27:03+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "sympy/functions/elementary/hyperbolic.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-14711",
+          "base_commit": "c6753448b5c34f95e250105d76709fe4d349ca1f",
+          "created_at": "2018-05-12T17:00:20+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "sympy/physics/vector/vector.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15017",
+          "base_commit": "6810dee426943c1a2fe85b5002dd0d4cf2246a05",
+          "created_at": "2018-08-03T03:15:04+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 6,
+          "modified_files": [
+            "sympy/tensor/array/dense_ndim_array.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15345",
+          "base_commit": "9ef28fba5b4d6d0168237c9c005a550e6dc27d81",
+          "created_at": "2018-10-05T06:00:31+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 7,
+          "modified_files": [
+            "sympy/printing/mathematica.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15809",
+          "base_commit": "28d913d3cead6c5646307ffa6540b21d65059dfd",
+          "created_at": "2019-01-20T06:08:26+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 8,
+          "modified_files": [
+            "sympy/functions/elementary/miscellaneous.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15875",
+          "base_commit": "b506169ad727ee39cb3d60c8b3ff5e315d443d8e",
+          "created_at": "2019-01-29T03:18:51+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 9,
+          "modified_files": [
+            "sympy/core/add.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-16450",
+          "base_commit": "aefdd023dc4f73c441953ed51f5f05a076f0862f",
+          "created_at": "2019-03-26T18:00:02+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 10,
+          "modified_files": [
+            "sympy/simplify/simplify.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-16766",
+          "base_commit": "b8fe457a02cc24b3470ff678d0099c350b7fef43",
+          "created_at": "2019-05-01T22:02:17+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 11,
+          "modified_files": [
+            "sympy/printing/pycode.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-16886",
+          "base_commit": "c50643a49811e9fe2f4851adff4313ad46f7325e",
+          "created_at": "2019-05-25T05:55:25+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 12,
+          "modified_files": [
+            "sympy/crypto/crypto.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-17139",
+          "base_commit": "1d3327b8e90a186df6972991963a5ae87053259d",
+          "created_at": "2019-07-01T19:17:18+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 13,
+          "modified_files": [
+            "sympy/simplify/fu.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-17655",
+          "base_commit": "f5e965947af2410ded92cfad987aaf45262ea434",
+          "created_at": "2019-09-25T17:04:26+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 14,
+          "modified_files": [
+            "sympy/geometry/point.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-18189",
+          "base_commit": "1923822ddf8265199dbd9ef9ce09641d3fd042b9",
+          "created_at": "2019-12-31T15:45:24+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 15,
+          "modified_files": [
+            "sympy/solvers/diophantine.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-18763",
+          "base_commit": "70381f282f2d9d039da860e391fe51649df2779d",
+          "created_at": "2020-03-03T03:40:06+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 16,
+          "modified_files": [
+            "sympy/printing/latex.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-19495",
+          "base_commit": "25fbcce5b1a4c7e3956e6062930f4a44ce95a632",
+          "created_at": "2020-06-05T11:53:09+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 17,
+          "modified_files": [
+            "sympy/sets/conditionset.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-19637",
+          "base_commit": "63f8f465d48559fecb4e4bf3c48b75bf15a3e0ef",
+          "created_at": "2020-06-24T13:08:57+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 18,
+          "modified_files": [
+            "sympy/core/sympify.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-19954",
+          "base_commit": "6f54459aa0248bf1467ad12ee6333d8bc924a642",
+          "created_at": "2020-08-12T06:07:32+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 19,
+          "modified_files": [
+            "sympy/combinatorics/perm_groups.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-20916",
+          "base_commit": "82298df6a51491bfaad0c6d1980e7e3ca808ae93",
+          "created_at": "2021-02-06T05:44:34+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 20,
+          "modified_files": [
+            "sympy/printing/conventions.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-21847",
+          "base_commit": "d9b18c518d64d0ebe8e35a98c2fb519938b9b151",
+          "created_at": "2021-08-10T17:41:59+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 21,
+          "modified_files": [
+            "sympy/polys/monomials.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-22714",
+          "base_commit": "3ff4717b6aef6086e78f01cdfa06f64ae23aed7e",
+          "created_at": "2021-12-19T18:54:36+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 22,
+          "modified_files": [
+            "sympy/geometry/point.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-23534",
+          "base_commit": "832c24fec1046eaa544a4cab4c69e3af3e651759",
+          "created_at": "2022-05-22T00:12:33+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 23,
+          "modified_files": [
+            "sympy/core/symbol.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-24539",
+          "base_commit": "193e3825645d93c73e31cdceb6d742cc6919624d",
+          "created_at": "2023-01-17T17:26:42+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 24,
+          "modified_files": [
+            "sympy/polys/rings.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-24562",
+          "base_commit": "b1cb676cf92dd1a48365b731979833375b188bf2",
+          "created_at": "2023-01-21T12:06:36+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 25,
+          "modified_files": [
+            "sympy/core/numbers.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-11618",
+          "base_commit": "360290c4c401e386db60723ddb0109ed499c9f6e",
+          "created_at": "2016-09-15T20:01:58+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 26,
+          "modified_files": [
+            "sympy/geometry/point.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-12419",
+          "base_commit": "479939f8c65c8c2908bbedc959549a257a7c0b0b",
+          "created_at": "2017-03-25T15:02:26+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 27,
+          "modified_files": [
+            "sympy/matrices/expressions/matexpr.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13031",
+          "base_commit": "2dfa7457f20ee187fbb09b5b6a1631da4458388c",
+          "created_at": "2017-07-23T15:48:13+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 28,
+          "modified_files": [
+            "sympy/matrices/sparse.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13091",
+          "base_commit": "d1320814eda6549996190618a21eaf212cfd4d1e",
+          "created_at": "2017-08-05T08:04:32+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 29,
+          "modified_files": [
+            "sympy/core/basic.py",
+            "sympy/core/exprtools.py",
+            "sympy/core/numbers.py",
+            "sympy/geometry/entity.py",
+            "sympy/physics/optics/medium.py",
+            "sympy/physics/vector/dyadic.py",
+            "sympy/physics/vector/frame.py",
+            "sympy/physics/vector/vector.py",
+            "sympy/polys/agca/modules.py",
+            "sympy/polys/domains/domain.py",
+            "sympy/polys/domains/expressiondomain.py",
+            "sympy/polys/domains/pythonrational.py",
+            "sympy/polys/domains/quotientring.py",
+            "sympy/polys/fields.py",
+            "sympy/polys/monomials.py",
+            "sympy/polys/polyclasses.py",
+            "sympy/polys/polytools.py",
+            "sympy/polys/rings.py",
+            "sympy/polys/rootoftools.py",
+            "sympy/tensor/array/ndim_array.py",
+            "sympy/utilities/enumerative.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13551",
+          "base_commit": "9476425b9e34363c2d9ac38e9f04aa75ae54a775",
+          "created_at": "2017-10-29T20:51:01+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 30,
+          "modified_files": [
+            "sympy/concrete/products.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13615",
+          "base_commit": "50d8a102f0735da8e165a0369bbb994c7d0592a6",
+          "created_at": "2017-11-17T08:59:51+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 31,
+          "modified_files": [
+            "sympy/sets/sets.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13647",
+          "base_commit": "67e3c956083d0128a621f65ee86a7dacd4f9f19f",
+          "created_at": "2017-11-28T21:22:51+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 32,
+          "modified_files": [
+            "sympy/matrices/common.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13757",
+          "base_commit": "a5e6a101869e027e7930e694f8b1cfb082603453",
+          "created_at": "2017-12-17T11:08:44+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 33,
+          "modified_files": [
+            "sympy/polys/polytools.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13798",
+          "base_commit": "7121bdf1facdd90d05b6994b4c2e5b2865a4638a",
+          "created_at": "2017-12-26T18:12:43+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 34,
+          "modified_files": [
+            "sympy/printing/latex.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13877",
+          "base_commit": "1659712001810f5fc563a443949f8e3bb38af4bd",
+          "created_at": "2018-01-10T01:55:34+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 35,
+          "modified_files": [
+            "sympy/matrices/matrices.py",
+            "sympy/utilities/randtest.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-13974",
+          "base_commit": "84c125972ad535b2dfb245f8d311d347b45e5b8a",
+          "created_at": "2018-01-20T18:25:59+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 36,
+          "modified_files": [
+            "sympy/physics/quantum/tensorproduct.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-14531",
+          "base_commit": "205da797006360fc629110937e39a19c9561313e",
+          "created_at": "2018-03-18T18:15:33+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 37,
+          "modified_files": [
+            "sympy/printing/str.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-14976",
+          "base_commit": "9cbea134220b0b951587e11b63e2c832c7246cbc",
+          "created_at": "2018-07-25T17:38:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 38,
+          "modified_files": [
+            "sympy/printing/pycode.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15349",
+          "base_commit": "768da1c6f6ec907524b8ebbf6bf818c92b56101b",
+          "created_at": "2018-10-06T19:45:27+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 39,
+          "modified_files": [
+            "sympy/algebras/quaternion.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15599",
+          "base_commit": "5e17a90c19f7eecfa10c1ab872648ae7e2131323",
+          "created_at": "2018-12-06T17:45:49+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 40,
+          "modified_files": [
+            "sympy/core/mod.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-15976",
+          "base_commit": "701441853569d370506514083b995d11f9a130bd",
+          "created_at": "2019-02-13T15:02:37+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 41,
+          "modified_files": [
+            "sympy/printing/mathml.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-16792",
+          "base_commit": "09786a173e7a0a488f46dd6000177c23e5d24eed",
+          "created_at": "2019-05-09T03:40:54+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 42,
+          "modified_files": [
+            "sympy/utilities/codegen.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-17318",
+          "base_commit": "d4e0231b08147337745dcf601e62de7eefe2fb2d",
+          "created_at": "2019-08-01T11:55:36+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 43,
+          "modified_files": [
+            "sympy/simplify/radsimp.py",
+            "sympy/simplify/sqrtdenest.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-18211",
+          "base_commit": "b4f1aa3540fe68d078d76e78ba59d022dd6df39f",
+          "created_at": "2020-01-03T06:39:19+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 44,
+          "modified_files": [
+            "sympy/core/relational.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-18698",
+          "base_commit": "3dff1b98a78f28c953ae2140b69356b8391e399c",
+          "created_at": "2020-02-21T05:46:56+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 45,
+          "modified_files": [
+            "sympy/polys/polytools.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-19040",
+          "base_commit": "b9179e80d2daa1bb6cba1ffe35ca9e6612e115c9",
+          "created_at": "2020-03-31T19:53:54+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 46,
+          "modified_files": [
+            "sympy/polys/factortools.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-19346",
+          "base_commit": "94fb720696f5f5d12bad8bc813699fd696afd2fb",
+          "created_at": "2020-05-17T12:23:33+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 47,
+          "modified_files": [
+            "sympy/printing/repr.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-19783",
+          "base_commit": "586a43201d0357e92e8c93548d69a9f42bf548f4",
+          "created_at": "2020-07-16T09:40:38+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 48,
+          "modified_files": [
+            "sympy/physics/quantum/dagger.py",
+            "sympy/physics/quantum/operator.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-20154",
+          "base_commit": "bdb49c4abfb35554a3c8ce761696ffff3bb837fe",
+          "created_at": "2020-09-26T22:49:04+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 49,
+          "modified_files": [
+            "sympy/utilities/iterables.py"
+          ]
+        },
+        {
+          "instance_id": "sympy__sympy-20428",
+          "base_commit": "c0e85160406f9bf2bcaa2992138587668a1cd0bc",
+          "created_at": "2020-11-14T05:56:31+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 50,
+          "modified_files": [
+            "sympy/polys/domains/expressiondomain.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "sphinx-doc_sphinx_sequence",
+      "repo": "sphinx-doc/sphinx",
+      "tasks": [
+        {
+          "instance_id": "sphinx-doc__sphinx-7440",
+          "base_commit": "9bb204dcabe6ba0fc422bf4a45ad0c79c680d90b",
+          "created_at": "2020-04-08T13:46:43+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "sphinx/domains/std.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7454",
+          "base_commit": "aca3f825f2e4a8817190f3c885a242a285aa0dba",
+          "created_at": "2020-04-09T17:08:30+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "sphinx/domains/python.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7462",
+          "base_commit": "b3e26a6c851133b82b50f4b68b53692076574d13",
+          "created_at": "2020-04-12T04:10:05+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "sphinx/domains/python.py",
+            "sphinx/pycode/ast.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7889",
+          "base_commit": "ec9af606c6cfa515f946d74da9b51574f2f9b16f",
+          "created_at": "2020-06-29T16:20:55+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "sphinx/ext/autodoc/mock.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7910",
+          "base_commit": "27ac10de04697e2372d31db5548e56a7c6d9265d",
+          "created_at": "2020-07-04T01:08:20+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "sphinx/ext/napoleon/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8269",
+          "base_commit": "1e2ccd8f0eca0870cf6f8fce6934e2da8eba9b72",
+          "created_at": "2020-10-03T11:08:37+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 6,
+          "modified_files": [
+            "sphinx/builders/linkcheck.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8459",
+          "base_commit": "68aa4fb29e7dfe521749e1e14f750d7afabb3481",
+          "created_at": "2020-11-20T16:44:10+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 7,
+          "modified_files": [
+            "sphinx/ext/autodoc/typehints.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8475",
+          "base_commit": "3ea1ec84cc610f7a9f4f6b354e264565254923ff",
+          "created_at": "2020-11-22T16:54:19+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 8,
+          "modified_files": [
+            "sphinx/builders/linkcheck.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8595",
+          "base_commit": "b19bce971e82f2497d67fdacdeca8db08ae0ba56",
+          "created_at": "2020-12-27T03:07:50+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 9,
+          "modified_files": [
+            "sphinx/ext/autodoc/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8621",
+          "base_commit": "21698c14461d27933864d73e6fba568a154e83b3",
+          "created_at": "2020-12-30T12:13:09+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 10,
+          "modified_files": [
+            "sphinx/builders/html/transforms.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8721",
+          "base_commit": "82ef497a8c88f0f6e50d84520e7276bfbf65025d",
+          "created_at": "2021-01-21T15:36:24+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 11,
+          "modified_files": [
+            "sphinx/ext/viewcode.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9230",
+          "base_commit": "567ff22716ac258b9edd2c1711d766b440ac0b11",
+          "created_at": "2021-05-15T11:33:05+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 12,
+          "modified_files": [
+            "sphinx/util/docfields.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9258",
+          "base_commit": "06107f838c28ab6ca6bfc2cc208e15997fcb2146",
+          "created_at": "2021-05-21T16:56:41+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 13,
+          "modified_files": [
+            "sphinx/domains/python.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9281",
+          "base_commit": "8ec06e9a1bd862cd713b9db748e039ccc7b3e15b",
+          "created_at": "2021-05-29T17:16:30+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 14,
+          "modified_files": [
+            "sphinx/util/inspect.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9320",
+          "base_commit": "e05cef574b8f23ab1b57f57e7da6dee509a4e230",
+          "created_at": "2021-06-11T13:29:04+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 15,
+          "modified_files": [
+            "sphinx/cmd/quickstart.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9367",
+          "base_commit": "6918e69600810a4664e53653d6ff0290c3c4a788",
+          "created_at": "2021-06-20T17:49:40+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 16,
+          "modified_files": [
+            "sphinx/pycode/ast.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9591",
+          "base_commit": "9ed054279aeffd5b1d0642e2d24a8800389de29f",
+          "created_at": "2021-08-29T15:26:24+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 17,
+          "modified_files": [
+            "sphinx/domains/python.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9698",
+          "base_commit": "f050a7775dfc9000f55d023d36d925a8d02ccfa8",
+          "created_at": "2021-10-03T04:04:04+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 18,
+          "modified_files": [
+            "sphinx/domains/python.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9711",
+          "base_commit": "81a4fd973d4cfcb25d01a7b0be62cdb28f82406d",
+          "created_at": "2021-10-06T15:08:03+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 19,
+          "modified_files": [
+            "sphinx/extension.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-10323",
+          "base_commit": "31eba1a76dd485dc633cae48227b46879eda5df4",
+          "created_at": "2022-04-02T14:42:24+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 20,
+          "modified_files": [
+            "sphinx/directives/code.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-10435",
+          "base_commit": "f1061c012e214f16fd8790dec3c283d787e3daa8",
+          "created_at": "2022-05-08T09:37:06+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 21,
+          "modified_files": [
+            "sphinx/writers/latex.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-10449",
+          "base_commit": "36367765fe780f962bba861bf368a765380bbc68",
+          "created_at": "2022-05-14T14:02:26+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 22,
+          "modified_files": [
+            "sphinx/ext/autodoc/typehints.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7748",
+          "base_commit": "9988d5ce267bf0df4791770b469431b1fb00dcdd",
+          "created_at": "2020-05-30T06:41:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 23,
+          "modified_files": [
+            "sphinx/ext/autodoc/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7757",
+          "base_commit": "212fd67b9f0b4fae6a7c3501fdf1a9a5b2801329",
+          "created_at": "2020-05-30T14:46:01+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 24,
+          "modified_files": [
+            "sphinx/util/inspect.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7985",
+          "base_commit": "f30284ef926ebaf04b176f21b421e2dffc679792",
+          "created_at": "2020-07-19T10:09:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 25,
+          "modified_files": [
+            "sphinx/builders/linkcheck.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8035",
+          "base_commit": "5e6da19f0e44a0ae83944fb6ce18f18f781e1a6e",
+          "created_at": "2020-08-01T16:28:05+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 26,
+          "modified_files": [
+            "sphinx/ext/autodoc/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8056",
+          "base_commit": "e188d56ed1248dead58f3f8018c0e9a3f99193f7",
+          "created_at": "2020-08-05T17:18:58+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 27,
+          "modified_files": [
+            "sphinx/ext/napoleon/docstring.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8120",
+          "base_commit": "795747bdb6b8fb7d717d5bbfc2c3316869e66a73",
+          "created_at": "2020-08-14T07:23:34+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 28,
+          "modified_files": [
+            "sphinx/application.py",
+            "sphinx/locale/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8265",
+          "base_commit": "b428cd2404675475a5c3dc2a2b0790ba57676202",
+          "created_at": "2020-10-03T03:06:00+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 29,
+          "modified_files": [
+            "sphinx/pycode/ast.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8551",
+          "base_commit": "57ed10c68057c96491acbd3e62254ccfaf9e3861",
+          "created_at": "2020-12-19T09:34:31+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 30,
+          "modified_files": [
+            "sphinx/domains/python.py",
+            "sphinx/util/docfields.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8593",
+          "base_commit": "07983a5a8704ad91ae855218ecbda1c8598200ca",
+          "created_at": "2020-12-27T02:41:20+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 31,
+          "modified_files": [
+            "sphinx/ext/autodoc/__init__.py",
+            "sphinx/ext/autodoc/importer.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8638",
+          "base_commit": "4b452338f914d4f6b54704222d70ae8a746e3db5",
+          "created_at": "2021-01-01T13:54:38+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 32,
+          "modified_files": [
+            "sphinx/domains/python.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9602",
+          "base_commit": "6c38f68dae221e8cfc70c137974b8b88bd3baaab",
+          "created_at": "2021-09-01T17:26:58+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 33,
+          "modified_files": [
+            "sphinx/domains/python.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9658",
+          "base_commit": "232dbe41c5250eb7d559d40438c4743483e95f15",
+          "created_at": "2021-09-20T17:04:23+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 34,
+          "modified_files": [
+            "sphinx/ext/autodoc/mock.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9673",
+          "base_commit": "5fb51fb1467dc5eea7505402c3c5d9b378d3b441",
+          "created_at": "2021-09-25T15:53:46+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 35,
+          "modified_files": [
+            "sphinx/ext/autodoc/typehints.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-10466",
+          "base_commit": "cab2d93076d0cca7c53fac885f927dde3e2a5fec",
+          "created_at": "2022-05-22T16:46:53+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 36,
+          "modified_files": [
+            "sphinx/builders/gettext.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-10614",
+          "base_commit": "ac2b7599d212af7d04649959ce6926c63c3133fa",
+          "created_at": "2022-06-29T14:29:04+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 37,
+          "modified_files": [
+            "sphinx/ext/inheritance_diagram.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-10673",
+          "base_commit": "f35d2a6cc726f97d0e859ca7a0e1729f7da8a6c8",
+          "created_at": "2022-07-16T19:29:29+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 38,
+          "modified_files": [
+            "sphinx/directives/other.py",
+            "sphinx/environment/adapters/toctree.py",
+            "sphinx/environment/collectors/toctree.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-11445",
+          "base_commit": "71db08c05197545944949d5aa76cd340e7143627",
+          "created_at": "2023-05-28T19:15:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 39,
+          "modified_files": [
+            "sphinx/util/rst.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-8548",
+          "base_commit": "dd1615c59dc6fff633e27dbb3861f2d27e1fb976",
+          "created_at": "2020-12-17T13:46:32+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 40,
+          "modified_files": [
+            "sphinx/ext/autodoc/__init__.py",
+            "sphinx/ext/autodoc/importer.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9229",
+          "base_commit": "876fa81e0a038cda466925b85ccf6c5452e0f685",
+          "created_at": "2021-05-15T07:21:49+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 41,
+          "modified_files": [
+            "sphinx/ext/autodoc/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-9461",
+          "base_commit": "939c7bb7ff7c53a4d27df067cea637540f0e1dad",
+          "created_at": "2021-07-17T06:31:58+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 42,
+          "modified_files": [
+            "sphinx/domains/python.py",
+            "sphinx/ext/autodoc/__init__.py",
+            "sphinx/util/inspect.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-11510",
+          "base_commit": "6cb783c0024a873722952a67ebb9f41771c8eb6d",
+          "created_at": "2023-07-24T22:46:12+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 43,
+          "modified_files": [
+            "sphinx/directives/other.py"
+          ]
+        },
+        {
+          "instance_id": "sphinx-doc__sphinx-7590",
+          "base_commit": "2e506c5ab457cba743bb47eb5b8c8eb9dd51d23d",
+          "created_at": "2020-05-01T18:29:11+00:00",
+          "difficulty": ">4 hours",
+          "cl_position": 44,
+          "modified_files": [
+            "sphinx/domains/c.py",
+            "sphinx/domains/cpp.py",
+            "sphinx/util/cfamily.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "matplotlib_matplotlib_sequence",
+      "repo": "matplotlib/matplotlib",
+      "tasks": [
+        {
+          "instance_id": "matplotlib__matplotlib-13989",
+          "base_commit": "a3e2897bfaf9eaac1d6649da535c4e721c89fa69",
+          "created_at": "2019-04-19T01:47:57+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "lib/matplotlib/axes/_axes.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-20676",
+          "base_commit": "6786f437df54ca7780a047203cbcfaa1db8dc542",
+          "created_at": "2021-07-19T10:10:07+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "lib/matplotlib/widgets.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-20859",
+          "base_commit": "64619e53e9d0ed417daba287ac0d3a06943a54d5",
+          "created_at": "2021-08-19T09:03:04+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "lib/matplotlib/legend.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-22719",
+          "base_commit": "a2a1b0a11b993fe5f8fab64b6161e99243a6393c",
+          "created_at": "2022-03-28T14:42:28+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "lib/matplotlib/category.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-23476",
+          "base_commit": "33a0599711d26dc2b79f851c6daed4947df7c167",
+          "created_at": "2022-07-22T18:58:22+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "lib/matplotlib/figure.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24149",
+          "base_commit": "af39f1edffcd828f05cfdd04f2e59506bb4a27bc",
+          "created_at": "2022-10-12T22:00:54+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 6,
+          "modified_files": [
+            "lib/matplotlib/axes/_axes.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24177",
+          "base_commit": "493d608e39d32a67173c23a7bbc47d6bfedcef61",
+          "created_at": "2022-10-15T10:52:31+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 7,
+          "modified_files": [
+            "lib/matplotlib/axes/_base.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24570",
+          "base_commit": "8f0003ae902952372824c9917975fb372c026a42",
+          "created_at": "2022-11-30T15:50:17+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 8,
+          "modified_files": [
+            "lib/matplotlib/offsetbox.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25122",
+          "base_commit": "5ec2bd279729ff534719b8bf238dbbca907b93c5",
+          "created_at": "2023-02-01T03:41:00+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 9,
+          "modified_files": [
+            "lib/matplotlib/mlab.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25287",
+          "base_commit": "f8ffce6d44127d4ea7d6491262ab30046b03294b",
+          "created_at": "2023-02-22T18:19:27+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 10,
+          "modified_files": [
+            "lib/matplotlib/axis.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25311",
+          "base_commit": "430fb1db88843300fb4baae3edc499bbfe073b0c",
+          "created_at": "2023-02-23T21:04:12+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 11,
+          "modified_files": [
+            "lib/matplotlib/offsetbox.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25332",
+          "base_commit": "66ba515e671638971bd11a34cff12c107a437e0b",
+          "created_at": "2023-02-26T11:18:40+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 12,
+          "modified_files": [
+            "lib/matplotlib/cbook.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25479",
+          "base_commit": "7fdf772201e4c9bafbc16dfac23b5472d6a53fa2",
+          "created_at": "2023-03-16T17:59:41+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 13,
+          "modified_files": [
+            "lib/matplotlib/cm.py",
+            "lib/matplotlib/colors.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-26113",
+          "base_commit": "5ca694b38d861c0e24cd8743753427dda839b90b",
+          "created_at": "2023-06-12T18:56:33+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 14,
+          "modified_files": [
+            "lib/matplotlib/axes/_axes.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-26208",
+          "base_commit": "f0f133943d3e4f1e2e665291fe1c8f658a84cc09",
+          "created_at": "2023-06-28T21:31:50+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 15,
+          "modified_files": [
+            "lib/matplotlib/axes/_base.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-14623",
+          "base_commit": "d65c9ca20ddf81ef91199e6d819f9d3506ef477c",
+          "created_at": "2019-06-25T14:01:17+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 16,
+          "modified_files": [
+            "lib/matplotlib/axes/_base.py",
+            "lib/matplotlib/ticker.py",
+            "lib/mpl_toolkits/mplot3d/axes3d.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-20488",
+          "base_commit": "b7ce415c15eb39b026a097a2865da73fbcf15c9c",
+          "created_at": "2021-06-23T03:05:05+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 17,
+          "modified_files": [
+            "lib/matplotlib/image.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-20826",
+          "base_commit": "a0d2e399729d36499a1924e5ca5bc067c8396810",
+          "created_at": "2021-08-11T06:23:50+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 18,
+          "modified_files": [
+            "lib/matplotlib/axis.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-21568",
+          "base_commit": "f0632c0fc7339f68e992ed63ae4cfac76cd41aad",
+          "created_at": "2021-11-08T18:41:08+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 19,
+          "modified_files": [
+            "lib/matplotlib/dates.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-22865",
+          "base_commit": "c6c7ec1978c22ae2c704555a873d0ec6e1e2eaa8",
+          "created_at": "2022-04-20T15:15:11+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 20,
+          "modified_files": [
+            "lib/matplotlib/colorbar.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-22871",
+          "base_commit": "a7b7260bf06c20d408215d95ce20a1a01c12e5b1",
+          "created_at": "2022-04-21T13:10:50+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 21,
+          "modified_files": [
+            "lib/matplotlib/dates.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-23299",
+          "base_commit": "3eadeacc06c9f2ddcdac6ae39819faa9fbee9e39",
+          "created_at": "2022-06-18T01:34:39+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 22,
+          "modified_files": [
+            "lib/matplotlib/__init__.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-23314",
+          "base_commit": "97fc1154992f64cfb2f86321155a7404efeb2d8a",
+          "created_at": "2022-06-21T02:41:34+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 23,
+          "modified_files": [
+            "lib/mpl_toolkits/mplot3d/axes3d.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-23412",
+          "base_commit": "f06c2c3abdaf4b90285ce5ca7fedbb8ace715911",
+          "created_at": "2022-07-11T01:41:11+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 24,
+          "modified_files": [
+            "lib/matplotlib/patches.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24026",
+          "base_commit": "14c96b510ebeba40f573e512299b1976f35b620e",
+          "created_at": "2022-09-28T02:45:01+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 25,
+          "modified_files": [
+            "lib/matplotlib/stackplot.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24627",
+          "base_commit": "9d22ab09d52d279b125d8770967569de070913b2",
+          "created_at": "2022-12-05T00:05:54+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 26,
+          "modified_files": [
+            "lib/matplotlib/axes/_base.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24637",
+          "base_commit": "a9ba9d5d3fe9d5ac15fbdb06127f97d381148dd0",
+          "created_at": "2022-12-06T03:42:05+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 27,
+          "modified_files": [
+            "lib/matplotlib/offsetbox.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24870",
+          "base_commit": "6091437be9776139d3672cde28a19cbe6c09dcd5",
+          "created_at": "2023-01-02T20:37:49+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 28,
+          "modified_files": [
+            "lib/matplotlib/contour.py",
+            "lib/matplotlib/tri/_tricontour.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-24970",
+          "base_commit": "a3011dfd1aaa2487cce8aa7369475533133ef777",
+          "created_at": "2023-01-13T14:23:39+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 29,
+          "modified_files": [
+            "lib/matplotlib/colors.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25775",
+          "base_commit": "26224d96066b5c60882296c551f54ca7732c0af0",
+          "created_at": "2023-04-26T21:26:46+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 30,
+          "modified_files": [
+            "lib/matplotlib/backends/backend_agg.py",
+            "lib/matplotlib/backends/backend_cairo.py",
+            "lib/matplotlib/text.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-25960",
+          "base_commit": "1d0d255b79e84dfc9f2123c5eb85a842d342f72b",
+          "created_at": "2023-05-23T21:58:53+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 31,
+          "modified_files": [
+            "lib/matplotlib/figure.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-26291",
+          "base_commit": "fa68f46289adf4a8a4bc7ba97ded8258ec9d079c",
+          "created_at": "2023-07-12T04:29:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 32,
+          "modified_files": [
+            "lib/mpl_toolkits/axes_grid1/inset_locator.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-26342",
+          "base_commit": "2aee6ccd7c7e1f8d282c1e7579f4ee546b838542",
+          "created_at": "2023-07-18T10:06:19+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 33,
+          "modified_files": [
+            "lib/matplotlib/collections.py"
+          ]
+        },
+        {
+          "instance_id": "matplotlib__matplotlib-26466",
+          "base_commit": "3dd06a46750d174f821df5377996f493f1af4ebb",
+          "created_at": "2023-08-07T19:30:22+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 34,
+          "modified_files": [
+            "lib/matplotlib/text.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "scikit-learn_scikit-learn_sequence",
+      "repo": "scikit-learn/scikit-learn",
+      "tasks": [
+        {
+          "instance_id": "scikit-learn__scikit-learn-11310",
+          "base_commit": "553b5fb8f84ba05c8397f26dd079deece2b05029",
+          "created_at": "2018-06-18T12:10:19+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "sklearn/model_selection/_search.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-12585",
+          "base_commit": "bfc4a566423e036fbdc9fb02765fd893e4860c85",
+          "created_at": "2018-11-14T13:20:30+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "sklearn/base.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13135",
+          "base_commit": "a061ada48efccf0845acae17009553e01764452b",
+          "created_at": "2019-02-11T21:34:25+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "sklearn/preprocessing/_discretization.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13142",
+          "base_commit": "1c8668b0a021832386470ddf740d834e02c66f69",
+          "created_at": "2019-02-12T14:32:37+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "sklearn/mixture/base.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13328",
+          "base_commit": "37b0e66c871e8fb032a9c7086b2a1d5419838154",
+          "created_at": "2019-02-28T12:47:52+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "sklearn/linear_model/huber.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13439",
+          "base_commit": "a62775e99f2a5ea3d51db7160fad783f6cd8a4c5",
+          "created_at": "2019-03-12T20:32:50+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 6,
+          "modified_files": [
+            "sklearn/pipeline.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13496",
+          "base_commit": "3aefc834dce72e850bff48689bea3c7dff5f3fad",
+          "created_at": "2019-03-23T09:46:59+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 7,
+          "modified_files": [
+            "sklearn/ensemble/iforest.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13779",
+          "base_commit": "b34751b7ed02b2cfcc36037fb729d4360480a299",
+          "created_at": "2019-05-03T13:24:57+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 8,
+          "modified_files": [
+            "sklearn/ensemble/voting.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14141",
+          "base_commit": "3d997697fdd166eff428ea9fd35734b6a8ba113e",
+          "created_at": "2019-06-21T20:53:37+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 9,
+          "modified_files": [
+            "sklearn/utils/_show_versions.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14496",
+          "base_commit": "d49a6f13af2f22228d430ac64ac2b518937800d0",
+          "created_at": "2019-07-28T13:47:05+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 10,
+          "modified_files": [
+            "sklearn/cluster/optics_.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14983",
+          "base_commit": "06632c0d185128a53c57ccc73b25b6408e90bb89",
+          "created_at": "2019-09-14T15:31:18+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 11,
+          "modified_files": [
+            "sklearn/model_selection/_split.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-25232",
+          "base_commit": "f7eea978097085a6781a0e92fc14ba7712a52d75",
+          "created_at": "2022-12-24T15:32:44+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 12,
+          "modified_files": [
+            "sklearn/impute/_iterative.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-25973",
+          "base_commit": "10dbc142bd17ccf7bd38eec2ac04b52ce0d1009e",
+          "created_at": "2023-03-25T13:27:07+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 13,
+          "modified_files": [
+            "sklearn/feature_selection/_sequential.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-9288",
+          "base_commit": "3eacf948e0f95ef957862568d87ce082f378e186",
+          "created_at": "2017-07-06T11:03:14+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 14,
+          "modified_files": [
+            "sklearn/cluster/k_means_.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-10297",
+          "base_commit": "b90661d6a46aa3619d3eec94d5281f5888add501",
+          "created_at": "2017-12-12T22:07:47+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 15,
+          "modified_files": [
+            "sklearn/linear_model/ridge.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-10844",
+          "base_commit": "97523985b39ecde369d83352d7c3baf403b60a22",
+          "created_at": "2018-03-21T00:16:18+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 16,
+          "modified_files": [
+            "sklearn/metrics/cluster/supervised.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-10908",
+          "base_commit": "67d06b18c68ee4452768f8a1e868565dd4354abf",
+          "created_at": "2018-04-03T03:50:46+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 17,
+          "modified_files": [
+            "sklearn/feature_extraction/text.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-11578",
+          "base_commit": "dd69361a0d9c6ccde0d2353b00b86e0e7541a3e3",
+          "created_at": "2018-07-16T23:21:56+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 18,
+          "modified_files": [
+            "sklearn/linear_model/logistic.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-12682",
+          "base_commit": "d360ffa7c5896a91ae498b3fb9cf464464ce8f34",
+          "created_at": "2018-11-27T08:30:51+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 19,
+          "modified_files": [
+            "examples/decomposition/plot_sparse_coding.py",
+            "sklearn/decomposition/dict_learning.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-12973",
+          "base_commit": "a7b8b9e9e16d4e15fabda5ae615086c2e1c47d8a",
+          "created_at": "2019-01-13T16:19:52+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 20,
+          "modified_files": [
+            "sklearn/linear_model/least_angle.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-13124",
+          "base_commit": "9f0b959a8c9195d1b6e203f08b698e052b426ca9",
+          "created_at": "2019-02-09T02:15:23+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 21,
+          "modified_files": [
+            "sklearn/model_selection/_split.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14053",
+          "base_commit": "6ab8c86c383dd847a1be7103ad115f174fe23ffd",
+          "created_at": "2019-06-09T15:36:55+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 22,
+          "modified_files": [
+            "sklearn/tree/export.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14087",
+          "base_commit": "a5743ed36fbd3fbc8e351bdab16561fbfca7dfa1",
+          "created_at": "2019-06-13T20:09:22+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 23,
+          "modified_files": [
+            "sklearn/linear_model/logistic.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14629",
+          "base_commit": "4aded39b5663d943f6a4809abacfa9cae3d7fb6a",
+          "created_at": "2019-08-12T09:31:54+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 24,
+          "modified_files": [
+            "sklearn/multioutput.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14710",
+          "base_commit": "4b6273b87442a4437d8b3873ea3022ae163f4fdf",
+          "created_at": "2019-08-21T16:29:47+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 25,
+          "modified_files": [
+            "sklearn/ensemble/_hist_gradient_boosting/gradient_boosting.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-14894",
+          "base_commit": "fdbaa58acbead5a254f2e6d597dc1ab3b947f4c6",
+          "created_at": "2019-09-05T17:41:11+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 26,
+          "modified_files": [
+            "sklearn/svm/base.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-15100",
+          "base_commit": "af8a6e592a1a15d92d77011856d5aa0ec4db4c6c",
+          "created_at": "2019-09-26T19:21:38+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 27,
+          "modified_files": [
+            "sklearn/feature_extraction/text.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-25747",
+          "base_commit": "2c867b8f822eb7a684f0d5c4359e4426e1c9cfe0",
+          "created_at": "2023-03-02T20:38:47+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 28,
+          "modified_files": [
+            "sklearn/utils/_set_output.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-25931",
+          "base_commit": "e3d1f9ac39e4bf0f31430e779acc50fb05fe1b64",
+          "created_at": "2023-03-22T00:34:47+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 29,
+          "modified_files": [
+            "sklearn/ensemble/_iforest.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-26194",
+          "base_commit": "e886ce4e1444c61b865e7839c9cff5464ee20ace",
+          "created_at": "2023-04-17T16:33:08+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 30,
+          "modified_files": [
+            "sklearn/metrics/_ranking.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-26323",
+          "base_commit": "586f4318ffcdfbd9a1093f35ad43e81983740b66",
+          "created_at": "2023-05-04T11:55:50+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 31,
+          "modified_files": [
+            "sklearn/compose/_column_transformer.py"
+          ]
+        },
+        {
+          "instance_id": "scikit-learn__scikit-learn-25102",
+          "base_commit": "f9a1cf072da9d7375d6c2163f68a6038b13b310f",
+          "created_at": "2022-12-02T20:03:37+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 32,
+          "modified_files": [
+            "sklearn/base.py",
+            "sklearn/feature_selection/_base.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "astropy_astropy_sequence",
+      "repo": "astropy/astropy",
+      "tasks": [
+        {
+          "instance_id": "astropy__astropy-7166",
+          "base_commit": "26d147868f8a891a6009a25cd6a8576d2e1bd747",
+          "created_at": "2018-02-07T15:05:31+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "astropy/utils/misc.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-7336",
+          "base_commit": "732d89c2940156bdc0e200bb36dc38b5e424bcba",
+          "created_at": "2018-03-28T15:31:32+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "astropy/units/decorators.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14309",
+          "base_commit": "cdb66059a2feb44ee49021874605ba90801f9986",
+          "created_at": "2023-01-23T22:34:01+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "astropy/io/fits/connect.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14995",
+          "base_commit": "b16c7d12ccbc7b2d20364b89fb44285bcbfede54",
+          "created_at": "2023-06-27T19:48:18+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "astropy/nddata/mixins/ndarithmetic.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-7606",
+          "base_commit": "3cedd79e6c121910220f8e6df77c54a0b344ea94",
+          "created_at": "2018-06-29T16:27:46+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 5,
+          "modified_files": [
+            "astropy/units/core.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-7671",
+          "base_commit": "a7141cd90019b62688d507ae056298507678c058",
+          "created_at": "2018-07-20T19:37:49+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 6,
+          "modified_files": [
+            "astropy/utils/introspection.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-8707",
+          "base_commit": "a85a0747c54bac75e9c3b2fe436b105ea029d6cf",
+          "created_at": "2019-05-15T13:21:19+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 7,
+          "modified_files": [
+            "astropy/io/fits/card.py",
+            "astropy/io/fits/header.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-8872",
+          "base_commit": "b750a0e6ee76fb6b8a099a4d16ec51977be46bf6",
+          "created_at": "2019-06-19T20:34:56+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 8,
+          "modified_files": [
+            "astropy/units/quantity.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-12907",
+          "base_commit": "d16bfe05a744909de4b27f5875fe0d4ed41ce607",
+          "created_at": "2022-03-03T15:14:54+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 9,
+          "modified_files": [
+            "astropy/modeling/separable.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-13033",
+          "base_commit": "298ccb478e6bf092953bca67a3d29dc6c35f6752",
+          "created_at": "2022-03-31T23:28:27+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 10,
+          "modified_files": [
+            "astropy/timeseries/core.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-13236",
+          "base_commit": "6ed769d58d89380ebaa1ef52b300691eefda8928",
+          "created_at": "2022-05-09T14:16:30+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 11,
+          "modified_files": [
+            "astropy/table/table.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-13453",
+          "base_commit": "19cc80471739bcb67b7e8099246b391c355023ee",
+          "created_at": "2022-07-14T10:04:40+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 12,
+          "modified_files": [
+            "astropy/io/ascii/html.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-13977",
+          "base_commit": "5250b2442501e6c671c6b380536f1edb352602d1",
+          "created_at": "2022-11-01T22:24:58+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 13,
+          "modified_files": [
+            "astropy/units/quantity.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14096",
+          "base_commit": "1a4462d72eb03f30dc83a879b1dd57aac8b2c18b",
+          "created_at": "2022-12-04T17:06:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 14,
+          "modified_files": [
+            "astropy/coordinates/sky_coordinate.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14182",
+          "base_commit": "a5917978be39d13cd90b517e1de4e7a539ffaa48",
+          "created_at": "2022-12-16T11:13:37+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 15,
+          "modified_files": [
+            "astropy/io/ascii/rst.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14365",
+          "base_commit": "7269fa3e33e8d02485a647da91a5a2a60a06af61",
+          "created_at": "2023-02-06T19:20:34+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 16,
+          "modified_files": [
+            "astropy/io/ascii/qdp.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14508",
+          "base_commit": "a3f4ae6cd24d5ecdf49f213d77b3513dd509a06c",
+          "created_at": "2023-03-09T11:08:51+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 17,
+          "modified_files": [
+            "astropy/io/fits/card.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14539",
+          "base_commit": "c0a24c1dc957a3b565294213f435fefb2ec99714",
+          "created_at": "2023-03-16T18:45:19+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 18,
+          "modified_files": [
+            "astropy/io/fits/diff.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14598",
+          "base_commit": "80c3854a5f4f4a6ab86c03d9db7854767fcd83c1",
+          "created_at": "2023-03-29T10:34:49+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 19,
+          "modified_files": [
+            "astropy/io/fits/card.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-13398",
+          "base_commit": "6500928dc0e57be8f06d1162eacc3ba5e2eff692",
+          "created_at": "2022-06-24T15:22:11+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 20,
+          "modified_files": [
+            "astropy/coordinates/builtin_frames/__init__.py",
+            "astropy/coordinates/builtin_frames/intermediate_rotation_transforms.py",
+            "astropy/coordinates/builtin_frames/itrs.py",
+            "astropy/coordinates/builtin_frames/itrs_observed_transforms.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-13579",
+          "base_commit": "0df94ff7097961e92fd7812036a24b145bc13ca8",
+          "created_at": "2022-08-26T15:06:53+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 21,
+          "modified_files": [
+            "astropy/wcs/wcsapi/wrappers/sliced_wcs.py"
+          ]
+        },
+        {
+          "instance_id": "astropy__astropy-14369",
+          "base_commit": "fa4e8d1cd279acf9b24560813c8652494ccd5922",
+          "created_at": "2023-02-06T21:56:51+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 22,
+          "modified_files": [
+            "astropy/units/format/cds.py",
+            "astropy/units/format/cds_parsetab.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pydata_xarray_sequence",
+      "repo": "pydata/xarray",
+      "tasks": [
+        {
+          "instance_id": "pydata__xarray-4075",
+          "base_commit": "19b088636eb7d3f65ab7a1046ac672e0689371d8",
+          "created_at": "2020-05-18T18:42:05+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "xarray/core/weighted.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-4094",
+          "base_commit": "a64cf2d5476e7bbda099b34c40b7be1880dbd39a",
+          "created_at": "2020-05-26T00:36:02+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "xarray/core/dataarray.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-4356",
+          "base_commit": "e05fddea852d08fc0845f954b79deb9e9f9ff883",
+          "created_at": "2020-08-19T23:48:49+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "xarray/core/nanops.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-4629",
+          "base_commit": "a41edc7bf5302f2ea327943c0c48c532b12009bc",
+          "created_at": "2020-11-30T23:06:17+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "xarray/core/merge.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-6461",
+          "base_commit": "851dadeb0338403e5021c3fbe80cbc9127ee672d",
+          "created_at": "2022-04-09T03:02:40+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "xarray/core/computation.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-2905",
+          "base_commit": "7c4e2ac83f7b4306296ff9b7b51aaf016e5ad614",
+          "created_at": "2019-04-17T21:52:37+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 6,
+          "modified_files": [
+            "xarray/core/variable.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-3095",
+          "base_commit": "1757dffac2fa493d7b9a074b84cf8c830a706688",
+          "created_at": "2019-07-11T13:16:16+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 7,
+          "modified_files": [
+            "xarray/core/indexing.py",
+            "xarray/core/variable.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-3151",
+          "base_commit": "118f4d996e7711c9aced916e6049af9f28d5ec66",
+          "created_at": "2019-07-20T12:31:14+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 8,
+          "modified_files": [
+            "xarray/core/combine.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-3305",
+          "base_commit": "69c7e01e5167a3137c285cb50d1978252bb8bcbf",
+          "created_at": "2019-09-12T19:27:14+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 9,
+          "modified_files": [
+            "xarray/core/dataset.py",
+            "xarray/core/variable.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-3677",
+          "base_commit": "ef6e6a7b86f8479b9a1fecf15ad5b88a2326b31e",
+          "created_at": "2020-01-09T16:07:14+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 10,
+          "modified_files": [
+            "xarray/core/dataset.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-4687",
+          "base_commit": "d3b6aa6d8b997df115a53c001d00222a0f92f63a",
+          "created_at": "2020-12-13T20:42:40+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 11,
+          "modified_files": [
+            "xarray/core/computation.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-4695",
+          "base_commit": "51ef2a66c4e0896eab7d2b03e3dfb3963e338e3c",
+          "created_at": "2020-12-15T00:30:04+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 12,
+          "modified_files": [
+            "xarray/core/dataarray.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-4966",
+          "base_commit": "37522e991a32ee3c0ad1a5ff8afe8e3eb1885550",
+          "created_at": "2021-02-26T12:05:51+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 13,
+          "modified_files": [
+            "xarray/coding/variables.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-6599",
+          "base_commit": "6bb2b855498b5c68d7cca8cceb710365d58e6048",
+          "created_at": "2022-05-12T15:12:41+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 14,
+          "modified_files": [
+            "xarray/core/computation.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-6721",
+          "base_commit": "cc183652bf6e1273e985e1c4b3cba79c896c1193",
+          "created_at": "2022-06-24T18:45:45+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 15,
+          "modified_files": [
+            "xarray/core/common.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-6744",
+          "base_commit": "7cc6cc991e586a6158bb656b8001234ccda25407",
+          "created_at": "2022-07-02T16:36:00+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 16,
+          "modified_files": [
+            "xarray/core/rolling.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-6938",
+          "base_commit": "c4e40d991c28be51de9ac560ce895ac7f9b14924",
+          "created_at": "2022-08-20T16:45:22+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 17,
+          "modified_files": [
+            "xarray/core/dataset.py",
+            "xarray/core/variable.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-7229",
+          "base_commit": "3aa75c8d00a4a2d4acf10d80f76b937cadb666b7",
+          "created_at": "2022-10-26T21:45:01+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 18,
+          "modified_files": [
+            "xarray/core/computation.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-7233",
+          "base_commit": "51d37d1be95547059251076b3fadaa317750aab3",
+          "created_at": "2022-10-27T23:46:49+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 19,
+          "modified_files": [
+            "xarray/core/rolling.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-7393",
+          "base_commit": "41fef6f1352be994cd90056d47440fe9aa4c068f",
+          "created_at": "2022-12-20T04:34:24+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 20,
+          "modified_files": [
+            "xarray/core/indexing.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-3993",
+          "base_commit": "8cc34cb412ba89ebca12fc84f76a9e452628f1bc",
+          "created_at": "2020-04-21T20:30:35+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 21,
+          "modified_files": [
+            "xarray/core/dataarray.py",
+            "xarray/core/dataset.py"
+          ]
+        },
+        {
+          "instance_id": "pydata__xarray-6992",
+          "base_commit": "45c0a114e2b7b27b83c9618bc05b36afac82183c",
+          "created_at": "2022-09-05T15:07:43+00:00",
+          "difficulty": ">4 hours",
+          "cl_position": 22,
+          "modified_files": [
+            "xarray/core/dataset.py",
+            "xarray/core/indexes.py"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pytest-dev_pytest_sequence",
+      "repo": "pytest-dev/pytest",
+      "tasks": [
+        {
+          "instance_id": "pytest-dev__pytest-5262",
+          "base_commit": "58e6a09db49f34886ff13f3b7520dd0bcd7063cd",
+          "created_at": "2019-05-14T21:54:55+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 1,
+          "modified_files": [
+            "src/_pytest/capture.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-5809",
+          "base_commit": "8aba863a634f40560e25055d179220f0eefabe9a",
+          "created_at": "2019-09-01T04:40:09+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 2,
+          "modified_files": [
+            "src/_pytest/pastebin.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-6202",
+          "base_commit": "3a668ea6ff24b0c8f00498c3144c63bac561d925",
+          "created_at": "2019-11-16T07:45:21+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 3,
+          "modified_files": [
+            "src/_pytest/python.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7205",
+          "base_commit": "5e7f1ab4bf58e473e5d7f878eb2b499d7deabd29",
+          "created_at": "2020-05-09T11:25:58+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 4,
+          "modified_files": [
+            "src/_pytest/setuponly.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7432",
+          "base_commit": "e6e300e729dd33956e5448d8be9a0b1540b4e53a",
+          "created_at": "2020-06-29T21:51:15+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 5,
+          "modified_files": [
+            "src/_pytest/skipping.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7521",
+          "base_commit": "41d211c24a6781843b174379d6d6538f5c17adb9",
+          "created_at": "2020-07-20T15:55:11+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 6,
+          "modified_files": [
+            "src/_pytest/capture.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7982",
+          "base_commit": "a7e38c5c61928033a2dc1915cbee8caa8544a4d0",
+          "created_at": "2020-10-31T12:27:03+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 7,
+          "modified_files": [
+            "src/_pytest/pathlib.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-10081",
+          "base_commit": "da9a2b584eb7a6c7e924b2621ed0ddaeca0a7bea",
+          "created_at": "2022-06-26T13:53:24+00:00",
+          "difficulty": "<15 min fix",
+          "cl_position": 8,
+          "modified_files": [
+            "src/_pytest/unittest.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-5631",
+          "base_commit": "cb828ebe70b4fa35cd5f9a7ee024272237eab351",
+          "created_at": "2019-07-19T20:13:12+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 9,
+          "modified_files": [
+            "src/_pytest/compat.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-5840",
+          "base_commit": "73c5b7f4b11a81e971f7d1bb18072e06a87060f4",
+          "created_at": "2019-09-12T01:09:28+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 10,
+          "modified_files": [
+            "src/_pytest/config/__init__.py",
+            "src/_pytest/pathlib.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7236",
+          "base_commit": "c98bc4cd3d687fe9b392d8eecd905627191d4f06",
+          "created_at": "2020-05-21T19:53:14+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 11,
+          "modified_files": [
+            "src/_pytest/unittest.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7324",
+          "base_commit": "19ad5889353c7f5f2b65cc2acd346b7a9e95dfcd",
+          "created_at": "2020-06-05T13:00:07+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 12,
+          "modified_files": [
+            "src/_pytest/mark/expression.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7490",
+          "base_commit": "7f7a36478abe7dd1fa993b115d22606aa0e35e88",
+          "created_at": "2020-07-13T22:20:10+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 13,
+          "modified_files": [
+            "src/_pytest/skipping.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-7571",
+          "base_commit": "422685d0bdc110547535036c1ff398b5e1c44145",
+          "created_at": "2020-07-29T12:00:47+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 14,
+          "modified_files": [
+            "src/_pytest/logging.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-8399",
+          "base_commit": "6e7dc8bac831cd8cf7a53b08efa366bd84f0c0fe",
+          "created_at": "2021-03-04T17:52:17+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 15,
+          "modified_files": [
+            "src/_pytest/python.py",
+            "src/_pytest/unittest.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-10051",
+          "base_commit": "aa55975c7d3f6c9f6d7f68accc41bb7cadf0eb9a",
+          "created_at": "2022-06-15T17:39:53+00:00",
+          "difficulty": "15 min - 1 hour",
+          "cl_position": 16,
+          "modified_files": [
+            "src/_pytest/logging.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-5787",
+          "base_commit": "955e54221008aba577ecbaefa15679f6777d3bf8",
+          "created_at": "2019-08-26T16:43:31+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 17,
+          "modified_files": [
+            "src/_pytest/reports.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-6197",
+          "base_commit": "e856638ba086fcf5bebf1bebea32d5cf78de87b4",
+          "created_at": "2019-11-15T16:37:22+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 18,
+          "modified_files": [
+            "src/_pytest/python.py"
+          ]
+        },
+        {
+          "instance_id": "pytest-dev__pytest-10356",
+          "base_commit": "3c1534944cbd34e8a41bc9e76818018fadefc9a1",
+          "created_at": "2022-10-08T06:20:42+00:00",
+          "difficulty": "1-4 hours",
+          "cl_position": 19,
+          "modified_files": [
+            "src/_pytest/mark/structures.py"
+          ]
+        }
+      ]
+    }
+  ]
+}

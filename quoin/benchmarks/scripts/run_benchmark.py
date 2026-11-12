@@ -624,7 +624,10 @@ def _resolve_suite_arg(value: str, benchmarks_dir: Path = _BENCHMARKS_DIR) -> Pa
 
 
 def _verified_tasks(tasks: list) -> list:
-    return [t for t in tasks if t.get("source") == "swebench_verified"]
+    """Tasks that run on a prepared repository checkout (Verified and Pro)."""
+    from quoin.benchmarks.harness.sources import is_repo_task
+
+    return [t for t in tasks if is_repo_task(t)]
 
 
 def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
@@ -641,7 +644,7 @@ def _prepare_repos_main(suite_path: Path, tasks: list) -> int:
 
     verified = _verified_tasks(tasks)
     if not verified:
-        print(f"ERROR: {suite_path} has no swebench_verified tasks", file=sys.stderr)
+        print(f"ERROR: {suite_path} has no swebench_verified or swebench_pro tasks", file=sys.stderr)
         return 2
 
     problems: dict = {}
@@ -689,7 +692,7 @@ def _judge_only_main(
     from quoin.benchmarks.scripts.check_invariants import check_invariants
 
     if not _verified_tasks(tasks):
-        print(f"ERROR: {suite_path} has no swebench_verified tasks", file=sys.stderr)
+        print(f"ERROR: {suite_path} has no swebench_verified or swebench_pro tasks", file=sys.stderr)
         return 2
     run_path = run_dir / run_id
     if not run_path.is_dir():
@@ -909,7 +912,7 @@ def _paired_dry_run(args, suite_path: Path, doc: dict) -> int:
     print(f"  auth variable: {'one set' if len(auth_set) == 1 else 'MISSING or ambiguous'}")
     missing = []
     for task in tasks:
-        if task.get("source") != "swebench_verified":
+        if not _verified_tasks([task]):
             continue
         found = repo_prep.pin_ref_status_offline(task)
         if found != task.get("base_commit"):
@@ -987,8 +990,12 @@ class PairedPreflight:
     carried_invalid: list
 
 
-def _judge_prereqs() -> tuple:
-    """Probe docker and the pinned swebench; returns (ok, clause, detail, swebench_version)."""
+def _judge_prereqs(tasks=None) -> tuple:
+    """Probe docker and the pinned swebench; returns (ok, clause, detail, swebench_version).
+
+    swebench judges only Verified tasks; a suite of Pro tasks needs docker alone
+    (its verifier runs in each task's own image).
+    """
     from quoin.benchmarks.harness import judge
 
     try:
@@ -997,6 +1004,8 @@ def _judge_prereqs() -> tuple:
         return (False, "docker", "docker info did not run; use --skip-judge to defer judging", "")
     if docker.returncode != 0:
         return (False, "docker", "docker info failed; use --skip-judge to defer judging", "")
+    if tasks is not None and not any(t.get("source") == "swebench_verified" for t in tasks):
+        return (True, "", "", "not-needed")
     python = os.environ.get(judge.SWEBENCH_PYTHON_ENV) or sys.executable
     try:
         swebench_version = judge.probe_swebench_version(python) or "not installed"
@@ -1077,7 +1086,7 @@ def _paired_preflight(args, suite_path: Path, doc: dict):
 
     swebench_version = "skipped"
     if not args.skip_judge:
-        ok, clause, detail, swebench_version = _judge_prereqs()
+        ok, clause, detail, swebench_version = _judge_prereqs(tasks)
         if not ok:
             return _refuse(clause, detail)
 

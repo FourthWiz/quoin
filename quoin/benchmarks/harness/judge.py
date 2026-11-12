@@ -21,6 +21,7 @@ on re-run given the same upstream harness version (pinned in requirements-bench.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import platform
@@ -34,6 +35,8 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+from .sources import PRO_INSTANCE_ID_RE
 
 
 # ---------------------------------------------------------------------------
@@ -659,6 +662,237 @@ def judge_swebench_verified(
 
 
 # ---------------------------------------------------------------------------
+# SWE-bench Pro judge
+# ---------------------------------------------------------------------------
+
+# Scale's open harness grades a V2 task with its per-task verifier
+# (`v2/tasks/<instance_id>/tests/`) inside the task's public image. The verifier
+# is run unchanged: the judge applies the patch the way Scale's patch-replay
+# re-grader does, then runs `bash /tests/test.sh`, which restores the test
+# files, applies the hidden test patch, runs the selected tests and writes
+# `/logs/verifier/reward.txt` (1 when every fail-to-pass and pass-to-pass test
+# passed). The verifier files are fetched at judge time from a pinned commit
+# and checked against the sha256 values the suite records, so the hidden tests
+# never live in this repository or in an agent's checkout.
+PRO_DATASET = "ScaleAI/SWE-bench_Pro"
+PRO_OS_REPO = "scaleapi/SWE-bench_Pro-os"
+PRO_IMAGE_PREFIX = "ghcr.io/scaleapi/swe-bench_pro-v2:"
+PRO_VERIFIER_FILES = ("test.sh", "run_script.sh", "parser.py", "config.json", "test_patch.patch")
+PRO_VERIFIER_URL = "https://raw.githubusercontent.com/{repo}/{commit}/v2/tasks/{iid}/{path}"
+PRO_VERIFIER_CACHE_ENV = "QUOIN_BENCH_PRO_VERIFIER_CACHE"
+DEFAULT_PRO_VERIFIER_CACHE = "~/.cache/quoin-bench/pro-verifiers"
+DOCKER_ENV = "QUOIN_BENCH_DOCKER"
+# Scale's verifier timeout is 3000 s on native x86; emulation is slower.
+PRO_JUDGE_TIMEOUT_SECONDS = 6000
+_PRO_SOURCE_ID_RE = PRO_INSTANCE_ID_RE
+_PRO_JUDGE_LOCK = threading.Lock()
+# Patch application as in Scale's patch_replay agent; the verifier runs even
+# when nothing applied, so a broken patch grades as unresolved, never skipped.
+# The logs are handed back to the host user afterwards, so a later re-judge can
+# remove them on a host where container root owns bind-mount writes.
+PRO_APPLY_AND_VERIFY = (
+    "mkdir -p /logs/verifier; cd /app 2>/dev/null || cd /testbed; "
+    "{ git apply --verbose /tmp/model.patch || git apply --3way /tmp/model.patch "
+    "|| patch --fuzz=3 -p1 -i /tmp/model.patch; } > /logs/apply.txt 2>&1; "
+    "echo $? > /logs/apply_rc.txt; bash /tests/test.sh; rc=$?; "
+    'chown -R "$HOST_UID:$HOST_GID" /logs 2>/dev/null; exit $rc'
+)
+
+
+class ProVerifierError(RuntimeError):
+    def __init__(self, reason: str, detail: str = ""):
+        self.reason = reason
+        super().__init__(f"{reason}: {detail}" if detail else reason)
+
+
+def _fetch_url(url: str) -> bytes:
+    import urllib.request
+
+    with urllib.request.urlopen(url, timeout=60) as resp:  # noqa: S310 - fixed https host
+        return resp.read()
+
+
+def ensure_pro_verifier(task_spec: dict, cache_root=None, fetch=None, path: str = "tests") -> Path:
+    """The task's pinned verifier directory, fetched once into the cache and hash-checked.
+
+    `path` is "tests" for the verifier; the smoke test also uses "solution" for
+    the reference patch. Raises ProVerifierError.
+    """
+    iid = task_spec.get("source_id", "")
+    pins = task_spec.get("verifier") or {}
+    commit = pins.get("commit", "")
+    files = pins.get(path if path != "tests" else "files") or {}
+    if not _PRO_SOURCE_ID_RE.match(str(iid)) or not re.match(r"^[0-9a-f]{40}$", str(commit)):
+        raise ProVerifierError("verifier-pins-missing", str(iid))
+    if not files:
+        raise ProVerifierError("verifier-pins-missing", f"{iid}: no {path} files pinned")
+    root = Path(cache_root or os.environ.get(PRO_VERIFIER_CACHE_ENV) or DEFAULT_PRO_VERIFIER_CACHE)
+    target = root.expanduser() / commit / iid / path
+    target.mkdir(parents=True, exist_ok=True)
+    fetch = fetch or _fetch_url
+    for name, digest in sorted(files.items()):
+        if "/" in name or name.startswith("."):
+            raise ProVerifierError("verifier-pins-bad", name)
+        dest = target / name
+        if dest.is_file() and hashlib.sha256(dest.read_bytes()).hexdigest() == digest:
+            continue
+        url = PRO_VERIFIER_URL.format(repo=PRO_OS_REPO, commit=commit, iid=iid, path=f"{path}/{name}")
+        try:
+            data = fetch(url)
+        except Exception as exc:
+            raise ProVerifierError("verifier-unavailable", f"{name}: {type(exc).__name__}")
+        if hashlib.sha256(data).hexdigest() != digest:
+            raise ProVerifierError("verifier-hash-mismatch", name)
+        tmp = dest.with_name(dest.name + ".part")
+        tmp.write_bytes(data)
+        os.replace(tmp, dest)
+    return target
+
+
+def build_pro_command(docker: str, image: str, tests_dir, patch_file, logs_dir, name: str,
+                      emulate_x86: bool = False) -> list:
+    for path in (tests_dir, patch_file, logs_dir):
+        if ":" in str(Path(path).resolve()):
+            raise ProVerifierError("judge-path-unsupported", str(path))
+    cmd = [docker, "run", "--rm", "--name", name,
+           "-e", f"HOST_UID={os.getuid()}", "-e", f"HOST_GID={os.getgid()}"]
+    if emulate_x86:
+        cmd += ["--platform", "linux/amd64"]
+    cmd += [
+        "-v", f"{Path(tests_dir).resolve()}:/tests:ro",
+        "-v", f"{Path(patch_file).resolve()}:/tmp/model.patch:ro",
+        "-v", f"{Path(logs_dir).resolve()}:/logs",
+        image, "bash", "-c", PRO_APPLY_AND_VERIFY,
+    ]
+    return cmd
+
+
+def judge_swebench_pro(
+    task_spec: dict,
+    patch_path,
+    run_id: str,
+    evidence_dir,
+    *,
+    cell: Optional[str] = None,
+    run=subprocess.run,
+    docker: Optional[str] = None,
+    timeout: int = PRO_JUDGE_TIMEOUT_SECONDS,
+    emulate_x86: bool = False,
+    verifier_cache=None,
+    fetch=None,
+) -> JudgeResult:
+    """Judge a Pro patch with the task's official verifier; never raises for valid arguments.
+
+    Verdicts map as for Verified: reward 1 is `pass` (resolved), reward 0 is
+    `fail` (unresolved), an empty patch is `fail` without a container, and
+    anything that kept the verifier from reporting is a non-final `error`, so
+    `--judge-only` retries it. With `emulate_x86` the image runs as
+    linux/amd64 (the images are amd64 only).
+    """
+    start = time.monotonic()
+    task_id = task_spec["id"]
+    source_id = task_spec.get("source_id", "")
+    image = task_spec.get("docker_image", "")
+    extra: dict = {"dataset": PRO_DATASET, "docker_image": image}
+    if emulate_x86:
+        extra.update(emulated=True, pull_platform="linux/amd64")
+
+    def done(verdict, reason, final, evidence=None):
+        extra["judge_final"] = final
+        extra["failure_reason"] = None if reason in ("resolved", "unresolved") else reason
+        return JudgeResult(
+            task_id=task_id, source_benchmark="swebench_pro", verdict=verdict,
+            evidence_path=evidence if evidence is not None else reason,
+            judge_runtime_seconds=time.monotonic() - start, extra=dict(extra),
+        )
+
+    if not isinstance(source_id, str) or not _PRO_SOURCE_ID_RE.match(source_id):
+        return done("error", "bad-source-id", False)
+    if image != PRO_IMAGE_PREFIX + source_id:
+        return done("error", "bad-docker-image", False)
+    patch_path = Path(patch_path)
+    try:
+        raw = patch_path.read_bytes()
+    except OSError:
+        return done("error", "patch-file-missing", False)
+    try:
+        patch = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return done("error", "patch-not-utf8", True)
+    if not patch.strip():
+        return done("fail", "empty-patch", True)
+    if not patch.endswith("\n"):
+        patch += "\n"
+
+    try:
+        tests_dir = ensure_pro_verifier(task_spec, verifier_cache, fetch)
+    except ProVerifierError as exc:
+        return done("error", exc.reason, False)
+    except OSError:
+        return done("error", "judge-oserror", False)
+    extra["verifier_commit"] = (task_spec.get("verifier") or {}).get("commit")
+
+    docker = docker or os.environ.get(DOCKER_ENV) or "docker"
+    judge_run_id = re.sub(r"[^A-Za-z0-9_.-]", "_", f"{run_id}-{cell or 'nocell'}-{task_id}")
+    extra["judge_run_id"] = judge_run_id
+    name = "qbench-pro-" + judge_run_id
+    eval_dir = Path(evidence_dir) / "swebench_pro_eval"
+    try:
+        if eval_dir.exists():
+            shutil.rmtree(eval_dir)
+        logs = eval_dir / "logs"
+        logs.mkdir(parents=True)
+        patch_file = eval_dir / "model.patch"
+        patch_file.write_text(patch, encoding="utf-8")
+    except OSError:
+        return done("error", "judge-oserror", False)
+    try:
+        cmd = build_pro_command(docker, image, tests_dir, patch_file, logs, name, emulate_x86)
+    except ProVerifierError as exc:
+        return done("error", exc.reason, False)
+    try:
+        with _PRO_JUDGE_LOCK:
+            # A container left by an interrupted judge would block the fixed name.
+            run([docker, "rm", "-f", name], capture_output=True, text=True, timeout=60)
+            proc = run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired:
+        try:
+            run([docker, "rm", "-f", name], capture_output=True, text=True, timeout=60)
+        except Exception:
+            pass
+        return done("error", "judge-timeout", False)
+    except (FileNotFoundError, PermissionError):
+        return done("error", "docker-unavailable", False)
+    except Exception as exc:
+        extra["exception_type"] = type(exc).__name__
+        return done("error", "judge-exception", False)
+
+    stdout_file = eval_dir / "judge-stdout.txt"
+    try:
+        stdout_file.write_text(_tail(getattr(proc, "stdout", "")), encoding="utf-8")
+        (eval_dir / "judge-stderr.txt").write_text(_tail(getattr(proc, "stderr", "")), encoding="utf-8")
+    except OSError:
+        pass
+    extra["docker_returncode"] = getattr(proc, "returncode", None)
+    try:
+        extra["apply_rc"] = int((logs / "apply_rc.txt").read_text().strip())
+    except (OSError, ValueError):
+        extra["apply_rc"] = None
+    output = logs / "verifier" / "output.json"
+    evidence = str(output if output.is_file() else stdout_file)
+    try:
+        reward = (logs / "verifier" / "reward.txt").read_text().strip()
+    except OSError:
+        reward = None
+    if reward == "1":
+        return done("pass", "resolved", True, evidence=evidence)
+    if reward == "0":
+        return done("fail", "unresolved", True, evidence=evidence)
+    return done("error", "docker-run-failed" if extra["docker_returncode"] == 125
+                else "verifier-no-reward", False, evidence=evidence)
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -684,6 +918,12 @@ def judge_task(
     flags the cell recorded (e.g. workflow-artifact evidence). Every
     pre-existing branch here ignores it.
     """
+    if task_spec is not None and task_spec.get("source") == "swebench_pro":
+        ctx = judge_context or {}
+        return judge_swebench_pro(
+            task_spec, Path(task_dir) / "diff.patch", run_id, evidence_dir or task_dir,
+            cell=ctx.get("cell"), emulate_x86=bool(ctx.get("emulate_x86", False)),
+        )
     if task_spec is not None and task_spec.get("source") == "swebench_verified":
         ctx = judge_context or {}
         return judge_swebench_verified(

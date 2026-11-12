@@ -108,13 +108,16 @@ def test_session_env_is_exactly_the_allowlist(tmp_path, cell, with_sandbox):
     assert sb.session_env_keys(env) == sorted(expected)
 
 
-@pytest.mark.parametrize("route,profile", [("lean", "bench-lean"), ("hard", None), ("", None)])
+@pytest.mark.parametrize("route,profile", [
+    ("lean", "bench-lean"), ("memory", "bench-memory"), ("hard", None), ("", None),
+])
 def test_lean_route_sets_run_profile_for_the_quoin_arm_only(route, profile):
     environ = dict(OPERATOR_ENV, QUOIN_BENCH_QUOIN_ROUTE=route, QUOIN_RUN_PROFILE="leak")
     quoin_env = sb.build_session_env(None, "quoin-claude", "r", AUTH, environ=environ)
     plain_env = sb.build_session_env(None, "simple-claude", "r", AUTH, environ=environ)
     assert quoin_env.get("QUOIN_RUN_PROFILE") == profile
-    assert quoin_env.get("QUOIN_DISCOVERY_REFRESH_DISABLE") == ("1" if profile else None)
+    # Only lean skips discovery; the memory route keeps the hook's refresh banner.
+    assert quoin_env.get("QUOIN_DISCOVERY_REFRESH_DISABLE") == ("1" if route == "lean" else None)
     assert "QUOIN_RUN_PROFILE" not in plain_env
     assert "QUOIN_BENCH_QUOIN_ROUTE" not in quoin_env
 

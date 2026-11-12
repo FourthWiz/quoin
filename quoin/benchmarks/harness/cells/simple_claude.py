@@ -37,6 +37,7 @@ from typing import Optional
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
 from ..config import BudgetSpec
+from ..sources import REPO_TASK_SOURCES
 from ..cost import estimate_session_cost, load_pricing
 
 # One table for every model the benchmark touches. The top-level session runs
@@ -254,6 +255,10 @@ def _build_prompt(task_spec: dict) -> str:
         from ..verified_prompt import build_verified_prompt
 
         return build_verified_prompt(task_spec)
+    elif source == "swebench_pro":
+        from ..pro_prompt import build_pro_prompt
+
+        return build_pro_prompt(task_spec)
     elif source == "quoin_scenario":
         # The suite entry's `description` is the scenario's Prompt verbatim
         # plus the fixture's concretely-named target subsystem (T-06, D-05).
@@ -698,7 +703,7 @@ def invoke(
         # .git/config (fsmonitor, filters) and would run it under the
         # operator's environment. Verified rows are scored from the
         # harness-owned capture_patch() bytes instead, so skip it there.
-        if task_spec.get("source") != "swebench_verified":
+        if task_spec.get("source") not in REPO_TASK_SOURCES:
             try:
                 diff_proc = subprocess.run(
                     ["git", "diff", "HEAD"],

@@ -56,7 +56,9 @@ from typing import Optional
 
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
-from ..config import LEAN_RUN_PROFILE, RUN_PROFILE_ENV, BudgetSpec, quoin_route_or_default
+from .. import sequence_memory
+from ..config import RUN_PROFILE_ENV, BudgetSpec, quoin_route_or_default, run_profile_for_route
+from ..sources import REPO_TASK_SOURCES
 from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
@@ -91,7 +93,8 @@ ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 # prefix defers to /run's own routing rather than forcing every step. Setting
 # QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
 # `small:` (one plan pass, implement, review), as the earlier suites did, and
-# =lean keeps this prompt but sets QUOIN_RUN_PROFILE=bench-lean for the session.
+# =lean and =memory keep this prompt but set QUOIN_RUN_PROFILE=bench-lean or
+# bench-memory for the session.
 QUOIN_RUN_PREFIX = (
     "/run --autonomous "
     "This session benchmarks the quoin workflow, so the task must go through /run: "
@@ -370,6 +373,7 @@ def invoke(
     run_output_dir: Optional[Path] = None,
     session_env: Optional[dict] = None,
     arm_identity=None,
+    memory_seed_dir: Optional[Path] = None,
 ) -> dict:
     """
     Invoke Claude Code with the full Quoin workflow.
@@ -481,6 +485,8 @@ def invoke(
         workdir, quoin_install_script,
         quoin_install_mode=quoin_install_mode, arm_root=resolved_arm_root,
     )
+    # Sequence suites: the previous task's workflow memory, after the reset.
+    seeded_memory = sequence_memory.seed_workdir(workdir, memory_seed_dir)
 
     result["extra"].update({
         "quoin_install_script": str(quoin_install_script),
@@ -489,6 +495,7 @@ def invoke(
         "install_ok": install_result["ok"],
         "install_reason": install_result["reason"],
         "install_returncode": install_result["returncode"],
+        "memory_seed_files": len(seeded_memory),
     })
 
     # Hard-fail paths: each returns BEFORE subprocess.Popen so no tokens are
@@ -542,8 +549,9 @@ def invoke(
 
     # Build subprocess environment with gate auto-approve
     env = dict(session_env) if session_env is not None else os.environ.copy()
-    if session_env is None and quoin_route_or_default() == "lean":
-        env[RUN_PROFILE_ENV] = LEAN_RUN_PROFILE
+    profile = run_profile_for_route(quoin_route_or_default())
+    if session_env is None and profile:
+        env[RUN_PROFILE_ENV] = profile
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
 
@@ -813,7 +821,7 @@ def invoke(
         # .git/config (fsmonitor, filters) and would run it under the
         # operator's environment. Verified rows are scored from the
         # harness-owned capture_patch() bytes instead, so skip it there.
-        if task_spec.get("source") != "swebench_verified":
+        if task_spec.get("source") not in REPO_TASK_SOURCES:
             try:
                 diff_proc = subprocess.run(
                     ["git", "diff", "HEAD"],
