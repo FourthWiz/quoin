@@ -154,3 +154,28 @@ def test_description_intent_doc_and_quickstart_mention_the_direct_route():
     assert "direct fix" in description and "direct:/light:" in description
     assert "direct route" in INTENT and "`direct:` and `light:`" in INTENT
     assert "`direct:` or `light:`" in QUICKSTART
+
+
+def test_escalation_switches_to_run_hard_once_unless_opted_out():
+    esc = _section("## Escalation")
+    assert "switch to `run_hard` through the switch procedure in the light pipeline file" in esc
+    assert "`NO_SWITCH`" in esc and "pipeline-switch.md" in esc
+    assert "at most once" in esc
+    step0 = _section("## Step 0 — Route")
+    assert "`no-switch:`" in step0 and "QUOIN_RUN_AUTO_SWITCH=0" in step0
+    # The switch note outranks run_hard's run-state and autonomous markers on resume.
+    assert step0.index("pipeline-switch.md") < step0.index("run-state-<task>.json")
+    assert "`[from-hard]`" in step0
+
+
+def test_switch_procedure_asks_once_and_keeps_the_work():
+    switch = " ".join(_raw_section("## Switch to run_hard", LIGHT).split())
+    for option in ("Switch to run_hard", "Continue as is", "Stop"):
+        assert '"%s"' % option in switch
+    assert "`AUTONOMOUS`, switch without asking" in switch
+    assert "`from: light`" in switch and "`to: hard`" in switch
+    assert "No reset, stash or commit of the partial diff" in switch
+    assert "Keep the claim" in switch and "`[from-light] <task>`" in switch
+    # The Step 4b confirm only offers the switch when Escalation allows it.
+    decompose = " ".join(_raw_section("## Step 4b — Decompose", LIGHT).split())
+    assert "When Escalation does not allow switching" in decompose
