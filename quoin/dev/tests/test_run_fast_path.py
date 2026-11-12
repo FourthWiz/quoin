@@ -1117,3 +1117,25 @@ def test_core_review_doc_documents_shape_override_and_large_carveout(run_skill_t
     for token in ("opus", "sonnet", "haiku"):
         assert token not in core_doc.lower()
 
+
+def test_light_handoff_check_is_small_or_medium_and_once(run_skill_text: str) -> None:
+    section = " ".join(_phase_1_6_section(run_skill_text).split())
+    assert "**Light hand-off check.**" in section
+    assert "Small or Medium" in section
+    for guard in ("`NO_SWITCH`", "`FROM_LIGHT`", "pipeline-switch.md"):
+        assert guard in section
+    assert '"Hand off to light /run"' in section and '"Continue in run_hard"' in section
+    assert "`from: hard`, `to: light`" in section and "`[from-hard] <task>`" in section
+    # A failed check keeps the Medium silent no-op contract.
+    assert "silent no-op mode" in section and "no prompt, no artifact" in section
+    # An autonomous hand-off clears its continuation state so the Stop hook stops resuming it.
+    assert "autonomous-run-<task>.marker" in section and "run-continue-arm-" in section
+
+
+def test_handoff_from_light_reuses_brief_and_resume_reads_switch_note(run_skill_text: str) -> None:
+    flat = " ".join(run_skill_text.split())
+    setup = flat[flat.index("### Pipeline switch from light `/run`"):flat.index("### Determine task name")]
+    assert "never as Small" in setup and "copy the light `brief.md`" in setup
+    assert "partial diff stays" in setup and "`worktree:`" in setup
+    resume = flat[flat.index("## Resume If invoked"):]
+    assert resume.index("pipeline-switch.md") < resume.index("autonomous-run-{task}.marker")

@@ -20,6 +20,34 @@ staged: continue at the first stage still marked ⏳, from the first step of
 that stage whose output under `stage-N/` is missing.
 **`stage N of <task>`** works the same way but runs only stage N.
 
+## Switch to run_hard
+
+Used by Escalation in SKILL.md once a trigger fires and switching is allowed.
+
+1. **Ask once** (interactive, one AskUserQuestion): "Switch to run_hard"
+   (recommended; keeps the brief, context pack and diff), "Continue as is"
+   (stay on the light pipeline and record the choice under Assumptions; failing
+   code is still never committed, so a verification trigger ends with a report
+   instead) or "Stop" (the Escalation stop). Under `AUTONOMOUS`, switch without
+   asking and add the trigger and reason under Assumptions in the brief.
+2. **Write `.workflow_artifacts/<task>/pipeline-switch.md`**: lines
+   `from: light`, `to: hard`, `trigger: <review-blocker | verification |
+   stages>`, `reason: <one line>`, `mode: <interactive | autonomous>`,
+   `worktree: <WT, or none>`, `branch: <task branch>`, and `reuse:` listing
+   whichever of `brief.md`, `context.md`, `review.md` exist, and `claim:
+   <repo>`. Add
+   `switched: to hard — <trigger>` to the brief's `## Size` section.
+3. **Keep the work.** No reset, stash or commit of the partial diff; stages
+   already committed stay. A staged task renames, with
+   `python3 __QUOIN_HOME__/scripts/fsops.py mv`, `architecture.md` to
+   `light-architecture.md` and each `stage-N/` to `light-stage-N/`, so
+   run_hard's architect starts clean and can read them.
+4. **Keep the claim.** run_hard continues the run in this session and releases
+   it when it ends, so no other run builds on the partial diff. It works in
+   `WT`; the worktree and branch stay.
+5. **Hand over.** Invoke the `run_hard` skill with `[from-light] <task>`, plus
+   `--autonomous` under `AUTONOMOUS`, and stop: run_hard owns the task from here.
+
 ## Step 2 — Discover (subagent, conditional)
 
 Discovery memory is refreshed when it is missing, older than 7 days
@@ -64,7 +92,9 @@ route: light
 reason: <the one-line reason from Step 1b>
 ```
 
-This replaces `/enrich` and `/specify` on the light path. Restate the request
+This replaces `/enrich` and `/specify` on the light path. A `[from-hard]` task
+restates the switch note's `evidence:` file; its Size reason is `handed off from
+run_hard`. Restate the request
 precisely; do not invent requirements.
 
 **Shape.** Decide whether the task is one change or several. Choose **staged**
@@ -139,7 +169,9 @@ with several consumers), stop and escalate instead (see Escalation).
 
 **Confirm.** Interactive: show the stage list and ask once (`AskUserQuestion`):
 proceed with these stages, run it as a single change instead, or switch to
-`/run hard:`. Apply edits the user asks for. Under `AUTONOMOUS`, proceed and
+`run_hard` (the switch procedure above, with no second question). When
+Escalation does not allow switching (`NO_SWITCH`, or `pipeline-switch.md`
+exists), the third option is stop and recommend `/run hard:` instead. Apply edits the user asks for. Under `AUTONOMOUS`, proceed and
 note the decomposition under Assumptions in the brief.
 
 **Implementer tier guard, per stage.** Apply the guard per stage: one Opus

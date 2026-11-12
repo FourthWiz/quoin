@@ -110,11 +110,18 @@ task); markers change no behaviour and are never committed.
 
 ## Escalation
 
-Recommend `run_hard` when the review finds a design-level problem, two
-implementation attempts fail for unclear reasons, or the task needs more
-than five stages or a stage needs its own design work. Spanning several
-repositories alone is handled by the staged path. Never switch
-automatically.
+The task outgrows the light pipeline when the review finds a design-level
+problem, two implementation attempts fail for unclear reasons, or the task
+needs more than five stages or a stage needs its own design work. Spanning
+several repositories alone is handled by the staged path. On a trigger the
+run hands the task to `run_hard` itself: interactive runs ask once (switch,
+continue as is, or stop); autonomous runs switch and record why in the
+brief. The hand-off writes `pipeline-switch.md` at the task root and keeps
+the brief, context pack, review notes, completed stages and the partial
+diff (no reset or stash); the worktree and branch stay and `run_hard`
+works in them. A `no-switch:` tag or `QUOIN_RUN_AUTO_SWITCH=0` keeps the
+older behaviour: stop and recommend `run_hard`. A task switches pipelines
+at most once; a resume follows the switch note's direction.
 
 ## Artifacts
 
