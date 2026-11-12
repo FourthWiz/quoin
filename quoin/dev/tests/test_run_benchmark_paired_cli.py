@@ -472,6 +472,16 @@ def test_judge_prereqs_success(monkeypatch):
     assert run_benchmark._judge_prereqs() == (True, "", "", judge.SWEBENCH_PINNED_VERSION)
 
 
+def test_judge_prereqs_skip_swebench_only_for_suites_without_verified_tasks(monkeypatch):
+    _run_stub(monkeypatch, 0)
+    probed = []
+    monkeypatch.setattr(judge, "probe_swebench_version", lambda *a, **k: probed.append(1) or "0.0.1")
+    pro, verified = {"source": "swebench_pro"}, {"source": "swebench_verified"}
+    assert run_benchmark._judge_prereqs([pro]) == (True, "", "", "not-needed") and probed == []
+    for tasks in ([verified], [pro, verified]):
+        assert run_benchmark._judge_prereqs(tasks)[:2] == (False, "swebench")
+
+
 def test_build_parser_resolves_spend_ledger_to_an_absolute_path():
     args = run_benchmark.build_parser().parse_args(["--run-id", "R", "--spend-ledger", "rel/ledger.jsonl"])
     assert args.spend_ledger.is_absolute()

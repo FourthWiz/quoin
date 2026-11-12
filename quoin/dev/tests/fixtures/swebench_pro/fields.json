@@ -1,0 +1,6 @@
+{
+ "instance_id": "instance_ansible__ansible-83fb24b923064d3576d473747ebbe62e4535c9e3-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+ "problem_statement": "## Title Support multiple destination ports in iptables rules\n\n## Description\nThe Ansible iptables module does not provide a way to specify multiple destination ports in a single rule. Users must create separate rules for each port, which makes configurations more complex and less efficient.\nThere should be a parameter that accepts a list of destination ports or port ranges and generates an iptables multiport match so multiple ports can be targeted in one rule. This should work for the `tcp`, `udp`, `udplite`, `dccp`, and `sctp` protocols.",
+ "requirements": "- Add a `destination_ports` parameter that accepts a list of ports or port ranges and defaults to an empty list.\n\n- When `destination_ports` is non-empty, use `append_match` and `append_csv` to generate `-m multiport --dports <comma-separated-ports>`.\n\n- Place the multiport arguments after `-j <jump>` and before `-i <in_interface>` in the generated iptables command.\n\n- The `destination_ports` parameter is valid only with the `tcp`, `udp`, `udplite`, `dccp`, and `sctp` protocols.",
+ "interface": "No new interfaces are introduced"
+}

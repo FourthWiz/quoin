@@ -772,6 +772,285 @@ def refresh_cl_snapshot(cl_file, revision, fetched_on, snapshot_path) -> None:
     print(f"Wrote {snapshot_path} ({snap['task_count']} tasks)")
 
 
+# pro-balanced: SWE-bench Pro V2 (ScaleAI/SWE-bench_Pro, default config), Python
+# rows only, in three tiers by reference patch size (changed lines, tertiles over
+# the Python rows). The vendored snapshot holds ids, commits and sizes; the
+# problems file holds the agent-visible text of the selected tasks; the
+# verifiers file pins, by commit and sha256, the per-task verifier files the
+# judge fetches. Hidden tests are never vendored.
+PRO_DATASET = "ScaleAI/SWE-bench_Pro"
+PRO_SOURCE_FILE = "data/default/test-00000-of-00001.parquet"
+PRO_OS_REPO = "scaleapi/SWE-bench_Pro-os"
+PRO_IMAGE_PREFIX = "ghcr.io/scaleapi/swe-bench_pro-v2:"
+PRO_SUITE = "pro-balanced"
+PRO_LANGUAGE = "python"
+PRO_SNAPSHOT_FIELDS = [
+    "instance_id", "repo", "base_commit", "repo_language", "patch_lines", "patch_files", "hard",
+]
+PRO_VERIFIER_FILES = ("test.sh", "run_script.sh", "parser.py", "config.json", "test_patch.patch")
+DEFAULT_PRO_SNAPSHOT_PATH = _DATA_DIR / "swebench-pro-snapshot.json"
+DEFAULT_PRO_PROBLEMS_PATH = _DATA_DIR / "swebench-pro-problems.json"
+DEFAULT_PRO_VERIFIERS_PATH = _DATA_DIR / "swebench-pro-verifiers.json"
+# Same pattern as harness/sources.py; this script also runs standalone.
+_PRO_INSTANCE_ID = re.compile(
+    r"^instance_[A-Za-z0-9_.-]+__[A-Za-z0-9_.-]+-[0-9a-f]{40}(?:-v(?:[0-9a-f]{40}|nan))?$"
+)
+
+# Same cap and wall clock as tiered-balanced. No Pro session cost has been
+# observed yet; the wall clock is derived from the cap (1.5 x cap / slowest
+# observed spend rate), so a larger task meets the cap before the clock.
+PRO_WALL_CLOCK_SECONDS = TIERED_BALANCED_WALL_CLOCK_SECONDS
+PRO_SPEC = {
+    "small": {"n": 10, "sub_seed_offset": 301, "tokens": TIERED_SMALL_SPEC["medium"]},
+    "medium": {"n": 15, "sub_seed_offset": 302, "tokens": TIERED_SMALL_SPEC["large"]},
+    "large": {"n": 15, "sub_seed_offset": 303, "tokens": TIERED_SMALL_SPEC["large"]},
+}
+PRO_COST = dict(TIERED_BALANCED_COST)
+PRO_REVIEW = dict(TIERED_BALANCED_REVIEW)
+
+
+def patch_size(patch: str) -> tuple:
+    """(changed lines, files) of a unified diff, headers excluded."""
+    lines = files = 0
+    for line in patch.splitlines():
+        if line.startswith("diff --git"):
+            files += 1
+        elif line.startswith(("+++", "---")):
+            continue
+        elif line.startswith(("+", "-")):
+            lines += 1
+    return lines, files
+
+
+def load_pro_snapshot(path) -> dict:
+    path = Path(path)
+    try:
+        snap = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise TieredSuiteError(f"cannot read Pro snapshot {path}: {exc}")
+    for key in ("dataset", "revision", "source_file_sha256", "row_count", "rows"):
+        if key not in snap:
+            raise TieredSuiteError(f"Pro snapshot {path} is missing '{key}'")
+    if not _SHA40.match(str(snap["revision"])):
+        raise TieredSuiteError("Pro snapshot revision is not a 40-hex commit SHA")
+    rows = snap["rows"]
+    if snap["row_count"] != len(rows):
+        raise TieredSuiteError(f"Pro snapshot row_count {snap['row_count']} != {len(rows)} rows")
+    for r in rows:
+        if sorted(r.keys()) != sorted(PRO_SNAPSHOT_FIELDS):
+            raise TieredSuiteError(f"Pro row {r.get('instance_id')!r} must have exactly {PRO_SNAPSHOT_FIELDS}")
+        if not _PRO_INSTANCE_ID.match(str(r["instance_id"])) or not _SHA40.match(str(r["base_commit"])):
+            raise TieredSuiteError(f"Pro row {r.get('instance_id')!r} is malformed")
+        if not _REPO_NAME.match(r["repo"]) or r["repo_language"] != PRO_LANGUAGE:
+            raise TieredSuiteError(f"Pro row {r['instance_id']} has a bad repo or language")
+    ids = [r["instance_id"] for r in rows]
+    if ids != sorted(set(ids)):
+        raise TieredSuiteError("Pro snapshot rows must be sorted and unique by instance_id")
+    return snap
+
+
+def pro_tier_bands(rows) -> dict:
+    """Tier -> sorted ids: tertiles of the rows ordered by (patch lines, id)."""
+    ordered = sorted(rows, key=lambda r: (r["patch_lines"], r["instance_id"]))
+    n = len(ordered)
+    cuts = [0, n // 3, (2 * n) // 3, n]
+    return {
+        tier: sorted(r["instance_id"] for r in ordered[cuts[i]:cuts[i + 1]])
+        for i, tier in enumerate(PRO_SPEC)
+    }
+
+
+def select_pro(rows, seed: int) -> dict:
+    bands = pro_tier_bands(rows)
+    chosen = {}
+    for tier, spec in PRO_SPEC.items():
+        pool = bands[tier]
+        if len(pool) < spec["n"]:
+            raise TieredSuiteError(f"Pro tier {tier} needs {spec['n']} rows, has {len(pool)}")
+        shuffled = list(pool)
+        random.Random(seed + spec["sub_seed_offset"]).shuffle(shuffled)
+        chosen[tier] = sorted(shuffled[: spec["n"]])
+    return chosen
+
+
+def pro_selected_ids(snapshot_path, seed: int) -> list:
+    chosen = select_pro(load_pro_snapshot(snapshot_path)["rows"], seed)
+    return [iid for ids in chosen.values() for iid in ids]
+
+
+def build_pro_suite(snapshot_path, problems_path, verifiers_path, seed: int) -> dict:
+    snapshot_path, problems_path, verifiers_path = map(Path, (snapshot_path, problems_path, verifiers_path))
+    snap = load_pro_snapshot(snapshot_path)
+    try:
+        problems_doc = json.loads(problems_path.read_text(encoding="utf-8"))
+        verifiers_doc = json.loads(verifiers_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise TieredSuiteError(f"cannot read Pro problems or verifiers: {exc}")
+    if problems_doc.get("revision") != snap["revision"]:
+        raise TieredSuiteError("Pro problems revision does not match the snapshot")
+    problems = problems_doc.get("problems") or {}
+    verifiers = verifiers_doc.get("tasks") or {}
+    commit = verifiers_doc.get("commit", "")
+    if not _SHA40.match(str(commit)):
+        raise TieredSuiteError("Pro verifiers file has no 40-hex commit")
+    chosen = select_pro(snap["rows"], seed)
+    selected = {iid for ids in chosen.values() for iid in ids}
+    for name, have in (("problems", set(problems)), ("verifiers", set(verifiers))):
+        if have != selected:
+            raise TieredSuiteError(
+                f"Pro {name} file does not match the selection (missing: {sorted(selected - have)};"
+                f" extra: {sorted(have - selected)}); run --refresh-pro-snapshot"
+            )
+    by_id = {r["instance_id"]: r for r in snap["rows"]}
+    tasks = []
+    for tier, spec in PRO_SPEC.items():
+        for rank, iid in enumerate(chosen[tier]):
+            row, text, ver = by_id[iid], problems[iid], verifiers[iid]
+            if sorted(ver.get("files", {})) != sorted(PRO_VERIFIER_FILES):
+                raise TieredSuiteError(f"{iid}: verifier pins must cover {PRO_VERIFIER_FILES}")
+            tasks.append({
+                "id": f"pro_{tier}_{rank:03d}",
+                "tier": tier,
+                "source": "swebench_pro",
+                "source_id": iid,
+                "repo": row["repo"],
+                "base_commit": row["base_commit"],
+                "repo_language": row["repo_language"],
+                "patch_lines": row["patch_lines"],
+                "patch_files": row["patch_files"],
+                "docker_image": PRO_IMAGE_PREFIX + iid,
+                "verifier": {"commit": commit, "files": ver["files"], "solution": ver.get("solution", {})},
+                "est_tokens_in": spec["tokens"]["est_tokens_in"],
+                "est_tokens_out": spec["tokens"]["est_tokens_out"],
+                "wall_clock_seconds": PRO_WALL_CLOCK_SECONDS,
+                "description": text["problem_statement"],
+                "requirements": text["requirements"],
+                "interface": text["interface"],
+            })
+    bands = pro_tier_bands(snap["rows"])
+    tiered = {
+        "dataset": PRO_DATASET,
+        "dataset_revision": snap["revision"],
+        "split": "test",
+        "snapshot_file": "quoin/benchmarks/data/" + snapshot_path.name,
+        "snapshot_sha256": hashlib.sha256(snapshot_path.read_bytes()).hexdigest(),
+        "seed": seed,
+        "sub_seeds": {t: s["sub_seed_offset"] for t, s in PRO_SPEC.items()},
+        "prompt_template_version": "pro-v1",
+        "worst_case_target_usd": PRO_COST["worst_case_target_usd"],
+        "worst_case_ceiling_usd": PRO_COST["worst_case_ceiling_usd"],
+        "documented_cap_usd": PRO_COST["documented_cap_usd"],
+        "requires_budget_cap": True,
+        "paired_run": True,
+        "pilot_tier": "small",
+        "tiers": {
+            t: {
+                "label": "patch lines %d-%d" % (
+                    min(by_id[i]["patch_lines"] for i in bands[t]),
+                    max(by_id[i]["patch_lines"] for i in bands[t])),
+                "n": s["n"],
+                "wall_clock_seconds": PRO_WALL_CLOCK_SECONDS,
+                "est_tokens_in": s["tokens"]["est_tokens_in"],
+                "est_tokens_out": s["tokens"]["est_tokens_out"],
+            }
+            for t, s in PRO_SPEC.items()
+        },
+        "problems_file": "quoin/benchmarks/data/" + problems_path.name,
+        "problems_sha256": hashlib.sha256(problems_path.read_bytes()).hexdigest(),
+        "verifiers_file": "quoin/benchmarks/data/" + verifiers_path.name,
+        "verifiers_sha256": hashlib.sha256(verifiers_path.read_bytes()).hexdigest(),
+        "verifier_repo": PRO_OS_REPO,
+        "verifier_commit": commit,
+    }
+    tiered.update(PRO_REVIEW)
+    return {
+        "schema_version": 2,
+        "description": (
+            f"Quoin benchmark {PRO_SUITE} task suite: {len(tasks)} SWE-bench Pro (V2) Python"
+            " instances in three tiers by reference patch size (small, medium, large)."
+            f" Generated deterministically via pick_subset.py --suite {PRO_SUITE} --seed {seed}"
+            " from vendored snapshots. Do not edit manually; regenerate from pick_subset.py."
+        ),
+        "generated_by": "quoin/benchmarks/scripts/pick_subset.py",
+        "seed": seed,
+        "provenance_file": "quoin/benchmarks/suite-pro-balanced-provenance.md",
+        "tiered": tiered,
+        "tasks": tasks,
+    }
+
+
+def _read_pro_parquet(parquet_file):
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:
+        print("ERROR: --refresh-pro-snapshot needs pyarrow", file=sys.stderr)
+        sys.exit(2)
+    raw = Path(parquet_file).read_bytes()
+    cols = ["instance_id", "repo", "base_commit", "repo_language", "patch", "hard",
+            "problem_statement", "requirements", "interface", "docker_image"]
+    try:
+        data = pq.read_table(str(parquet_file), columns=cols).to_pydict()
+    except Exception as exc:
+        raise TieredSuiteError(f"cannot read required columns from {parquet_file}: {exc}")
+    return [dict(zip(cols, vals)) for vals in zip(*(data[c] for c in cols))], raw
+
+
+def refresh_pro_snapshot(parquet_file, revision, os_dir, os_commit, fetched_on, seed,
+                         snapshot_path, problems_path, verifiers_path) -> None:
+    """Rewrite the Pro snapshot, problems and verifiers files from the pinned sources.
+
+    `os_dir` is a checkout of scaleapi/SWE-bench_Pro-os at `os_commit` holding
+    at least the selected tasks' `v2/tasks/<id>/` directories.
+    """
+    rows, raw = _read_pro_parquet(parquet_file)
+    kept = []
+    for r in rows:
+        if r["repo_language"] != PRO_LANGUAGE:
+            continue
+        if r["docker_image"] != PRO_IMAGE_PREFIX + r["instance_id"]:
+            raise TieredSuiteError(f"unexpected docker_image for {r['instance_id']}")
+        lines, files = patch_size(r["patch"])
+        kept.append({"instance_id": r["instance_id"], "repo": r["repo"], "base_commit": r["base_commit"],
+                     "repo_language": r["repo_language"], "patch_lines": lines, "patch_files": files,
+                     "hard": bool(r["hard"])})
+    kept.sort(key=lambda r: r["instance_id"])
+    snap = {
+        "dataset": PRO_DATASET, "config": "default", "revision": revision, "split": "test",
+        "source_file": PRO_SOURCE_FILE, "source_file_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_file_size": len(raw), "fetched_on": fetched_on,
+        "generated_by": "quoin/benchmarks/scripts/pick_subset.py --refresh-pro-snapshot",
+        "language_counts": {k: v for k, v in sorted(collections.Counter(r["repo_language"] for r in rows).items())},
+        "fields": list(PRO_SNAPSHOT_FIELDS), "row_count": len(kept), "rows": kept,
+    }
+    selected = select_pro(kept, seed)
+    ids = sorted(i for v in selected.values() for i in v)
+    by_id = {r["instance_id"]: r for r in rows}
+    problems = {"dataset": PRO_DATASET, "revision": revision,
+                "fields": ["problem_statement", "requirements", "interface"],
+                "note": "verbatim upstream agent-visible text for the selected instances only",
+                "problems": {i: {k: by_id[i][k] for k in ("problem_statement", "requirements", "interface")}
+                             for i in ids}}
+    tasks = {}
+    for iid in ids:
+        task_dir = Path(os_dir) / "v2" / "tasks" / iid
+        files = {}
+        for name in PRO_VERIFIER_FILES:
+            path = task_dir / "tests" / name
+            if not path.is_file():
+                raise TieredSuiteError(f"{iid}: missing tests/{name} in {os_dir}")
+            files[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+        gold = task_dir / "solution" / "gold_patch.diff"
+        tasks[iid] = {"files": files}
+        if gold.is_file():
+            tasks[iid]["solution"] = {"gold_patch.diff": hashlib.sha256(gold.read_bytes()).hexdigest()}
+    verifiers = {"repo": PRO_OS_REPO, "commit": os_commit,
+                 "note": "sha256 of each task's verifier files; the judge fetches and checks them",
+                 "tasks": tasks}
+    for path, doc in ((snapshot_path, snap), (problems_path, problems), (verifiers_path, verifiers)):
+        _write_text(path, render_suite(doc))
+        print(f"Wrote {path}")
+
+
 def snapshot_from_rows(
     rows, *, revision, source_file, source_sha256, source_size, fetched_on
 ) -> dict:
@@ -941,9 +1220,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--suite",
-        choices=sorted(list(TIERED_SUITES) + [CL_SUITE]),
+        choices=sorted(list(TIERED_SUITES) + [CL_SUITE, PRO_SUITE]),
         default=None,
-        help="Generate a tiered suite from the vendored SWE-bench Verified snapshot (default: v1)",
+        help="Generate a tiered suite from vendored snapshots (Verified, CL sequences or Pro; default: v1)",
     )
     parser.add_argument(
         "--snapshot",
@@ -979,6 +1258,15 @@ def main(argv: list[str] | None = None) -> None:
         help="Maintainer mode: rebuild the vendored CL snapshot from SWE-Bench-CL-Curriculum.json",
     )
     parser.add_argument("--cl-file", type=Path, default=None)
+    parser.add_argument(
+        "--refresh-pro-snapshot",
+        action="store_true",
+        help="Maintainer mode: rebuild the vendored SWE-bench Pro files (--parquet-file, --revision,"
+             " --pro-os-dir, --pro-os-commit)",
+    )
+    parser.add_argument("--pro-os-dir", type=Path, default=None,
+                        help="Checkout of scaleapi/SWE-bench_Pro-os holding the selected task dirs")
+    parser.add_argument("--pro-os-commit", default=None)
     parser.add_argument("--parquet-file", type=Path, default=None)
     parser.add_argument("--revision", default=None)
     parser.add_argument("--fetched-on", default=None, help="YYYY-MM-DD (default: today, UTC)")
@@ -998,6 +1286,22 @@ def main(argv: list[str] | None = None) -> None:
         fetched_on = args.fetched_on or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
         try:
             refresh_cl_snapshot(args.cl_file, args.revision, fetched_on, args.cl_snapshot)
+        except (TieredSuiteError, OSError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        return
+
+    if args.refresh_pro_snapshot:
+        if (args.parquet_file is None or args.pro_os_dir is None
+                or not _SHA40.match(args.revision or "") or not _SHA40.match(args.pro_os_commit or "")):
+            print("ERROR: --refresh-pro-snapshot requires --parquet-file, --pro-os-dir and 40-character"
+                  " --revision and --pro-os-commit", file=sys.stderr)
+            sys.exit(2)
+        fetched_on = args.fetched_on or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        try:
+            refresh_pro_snapshot(args.parquet_file, args.revision, args.pro_os_dir, args.pro_os_commit,
+                                 fetched_on, args.seed, DEFAULT_PRO_SNAPSHOT_PATH,
+                                 DEFAULT_PRO_PROBLEMS_PATH, DEFAULT_PRO_VERIFIERS_PATH)
         except (TieredSuiteError, OSError) as exc:
             print(f"ERROR: {exc}", file=sys.stderr)
             sys.exit(2)
@@ -1041,7 +1345,14 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(2)
         return
 
-    if args.suite == CL_SUITE:
+    if args.suite == PRO_SUITE:
+        try:
+            suite = build_pro_suite(DEFAULT_PRO_SNAPSHOT_PATH, DEFAULT_PRO_PROBLEMS_PATH,
+                                    DEFAULT_PRO_VERIFIERS_PATH, args.seed)
+        except TieredSuiteError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+    elif args.suite == CL_SUITE:
         try:
             suite = build_cl_suite(
                 args.cl_snapshot, args.snapshot, args.problems or DEFAULT_PROBLEMS_PATH_CL, args.seed,

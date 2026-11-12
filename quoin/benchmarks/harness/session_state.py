@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
+from .sources import REPO_TASK_SOURCES
+
 PRECEDENCE = ["timeout", "budget_halt", "session_error"]
 SYNTHETIC_MODEL = "<synthetic>"
 AUTH_TEXT = "Not logged in"
@@ -189,7 +191,7 @@ def pipeline_rule_applies(cell: str, task_dir) -> bool:
     if cell != QUOIN_CELL:
         return False
     session = read_session_json(task_dir)
-    return bool(session) and session.get("source") == "swebench_verified"
+    return bool(session) and session.get("source") in REPO_TASK_SOURCES
 
 
 def pipeline_invalid_reason(cell: str, task_dir, metrics: Optional[dict]) -> Optional[str]:

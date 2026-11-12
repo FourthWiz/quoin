@@ -58,6 +58,7 @@ from .. import proc_group
 from ..arm_identity import InitIdentityCheck
 from .. import sequence_memory
 from ..config import RUN_PROFILE_ENV, BudgetSpec, quoin_route_or_default, run_profile_for_route
+from ..sources import REPO_TASK_SOURCES
 from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
@@ -820,7 +821,7 @@ def invoke(
         # .git/config (fsmonitor, filters) and would run it under the
         # operator's environment. Verified rows are scored from the
         # harness-owned capture_patch() bytes instead, so skip it there.
-        if task_spec.get("source") != "swebench_verified":
+        if task_spec.get("source") not in REPO_TASK_SOURCES:
             try:
                 diff_proc = subprocess.run(
                     ["git", "diff", "HEAD"],

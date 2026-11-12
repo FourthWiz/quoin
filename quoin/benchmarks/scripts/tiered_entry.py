@@ -535,17 +535,20 @@ def print_parity_next_steps(verdict: Verdict) -> None:
 
 # --- judging ----------------------------------------------------------------
 
-def judge_possible(args) -> tuple:
+def judge_possible(args, tasks=None) -> tuple:
     """(can judge here, reason it cannot)."""
     from quoin.benchmarks.harness import judge
 
     if args.skip_judge:
         return False, "--skip-judge"
-    ok, clause, detail, _version = _rb()._judge_prereqs()
+    ok, clause, detail, _version = _rb()._judge_prereqs(tasks)
     if not ok:
         return False, f"{clause}: {detail}"
     x86 = platform.machine().lower() in {"x86_64", "amd64"}
-    if x86 or os.environ.get(judge.SWEBENCH_NAMESPACE_ENV) == "" or args.judge_emulation:
+    # A local swebench image build helps only Verified; Pro images are amd64 only.
+    local_build = os.environ.get(judge.SWEBENCH_NAMESPACE_ENV) == "" and (
+        tasks is None or any(t.get("source") == "swebench_verified" for t in tasks))
+    if x86 or local_build or args.judge_emulation:
         return True, ""
     return False, "arm64 host without local image build or --judge-emulation"
 
@@ -703,7 +706,7 @@ def _emulate_x86(res: Resolved) -> bool:
 def _judge_pending_or_defer(res: Resolved) -> int:
     rb = _rb()
     pending = pending_rows(res)
-    ok, why = judge_possible(res.args)
+    ok, why = judge_possible(res.args, res.tasks)
     rc = 0
     if pending and ok:
         rc = rb._judge_only_main(
@@ -770,7 +773,7 @@ def orchestrate(args, confirmed: Optional[float] = None) -> int:
             return 2
         print("prepare: done")
 
-    judge_ok, why = judge_possible(args)
+    judge_ok, why = judge_possible(args, res.tasks)
     # The estimate needs only the spawn count; judging was probed just above, and the
     # full leg's own preflight checks it again before anything is spent.
     pre = rb._paired_preflight(leg_namespace(res, skip_judge=True), res.suite_path, res.doc)
@@ -823,7 +826,7 @@ def orchestrate(args, confirmed: Optional[float] = None) -> int:
 
     if in_pilot:
         # The pilot can take long enough for the daemon to go away, so look again.
-        judge_ok, why = judge_possible(args)
+        judge_ok, why = judge_possible(args, res.tasks)
     judged = False
     if remaining:
         print(f"full: {remaining} sessions")

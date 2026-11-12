@@ -37,6 +37,7 @@ from .isolation import create_task_worktree, cleanup_task_worktree
 from .judge import judge_task
 from .repo_prep import RepoPrepError, capture_patch, cleanup_task_repo, prepare_task_repo
 from . import sequence_memory
+from .sources import VERIFIED_SOURCE, is_repo_task
 from .result_writer import (
     CellResult,
     RunResult,
@@ -53,6 +54,7 @@ from .session_state import (
     pipeline_validity,
     write_session_json,
 )
+from .pro_prompt import PRO_PROMPT_TEMPLATE_VERSION
 from .verified_prompt import VERIFIED_PROMPT_TEMPLATE_VERSION
 
 # Terminal verdicts a cell can report on its own invocation result. When the
@@ -270,7 +272,7 @@ def run_one_task(
         )
 
     adapter = _load_cell_adapter(cell)
-    if task_spec.get("source") == "swebench_verified":
+    if is_repo_task(task_spec):
         return _run_one_verified_task(cell, task_spec, run_id, config, adapter, t_dir)
     budget = config.budget
 
@@ -427,10 +429,16 @@ def _suite_dataset_revision(suite_path) -> Optional[str]:
     return value if isinstance(value, str) else None
 
 
-def _verified_result(cell, task_id, run_id, **fields) -> RunResult:
+def _prompt_template_version(task_spec: dict) -> str:
+    if task_spec.get("source") == "swebench_pro":
+        return PRO_PROMPT_TEMPLATE_VERSION
+    return VERIFIED_PROMPT_TEMPLATE_VERSION
+
+
+def _verified_result(cell, task_id, run_id, source=VERIFIED_SOURCE, **fields) -> RunResult:
     return RunResult(
         cell=cell, task_id=task_id, run_id=run_id,
-        source_benchmark="swebench_verified", **fields,
+        source_benchmark=source, **fields,
     )
 
 
@@ -465,7 +473,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
     except Exception as e:
         reason = e.reason if isinstance(e, RepoPrepError) else "unexpected-" + type(e).__name__
         result = _verified_result(
-            cell, task_id, run_id,
+            cell, task_id, run_id, source=task_spec["source"],
             verdict="error",
             evidence_path=f"repo-prep: {reason}",
             transcript_events=[{
@@ -490,7 +498,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             )
             cleanup_task_repo(prepared.path)
             result = _verified_result(
-                cell, task_id, run_id,
+                cell, task_id, run_id, source=task_spec["source"],
                 verdict="error",
                 evidence_path=f"arm identity: {reason}",
                 transcript_events=[{
@@ -612,7 +620,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             "task_id": task_id,
             "cell": cell,
             "run_id": run_id,
-            "source": "swebench_verified",
+            "source": task_spec["source"],
             "source_id": task_spec.get("source_id"),
             "base_commit": task_spec.get("base_commit"),
             "tree_sha": prepared.tree_sha,
@@ -632,7 +640,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             "clone_cleanup_failed": cleanup_note,
             "cost_runtime_usd": inv.get("cost_runtime_usd"),
             "wall_clock_seconds": elapsed,
-            "prompt_template_version": VERIFIED_PROMPT_TEMPLATE_VERSION,
+            "prompt_template_version": _prompt_template_version(task_spec),
         })
         session_written = True
 
@@ -679,7 +687,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
             judge_extra = {"judge_final": True, "judged": False}
 
         result = _verified_result(
-            cell, task_id, run_id,
+            cell, task_id, run_id, source=task_spec["source"],
             transcript_events=events_so_far,
             verdict=verdict,
             evidence_path=evidence,
@@ -712,7 +720,7 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
                 pass
         extra["failure_reason"] = "harness-exception-" + type(exc).__name__
         result = _verified_result(
-            cell, task_id, run_id,
+            cell, task_id, run_id, source=task_spec["source"],
             verdict="error",
             evidence_path=str(exc),
             transcript_events=events_so_far,
@@ -753,7 +761,7 @@ def judge_pending_rows(
     judge=None,
     emulate_x86: bool = False,
 ) -> list:
-    """Re-judge Verified rows whose session was recorded but whose verdict is not final."""
+    """Re-judge Verified and Pro rows whose session was recorded but whose verdict is not final."""
     judge = judge if judge is not None else judge_task
     base = Path(run_dir) / run_id
     rows = []
@@ -761,7 +769,7 @@ def judge_pending_rows(
         return rows
     for cell_dir in sorted(p for p in base.iterdir() if p.is_dir()):
         for spec in suite_tasks:
-            if spec.get("source") != "swebench_verified":
+            if not is_repo_task(spec):
                 continue
             t_dir = cell_dir / spec["id"]
             if not t_dir.is_dir() or not is_judge_pending(t_dir):
@@ -781,7 +789,7 @@ def judge_pending_rows(
                              "judge_final": False, "error": type(exc).__name__})
                 continue
             write_judge_json(
-                t_dir, spec["id"], "swebench_verified", judged.verdict,
+                t_dir, spec["id"], spec["source"], judged.verdict,
                 judged.evidence_path, judged.judge_runtime_seconds, judged.extra,
             )
             rows.append({

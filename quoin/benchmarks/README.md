@@ -710,6 +710,35 @@ and memory minus plain with a sign test; and per task what memory the memory
 arm inherited and how many lessons it wrote. It reads no model and costs
 nothing. `multi_run_report.py` still compares repeats of one route.
 
+### SWE-bench Pro suite: larger tasks
+
+Verified fixes are mostly single-file. `suite-pro-balanced.json` holds 40
+Python tasks from SWE-bench Pro V2 (Scale AI; ansible, openlibrary,
+qutebrowser) in three tiers by reference patch size: 10 small (22-49 changed
+lines), 15 medium (50-104), 15 large (104 and up, median across Pro Python
+69 lines over 3 files). Provenance, the task list and the budget are in
+`suite-pro-balanced-provenance.md`. Repo preparation is the Verified one
+(`source: swebench_pro`); the prompt is Scale's standard instruction (problem
+statement, requirements, new interfaces; template `pro-v1`); the judge runs
+the task's official verifier in its public image, fetched at judge time from a
+pinned harness commit and hash-checked. It needs Docker, not swebench; the
+images are amd64 only, so pass `--judge-emulation` on an arm64 host, and allow
+about 1.25 GB of Docker disk per task.
+
+```bash
+quoin bench tiered --suite pro-balanced --run-id pro-r1 --judge-emulation
+RUNS=.workflow_artifacts/quoin-benchmarks/runs
+python3 quoin/benchmarks/scripts/multi_run_report.py $RUNS/pro-r1 --json pro-r1.json
+```
+
+Worst case $2,800 (40 tasks x 2 arms x $35, ceiling $3,170; small-tier pilot
+$700). No Pro session has been costed yet; assuming quoin sessions near the
+tiered-balanced large tier ($6 to $11) and plain about $1, expect roughly $300
+to $480 per run. `QUOIN_BENCH_QUOIN_ROUTE`, `--tiers` and `--repeat` work as
+on the Verified suites. A live judge check of one real instance (reference
+patch passes, empty patch fails) runs with
+`QUOIN_BENCH_PRO_LIVE=1 python3 -m pytest quoin/dev/tests/test_swebench_pro.py -k live`.
+
 ### What each arm sees
 
 Each arm runs in its own throwaway sandbox with an empty `HOME`, its own

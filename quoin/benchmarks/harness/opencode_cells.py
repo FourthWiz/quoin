@@ -559,7 +559,7 @@ def invoke_opencode(
     # Provenance first, so even a refused run carries what was configured.
     version = _runtime_version(binary, env)
     extra["provenance"] = build_provenance(cell, workdir, env, version)
-    if task_spec.get("source") == "swebench_verified":
+    if task_spec.get("source") in ("swebench_verified", "swebench_pro"):
         return refuse("verified-tasks-unsupported")
     missing = missing_pairing_inputs(env)
     if missing:

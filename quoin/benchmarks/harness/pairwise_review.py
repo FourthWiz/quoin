@@ -27,6 +27,16 @@ from typing import Optional, Protocol, Tuple
 from . import arm_sandbox, paired_spend, patch_size, proc_group
 from .session_state import pipeline_invalid_reason
 
+
+def _issue_text(task: dict) -> str:
+    """What the arms were asked to do; Pro tasks add requirements and interfaces."""
+    if task.get("source") == "swebench_pro" and task.get("requirements"):
+        from .pro_prompt import render_instruction
+
+        return render_instruction(task.get("description") or "", task["requirements"],
+                                  task.get("interface") or "")
+    return task.get("description") or ""
+
 PROMPT_VERSION = "pairwise-v1"
 DEFAULT_SEED = 1729
 STATE_FILE = "pairwise-review.json"
@@ -423,7 +433,7 @@ def _run_locked(run_path, suite, reviewer, ledger, run_id, seed, model, effort, 
             _write_state(run_path, state)
             continue
         patch_a, patch_b = (quoin_text, plain_text) if is_a else (plain_text, quoin_text)
-        prompt = build_prompt(task.get("description") or "", patch_a, patch_b)
+        prompt = build_prompt(_issue_text(task), patch_a, patch_b)
         if len(prompt) > MAX_PROMPT_CHARS:
             records[task_id] = dict(base, status="skipped", reason="patch-too-large", prompt_chars=len(prompt))
             _write_state(run_path, state)

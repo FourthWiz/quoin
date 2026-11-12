@@ -256,7 +256,7 @@ def invoke(
         # .git/config (fsmonitor, filters) and would run it under the
         # operator's environment. Verified rows are scored from the
         # harness-owned capture_patch() bytes instead, so skip it there.
-        if task_spec.get("source") != "swebench_verified":
+        if task_spec.get("source") not in ("swebench_verified", "swebench_pro"):
             try:
                 diff_proc = subprocess.run(
                     ["git", "diff", "HEAD"],

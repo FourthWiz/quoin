@@ -1,0 +1,6 @@
+{
+ "tests": [
+  {"name": "test/units/example/test_module.py::TestExample::test_new_behaviour", "status": "PASSED"},
+  {"name": "test/units/example/test_module.py::TestExample::test_existing_behaviour", "status": "PASSED"}
+ ]
+}

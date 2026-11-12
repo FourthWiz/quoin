@@ -1276,7 +1276,7 @@ def test_review_hint_is_absent_after_an_interrupt(tw, capsys):
 
 def test_review_hint_is_absent_while_judging_is_pending(tw, capsys):
     w = tw
-    w["monkeypatch"].setattr(tiered_entry, "judge_possible", lambda args: (False, "no docker"))
+    w["monkeypatch"].setattr(tiered_entry, "judge_possible", lambda args, tasks=None: (False, "no docker"))
     assert _go(w, "--yes") == 0
     out = capsys.readouterr().out
     assert "judge: deferred" in out and HINT not in out

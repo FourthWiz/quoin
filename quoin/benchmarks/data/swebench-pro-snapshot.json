@@ -1,0 +1,2162 @@
+{
+  "dataset": "ScaleAI/SWE-bench_Pro",
+  "config": "default",
+  "revision": "2d52cb3df914a3fcf80c7f66738b3a88ae37fc50",
+  "split": "test",
+  "source_file": "data/default/test-00000-of-00001.parquet",
+  "source_file_sha256": "1067f72c1f43bbc578276888625db3b836cebb535546c9eaf824c5d5dd104a7f",
+  "source_file_size": 6511689,
+  "fetched_on": "2026-11-12",
+  "generated_by": "quoin/benchmarks/scripts/pick_subset.py --refresh-pro-snapshot",
+  "language_counts": {
+    "go": 256,
+    "js": 145,
+    "python": 237,
+    "ts": 4
+  },
+  "fields": [
+    "instance_id",
+    "repo",
+    "base_commit",
+    "repo_language",
+    "patch_lines",
+    "patch_files",
+    "hard"
+  ],
+  "row_count": 237,
+  "rows": [
+    {
+      "instance_id": "instance_ansible__ansible-0ea40e09d1b35bcb69ff4d9cecf3d0defa4b36e8-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "f7234968d241d7171aadb1e873a67510753f3163",
+      "repo_language": "python",
+      "patch_lines": 32,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-0fd88717c953b92ed8a50495d55e630eb5d59166-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "016b7f71b10539c90ddbb3246f19f9cbf0e65428",
+      "repo_language": "python",
+      "patch_lines": 108,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-106909db8b730480615f4a33de0eb5b710944e78-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "3fffddc18305f4d910774b57bc90e14456e7a15b",
+      "repo_language": "python",
+      "patch_lines": 26,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-11c1777d56664b1acb56b387a1ad6aeadef1391d-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "e1daaae42af1a4e465edbdad4bb3c6dd7e7110d5",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-12734fa21c08a0ce8c84e533abdc560db2eb1955-v7eee2454f617569fd6889f2211f75bc02a35f9f8",
+      "repo": "ansible/ansible",
+      "base_commit": "de01db08d00c8d2438e1ba5989c313ba16a145b0",
+      "repo_language": "python",
+      "patch_lines": 26,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-164881d871964aa64e0f911d03ae270acbad253c-v390e508d27db7a51eece36bb6d9698b63a5b638a",
+      "repo": "ansible/ansible",
+      "base_commit": "e80f8048ee027ab0c7c8b5912fb6c69c44fb877a",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-185d41031660a676c43fbb781cd1335902024bfe-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "a7c8093ce49145966c3af21e40fad9ee8912d297",
+      "repo_language": "python",
+      "patch_lines": 70,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-189fcb37f973f0b1d52b555728208eeb9a6fce83-v906c969b551b346ef54a2c0b41e04f632b7b73c2",
+      "repo": "ansible/ansible",
+      "base_commit": "bc6cd138740bd927b5c52c3b9c18c7812179835e",
+      "repo_language": "python",
+      "patch_lines": 266,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-1bd7dcf339dd8b6c50bc16670be2448a206f4fdb-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "20ef733ee02ba688757998404c1926381356b031",
+      "repo_language": "python",
+      "patch_lines": 137,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-1c06c46cc14324df35ac4f39a45fb3ccd602195d-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "6198c7377f545207218fe8eb2e3cfa9673ff8f5e",
+      "repo_language": "python",
+      "patch_lines": 71,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-1ee70fc272aff6bf3415357c6e13c5de5b928d9b-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "9281148b623d4e2e8302778d91af3e84ab9579a9",
+      "repo_language": "python",
+      "patch_lines": 63,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-29aea9ff3466e4cd2ed00524b9e56738d568ce8b-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "270f109bb3af5c2498725b384f77ddc26da2fb73",
+      "repo_language": "python",
+      "patch_lines": 61,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-34db57a47f875d11c4068567b9ec7ace174ec4cf-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "d63a71e3f83fc23defb97393367859634881b8da",
+      "repo_language": "python",
+      "patch_lines": 29,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-379058e10f3dbc0fdcaf80394bd09b18927e7d33-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "e658995760ac1209cb12df97027a2e282b4536ae",
+      "repo_language": "python",
+      "patch_lines": 81,
+      "patch_files": 11,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-3889ddeb4b780ab4bac9ca2e75f8c1991bcabe83-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "d5a740ddca57ed344d1d023383d4aff563657424",
+      "repo_language": "python",
+      "patch_lines": 61,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-395e5e20fab9cad517243372fa3c3c5d9e09ab2a-v7eee2454f617569fd6889f2211f75bc02a35f9f8",
+      "repo": "ansible/ansible",
+      "base_commit": "cd64e0b070f8630e1dcc021e594ed42ea7afe304",
+      "repo_language": "python",
+      "patch_lines": 295,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-39bd8b99ec8c6624207bf3556ac7f9626dad9173-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "8502c2302871e35e59fb7092b4b01b937c934031",
+      "repo_language": "python",
+      "patch_lines": 99,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-3b823d908e8a5d17674f8c26d337d3114b7493b1-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "92df66480613d0f3c1f11ab27146e3162d2a5bd5",
+      "repo_language": "python",
+      "patch_lines": 45,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-3db08adbb1cc6aa9941be5e0fc810132c6e1fa4b-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "709484969c8a4ffd74b839a673431a8c5caa6457",
+      "repo_language": "python",
+      "patch_lines": 46,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-40ade1f84b8bb10a63576b0ac320c13f57c87d34-v6382ea168a93d80a64aab1fbd8c4f02dc5ada5bf",
+      "repo": "ansible/ansible",
+      "base_commit": "9ab63986ad528a6ad5bf4c59fe104d5106d6ef9b",
+      "repo_language": "python",
+      "patch_lines": 653,
+      "patch_files": 2,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-415e08c2970757472314e515cb63a51ad825c45e-v7eee2454f617569fd6889f2211f75bc02a35f9f8",
+      "repo": "ansible/ansible",
+      "base_commit": "f05bcf569367904985c0e5796a4c14ce0b7d4be9",
+      "repo_language": "python",
+      "patch_lines": 72,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-42355d181a11b51ebfc56f6f4b3d9c74e01cb13b-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "fafb23094e77a619066a92a7fa99a7045292e473",
+      "repo_language": "python",
+      "patch_lines": 89,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-489156378c8e97374a75a544c7c9c2c0dd8146d1-v390e508d27db7a51eece36bb6d9698b63a5b638a",
+      "repo": "ansible/ansible",
+      "base_commit": "5ee81338fcf7adbc1a8eda26dd8105a07825cb08",
+      "repo_language": "python",
+      "patch_lines": 90,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5260527c4a71bfed99d803e687dd19619423b134-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "bf98f031f3f5af31a2d78dc2f0a58fe92ebae0bb",
+      "repo_language": "python",
+      "patch_lines": 105,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5640093f1ca63fd6af231cc8a7fb7d40e1907b8c-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "a5a13246ce02fd4c4ce997627b4f42152e59d288",
+      "repo_language": "python",
+      "patch_lines": 31,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5c225dc0f5bfa677addeac100a8018df3f3a9db1-v173091e2e36d38c978002990795f66cfc0af30ad",
+      "repo": "ansible/ansible",
+      "base_commit": "d7fbb209b403e782c6e2b7883a106e6dca15b330",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5d253a13807e884b7ce0b6b57a963a45e2f0322c-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "14e7f05318ddc421330209eece0e891d0eaef10d",
+      "repo_language": "python",
+      "patch_lines": 122,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5e369604e1930b1a2e071fecd7ec5276ebd12cb1-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "0fae2383dafba38cdd0f02bcc4da1b89f414bf93",
+      "repo_language": "python",
+      "patch_lines": 94,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5e88cd9972f10b66dd97e1ee684c910c6a2dd25e-v906c969b551b346ef54a2c0b41e04f632b7b73c2",
+      "repo": "ansible/ansible",
+      "base_commit": "5fa2d29c9a06baa8cc5d271c41e23b1f99b3814a",
+      "repo_language": "python",
+      "patch_lines": 200,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-5f4e332e3762999d94af27746db29ff1729252c1-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "a870e7d0c6368dbc4c8f1f088f540e8be07223e1",
+      "repo_language": "python",
+      "patch_lines": 52,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-622a493ae03bd5e5cf517d336fc426e9d12208c7-v906c969b551b346ef54a2c0b41e04f632b7b73c2",
+      "repo": "ansible/ansible",
+      "base_commit": "f4502a8f1ce71d88cc90f4b4f6c2899943441ebf",
+      "repo_language": "python",
+      "patch_lines": 270,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-6cc97447aac5816745278f3735af128afb255c81-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "e094d48b1bdd93cbc189f416543e810c19b2e561",
+      "repo_language": "python",
+      "patch_lines": 83,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-709484969c8a4ffd74b839a673431a8c5caa6457-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "35809806d3ab5d66fbb9696dc6a0009383e50673",
+      "repo_language": "python",
+      "patch_lines": 88,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-748f534312f2073a25a87871f5bd05882891b8c4-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "68e270d4cc2579e4659ed53aecbc5a3358b85985",
+      "repo_language": "python",
+      "patch_lines": 88,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-77658704217d5f166404fc67997203c25381cb6e-v390e508d27db7a51eece36bb6d9698b63a5b638a",
+      "repo": "ansible/ansible",
+      "base_commit": "db2d5b09eff918e981c9e10787a5f2c500d1784f",
+      "repo_language": "python",
+      "patch_lines": 148,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-7e1a347695c7987ae56ef1b6919156d9254010ad-v390e508d27db7a51eece36bb6d9698b63a5b638a",
+      "repo": "ansible/ansible",
+      "base_commit": "20ec92728004bc94729ffc08cbc483b7496c0c1f",
+      "repo_language": "python",
+      "patch_lines": 328,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-8127abbc298cabf04aaa89a478fc5e5e3432a6fc-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "3684b4824d367f866d038c5373f975503580d49e",
+      "repo_language": "python",
+      "patch_lines": 241,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-83fb24b923064d3576d473747ebbe62e4535c9e3-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "0044091a055dd9cd448f7639a65b7e8cc3dacbf1",
+      "repo_language": "python",
+      "patch_lines": 22,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-9142be2f6cabbe6597c9254c5bb9186d17036d55-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "7fff4086523678f3c6533da4c500f86f6fb47efa",
+      "repo_language": "python",
+      "patch_lines": 81,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-935528e22e5283ee3f63a8772830d3d01f55ed8c-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "43300e22798e4c9bd8ec2e321d28c5e8d2018aeb",
+      "repo_language": "python",
+      "patch_lines": 259,
+      "patch_files": 8,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-942424e10b2095a173dbd78e7128f52f7995849b-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "dd44449b6ec454a46426a020608fe3763287101f",
+      "repo_language": "python",
+      "patch_lines": 163,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-949c503f2ef4b2c5d668af0492a5c0db1ab86140-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "375d3889de9f437bc120ade623c170198629375d",
+      "repo_language": "python",
+      "patch_lines": 230,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-9759e0ca494de1fd5fc2df2c5d11c57adbe6007c-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "fce22529c4f5a7293f12979e7cb45f5ed9f6e9f7",
+      "repo_language": "python",
+      "patch_lines": 102,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-984216f52e76b904e5b0fa0fb956ab4f1e0a7751-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "d79b23910a1a16931885c5b3056179e72e0e6466",
+      "repo_language": "python",
+      "patch_lines": 286,
+      "patch_files": 8,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-9a21e247786ebd294dafafca1105fcd770ff46c6-v67cdaa49f89b34e42b69d5b7830b3c3ad3d8803f",
+      "repo": "ansible/ansible",
+      "base_commit": "4c8c40fd3d4a58defdc80e7d22aa8d26b731353e",
+      "repo_language": "python",
+      "patch_lines": 63,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-a02e22e902a69aeb465f16bf03f7f5a91b2cb828-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "813c25eed1e4832a8ae363455a2f40bb3de33c7f",
+      "repo_language": "python",
+      "patch_lines": 35,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-a1569ea4ca6af5480cf0b7b3135f5e12add28a44-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "f10d11bcdc54c9b7edc0111eb38c59a88e396d0a",
+      "repo_language": "python",
+      "patch_lines": 59,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-a20a52701402a12f91396549df04ac55809f68e9-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "8c044b846d1ea9e2a9c8870b1eaf6db3775e8e2c",
+      "repo_language": "python",
+      "patch_lines": 50,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-a6e671db25381ed111bbad0ab3e7d97366395d05-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "1f59bbf4f39504c8f2087f8132f2475a6ac38dcb",
+      "repo_language": "python",
+      "patch_lines": 30,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-a7d2a4e03209cff1e97e59fd54bb2b05fdbdbec6-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "38067860e271ce2f68d6d5d743d70286e5209623",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-b2a289dcbb702003377221e25f62c8a3608f0e89-v173091e2e36d38c978002990795f66cfc0af30ad",
+      "repo": "ansible/ansible",
+      "base_commit": "6382ea168a93d80a64aab1fbd8c4f02dc5ada5bf",
+      "repo_language": "python",
+      "patch_lines": 110,
+      "patch_files": 9,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-b748edea457a4576847a10275678127895d2f02f-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "08da8f49b83adec1427abb350d734e6c0569410e",
+      "repo_language": "python",
+      "patch_lines": 269,
+      "patch_files": 5,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-be2c376ab87e3e872ca21697508f12c6909cf85a-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "034e9b0252b9aafe27804ba72320ad99b3344090",
+      "repo_language": "python",
+      "patch_lines": 59,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-be59caa59bf47ca78a4760eb7ff38568372a8260-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "98726ad86c27b4cbd607f7be97ae0f56461fcc03",
+      "repo_language": "python",
+      "patch_lines": 35,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-bec27fb4c0a40c5f8bbcf26a475704227d65ee73-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "6d34eb88d95c02013d781a29dfffaaf2901cd81f",
+      "repo_language": "python",
+      "patch_lines": 467,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-bf98f031f3f5af31a2d78dc2f0a58fe92ebae0bb-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "17332532973343248297e3d3c746738d1f3b2f56",
+      "repo_language": "python",
+      "patch_lines": 108,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-c1f2df47538b884a43320f53e787197793b105e8-v906c969b551b346ef54a2c0b41e04f632b7b73c2",
+      "repo": "ansible/ansible",
+      "base_commit": "57596edcca0ef3bc4d0d90a55d33ac433b407abb",
+      "repo_language": "python",
+      "patch_lines": 553,
+      "patch_files": 1,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-c616e54a6e23fa5616a1d56d243f69576164ef9b-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "b479adddce8fe46a2df5469f130cf7b6ad70fdc4",
+      "repo_language": "python",
+      "patch_lines": 2028,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-cd473dfb2fdbc97acf3293c134b21cbbcfa89ec3-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "e8ae7211dabbd07093f50d6dfb383da3bb14f13d",
+      "repo_language": "python",
+      "patch_lines": 37,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-cd9c4eb5a6b2bfaf4a6709f001ce3d0c92c1eed2-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "585ef6c55e87c10c1ce7d59ebe9c33dd6dbe5afb",
+      "repo_language": "python",
+      "patch_lines": 28,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d2f80991180337e2be23d6883064a67dcbaeb662-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "f9a450551de47ac2b9d1d7e66a103cbf8f05c37f",
+      "repo_language": "python",
+      "patch_lines": 310,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d30fc6c0b359f631130b0e979d9a78a7b3747d48-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "a58fcde3a0d7a93c363ae7af4e6ee03001b96d82",
+      "repo_language": "python",
+      "patch_lines": 117,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d33bedc48fdd933b5abd65a77c081876298e2f07-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "dcc5dac1846be3bf6e948a2950b93477b9193076",
+      "repo_language": "python",
+      "patch_lines": 285,
+      "patch_files": 7,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d58e69c82d7edd0583dd8e78d76b075c33c3151e-v173091e2e36d38c978002990795f66cfc0af30ad",
+      "repo": "ansible/ansible",
+      "base_commit": "a6e671db25381ed111bbad0ab3e7d97366395d05",
+      "repo_language": "python",
+      "patch_lines": 136,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d62496fe416623e88b90139dc7917080cb04ce70-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "df29852f3a48160e1a60635692c202531dd8b14a",
+      "repo_language": "python",
+      "patch_lines": 35,
+      "patch_files": 3,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d6d2251929c84c3aa883bad7db0f19cc9ff0339e-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "02e00aba3fd7b646a4f6d6af72159c2b366536bf",
+      "repo_language": "python",
+      "patch_lines": 36,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d72025be751c894673ba85caa063d835a0ad3a8c-v390e508d27db7a51eece36bb6d9698b63a5b638a",
+      "repo": "ansible/ansible",
+      "base_commit": "ea164fdde79a3e624c28f90c74f57f06360d2333",
+      "repo_language": "python",
+      "patch_lines": 294,
+      "patch_files": 5,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-d9f1866249756efc264b00ff7497e92c11a9885f-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "59ca05b70994b07a9507f61a0871146a4991b262",
+      "repo_language": "python",
+      "patch_lines": 28,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-de01db08d00c8d2438e1ba5989c313ba16a145b0-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "fc8197e32675dd0343939f107b5f017993e36f62",
+      "repo_language": "python",
+      "patch_lines": 51,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-de5858f48dc9e1ce9117034e0d7e76806f420ca8-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "a1730af91f94552e8aaff4bedfb8dcae00bd284d",
+      "repo_language": "python",
+      "patch_lines": 254,
+      "patch_files": 4,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-e0c91af45fa9af575d10fd3e724ebc59d2b2d6ac-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "5d15af3a9563271615fa1d0f5a99a175bfe41a9f",
+      "repo_language": "python",
+      "patch_lines": 78,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-e22e103cdf8edc56ff7d9b848a58f94f1471a263-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "a77dbf08663e002198d0fa2af502d5cde8009454",
+      "repo_language": "python",
+      "patch_lines": 30,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-e64c6c1ca50d7d26a8e7747d8eb87642e767cd74-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "a0aad17912da687a3b0b5a573ab6ed0394b569ad",
+      "repo_language": "python",
+      "patch_lines": 28,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-e9e6001263f51103e96e58ad382660df0f3d0e39-v30a923fb5c164d6cd18280c02422f75e611e8fb2",
+      "repo": "ansible/ansible",
+      "base_commit": "bddb9a7490b5e9475d0d01a8d906332e81789cde",
+      "repo_language": "python",
+      "patch_lines": 96,
+      "patch_files": 2,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_ansible__ansible-ea04e0048dbb3b63f876aad7020e1de8eee9f362-v1055803c3a812189a1133297f7f5468579283f86",
+      "repo": "ansible/ansible",
+      "base_commit": "341a6be78d7fc1701b0b120fc9df1c913a12948c",
+      "repo_language": "python",
+      "patch_lines": 83,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-ecea15c508f0e081525be036cf76bbb56dbcdd9d-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "01e7915b0a9778a934a0f0e9e9d110dbef7e31ec",
+      "repo_language": "python",
+      "patch_lines": 182,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-ed6581e4db2f1bec5a772213c3e186081adc162d-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "c819c1725de510fb41e8bdc38e68c2ac1df81ced",
+      "repo_language": "python",
+      "patch_lines": 44,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-eea46a0d1b99a6dadedbb6a3502d599235fa7ec3-v390e508d27db7a51eece36bb6d9698b63a5b638a",
+      "repo": "ansible/ansible",
+      "base_commit": "07e7b69c04116f598ed2376616cbb46343d9a0e9",
+      "repo_language": "python",
+      "patch_lines": 501,
+      "patch_files": 9,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-f327e65d11bb905ed9f15996024f857a95592629-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "f533d46572113655a0a698beab4b38671744a458",
+      "repo_language": "python",
+      "patch_lines": 61,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-f86c58e2d235d8b96029d102c71ee2dfafd57997-v0f01c69f1e2528b935359cfe578530722bca2c59",
+      "repo": "ansible/ansible",
+      "base_commit": "3398c102b5c41d48d0cbc2d81f9c004f07ac3fcb",
+      "repo_language": "python",
+      "patch_lines": 88,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-f8ef34672b961a95ec7282643679492862c688ec-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "e889b1063f60f6b99f5d031f7e903f7be5f58900",
+      "repo_language": "python",
+      "patch_lines": 52,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_ansible__ansible-fb144c44144f8bd3542e71f5db62b6d322c7bd85-vba6da65a0f3baefda7a058ebbd0a8dcafb8512f5",
+      "repo": "ansible/ansible",
+      "base_commit": "662d34b9a7a1b3ab1d4847eeaef201a005826aef",
+      "repo_language": "python",
+      "patch_lines": 67,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-00bec1e7c8f3272c469a58e1377df03f955ed478-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "02f647f7d525286b6e3a661133c3772649e585cd",
+      "repo_language": "python",
+      "patch_lines": 69,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-03095f2680f7516fca35a58e665bf2a41f006273-v8717e18970bcdc4e0d2cea3b1527752b21e74866",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "46bcf7c30178f53ef427a5840c4b24717ed79fb0",
+      "repo_language": "python",
+      "patch_lines": 53,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-08ac40d050a64e1d2646ece4959af0c42bf6b7b5-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "1e32ae3ec085dc3ab8611b88b56baf6354fa0762",
+      "repo_language": "python",
+      "patch_lines": 41,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-09865f5fb549694d969f0a8e49b9d204ef1853ca-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "50350d0432e2edf3429552bd9b50e78e662df8eb",
+      "repo_language": "python",
+      "patch_lines": 123,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-0a90f9f0256e4f933523e9842799e39f95ae29ce-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "5c6c22f3d2edf2f1b10f5dc335e32cb6a5f40341",
+      "repo_language": "python",
+      "patch_lines": 170,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-0d13e6b4bf80bced6c0946b969b9a1b6963f6bce-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "fe6c160d3f2afd9fd70bea62195337fad15c6535",
+      "repo_language": "python",
+      "patch_lines": 75,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-0dc5b20fa186f9714f8a838178597e69f549d026-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "bd9d2a04efbbaec1575faa02a02eea995badf7f0",
+      "repo_language": "python",
+      "patch_lines": 62,
+      "patch_files": 1,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-111347e9583372e8ef91c82e0612ea437ae3a9c9-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "c9795319b19c60e884f34df3eaf7e3e7f2bfd58c",
+      "repo_language": "python",
+      "patch_lines": 143,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-123e6e5e1c85b9c07d1e98f70bfc480bc8016890-v2733ff199fb72f0d033a30dc62cb0a4742e3a7f4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "115079a6a07b6341bb487f954e50384273b56a98",
+      "repo_language": "python",
+      "patch_lines": 106,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-1351c59fd43689753de1fca32c78d539a116ffc1-v29f82c9cf21d57b242f8d8b0e541525d259e2d63",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "ddbbdd64ecde64f314b9083953af63d07305f640",
+      "repo_language": "python",
+      "patch_lines": 73,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-1894cb48d6e7fb498295a5d3ed0596f6f603b784-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "88da48a8faf5d6864c6ceea4a3e4a305550318e2",
+      "repo_language": "python",
+      "patch_lines": 106,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-1be7de788a444f6255e89c10ef6aa608550604a8-v29f82c9cf21d57b242f8d8b0e541525d259e2d63",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "8b933806b52d3785f98d2c397032c8b97a88feb2",
+      "repo_language": "python",
+      "patch_lines": 148,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-25858f9f0c165df25742acf8309ce909773f0cdd-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "322d7a46cdc965bfabbf9500e98fde098c9d95b2",
+      "repo_language": "python",
+      "patch_lines": 419,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-2abe28b472ffed563a87cfe83685b161b35263b0-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "eb8da9e755f4bf59f8f0bd2b021d3e49a87ccf4e",
+      "repo_language": "python",
+      "patch_lines": 24,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-2fe532a33635aab7a9bfea5d977f6a72b280a30c-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "4315bbe27c111e85712899901fde689d0eac18bd",
+      "repo_language": "python",
+      "patch_lines": 28,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-308a35d6999427c02b1dbf5211c033ad3b352556-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "cb6c053eba49facef557ee95d587f6d6c93caf3a",
+      "repo_language": "python",
+      "patch_lines": 244,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-30bc73a1395fba2300087c7f307e54bb5372b60a-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "540853735859789920caf9ee78a762ebe14f6103",
+      "repo_language": "python",
+      "patch_lines": 623,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-322d7a46cdc965bfabbf9500e98fde098c9d95b2-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "0d5acead6fdfb5e41a1d29a076a6e89ad1a39027",
+      "repo_language": "python",
+      "patch_lines": 483,
+      "patch_files": 2,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-3aeec6afed9198d734b7ee1293f03ca94ff970e1-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "b36762b27e11d2bdf1ef556a8c5588294bb7deb7",
+      "repo_language": "python",
+      "patch_lines": 104,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-3c48b4bb782189e0858e6c3fc7956046cf3e1cfb-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "d38cb5a4162aa2942cdb5037dd679f37687b9d4f",
+      "repo_language": "python",
+      "patch_lines": 27,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-3f580a5f244c299d936d73d9e327ba873b6401d9-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "46d7d325e6ed4b4de998d69c0e89893274ad5d60",
+      "repo_language": "python",
+      "patch_lines": 75,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-3f7db6bbbcc7c418b3db72d157c6aed1d45b2ccf-v430f20c722405e462d9ef44dee7d34c41e76fe7a",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "c46e5170e93bbfac133dd1e2e1e3b56882f2519f",
+      "repo_language": "python",
+      "patch_lines": 208,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-427f1f4eddfc54735ca451779d4f95bf683d1b0e-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "8c988af810a451a2bda2dd080852c81f662aee1e",
+      "repo_language": "python",
+      "patch_lines": 46,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-431442c92887a3aece3f8aa771dd029738a80eb1-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "188a76779dbd2368d73313ad15cae639c295eb21",
+      "repo_language": "python",
+      "patch_lines": 56,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-43f9e7e0d56a4f1d487533543c17040a029ac501-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "de903b9535d53122d655590f238a78e217a6c770",
+      "repo_language": "python",
+      "patch_lines": 29,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-4a5d2a7d24c9e4c11d3069220c0685b736d5ecde-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "90475fb6c168e8317e22bd5fbe057d98e570a715",
+      "repo_language": "python",
+      "patch_lines": 92,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-4b7ea2977be2747496ba792a678940baa985f7ea-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "86d9b8a203cab5bc446614f3cbffd77b4751084a",
+      "repo_language": "python",
+      "patch_lines": 276,
+      "patch_files": 8,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-5069b09e5f64428dce59b33455c8bb17fe577070-v8717e18970bcdc4e0d2cea3b1527752b21e74866",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "facafbe7339ca48a33e0d07e089e99b2cf6235df",
+      "repo_language": "python",
+      "patch_lines": 54,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-53d376b148897466bb86d5accb51912bbbe9a8ed-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "0d13e6b4bf80bced6c0946b969b9a1b6963f6bce",
+      "repo_language": "python",
+      "patch_lines": 59,
+      "patch_files": 4,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-53e02a22972e9253aeded0e1981e6845e1e521fe-vfa6ff903cb27f336e17654595dd900fa943dcd91",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "2e2140e23dde91a233a91e9a7d04648450387721",
+      "repo_language": "python",
+      "patch_lines": 403,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-58999808a17a26b387f8237860a7a524d1e2d262-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "6e5fa4b4afcbbf022aff88732f1d458be31fc086",
+      "repo_language": "python",
+      "patch_lines": 97,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-5c6c22f3d2edf2f1b10f5dc335e32cb6a5f40341-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "31d6ecf3c04c8e365e557f2a9a6a65df2b8d01a3",
+      "repo_language": "python",
+      "patch_lines": 82,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-5de7de19211e71b29b2f2ba3b1dff2fe065d660f-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "5f7d8d190e2f0d837545e582fd5db99aae51a979",
+      "repo_language": "python",
+      "patch_lines": 88,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-5fb312632097be7e9ac6ab657964af115224d15d-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "7549c413a901a640aa351933392f503648d345cc",
+      "repo_language": "python",
+      "patch_lines": 146,
+      "patch_files": 8,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-60725705782832a2cb22e17c49697948a42a9d03-v298a7a812ceed28c4c18355a091f1b268fe56d86",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "73e4b70aa3adafbbf44e7942b5bf9efabce70447",
+      "repo_language": "python",
+      "patch_lines": 76,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-630221ab686c64e75a2ce253c893c033e4814b2e-v93c53c13d5f9b383ebb411ee7750b49dcd1a34c6",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "247986f00311d9ee34009b0bb02d0d3bd7497ebd",
+      "repo_language": "python",
+      "patch_lines": 328,
+      "patch_files": 6,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-6afdb09df692223c3a31df65cfa92f15e5614c01-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "1a3fab3f0b319e0df49dd742ce2ffa0d747d1b44",
+      "repo_language": "python",
+      "patch_lines": 30,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-6e889f4a733c9f8ce9a9bd2ec6a934413adcedb9-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "9a9204b43f9ab94601e8664340eb1dd0fca33517",
+      "repo_language": "python",
+      "patch_lines": 104,
+      "patch_files": 2,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-6fdbbeee4c0a7e976ff3e46fb1d36f4eb110c428-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "71b18af1fa3b1e0ea6acb368037736be759a8bca",
+      "repo_language": "python",
+      "patch_lines": 269,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-72321288ea790a3ace9e36f1c05b68c93f7eec43-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "72593efe54e9ee0579798f418d7b823fa5d91834",
+      "repo_language": "python",
+      "patch_lines": 51,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-798055d1a19b8fa0983153b709f460be97e33064-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "7b1ec94b425e4032a8c1b66a5219b4262af49484",
+      "repo_language": "python",
+      "patch_lines": 36,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-798a582540019363d14b2090755cc7b89a350788-v430f20c722405e462d9ef44dee7d34c41e76fe7a",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "a8db93460b49a39fc3bd8639e34abfca9303236f",
+      "repo_language": "python",
+      "patch_lines": 239,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-7bf3238533070f2d24bafbb26eedf675d51941f6-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "0c5d154db9a199adc4be35be84390368693b2144",
+      "repo_language": "python",
+      "patch_lines": 121,
+      "patch_files": 9,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-7c8dc180281491ccaa1b4b43518506323750d1e4-v298a7a812ceed28c4c18355a091f1b268fe56d86",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "a797a05d077f8896c5d8f480b3620eb1ee398f8c",
+      "repo_language": "python",
+      "patch_lines": 162,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-7cbfb812ef0e1f9716e2d6e85d538a96fcb79d13-vfa6ff903cb27f336e17654595dd900fa943dcd91",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "20e8fee0e879ca47c0a1259fec0a5ab1e292aa1f",
+      "repo_language": "python",
+      "patch_lines": 553,
+      "patch_files": 5,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-7edd1ef09d91fe0b435707633c5cc9af41dedddf-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "1d2cbffd8cbda42d71d50a045a8d2b9ebfe1f781",
+      "repo_language": "python",
+      "patch_lines": 212,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-7f6b722a10f822171501d027cad60afe53337732-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "febda3f008cb4d4e4e0568ab4d671992ceea07cf",
+      "repo_language": "python",
+      "patch_lines": 1663,
+      "patch_files": 13,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-7f7e53aa4cf74a4f8549a5bcd4810c527e2f6d7e-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "630221ab686c64e75a2ce253c893c033e4814b2e",
+      "repo_language": "python",
+      "patch_lines": 49,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-89e4b4431fe7506c365a6f6eb6f6d048d04c044c-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "64c18604714c0672f272ee1e620ad62e9a248312",
+      "repo_language": "python",
+      "patch_lines": 32,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-8a5a63af6e0be406aa6c8c9b6d5f28b2f1b6af5a-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "9d9f3a19983876522bcfd17c9079c46a17986cb3",
+      "repo_language": "python",
+      "patch_lines": 251,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-8a9d9d323dfcf2a5b4f38d70b1108b030b20ebf3-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "9db365285453fb388757aa65ae06226e7c0f64cf",
+      "repo_language": "python",
+      "patch_lines": 421,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-910b08570210509f3bcfebf35c093a48243fe754-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "e9e9d8be33f09cd487b905f339ec3e76ad75e0bb",
+      "repo_language": "python",
+      "patch_lines": 330,
+      "patch_files": 9,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-91efee627df01e32007abf2d6ebf73f9d9053076-vbee42ad1b72fb23c6a1c874868a720b370983ed2",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "ab62fa4d63d15b7bc1b9a856ae9acd74df1f1f93",
+      "repo_language": "python",
+      "patch_lines": 33,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-92db3454aeaa02f89b4cdbc3103f7e95c9759f92-v2c55207218fb8a0138425cbf7d9675272e240b90",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "4d2c696773853ee7fb4ec0ceb773351a52257447",
+      "repo_language": "python",
+      "patch_lines": 703,
+      "patch_files": 11,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-9bdfd29fac883e77dcbc4208cab28c06fd963ab2-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "b2086f9bf54a3a8289e558a8f542673e3d01b376",
+      "repo_language": "python",
+      "patch_lines": 141,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-9c392b60e2c6fa1d68cb68084b4b4ff04d0cb35c-v2d9a6c849c60ed19fd0858ce9e40b7cc8e097e59",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "bf5511b4348e89a143ffc99553cd7e4e2a6b0485",
+      "repo_language": "python",
+      "patch_lines": 52,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-9cd47f4dc21e273320d9e30d889c864f8cb20ccf-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "7fab050b6a99923d9d2efcc2f79311580b88f8a9",
+      "repo_language": "python",
+      "patch_lines": 35,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-a48fd6ba9482c527602bc081491d9e8ae6e8226c-vfa6ff903cb27f336e17654595dd900fa943dcd91",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "5e9872c8e19487fbeac11873549275184ce9b817",
+      "repo_language": "python",
+      "patch_lines": 228,
+      "patch_files": 1,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-b112069e31e0553b2d374abb5f9c5e05e8f3dbbe-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "4825ff66e84545216c35d7a0bb01c177f5591b96",
+      "repo_language": "python",
+      "patch_lines": 233,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-b4f7c185ae5f1824ac7f3a18e8adf6a4b468459c-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "0b2e93f2d150770f6ecbfd1931ef56ad876d2c4c",
+      "repo_language": "python",
+      "patch_lines": 41,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-b67138b316b1e9c11df8a4a8391fe5cc8e75ff9f-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "d8518f64d954113c9363335eb25201befa2de6f2",
+      "repo_language": "python",
+      "patch_lines": 888,
+      "patch_files": 6,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-ba3abfb6af6e722185d3715929ab0f3e5a134eed-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "2edaf7283cf5d934e0d60aac0cc89eff7ceb6e43",
+      "repo_language": "python",
+      "patch_lines": 48,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-bdba0af0f6cbaca8b5fc3be2a3080f38156d9c92-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "4a17636ae04cf6039ccb6b91f2ed13ce589358d4",
+      "repo_language": "python",
+      "patch_lines": 46,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-c05ccf2cd8baa81609434e0e35c4a63bc0da5a25-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "0180e2ca33a152e69bdbc97047cf6961787c947d",
+      "repo_language": "python",
+      "patch_lines": 49,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-c12943be1db80cf1114bc267ddf4f9933aca9b28-v2c55207218fb8a0138425cbf7d9675272e240b90",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "d55e8868085c70c2b9f2ef859ebacbb50fff85fe",
+      "repo_language": "python",
+      "patch_lines": 42,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-c4eebe6677acc4629cb541a98d5e91311444f5d4-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "84cc4ed5697b83a849e9106a09bfed501169cc20",
+      "repo_language": "python",
+      "patch_lines": 119,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-c506c1b0b678892af5cb22c1c1dbc35d96787a0a-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "2f590171b1d95cc124c44fb6ec647c85f1ca9581",
+      "repo_language": "python",
+      "patch_lines": 288,
+      "patch_files": 14,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-c8996ecc40803b9155935fd7ff3b8e7be6c1437c-ve8fc82d8aae8463b752a211156c5b7b59f349237",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "f0341c0ba81c790241b782f5103ce5c9a6edf8e3",
+      "repo_language": "python",
+      "patch_lines": 35,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-d109cc7e6e161170391f98f9a6fa1d02534c18e4-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "daf93507208f2206f8950e3bb5fffac7caf80520",
+      "repo_language": "python",
+      "patch_lines": 629,
+      "patch_files": 10,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-d40ec88713dc95ea791b252f92d2f7b75e107440-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "cbfef314d45fe04e8bf7ebb239f1699606378634",
+      "repo_language": "python",
+      "patch_lines": 226,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-d8162c226a9d576f094dc1830c4c1ffd0be2dd17-v76304ecdb3a5954fcf13feb710e8c40fcf24b73c",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "5de7de19211e71b29b2f2ba3b1dff2fe065d660f",
+      "repo_language": "python",
+      "patch_lines": 74,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-dbbd9d539c6d4fd45d5be9662aa19b6d664b5137-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "409914bf541b32b2160200b7623060f2b5fab6c0",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-e010b2a13697de70170033902ba2e27a1e1acbe9-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "b70f9abab445676042e5c300dcf5dd8eac4afd18",
+      "repo_language": "python",
+      "patch_lines": 120,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-e1e502986a3b003899a8347ac8a7ff7b08cbfc39-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "77c16d530b4d5c0f33d68bead2c6b329aee9b996",
+      "repo_language": "python",
+      "patch_lines": 123,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-e390c1212055dd84a262a798e53487e771d3fb64-v8717e18970bcdc4e0d2cea3b1527752b21e74866",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "a08e565962ccbbd2931c7e2821bd37067a97f339",
+      "repo_language": "python",
+      "patch_lines": 123,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-e8084193a895d8ee81200f49093389a3887479ce-ve8c8d62a2b60610a3c4631f5f23ed866bada9818",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "8d41b319745228044947e039f629c44a5da08a09",
+      "repo_language": "python",
+      "patch_lines": 29,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-f0341c0ba81c790241b782f5103ce5c9a6edf8e3-ve8fc82d8aae8463b752a211156c5b7b59f349237",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "ba3abfb6af6e722185d3715929ab0f3e5a134eed",
+      "repo_language": "python",
+      "patch_lines": 48,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-f343c08f89c772f7ba6c0246f384b9e6c3dc0add-v08d8e8889ec945ab821fb156c04c7d2e2810debb",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "53d376b148897466bb86d5accb51912bbbe9a8ed",
+      "repo_language": "python",
+      "patch_lines": 54,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-f3b26c2c0721f8713353fe4b341230332e30008d-v0f5aece3601a5b4419f7ccec1dbda2071be28ee4",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "471ffcf05c6b9ceaf879eb95d3a86ccf8232123b",
+      "repo_language": "python",
+      "patch_lines": 51,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-f8cc11d9c1575fdba5ac66aee0befca970da8d64-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "3677dd20bcdd17aa0fa0f202f4ea50c46936bdc5",
+      "repo_language": "python",
+      "patch_lines": 146,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-fad4a40acf5ff5f06cd7441a5c7baf41a7d81fe4-vfa6ff903cb27f336e17654595dd900fa943dcd91",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "afb819f8166c6dff4295c6802cc0b55b67f05731",
+      "repo_language": "python",
+      "patch_lines": 43,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_internetarchive__openlibrary-fdbc0d8f418333c7e575c40b661b582c301ef7ac-v13642507b4fc1f8d234172bf8129942da2c2ca26",
+      "repo": "internetarchive/openlibrary",
+      "base_commit": "69cb6f271d8eb461baf163260f8e43e7420793e7",
+      "repo_language": "python",
+      "patch_lines": 95,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-01d1d1494411380d97cac14614a829d3a69cecaf-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "71451483f4f380c2f70f6e5b28025af79b1168e5",
+      "repo_language": "python",
+      "patch_lines": 95,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0833b5f6f140d04200ec91605f88704dd18e2970-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "def864adc8b19bdbc506919270d8ff1408b4faac",
+      "repo_language": "python",
+      "patch_lines": 30,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0aa57e4f7243024fa4bba8853306691b5dbd77b3-v5149fcda2a9a6fe1d35dfed1bade1444a11ef271",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "e8a7c6b257478bd39810f19c412f484ada6a3dc6",
+      "repo_language": "python",
+      "patch_lines": 59,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0b621cb0ce2b54d3f93d8d41d8ff4257888a87e5-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "df2b817aa418ea7a83c5cbe523aab58ef26a2b20",
+      "repo_language": "python",
+      "patch_lines": 23,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0d2afd58f3d0e34af21cee7d8a3fc9d855594e9f-vnan",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "8e152aaa0ac40a5200658d2b283cdf11b9d7ca0d",
+      "repo_language": "python",
+      "patch_lines": 50,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-0fc6d1109d041c69a68a896db87cf1b8c194cef7-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "21b20116f5872490bfbba4cf9cbdc8410a8a1d7d",
+      "repo_language": "python",
+      "patch_lines": 115,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-16de05407111ddd82fa12e54389d532362489da9-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "744cd94469de77f52905bebb123597c040ac07b6",
+      "repo_language": "python",
+      "patch_lines": 102,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-1943fa072ec3df5a87e18a23b0916f134c131016-vafb3e8e01b31319c66c4e666b8a3b1d8ba55db24",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "1e473c4bc01da1d7f1c4386d8b7b887e00fbf385",
+      "repo_language": "python",
+      "patch_lines": 39,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-1a9e74bfaf9a9db2a510dc14572d33ded6040a57-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "ebf4b987ecb6c239af91bb44235567c30e288d71",
+      "repo_language": "python",
+      "patch_lines": 32,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-1af602b258b97aaba69d2585ed499d95e2303ac2-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "ab65c542a0551abf105eeb58803cd08bd040753b",
+      "repo_language": "python",
+      "patch_lines": 47,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-233cb1cc48635130e5602549856a6fa4ab4c087f-v35616345bb8052ea303186706cec663146f0f184",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "08604f5a871e7bf2332f24552895a11b7295cee9",
+      "repo_language": "python",
+      "patch_lines": 54,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-2dd8966fdcf11972062c540b7a787e4d0de8d372-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "6c653125d95a26db53471dba1bc331aee3b0477e",
+      "repo_language": "python",
+      "patch_lines": 48,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-305e7c96d5e2fdb3b248b27dfb21042fb2b7e0b8-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "1aec789f4d010dfebae3cceac2c71ebeafe81e08",
+      "repo_language": "python",
+      "patch_lines": 28,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-322834d0e6bf17e5661145c9f085b41215c280e8-v488d33dd1b2540b234cbb0468af6b6614941ce8f",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "7691556ea171c241eabb76e65c64c90dfc354327",
+      "repo_language": "python",
+      "patch_lines": 87,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-34a13afd36b5e529d553892b1cd8b9d5ce8881c4-vafb3e8e01b31319c66c4e666b8a3b1d8ba55db24",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "f8692cb141776c3567e35f9032e9892bf0a7cfc9",
+      "repo_language": "python",
+      "patch_lines": 50,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-35168ade46184d7e5b91dfa04ca42fe2abd82717-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "04c65bb2b72542b239de2491c9242d8f641636db",
+      "repo_language": "python",
+      "patch_lines": 76,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-36ade4bba504eb96f05d32ceab9972df7eb17bcc-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "73f93008f6c8104dcb317b10bae2c6d156674b33",
+      "repo_language": "python",
+      "patch_lines": 47,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-394bfaed6544c952c6b3463751abab3176ad4997-vafb3e8e01b31319c66c4e666b8a3b1d8ba55db24",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "d1164925c55f2417f1c3130b0196830bc2a3d25d",
+      "repo_language": "python",
+      "patch_lines": 560,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-3d01c201b8aa54dd71d4f801b1dd12feb4c0a08a-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "6d9c28ce10832aa727de1a326d9459a035ff3aba",
+      "repo_language": "python",
+      "patch_lines": 63,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-3e21c8214a998cb1058defd15aabb24617a76402-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "fce306d5f184f185b660f35ec2808b6745d57520",
+      "repo_language": "python",
+      "patch_lines": 59,
+      "patch_files": 1,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-3fd8e12949b8feda401930574facf09dd4180bba",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "a19634474246739027f826968ea34e720c0ec987",
+      "repo_language": "python",
+      "patch_lines": 244,
+      "patch_files": 6,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-44e64199ed38003253f0296badd4a447645067b6-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "22a3fd479accc3b9a0c0e2e5c2f1841324c3ab3d",
+      "repo_language": "python",
+      "patch_lines": 49,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-46e6839e21d9ff72abb6c5d49d5abaa5a8da8a81-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "e46adf32bdf880385319cb701d926fec6899046d",
+      "repo_language": "python",
+      "patch_lines": 50,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-473a15f7908f2bb6d670b0e908ab34a28d8cf7e2-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "8e08f046aeffb38445cc659050f7a083b4a9649c",
+      "repo_language": "python",
+      "patch_lines": 102,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-479aa075ac79dc975e2e949e188a328e95bf78ff-vc2f56a753b62a190ddb23cd330c257b9cf560d12",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "34db7a1ef4139f30f5b6289ea114c44e1a7b33a6",
+      "repo_language": "python",
+      "patch_lines": 41,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-50efac08f623644a85441bbe02ab9347d2b71a9d-v9f8e9d96c85c85a605e382f1510bd08563afc566",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "434f6906f9088172494fa7e219a856d893ed55ba",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-52708364b5f91e198defb022d1a5b4b3ebd9b563-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "a0710124a1790237aa4f2a17e2f7011a074143b4",
+      "repo_language": "python",
+      "patch_lines": 55,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-54bcdc1eefa86cc20790973d6997b60c3bba884c-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "0df0985292b79e54c062b7fd8b3f5220b444b429",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-5cef49ff3074f9eab1da6937a141a39a20828502-v02ad04386d5238fe2d1a1be450df257370de4b6a",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "c41f152fa5b0bc44e15779e99706d7fb8431de85",
+      "repo_language": "python",
+      "patch_lines": 43,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-5e0d6dc1483cb3336ea0e3dcbd4fe4aa00fc1742-v5149fcda2a9a6fe1d35dfed1bade1444a11ef271",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "4df7aedf2b2e1f844e8f0ba55bb6fdcafcfa8ec8",
+      "repo_language": "python",
+      "patch_lines": 48,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-5fdc83e5da6222fe61163395baaad7ae57fa2cb4-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "cb59619327e7fa941087d62b83459750c1b7c579",
+      "repo_language": "python",
+      "patch_lines": 72,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-66cfa15c372fa9e613ea5a82d3b03e4609399fb6-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "6d0b7cb12b206f400f8b44041a86c1a93cd78c7f",
+      "repo_language": "python",
+      "patch_lines": 126,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-6b320dc18662580e1313d2548fdd6231d2a97e6d-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "d283e2250fcc533838fbac1078acd5883c77e2e3",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-6dd402c0d0f7665d32a74c43c5b4cf5dc8aff28d-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "d6a3d1fe608bae2afedd3019e46de3476ac18ff6",
+      "repo_language": "python",
+      "patch_lines": 44,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-70248f256f93ed9b1984494d0a1a919ddd774892-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "bf65a1db0f3f49977de77d7d61eeaaecd022185c",
+      "repo_language": "python",
+      "patch_lines": 37,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-77c3557995704a683cdb67e2a3055f7547fa22c3-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "1799b7926a0202497a88e4ee1fdb232f06ab8e3a",
+      "repo_language": "python",
+      "patch_lines": 45,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-7b603dd6bf195e3e723ce08ff64a82b406e3f6b6-v9f8e9d96c85c85a605e382f1510bd08563afc566",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "a67832ba311fdb0e9d57190d1671241a369b5b0a",
+      "repo_language": "python",
+      "patch_lines": 60,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-7f9713b20f623fc40473b7167a082d6db0f0fd40-va0fd88aac89cde702ec1ba84877234da33adce8a",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "142f019c7a262e95eb1957ad0766c7a51621109b",
+      "repo_language": "python",
+      "patch_lines": 63,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-85b867fe8d4378c8e371f055c70452f546055854-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "c97257cac01d9f7d67fb42d0344cb4332c7a0833",
+      "repo_language": "python",
+      "patch_lines": 106,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-8cd06741bb56cdca49f5cdc0542da97681154315-v5149fcda2a9a6fe1d35dfed1bade1444a11ef271",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "2a10461ca473838cbc3bf6b92501324470d4f521",
+      "repo_language": "python",
+      "patch_lines": 59,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-8d05f0282a271bfd45e614238bd1b555c58b3fc1-v35616345bb8052ea303186706cec663146f0f184",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "190bab127d9e8421940f5f3fdc738d1c7ec02193",
+      "repo_language": "python",
+      "patch_lines": 31,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-8f46ba3f6dc7b18375f7aa63c48a1fe461190430-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "1547a48e6f1a8af8dc618d5afe858084ebfd317f",
+      "repo_language": "python",
+      "patch_lines": 29,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-96b997802e942937e81d2b8a32d08f00d3f4bc4e-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "2e65f731b1b615b5cd60417c00b6993c2295e9f8",
+      "repo_language": "python",
+      "patch_lines": 24,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-99029144b5109bb1b2a53964a7c129e009980cd9-va0fd88aac89cde702ec1ba84877234da33adce8a",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "ef62208ce998797c9a1f0110a528bbd11c402357",
+      "repo_language": "python",
+      "patch_lines": 77,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-996487c43e4fcc265b541f9eca1e7930e3c5cf05-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "03fa9383833c6262b08a5f7c4930143e39327173",
+      "repo_language": "python",
+      "patch_lines": 43,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-9b71c1ea67a9e7eb70dd83214d881c2031db6541-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "b84ef9b299ec1639ddf79ab900b670a96d71d9f2",
+      "repo_language": "python",
+      "patch_lines": 102,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-9ed748effa8f3bcd804612d9291da017b514e12f-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "30250d8e680041a15e440aa7441a224d670c3862",
+      "repo_language": "python",
+      "patch_lines": 38,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-a25e8a09873838ca9efefd36ea8a45170bbeb95c-vc2f56a753b62a190ddb23cd330c257b9cf560d12",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "83bef2ad4bdc10113bb9e5ed12c32d92bc1247af",
+      "repo_language": "python",
+      "patch_lines": 52,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-a84ecfb80a00f8ab7e341372560458e3f9cfffa2-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "c9380605a1240748769c012403520323b4d2c3be",
+      "repo_language": "python",
+      "patch_lines": 51,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-bedc9f7fadf93f83d8dee95feeecb9922b6f063f-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "0e624e64695e8f566c7391f65f737311aeb6b2eb",
+      "repo_language": "python",
+      "patch_lines": 164,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-c09e1439f145c66ee3af574386e277dd2388d094-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "ea60bcfc2ae1e018559031a4c8a26b29caec1c59",
+      "repo_language": "python",
+      "patch_lines": 45,
+      "patch_files": 4,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-c0be28ebee3e1837aaf3f30ec534ccd6d038f129-v9f8e9d96c85c85a605e382f1510bd08563afc566",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "690813e1b10fee83660a6740ab3aabc575a9b125",
+      "repo_language": "python",
+      "patch_lines": 32,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-c580ebf0801e5a3ecabc54f327498bb753c6d5f2-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "0b8cc812fd0b73e296a3f93db02ce5d0b35714fc",
+      "repo_language": "python",
+      "patch_lines": 44,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-cc360cd4a34a126274c7b51f3b63afbaf3e05a02-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "96b997802e942937e81d2b8a32d08f00d3f4bc4e",
+      "repo_language": "python",
+      "patch_lines": 44,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-cf06f4e3708f886032d4d2a30108c2fddb042d81-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "61ff98d395c39d57bbbae1b941150ca11b7671e1",
+      "repo_language": "python",
+      "patch_lines": 64,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-de4a1c1a2839b5b49c3d4ce21d39de48d24e2091-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "6e7bb038fdab304eb3b93dfbb57a49a48ccca287",
+      "repo_language": "python",
+      "patch_lines": 542,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-deeb15d6f009b3ca0c3bd503a7cef07462bd16b4-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "3ae5cc96aecb12008345f45bd7d06dbc52e48fa7",
+      "repo_language": "python",
+      "patch_lines": 53,
+      "patch_files": 1,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-e15d26630934d0b6415ed2295ac42fd570a57620-va0fd88aac89cde702ec1ba84877234da33adce8a",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "e158a480f52185c77ee07a52bc022f021d9789fe",
+      "repo_language": "python",
+      "patch_lines": 32,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-e34dfc68647d087ca3175d9ad3f023c30d8c9746-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "c984983bc4cf6f9148e16ea17369597f67774ff9",
+      "repo_language": "python",
+      "patch_lines": 58,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-e5340c449f23608803c286da0563b62f58ba25b0-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "ae910113a7a52a81c4574a18937b7feba48b387d",
+      "repo_language": "python",
+      "patch_lines": 213,
+      "patch_files": 7,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-e57b6e0eeeb656eb2c84d6547d5a0a7333ecee85-v2ef375ac784985212b1805e1d0431dc8f1b3c171",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "5a7f64ea219f3f008a4b61546ae18820e6780d8e",
+      "repo_language": "python",
+      "patch_lines": 42,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-e64622cd2df5b521342cf4a62e0d4cb8f8c9ae5a-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "09925f74817cf7a970f166342f81886a1d27ee35",
+      "repo_language": "python",
+      "patch_lines": 41,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-e70f5b03187bdd40e8bf70f5f3ead840f52d1f42-v02ad04386d5238fe2d1a1be450df257370de4b6a",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "d7d1293569cd71200758068cabc54e1e2596d606",
+      "repo_language": "python",
+      "patch_lines": 46,
+      "patch_files": 2,
+      "hard": true
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-ebfe9b7aa0c4ba9d451f993e08955004aaec4345-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "30570a5cad1a3e7f648f066b4a1df8158d6b1189",
+      "repo_language": "python",
+      "patch_lines": 314,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-ec2dcfce9eee9f808efc17a1b99e227fc4421dea-v5149fcda2a9a6fe1d35dfed1bade1444a11ef271",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "b9920503db6482f0d3af7e95b3cf3c71fbbd7d4f",
+      "repo_language": "python",
+      "patch_lines": 96,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-ed19d7f58b2664bb310c7cb6b52c5b9a06ea60b2-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "836221ecaf2bad121c741b0c41dff508049e8ca5",
+      "repo_language": "python",
+      "patch_lines": 34,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-ef5ba1a0360b39f9eff027fbdc57f363597c3c3b-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "9c056f288aefebbb95734fa3dc46a2405862405b",
+      "repo_language": "python",
+      "patch_lines": 102,
+      "patch_files": 4,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-f631cd4422744160d9dcf7a0455da532ce973315-v35616345bb8052ea303186706cec663146f0f184",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "5ee28105ad972dd635fcdc0ea56e5f82de478fb1",
+      "repo_language": "python",
+      "patch_lines": 138,
+      "patch_files": 5,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-f91ace96223cac8161c16dd061907e138fe85111-v059c6fdc75567943479b23ebca7c07b5e9a7f34c",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "ebfe9b7aa0c4ba9d451f993e08955004aaec4345",
+      "repo_language": "python",
+      "patch_lines": 64,
+      "patch_files": 3,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-fcfa069a06ade76d91bac38127f3235c13d78eb1-v5fc38aaf22415ab0b70567368332beee7955b367",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "74671c167f6f18a5494ffe44809e6a0e1c6ea8e9",
+      "repo_language": "python",
+      "patch_lines": 56,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-fea33d607fde83cf505b228238cf365936437a63-v9f8e9d96c85c85a605e382f1510bd08563afc566",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "54c0c493b3e560f478c3898627c582cab11fbc2b",
+      "repo_language": "python",
+      "patch_lines": 22,
+      "patch_files": 2,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-fec187c2cb53d769c2682b35ca77858a811414a8-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "a55f4db26b4b1caa304dd4b842a4103445fdccc7",
+      "repo_language": "python",
+      "patch_lines": 40,
+      "patch_files": 1,
+      "hard": false
+    },
+    {
+      "instance_id": "instance_qutebrowser__qutebrowser-ff1c025ad3210506fc76e1f604d8c8c27637d88e-v363c8a7e5ccdf6968fc7ab84a2053ac78036691d",
+      "repo": "qutebrowser/qutebrowser",
+      "base_commit": "e545faaf7b18d451c082f697675f0ab0e7599ed1",
+      "repo_language": "python",
+      "patch_lines": 95,
+      "patch_files": 4,
+      "hard": false
+    }
+  ]
+}
