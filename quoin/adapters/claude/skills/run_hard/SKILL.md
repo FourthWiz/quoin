@@ -26,6 +26,30 @@ Note: the cost ledger initializes during Setup ("Initialize cost ledger" below);
 
 ## Setup
 
+### Pipeline switch from light `/run`
+
+Check this first, before every other Setup step. `FROM_LIGHT=true` when the input carries a
+`[from-light]` sentinel (strip it) or, on fresh entry and on resume alike,
+`.workflow_artifacts/<task>/pipeline-switch.md` says `to: hard`: light `/run` escalated this task
+to you. A `no-switch:` tag (strip it), or `QUOIN_RUN_AUTO_SWITCH=0` (read it with `printenv`),
+sets `NO_SWITCH=true`. Under `FROM_LIGHT`:
+- Keep the light task name and folder; do not derive a new name. Keep an existing
+  `cost-ledger.md` and append to it rather than recreating it.
+- Classify the profile from the light `brief.md` (Goal, Acceptance criteria, Shape) plus the
+  note's `reason:`, never as Small (the task already outgrew the light path): a Small result
+  becomes Medium. No light hand-off check runs in Phase 1.6 (a task switches at most once).
+- Check git state: skip items 2–4. The partial diff stays in the working tree and the branch
+  named in the switch note stays checked out. When the note names a `worktree:`, that path is the
+  repo path for every git command and phase spawn.
+- If `enriched-prompt.md` does not exist, copy the light `brief.md` to it; Phase 1.4 then skips
+  without prompting.
+- Phase 2 and Phase 3 also get, read-if-exists, `context.md`, `review.md`,
+  `light-architecture.md` and `pipeline-switch.md` from the task root, and are told the working
+  tree may hold a partial implementation to build on.
+- The light run's claim on the checkout is still held. When this run ends (after Phase 6, or on
+  any stop), release it: `python3 __QUOIN_HOME__/scripts/run_isolation.py release --task "<task>"
+  --repo "<the note's claim: repo>"`.
+
 ### Parse `--autonomous` flag (opt-in, default off)
 
 Before profile-tag parsing, scan the task description for the `--autonomous` token. This is **opt-in** — omitting it preserves today's fully-interactive `/run` behavior unchanged (default off).
@@ -309,7 +333,7 @@ Before each HEAVY phase spawn — Phase 2 (architect), Phase 3 (thorough_plan),
 Phase 4 (implement), Phase 5 (review) — run the on-demand context-budget guard in
 the FOREGROUND top-level `/run` session (this is the PRIMARY / authoritative
 measurement point; it measures the context that is about to spawn the phase). Do
-NOT run it before the lighter Phase 1 / 1.4 / 1.5 / 1.6 / 6 (Phase 1.6 is inline, `D-12`, and never spawned; heavy-phase-only scope). This exclusion is unconditionally correct for Phase 1.6's silent no-op mode (Medium/Large, no `fast:` tag — genuinely zero extra reasoning); evaluating mode (Small, or `fast:` from any profile) does non-trivial inline reasoning over the evidence ladder and five eligibility criteria in the orchestrator's own session, so the exclusion there is a deliberate `D-12` scope choice (bounded, small relative to the phases this guard protects), not a claim that evaluating mode is free.
+NOT run it before the lighter Phase 1 / 1.4 / 1.5 / 1.6 / 6 (Phase 1.6 is inline, `D-12`, and never spawned; heavy-phase-only scope). This exclusion is unconditionally correct for Phase 1.6's silent no-op mode (Medium/Large, no `fast:` tag — genuinely zero extra reasoning, apart from the bounded light hand-off check on Medium); evaluating mode (Small, or `fast:` from any profile) does non-trivial inline reasoning over the evidence ladder and five eligibility criteria in the orchestrator's own session, so the exclusion there is a deliberate `D-12` scope choice (bounded, small relative to the phases this guard protects), not a claim that evaluating mode is free.
 This is additive to the existing checkpoints; it never lowers or touches any hook
 threshold.
 
@@ -532,6 +556,10 @@ python3 __QUOIN_HOME__/scripts/run_state.py --write \
 
 ## Phase 1.4 — Enrich (default-on prompt)
 
+**Skip condition (light hand-off):** `FROM_LIGHT` and `<task-root>/enriched-prompt.md`
+exists → tell the user "Skipping /enrich (light /run brief reused)." and proceed
+to Phase 1.5 without prompting.
+
 On entry, PROMPT via `AskUserQuestion`: "Run prompt enrichment on this task, or skip?"
 
 - Header: "Enrich"; multiSelect: false
@@ -626,7 +654,9 @@ resumable-phase roster and its sentinel contract stay whole — but it has two b
   `route=full` with zero user-facing output, zero prompts, zero extra model calls, and no
   `triage-decision.md`. This mirrors the existing skip behavior at Phase 1.4 and Phase 1.5 exactly.
   A plain (non-autonomous) run adds zero artifacts and zero behavior delta here; an autonomous run
-  adds exactly one thing — its own completion sentinel (below) — and nothing else.
+  adds exactly one thing — its own completion sentinel (below) — and nothing else. The light
+  hand-off check below is the one exception on Medium: it reasons inline over the evidence, and
+  when it fails it still adds no prompt and no artifact.
 - **Evaluating mode.** Fires when the Setup profile is Small, or a `fast:` tag was given from any
   profile. Only in this mode is eligibility assessed, Checkpoint A1 raised (see below), and
   `triage-decision.md` written.
@@ -653,6 +683,30 @@ five of these, fast-path eligibility does.
 
 A Small task that evaluates to ineligible is ALSO silent: it emits `route=full`, raises no
 checkpoint, and writes no decision artifact.
+
+**Light hand-off check.** Runs first in this phase, before either mode above, when the profile is
+Small or Medium and none of these hold: a `strict:` or `fast:` tag, `NO_SWITCH`, `FROM_LIGHT`, or
+an existing `<task-root>/pipeline-switch.md`. It reads the evidence ladder above (a raw task
+description alone never qualifies) and passes when all of these hold: one repository; one
+coherent diff (roughly at most three subsystems or fifteen files); no data migration, auth change
+or new public API with several consumers; acceptance criteria concrete enough to implement from.
+When it fails, it is silent (no prompt, no artifact) and the phase goes on exactly as described
+here, including the silent no-op mode for Medium. When it passes:
+- Interactive: ask once via AskUserQuestion, header "Light hand-off": "Hand off to light /run"
+  (recommended; the cheaper pipeline is enough for this task), "Continue in run_hard" (the phase
+  goes on as described here) or "Stop" (end the run; nothing is lost).
+- Under `AUTONOMOUS`: hand off without asking, and record why in the switch note.
+- Under `[no-interactive]` without `AUTONOMOUS`: continue in run_hard.
+
+To hand off, write `<task-root>/pipeline-switch.md` with lines `from: hard`, `to: light`,
+`trigger: triage`, `reason: <one line>`, `mode: <interactive | autonomous>`, `branch: <task
+branch>` and `evidence: <spec.md | enriched-prompt.md>`; then invoke the `run` skill with
+`[from-hard] <task>` (plus `--autonomous` under `AUTONOMOUS`) and stop. Before invoking it,
+under `AUTONOMOUS`, delete this run's continuation state so the Stop hook does not keep resuming
+it: `python3 __QUOIN_HOME__/scripts/fsops.py rm
+".workflow_artifacts/memory/autonomous-run-<task>.marker"
+".workflow_artifacts/memory/run-continue-arm-$CLAUDE_CODE_SESSION_ID.txt" || true`. Light `/run` owns the task
+from here; a later resume of this task reads the switch note first and routes to light `/run`.
 
 **Checkpoint A1.** Fires in evaluating mode only, and only once eligibility has passed (an
 ineligible evaluation stays silent, per above — no checkpoint, no artifact). Raised inline by the
@@ -840,7 +894,7 @@ python3 __QUOIN_HOME__/scripts/run_state.py --write \
   ```
 - **If fast route:** tell the user "Fast route — skipping /architect, dispatching /implement directly against the routing stub." Same immediate write as the Small branch above (no gate on this
   branch either).
-- **If running:** spawn `/architect` as a subagent session, passing the task description, paths to discovery output files (`repos-inventory.md`, `architecture-overview.md`, `dependencies-map.md`), and the path to `<task-root>/spec.md` if it exists (read-if-exists). The rest of this section —
+- **If running:** spawn `/architect` as a subagent session, passing the task description, paths to discovery output files (`repos-inventory.md`, `architecture-overview.md`, `dependencies-map.md`), and the path to `<task-root>/spec.md` if it exists (read-if-exists), plus the light hand-off inputs under `FROM_LIGHT` (see "Pipeline switch from light `/run`" in Setup). The rest of this section —
   through the gate-conditional write below — applies only to this branch.
   - **Note:** `/architect` now includes a Phase 4 critic loop (max 2 rounds default, 4 in strict mode); expect 1-2 additional `critic` phase rows in the cost ledger per round. If Phase 4 triggers the cost-guard confirmation (pre-round-2), the architect subagent will pause for user input — watch for the prompt `[critic round 2 starting — ~$10-30 estimated based on body size]` in the subagent output.
 
@@ -906,6 +960,9 @@ dispatched to `/implement` directly.
   - Task description (with tokens stripped)
   - Path to `architecture.md` (if it exists)
   - Path to `spec.md` (if it exists)
+  - Under `FROM_LIGHT`: paths to `context.md`, `review.md`, `light-architecture.md` and
+    `pipeline-switch.md` (each if it exists), and a note that the working tree may hold a
+    partial implementation to build on
   - Repo paths
 
 `/thorough_plan` handles its own internal plan→critic→revise loop and runs its own post-plan smoke
@@ -1337,6 +1394,11 @@ At every checkpoint, the orchestrator presents a concise summary and waits for e
 ## Resume
 
 If invoked as `/run --resume <task-name>` (or "resume the run for <task-name>"):
+
+**Pipeline switch first.** If `.workflow_artifacts/<task-name>/pipeline-switch.md` says `to: light`,
+the task left this pipeline: invoke the `run` skill with `--resume <task-name>` (plus
+`--autonomous` when the invocation carried it) and stop, before Step 0 below and before reading
+any marker or run-state record.
 
 **Step 0 (T-09) — re-establish autonomous mode from the marker, BEFORE any other
 decision point.** Read `.workflow_artifacts/memory/autonomous-run-{task}.marker`

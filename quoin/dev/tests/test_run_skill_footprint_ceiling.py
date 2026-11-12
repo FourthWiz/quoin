@@ -22,10 +22,13 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 # Ratchet: measured size at ceiling-authoring time * 1.10, rounded up.
 # Lowered when the light-route steps moved to light-pipeline.md (read only on
 # that route): measured 20,342 bytes after the split, times 1.10.
-CEILING_BYTES = 22380
+# Raised for the automatic light -> run_hard switch (Step 0 tags, Escalation):
+# measured 23,736 bytes, plus a small margin.
+CEILING_BYTES = 23900
 LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Same ratchet for the reference file: 15,347 bytes at the split, times 1.10.
-LIGHT_CEILING_BYTES = 16890
+# Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.
+LIGHT_CEILING_BYTES = 18000
 
 
 def test_run_skill_md_byte_ceiling():

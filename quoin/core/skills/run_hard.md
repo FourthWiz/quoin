@@ -79,6 +79,18 @@ be honored when locating per-stage artifacts.
   needs an interactive prompt the orchestrator itself must raise.
 - The skill MUST honor profile triage (Small / Medium / Large) when
   routing sub-skills.
+- Pipeline switching (at most once per task, recorded in
+  `<task-root>/pipeline-switch.md`; disabled by a `no-switch:` tag or
+  `QUOIN_RUN_AUTO_SWITCH=0`). A task handed over by light `run` reuses its
+  brief as the enriched prompt, passes its context pack, review notes and
+  any light stage decomposition to architecture and planning, keeps the
+  partial diff and works in the light run's worktree; it is never
+  classified Small. Conversely, during routing a Small or Medium task whose
+  evidence shows one repository, one coherent diff, no migration, auth or
+  multi-consumer API change, and concrete acceptance criteria MAY be
+  handed back to light `run` (interactive runs ask once; autonomous runs
+  hand off and record why). A resume reads the switch note before any
+  other state.
 - The skill MUST NOT auto-invoke implementation or finalization without
   a prior user confirmation at the dedicated checkpoint for each phase.
 - The skill MUST preserve all artifacts if the user stops the pipeline

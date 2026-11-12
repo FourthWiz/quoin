@@ -36,14 +36,18 @@ fixes made through that implementer show up as `implement`.)
 
 Scan the input before anything else. The task name is the first token that is
 not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
-`hard:`, `strict:`, `small:`, `parallel:`, `direct:`, `light:`, `isolate:` and the like; a leading `[no-redispatch]` is
+`[from-hard]`, `hard:`, `strict:`, `small:`, `parallel:`, `direct:`, `light:`, `no-switch:`, `isolate:` and the like; a leading `[no-redispatch]` is
 stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
-input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolate:`).
+input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolate:`),
+except the Escalation switch, which passes its own input.
 
 1. **`hard:`** or **`strict:`** anywhere in the input → this task wants the full
    heavy pipeline. Invoke the `run_hard` skill with the input unchanged (keep
    `strict:`, strip only `hard:`) and stop; `run_hard` owns everything from there.
-2. **`--resume`** (task name as above) → if `.workflow_artifacts/memory/run-state-<task>.json` or
+2. **`--resume`** (task name as above) → if `.workflow_artifacts/<task>/pipeline-switch.md`
+   exists, its `to:` line decides alone: `hard` → invoke `run_hard` with the input
+   unchanged and stop; `light` → resume the light run below, ignoring run_hard's
+   files. Otherwise, if `.workflow_artifacts/memory/run-state-<task>.json` or
    `.workflow_artifacts/memory/autonomous-run-<task>.marker` exists, the task was
    started by the heavy pipeline: invoke `run_hard` with the input unchanged and
    stop. Otherwise resume the light run: run Step 1's claim (item 2; it
@@ -80,6 +84,15 @@ input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolat
 8. **`isolate:`** → recognised the same way as `direct:`/`light:`. Strip it and
    set `ISOLATE=true`: Step 1 works in a worktree even when no other run holds
    the checkout.
+9. **`no-switch:`** → recognised the same way; strip it and set `NO_SWITCH=true`
+   (also when `QUOIN_RUN_AUTO_SWITCH=0`; read it with `printenv` when a trigger
+   fires): Escalation then stops instead of switching to `run_hard`.
+10. **`[from-hard]`** → `run_hard` handed this task over (its
+   `pipeline-switch.md` says `to: light`). Strip it and keep the given task
+   name. Step 1 keeps the task branch `run_hard` created (no new branch); the
+   note's `evidence:` file is the request that Step 1b and the brief (light
+   pipeline file) work from; Step 1b takes the light route. The task never
+   switches again.
 
 ## Step 1 — Setup (inline)
 
@@ -171,7 +184,7 @@ Phase markers: log `discover`, `context` and `review` as `--skipped` and then
 plus its tests, verification fails twice, or the change turns out to need an
 excluded category (that last trigger does not apply when `direct:` forced the
 route). Two failed verifications here mean this escalation, not the
-`/run hard:` recommendation under Escalation, which applies only to failures on
+switch to `run_hard` under Escalation, which applies only to failures on
 the light pipeline. Keep the working tree as it is: no reset, no stash. Read
 the light pipeline file first (it holds the Step 3 brief template), then
 rewrite the brief in one write as the full Step 3 brief, its Size section saying
@@ -347,8 +360,7 @@ Marker: `commit` (chain it onto the `git add` call).
 
 ## Escalation
 
-Stop and recommend `/run hard: <task>` (interactive), or end with that
-recommendation in the final report (autonomous), when:
+The task is bigger than the light pipeline when:
 
 - the review returns a blocker that is a design problem, not a local fix;
 - two implementation attempts fail verification for reasons you do not understand;
@@ -358,11 +370,18 @@ recommendation in the final report (autonomous), when:
 A task that spans several repos or needs a few stages is not by itself a reason
 to escalate: the staged path in Step 4b (light pipeline file) handles it.
 
-Before stopping, release the claim (Step 8 item 6) and, in worktree mode,
-name `WT` and the branch: `/run hard:` does not isolate, so run it from `WT`.
+When one fires, switch to `run_hard` through the switch procedure in the light
+pipeline file: it asks once (interactive), keeps the brief, context
+pack and working tree, and hands over in this session. Do not switch, and
+instead stop and recommend `/run hard: <task>` (interactive) or end with that
+recommendation in the final report (autonomous), when `NO_SWITCH` is set, when
+`.workflow_artifacts/<task>/pipeline-switch.md` already exists (a task switches
+at most once), or when the user picks stop. Before stopping, release the claim
+(Step 8 item 6) and, in worktree mode, name `WT` and the branch: `/run hard:`
+does not isolate, so run it from `WT`.
 
-Never switch to the heavy pipeline on your own. Escalating from the Direct
-route to the light pipeline is a separate, one-way step (see Step 1b).
+Escalating from the Direct route to the light pipeline is a separate, one-way
+step (see Step 1b); the Direct route never switches to `run_hard` directly.
 
 ## Important behaviours
 
