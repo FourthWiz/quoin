@@ -115,12 +115,16 @@ class HarnessConfig:
 
 
 # Which /run route the quoin arm takes. "default" is light /run, "hard" the heavy
-# pipeline, "lean" light /run without discovery and without the lessons append.
+# pipeline, "lean" light /run without discovery and without the lessons append,
+# "memory" light /run that keeps lessons, discovery and the dirty marker and
+# skips only run isolation (for sequence suites, where memory carries).
 QUOIN_ROUTE_ENV = "QUOIN_BENCH_QUOIN_ROUTE"
-QUOIN_ROUTES = ("default", "hard", "lean")
+QUOIN_ROUTES = ("default", "hard", "lean", "memory")
 # Benchmark-only switch the quoin arm's session reads in /run Step 0.
 RUN_PROFILE_ENV = "QUOIN_RUN_PROFILE"
 LEAN_RUN_PROFILE = "bench-lean"
+MEMORY_RUN_PROFILE = "bench-memory"
+ROUTE_RUN_PROFILES = {"lean": LEAN_RUN_PROFILE, "memory": MEMORY_RUN_PROFILE}
 # Silences the session-start hook's "run /discover" banner, which would
 # otherwise contradict the lean profile's skipped discovery step.
 DISCOVERY_REFRESH_DISABLE_ENV = "QUOIN_DISCOVERY_REFRESH_DISABLE"
@@ -146,3 +150,8 @@ def quoin_route_or_default(environ=None) -> str:
         return quoin_route(environ)
     except ValueError:
         return "default"
+
+
+def run_profile_for_route(route: str):
+    """The QUOIN_RUN_PROFILE value a quoin-arm route sets, or None."""
+    return ROUTE_RUN_PROFILES.get(route)

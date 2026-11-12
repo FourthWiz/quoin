@@ -32,10 +32,11 @@ from pathlib import Path
 from typing import Optional
 
 from . import arm_identity as _arm_identity
-from .config import BudgetSpec, HarnessConfig
+from .config import BudgetSpec, HarnessConfig, quoin_route_or_default
 from .isolation import create_task_worktree, cleanup_task_worktree
 from .judge import judge_task
 from .repo_prep import RepoPrepError, capture_patch, cleanup_task_repo, prepare_task_repo
+from . import sequence_memory
 from .result_writer import (
     CellResult,
     RunResult,
@@ -520,6 +521,14 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
         extra_kwargs = _threadable_kwargs(adapter, config)
         if "run_output_dir" in inspect.signature(adapter.invoke).parameters:
             extra_kwargs["run_output_dir"] = t_dir
+        carries_memory = (
+            sequence_memory.is_sequence_task(task_spec)
+            and quoin_route_or_default() == "memory"
+            and "memory_seed_dir" in inspect.signature(adapter.invoke).parameters
+        )
+        if carries_memory:
+            seed_dir, inherited_from = sequence_memory.find_seed(t_dir.parent, task_spec)
+            extra_kwargs["memory_seed_dir"] = seed_dir
         inv = adapter.invoke(
             task_spec=task_spec,
             workdir=prepared.path,
@@ -552,6 +561,14 @@ def _run_one_verified_body(cell, task_spec, run_id, config, adapter, t_dir, stac
         cleaned = True
         if cleanup_note is not None:
             extra["clone_cleanup_failed"] = cleanup_note
+        if carries_memory:
+            try:
+                carry = sequence_memory.finish_task(t_dir, task_spec, seed_dir, inherited_from)
+                extra["memory_carry"] = {
+                    k: carry[k] for k in ("inherited_from", "lessons_written", "snapshot")
+                }
+            except OSError as exc:
+                extra["memory_carry_error"] = str(exc)[:300]
 
         stats = {"skipped_lines": 0}
         if extra.get("transcript_streamed"):

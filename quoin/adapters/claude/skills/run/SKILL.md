@@ -65,12 +65,13 @@ input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolat
    staged task runs its stages (Step 4b, "Parallel waves", in the light
    pipeline file); a single-shape
    task ignores it. It combines with `--autonomous` and `--resume`.
-6. **`QUOIN_RUN_PROFILE=bench-lean`** in the environment → set `LEAN=true`.
-   Benchmark-only, never a tag: the harness sets it for its quoin arm. Read it from the
-   `profile=` line the Step 1 setup marker prints; a `--resume` that skips
-   Step 1 reads it with `printenv QUOIN_RUN_PROFILE`. Under `LEAN`, skip
-   isolation, lessons and the dirty marker (Step 1 items 2 and 4, Step 8 items
-   3, 4 and 6); Step 2 only logs its marker as skipped; all else as written.
+6. **`QUOIN_RUN_PROFILE`** (benchmark only, never a tag):
+   `bench-lean` sets `LEAN`, `bench-memory` sets `MEMORY`. Read it from the
+   Step 1 marker's `profile=` line (`printenv QUOIN_RUN_PROFILE` on a
+   `--resume` that skips Step 1). `LEAN` skips isolation, lessons and the
+   dirty marker (Step 1 items 2 and 4, Step 8 items 3, 4 and 6), and Step 2
+   only logs its marker as skipped; `MEMORY` skips only isolation (Step 1
+   item 2, Step 8 item 6). All else as written.
 7. **`direct:`** / **`light:`** → recognised only as whitespace-delimited
    tokens among the leading flags and tags, before the task text (so
    `redirect:` or a tag quoted in an issue body never counts). Strip them and
@@ -90,7 +91,7 @@ input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolat
    the change lands in:
    `python3 "__QUOIN_HOME__/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`
    (`<repo>` is the main checkout, never `WT`), plus `--isolate` under
-   `ISOLATE`. Set `WT` to the `worktree` it prints. `LEAN`: no claim,
+   `ISOLATE`. Set `WT` to the `worktree` it prints. `LEAN`/`MEMORY`: no claim,
    `WT` is the checkout.
    - `mode: main`: `WT` is the checkout itself; go on to item 3.
    - `mode: worktree`: another live run holds the checkout (`blocking`) or

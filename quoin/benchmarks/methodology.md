@@ -45,6 +45,9 @@ For the `quoin-claude` cell, "Quoin" means:
    benchmark-only `QUOIN_RUN_PROFILE=bench-lean` in this arm's session, which
    drops `/run`'s discovery step and its lessons-learned append; everything
    from the brief through the post-review fixes runs as on the light route.
+   `QUOIN_BENCH_QUOIN_ROUTE=memory` sets `QUOIN_RUN_PROFILE=bench-memory`,
+   which skips only run isolation; it is for sequence suites, where the
+   arm's workflow memory carries from one task to the next.
    The route is recorded in the manifest and a resume with another route is
    refused, so one run id never mixes routes.
    The plain arm's prompt is unchanged. The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline

@@ -516,6 +516,262 @@ def build_tiered_suite(snapshot_path, problems_path, seed: int, suite: str = "ti
     }
 
 
+# cl-sequences: per-repo chronological sequences from SWE-Bench-CL (arXiv
+# 2507.00014), whose tasks are SWE-bench Verified instances. The vendored CL
+# snapshot keeps the upstream order and per-task metadata of all eight
+# sequences; the suite takes one seeded window of consecutive tasks from the
+# chronological head of three of them. Every instance must be in the vendored
+# Verified snapshot with the same repo, base commit and difficulty, and its
+# prompt text comes from the Verified problems file, so repo prep, prompt and
+# judge are the Verified ones unchanged.
+CL_DATASET = "SWE-Bench-CL"
+CL_SOURCE_REPO = "https://github.com/thomasjoshi/agents-never-forget"
+CL_SOURCE_FILE = "data/SWE-Bench-CL-Curriculum.json"
+CL_SNAPSHOT_FIELDS = [
+    "instance_id", "base_commit", "created_at", "difficulty", "cl_position", "modified_files",
+]
+DEFAULT_CL_SNAPSHOT_PATH = _DATA_DIR / "swebench-cl-snapshot.json"
+DEFAULT_PROBLEMS_PATH_CL = _DATA_DIR / "swebench-verified-problems-cl-sequences.json"
+CL_SUITE = "cl-sequences"
+
+# Same wall clock as tiered-balanced: CL windows sit in the easy and medium
+# labels, which that figure already covers with headroom.
+CL_WALL_CLOCK_SECONDS = TIERED_BALANCED_WALL_CLOCK_SECONDS
+CL_SEQUENCE_SPEC = {
+    "django": {"sequence_id": "django_django_sequence", "n": 12, "sub_seed_offset": 201},
+    "sympy": {"sequence_id": "sympy_sympy_sequence", "n": 12, "sub_seed_offset": 202},
+    "sphinx": {"sequence_id": "sphinx-doc_sphinx_sequence", "n": 12, "sub_seed_offset": 203},
+}
+# Cap $35 per session x 36 tasks x 2 arms = $2520 worst case per run id; the
+# ceiling adds 10% and rounds up to a multiple of $10.
+CL_COST = {
+    "worst_case_target_usd": 2520,
+    "worst_case_ceiling_usd": 2780,
+    "documented_cap_usd": 35,
+}
+
+
+def cl_snapshot_from_curriculum(doc, *, revision, source_sha256, source_size, fetched_on) -> dict:
+    sequences = []
+    for seq in doc.get("sequences", []):
+        tasks = []
+        for task in seq["tasks"]:
+            meta = task["metadata"]
+            cont = task["continual_learning"]
+            tasks.append({
+                "instance_id": meta["instance_id"],
+                "base_commit": meta["base_commit"],
+                "created_at": meta["created_at"],
+                "difficulty": meta["difficulty"],
+                "cl_position": int(cont["sequence_position"]),
+                "modified_files": sorted(cont.get("modified_files") or []),
+            })
+        sequences.append({"id": seq["id"], "repo": seq["repo"], "tasks": tasks})
+    return {
+        "dataset": CL_DATASET,
+        "source_repo": CL_SOURCE_REPO,
+        "revision": revision,
+        "source_file": CL_SOURCE_FILE,
+        "source_file_sha256": source_sha256,
+        "source_file_size": source_size,
+        "license": "MIT",
+        "fetched_on": fetched_on,
+        "generated_by": "quoin/benchmarks/scripts/pick_subset.py --refresh-cl-snapshot",
+        "fields": list(CL_SNAPSHOT_FIELDS),
+        "task_count": sum(len(s["tasks"]) for s in sequences),
+        "sequences": sequences,
+    }
+
+
+def load_cl_snapshot(path) -> dict:
+    path = Path(path)
+    try:
+        snap = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise TieredSuiteError(f"cannot read CL snapshot {path}: {exc}")
+    for key in ("dataset", "revision", "source_file_sha256", "task_count", "sequences"):
+        if key not in snap:
+            raise TieredSuiteError(f"CL snapshot {path} is missing '{key}'")
+    if not _SHA40.match(str(snap["revision"])):
+        raise TieredSuiteError("CL snapshot revision is not a 40-hex commit SHA")
+    total = 0
+    for seq in snap["sequences"]:
+        tasks = seq.get("tasks")
+        if not isinstance(tasks, list) or not tasks:
+            raise TieredSuiteError(f"CL sequence {seq.get('id')!r} has no tasks")
+        positions = [t.get("cl_position") for t in tasks]
+        if positions != list(range(1, len(tasks) + 1)):
+            raise TieredSuiteError(f"CL sequence {seq.get('id')!r} positions are not 1..n in order")
+        for t in tasks:
+            if sorted(t.keys()) != sorted(CL_SNAPSHOT_FIELDS):
+                raise TieredSuiteError(
+                    f"CL task {t.get('instance_id')!r} must have exactly the keys {CL_SNAPSHOT_FIELDS}"
+                )
+            if not _INSTANCE_ID.match(str(t["instance_id"])) or not _SHA40.match(str(t["base_commit"])):
+                raise TieredSuiteError(f"CL task {t.get('instance_id')!r} is malformed")
+        total += len(tasks)
+    if total != snap["task_count"]:
+        raise TieredSuiteError(f"CL snapshot task_count {snap['task_count']} != {total} tasks")
+    return snap
+
+
+def chronological_head(tasks) -> int:
+    """Length of the leading run of tasks whose created_at never goes back."""
+    n = 1
+    while n < len(tasks) and tasks[n]["created_at"] >= tasks[n - 1]["created_at"]:
+        n += 1
+    return n
+
+
+def select_cl_windows(cl_snap, seed: int, spec=None) -> dict:
+    """Per tier, the seeded window of consecutive tasks (CL snapshot order).
+
+    The window lies inside the sequence's chronological head, so its tasks are
+    in creation order; upstream orders by difficulty band first, and only the
+    first band is guaranteed chronological.
+    """
+    spec = CL_SEQUENCE_SPEC if spec is None else spec
+    by_id = {s["id"]: s for s in cl_snap["sequences"]}
+    chosen = {}
+    for tier, tier_spec in spec.items():
+        seq = by_id.get(tier_spec["sequence_id"])
+        if seq is None:
+            raise TieredSuiteError(f"CL snapshot has no sequence {tier_spec['sequence_id']!r}")
+        head = chronological_head(seq["tasks"])
+        n = tier_spec["n"]
+        if head < n:
+            raise TieredSuiteError(
+                f"tier {tier} needs {n} chronological tasks but {seq['id']} has only {head}"
+            )
+        rng = random.Random(seed + tier_spec["sub_seed_offset"])
+        start = rng.randrange(0, head - n + 1)
+        chosen[tier] = seq["tasks"][start:start + n]
+    return chosen
+
+
+def cl_selected_ids(cl_snapshot_path, seed: int) -> list:
+    chosen = select_cl_windows(load_cl_snapshot(cl_snapshot_path), seed)
+    return [t["instance_id"] for tasks in chosen.values() for t in tasks]
+
+
+def build_cl_suite(cl_snapshot_path, verified_snapshot_path, problems_path, seed: int) -> dict:
+    cl_snapshot_path = Path(cl_snapshot_path)
+    verified_snapshot_path = Path(verified_snapshot_path)
+    problems_path = Path(problems_path)
+    cl_snap = load_cl_snapshot(cl_snapshot_path)
+    snap = load_verified_snapshot(verified_snapshot_path)
+    problems = load_verified_problems(problems_path, snap["revision"])
+    chosen = select_cl_windows(cl_snap, seed)
+    verified = {r["instance_id"]: r for r in snap["rows"]}
+    repo_of = {s["id"]: s["repo"] for s in cl_snap["sequences"]}
+    selected = {t["instance_id"] for tasks in chosen.values() for t in tasks}
+    missing = sorted(selected - set(problems))
+    extra = sorted(set(problems) - selected)
+    if missing or extra:
+        raise TieredSuiteError(
+            f"problems file does not match the selection (missing: {missing}; extra: {extra}); "
+            "run --refresh-verified-snapshot --problems-only --suite cl-sequences"
+        )
+    tasks = []
+    for tier, tier_spec in CL_SEQUENCE_SPEC.items():
+        window = chosen[tier]
+        repo = repo_of[tier_spec["sequence_id"]]
+        for pos, t in enumerate(window):
+            iid = t["instance_id"]
+            row = verified.get(iid)
+            if row is None:
+                raise TieredSuiteError(f"{iid} is not in the vendored Verified snapshot")
+            if (row["repo"], row["base_commit"], row["difficulty"]) != (repo, t["base_commit"], t["difficulty"]):
+                raise TieredSuiteError(f"{iid} disagrees with the Verified snapshot")
+            tasks.append({
+                "id": f"cl_{tier}_{pos:02d}",
+                "tier": tier,
+                "source": "swebench_verified",
+                "source_id": iid,
+                "repo": repo,
+                "base_commit": t["base_commit"],
+                "difficulty": t["difficulty"],
+                "sequence_id": tier,
+                "sequence_position": pos,
+                "sequence_length": len(window),
+                "cl_position": t["cl_position"],
+                "created_at": t["created_at"],
+                "est_tokens_in": TIERED_SMALL_SPEC["easy"]["est_tokens_in"],
+                "est_tokens_out": TIERED_SMALL_SPEC["easy"]["est_tokens_out"],
+                "wall_clock_seconds": CL_WALL_CLOCK_SECONDS,
+                "description": problems[iid],
+            })
+    tiered = {
+        "dataset": VERIFIED_DATASET,
+        "dataset_revision": snap["revision"],
+        "split": "test",
+        "snapshot_file": "quoin/benchmarks/data/swebench-verified-snapshot.json",
+        "snapshot_sha256": hashlib.sha256(verified_snapshot_path.read_bytes()).hexdigest(),
+        "seed": seed,
+        "sub_seeds": {t: s["sub_seed_offset"] for t, s in CL_SEQUENCE_SPEC.items()},
+        "prompt_template_version": PROMPT_TEMPLATE_VERSION,
+        "worst_case_target_usd": CL_COST["worst_case_target_usd"],
+        "worst_case_ceiling_usd": CL_COST["worst_case_ceiling_usd"],
+        "documented_cap_usd": CL_COST["documented_cap_usd"],
+        "requires_budget_cap": True,
+        "paired_run": True,
+        "sequence_mode": True,
+        "pilot_tier": next(iter(CL_SEQUENCE_SPEC)),
+        "sequence_source": {
+            "dataset": CL_DATASET,
+            "source_repo": CL_SOURCE_REPO,
+            "revision": cl_snap["revision"],
+            "source_file": cl_snap.get("source_file", CL_SOURCE_FILE),
+            "source_file_sha256": cl_snap["source_file_sha256"],
+            "snapshot_file": "quoin/benchmarks/data/" + cl_snapshot_path.name,
+            "snapshot_sha256": hashlib.sha256(cl_snapshot_path.read_bytes()).hexdigest(),
+        },
+        "tiers": {
+            t: {
+                "label": s["sequence_id"],
+                "n": s["n"],
+                "wall_clock_seconds": CL_WALL_CLOCK_SECONDS,
+                "est_tokens_in": TIERED_SMALL_SPEC["easy"]["est_tokens_in"],
+                "est_tokens_out": TIERED_SMALL_SPEC["easy"]["est_tokens_out"],
+            }
+            for t, s in CL_SEQUENCE_SPEC.items()
+        },
+        "problems_file": "quoin/benchmarks/data/" + problems_path.name,
+        "problems_sha256": hashlib.sha256(problems_path.read_bytes()).hexdigest(),
+    }
+    return {
+        "schema_version": 2,
+        "description": (
+            f"Quoin benchmark {CL_SUITE} task suite: {len(tasks)} SWE-bench Verified instances"
+            f" in {len(CL_SEQUENCE_SPEC)} per-repo chronological sequences from SWE-Bench-CL."
+            " Tasks of a sequence run in order and the quoin arm's workflow memory carries"
+            f" between them. Generated deterministically via pick_subset.py --suite {CL_SUITE}"
+            f" --seed {seed} from vendored snapshots. Do not edit manually; regenerate from"
+            " pick_subset.py."
+        ),
+        "generated_by": "quoin/benchmarks/scripts/pick_subset.py",
+        "seed": seed,
+        "provenance_file": "quoin/benchmarks/suite-cl-sequences-provenance.md",
+        "tiered": tiered,
+        "tasks": tasks,
+    }
+
+
+def refresh_cl_snapshot(cl_file, revision, fetched_on, snapshot_path) -> None:
+    raw = Path(cl_file).read_bytes()
+    try:
+        doc = json.loads(raw.decode("utf-8"))
+    except ValueError as exc:
+        raise TieredSuiteError(f"cannot parse {cl_file}: {exc}")
+    snap = cl_snapshot_from_curriculum(
+        doc, revision=revision, source_sha256=hashlib.sha256(raw).hexdigest(),
+        source_size=len(raw), fetched_on=fetched_on,
+    )
+    _write_text(snapshot_path, render_suite(snap))
+    load_cl_snapshot(snapshot_path)
+    print(f"Wrote {snapshot_path} ({snap['task_count']} tasks)")
+
+
 def snapshot_from_rows(
     rows, *, revision, source_file, source_sha256, source_size, fetched_on
 ) -> dict:
@@ -616,7 +872,8 @@ def refresh_verified_snapshot(parquet_file, revision, fetched_on, seed, snapshot
         print(f"Wrote {path} ({count} problems)")
 
 
-def refresh_problems_only(parquet_file, revision, seed, suite, snapshot_path, problems_path) -> None:
+def refresh_problems_only(parquet_file, revision, seed, suite, snapshot_path, problems_path,
+                          cl_snapshot_path=DEFAULT_CL_SNAPSHOT_PATH) -> None:
     """Write one suite's problems file without touching the snapshot.
 
     Refuses unless the parquet bytes and revision match the committed snapshot,
@@ -634,11 +891,18 @@ def refresh_problems_only(parquet_file, revision, seed, suite, snapshot_path, pr
         raise TieredSuiteError(
             f"--revision {revision} does not match the snapshot revision {snap['revision']}"
         )
-    chosen = select_tiered(snap["rows"], seed, TIERED_SUITES[suite]["tiers"])
-    selected = [iid for ids in chosen.values() for iid in ids]
+    if suite == CL_SUITE:
+        selected = cl_selected_ids(cl_snapshot_path, seed)
+    else:
+        chosen = select_tiered(snap["rows"], seed, TIERED_SUITES[suite]["tiers"])
+        selected = [iid for ids in chosen.values() for iid in ids]
     problems = problems_from_rows(rows, selected, revision=revision)
     _write_text(problems_path, render_suite(problems))
     print(f"Wrote {problems_path} ({len(selected)} problems)")
+
+
+def _problems_path(suite: str) -> Path:
+    return DEFAULT_PROBLEMS_PATH_CL if suite == CL_SUITE else TIERED_SUITES[suite]["problems_path"]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -677,7 +941,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--suite",
-        choices=sorted(TIERED_SUITES),
+        choices=sorted(list(TIERED_SUITES) + [CL_SUITE]),
         default=None,
         help="Generate a tiered suite from the vendored SWE-bench Verified snapshot (default: v1)",
     )
@@ -703,6 +967,18 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="With --refresh-verified-snapshot and --suite: rewrite only that suite's problems file",
     )
+    parser.add_argument(
+        "--cl-snapshot",
+        type=Path,
+        default=DEFAULT_CL_SNAPSHOT_PATH,
+        help="Vendored SWE-Bench-CL snapshot path (--suite cl-sequences)",
+    )
+    parser.add_argument(
+        "--refresh-cl-snapshot",
+        action="store_true",
+        help="Maintainer mode: rebuild the vendored CL snapshot from SWE-Bench-CL-Curriculum.json",
+    )
+    parser.add_argument("--cl-file", type=Path, default=None)
     parser.add_argument("--parquet-file", type=Path, default=None)
     parser.add_argument("--revision", default=None)
     parser.add_argument("--fetched-on", default=None, help="YYYY-MM-DD (default: today, UTC)")
@@ -714,6 +990,18 @@ def main(argv: list[str] | None = None) -> None:
     if args.problems_only and args.suite is None:
         print("ERROR: --problems-only needs --suite to name the problems file to refresh", file=sys.stderr)
         sys.exit(2)
+
+    if args.refresh_cl_snapshot:
+        if args.cl_file is None or args.revision is None or not _SHA40.match(args.revision):
+            print("ERROR: --refresh-cl-snapshot requires --cl-file and a 40-character --revision", file=sys.stderr)
+            sys.exit(2)
+        fetched_on = args.fetched_on or datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%d")
+        try:
+            refresh_cl_snapshot(args.cl_file, args.revision, fetched_on, args.cl_snapshot)
+        except (TieredSuiteError, OSError) as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+        return
 
     if args.refresh_verified_snapshot:
         if args.parquet_file is None or args.revision is None:
@@ -741,7 +1029,7 @@ def main(argv: list[str] | None = None) -> None:
             if args.problems_only:
                 refresh_problems_only(
                     args.parquet_file, args.revision, args.seed, args.suite, args.snapshot,
-                    args.problems or TIERED_SUITES[args.suite]["problems_path"],
+                    args.problems or _problems_path(args.suite), args.cl_snapshot,
                 )
             else:
                 refresh_verified_snapshot(
@@ -753,7 +1041,15 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(2)
         return
 
-    if args.suite in TIERED_SUITES:
+    if args.suite == CL_SUITE:
+        try:
+            suite = build_cl_suite(
+                args.cl_snapshot, args.snapshot, args.problems or DEFAULT_PROBLEMS_PATH_CL, args.seed,
+            )
+        except TieredSuiteError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            sys.exit(2)
+    elif args.suite in TIERED_SUITES:
         if args.n_humaneval is not None or args.n_swebench is not None:
             print(f"ERROR: --n-humaneval and --n-swebench are not valid with --suite {args.suite}", file=sys.stderr)
             sys.exit(2)

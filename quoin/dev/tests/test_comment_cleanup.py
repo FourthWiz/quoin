@@ -466,9 +466,9 @@ def test_pinned_corpus_pointer_block_census():
     pointer_linenos = sorted(
         b.start for b in blocks if cc._POINTER_RE.search(b.joined)
     )
-    assert pointer_linenos == [552, 571, 586, 595, 601, 613, 704, 719, 735, 756, 787, 867]
-    assert 630 not in [b.start for b in blocks]
-    assert 630 in exclusion
+    assert pointer_linenos == [559, 578, 593, 602, 608, 620, 711, 726, 742, 763, 794, 874]
+    assert 637 not in [b.start for b in blocks]
+    assert 637 in exclusion
 
 
 def test_pinned_corpus_docstring_hits_byte_identical():

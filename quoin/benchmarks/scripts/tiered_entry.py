@@ -124,8 +124,9 @@ def build_parser(prog: str = "quoin bench tiered") -> argparse.ArgumentParser:
                         help="Per-session spend cap (default: the suite's documented cap)")
     parser.add_argument("--yes", action="store_true",
                         help="Skip the spend prompt; needed for unattended runs")
-    parser.add_argument("--pilot-tier", default="easy",
-                        help="Tier run first and checked for denial parity (default: %(default)s)")
+    parser.add_argument("--pilot-tier", default=None,
+                        help="Tier run first and checked for denial parity (default: the suite's "
+                             "tiered.pilot_tier, else easy)")
     parser.add_argument("--parity-min-gap", type=int, default=3,
                         help="Stop when the arms differ by at least this many permission denials "
                              "(and the ratio test also holds) (default: %(default)s)")
@@ -224,6 +225,8 @@ def resolve(args):
         return rb._refuse("suite", "quoin bench tiered needs a paired tiered suite")
     tiered = doc["tiered"]
     tier_names = list((tiered.get("tiers") or {}).keys())
+    if args.pilot_tier is None:
+        args.pilot_tier = tiered.get("pilot_tier") or "easy"
     if args.pilot_tier not in tier_names:
         return rb._refuse(
             "pilot-tier",

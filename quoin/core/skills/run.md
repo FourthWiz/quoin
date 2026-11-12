@@ -51,7 +51,9 @@ task); markers change no behaviour and are never committed.
    lean profile (`QUOIN_RUN_PROFILE=bench-lean`, set by the benchmark
    harness, never a user tag) skips this step, the isolation claim and
    release, the lessons-learned read and append, and the dirty marker;
-   every other step runs unchanged.
+   every other step runs unchanged. The memory profile
+   (`QUOIN_RUN_PROFILE=bench-memory`, for sequence suites whose workflow
+   memory carries between tasks) skips only the isolation claim and release.
 4. Frame, inline: write `brief.md` (goal, acceptance criteria,
    non-goals, assumptions, shape). Ask the user when the request is
    unclear in a way that changes the work; never ask in autonomous mode.
