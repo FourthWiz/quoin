@@ -298,6 +298,15 @@
       "claude_model": "sonnet",
       "section_0": true,
       "spawn_target": false
+    },
+    {
+      "name": "repo_cleanup",
+      "phase": "repo_cleanup",
+      "effort": "high",
+      "user_facing": true,
+      "claude_model": "opus",
+      "section_0": false,
+      "spawn_target": false
     }
   ]
 }

@@ -79,6 +79,7 @@ CANONICAL_SKILLS = (
     "next_steps",
     "plan",
     "pr",
+    "repo_cleanup",
     "review",
     "revise",
     "revise-fast",
@@ -156,6 +157,8 @@ DEPLOYED_SCRIPTS = (
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator (wrapped portable-core — also in CORE_SCRIPTS)
     "continuation_handoff.py",  # continuation handoff helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "comment_cleanup.py",  # pre-PR comment cleanup wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "repo_comment_cleanup.py",  # /repo_cleanup comment lister, applier and removal-only verifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
+    "suite_audit.py",  # /repo_cleanup test-suite audit helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "task_bookkeeping.py",  # task-folder bookkeeping classifier wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "fsops.py",  # file-operations helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
     "append_artifact.py",  # artifact append helper wrapper (wrapped portable-core — also in CORE_SCRIPTS)
@@ -220,6 +223,7 @@ SKILL_OVERRIDES: dict[str, str] = {
     "weekly_review": "name-only",
     "next_steps": "name-only",
     "continue_work": "name-only",
+    "repo_cleanup": "name-only",
     "security_review": "name-only",
     "workspace": "name-only",
     # Dispatched by name from /thorough_plan; its description says not for direct use.
@@ -671,6 +675,8 @@ CORE_SCRIPTS = (
     "handoff_validate.py",  # IVG-248: inter-agent handoff envelope validator core impl; required by ~/.claude/scripts/handoff_validate.py parents[1] loader
     "continuation_handoff.py",  # continuation handoff helper core impl; required by the wrapper's parents[1] loader
     "comment_cleanup.py",  # pre-PR comment cleanup core impl; required by the wrapper's parents[1] loader
+    "repo_comment_cleanup.py",  # /repo_cleanup comment script core impl; required by the wrapper's parents[1] loader
+    "suite_audit.py",  # /repo_cleanup audit helper core impl; required by the wrapper's parents[1] loader
     "task_bookkeeping.py",  # task-folder bookkeeping classifier core impl; required by ~/.claude/scripts/task_bookkeeping.py parents[1] loader
     "fsops.py",  # file-operations helper core impl; required by the wrapper's parents[1] loader
     "append_artifact.py",  # artifact append helper core impl; required by the wrapper's parents[1] loader
@@ -1900,7 +1906,7 @@ def regenerate_pollution_dispatch(source_dir: pathlib.Path, *, allow_writes: boo
     """Regenerate §0' Pollution dispatch, §0″ Minimum-tier guard (Opus), and §0‴
     Minimum-tier guard (Sonnet) blocks.
 
-    Regenerates §0' (10 Opus-tier leaf skills carry pollution dispatch) AND
+    Regenerates §0' (11 Opus-tier leaf skills carry pollution dispatch) AND
     §0″ (same 10 skills carry minimum-tier guard) AND §0‴ (13 Sonnet-tier
     cheap-tier skills carry the mirrored minimum-tier guard, IVG-117) in the
     adapter SKILL.md files at quoin/adapters/claude/skills/*/SKILL.md.
