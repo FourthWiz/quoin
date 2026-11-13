@@ -531,6 +531,42 @@ def test_apply_rejects_non_py_file(tmp_path):
     assert "not a .py file" in res.stderr
 
 
+def test_apply_rejects_entry_without_lines_before_any_write(tmp_path):
+    repo = make_repo(tmp_path, {"a.py": b"x = 1  # note\n", "b.py": b"y = 2  # note\n"})
+    res = apply(repo, [{"file": "a.py", "lines": [1]}, {"file": "b.py"}])
+    _assert_rejected(repo, res, (repo / "a.py", b"x = 1  # note\n"), (repo / "b.py", b"y = 2  # note\n"))
+    assert "positive integers" in res.stderr
+
+
+def test_apply_rejects_bad_line_values(tmp_path):
+    repo = make_repo(tmp_path, {"a.py": b"x = 1  # note\n"})
+    for bad in ([], [0], [-1], ["1"], [True], 1):
+        res = apply(repo, [{"file": "a.py", "lines": bad}])
+        _assert_rejected(repo, res, (repo / "a.py", b"x = 1  # note\n"))
+
+
+def test_apply_rejects_non_object_entry_and_non_list_spec(tmp_path):
+    repo = make_repo(tmp_path, {"a.py": b"x = 1  # note\n"})
+    _assert_rejected(repo, apply(repo, ["a.py"]), (repo / "a.py", b"x = 1  # note\n"))
+    _assert_rejected(repo, apply(repo, {"file": "a.py", "lines": [1]}), (repo / "a.py", b"x = 1  # note\n"))
+
+
+def test_apply_rejects_duplicate_spellings_of_one_file(tmp_path):
+    src = b"# one\n# two\nx = 1\n"
+    repo = make_repo(tmp_path, {"a.py": src})
+    res = apply(repo, [{"file": "a.py", "lines": [1]}, {"file": "./a.py", "lines": [1]}])
+    _assert_rejected(repo, res, (repo / "a.py", src))
+    assert "duplicate" in res.stderr
+
+
+def test_apply_normalizes_dot_slash_path(tmp_path):
+    repo = make_repo(tmp_path, {"a.py": b"x = 1  # note\n"})
+    res = apply(repo, [{"file": "./a.py", "lines": [1]}])
+    assert res.returncode == 0, res.stderr
+    assert "TOUCHED a.py" in res.stdout
+    assert (repo / "a.py").read_bytes() == b"x = 1\n"
+
+
 def test_apply_prints_touched_files(tmp_path):
     repo = make_repo(tmp_path, {"m.py": b"x = 1  # note\n"})
     res = apply(repo, [{"file": "m.py", "lines": [1]}])

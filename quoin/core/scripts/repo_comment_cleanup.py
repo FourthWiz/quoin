@@ -243,15 +243,38 @@ def containment_error(repo: Path, rel: object, tracked: set[str]) -> str | None:
     return None
 
 
+def entry_error(repo: Path, entry: object, tracked: set[str], seen: set[str]) -> str | None:
+    """Why a deletions-file entry is unusable, or None. Records the normalized path in `seen`."""
+    if not isinstance(entry, dict):
+        return "entry must be an object with 'file' and 'lines'"
+    why = containment_error(repo, entry.get("file"), tracked)
+    if why:
+        return why
+    lines = entry.get("lines")
+    if (not isinstance(lines, list) or not lines
+            or not all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in lines)):
+        return "'lines' must be a non-empty list of positive integers"
+    # Two spellings of one file would apply the original line numbers to already-edited text.
+    norm = PurePosixPath(entry["file"]).as_posix()
+    if norm in seen:
+        return "duplicate entry for the same file"
+    seen.add(norm)
+    return None
+
+
 def cmd_apply(args) -> int:
     repo = Path(args.repo).resolve()
     spec = json.loads(Path(args.deletions).read_text())
+    if not isinstance(spec, list):
+        print("ERROR rejected path deletions file must be a JSON list", file=sys.stderr)
+        print("applied 0 comment deletions; 1 entries rejected, nothing written")
+        return 1
     raw = _git(repo, "ls-files", "-z").decode("utf-8", "surrogateescape")
     tracked = {n for n in raw.split("\0") if n}
+    seen: set[str] = set()
     rejected = [f"{entry.get('file') if isinstance(entry, dict) else entry!r}: {why}"
                 for entry in spec
-                if (why := containment_error(
-                    repo, entry.get("file") if isinstance(entry, dict) else None, tracked))]
+                if (why := entry_error(repo, entry, tracked, seen))]
     if rejected:
         for r in rejected:
             print("ERROR rejected path", r, file=sys.stderr)
@@ -260,7 +283,7 @@ def cmd_apply(args) -> int:
     errors: list[str] = []
     total = 0
     for entry in spec:
-        rel = entry["file"]
+        rel = PurePosixPath(entry["file"]).as_posix()
         path = repo / rel
         try:
             text, encoding, _ = read_source(path.read_bytes())
