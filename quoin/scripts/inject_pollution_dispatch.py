@@ -956,10 +956,10 @@ def inject_mintier_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
 
 def inject_mintier_sonnet_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
     """Inject/refresh §0‴ Minimum-tier guard (Sonnet tier) into a single adapter
-    SKILL.md file — IVG-117.
+    SKILL.md file.
 
     Anchors on SECTION0_HEADING (the hand-authored §0 block, always present in the
-    12 Sonnet targets), NOT on §0'/§0″ (Opus-only, disjoint file set). D-06.
+    12 Sonnet targets), NOT on §0'/§0″ (Opus-only, disjoint file set).
 
     Strategy:
     - Refresh path: if MINTIER_SONNET_HEADING already in text, replace in place

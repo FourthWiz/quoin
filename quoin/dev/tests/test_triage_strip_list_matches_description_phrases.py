@@ -1,14 +1,14 @@
-"""Triage description/body strip-list coupling guard (IVG-164 S-4, plan D-08/proc:TRIAGE).
+"""Triage description/body strip-list coupling guard.
 
 triage's body "Step 1: Strip trigger phrases" list feeds its own Signal B
-scoring and mirrors the frontmatter description's trigger phrases. S-4's
+scoring and mirrors the frontmatter description's trigger phrases. The
 description trim froze all 5 existing phrases verbatim (zero-deviation
 default — no body edit anywhere; the stub tree has no body at all).
 
-This test hardcodes the 5 D-08-frozen phrases as literals rather than
+This test hardcodes the 5 frozen phrases as literals rather than
 extracting them from the description — the 5th phrase contains an internal
-apostrophe, so any quote-delimiter parse would truncate it to "I" (round-4
-MAJ-1; the hazard is systemic: 8 of 33 skills carry apostrophes in trigger
+apostrophe, so any quote-delimiter parse would truncate it to "I" (the
+hazard is systemic: 8 of 33 skills carry apostrophes in trigger
 phrases, so no phrase-level check may parse by quote delimiter).
 
 Assertions:
