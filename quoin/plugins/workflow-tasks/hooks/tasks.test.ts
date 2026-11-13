@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   deriveStage,
   detectPhaseCompat,
+  readLightTexts,
   discoverTasks,
   findProjectRoot,
   flattenTasks,
@@ -128,7 +129,8 @@ describe('stage fixtures', () => {
       const { fs } = memFs(f.tree)
       const dir = `${ART}/${f.phaseDir ?? f.task}`
       if (f.expect.detectPhase !== null) {
-        expect(detectPhaseCompat(dir, await fs.list(dir)).phase).toBe(f.expect.detectPhase)
+        const entries = await fs.list(dir)
+        expect(detectPhaseCompat(dir, entries, await readLightTexts(fs, dir, entries)).phase).toBe(f.expect.detectPhase)
       }
       const stage = await deriveStage(fs, ROOT, f.task)
       expect(stage.key).toBe(f.expect.stage)

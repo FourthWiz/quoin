@@ -28,15 +28,21 @@ export type Fs = {
 
 export type Phase =
   | 'done'
+  | 'committed'
   | 'review-gated'
   | 'review'
   | 'implement-gated'
+  | 'implement'
   | 'plan-gated'
   | 'planning'
   | 'architecture'
   | 'discover'
 
-export type PhaseResult = { phase: Phase; criticRounds: number; reviewRounds: number }
+/** `light` is set when the phase came from a light /run folder (brief.md, phases.log). */
+export type PhaseResult = { phase: Phase; criticRounds: number; reviewRounds: number; light?: true }
+
+/** Contents detectPhaseCompat needs for a light /run folder; read with readLightTexts. */
+export type LightTexts = { phasesLog?: string; architecture?: string; pipelineSwitch?: string }
 
 const ARTIFACTS = '.workflow_artifacts'
 const MAX_DEPTH = 3
@@ -247,8 +253,56 @@ const maxN = (re: RegExp, names: string[]) =>
 const hasPrefix = (names: string[], prefixes: string[]) =>
   names.some(f => prefixes.some(p => f.startsWith(p)))
 
+// Light /run phase markers (run_phase.py PHASES) -> detect_phase output.
+const LIGHT_MARKER_PHASE: Record<string, Phase> = {
+  setup: 'planning',
+  discover: 'planning',
+  frame: 'planning',
+  context: 'planning',
+  decompose: 'planning',
+  implement: 'implement',
+  verify: 'implement',
+  review: 'review',
+  'review-fixes': 'review',
+  commit: 'committed',
+}
+const LIGHT_MARKER_RE = /^\S+\s+(?:\d+:)?([a-z-]+)(\s+skipped)?\s*$/
+
+/** Port of status_graph._light_run_phase: null when the folder is not a light /run task. */
+function lightRunPhase(names: string[], texts: LightTexts): Phase | null {
+  if (!names.includes('phases.log') && !names.includes('brief.md')) return null
+  if (/^to:\s*hard\b/m.test(texts.pipelineSwitch ?? '')) return null
+  let phase: Phase | null = null
+  const lines = (texts.phasesLog ?? '').split(/\r?\n/)
+  for (let i = lines.length - 1; i >= 0 && phase === null; i -= 1) {
+    const m = lines[i].match(LIGHT_MARKER_RE)
+    if (m && !m[2] && Object.prototype.hasOwnProperty.call(LIGHT_MARKER_PHASE, m[1])) phase = LIGHT_MARKER_PHASE[m[1]]
+  }
+  if (phase === null) {
+    if (names.includes('review.md')) phase = 'review'
+    else if (names.includes('context.md')) phase = 'implement'
+    else if (names.includes('brief.md')) phase = 'planning'
+    else return null
+  }
+  const rows = (texts.architecture ?? '').match(STAGE_ROW_RE) ?? []
+  if (phase === 'committed' && rows.some(r => r.includes('⏳'))) return 'implement'
+  return phase
+}
+
+/** Reads the files lightRunPhase looks at, when present. */
+export async function readLightTexts(fs: Fs, dirPath: string, entries: Entry[]): Promise<LightTexts> {
+  const names = entries.filter(isLiveFile).map(e => e.name)
+  if (!names.includes('phases.log') && !names.includes('brief.md')) return {}
+  const read = (name: string) => (names.includes(name) ? readSafe(fs, joinPath(dirPath, name)) : Promise.resolve(''))
+  return {
+    phasesLog: await read('phases.log'),
+    architecture: await read('architecture.md'),
+    pipelineSwitch: await read('pipeline-switch.md'),
+  }
+}
+
 /** Port of status_graph.detect_phase with the git probe off. */
-export function detectPhaseCompat(dirPath: string, entries: Entry[]): PhaseResult {
+export function detectPhaseCompat(dirPath: string, entries: Entry[], texts: LightTexts = {}): PhaseResult {
   if (dirPath.split('/').includes('finalized')) return { phase: 'done', criticRounds: 0, reviewRounds: 0 }
   const names = entries.filter(isLiveFile).map(e => e.name)
   const criticRounds = maxN(/^critic-response-(\d+)\.md$/, names)
@@ -257,6 +311,10 @@ export function detectPhaseCompat(dirPath: string, entries: Entry[]): PhaseResul
   if (reviewRounds >= 1) return { phase: 'review', criticRounds, reviewRounds }
   if (hasPrefix(names, IMPLEMENT_GATE_PREFIXES)) return { phase: 'implement-gated', criticRounds, reviewRounds: 0 }
   if (hasPrefix(names, PLAN_GATE_PREFIXES)) return { phase: 'plan-gated', criticRounds, reviewRounds: 0 }
+  if (!names.includes('current-plan.md')) {
+    const light = lightRunPhase(names, texts)
+    if (light !== null) return { phase: light, criticRounds, reviewRounds: 0, light: true }
+  }
   if (names.includes('current-plan.md')) return { phase: 'planning', criticRounds, reviewRounds: 0 }
   if (names.includes('architecture.md')) return { phase: 'architecture', criticRounds, reviewRounds: 0 }
   return { phase: 'discover', criticRounds: 0, reviewRounds: 0 }
@@ -383,6 +441,8 @@ export function newestGate(entries: Entry[], prefixes: string[]): Entry | null {
 const SHORT: Record<StageKey, string> = {
   'run-active': 'run',
   started: 'new',
+  'run-light': 'run',
+  'run-committed': 'committed',
   'pre-spec': 'brief',
   spec: 'spec',
   'spec-approved': 'spec ✓',
@@ -409,6 +469,8 @@ const SHORT: Record<StageKey, string> = {
 const LONG: Record<StageKey, string> = {
   'run-active': 'run in progress',
   started: 'started, nothing written yet',
+  'run-light': 'light /run in progress',
+  'run-committed': 'committed locally, pull request next',
   'pre-spec': 'task brief written, no spec yet',
   spec: 'spec written, not gated',
   'spec-approved': 'spec approved',
@@ -505,7 +567,7 @@ const gateInfo = (g: GateRead) => (g.entry ? { name: g.entry.name, verdict: g.ve
 
 /** Refines the base phase of one directory (a task folder or a stage folder) into a stage. */
 async function evaluateDir(fs: Fs, dirPath: string, entries: Entry[], ctx: StageCtx): Promise<StageInfo> {
-  const base = detectPhaseCompat(dirPath, entries)
+  const base = detectPhaseCompat(dirPath, entries, await readLightTexts(fs, dirPath, entries))
   const names = entries.filter(isLiveFile).map(e => e.name)
   const has = (name: string) => names.includes(name)
 
@@ -521,6 +583,8 @@ async function evaluateDir(fs: Fs, dirPath: string, entries: Entry[], ctx: Stage
     if (g.entry && g.verdict === 'fail') return makeStage(key.fail, base, ctx, { gate: gateInfo(g), scope })
     return makeStage('gate-undecided', base, ctx, { gate: gateInfo(g), scope })
   }
+
+  if (base.light) return makeStage(base.phase === 'committed' ? 'run-committed' : 'run-light', base, ctx)
 
   switch (base.phase) {
     case 'done':
@@ -607,6 +671,9 @@ async function artifactStage(fs: Fs, taskPath: string, entries: Entry[]): Promis
   const multi =
     STAGE_SECTION_RE.test(architecture) && (live.length > 0 || closed.length > 0 || hasArchitectGate)
   if (!multi) return evaluateDir(fs, taskPath, entries, single)
+  // A staged light /run logs every stage at the task root, so the root decides.
+  const root = detectPhaseCompat(taskPath, entries, await readLightTexts(fs, taskPath, entries))
+  if (root.light) return makeStage(root.phase === 'committed' ? 'run-committed' : 'run-light', root, single)
 
   const count = stageCount(architecture)
   if (live.length > 0) {
@@ -695,6 +762,7 @@ const THEN: Partial<Record<StageKey, string>> = {
   review: 'then /end_of_task',
   'review-approved': 'then /pr',
   'end-of-task-done': 'then merge',
+  'run-committed': 'then merge',
 }
 
 /** The command that moves a task forward, validated before it is shown. `task` is the task argument. */
@@ -745,7 +813,10 @@ export function nextCommand(stage: StageInfo, task: string): NextCommand {
     case 'gate-undecided':
       return make(`/gate ${stage.scope === 'task' ? task : stageArg}`, 'the last gate left no decision')
     case 'end-of-task-done':
+    case 'run-committed':
       return make('/pr')
+    case 'run-light':
+      return make(`/run --resume ${task}`)
     case 'stages-done':
       return make(null, 'all stages archived')
     default:

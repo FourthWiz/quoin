@@ -17,6 +17,7 @@
     'implement-gated': 'implement',
     'review':          'review',
     'review-gated':    'review',
+    'committed':       'end_of_task',
     'done':            'end_of_task',
   };
 

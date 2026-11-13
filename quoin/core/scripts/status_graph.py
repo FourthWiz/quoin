@@ -98,6 +98,8 @@ def detect_phase(task_dir: Path, probe_git: bool = False) -> PhaseResult:
       implement-gated — gate-implement-* or gate-post-implement-* present
       implement      — only under --probe-git: uncommitted changes detected
       plan-gated     — gate-post-plan-* or gate-plan-* present
+      (light /run)   — no current-plan.md, and phases.log or brief.md present
+                       (see _light_run_phase; may return committed)
       planning       — current-plan.md + critic-response-N.md present
       planning       — current-plan.md present alone
       architecture   — architecture.md present
@@ -140,11 +142,104 @@ def detect_phase(task_dir: Path, probe_git: bool = False) -> PhaseResult:
         return PhaseResult(phase="implement", critic_rounds=crit, review_rounds=0, task_dir=task_dir)
     if _has_glob(filenames, "gate-post-plan-") or _has_glob(filenames, "gate-plan-"):
         return PhaseResult(phase="plan-gated", critic_rounds=crit, review_rounds=0, task_dir=task_dir)
+    if "current-plan.md" not in filenames:
+        light = _light_run_phase(task_dir, filenames)
+        if light:
+            return PhaseResult(phase=light, critic_rounds=crit, review_rounds=0, task_dir=task_dir)
     if "current-plan.md" in filenames:
         return PhaseResult(phase="planning", critic_rounds=crit, review_rounds=0, task_dir=task_dir)
     if "architecture.md" in filenames:
         return PhaseResult(phase="architecture", critic_rounds=crit, review_rounds=0, task_dir=task_dir)
     return PhaseResult(phase="discover", critic_rounds=0, review_rounds=0, task_dir=task_dir)
+
+
+# Light /run phase markers (run_phase.py PHASES) -> detect_phase output.
+_LIGHT_MARKER_PHASE = {
+    "setup": "planning", "discover": "planning", "frame": "planning",
+    "context": "planning", "decompose": "planning",
+    "implement": "implement", "verify": "implement",
+    "review": "review", "review-fixes": "review",
+    "commit": "committed",
+}
+_LIGHT_MARKER_RE = re.compile(r"^\S+\s+(?:(\d+):)?([a-z-]+)(\s+skipped)?\s*$")
+
+
+def _switched_to_hard(task_dir: Path) -> bool:
+    try:
+        text = (task_dir / "pipeline-switch.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return re.search(r"^to:\s*hard\b", text, re.MULTILINE) is not None
+
+
+def _has_pending_stage(task_dir: Path) -> bool:
+    try:
+        text = (task_dir / "architecture.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    return any("⏳" in m.group(0) for m in _ROW_RE.finditer(text))
+
+
+def _light_run_phase(task_dir: Path, filenames: list[str]) -> Optional[str]:
+    """Phase of a light /run task folder, or None when it is not one.
+
+    The last non-skipped phases.log marker decides; folders from runs that
+    predate phases.log fall back to the files the run writes. A task handed to
+    run_hard (pipeline-switch.md says to: hard) is left to the heavy rules, and
+    a staged task with a stage still pending never reports committed.
+    """
+    if "phases.log" not in filenames and "brief.md" not in filenames:
+        return None
+    if _switched_to_hard(task_dir):
+        return None
+    phase = None
+    if "phases.log" in filenames:
+        try:
+            lines = (task_dir / "phases.log").read_text(encoding="utf-8").splitlines()
+        except (OSError, UnicodeDecodeError):
+            lines = []
+        for line in reversed(lines):
+            m = _LIGHT_MARKER_RE.match(line)
+            if m and not m.group(3) and m.group(2) in _LIGHT_MARKER_PHASE:
+                phase = _LIGHT_MARKER_PHASE[m.group(2)]
+                break
+    if phase is None:
+        if "review.md" in filenames:
+            phase = "review"
+        elif "context.md" in filenames:
+            phase = "implement"
+        elif "brief.md" in filenames:
+            phase = "planning"
+        else:
+            return None
+    if phase == "committed" and _has_pending_stage(task_dir):
+        return "implement"
+    return phase
+
+
+def light_run_phase(task_dir: Path) -> Optional[str]:
+    """detect_phase's light /run reading of a task root, or None when the
+    folder is not a light /run task (or a heavy plan decides first)."""
+    try:
+        names = [f.name for f in task_dir.iterdir() if f.is_file() and not _is_drive_conflict(f.name)]
+    except (OSError, PermissionError):
+        return None
+    if "current-plan.md" in names:
+        return None
+    return _light_run_phase(task_dir, names)
+
+
+def _light_last_stage(task_dir: Path) -> Optional[int]:
+    """Stage number of the last stage-prefixed phases.log marker, if any."""
+    try:
+        lines = (task_dir / "phases.log").read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return None
+    for line in reversed(lines):
+        m = _LIGHT_MARKER_RE.match(line)
+        if m and m.group(1):
+            return int(m.group(1))
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -236,6 +331,7 @@ _PHASE_TO_NODE = {
     "implement-gated": "implement",
     "review":          "review",
     "review-gated":    "review",
+    "committed":       "end_of_task",
     "done":            "end_of_task",
 }
 
@@ -273,6 +369,7 @@ _PHASE_LABELS = {
     "implement-gated": "implement-gated (ready to review)",
     "review":          "review",
     "review-gated":    "review-gated (ready to finalize)",
+    "committed":       "committed (ready for /pr)",
     "done":            "done",
 }
 
@@ -367,7 +464,7 @@ def _render_compact(result: PhaseResult, task_name: str, active_node: str, label
 # Phase strings in pipeline order; a later entry means the task got further.
 _PHASE_ORDER = [
     "discover", "architecture", "planning", "plan-gated", "implement",
-    "implement-gated", "review", "review-gated", "done",
+    "implement-gated", "review", "review-gated", "committed", "done",
 ]
 
 # Per-stage progress sentinels written by autonomous runs:
@@ -501,6 +598,13 @@ def resolve_position(
     """
     pos = RunPosition()
     if base.phase == "done":
+        return base, pos
+    if light_run_phase(task_dir) is not None:
+        # A light /run logs every stage's markers at the task root, so the root
+        # already holds the position; its stage folders never record gates.
+        pos.stage_count = _stage_count(task_dir)
+        if pos.stage_count:
+            pos.stage = _light_last_stage(task_dir)
         return base, pos
 
     task = task_dir.name

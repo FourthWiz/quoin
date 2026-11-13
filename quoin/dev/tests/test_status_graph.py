@@ -179,6 +179,62 @@ class TestDetectPhase:
         assert r.phase == "planning"
 
 
+class TestDetectPhaseLightRun:
+    """Light /run layout: phases.log decides, older runs fall back to files."""
+
+    def _log(self, task_dir: Path, *lines: str) -> None:
+        (task_dir / "phases.log").write_text(
+            "".join(f"2026-11-13T07:00:0{i}.000Z {ln}\n" for i, ln in enumerate(lines))
+        )
+
+    @pytest.mark.parametrize("markers,expected", [
+        (["setup", "discover skipped", "frame", "context"], "planning"),
+        (["frame", "implement", "verify"], "implement"),
+        (["implement", "review", "review-fixes"], "review"),
+        (["review", "commit"], "committed"),
+        (["commit", "verify skipped"], "committed"),  # skipped markers never decide
+    ])
+    def test_last_marker_decides(self, tmp_path, markers, expected):
+        task_dir = make_task(tmp_path, "light", ["brief.md"])
+        self._log(task_dir, *markers)
+        assert detect_phase(task_dir).phase == expected
+
+    @pytest.mark.parametrize("files,expected", [
+        (["brief.md"], "planning"),
+        (["brief.md", "context.md"], "implement"),
+        (["brief.md", "context.md", "review.md"], "review"),
+    ])
+    def test_old_layout_without_phases_log(self, tmp_path, files, expected):
+        assert detect_phase(make_task(tmp_path, "old", files)).phase == expected
+
+    def test_staged_with_pending_stage_is_not_committed(self, tmp_path):
+        task_dir = make_task(tmp_path, "staged", ["brief.md"])
+        (task_dir / "architecture.md").write_text(
+            "## Stage decomposition\n1. ✅ S-01: a\n2. ⏳ S-02: b\n"
+        )
+        self._log(task_dir, "1:commit")
+        assert detect_phase(task_dir).phase == "implement"
+        (task_dir / "architecture.md").write_text(
+            "## Stage decomposition\n1. ✅ S-01: a\n2. ✅ S-02: b\n"
+        )
+        assert detect_phase(task_dir).phase == "committed"
+
+    def test_switched_to_hard_uses_heavy_rules(self, tmp_path):
+        task_dir = make_task(tmp_path, "switched", ["brief.md", "architecture.md"])
+        (task_dir / "pipeline-switch.md").write_text("from: light\nto: hard\n")
+        self._log(task_dir, "review")
+        assert detect_phase(task_dir).phase == "architecture"
+
+    def test_staged_position_comes_from_root_markers(self, tmp_path):
+        task_dir = make_task(tmp_path, "staged-pos", ["brief.md", "stage-1/review.md"])
+        (task_dir / "architecture.md").write_text(
+            "## Stage decomposition\n1. ✅ S-01: a\n2. ⏳ S-02: b\n"
+        )
+        self._log(task_dir, "1:commit", "2:frame")
+        result, pos = _SG.resolve_position(task_dir, tmp_path, detect_phase(task_dir))
+        assert (result.phase, pos.stage, pos.stage_count) == ("planning", 2, 2)
+
+
 # ---------------------------------------------------------------------------
 # render_graph
 # ---------------------------------------------------------------------------

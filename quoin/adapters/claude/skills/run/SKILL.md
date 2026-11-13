@@ -320,7 +320,9 @@ Marker: `commit` (chain it onto the `git add` call).
 2. Commit with a conventional message (`type(scope): summary`, body says why).
    The message is plain engineering prose per
    `__QUOIN_HOME__/memory/clean-authored-content.md`: no artifact paths, finding
-   IDs or review narration.
+   IDs or review narration. Then add or update the brief's `## Commit` section,
+   with `branch: <task branch>` and `commit: <sha>` lines (`/cleanup` finds
+   the PR by it).
 3. Unless `LEAN`, if the task surfaced a reusable gotcha, record one entry in
    `.workflow_artifacts/memory/lessons-learned.md` in the standard form
    (`## <date> — <task>`, then **What happened**, **Lesson**, **Applies to**).

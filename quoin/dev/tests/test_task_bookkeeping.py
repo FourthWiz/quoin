@@ -556,6 +556,46 @@ def test_injected_pr_lookup_merged_no_eot_becomes_nearly_done(tmp_path):
     assert f"/end_of_task {row['task']}" in row["next_commands"]
 
 
+def test_committed_light_run_is_nearly_done_then_archivable_once_merged(tmp_path):
+    brief = "# t\n## Goal\nx\n## Commit\nbranch: feat/light-run\ncommit: abc123\n"
+    task_dir = _mk(tmp_path, "light-run", files={
+        "brief.md": brief, "phases.log": "2026-11-13T07:00:00.000Z commit\n",
+    })
+    _touch_all(task_dir, NOW - 2 * DAY)
+    seen = {}
+
+    def lookup(state):
+        def _lookup(task, branch_keys, commit_hash, root):
+            seen["keys"] = branch_keys
+            return PrInfo(state=state, number=7, repo="quoin")
+        return _lookup
+
+    row = classify(tmp_path, now=NOW, gh_enabled=True, pr_lookup=lookup("open"))["rows"][0]
+    assert seen["keys"] == ["feat/light-run"]
+    assert (row["bucket"], row["next_commands"]) == ("nearly-done", ["/pr"])
+
+    row = classify(tmp_path, now=NOW, gh_enabled=True, pr_lookup=lookup("merged"))["rows"][0]
+    assert row["bucket"] == "done"
+    assert row["recommended_action"] == "archive"
+
+
+def test_staged_light_run_closes_out_with_pr_not_stage_eots(tmp_path):
+    task_dir = _mk(tmp_path, "staged-light", files={
+        "brief.md": "# t\n## Commit\nbranch: feat/staged-light\ncommit: abc1234\n",
+        "architecture.md": "## Stage decomposition\n1. ✅ S-01: a\n2. ✅ S-02: b\n",
+        "phases.log": "2026-11-13T07:00:00.000Z 1:commit\n2026-11-13T07:00:01.000Z 2:commit\n",
+        "stage-1/review.md": "r", "stage-2/review.md": "r",
+    })
+    _touch_all(task_dir, NOW - 2 * DAY)
+
+    def lookup(task, branch_keys, commit_hash, root):
+        assert (branch_keys, commit_hash) == (["feat/staged-light"], "abc1234")
+        return PrInfo(state="merged", number=8, repo="quoin")
+
+    row = classify(tmp_path, now=NOW, gh_enabled=True, pr_lookup=lookup)["rows"][0]
+    assert (row["bucket"], row["recommended_action"]) == ("done", "archive")
+
+
 def test_merged_pr_no_eot_never_yields_done(tmp_path):
     task_dir = _mk(tmp_path, "prtest5b", files={"current-plan.md": "x"})
     sessions = tmp_path / ".workflow_artifacts" / "memory" / "sessions"

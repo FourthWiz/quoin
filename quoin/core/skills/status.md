@@ -26,6 +26,11 @@ Artifact filenames in the resolved task directory under `.workflow_artifacts/`:
 - `review-N.md` → N review rounds completed
 - `gate-post-review-*.md` or `gate-review-*.md` → review-gated (ready to finalize)
 - task under `.workflow_artifacts/finalized/` → done
+- light `/run` task (`phases.log` or `brief.md`, no `current-plan.md`): the last
+  non-skipped `phases.log` marker decides (frame/context → planning,
+  implement/verify → implement, review → review, commit → committed); without
+  `phases.log`, `review.md` → review, `context.md` → implement, `brief.md` →
+  planning. `committed` means the local commit landed and `/pr` is next.
 
 Optional CLI arguments: `--task NAME`, `--project-root PATH`, `--stage N-or-NAME`,
 `--json`, `--watch [N]`, `--compact`, `--probe-git`.
