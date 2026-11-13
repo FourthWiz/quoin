@@ -749,6 +749,28 @@ def ensure_pro_verifier(task_spec: dict, cache_root=None, fetch=None, path: str 
     return target
 
 
+PRO_KEEP_IMAGES_ENV = "QUOIN_BENCH_PRO_KEEP_IMAGES"
+
+
+def remove_pro_image(task_spec: dict, run=subprocess.run, docker: Optional[str] = None) -> bool:
+    """Best-effort `docker rmi` of a Pro task's image once its rows are judged.
+
+    Each image is about 1.25 GB and a suite pulls one per task, so keeping them
+    fills Docker's disk part way through a run. Skipped when
+    QUOIN_BENCH_PRO_KEEP_IMAGES=1 or the image name is not a Pro image.
+    """
+    image = task_spec.get("docker_image", "")
+    source_id = task_spec.get("source_id", "")
+    if os.environ.get(PRO_KEEP_IMAGES_ENV) == "1" or image != PRO_IMAGE_PREFIX + str(source_id):
+        return False
+    try:
+        proc = run([docker or os.environ.get(DOCKER_ENV) or "docker", "rmi", image],
+                   capture_output=True, text=True, timeout=120)
+    except Exception:
+        return False
+    return getattr(proc, "returncode", 1) == 0
+
+
 def build_pro_command(docker: str, image: str, tests_dir, patch_file, logs_dir, name: str,
                       emulate_x86: bool = False) -> list:
     for path in (tests_dir, patch_file, logs_dir):
