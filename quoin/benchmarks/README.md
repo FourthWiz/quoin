@@ -732,9 +732,11 @@ python3 quoin/benchmarks/scripts/multi_run_report.py $RUNS/pro-r1 --json pro-r1.
 ```
 
 Worst case $2,800 (40 tasks x 2 arms x $35, ceiling $3,170; small-tier pilot
-$700). No Pro session has been costed yet; assuming quoin sessions near the
-tiered-balanced large tier ($6 to $11) and plain about $1, expect roughly $300
-to $480 per run. `QUOIN_BENCH_QUOIN_ROUTE`, `--tiers` and `--repeat` work as
+$700). The first run (pro-r1, quoin on the lean route) cost about $64 for its
+80 sessions: plain $0.45 and quoin $1.16 per session on average, $2.87 at most.
+Deferred judging takes task after task (both arms back to back) and then removes
+the task's image, so Docker needs room for one image at a time;
+`QUOIN_BENCH_PRO_KEEP_IMAGES=1` keeps them. `QUOIN_BENCH_QUOIN_ROUTE`, `--tiers` and `--repeat` work as
 on the Verified suites. A live judge check of one real instance (reference
 patch passes, empty patch fails) runs with
 `QUOIN_BENCH_PRO_LIVE=1 python3 -m pytest quoin/dev/tests/test_swebench_pro.py -k live`.
