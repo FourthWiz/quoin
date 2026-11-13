@@ -1,6 +1,6 @@
 """Byte-compare every live §0-family block against its renderer.
 
-Parametrized over all 51 (skill, family) pairs recorded in the five roster
+Parametrized over all 53 (skill, family) pairs recorded in the five roster
 constants. For each, slices the live block from the adapter SKILL.md with the
 SAME span rule `inject_pollution_dispatch.py` itself uses to replace that
 block, and compares it byte-for-byte against the matching renderer's output.
@@ -44,7 +44,7 @@ POLLUTION_TARGET_SKILLS = sorted(generator.POLLUTION_TARGET_SKILLS)
 MINTIER_TARGET_SKILLS = sorted(generator.MINTIER_TARGET_SKILLS)
 MINTIER_SONNET_TARGET_SKILLS = sorted(generator.MINTIER_SONNET_TARGET_SKILLS)
 
-# Every (family, skill) pair this test guards — 19 + 10 + 12 + 10 = 51.
+# Every (family, skill) pair this test guards — 19 + 11 + 12 + 11 = 53.
 ALL_PAIRS = (
     [("§0", s) for s in SECTION0_TARGET_SKILLS]
     + [("§0'", s) for s in POLLUTION_TARGET_SKILLS]
@@ -124,5 +124,5 @@ def test_live_block_byte_matches_renderer(family, skill):
 
 
 def test_all_pairs_covered():
-    assert len(ALL_PAIRS) == 51
-    assert len(set(ALL_PAIRS)) == 51, "duplicate (family, skill) pair in ALL_PAIRS"
+    assert len(ALL_PAIRS) == 53
+    assert len(set(ALL_PAIRS)) == 53, "duplicate (family, skill) pair in ALL_PAIRS"

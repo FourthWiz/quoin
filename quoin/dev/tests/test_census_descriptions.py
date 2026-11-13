@@ -5,7 +5,7 @@ any skill-name lists needed here are derived inside test functions/fixtures
 (local scope) so `check_registration.py::rg_census` discovers no new roster.
 
 Phrase-parsing note: descriptions carry trigger phrases with internal
-apostrophes (8 of 32 skills); nothing here extracts phrases by quote
+apostrophes (8 of 33 skills); nothing here extracts phrases by quote
 delimiter — byte counts only.
 """
 
@@ -53,13 +53,13 @@ def test_known_description_exact_byte_count(census, tmp_path):
 
 
 def test_live_tree_census_totals(census):
-    # (c) live-tree census: 32 skills, total never above
+    # (c) live-tree census: 33 skills, total never above
     # the 13,470 B pre-trim baseline (equal at T-01 commit time; the trim
     # batches only ever reduce it — asserting exact equality would red the
     # suite the moment batch 1 lands, so the invariant here is the no-growth
     # bound plus the skill count).
     sizes = census.census_tree(census.TREES["adapter"])
-    assert len(sizes) == 32
+    assert len(sizes) == 33
     assert sum(sizes.values()) <= 13470
 
 

@@ -659,7 +659,7 @@ def rg_genroster(dev_tests_dir: Path, scripts_dir: Path, manifest_skills: list, 
 # Rosters actually checked by RG-TESTROSTER / RG-GENROSTER above — one entry
 # per (roster, file) pair each rule reads. Keyed "NAME@basename.py".
 COVERED_ROSTERS: frozenset = frozenset({
-    # RG-TESTROSTER: opus-leaf class (10 skills), 6 agreeing copies
+    # RG-TESTROSTER: opus-leaf class (11 skills), 6 agreeing copies
     "SECTION0PRIME_TARGETS@test_1m_context_precheck.py",
     "SKILL_DISTINCTIVE_TOKENS@test_quoin_pollution_preamble.py",
     "POLLUTION_TARGET_SKILLS@test_quoin_pollution_preamble.py",
@@ -789,7 +789,7 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     ),
     "SHARE_CEILINGS@test_section0_provenance_guard.py": (
         "per-file §0-family share "
-        "ceiling roster: all 32 adapter skill names, used only to key the "
+        "ceiling roster: all 33 adapter skill names, used only to key the "
         "SHARE_CEILINGS dict for per-file percentage-share assertions "
         "(measured §0-family line share + a flat headroom). Same shape as "
         "SECTION0_SKILLS@test_footprint_ceilings.py above — no skills.json "

@@ -3,7 +3,7 @@
 inject_pollution_dispatch.py — Generator for §0' Pollution dispatch AND §0″ Minimum-tier guard.
 
 Inserts/refreshes the §0' Pollution dispatch block AND the §0″ Minimum-tier
-guard block into the 10 Opus-tier
+guard block into the 11 Opus-tier
 Claude adapter SKILL.md files at:
   quoin/adapters/claude/skills/<skill>/SKILL.md
 
@@ -42,7 +42,7 @@ ZC_HEADING = "## §0c Pidfile lifecycle"
 # template, --check regex, and drift test. Copy-paste from here; do not retype.
 MINTIER_HEADING = "## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)"
 
-# 10 Opus-tier target skills — must carry §0'.
+# 11 Opus-tier target skills — must carry §0'.
 POLLUTION_TARGET_SKILLS = [
     "architect",
     "plan",
@@ -54,9 +54,10 @@ POLLUTION_TARGET_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
-# 10 Opus-tier target skills — must carry §0″ (same set as POLLUTION_TARGET_SKILLS).
+# 11 Opus-tier target skills — must carry §0″ (same set as POLLUTION_TARGET_SKILLS).
 # Orchestrators /run and /thorough_plan are deliberately excluded (D-04):
 # orchestrators carry no §0/§0'/§0c today and route to correctly-tiered children.
 MINTIER_TARGET_SKILLS = [
@@ -70,6 +71,7 @@ MINTIER_TARGET_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
 # ─── §0‴ Minimum-tier guard (Sonnet tier) — IVG-117 ───────────────────────────
@@ -197,7 +199,7 @@ def render_mintier_block(skill: str) -> str:
 
 # ─── §0‴ Minimum-tier guard (Sonnet tier) block template — IVG-117 ────────────
 # Tier-swapped derivative of _MINTIER_BLOCK_BODY (D-07: zero edits to the Opus
-# template/constants — separate constants keep the 10 deployed Opus files and
+# template/constants — separate constants keep the 11 deployed Opus files and
 # test_mintier_guard.py byte-frozen). Substitution map applied: "an Opus" -> "a
 # Sonnet" (article agreement, MIN-3), "Opus" -> "Sonnet", "opus" -> "sonnet",
 # "§0″" -> "§0‴", "doubleprime" -> "tripleprime". declared_tier = sonnet.
@@ -819,6 +821,16 @@ DISPATCH_CONTRACTS = {
         "[no-redispatch]\\n/enrich <task description>\\n"
         "Enriched prompt output path: .workflow_artifacts/<task>/enriched-prompt.md",
     ),
+    "repo_cleanup": (
+        """\
+  Determine dispatch contract fields:
+    - Take the target repository path from the invocation; else use the current working directory.
+    - Pass the phase, dry-run and mutation flags through unchanged.
+    - Get the current git branch (`git rev-parse --abbrev-ref HEAD`).
+""",
+        "[no-redispatch]\\n/repo_cleanup <flags>\\n"
+        "Repo cleanup target: <absolute path to target repo>\\nBranch: <current git branch>",
+    ),
 }
 
 
@@ -919,7 +931,7 @@ def inject_mintier_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
         # Refresh path (all re-runs after first injection)
         text = _replace_existing_block(text, MINTIER_HEADING, mintier_block)
     elif POLLUTION_HEADING in text:
-        # Insert path: all 10 skills have §0' (first run)
+        # Insert path: all 11 skills have §0' (first run)
         # §0' block ends at the next "## " heading STRICTLY AFTER POLLUTION_HEADING
         p_idx = text.index(POLLUTION_HEADING)
         next_h2_match = re.search(r"^## ", text[p_idx + len(POLLUTION_HEADING):], re.MULTILINE)
@@ -944,10 +956,10 @@ def inject_mintier_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
 
 def inject_mintier_sonnet_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
     """Inject/refresh §0‴ Minimum-tier guard (Sonnet tier) into a single adapter
-    SKILL.md file — IVG-117.
+    SKILL.md file.
 
     Anchors on SECTION0_HEADING (the hand-authored §0 block, always present in the
-    13 Sonnet targets), NOT on §0'/§0″ (Opus-only, disjoint file set). D-06.
+    12 Sonnet targets), NOT on §0'/§0″ (Opus-only, disjoint file set).
 
     Strategy:
     - Refresh path: if MINTIER_SONNET_HEADING already in text, replace in place
@@ -998,7 +1010,7 @@ def _get_adapter_dir() -> pathlib.Path:
 
 
 def run_inject(*, dry_run: bool = False) -> int:
-    """Inject/refresh §0' AND §0″ into all 10 target adapter SKILL.md files.
+    """Inject/refresh §0' AND §0″ into all 11 target adapter SKILL.md files.
 
     Two loops:
     1. Loop over POLLUTION_TARGET_SKILLS — injects §0' (inject_blocks_into_file).
@@ -1066,7 +1078,7 @@ def run_inject(*, dry_run: bool = False) -> int:
 
     # ── Loop 3: §0‴ (Minimum-tier guard — Sonnet tier) injection — IVG-117 ──
     # Independent of Loops 1-2: anchors on SECTION0_HEADING (hand-authored §0),
-    # not on §0'/§0″. MINTIER_SONNET_TARGET_SKILLS is disjoint from the Opus-10.
+    # not on §0'/§0″. MINTIER_SONNET_TARGET_SKILLS is disjoint from the Opus-11.
     for skill in MINTIER_SONNET_TARGET_SKILLS:
         skill_md = adapter_dir / skill / "SKILL.md"
         if not skill_md.exists():
@@ -1119,7 +1131,7 @@ def run_inject(*, dry_run: bool = False) -> int:
 
 
 def run_check() -> int:
-    """--check mode: verify all 10 adapter SKILL.md files carry correct §0' AND §0″ blocks.
+    """--check mode: verify all 11 adapter SKILL.md files carry correct §0' AND §0″ blocks.
 
     Returns 0 if all files are fresh, 7 if any drift detected.
     Also verifies:
@@ -1364,8 +1376,8 @@ def run_check() -> int:
         for msg in drifted:
             print(f"DRIFT: {msg}", file=sys.stderr)
         return 7
-    print("inject_pollution_dispatch --check: all 10 adapter files are fresh")
-    print("inject_pollution_dispatch --check: all 10 §0doubleprime files are fresh")
+    print(f"inject_pollution_dispatch --check: all {len(POLLUTION_TARGET_SKILLS)} adapter files are fresh")
+    print(f"inject_pollution_dispatch --check: all {len(MINTIER_TARGET_SKILLS)} §0doubleprime files are fresh")
     print(
         f"inject_pollution_dispatch --check: all {len(MINTIER_SONNET_TARGET_SKILLS)} "
         "§0tripleprime files are fresh"
@@ -1387,7 +1399,7 @@ def main() -> int:
     parser.add_argument(
         "--check",
         action="store_true",
-        help="Verify all 10 adapter SKILL.md files carry correct §0' blocks; exit 7 if any drift",
+        help="Verify all 11 adapter SKILL.md files carry correct §0' blocks; exit 7 if any drift",
     )
     args = parser.parse_args()
 

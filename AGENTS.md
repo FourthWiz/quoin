@@ -72,6 +72,7 @@ User-facing workflow skills with effort levels (from `quoin/core/workflow/skills
 | `weekly_review` | session-lifecycle | low |
 | `specify` | specify | max |
 | `enrich` | enrich | max |
+| `repo_cleanup` | repo_cleanup | high |
 
 Codex performs each phase natively using its own planning and reasoning capabilities.
 Use native Codex behavior for planning, progress tracking, approvals, sandboxing,

@@ -20,12 +20,12 @@ It builds on `quoin/docs/runtime-portability.md` (the portable core and adapter 
 Quoin already separates intent from runtime mechanics in three layers:
 
 1. `quoin/core/workflow/` holds runtime-neutral semantics: `rules.md`, `task-layout.md`, `session-state.md`, `cost-ledger.md`, the dispatch envelope in `handoff-format.md`, and `skills.json`. That catalog has one row per skill with `name`, `phase`, `effort`, `user_facing`, `claude_model`, `section_0` and `spawn_target`, plus `claude_adapter: false` for skills with no Claude implementation.
-2. `quoin/core/skills/` holds one portable intent document per skill (33, including `checkpoint`, which has no Claude adapter). Each one follows a fixed outline: Purpose, When to use, Inputs, Output, Behavior contract, Out of scope, Notes. These documents describe contracts, not runtime steps.
+2. `quoin/core/skills/` holds one portable intent document per skill (34, including `checkpoint`, which has no Claude adapter). Each one follows a fixed outline: Purpose, When to use, Inputs, Output, Behavior contract, Out of scope, Notes. These documents describe contracts, not runtime steps.
 3. `quoin/adapters/<runtime>/` turns that intent into something a runtime can run.
 
 ### Claude adapter
 
-The 32 Claude skills live in `quoin/adapters/claude/skills/<name>/SKILL.md`. Their frontmatter carries `name`, `description` (with trigger phrases such as "Use for: /plan") and `model: haiku|sonnet|opus`. `model` is a Claude Code extension and is not part of the Agent Skills standard. Each body starts by pointing at its portable intent document, then adds Claude-only machinery:
+The 33 Claude skills live in `quoin/adapters/claude/skills/<name>/SKILL.md`. Their frontmatter carries `name`, `description` (with trigger phrases such as "Use for: /plan") and `model: haiku|sonnet|opus`. `model` is a Claude Code extension and is not part of the Agent Skills standard. Each body starts by pointing at its portable intent document, then adds Claude-only machinery:
 
 - **§0 model dispatch.** On the 19 cheap-tier Claude skills, a generated block tells the agent to read its own model name, compare it with the declared tier, and re-spawn itself through the Agent tool at the cheaper tier. A `[no-redispatch]` sentinel prevents loops, and a `dispatch_config.py` check runs first.
 - **§0' pollution dispatch.** `pollution_guard.py` scores the Claude session transcript and, past a threshold, re-spawns the skill in a fresh subagent.

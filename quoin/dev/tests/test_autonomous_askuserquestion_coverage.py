@@ -171,7 +171,7 @@ def build_propagation_set(candidates, loader=load_skill_text) -> set[str]:
     SCOPE NOTE (deliberate, not a shortcut): candidates are the derived spawn closure's
     own members, not a blind scan of every SKILL.md in the repo. This is required by
     the codebase's own byte-identity sync contracts: T-23's generated `§0'`/`§0''`
-    fail-open clause is propagated byte-identically to ALL 10 Opus-tier leaf skills,
+    fail-open clause is propagated byte-identically to ALL 11 Opus-tier leaf skills,
     including `init_workflow` (never reached by `/run`'s autonomous spawn graph), and
     T-25's hand-synced `§0`-worktree-fallback/sidecar clause is propagated
     byte-identically to all 12 artifact-only + 4 source-mutating skills (e.g. `pr`,

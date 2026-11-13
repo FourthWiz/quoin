@@ -96,7 +96,7 @@ CHEAP_TIER_SKILLS = [
 # file's parametrized lists (it is covered separately via MIGRATED_TO_ADAPTER paths).
 # Do NOT add `continue_work` here to "fix" the count — the gap is by design.
 
-# 12 Opus-tier skills — must NOT carry §0.
+# 13 Opus-tier skills — must NOT carry §0.
 OPUS_TIER_SKILLS = [
     "architect",
     "plan",
@@ -111,6 +111,7 @@ OPUS_TIER_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
 YAML_RE = re.compile(r"^---\n(.*?)\n---\n", re.DOTALL)

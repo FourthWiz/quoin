@@ -108,6 +108,7 @@ SECTION0PRIME_TARGETS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
 # ---------------------------------------------------------------------------

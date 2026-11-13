@@ -37,6 +37,7 @@ POLLUTION_TARGET_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
 # 12 cheap-tier skills — must NOT carry §0'.
@@ -83,6 +84,7 @@ SKILL_DISTINCTIVE_TOKENS = {
     "specify": "spec.md",
     "security_review": "OWASP",
     "enrich": "enriched-prompt.md",
+    "repo_cleanup": "Repo cleanup target",
 }
 
 
