@@ -1907,7 +1907,7 @@ def regenerate_pollution_dispatch(source_dir: pathlib.Path, *, allow_writes: boo
     Minimum-tier guard (Sonnet) blocks.
 
     Regenerates §0' (11 Opus-tier leaf skills carry pollution dispatch) AND
-    §0″ (same 10 skills carry minimum-tier guard) AND §0‴ (13 Sonnet-tier
+    §0″ (same 11 skills carry minimum-tier guard) AND §0‴ (12 Sonnet-tier
     cheap-tier skills carry the mirrored minimum-tier guard, IVG-117) in the
     adapter SKILL.md files at quoin/adapters/claude/skills/*/SKILL.md.
 

@@ -107,6 +107,8 @@ Added IVG-117 (2026-07-21) to close Gap 1: §0″ only protected the 10 Opus-tie
 
 The 12 Sonnet-tier targets (cleanup, continue_work, end_of_day, end_of_task, expand, gate, implement, pr, revise-fast, rollback, sleep, workspace) carry a `## §0‴ Minimum-tier guard (execute after §0 — before any §0-sidecar block and the skill body)` block, landing as the FIRST H2 immediately after §0 (before §0a/§0b sidecar blocks where present — MIN-1 neutral wording avoids misdescribing the sidecar-less targets). Fires when `current_tier < declared_tier` (declared_tier = sonnet), mirroring §0″'s fire condition exactly.
 
+`/end_of_day` is declared Sonnet rather than Haiku because Haiku could not dedupe lessons reliably; keep it at Sonnet unless that is re-evaluated.
+
 **Anchor (D-06):** §0‴ anchors on `SECTION0_HEADING` (the hand-authored §0 heading, always present and count==1 in all 12 targets) — NOT on §0'/§0″, which only exist on the disjoint Opus-10 file set. FAIL LOUD if §0 is absent or appears more than once.
 
 **Byte-safety (D-07):** separate `MINTIER_SONNET_*` constants and a separate `_MINTIER_SONNET_BLOCK_BODY` template — zero edits to the existing Opus `_MINTIER_BLOCK_BODY`/`MINTIER_HEADING`. The 10 deployed Opus files and `test_mintier_guard.py` are untouched by this change.
