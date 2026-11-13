@@ -103,7 +103,8 @@ task); markers change no behaviour and are never committed.
 8. Review, delegated, one pass, strong model, given only the brief, the
    diff and the test result. Fixes are applied where step 6 ran (the
    same implementer when delegated); no second review.
-9. Commit locally. Never push or open a PR. A reusable lesson is
+9. Commit locally, then record the branch and commit in the brief (so
+   `/cleanup` can find the PR). Never push or open a PR. A reusable lesson is
    checked against `lessons-learned.md` with the duplicate guard before it
    is appended. When the commit changed the project's structure (top-level
    directories or packages, dependency manifests, public interfaces), a

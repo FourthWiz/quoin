@@ -1113,6 +1113,52 @@ export const STAGE_FIXTURES: StageFixture[] =
       "command": "/implement stage 2 of foo",
       "gateVerdict": "fail"
     }
+  },
+  {
+    "id": "light-run-implementing",
+    "tree": {
+      "foo/brief.md": "# foo\n",
+      "foo/context.md": "# context\n",
+      "foo/phases.log": "2026-11-13T07:00:00.000Z frame\n2026-11-13T07:00:01.000Z implement\n"
+    },
+    "task": "foo",
+    "expect": {
+      "detectPhase": "implement",
+      "stage": "run-light",
+      "command": "/run --resume foo"
+    }
+  },
+  {
+    "id": "light-run-committed",
+    "tree": {
+      "foo/brief.md": "# foo\n",
+      "foo/review.md": "# review\n",
+      "foo/phases.log": "2026-11-13T07:00:00.000Z review\n2026-11-13T07:00:01.000Z commit\n"
+    },
+    "task": "foo",
+    "expect": {
+      "detectPhase": "committed",
+      "stage": "run-committed",
+      "command": "/pr"
+    }
+  },
+  {
+    "id": "light-run-staged-committed",
+    "tree": {
+      "foo/brief.md": "# foo\n",
+      "foo/architecture.md": "# foo — stages\n## Stage decomposition\n1. ✅ S-01: a\n2. ✅ S-02: b\n",
+      "foo/phases.log": "2026-11-13T07:00:00.000Z 1:commit\n2026-11-13T07:00:01.000Z 2:commit\n",
+      "foo/stage-1/brief.md": "# s1\n",
+      "foo/stage-1/review.md": "# r1\n",
+      "foo/stage-2/brief.md": "# s2\n",
+      "foo/stage-2/review.md": "# r2\n"
+    },
+    "task": "foo",
+    "expect": {
+      "detectPhase": "committed",
+      "stage": "run-committed",
+      "command": "/pr"
+    }
   }
 ]
 // END STAGE FIXTURES

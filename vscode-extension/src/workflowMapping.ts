@@ -22,14 +22,15 @@ export const PHASE_TO_NODE: Record<string, string> = {
   'implement-gated': 'implement',
   'review':          'review',
   'review-gated':    'review',
+  'committed':       'end_of_task',
   'done':            'end_of_task',
 };
 
 /**
  * Maps active pipeline node → the next skill to highlight.
- * 'end_of_task' → null is defensive only: end_of_task node is never active
- * in the auto-select path (detect_phase returns 'done' only for finalized tasks
- * which pick_active_task excludes).
+ * 'end_of_task' → null: the node is active only for a light /run task that
+ * has committed (detect_phase 'committed'; its next step is /pr) or for a
+ * finalized task ('done'), which pick_active_task excludes.
  */
 export const NEXT_SKILL: Record<string, string | null> = {
   'discover':     'architect',

@@ -184,6 +184,8 @@ _RECOGNISED_ARTIFACT_FILES = frozenset({
     "cost-ledger.md", "architecture.md", "current-plan.md", "spec.md",
     "enriched-prompt.md", "task-source.md", "user-decisions.md",
     "eot-preflights.json",
+    # light /run layout
+    "brief.md", "context.md", "phases.log",
 })
 _RECOGNISED_PREFIXES = ("critic-response-", "review-", "gate-")
 _STAGE_DIR_RE = re.compile(r"^stage-(\d+)$")
@@ -252,6 +254,20 @@ class EotState:
 
 _SESSION_NAME_RE = re.compile(r"^\d{4}-\d{2}-\d{2}-(.+)\.md$")
 _BRANCH_LINE_RE = re.compile(r"(?i)\bbranch\b[^:\n]{0,20}:\s*`?([A-Za-z0-9._/-]+)")
+# The `branch:` and `commit:` lines /run writes into brief.md's `## Commit` section.
+_BRIEF_BRANCH_RE = re.compile(r"^branch:\s*`?([A-Za-z0-9._/-]+)", re.MULTILINE)
+_BRIEF_COMMIT_RE = re.compile(r"^commit:\s*`?([0-9a-fA-F]{7,40})\b", re.MULTILINE)
+
+
+def brief_commit(task_dir: Path) -> tuple:
+    """(branch, commit) recorded by a light /run in brief.md, each or both None."""
+    try:
+        text = (task_dir / "brief.md").read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None, None
+    b = _BRIEF_BRANCH_RE.search(text)
+    c = _BRIEF_COMMIT_RE.search(text)
+    return (b.group(1) if b else None), (c.group(1) if c else None)
 
 
 class SessionIndex:
@@ -347,7 +363,7 @@ def load_eot(task_dir: Path, session_index: Optional[SessionIndex] = None) -> Eo
 # ---------------------------------------------------------------------------
 
 def single_stage_rules(task_dir: Path, eot: EotState, phase: str, idle_days: int,
-                        idle_threshold: int) -> dict:
+                        idle_threshold: int, light: bool = False) -> dict:
     name = task_dir.name
     evidence: list = []
 
@@ -357,6 +373,18 @@ def single_stage_rules(task_dir: Path, eot: EotState, phase: str, idle_days: int
         )
         evidence.append("phase=review-gated")
         return {"bucket": "done", "evidence": evidence, "next_commands": [], "prompt": False}
+
+    if phase == "committed" and eot.status == "absent":
+        # A light /run task stops at a local commit; its close-out is the PR.
+        # A merged PR promotes it to done in _apply_pr_effects.
+        evidence.append("phase=committed (light /run)")
+        return {"bucket": "nearly-done", "evidence": evidence, "next_commands": ["/pr"], "prompt": False}
+
+    if light and phase == "review" and eot.status == "absent":
+        # Reviewed light /run (often from before phases.log): its close-out is
+        # the PR too, never /end_of_task.
+        evidence.append("phase=review (light /run, commit not recorded)")
+        return {"bucket": "nearly-done", "evidence": evidence, "next_commands": ["/pr"], "prompt": False}
 
     if eot.status == "more-work":
         evidence.append("more work planned at end_of_task")
@@ -694,14 +722,20 @@ def _apply_pr_effects(rows: list, root: Path, pr_lookup, repo_dirs, session_inde
         session_branch = session_index.branch(name)
         if session_branch and session_branch not in branch_keys:
             branch_keys.append(session_branch)
+        light = row.pop("_light", False)
+        light_branch, light_commit = brief_commit(root / ".workflow_artifacts" / name)
+        if light_branch and light_branch not in branch_keys:
+            branch_keys.append(light_branch)
 
         has_commit_key = bool(eot and eot.status != "absent" and eot.commit_hash)
+        commit_hash = eot.commit_hash if eot else None
+        if light and not has_commit_key and light_commit:
+            has_commit_key, commit_hash = True, light_commit
         has_key = bool(branch_keys) or has_commit_key
         if not has_key:
             row["pr"] = {"state": "unknown", "number": None, "repo": None}
             continue
 
-        commit_hash = eot.commit_hash if eot else None
         if accepts_root:
             info = pr_lookup(name, branch_keys, commit_hash, root)
         else:
@@ -710,7 +744,11 @@ def _apply_pr_effects(rows: list, root: Path, pr_lookup, repo_dirs, session_inde
 
         if info.state == "unknown":
             continue
-        if row["bucket"] == "done" and info.state in ("open", "closed", "none"):
+        if light and row["bucket"] == "nearly-done" and info.state == "merged":
+            row["bucket"] = "done"
+            row["evidence"].append("pr merged")
+            row["next_commands"] = []
+        elif row["bucket"] == "done" and info.state in ("open", "closed", "none"):
             row["bucket"] = "nearly-done"
             row["evidence"].append(f"pr {info.state}")
             row["next_commands"] = ["/pr"]
@@ -892,7 +930,8 @@ def classify(root: Path, *, now: Optional[float] = None, stale_days: int = 14,
             rows.append(row)
             continue
 
-        if multi_stage_shape(task_dir):
+        light_phase = _status_graph.light_run_phase(task_dir)
+        if multi_stage_shape(task_dir) and light_phase is None:
             arch_path = task_dir / "architecture.md"
             arch_text = ""
             if arch_path.is_file():
@@ -912,9 +951,12 @@ def classify(root: Path, *, now: Optional[float] = None, stale_days: int = 14,
             # A root preflight scoped to a stage belongs to a stage close-out,
             # not to this single-stage task: ignore it for single-stage rules.
             eot = EotState(status="absent", marker=eot.marker)
-        phase = detect_phase(task_dir).phase
-        result = single_stage_rules(task_dir, eot, phase, idle, idle_days)
+        # A staged light /run is classified here too: its root phases.log
+        # tracks every stage, and its close-out is one PR, not per-stage EOTs.
+        phase = light_phase or detect_phase(task_dir).phase
+        result = single_stage_rules(task_dir, eot, phase, idle, idle_days, light=light_phase is not None)
         row = _finish_row(name, result, last_activity_epoch, idle, fingerprint, is_multi_stage=False, eot=eot)
+        row["_light"] = light_phase is not None
         rows.append(row)
 
     if gh_enabled:
@@ -928,6 +970,7 @@ def classify(root: Path, *, now: Optional[float] = None, stale_days: int = 14,
         _options_for(row, wa)
         row.pop("_is_multi_stage", None)
         row.pop("_eot", None)
+        row.pop("_light", None)
 
     rows.sort(key=lambda r: (_BUCKET_ORDER.index(r["bucket"]), r["task"]))
 

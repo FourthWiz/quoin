@@ -5,6 +5,8 @@ export type GateVerdict = 'pass' | 'fail' | 'undecided'
 /** Every state the stage derivation can land on; `unknown` marks a task whose folder could not be read. */
 export type StageKey =
   | 'run-active'
+  | 'run-light'
+  | 'run-committed'
   | 'started'
   | 'pre-spec'
   | 'spec'

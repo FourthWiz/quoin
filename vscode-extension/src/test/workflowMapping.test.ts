@@ -16,7 +16,7 @@ describe('workflowMapping', () => {
   });
 
   describe('PHASE_TO_NODE', () => {
-    it('maps all 9 known detect_phase outputs', () => {
+    it('maps all 10 known detect_phase outputs', () => {
       const expected: Record<string, string> = {
         'discover':        'discover',
         'architecture':    'architect',
@@ -26,6 +26,7 @@ describe('workflowMapping', () => {
         'implement-gated': 'implement',
         'review':          'review',
         'review-gated':    'review',
+        'committed':       'end_of_task',
         'done':            'end_of_task',
       };
       assert.deepStrictEqual(PHASE_TO_NODE, expected);
