@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<testsuites>
+  <testsuite name="pytest" errors="0" failures="0" skipped="1" tests="5" time="12.500">
+    <testcase classname="tests.test_a" name="test_fast" time="0.010"/>
+    <testcase classname="tests.test_a" name="test_slow" time="5.000"/>
+    <testcase classname="tests.test_b.TestGroup" name="test_method" time="2.000"/>
+    <testcase classname="tests.test_b.TestGroup" name="test_method" time="1.000"/>
+    <testcase classname="tests.test_b" name="test_skipped" time="0.001"><skipped message="x"/></testcase>
+  </testsuite>
+</testsuites>

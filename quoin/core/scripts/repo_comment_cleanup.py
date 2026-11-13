@@ -294,7 +294,7 @@ def mode_changed_paths(repo: Path, base: str) -> set[str]:
         ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff", "--summary", base],
         capture_output=True, text=True, check=True).stdout
     found = set()
-    for line in out.splitlines():
+    for line in out.split("\n"):
         m = re.match(r"^ mode change \d+ => \d+ (.+)$", line)
         if m:
             found.add(m.group(1))

@@ -1,0 +1,18 @@
+{
+  "files": {
+    "src/mod.py": {
+      "executed_lines": [1, 2, 3, 4, 5],
+      "contexts": {
+        "1": ["tests/test_a.py::test_one|run", "tests/test_a.py::test_one_copy|run", "tests/test_a.py::test_big|run"],
+        "2": ["tests/test_a.py::test_one|run", "tests/test_a.py::test_one_copy|run", "tests/test_a.py::test_big|run"],
+        "3": ["tests/test_a.py::test_big|run", "tests/test_a.py::test_other|run"],
+        "4": ["tests/test_a.py::test_big|run"],
+        "5": ["tests/test_a.py::test_other|run"]
+      }
+    },
+    "tests/test_a.py": {
+      "executed_lines": [1],
+      "contexts": {"1": ["tests/test_a.py::test_textfile|run", ""]}
+    }
+  }
+}

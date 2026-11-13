@@ -1,0 +1,5 @@
+tests/test_a.py::test_one
+tests/test_a.py::test_one_copy
+tests/test_a.py::test_big
+tests/test_a.py::test_other
+tests/test_a.py::test_textfile
