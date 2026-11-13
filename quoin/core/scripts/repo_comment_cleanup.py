@@ -132,7 +132,10 @@ def residue_hint(text: str, prefixes=()) -> str | None:
     global _LINT, _LINT_WARNED
     try:
         if _LINT is None:
-            path = Path(__file__).resolve().parent / "authored_content_lint.py"
+            here = Path(__file__).resolve().parent
+            if str(here) not in sys.path:
+                sys.path.insert(0, str(here))
+            path = here / "authored_content_lint.py"
             spec = importlib.util.spec_from_file_location("_repo_comment_cleanup_lint", path)
             mod = importlib.util.module_from_spec(spec)
             sys.modules[spec.name] = mod
