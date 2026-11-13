@@ -8,7 +8,8 @@ Subcommands
 
 Deletions file format: [{"file": "pkg/mod.py", "lines": [12, 13, 40]}, ...] with 1-based line
 numbers of COMMENT tokens. A full-line comment line is removed entirely; a trailing comment is
-stripped from its code line. Protected comments are never removed: `apply` refuses them and
+stripped from its code line. Entries must be plain tracked .py paths inside the repo (no
+absolute paths, `..` or symlinks); any other entry rejects the whole apply with nothing written. Protected comments are never removed: `apply` refuses them and
 `verify` fails if one is gone. Files are read and written as bytes in their detected encoding, so
 line endings, byte-order marks and coding declarations survive untouched.
 
@@ -36,7 +37,7 @@ import subprocess
 import sys
 import tokenize
 from collections import Counter
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 PROTECTED = [
     ("directive", re.compile(
@@ -50,10 +51,11 @@ PROTECTED = [
 
 DEFAULT_EXCLUDES = [
     ".venv/*", "*/.venv/*", "build/*", "*.egg-info/*", ".claude/*", "*/__pycache__/*",
-    "node_modules/*", "mutants/*", "*/mutants/*", ".mutmut-cache*",
+    "node_modules/*", "mutants/*", "*/mutants/*", ".mutmut-cache", ".mutmut-cache/*",
 ]
 
-MUTATION_WORKDIRS = ("mutants/", ".mutmut-cache")
+def is_mutation_workdir(rel: str) -> bool:
+    return rel.startswith("mutants/") or rel == ".mutmut-cache" or rel.startswith(".mutmut-cache/")
 
 _PARSE_ERRORS = (SyntaxError, tokenize.TokenError, UnicodeDecodeError, ValueError)
 
@@ -216,9 +218,45 @@ def cmd_list(args) -> int:
     return 0
 
 
+def containment_error(repo: Path, rel: object, tracked: set[str]) -> str | None:
+    """Why a deletions-file path may not be written, or None when it is a plain tracked .py file."""
+    if not isinstance(rel, str) or not rel:
+        return "path must be a non-empty string"
+    pure = PurePosixPath(rel)
+    if pure.is_absolute() or PureWindowsPath(rel).is_absolute() or PureWindowsPath(rel).drive:
+        return "absolute path"
+    if ".." in pure.parts or ".." in PureWindowsPath(rel).parts:
+        return "'..' component"
+    if not rel.endswith(".py"):
+        return "not a .py file"
+    path = repo / rel
+    try:
+        resolved = path.resolve()
+    except (OSError, RuntimeError) as exc:
+        return f"cannot resolve ({exc})"
+    if not resolved.is_relative_to(repo):
+        return "resolves outside the repository"
+    if resolved != repo.joinpath(*pure.parts):
+        return "path goes through a symlink"
+    if pure.as_posix() not in tracked:
+        return "not tracked by git"
+    return None
+
+
 def cmd_apply(args) -> int:
     repo = Path(args.repo).resolve()
     spec = json.loads(Path(args.deletions).read_text())
+    raw = _git(repo, "ls-files", "-z").decode("utf-8", "surrogateescape")
+    tracked = {n for n in raw.split("\0") if n}
+    rejected = [f"{entry.get('file') if isinstance(entry, dict) else entry!r}: {why}"
+                for entry in spec
+                if (why := containment_error(
+                    repo, entry.get("file") if isinstance(entry, dict) else None, tracked))]
+    if rejected:
+        for r in rejected:
+            print("ERROR rejected path", r, file=sys.stderr)
+        print(f"applied 0 comment deletions; {len(rejected)} entries rejected, nothing written")
+        return 1
     errors: list[str] = []
     total = 0
     for entry in spec:
@@ -269,6 +307,7 @@ def cmd_apply(args) -> int:
                 i += 1
         new_text = "".join(ln for k, ln in enumerate(lines) if k not in drop)
         path.write_bytes(new_text.encode(encoding))
+        print(f"TOUCHED {rel}")
         total += len(want)
     for e in errors:
         print("ERROR", e, file=sys.stderr)
@@ -277,7 +316,7 @@ def cmd_apply(args) -> int:
 
 
 def changed_files(repo: Path, base: str) -> list[list[str]]:
-    out = _git(repo, "diff", "--name-status", "-z", base).decode("utf-8", "surrogateescape").split("\0")
+    out = _git(repo, "diff", "--name-status", "-z", base, "--").decode("utf-8", "surrogateescape").split("\0")
     rows: list[list[str]] = []
     i = 0
     while i < len(out) and out[i]:
@@ -288,13 +327,13 @@ def changed_files(repo: Path, base: str) -> list[list[str]]:
     untracked = _git(repo, "ls-files", "--others", "--exclude-standard", "-z")
     for name in untracked.decode("utf-8", "surrogateescape").split("\0"):
         if name:
-            rows.append(["A", name])
+            rows.append(["?", name])
     return rows
 
 
 def mode_changed_paths(repo: Path, base: str) -> set[str]:
     out = subprocess.run(
-        ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff", "--summary", base],
+        ["git", "-C", str(repo), "-c", "core.quotePath=false", "diff", "--summary", base, "--"],
         capture_output=True, text=True, check=True).stdout
     found = set()
     for line in out.split("\n"):
@@ -320,6 +359,9 @@ def align_lines(old_text: str, new_text: str) -> tuple[bool, int, int]:
             trail[row - 1] = col
     droppable = {i for i, ln in enumerate(old) if i in full or ln.strip() == ""}
     reach = {0}
+    # Every old line either survives or is dropped, so after line i the new-side index is at
+    # least i + 1 minus the total number of drops; anything lower can never finish.
+    spare = len(old) - len(new)
     for i, line in enumerate(old):
         stripped = line[:trail[i]].rstrip() + _line_ending(line) if i in trail else None
         nxt: set[int] = set()
@@ -329,6 +371,8 @@ def align_lines(old_text: str, new_text: str) -> tuple[bool, int, int]:
                 nxt.add(j)
             if j < len(new) and (new[j] == line or (stripped is not None and new[j] == stripped)):
                 nxt.add(j + 1)
+        if spare >= 0:
+            nxt = {j for j in nxt if j >= i + 1 - spare}
         if not nxt:
             return False, i + 1, max(reach) + 1
         reach = nxt
@@ -365,16 +409,43 @@ def _check_file(old_bytes: bytes, new_bytes: bytes) -> tuple[str | None, int]:
     return None, sum((old_c - new_c).values())
 
 
+def resolve_base(repo: Path, base: str) -> str | None:
+    """Resolve a user-supplied base to a commit SHA; None when it is unsafe or unknown."""
+    if base.startswith("-"):
+        return None
+    res = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "--verify", "--end-of-options", f"{base}^{{commit}}"],
+        capture_output=True, text=True)
+    return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else None
+
+
+def _name_set(repo: Path, *args: str) -> set[str]:
+    out = _git(repo, "diff", "--name-only", "-z", "--no-renames", *args).decode("utf-8", "surrogateescape")
+    return {n for n in out.split("\0") if n}
+
+
 def cmd_verify(args) -> int:
     repo = Path(args.repo).resolve()
+    base = resolve_base(repo, args.base)
+    if base is None:
+        print(f"FAIL --base {args.base!r} is not a valid commit-ish", file=sys.stderr)
+        return 2
+    args.base = base
     failures: list[str] = []
+    # The commit takes the index, the proof reads the working tree: a path staged differently
+    # from its working copy would be committed unproven.
+    staged = _name_set(repo, "--cached", base, "--")
+    for rel in sorted(staged & _name_set(repo, "--")):
+        failures.append(f"{rel}: index differs from working tree")
     checked = removed = ignored = 0
     modes: set[str] | None = None
     for row in changed_files(repo, args.base):
         status, rel = row[0], row[-1]
-        if status == "A" and rel.startswith(MUTATION_WORKDIRS):
+        if status == "?" and is_mutation_workdir(rel):
             ignored += 1
             continue
+        if status == "?":
+            status = "A"
         if not rel.endswith(".py"):
             if not args.allow_non_py:
                 failures.append(f"{rel}: non-Python file changed ({status})")

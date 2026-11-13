@@ -459,3 +459,128 @@ def test_parses_as_code_regression_bites(core):
 
     assert rejects_every_colon_line("# if x:") is False
     assert core.parses_as_code("# if x:") is True
+
+
+# --------------------------------------------------------------------------
+# apply path containment, verify hardening
+# --------------------------------------------------------------------------
+
+def _outside_file(tmp_path: Path) -> Path:
+    out = tmp_path / "outside"
+    out.mkdir()
+    target = out / "o.py"
+    target.write_bytes(b"x = 1  # note\n")
+    return target
+
+
+def _assert_rejected(repo: Path, res, *untouched: Path):
+    assert res.returncode == 1, (res.stdout, res.stderr)
+    assert "rejected path" in res.stderr
+    assert "nothing written" in res.stdout
+    for p, data in untouched:
+        assert p.read_bytes() == data
+
+
+def test_apply_rejects_absolute_path(tmp_path):
+    target = _outside_file(tmp_path)
+    repo = make_repo(tmp_path, {"m.py": b"x = 1  # note\n"})
+    res = apply(repo, [{"file": str(target), "lines": [1]}, {"file": "m.py", "lines": [1]}])
+    _assert_rejected(repo, res, (target, b"x = 1  # note\n"), (repo / "m.py", b"x = 1  # note\n"))
+    assert "absolute path" in res.stderr
+
+
+def test_apply_rejects_dotdot_component(tmp_path):
+    target = _outside_file(tmp_path)
+    repo = make_repo(tmp_path, {"m.py": b"x = 1  # note\n"})
+    res = apply(repo, [{"file": "../outside/o.py", "lines": [1]}])
+    _assert_rejected(repo, res, (target, b"x = 1  # note\n"))
+    assert "'..' component" in res.stderr
+
+
+def test_apply_rejects_symlinked_file(tmp_path):
+    target = _outside_file(tmp_path)
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n"})
+    os.symlink(target, repo / "link.py")
+    git(repo, "add", "link.py")
+    res = apply(repo, [{"file": "link.py", "lines": [1]}])
+    _assert_rejected(repo, res, (target, b"x = 1  # note\n"))
+    assert "symlink" in res.stderr or "outside" in res.stderr
+
+
+def test_apply_rejects_symlinked_directory(tmp_path):
+    target = _outside_file(tmp_path)
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n"})
+    os.symlink(target.parent, repo / "linkdir")
+    git(repo, "add", "linkdir")
+    res = apply(repo, [{"file": "linkdir/o.py", "lines": [1]}])
+    _assert_rejected(repo, res, (target, b"x = 1  # note\n"))
+
+
+def test_apply_rejects_untracked_file(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n"})
+    (repo / "extra.py").write_bytes(b"y = 2  # note\n")
+    res = apply(repo, [{"file": "extra.py", "lines": [1]}])
+    _assert_rejected(repo, res, (repo / "extra.py", b"y = 2  # note\n"))
+    assert "not tracked" in res.stderr
+
+
+def test_apply_rejects_non_py_file(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n", "s.txt": b"a  # b\n"})
+    res = apply(repo, [{"file": "s.txt", "lines": [1]}])
+    _assert_rejected(repo, res, (repo / "s.txt", b"a  # b\n"))
+    assert "not a .py file" in res.stderr
+
+
+def test_apply_prints_touched_files(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1  # note\n"})
+    res = apply(repo, [{"file": "m.py", "lines": [1]}])
+    assert res.returncode == 0, res.stderr
+    assert "TOUCHED m.py" in res.stdout
+
+
+def test_verify_fails_when_index_differs_from_worktree(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1  # note\n"})
+    (repo / "m.py").write_bytes(b"x = 2  # note\n")
+    git(repo, "add", "m.py")
+    (repo / "m.py").write_bytes(b"x = 1  # note\n")
+    _fail(repo, "m.py: index differs from working tree")
+
+
+def test_verify_staged_matching_worktree_passes(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1  # note\n"})
+    (repo / "m.py").write_bytes(b"x = 1\n")
+    git(repo, "add", "m.py")
+    assert verify(repo).returncode == 0
+
+
+def test_verify_does_not_ignore_staged_additions_under_mutants(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n"})
+    (repo / "mutants").mkdir()
+    (repo / "mutants" / "a.py").write_bytes(b"x = 2\n")
+    git(repo, "add", "mutants/a.py")
+    _fail(repo, "mutants/a.py: file A")
+
+
+def test_verify_mutmut_cache_match_is_exact(tmp_path):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n"})
+    (repo / ".mutmut-cache-evil.py").write_bytes(b"x = 2\n")
+    _fail(repo, ".mutmut-cache-evil.py: file A")
+
+
+@pytest.mark.parametrize("base", ["--output=out.txt", "--no-such-ref", "does-not-exist"])
+def test_verify_rejects_bad_base(tmp_path, base):
+    repo = make_repo(tmp_path, {"m.py": b"x = 1\n"})
+    res = cli("verify", str(repo), f"--base={base}")
+    assert res.returncode == 2
+    assert "not a valid commit-ish" in res.stderr
+    assert not (repo / "out.txt").exists()
+
+
+def test_align_lines_long_blank_run_is_fast(core):
+    import time
+    old = "x = 1\n" + "\n" * 8000 + "y = 2\n"
+    new = "x = 1\n" + "\n" * 7999 + "y = 2\n"
+    t0 = time.time()
+    ok, _, _ = core.align_lines(old, new)
+    assert ok
+    assert time.time() - t0 < 2
