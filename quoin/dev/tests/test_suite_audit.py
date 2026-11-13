@@ -292,3 +292,25 @@ def test_affected_tests_maps_helper_to_this_file():
         ["quoin/core/scripts/suite_audit.py"], REPO_ROOT)
     assert any(s.endswith("quoin/dev/tests/test_suite_audit.py") for s in selectors)
     assert not any("suite_audit.py" in u for u in unmatched)
+
+
+def test_redundancy_strips_only_phase_suffixes(tmp_path):
+    p = cov_file(tmp_path, {
+        "t.py::test_a[x|y]|run": [1, 2],
+        "t.py::test_a[x|z]|run": [1],
+        "t.py::test_b|setup": [1],
+    })
+    out = run_json("redundancy", p)
+    assert "t.py::test_a[x|y]" in out["reasons"] or "t.py::test_a[x|z]" in out["reasons"]
+    assert "t.py::test_a[x|z]" in out["reasons"]
+    assert any(r.startswith("dominated-by:t.py::test_a[x|y]") for r in out["reasons"]["t.py::test_a[x|z]"])
+    assert "t.py::test_a[x" not in out["reasons"]
+
+
+def test_redundancy_dominated_by_with_many_tests(tmp_path):
+    mapping = {f"t.py::test_{i}": [i] for i in range(1, 200)}
+    mapping["t.py::test_big"] = list(range(1, 200))
+    out = run_json("redundancy", cov_file(tmp_path, mapping))
+    assert all(
+        any(r.startswith("dominated-by:t.py::test_big") for r in out["reasons"][f"t.py::test_{i}"])
+        for i in range(1, 200))

@@ -248,6 +248,16 @@ def _is_test_file(path: str) -> bool:
     return base.startswith("test_") or base.endswith("_test.py") or base == "conftest.py"
 
 
+_PHASES = ("|setup", "|run", "|teardown")
+
+
+def _strip_phase(ctx: str) -> str:
+    for suffix in _PHASES:
+        if ctx.endswith(suffix):
+            return ctx[: -len(suffix)]
+    return ctx
+
+
 def _test_line_sets(cov: dict) -> dict[str, set[tuple[str, int]]]:
     sets: dict[str, set[tuple[str, int]]] = defaultdict(set)
     for fname, info in cov.get("files", {}).items():
@@ -255,15 +265,32 @@ def _test_line_sets(cov: dict) -> dict[str, set[tuple[str, int]]]:
             for ctxs in info.get("contexts", {}).values():
                 for c in ctxs:
                     if c:
-                        sets.setdefault(c.rsplit("|", 1)[0] if "|" in c else c, set())
+                        sets.setdefault(_strip_phase(c), set())
             continue
         for line, ctxs in info.get("contexts", {}).items():
             for c in ctxs:
                 if not c:
                     continue
-                node = c.rsplit("|", 1)[0] if "|" in c else c
+                node = _strip_phase(c)
                 sets[node].add((fname, int(line)))
     return sets
+
+
+_SPAN_CACHE: dict[tuple[str, str], list[tuple[int, int, str]]] = {}
+
+
+def _function_spans(source_root: Path, f: str) -> list[tuple[int, int, str]]:
+    key = (str(source_root), f)
+    if key not in _SPAN_CACHE:
+        try:
+            tree = ast.parse((source_root / f).read_text())
+        except (OSError, SyntaxError, UnicodeDecodeError):
+            _SPAN_CACHE[key] = []
+        else:
+            _SPAN_CACHE[key] = [
+                (n.lineno, n.end_lineno or n.lineno, n.name) for n in ast.walk(tree)
+                if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    return _SPAN_CACHE[key]
 
 
 def _functions_for(source_root: Path, lines: set[tuple[str, int]]) -> list[str]:
@@ -272,14 +299,9 @@ def _functions_for(source_root: Path, lines: set[tuple[str, int]]) -> list[str]:
         by_file[f].add(ln)
     names = set()
     for f, nums in by_file.items():
-        try:
-            tree = ast.parse((source_root / f).read_text())
-        except (OSError, SyntaxError, UnicodeDecodeError):
-            continue
-        for n in ast.walk(tree):
-            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
-                    n.lineno <= x <= (n.end_lineno or n.lineno) for x in nums):
-                names.add(f"{f}::{n.name}")
+        for start, end, name in _function_spans(source_root, f):
+            if any(start <= x <= end for x in nums):
+                names.add(f"{f}::{name}")
     return sorted(names)
 
 
@@ -322,8 +344,13 @@ def cmd_redundancy(args) -> int:
             if m != rep:
                 removed.add(m)
                 reasons[m].append(f"duplicate-of:{rep}")
+    by_line: dict[tuple[str, int], list[str]] = defaultdict(list)
     for t, s in nonempty.items():
-        supers = [o for o, os_ in nonempty.items() if o != t and s < os_]
+        for ln in s:
+            by_line[ln].append(t)
+    for t, s in nonempty.items():
+        rarest = min(s, key=lambda ln: len(by_line[ln]))
+        supers = [o for o in by_line[rarest] if o != t and s < nonempty[o]]
         if supers:
             reasons[t].append(f"dominated-by:{min(supers, key=rank)}")
     covering: dict[tuple[str, int], int] = defaultdict(int)
