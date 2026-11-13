@@ -98,9 +98,10 @@ route only, the
 `.workflow_artifacts/memory/` the previous task of the same sequence ended
 with is copied into the new checkout before the session starts (lessons
 learned, discovery files, daily insights). Session state under `memory/`
-(`sessions/`, `checkpoints/`, `workspaces/`, `telemetry/`, run-state,
+(`sessions/`, `checkpoints/`, `workspaces/`, `telemetry/`, `trash/`, run-state,
 autonomous, auto-resume, supervisor, continuation, run-notes, 1m-tier,
-needs-decision and worktree-probe records) is not carried, nor is anything outside
+needs-decision and worktree-probe records, and the session hooks'
+`recent-sessions.md`, pending-restore and compact-happened files) is not carried, nor is anything outside
 `memory/`: no code, branches, `cache/`, session or the arm's auto memory. The
 plain arm is stateless, as on the tiered suites.
 

@@ -444,6 +444,8 @@ class Verdict:
     plain: int = 0
     quoin: int = 0
     pairs: int = 0
+    # Denials of the shared base deny rules, left out of the gap above.
+    shared: dict = field(default_factory=dict)
     stop: bool = False
     missing: bool = False
     notes: list = field(default_factory=list)
@@ -461,8 +463,106 @@ def _metrics_reason(row_dir: Path) -> str:
     return NO_RESULT_REASON if isinstance(metrics, dict) else NO_METRICS_REASON
 
 
+_SHELL_SEPARATORS = {"&&", "||", ";", "|", "&", "|&", ";;"}
+_ENV_ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _subcommands(command: str):
+    """Leading words of each subcommand, quote-aware; None when it cannot be parsed.
+
+    Quoted text and heredoc bodies are never treated as commands, so a denied
+    program named inside a string cannot make a denial look shared.
+    """
+    import shlex
+
+    lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    parts, current = [], []
+    for tok in tokens:
+        if tok.startswith("<<"):
+            break
+        if tok in _SHELL_SEPARATORS:
+            parts.append(current)
+            current = []
+        else:
+            current.append(tok)
+    parts.append(current)
+    return [[w for w in part if not _ENV_ASSIGN.match(w)] for part in parts]
+
+
+def _shared_deny_rules():
+    """(tool names, Bash programs) denied identically in both arms."""
+    from quoin.benchmarks.harness.arm_sandbox import SANDBOX_BASE_PERMISSIONS
+
+    tools, programs = set(), set()
+    for rule in SANDBOX_BASE_PERMISSIONS["deny"]:
+        m = re.fullmatch(r"Bash\(([^:()]+):\*\)", rule)
+        if m:
+            programs.add(m.group(1))
+        elif "(" not in rule:
+            tools.add(rule)
+    return tools, programs
+
+
+def is_shared_rule_denial(denial, rules=None) -> bool:
+    """True when a recorded denial matches the base deny profile both arms share.
+
+    The CLI checks a compound Bash command per subcommand, so a command counts
+    when any subcommand runs a denied program, after leading VAR=value
+    assignments. Programs match by basename: in the CL pilot the plain arm,
+    which has only the base rules, was denied a command whose one candidate
+    was `/tmp/venv/bin/pip install`. Unparseable commands never count as
+    shared, so they stay in the gap.
+    """
+    tools, programs = rules or _shared_deny_rules()
+    if not isinstance(denial, dict):
+        return False
+    name = denial.get("tool_name")
+    if name in tools:
+        return True
+    if name != "Bash":
+        return False
+    command = (denial.get("tool_input") or {}).get("command")
+    if not isinstance(command, str):
+        return False
+    parts = _subcommands(command)
+    if parts is None:
+        return False
+    return any(words and os.path.basename(words[0]) in programs for words in parts)
+
+
+def shared_rule_denials(row_dir) -> Optional[int]:
+    """Shared-rule denials in a row's final result event; None when not recorded."""
+    path = Path(row_dir) / "transcript.jsonl"
+    found = None
+    rules = _shared_deny_rules()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                if '"permission_denials"' not in line:
+                    continue
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                denials = event.get("permission_denials") if event.get("type") == "result" else None
+                if isinstance(denials, list):
+                    found = sum(1 for d in denials if is_shared_rule_denial(d, rules))
+    except OSError:
+        return None
+    return found
+
+
 def parity(res: Resolved) -> Verdict:
-    """Compare permission denials between the arms over the pilot tier's recorded rows."""
+    """Compare permission denials between the arms over the pilot tier's recorded rows.
+
+    Denials of the shared base deny rules (identical in both arms) are counted
+    separately and left out of the gap; only the rest can stop the run.
+    """
     from quoin.benchmarks.harness import paired_run
     from quoin.benchmarks.harness.session_state import read_session_json
     from quoin.benchmarks.harness.tiered_report import load_row
@@ -500,6 +600,10 @@ def parity(res: Resolved) -> Verdict:
             missing.append((cell, task["id"], _metrics_reason(rows[cell])))
         if not gaps:
             verdict.pairs += 1
+            for cell in paired_run.PAIR_ORDER:
+                shared = min(shared_rule_denials(rows[cell]) or 0, counts[cell])
+                verdict.shared[cell] = verdict.shared.get(cell, 0) + shared
+                counts[cell] -= shared
             plain_total += counts[plain_cell]
             quoin_total += counts[quoin_cell]
     for cell, task_id, reason in missing:
@@ -518,6 +622,12 @@ def parity(res: Resolved) -> Verdict:
 def report_parity(res: Resolved) -> Verdict:
     verdict = parity(res)
     print(f"parity: plain {verdict.plain}, quoin {verdict.quoin} -> {verdict.label}")
+    from quoin.benchmarks.harness import paired_run
+
+    plain_cell, quoin_cell = paired_run.PAIR_ORDER
+    if any(verdict.shared.values()):
+        print(f"  not counted, shared base deny rules: plain {verdict.shared.get(plain_cell, 0)}, "
+              f"quoin {verdict.shared.get(quoin_cell, 0)}")
     for note in verdict.notes:
         print(f"  {note}")
     return verdict

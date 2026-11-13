@@ -98,8 +98,12 @@ def _value(cell: dict, measure: str):
 
 
 def _counted(cell: Optional[dict], measure: str = "pass") -> bool:
-    """A row that ran and is not invalid; for cost, also one with a known cost."""
-    if cell is None or cell["verdict"] in ("not_run", "invalid"):
+    """A judged row that ran and is not invalid; for cost, also one with a known cost.
+
+    A row still awaiting judging reads as an error in the tiered report; it is
+    left out here rather than counted as a failure.
+    """
+    if cell is None or cell["verdict"] in ("not_run", "invalid") or cell.get("judge_pending"):
         return False
     return measure != "usd" or cell.get("usd_source") != "unavailable"
 
@@ -107,6 +111,7 @@ def _counted(cell: Optional[dict], measure: str = "pass") -> bool:
 def arm_rows(memory_run: dict, lean_run: Optional[dict]) -> dict:
     """{arm: {task_id: pair-entry cell}} for the three arms."""
     out = {arm: {} for arm in ARMS}
+
     for entry in memory_run["pairs"]:
         out["plain"][entry["task_id"]] = entry[PLAIN_CELL]
         out["memory"][entry["task_id"]] = entry[QUOIN_CELL]
@@ -114,6 +119,11 @@ def arm_rows(memory_run: dict, lean_run: Optional[dict]) -> dict:
         for entry in lean_run["pairs"]:
             out["lean"][entry["task_id"]] = entry[QUOIN_CELL]
     return out
+
+
+def pending_counts(rows: dict) -> dict:
+    """Rows per arm left out because they still await judging."""
+    return {arm: sum(1 for c in rows[arm].values() if c.get("judge_pending")) for arm in ARMS}
 
 
 def by_position(suite: dict, rows: dict) -> dict:
@@ -202,6 +212,7 @@ def build_report(memory_run: dict, lean_run: Optional[dict]) -> dict:
     return {
         "memory_run": str(memory_run["path"]),
         "lean_run": str(lean_run["path"]) if lean_run else None,
+        "judge_pending_excluded": pending_counts(rows),
         "by_position": by_position(suite, rows),
         "paired": paired(suite, rows),
         "memory": inherited_memory(suite, Path(memory_run["path"])),
@@ -222,7 +233,12 @@ def _fmt(value, kind) -> str:
 
 def render_markdown(report: dict) -> str:
     lines = ["# Sequence report", "", f"Memory run: `{report['memory_run']}`",
-             f"Lean run: `{report['lean_run'] or 'not given'}`", "",
+             f"Lean run: `{report['lean_run'] or 'not given'}`", ""]
+    pending = report.get("judge_pending_excluded") or {}
+    if any(pending.values()):
+        lines += ["Left out, still awaiting judging (run `--judge-only`): "
+                  + ", ".join(f"{arm} {n}" for arm, n in pending.items() if n), ""]
+    lines += [
              "## By position in the sequence", "",
              "| Arm | Third | n | Pass rate | Mean cost | Mean time |", "|---|---|---|---|---|---|"]
     for arm in ARMS:

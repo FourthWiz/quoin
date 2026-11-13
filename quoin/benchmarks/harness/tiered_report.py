@@ -462,6 +462,7 @@ def _pair_entry(task, rows):
             "invalid_reason": r["invalid_reason"], "post_plan_stop": r["post_plan_stop"],
             "workflow_route": r["workflow_route"],
             "patch_size": r["patch_size"],
+            "judge_pending": r["judge_pending"],
         }
     a, b = rows[PLAIN_CELL]["tree_sha"], rows[QUOIN_CELL]["tree_sha"]
     entry["tree_sha_match"] = (a == b) if (a and b) else None

@@ -32,7 +32,7 @@ LESSONS_FILE = "lessons-learned.md"
 # Per-session pipeline state that lives under memory/ but is not memory: run
 # state, checkpoints, resume and supervisor records. Carrying it would let one
 # task's session leak into the next.
-SESSION_STATE_DIRS = ("sessions", "checkpoints", "workspaces", "telemetry")
+SESSION_STATE_DIRS = ("sessions", "checkpoints", "workspaces", "telemetry", "trash")
 SESSION_STATE_PATTERNS = (
     "run-state-*",
     "autonomous-*",
@@ -44,6 +44,9 @@ SESSION_STATE_PATTERNS = (
     "1m-tier-*",
     "needs-decision-*",
     "worktree-probe.txt",
+    "recent-sessions.md",
+    "pending-restore-*",
+    "compact-happened-*",
 )
 
 

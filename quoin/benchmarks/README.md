@@ -381,8 +381,12 @@ the package; `--repo-root` points it at a checkout explicitly. In order, it:
    exit 4 when the arms differ by at least `--parity-min-gap` denials (default
    3) and the larger total is at least `--parity-min-ratio` times the smaller
    (default 2; a smaller total of 0 always satisfies the ratio). It also stops
-   when a pilot row has no denial count, naming the row and the reason. After
-   reviewing the pilot rows, `--ignore-parity` continues past either stop.
+   when a pilot row has no denial count, naming the row and the reason.
+   Denials of the base deny rules both arms share (`WebFetch`, `WebSearch` and
+   Bash `curl`, `wget`, `pip`, `pip3`, `claude`, for example a blocked
+   `pip install` while building a test environment) are printed but not counted
+   toward the gap. After reviewing the pilot rows, `--ignore-parity` continues
+   past either stop.
 5. Runs the remaining tiers on the same run id and the same ledger. Pilot
    sessions already recorded are not paid for again.
 6. Judges the sessions when this host can: Docker running, the pinned
@@ -707,8 +711,10 @@ It gives, per arm (plain, memory, lean), pass rate, mean cost and mean time
 over the first, middle and last third of the sequences and the slope of each
 against relative position; the paired per-task differences memory minus lean
 and memory minus plain with a sign test; and per task what memory the memory
-arm inherited and how many lessons it wrote. It reads no model and costs
-nothing. `multi_run_report.py` still compares repeats of one route.
+arm inherited and how many lessons it wrote. Rows still awaiting judging are
+left out, not counted as failures, and the report says how many per arm. It
+reads no model and costs nothing. `multi_run_report.py` still compares repeats
+of one route.
 
 ### SWE-bench Pro suite: larger tasks
 
