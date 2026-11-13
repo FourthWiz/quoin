@@ -141,6 +141,11 @@ def _memory_tree(root: Path, lessons: int):
     (mem / "1m-tier-sonnet.txt").write_text("")
     (mem / "needs-decision-t.md").write_text("")
     (mem / "worktree-probe.txt").write_text("")
+    (mem / "recent-sessions.md").write_text("session hook record")
+    (mem / "pending-restore-abc.txt").write_text("")
+    (mem / "compact-happened-abc.txt").write_text("")
+    (mem / "trash" / "2026-11-13").mkdir(parents=True)
+    (mem / "trash" / "2026-11-13" / "old.txt").write_text("")
     return mem
 
 
@@ -418,6 +423,24 @@ def test_slope_is_within_sequence_and_unknown_cost_is_left_out(tmp_path):
     assert sequence_report.slope([("a", 0.0, 1.0)]) is None
     cell = {"verdict": "pass", "usd": 0.0, "usd_source": "unavailable", "wall_clock_s": 5}
     assert sequence_report._counted(cell) and not sequence_report._counted(cell, "usd")
+
+
+def test_rows_awaiting_judging_are_left_out_not_failed(tmp_path, capsys):
+    mem = _seq_run(tmp_path, "mem", "memory", ["pass"] * 6, ["pass"] * 6)
+    lean = _seq_run(tmp_path, "lean", "lean", ["pass"] * 6, ["error"] * 6)
+    for i in range(6):
+        d = lean / QUOIN / f"t{i}"
+        (d / "session.json").write_text(json.dumps({"judge_required": True}))
+        (d / "judge.json").write_text(json.dumps({"verdict": "error", "judge_final": False}))
+    out = tmp_path / "r.json"
+    assert sequence_report.main([str(mem), "--lean-run", str(lean), "--json", str(out)]) == 0
+    report = json.loads(out.read_text())
+    assert report["judge_pending_excluded"] == {"plain": 0, "memory": 0, "lean": 6}
+    assert report["by_position"]["lean"]["first"] == {
+        "n": 0, "pass_rate": None, "mean_usd": None, "mean_wall_clock_s": None}
+    assert report["paired"]["memory_vs_lean"]["n"] == 0
+    assert report["by_position"]["lean"]["slope"]["pass"] is None
+    assert "still awaiting judging (run `--judge-only`): lean 6" in capsys.readouterr().out
 
 
 def test_sequence_report_refuses_wrong_routes(tmp_path):

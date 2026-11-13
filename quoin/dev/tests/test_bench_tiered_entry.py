@@ -436,6 +436,45 @@ def test_parity_thresholds_change_the_verdict(tw):
     assert _pair(["--parity-min-ratio", "5"], spec, tw).label == "ok"
 
 
+def test_parity_leaves_shared_base_rule_denials_out_of_the_gap(tw, capsys):
+    """The CL pilot stopped on plain-arm `pip install` denials; those rules are the same in both arms."""
+    w = tw
+    res = tiered_entry.resolve(_parsed(*_argv(w)))
+    _rows(res, {(0, 0): 3, (0, 1): 0, (1, 0): 1, (1, 1): 0})
+    pip = {"tool_name": "Bash", "tool_input": {"command": "python3 -m venv /tmp/v && /tmp/v/bin/pip install pytz"}}
+    other = {"tool_name": "Bash", "tool_input": {"command": "rm -rf build"}}
+    d = res.run_path / ARMS[0] / [t for t in res.tasks if t["tier"] == res.pilot_tier][0]["id"]
+    (d / "transcript.jsonl").write_text(json.dumps(
+        {"type": "result", "permission_denials": [pip, pip, other]}) + "\n")
+    q = res.run_path / ARMS[1] / d.name
+    (q / "metrics.json").write_text(json.dumps({"permission_denial_count": 1}))
+    (q / "transcript.jsonl").write_text(json.dumps(
+        {"type": "result", "permission_denials": [other]}) + "\n")
+    verdict = tiered_entry.report_parity(res)
+    # plain: 3 + 1 recorded, 2 of them shared; quoin: its non-shared denial still counts.
+    assert (verdict.label, verdict.plain, verdict.quoin) == ("ok", 2, 1)
+    assert verdict.shared == {"simple-claude": 2, "quoin-claude": 0}
+    assert "not counted, shared base deny rules: plain 2, quoin 0" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("denial,shared", [
+    ({"tool_name": "WebFetch", "tool_input": {"url": "x"}}, True),
+    ({"tool_name": "Bash", "tool_input": {"command": "FOO=1 curl -s x"}}, True),
+    ({"tool_name": "Bash", "tool_input": {"command": "cd /tmp; /usr/local/bin/pip3 install a"}}, True),
+    ({"tool_name": "Bash", "tool_input": {"command": "python3 -m pip install a"}}, False),
+    ({"tool_name": "Bash", "tool_input": {"command": "rm -rf /tmp/x"}}, False),
+    ({"tool_name": "Edit", "tool_input": {}}, False),
+    # Text inside quotes or a heredoc is not a subcommand.
+    ({"tool_name": "Bash", "tool_input": {"command": 'git commit -m "x; pip y" && rm -rf b'}}, False),
+    ({"tool_name": "Bash", "tool_input": {"command": 'echo "a && curl x"; rm -rf b'}}, False),
+    ({"tool_name": "Bash", "tool_input": {"command": "cat <<EOF\npip install\nEOF"}}, False),
+    ({"tool_name": "Bash", "tool_input": {"command": 'echo "unbalanced'}}, False),
+    ({"tool_name": "Bash", "tool_input": {"command": "sleep 1 & pip install a"}}, True),
+])
+def test_shared_rule_denial_classification(denial, shared):
+    assert tiered_entry.is_shared_rule_denial(denial) is shared
+
+
 @pytest.mark.parametrize("machine,ns,emulation,expected", [
     ("arm64", None, False, False),
     ("x86_64", None, False, True),
