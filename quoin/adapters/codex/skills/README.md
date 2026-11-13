@@ -43,3 +43,4 @@ mechanics.
 | [`specify`](specify/README.md) | specify | max | yes |
 | [`enrich`](enrich/README.md) | enrich | max | yes |
 | [`workspace`](workspace/README.md) | workspace | medium | yes |
+| [`repo_cleanup`](repo_cleanup/README.md) | repo_cleanup | high | yes |

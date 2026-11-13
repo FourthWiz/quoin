@@ -253,7 +253,7 @@ def test_parity_matrix_opencode_column():
     assert "OpenCode" in "".join(semantics_header)
     assert "OpenCode" in skill_header
 
-    assert len(skill_rows) == 33
+    assert len(skill_rows) == 34
     for row in skill_rows:
         assert len(row) == len(skill_header), row
 

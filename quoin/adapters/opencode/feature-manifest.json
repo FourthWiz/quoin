@@ -3,7 +3,7 @@
   "feature_name": "opencode-project-assets",
   "adapter": "opencode",
   "status": "generated-offline-verified",
-  "description": "Catalog manifest classifying all 32 portable Quoin workflow skills for the OpenCode adapter, with per-entry support status, generated-name mapping and a drift check against the portable catalog. The generator, installer and doctor for the supported entries are implemented and offline-verified; live runtime evidence is not yet collected.",
+  "description": "Catalog manifest classifying all 34 portable Quoin workflow skills for the OpenCode adapter, with per-entry support status, generated-name mapping and a drift check against the portable catalog. The generator, installer and doctor for the supported entries are implemented and offline-verified; live runtime evidence is not yet collected.",
   "opencode_version": "1.18.32",
   "entrypoints": [
     {
@@ -50,7 +50,7 @@
   "portable_inputs": [
     {
       "path": "quoin/core/workflow/skills.json",
-      "description": "Canonical skill catalog: id, phase, effort, user-facing and spawn-target flags for all 32 portable skills"
+      "description": "Canonical skill catalog: id, phase, effort, user-facing and spawn-target flags for all 34 portable skills"
     },
     {
       "path": "quoin/core/skills/*.md",
@@ -502,6 +502,20 @@
       "status": "documentation-only",
       "reason": "This performs an external write by opening a remote pull request, and needs its own authorization path before it is generated.",
       "target_milestone": "controlled-writes",
+      "catalog": {
+        "user_facing": true,
+        "spawn_target": false
+      },
+      "opencode": {},
+      "assets": [],
+      "live_runtime_evidence": false,
+      "evidence": []
+    },
+    {
+      "id": "repo_cleanup",
+      "status": "documentation-only",
+      "reason": "Portable contract only; OpenCode has no generated command or role for this whole-repo cleanup yet.",
+      "target_milestone": "release-hardening",
       "catalog": {
         "user_facing": true,
         "spawn_target": false
