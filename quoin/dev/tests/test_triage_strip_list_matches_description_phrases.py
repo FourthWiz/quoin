@@ -8,7 +8,7 @@ default — no body edit anywhere; the stub tree has no body at all).
 This test hardcodes the 5 D-08-frozen phrases as literals rather than
 extracting them from the description — the 5th phrase contains an internal
 apostrophe, so any quote-delimiter parse would truncate it to "I" (round-4
-MAJ-1; the hazard is systemic: 8 of 32 skills carry apostrophes in trigger
+MAJ-1; the hazard is systemic: 8 of 33 skills carry apostrophes in trigger
 phrases, so no phrase-level check may parse by quote delimiter).
 
 Assertions:

@@ -789,7 +789,7 @@ KNOWN_DEFERRED_ROSTERS: dict = {
     ),
     "SHARE_CEILINGS@test_section0_provenance_guard.py": (
         "per-file §0-family share "
-        "ceiling roster: all 32 adapter skill names, used only to key the "
+        "ceiling roster: all 33 adapter skill names, used only to key the "
         "SHARE_CEILINGS dict for per-file percentage-share assertions "
         "(measured §0-family line share + a flat headroom). Same shape as "
         "SECTION0_SKILLS@test_footprint_ceilings.py above — no skills.json "

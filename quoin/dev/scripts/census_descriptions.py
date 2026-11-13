@@ -21,7 +21,7 @@ switch crept in, and the census fails loudly (exit 3).
 The census reads the Claude adapter tree (`quoin/adapters/claude/skills/`).
 
 NOTE (phrase parsing): trigger phrases inside descriptions may contain
-internal apostrophes (8 of 32 skills do). NO code in this script or its
+internal apostrophes (8 of 33 skills do). NO code in this script or its
 tests may extract phrases with quote-delimiter parsing; use frozen literals
 or `', '`-boundary splits instead.
 

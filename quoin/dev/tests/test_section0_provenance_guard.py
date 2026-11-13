@@ -103,10 +103,10 @@ START_OF_DAY_NEXT_H2 = "## Session bootstrap"
 SNAPSHOT_CORPUS_LINES = 15475
 # The census counts every §0 block up to the next H2, so it includes the
 # start_of_day tail; the snapshot is stated without that tail.
-SNAPSHOT_CENSUS_LINES = 4310
-SNAPSHOT_GENERATED_LINES = 4119
+SNAPSHOT_CENSUS_LINES = 4426
+SNAPSHOT_GENERATED_LINES = 4235
 SNAPSHOT_OVERHANG_LINES = 18  # one blank line for each carrier except start_of_day
-SNAPSHOT_CARRIERS = 29
+SNAPSHOT_CARRIERS = 30
 
 
 def _variant_of(line: str) -> str | None:
@@ -463,7 +463,7 @@ def test_census_snapshot_reproduces_state():
         f"{SNAPSHOT_CARRIERS} — re-seed SNAPSHOT_CARRIERS per the re-seed procedure above."
     )
     assert VARIANT_COUNTS == {
-        "§0": 19, "§0'": 10, "§0a": 1, "§0b": 2, "§0″": 10, "§0‴": 12,
+        "§0": 19, "§0'": 11, "§0a": 1, "§0b": 2, "§0″": 11, "§0‴": 12,
     }, (
         f"VARIANT_COUNTS={VARIANT_COUNTS} no longer matches the recorded per-variant "
         "block counts — re-seed the literal dict above per the re-seed procedure above."
@@ -543,6 +543,7 @@ SHARE_CEILINGS: dict[str, float] = {
     "next_steps": 58.3333,
     "plan": 42.5405,
     "pr": 56.1002,
+    "repo_cleanup": 56.1013,
     "review": 29.8658,
     "revise": 40.0610,
     "revise-fast": 48.0052,
@@ -591,7 +592,7 @@ def test_share_ceilings_key_set_matches_adapter_skills():
         f"skills {sorted(discovered)} "
         f"(sym-diff {sorted(set(SHARE_CEILINGS) ^ discovered)})"
     )
-    assert len(SHARE_CEILINGS) == 32
+    assert len(SHARE_CEILINGS) == 33
 
 
 def test_zero_share_carve_out_is_exact():
@@ -686,13 +687,13 @@ DENSITY_CEILINGS: dict[str, int] = {
     "claude_md": 5,
 }
 
-# The 18 excluded files, named explicitly (never silently absent from the
+# The 19 excluded files, named explicitly (never silently absent from the
 # module) — every one measures below DENSITY_MATERIALITY_FLOOR.
 DENSITY_EXCLUDED_BELOW_FLOOR = {
     "cleanup", "specify", "start_of_day", "discover", "enrich", "expand",
     "init_workflow", "rollback", "workspace", "cost_snapshot", "sleep",
     "capture_insight", "continue_work", "next_steps", "pr", "status",
-    "triage", "weekly_review",
+    "triage", "weekly_review", "repo_cleanup",
 }
 
 
@@ -746,7 +747,7 @@ def test_density_ceiling_and_excluded_sets_cover_manifest_exactly():
         "between DENSITY_CEILINGS and DENSITY_EXCLUDED_BELOW_FLOOR and update both "
         "this count and the one below to match."
     )
-    assert len(DENSITY_EXCLUDED_BELOW_FLOOR) == 18, (
+    assert len(DENSITY_EXCLUDED_BELOW_FLOOR) == 19, (
         f"DENSITY_EXCLUDED_BELOW_FLOOR has {len(DENSITY_EXCLUDED_BELOW_FLOOR)} "
         "entries, expected 18. If a skill's in-domain caps count crossed "
         "DENSITY_MATERIALITY_FLOOR, move it between the two sets and update both "
