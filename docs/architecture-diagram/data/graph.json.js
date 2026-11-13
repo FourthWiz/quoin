@@ -91,7 +91,7 @@ window.__GRAPH__ = {
       "type": "adapter",
       "layer": "claude-adapter",
       "summary": "install.sh · installer.py — Deploys skills, memory, scripts, hooks to ~/.claude/. Run once per machine; re-run after every pull.",
-      "details_md": "## Installer\n\n`bash quoin/install.sh` deploys the entire Claude adapter to `~/.claude/`:\n\n- **Skills** — all 32 SKILL.md files to `~/.claude/skills/` (overlay rule: claude adapter overrides base)\n- **Memory files** — all Tier 1 reference files to `~/.claude/memory/`\n- **Scripts** — Python utilities to `~/.claude/scripts/`\n- **Hooks** — 7 bash scripts to `~/.claude/hooks/`; registers 8 stanzas in `settings.json`\n- **Preambles** — runs `build_preambles.py` to inject §0 dispatch blocks into skill files\n\n`installer.py` handles the overlay logic and PLACEHOLDER token substitution for `~/.claude/` paths.\n\n**Re-run after every `git pull`** — deployed copies at `~/.claude/` are not auto-updated."
+      "details_md": "## Installer\n\n`bash quoin/install.sh` deploys the entire Claude adapter to `~/.claude/`:\n\n- **Skills** — all 33 SKILL.md files to `~/.claude/skills/` (overlay rule: claude adapter overrides base)\n- **Memory files** — all Tier 1 reference files to `~/.claude/memory/`\n- **Scripts** — Python utilities to `~/.claude/scripts/`\n- **Hooks** — 7 bash scripts to `~/.claude/hooks/`; registers 8 stanzas in `settings.json`\n- **Preambles** — runs `build_preambles.py` to inject §0 dispatch blocks into skill files\n\n`installer.py` handles the overlay logic and PLACEHOLDER token substitution for `~/.claude/` paths.\n\n**Re-run after every `git pull`** — deployed copies at `~/.claude/` are not auto-updated."
     }
   ],
   "edges": [

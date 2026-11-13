@@ -295,6 +295,7 @@ workflow intent through natural-language phase requests and repo-local docs.
 | `/expand <path>` | Sonnet | Re-renders a terse workflow artifact in readable English |
 | `/status` | Haiku | Renders the workflow pipeline graph with the active phase marked (read-only) |
 | `/cleanup` | Sonnet | Trash-moves stale sentinels and old checkpoints into recoverable archive; standalone runs also offer a confirmed task-folder bookkeeping pass |
+| `/repo_cleanup` | Opus | Whole-repo pass: removes redundant comments under a removal-only proof, trims tests only on coverage and mutation evidence |
 | `/next-steps` | Haiku | Append-only queue for future work items (`add` / `list` / `done N`) |
 
 ## Open-model routing (opt-in)

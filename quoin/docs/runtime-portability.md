@@ -225,7 +225,7 @@ portable skills:
 - `quoin/adapters/codex/skills/<skill>/README.md` references the corresponding
   `quoin/core/skills/<skill>.md` contract and records the skill phase, effort,
   and user-facing status from `quoin/core/workflow/skills.json`.
-- `quoin/adapters/codex/skills/README.md` indexes the 32 skill docs.
+- `quoin/adapters/codex/skills/README.md` indexes the 33 skill docs.
 - `quoin/adapters/codex/unsupported-claude-behavior.md` documents Claude-only
   behavior that is intentionally not translated into Codex.
 

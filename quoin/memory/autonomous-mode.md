@@ -166,9 +166,9 @@ The §0'/§0″ dispatch-failure and 1M-credit `AskUserQuestion` prompts are
 **generated** per-skill by `inject_pollution_dispatch.py`
 (`render_pollution_block` / `render_mintier_block`, `{skill}`
 substitution) into the `<!-- §0doubleprime-begin/end -->` and §0'
-blocks, across the 10 Opus-tier leaf skills: `architect`, `plan`,
+blocks, across the 11 Opus-tier leaf skills: `architect`, `plan`,
 `critic`, `revise`, `review`, `security_review`, `discover`, `specify`,
-`enrich`, `init_workflow`. Under `[autonomous]`, the generated clause
+`enrich`, `init_workflow`, `repo_cleanup`. Under `[autonomous]`, the generated clause
 reads: on any §0'/§0″ dispatch-failure or 1M-credit error, proceed at
 current tier fail-OPEN and do **not** call `AskUserQuestion`. This
 clause is added to the **generator template**, then every leaf skill's
