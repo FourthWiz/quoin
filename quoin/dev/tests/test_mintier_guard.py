@@ -74,6 +74,7 @@ MINTIER_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
 # mintier_required_tokens (MIN-1): 9 content tokens checked INSIDE the §0″ block.

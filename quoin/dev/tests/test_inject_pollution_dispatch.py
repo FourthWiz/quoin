@@ -89,6 +89,7 @@ SKILL_DISTINCTIVE_TOKENS = {
     "specify": "spec.md",
     "security_review": "OWASP",
     "enrich": "enriched-prompt.md",
+    "repo_cleanup": "Repo cleanup target",
 }
 
 # MIN-A: literal default threshold value

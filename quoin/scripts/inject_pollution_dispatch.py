@@ -3,7 +3,7 @@
 inject_pollution_dispatch.py — Generator for §0' Pollution dispatch AND §0″ Minimum-tier guard.
 
 Inserts/refreshes the §0' Pollution dispatch block AND the §0″ Minimum-tier
-guard block into the 10 Opus-tier
+guard block into the 11 Opus-tier
 Claude adapter SKILL.md files at:
   quoin/adapters/claude/skills/<skill>/SKILL.md
 
@@ -42,7 +42,7 @@ ZC_HEADING = "## §0c Pidfile lifecycle"
 # template, --check regex, and drift test. Copy-paste from here; do not retype.
 MINTIER_HEADING = "## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)"
 
-# 10 Opus-tier target skills — must carry §0'.
+# 11 Opus-tier target skills — must carry §0'.
 POLLUTION_TARGET_SKILLS = [
     "architect",
     "plan",
@@ -54,9 +54,10 @@ POLLUTION_TARGET_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
-# 10 Opus-tier target skills — must carry §0″ (same set as POLLUTION_TARGET_SKILLS).
+# 11 Opus-tier target skills — must carry §0″ (same set as POLLUTION_TARGET_SKILLS).
 # Orchestrators /run and /thorough_plan are deliberately excluded (D-04):
 # orchestrators carry no §0/§0'/§0c today and route to correctly-tiered children.
 MINTIER_TARGET_SKILLS = [
@@ -70,6 +71,7 @@ MINTIER_TARGET_SKILLS = [
     "specify",
     "security_review",
     "enrich",
+    "repo_cleanup",
 ]
 
 # ─── §0‴ Minimum-tier guard (Sonnet tier) — IVG-117 ───────────────────────────
@@ -819,6 +821,16 @@ DISPATCH_CONTRACTS = {
         "[no-redispatch]\\n/enrich <task description>\\n"
         "Enriched prompt output path: .workflow_artifacts/<task>/enriched-prompt.md",
     ),
+    "repo_cleanup": (
+        """\
+  Determine dispatch contract fields:
+    - Take the target repository path from the invocation; else use the current working directory.
+    - Pass the phase, dry-run and mutation flags through unchanged.
+    - Get the current git branch (`git rev-parse --abbrev-ref HEAD`).
+""",
+        "[no-redispatch]\\n/repo_cleanup <flags>\\n"
+        "Repo cleanup target: <absolute path to target repo>\\nBranch: <current git branch>",
+    ),
 }
 
 
@@ -919,7 +931,7 @@ def inject_mintier_block_into_file(skill: str, skill_md: pathlib.Path) -> None:
         # Refresh path (all re-runs after first injection)
         text = _replace_existing_block(text, MINTIER_HEADING, mintier_block)
     elif POLLUTION_HEADING in text:
-        # Insert path: all 10 skills have §0' (first run)
+        # Insert path: all 11 skills have §0' (first run)
         # §0' block ends at the next "## " heading STRICTLY AFTER POLLUTION_HEADING
         p_idx = text.index(POLLUTION_HEADING)
         next_h2_match = re.search(r"^## ", text[p_idx + len(POLLUTION_HEADING):], re.MULTILINE)

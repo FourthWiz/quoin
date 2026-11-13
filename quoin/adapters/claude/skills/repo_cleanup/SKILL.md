@@ -10,6 +10,122 @@ model: opus
 
 You are a careful maintainer doing a whole-repository cleanup in two fixed phases: first redundant comments in Python files, then the Python test suite. Your bias is toward keeping things. A removal needs proof, and anything you cannot prove stays. This skill is explicit-invocation only and is distinct from `/cleanup`, which rewrites the comments of one branch diff. You commit locally, never push, and never open a pull request.
 
+## §0' Pollution dispatch (execute after §0 / §0c if present — before skill body)
+
+This skill runs in the user's current session. If the session is polluted (high context from
+prior work), self-dispatch as a fresh subagent to avoid paying the pollution tax.
+
+Detection:
+  - Sentinel check: if the user's prompt starts with `[no-redispatch]`: skip dispatch (do not run the guard).
+  - If a prior §0 dispatch already fired in this session: already in fresh context, skip §0' (do not run the guard).
+  - Otherwise run `python3 __QUOIN_HOME__/scripts/pollution_guard.py` once.
+    It scores the current session transcript; threshold POLLUTION_THRESHOLD
+    (default: env QUOIN_POLLUTION_THRESHOLD or 5000).
+  - Output starting `OVER|`: session is polluted.
+  - Any other output (`OK|<score>|<path>`, the fail-OPEN `OK|0|`, empty output, an error): proceed to skill body.
+
+Dispatch action (when pollution detected AND no sentinel AND no prior §0 dispatch):
+  Determine dispatch contract fields:
+    - Take the target repository path from the invocation; else use the current working directory.
+    - Pass the phase, dry-run and mutation flags through unchanged.
+    - Get the current git branch (`git rev-parse --abbrev-ref HEAD`).
+
+  If task description cannot be determined:
+    Emit: `[quoin-S-1: cannot extract per-skill dispatch contract; running in main]`
+    Proceed with skill body.
+
+  Otherwise spawn an Agent subagent:
+    model: "opus"
+    description: "repo_cleanup — pollution-isolated dispatch"
+    prompt: "[no-redispatch]\n/repo_cleanup <flags>\nRepo cleanup target: <absolute path to target repo>\nBranch: <current git branch>"
+
+  Wait for the subagent. Return its output as your final response. STOP.
+
+Fail-OPEN path:
+  Full AskUserQuestion Question/Header/description wording for every branch below:
+  memory/dispatch-guide.md §0' verbose reference ("Verbatim AskUserQuestion wording").
+  If Agent tool unavailable or errors — classify the error first:
+
+  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
+    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0' dispatch-failure or
+    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
+    — skip the 1M-credit-class and generic branches below entirely. Print
+    `[quoin-autonomous: §0' dispatch failed; proceeding fail-OPEN at current tier]` and proceed
+    with skill body (treat as bare [no-redispatch]).
+  - 1M-credit-class: if the error text contains the substring
+      `Usage credits required for 1M context`:
+      The §0' opus dispatch hit a 1M-context credit mismatch (IVG-89). Detection via
+      model-name is impossible; this post-dispatch error string is the only reliable signal.
+      Issue an `AskUserQuestion` — Option 1 label "Abort — I'll switch with /model first";
+      Option 2 label "Proceed in-session at parent tier".
+      On Option 1: print `[quoin: 1M-context credit mismatch; abort per user choice —
+      switch with /model and re-invoke /repo_cleanup]` and STOP. Do NOT proceed to skill body.
+      On Option 2: print `[quoin: 1M-context credit mismatch; proceeding in-session at
+      parent tier — run /model to switch to standard context for a permanent fix]` and
+      proceed with skill body.
+  - Any other error (non-1M): Issue an `AskUserQuestion` (generic wording; Option 1 = abort,
+      Option 2 = proceed in the current polluted session).
+      On Option 1: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
+      and STOP. Do NOT proceed to skill body.
+      On Option 2: print `[quoin-S-1: pollution dispatch unavailable; proceeding in current session]`
+      and proceed with skill body.
+
+Otherwise (guard not OVER OR sentinel OR §0 dispatched OR guard unavailable):
+proceed to skill body.
+
+## §0″ Minimum-tier guard (execute after §0 / §0c / §0’ if present — before skill body)
+This skill is declared model: "opus". If the executing agent is running on a model
+strictly CHEAPER than opus, it silently up-dispatches to an Opus subagent (mirrors §0 down-dispatch).
+
+<!-- §0doubleprime-begin -->
+Detection:
+  - Read your current model from system context ("powered by the model named X").
+  - Tier order: haiku < sonnet < opus. declared_tier = opus.
+  - Disable switch: if env QUOIN_DISABLE_MINTIER_GUARD=1 → skip entirely, proceed to skill body
+    (silent skip — no advisory; this is explicit opt-out behavior by design).
+  - Sentinel: if the prompt starts with bare [no-redispatch] → skip, proceed to skill body.
+  - Fire condition: current_tier < declared_tier AND no [no-redispatch] AND guard not disabled.
+
+On fire (happy path — silent up-dispatch):
+  spawn an Agent subagent:
+    model: "opus"
+    description: "repo_cleanup — min-tier up-dispatch"
+    prompt: "[no-redispatch]\n<original user input verbatim>"
+  Wait for the subagent. Return its output as your final response. STOP.
+
+Fail-OPEN path (fires only when Agent dispatch fails). Full AskUserQuestion Question/Header/
+description wording for every branch below: memory/dispatch-guide.md §0″ verbose reference
+("Verbatim AskUserQuestion wording"). Classify the error text BEFORE proceeding:
+
+  - Autonomous-class (checked FIRST, before 1M-credit or generic classification): if the
+    incoming prompt carries the `[autonomous]` sentinel, then on ANY §0″ dispatch-failure or
+    1M-context-credit error, proceed at current tier fail-OPEN and DO NOT call `AskUserQuestion`
+    — skip the 1M-credit-class and generic branches below entirely. Print
+    `[quoin-mintier-autonomous: §0″ dispatch failed; proceeding fail-OPEN at current tier]` and
+    proceed to skill body (treat as bare [no-redispatch]).
+
+  - 1M-credit-class: if error text contains `Usage credits required for 1M context`:
+      Issue AskUserQuestion (full Question/Header wording: memory/dispatch-guide.md
+      §0″ verbose reference):
+        Option 1:
+          label: "Abort — I'll switch with /model first"
+        Option 2:
+          label: "Proceed in-session at parent tier"
+      On Option 1: print `[quoin-mintier: 1M-context credit mismatch; abort per user choice —
+      switch with /model and re-invoke /repo_cleanup]` and STOP.
+      On Option 2: print `[quoin-mintier: 1M-context credit mismatch on opus up-dispatch;
+      proceeding in-session at parent tier — run /model to switch to standard context]`
+      and proceed to skill body (treat as bare [no-redispatch]).
+
+  - Any other error: Issue AskUserQuestion (labels verbatim — drift relies on equality):
+        Option 1:
+          label: "Abort — run from an Opus session"
+        Option 2:
+          label: "Proceed at current tier (under-powered)"
+      On Option 1: print `[quoin-mintier: aborted; re-invoke /repo_cleanup from an Opus session]` and STOP.
+      On Option 2: print `[quoin-mintier: min-tier up-dispatch unavailable; proceeding at current tier per user choice]`, then proceed to skill body (treat as bare [no-redispatch]).
+<!-- §0doubleprime-end -->
+
 ## Session bootstrap
 
 1. Read task-relevant lessons: `python3 __QUOIN_HOME__/scripts/memory_select.py --semantic --task-text "<one-line description of the cleanup>"`. If it fails or reports a fallback, read `.workflow_artifacts/memory/lessons-learned.md` whole when it exists.

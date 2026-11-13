@@ -659,7 +659,7 @@ def rg_genroster(dev_tests_dir: Path, scripts_dir: Path, manifest_skills: list, 
 # Rosters actually checked by RG-TESTROSTER / RG-GENROSTER above — one entry
 # per (roster, file) pair each rule reads. Keyed "NAME@basename.py".
 COVERED_ROSTERS: frozenset = frozenset({
-    # RG-TESTROSTER: opus-leaf class (10 skills), 6 agreeing copies
+    # RG-TESTROSTER: opus-leaf class (11 skills), 6 agreeing copies
     "SECTION0PRIME_TARGETS@test_1m_context_precheck.py",
     "SKILL_DISTINCTIVE_TOKENS@test_quoin_pollution_preamble.py",
     "POLLUTION_TARGET_SKILLS@test_quoin_pollution_preamble.py",

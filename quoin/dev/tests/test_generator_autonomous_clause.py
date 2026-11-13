@@ -2,7 +2,7 @@
 Drift-detection test for the T-23 generator autonomous fail-OPEN clause (IVG-153).
 
 `inject_pollution_dispatch.py` is the SOURCE-OF-TRUTH generator for the §0'
-Pollution dispatch and §0″ Minimum-tier guard blocks across the 10 Opus-tier
+Pollution dispatch and §0″ Minimum-tier guard blocks across the 11 Opus-tier
 leaf skills. Under `--autonomous` `/run`, those blocks must fail-OPEN (proceed
 at current tier, no `AskUserQuestion`) whenever the incoming prompt carries the
 `[autonomous]` sentinel — otherwise an unattended dispatch-failure/1M-credit
