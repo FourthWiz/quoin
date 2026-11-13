@@ -322,6 +322,43 @@ def test_runner_records_and_defers_pro_rows_like_verified(pro_world, tmp_path, m
     assert json.loads((plain / "judge.json").read_text())["source_benchmark"] == "swebench_pro"
 
 
+def test_deferred_judging_goes_task_by_task_and_removes_each_image(tmp_path, monkeypatch):
+    from quoin.benchmarks.harness import runner
+    from quoin.benchmarks.harness.judge import JudgeResult
+
+    specs = [_spec(id=f"pro_small_00{i}") for i in range(2)]
+    for cell in ("quoin-claude", "simple-claude"):
+        for spec in specs:
+            d = tmp_path / "r1" / cell / spec["id"]
+            d.mkdir(parents=True)
+            (d / "session.json").write_text(json.dumps({"judge_required": True}))
+    events = []
+    monkeypatch.setattr(runner, "remove_pro_image", lambda spec: events.append(("rmi", spec["id"])))
+
+    def stub(tid, td, rid, **kw):
+        events.append((kw["judge_context"]["cell"], tid))
+        return JudgeResult(tid, "swebench_pro", "pass", "ev", 0.0, extra={"judge_final": True})
+
+    runner.judge_pending_rows(tmp_path, "r1", specs, judge=stub)
+    assert events == [
+        ("quoin-claude", "pro_small_000"), ("simple-claude", "pro_small_000"), ("rmi", "pro_small_000"),
+        ("quoin-claude", "pro_small_001"), ("simple-claude", "pro_small_001"), ("rmi", "pro_small_001"),
+    ]
+    events.clear()
+    runner.judge_pending_rows(tmp_path, "r1", specs, judge=stub)
+    assert events == [], "nothing pending: no judging and no image removal"
+
+
+def test_remove_pro_image_honours_keep_and_refuses_foreign_images(monkeypatch):
+    calls = []
+    run = lambda cmd, **kw: calls.append(cmd) or subprocess.CompletedProcess(cmd, 0, "", "")
+    assert judge.remove_pro_image(_spec(), run=run) is True
+    assert calls == [["docker", "rmi", judge.PRO_IMAGE_PREFIX + PRO_ID]]
+    assert judge.remove_pro_image(_spec(docker_image="evil:latest"), run=run) is False
+    monkeypatch.setenv("QUOIN_BENCH_PRO_KEEP_IMAGES", "1")
+    assert judge.remove_pro_image(_spec(), run=run) is False and len(calls) == 1
+
+
 def test_judge_task_dispatches_pro_tasks(tmp_path, monkeypatch):
     seen = {}
     monkeypatch.setattr(judge, "judge_swebench_pro",

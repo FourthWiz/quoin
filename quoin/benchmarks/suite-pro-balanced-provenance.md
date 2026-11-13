@@ -140,10 +140,12 @@ Pilot rule, as for tiered-balanced: if any pilot session costs more than half
 the cap or ends `budget_stopped`, stop, raise the cap and regenerate before
 the full run.
 
-Expected spend, for orientation and not a budget: Pro fixes are a median 69
-changed lines against mostly single-file Verified fixes, so assume quoin
-sessions near the tiered-balanced large-tier figures (about $6 to $11) and
-plain sessions about $1: about $300 to $480 for a run.
+Expected spend, for orientation and not a budget, from the first run
+(pro-r1, 2026-11-13, quoin on the lean route, both arms Opus 5.5): plain
+sessions averaged $0.45 (most $1.73) and quoin sessions $1.16 (most $2.87),
+about $64 for the 80 sessions. The $35 cap was never close to binding.
+Judging costs no model spend but pulls one image per task (about 1.25 GB);
+the judge removes it after both arms are judged.
 
 ## Reproducing
 

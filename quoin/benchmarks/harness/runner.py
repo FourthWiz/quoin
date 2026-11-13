@@ -34,10 +34,10 @@ from typing import Optional
 from . import arm_identity as _arm_identity
 from .config import BudgetSpec, HarnessConfig, quoin_route_or_default
 from .isolation import create_task_worktree, cleanup_task_worktree
-from .judge import judge_task
+from .judge import judge_task, remove_pro_image
 from .repo_prep import RepoPrepError, capture_patch, cleanup_task_repo, prepare_task_repo
 from . import sequence_memory
-from .sources import VERIFIED_SOURCE, is_repo_task
+from .sources import PRO_SOURCE, VERIFIED_SOURCE, is_repo_task
 from .result_writer import (
     CellResult,
     RunResult,
@@ -761,19 +761,26 @@ def judge_pending_rows(
     judge=None,
     emulate_x86: bool = False,
 ) -> list:
-    """Re-judge Verified and Pro rows whose session was recorded but whose verdict is not final."""
+    """Re-judge Verified and Pro rows whose session was recorded but whose verdict is not final.
+
+    Rows are judged task by task, every cell of a task back to back, so a Pro
+    task's image is pulled once and can be removed before the next task's.
+    """
     judge = judge if judge is not None else judge_task
     base = Path(run_dir) / run_id
     rows = []
     if not base.is_dir():
         return rows
-    for cell_dir in sorted(p for p in base.iterdir() if p.is_dir()):
-        for spec in suite_tasks:
-            if not is_repo_task(spec):
-                continue
+    cell_dirs = sorted(p for p in base.iterdir() if p.is_dir())
+    for spec in suite_tasks:
+        if not is_repo_task(spec):
+            continue
+        judged_here = False
+        for cell_dir in cell_dirs:
             t_dir = cell_dir / spec["id"]
             if not t_dir.is_dir() or not is_judge_pending(t_dir):
                 continue
+            judged_here = True
             try:
                 judged = judge(
                     spec["id"], t_dir, run_id,
@@ -796,6 +803,8 @@ def judge_pending_rows(
                 "cell": cell_dir.name, "task_id": spec["id"], "verdict": judged.verdict,
                 "judge_final": bool(judged.extra.get("judge_final")),
             })
+        if judged_here and spec.get("source") == PRO_SOURCE:
+            remove_pro_image(spec)
     return rows
 
 
