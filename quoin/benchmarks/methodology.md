@@ -34,17 +34,17 @@ For the `quoin-claude` cell, "Quoin" means:
    run skill itself. A prose request to "use /run" left a session free to skip
    the pipeline (the tiered-small run showed it), and the bare slash command
    still let a pilot session decide an easy issue was a one-line fix and skip
-   it. By default this is `/run` with its own routing: its Size step sends a
-   small, well-localized fix down the direct route (implement, verify,
-   commit) and everything else down the light pipeline (brief, context pack,
-   implement, one review); both count as pipeline rows. `QUOIN_BENCH_QUOIN_ROUTE=hard` restores the earlier
+   it. By default this is `/run` with its own routing: its scope triage
+   sends a task with no risk or multi-part signal down the plain r0 route
+   (implement, verify, commit), adds one review for r1 and a stage plan for
+   r2; every class counts as a pipeline row. `QUOIN_BENCH_QUOIN_ROUTE=hard` restores the earlier
    `/run --autonomous hard: small:` prompt, where `small:` selects the heavy
    pipeline's single-pass path (plan, implement, review) for every tier, since
-   each task is one SWE-bench issue; `small:` does nothing on the light route.
+   each task is one SWE-bench issue; `small:` does nothing in light `/run`.
    `QUOIN_BENCH_QUOIN_ROUTE=lean` keeps the light prompt but sets the
    benchmark-only `QUOIN_RUN_PROFILE=bench-lean` in this arm's session, which
    drops `/run`'s discovery step and its lessons-learned append; everything
-   from the brief through the post-review fixes runs as on the light route.
+   everything else runs as in light `/run`.
    `QUOIN_BENCH_QUOIN_ROUTE=memory` sets `QUOIN_RUN_PROFILE=bench-memory`,
    which skips only run isolation; it is for sequence suites, where the
    arm's workflow memory carries from one task to the next.

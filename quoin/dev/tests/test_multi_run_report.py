@@ -21,8 +21,8 @@ def _runs(tmp_path, n=3, **manifest):
 
     Plain solves e1 in every run and e2 only in r1; quoin solves e1 and e2 in
     every run. m1/m2 pass for neither arm, l1 passes for quoin in r1 only.
-    The quoin arm takes the light route on e*, direct on m*, and on l1 light
-    in r1 but direct afterwards.
+    The quoin arm takes class r1 on e*, r0 on m*, and on l1 class r1 in the
+    first run but r0 afterwards.
     """
     paths = []
     for i in range(1, n + 1):
@@ -33,8 +33,9 @@ def _runs(tmp_path, n=3, **manifest):
                  "l1": "fail"}
         quoin = {"e1": "pass", "e2": "pass", "m1": "fail", "m2": "fail",
                  "l1": "pass" if i == 1 else "fail"}
-        routes = {"e1": "light", "e2": "light", "m1": "direct", "m2": "direct",
-                  "l1": "light" if i == 1 else "direct"}
+        # e2 and m2 carry the pre-scope-triage names, which count as r1 and r0.
+        routes = {"e1": "r1", "e2": "light", "m1": "r0", "m2": "direct",
+                  "l1": "r1" if i == 1 else "r0"}
         for task_id in plain:
             write_row(run_path, PLAIN, task_id, verdict=plain[task_id], wall=1, cost=0.1)
             write_row(run_path, QUOIN, task_id, verdict=quoin[task_id], wall=1, cost=0.1,
@@ -76,7 +77,7 @@ def test_report_counts_passes_per_task_tier_route_and_stability(tmp_path, capsys
     tasks = {t["task_id"]: t for t in report["tasks"]}
     assert tasks["e2"]["passes"] == {PLAIN: 1, QUOIN: 3} and tasks["e2"]["runs"] == 3
     assert tasks["e2"]["diff"] == pytest.approx(2 / 3)
-    assert tasks["l1"]["route"] == "mixed" and tasks["m1"]["route"] == "direct"
+    assert tasks["l1"]["route"] == "mixed" and tasks["m1"]["route"] == "r0" and tasks["e2"]["route"] == "r1"
 
     easy = report["tiers"]["easy"]
     assert easy["mean_pass_rate"][PLAIN] == pytest.approx(2 / 3)
@@ -91,9 +92,9 @@ def test_report_counts_passes_per_task_tier_route_and_stability(tmp_path, capsys
     assert stab[PLAIN] == {"every": ["e1"], "none": ["m1", "m2", "l1"], "some": ["e2"]}
     assert stab[QUOIN] == {"every": ["e1", "e2"], "none": ["m1", "m2"], "some": ["l1"]}
 
-    assert set(report["by_route"]) == {"light", "direct", "mixed"}
-    assert report["by_route"]["light"]["n_tasks"] == 2
-    assert "| e2 | easy | 1/3 | 3/3 | +66.7 pp | light |" in md
+    assert set(report["by_route"]) == {"r1", "r0", "mixed"}
+    assert report["by_route"]["r1"]["n_tasks"] == 2
+    assert "| e2 | easy | 1/3 | 3/3 | +66.7 pp | r1 |" in md
     assert "## Stability" in md and "## By quoin route" in md
 
 

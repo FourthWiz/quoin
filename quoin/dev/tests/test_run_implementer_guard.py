@@ -113,7 +113,7 @@ def test_autonomous_staged_run_never_hands_off_between_stages():
     # The staged loop closes Step 4b in the light pipeline file.
     text = RUN_LIGHT.read_text(encoding="utf-8")
     start = text.index("Continue to the next stage without asking")
-    loop = text[start:text.index("## Step 7 — Review", start)]
+    loop = text[start:]
     assert "Under `AUTONOMOUS`, run every remaining stage in this session" in loop
     # The fresh-session hand-off must be scoped to interactive runs only.
     assert loop.index("Interactive only:") < loop.index("fresh session;")

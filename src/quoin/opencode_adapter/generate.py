@@ -273,7 +273,7 @@ GENERATOR_SCHEMA_VERSION = 1
 
 # Open models still need the explicit planning and review scaffolding, so the
 # OpenCode `run` command keeps the heavy pipeline's contract while Claude's
-# `run` defaults to the light route.
+# `run` defaults to light /run with scope triage.
 CONTRACT_SOURCE = {"run": "run_hard"}
 INSTRUCTIONS_PATH = ".opencode/quoin/instructions.md"
 CONFIG_PATH = ".opencode/opencode.jsonc"

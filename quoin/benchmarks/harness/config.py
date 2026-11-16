@@ -118,7 +118,7 @@ class HarnessConfig:
 # pipeline, "lean" light /run without discovery and without the lessons append,
 # "memory" light /run that keeps lessons, discovery and the dirty marker and
 # skips only run isolation (for sequence suites, where memory carries), and
-# "r0" forces /run's Direct route (implement, verify, commit) under the lean
+# "r0" forces /run's plain r0 route (implement, verify, commit) under the lean
 # profile, to measure the minimal path against plain.
 QUOIN_ROUTE_ENV = "QUOIN_BENCH_QUOIN_ROUTE"
 QUOIN_ROUTES = ("default", "hard", "lean", "memory", "r0")

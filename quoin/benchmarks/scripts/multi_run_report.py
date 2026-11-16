@@ -49,7 +49,7 @@ from pathlib import Path
 from typing import Optional
 
 from quoin.benchmarks.harness.tiered_report import (
-    PLAIN_CELL, QUOIN_CELL, _tier_order, build_tiered_report, read_manifest,
+    PLAIN_CELL, QUOIN_CELL, _tier_order, build_tiered_report, canonical_route, read_manifest,
 )
 
 # Manifest keys that must agree across the runs being combined.
@@ -169,7 +169,7 @@ def _counted(entry) -> bool:
 
 def _route(entry) -> Optional[str]:
     route = (entry[QUOIN_CELL].get("workflow_route") or {}).get("route")
-    return route if isinstance(route, str) and route else None
+    return canonical_route(route) if isinstance(route, str) and route else None
 
 
 def per_task(runs: list) -> list:

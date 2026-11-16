@@ -94,7 +94,7 @@ Skills resolve the artifact path via `quoin/scripts/path_resolve.py`. Resolution
 
 ## Workflow sequence
 
-**Default: light `/run`.** Most tasks use `/run`: one session that writes a short brief (asking only when the request is unclear), refreshes discovery only when stale, gathers a context pack in a subagent, implements on Opus with proportionate tests, gets one Opus review in a subagent, and commits locally. A task that spans several repos or must land in order is split into two to five stages in a short `architecture.md` (the standard `## Stage decomposition` layout), and each stage runs through the same light steps with its own review and commit. The heavy pipeline below runs via `/run hard:` (`/run_hard`) or a light `/run` escalation; it can hand small tasks back (once).
+**Default: light `/run`.** Most tasks use `/run`: one session that triages the request (asking only when unclear) and its scope. r0 (default) implements on Opus with proportionate tests and commits locally; r1 (auth, crypto, schema, public API and the like) adds one Opus review; r2 (several repos, or ordered parts) adds discovery when stale, a context pack and two to five stages in a short `architecture.md` (`## Stage decomposition` layout), each run as r0 or r1; r3 (needs design) offers the heavy pipeline, opt-in only. The heavy pipeline below runs via `/run hard:` (`/run_hard`) or a light `/run` escalation; it can hand small tasks back (once).
 
 ### Canonical flow
 
@@ -337,7 +337,7 @@ The full catalog of always-English Tier-1 files (hand-edited, contract-approval,
 | /revise | Opus | Addressing critic feedback requires strong reasoning (used in strict mode) |
 | /revise-fast | Sonnet | Cost-efficient revision (used by /thorough_plan in normal mode, rounds 2+) |
 | /thorough_plan | Opus | Orchestrates task triage and plan→critic→revise loop. Routes Small tasks to single-pass /plan; Medium uses Sonnet /revise-fast; Large/strict: uses all-Opus. Critic always Opus. |
-| /run | Opus | Light pipeline: implements on Opus (inline, or an Opus subagent on other tiers); delegates discovery, context pack (Sonnet), review (Opus). |
+| /run | Opus | Light pipeline: implements on Opus (inline, or an Opus subagent on other tiers); r1 adds an Opus review, r2 a Sonnet context pack and stages. |
 | /run_hard | Opus | Heavy end-to-end orchestrator managing phase transitions, user checkpoints, and subagent dispatch. Explicit opt-in only. |
 | /implement | Sonnet | Efficient code generation, plan already defines what to do |
 | /review | Opus | Thorough analysis, integration safety, risk assessment |

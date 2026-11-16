@@ -34,7 +34,14 @@ QUOIN_CELL = "quoin-claude"
 ARMS = (PLAIN_CELL, QUOIN_CELL)
 DEFAULT_TIER_ORDER = ("easy", "medium", "large")
 OUTCOMES = ("pass", "fail", "error", "timeout", "budget_stopped", "not_run", "invalid")
-QUOIN_ROUTES = ("direct", "light", "fast", "full", "unknown")
+QUOIN_ROUTES = ("r0", "r1", "r2", "r3", "fast", "full", "unknown")
+# Light /run routes recorded before scope triage replaced them with r0..r3.
+LEGACY_ROUTES = {"direct": "r0", "light": "r1"}
+
+
+def canonical_route(route):
+    """A recorded route with a pre-scope-triage name mapped to its class."""
+    return LEGACY_ROUTES.get(route, route)
 IDENTITY_TRIP_REASONS = frozenset({
     "plain-arm-contaminated", "quoin-arm-missing-quoin", "quoin-arm-contaminated",
 })
@@ -697,7 +704,7 @@ def _validity(run_path, manifest, suite_sha, suite_ids, scoped, rows, entries, i
 
 
 def _route_of(row):
-    route = (row.get("workflow_route") or {}).get("route")
+    route = canonical_route((row.get("workflow_route") or {}).get("route"))
     return route if route in QUOIN_ROUTES else "unknown"
 
 
@@ -750,7 +757,7 @@ def route_breakdown(order, scoped, rows):
         mix[tier] = {
             "n": len(counted),
             "counts": counts,
-            "direct_share": counts["direct"] / len(counted) if counted else None,
+            "r0_share": counts["r0"] / len(counted) if counted else None,
         }
     return {"tiers": by_tier, "overall": _route_group(scoped, rows), "route_by_tier": mix}
 
@@ -963,12 +970,12 @@ def _render_by_route(by_route, table_text):
 
     lines.append("### Quoin route by tier")
     lines.append("")
-    header = ["Tier", "N", *QUOIN_ROUTES, "Direct share"]
+    header = ["Tier", "N", *QUOIN_ROUTES, "R0 share"]
     table = [header, ["---"] * len(header)]
     for tier, mix in by_route["route_by_tier"].items():
         table.append([
             tier, str(mix["n"]), *[str(mix["counts"][r]) for r in QUOIN_ROUTES],
-            _rate_text(mix["direct_share"]),
+            _rate_text(mix["r0_share"]),
         ])
     lines.append(table_text(table))
     return lines
