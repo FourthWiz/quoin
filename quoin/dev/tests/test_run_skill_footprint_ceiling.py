@@ -24,11 +24,18 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 # that route): measured 20,342 bytes after the split, times 1.10.
 # Raised for the automatic light -> run_hard switch (Step 0 tags, Escalation):
 # measured 23,736 bytes, plus a small margin.
-CEILING_BYTES = 23900
+# Lowered when SKILL.md became a short core for the Direct route and the rarely
+# needed text moved to reference.md: measured 10,760 bytes, with a small margin
+# only, since every turn of every /run session re-reads this file.
+CEILING_BYTES = 11000
 LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Same ratchet for the reference file: 15,347 bytes at the split, times 1.10.
 # Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.
 LIGHT_CEILING_BYTES = 18000
+REFERENCE = RUN_SKILL.with_name("reference.md")
+# reference.md is read only for rare tags, non-Opus sessions, lessons and
+# escalation: measured 14,666 bytes at the split, times 1.05.
+REFERENCE_CEILING_BYTES = 15400
 
 
 def test_run_skill_md_byte_ceiling():
@@ -44,5 +51,13 @@ def test_light_pipeline_byte_ceiling():
     size = LIGHT_PIPELINE.stat().st_size
     assert size <= LIGHT_CEILING_BYTES, (
         f"run/light-pipeline.md is {size} bytes, over its {LIGHT_CEILING_BYTES}-byte "
+        "ceiling -- trim it or raise the ceiling alongside the change that grew it."
+    )
+
+
+def test_reference_byte_ceiling():
+    size = REFERENCE.stat().st_size
+    assert size <= REFERENCE_CEILING_BYTES, (
+        f"run/reference.md is {size} bytes, over its {REFERENCE_CEILING_BYTES}-byte "
         "ceiling -- trim it or raise the ceiling alongside the change that grew it."
     )

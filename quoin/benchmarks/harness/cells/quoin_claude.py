@@ -57,7 +57,10 @@ from typing import Optional
 from .. import proc_group
 from ..arm_identity import InitIdentityCheck
 from .. import sequence_memory
-from ..config import RUN_PROFILE_ENV, BudgetSpec, quoin_route_or_default, run_profile_for_route
+from ..config import (
+    DISCOVERY_REFRESH_DISABLE_ENV, DISCOVERY_SKIPPING_ROUTES, RUN_PROFILE_ENV, BudgetSpec,
+    quoin_route_or_default, run_profile_for_route,
+)
 from ..sources import REPO_TASK_SOURCES
 from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
@@ -94,7 +97,9 @@ ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 # QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
 # `small:` (one plan pass, implement, review), as the earlier suites did, and
 # =lean and =memory keep this prompt but set QUOIN_RUN_PROFILE=bench-lean or
-# bench-memory for the session.
+# bench-memory for the session. =r0 forces the Direct route with `direct:` and
+# a one-line prefix, so the arm measures /run's minimal path and nothing the
+# prompt itself adds.
 QUOIN_RUN_PREFIX = (
     "/run --autonomous "
     "This session benchmarks the quoin workflow, so the task must go through /run: "
@@ -107,12 +112,27 @@ QUOIN_HARD_RUN_PREFIX = (
     "run its phases (plan, implement, review) even if the fix looks trivial, and "
     "do not fix the issue directly outside the pipeline.\n\n"
 )
+QUOIN_R0_RUN_PREFIX = "/run --autonomous direct: Fix this issue through /run.\n\n"
 ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
+
+
+def _route_session_env() -> dict:
+    """Route-derived keys for a session the paired sandbox did not build."""
+    route = quoin_route_or_default()
+    env = {}
+    profile = run_profile_for_route(route)
+    if profile:
+        env[RUN_PROFILE_ENV] = profile
+    if route in DISCOVERY_SKIPPING_ROUTES:
+        env[DISCOVERY_REFRESH_DISABLE_ENV] = "1"
+    return env
 
 
 def _run_prefix() -> str:
     route = quoin_route_or_default()
-    return QUOIN_HARD_RUN_PREFIX if route == "hard" else QUOIN_RUN_PREFIX
+    if route == "hard":
+        return QUOIN_HARD_RUN_PREFIX
+    return QUOIN_R0_RUN_PREFIX if route == "r0" else QUOIN_RUN_PREFIX
 
 
 _INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)
@@ -549,9 +569,8 @@ def invoke(
 
     # Build subprocess environment with gate auto-approve
     env = dict(session_env) if session_env is not None else os.environ.copy()
-    profile = run_profile_for_route(quoin_route_or_default())
-    if session_env is None and profile:
-        env[RUN_PROFILE_ENV] = profile
+    if session_env is None:
+        env.update(_route_session_env())
     env[ENV_GATE_AUTO_APPROVE] = "1"
     env[ENV_BENCHMARK_RUN] = run_id
 

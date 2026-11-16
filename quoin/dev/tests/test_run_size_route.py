@@ -17,6 +17,9 @@ RUN_DIR = QUOIN / "adapters" / "claude" / "skills" / "run"
 SKILL = (RUN_DIR / "SKILL.md").read_text(encoding="utf-8")
 # Steps only the light route runs (2, 3, 4, 4b, 7) live in this reference file.
 LIGHT = (RUN_DIR / "light-pipeline.md").read_text(encoding="utf-8")
+# Tag semantics, resume and escalation detail live in reference.md, read on demand.
+REF = (RUN_DIR / "reference.md").read_text(encoding="utf-8")
+TAGS = "## Step 0 — Tags and resume"
 INTENT = (QUOIN / "core" / "skills" / "run.md").read_text(encoding="utf-8")
 QUICKSTART = (QUOIN / "QUICKSTART.md").read_text(encoding="utf-8")
 
@@ -38,13 +41,13 @@ def _raw_section(heading, text=SKILL):
     return "\n".join(out) + "\n"
 
 
-def _section(heading):
+def _section(heading, text=SKILL):
     """Like `_raw_section`, with whitespace collapsed so rewrapping prose does not matter."""
-    return " ".join(_raw_section(heading).split())
+    return " ".join(_raw_section(heading, text).split())
 
 
 def test_route_tags_do_not_collide_with_tags_step0_already_handles():
-    step0 = _raw_section("## Step 0 — Route")
+    step0 = _raw_section(TAGS, REF)
     handled = set(re.findall(r"`([a-z_]+:)`", step0.split("**`direct:`** / **`light:`**")[0])) - set(ROUTE_TAGS)
     assert set(EXISTING_TAGS) - {"max_rounds:"} <= handled
     for tag in ROUTE_TAGS:
@@ -52,8 +55,8 @@ def test_route_tags_do_not_collide_with_tags_step0_already_handles():
 
 
 def test_step0_strips_route_tags_and_keeps_them_out_of_the_task_name():
-    step0 = _section("## Step 0 — Route")
-    task_name_rule = _raw_section("## Step 0 — Route").split("\n\n")[1]
+    step0 = _section(TAGS, REF)
+    task_name_rule = _raw_section(TAGS, REF).split("\n\n")[1]
     for tag in ROUTE_TAGS:
         assert "`%s`" % tag in task_name_rule
     item = re.search(r"\*\*`direct:`\*\* / \*\*`light:`\*\*(.+?)(?: \d+\. \*\*|## |\Z)", step0)
@@ -66,7 +69,7 @@ def test_step0_strips_route_tags_and_keeps_them_out_of_the_task_name():
 
 
 def test_run_hard_handoff_drops_route_tags():
-    step0 = _section("## Step 0 — Route")
+    step0 = _section(TAGS, REF)
     assert "removing `hard:`, `direct:` and `light:`" in step0
 
 
@@ -121,10 +124,15 @@ def test_light_brief_template_carries_the_size_section():
 
 def test_direct_route_keeps_branch_tests_brief_and_commit_but_no_subagents():
     direct = _section("## Direct route (inline)")
-    assert "no discovery, no context-pack subagent and no review subagent" in direct
+    assert "No discovery, context pack or review subagent" in direct
     assert "implementer tier guard still applies" in direct
     assert "`## Verification`" in direct and "`## Size` section" in direct
-    assert "Step 6 as written" in direct and "Step 8 as written" in direct
+    assert "**Verify.** Step 6" in direct and "**Commit.** Step 8" in direct
+    # R0 bookkeeping: the brief is written with the skipped markers in one
+    # call (the harness counts a row only once brief.md exists), and the
+    # verification and commit are appended at the end.
+    assert "In one Bash call" in direct and "brief.md` with a heredoc" in direct
+    assert "still appends `## Verification`" in direct
     # Skipped steps still get markers, so the phase report sees the direct route's shape.
     from quoin.core.scripts.run_phase import PHASES
     for phase in ("discover", "context", "review", "frame", "implement", "verify", "commit"):
@@ -139,14 +147,17 @@ def test_direct_route_escalates_one_way_and_keeps_the_work():
     assert "one way, never back" in direct
     for trigger in ("outgrows one module", "verification fails twice", "excluded category"):
         assert trigger in direct
+    assert 'reference.md "Direct route escalation"' in direct
+    direct = _section("## Direct route escalation", REF)
     assert "no reset" in direct
     assert "only to failures on the light pipeline" in direct
     assert "`route: light`" in direct and "escalated: from direct" in direct
 
 
 def test_resume_follows_the_recorded_route():
-    step0 = _section("## Step 0 — Route")
+    step0 = _section(TAGS, REF)
     assert "`route: direct` resumes on the Direct route" in step0
+    assert "`--resume`" in _section("## Step 0 — Route")
 
 
 def test_description_intent_doc_and_quickstart_mention_the_direct_route():
@@ -157,11 +168,12 @@ def test_description_intent_doc_and_quickstart_mention_the_direct_route():
 
 
 def test_escalation_switches_to_run_hard_once_unless_opted_out():
-    esc = _section("## Escalation")
+    assert 'reference.md "Escalation"' in _section("## Escalation")
+    esc = _section("## Escalation", REF)
     assert "switch to `run_hard` through the switch procedure in the light pipeline file" in esc
     assert "`NO_SWITCH`" in esc and "pipeline-switch.md" in esc
     assert "at most once" in esc
-    step0 = _section("## Step 0 — Route")
+    step0 = _section(TAGS, REF)
     assert "`no-switch:`" in step0 and "QUOIN_RUN_AUTO_SWITCH=0" in step0
     # The switch note outranks run_hard's run-state and autonomous markers on resume.
     assert step0.index("pipeline-switch.md") < step0.index("run-state-<task>.json")

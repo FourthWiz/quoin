@@ -28,6 +28,8 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SKILLS = REPO_ROOT / "quoin" / "adapters" / "claude" / "skills"
 RUN = SKILLS / "run" / "SKILL.md"
+# run keeps its non-Opus dispatch, watchdog and fail-open text in reference.md.
+RUN_REF = SKILLS / "run" / "reference.md"
 RUN_HARD = SKILLS / "run_hard" / "SKILL.md"
 IMPLEMENT = SKILLS / "implement" / "SKILL.md"
 CORE = REPO_ROOT / "quoin" / "core" / "skills"
@@ -45,7 +47,7 @@ def _between(text: str, start: str, end: str) -> str:
 
 
 def run_guard() -> str:
-    return _between(RUN.read_text(encoding="utf-8"), "## Implementer tier guard", "## Step 5")
+    return _between(RUN_REF.read_text(encoding="utf-8"), "## Implementer tier guard (dispatch)", "## Lessons")
 
 
 def run_hard_phase4() -> str:
