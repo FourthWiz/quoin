@@ -194,7 +194,7 @@ def test_parallel_stage_worktrees_branch_from_the_task_worktree(env):
 
 
 def test_run_skill_claims_releases_and_fails_open():
-    text = RUN_SKILL.read_text()
+    text = RUN_SKILL.read_text() + RUN_SKILL.with_name("reference.md").read_text()
     assert 'run_isolation.py" claim --task "<task>"' in text
     assert 'run_isolation.py" release --task "<task>"' in text
     assert "[quoin-run: run isolation unavailable; working in this checkout]" in text

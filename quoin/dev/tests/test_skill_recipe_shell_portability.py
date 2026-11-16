@@ -35,6 +35,7 @@ LINTED = [
     SKILLS / "review" / "SKILL.md",
     SKILLS / "run" / "SKILL.md",
     SKILLS / "run" / "light-pipeline.md",
+    SKILLS / "run" / "reference.md",
     SKILLS / "implement" / "SKILL.md",
     PKG / "memory" / "autonomous-mode.md",
 ]

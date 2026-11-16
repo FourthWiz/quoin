@@ -112,6 +112,7 @@ def corpus_files() -> list:
     patterns = (
         "quoin/adapters/claude/skills/*/SKILL.md",
         "quoin/adapters/claude/skills/run/light-pipeline.md",
+        "quoin/adapters/claude/skills/run/reference.md",
         "quoin/core/skills/*.md",
         "quoin/memory/*.md",
     )

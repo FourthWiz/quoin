@@ -39,10 +39,14 @@ task); markers change no behaviour and are never committed.
    cross-repo change; otherwise, or when unsure, the light route. The
    `direct:` and `light:` tags force a route, also in autonomous mode.
    The decision and a one-line reason go into `brief.md` (`route:`,
-   `reason:`). The direct route writes a minimal brief (goal, route,
-   reason, verification result), implements on the strong model,
-   verifies and commits, skipping discovery (3), the context pack (5)
-   and the review (8). It escalates one way to the light route, keeping the work
+   `reason:`). The direct route implements on the strong model, verifies
+   and commits, skipping discovery (3), the context pack (5) and the
+   review (8). Its minimal brief (goal, route, reason) is written with the
+   skipped markers in one call, and the verification result and commit are
+   appended at the end. The skill text a
+   direct-route session loads is kept to a short core; tags, resume,
+   isolation modes, the non-strong-model dispatch, lessons and
+   escalation sit in an on-demand reference file. It escalates one way to the light route, keeping the work
    done, when the diff outgrows one module, verification fails twice, or
    the change falls into an excluded category.
 3. Discover, delegated, only when discovery memory is missing, older

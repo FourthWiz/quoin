@@ -95,8 +95,12 @@ def test_discovery_dirty_marker_contract() -> None:
     light = (run_dir / "light-pipeline.md").read_text(encoding="utf-8")
     step2 = light.split("## Step 2 — Discover", 1)[1].split("## Step 3", 1)[0]
     step8 = run.split("## Step 8 — Commit", 1)[1].split("## Escalation", 1)[0]
+    # Step 8 points at reference.md for the lessons procedure.
+    ref = (run_dir / "reference.md").read_text(encoding="utf-8")
+    lessons = ref.split("## Lessons", 1)[1].split("## Direct route escalation", 1)[0]
     assert "discovery-dirty" in step2
     assert "discovery-dirty" in step8
-    assert "lessons_guard.py" in step8 and "--no-strict-attrib" in step8
+    assert '"Lessons"' in step8
+    assert "lessons_guard.py" in lessons and "--no-strict-attrib" in lessons
     discover = _ADAPTER_DISCOVER.read_text(encoding="utf-8")
-    assert "rm -f" in discover and "discovery-dirty" in discover
+    assert "fsops.py rm" in discover and "discovery-dirty" in discover

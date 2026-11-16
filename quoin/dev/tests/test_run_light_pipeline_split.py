@@ -18,6 +18,7 @@ QUOIN = Path(__file__).resolve().parents[2]
 RUN_DIR = QUOIN / "adapters" / "claude" / "skills" / "run"
 SKILL = (RUN_DIR / "SKILL.md").read_text(encoding="utf-8")
 LIGHT = (RUN_DIR / "light-pipeline.md").read_text(encoding="utf-8")
+REF = (RUN_DIR / "reference.md").read_text(encoding="utf-8")
 REF_PATH = "__QUOIN_HOME__/skills/run/light-pipeline.md"
 FILE_NAME = re.compile(r"light-pipeline\.md|light\s+pipeline\s+file")
 
@@ -87,15 +88,20 @@ def test_light_route_triggers_name_the_reference_file():
         assert trigger in pointer, trigger
     size = _section(SKILL, "## Step 1b — Size")
     assert re.search(r"Light → read the light pipeline file", size)
+    # Step 0 sends --resume and the rarer tags to reference.md, whose resume
+    # item names the light pipeline file.
     step0 = _section(SKILL, "## Step 0 — Route")
-    resume = next(u for u in _units(step0) if u.startswith("2. **`--resume`**"))
+    assert "`--resume`" in step0 and "reference.md" in step0
+    tags = _section(REF, "## Step 0 — Tags and resume")
+    resume = next(u for u in _units(tags) if u.startswith("2. **`--resume`**"))
     assert FILE_NAME.search(resume)
 
 
 def test_escalation_reads_the_reference_file_before_writing_the_light_brief():
-    direct = " ".join(_section(SKILL, "## Direct route").split())
+    assert 'reference.md "Direct route escalation"' in " ".join(_section(SKILL, "## Direct route").split())
+    direct = " ".join(_section(REF, "## Direct route escalation").split())
     read = direct.index("Read the light pipeline file first")
-    assert read < direct.index("rewrite the brief in one write as the full Step 3 brief")
+    assert read < direct.index("write the brief in one write as the full Step 3 brief")
 
 
 # SKILL.md sections a direct-route session follows (it never reads the reference file).

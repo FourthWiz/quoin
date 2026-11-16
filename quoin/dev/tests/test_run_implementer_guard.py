@@ -64,7 +64,13 @@ def _guard_block() -> str:
     assert text.count(GUARD_HEADING) == 1
     match = re.search(re.escape(GUARD_HEADING) + r".+?(?=^## )", text, re.S | re.M)
     assert match
-    return match.group(0)
+    # The core guard decides inline vs dispatch; the dispatch, watchdog and
+    # fail-open steps live in reference.md, which the core names.
+    assert 'reference.md "Implementer tier guard (dispatch)"' in " ".join(match.group(0).split())
+    ref = RUN_SKILL.with_name("reference.md").read_text(encoding="utf-8")
+    dispatch = re.search(r"^## Implementer tier guard \(dispatch\).+?(?=^## )", ref, re.S | re.M)
+    assert dispatch
+    return match.group(0) + dispatch.group(0)
 
 
 def test_guard_sits_before_step_5_and_is_not_a_mintier_block():

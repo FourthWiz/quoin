@@ -603,6 +603,40 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/run/SKILL.md",
         "quoin/dev/tests/test_handoff_producer_conformance.py",
     ),
+    # run keeps tags, resume, the non-Opus dispatch, lessons and escalation in
+    # reference.md, read on demand; these tests pin the text that moved there.
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_background_test_watchdog.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_cl_sequences.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_discovery_refresh_policy_docs.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_run_implementer_guard.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_run_isolation.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_run_light_pipeline_split.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_run_size_route.py",
+    ),
+    (
+        "quoin/adapters/claude/skills/run/reference.md",
+        "quoin/dev/tests/test_run_skill_footprint_ceiling.py",
+    ),
     # run keeps its light-route steps in light-pipeline.md, read on demand;
     # these tests pin the split and the text that moved there.
     (
