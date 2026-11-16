@@ -280,6 +280,11 @@ rows pass the same pipeline check through `brief.md`. The lean session also gets
 to run `/discover`. `QUOIN_BENCH_QUOIN_ROUTE=memory` sets
 `QUOIN_RUN_PROFILE=bench-memory` instead, which skips only run isolation and
 keeps discovery and the lessons read and append (see "Sequence suite" below).
+`QUOIN_BENCH_QUOIN_ROUTE=r0` forces `/run`'s Direct route with a one-line
+`/run --autonomous direct:` prompt and the same `bench-lean` profile and
+discovery-banner silencing as lean, so every quoin row is a minimal
+implement, verify and commit session; `overhead-audit.md` describes how to
+check its cost against plain.
 A paired run refuses any other route value before it starts. The
 harness records on-disk evidence that the pipeline ran,
 and treats a quoin session that left no plan as an `invalid` row (see "Invalid

@@ -99,3 +99,62 @@ Analysis of the numbers above (by hand, not script output):
   quoin ships: the benchmark's longer `/run` prompt prefix, the
   skill-invocation wrapper and the formatting of the 31 extra skill and
   slash-command entries.
+
+## What was cut
+
+| source | loaded | before (chars / ≈tokens) | after (chars / ≈tokens) |
+|---|---|---|---|
+| run SKILL.md | every /run session | 23829 / 5957 | 10712 / 2678 |
+| run reference.md (new) | on demand: rare tags, resume, non-Opus sessions, lessons, escalation | - | 14636 / 3659 |
+| benchmark prompt prefix (`r0` route) | every quoin benchmark session | 234 / 58 | 56 / 14 |
+| CLAUDE.md as deployed (slim) | every session | 2266 / 566 | unchanged |
+| skill listing (33 skills) | every session | 5305 / 1326 | unchanged |
+| run light-pipeline.md | light route only | 17736 / 4434 | unchanged |
+| hook output | every session | 0 | unchanged |
+
+Text moved to `reference.md` is mostly the same text, plus section headings
+and pointers, read only when the core points there; a `direct:`-forced Opus
+session (the `r0` route) never reads it. The Direct route
+also does less bookkeeping: its brief is written together with the skipped
+phase markers in one Bash call, and the verification result and commit are
+appended once at the end. Under the `r0` route's lean profile it skips run
+isolation, the lessons read and append, and the discovery-dirty marker.
+
+## R0 rerun and acceptance check
+
+`QUOIN_BENCH_QUOIN_ROUTE=r0` sends the quoin arm through `/run --autonomous
+direct:` with the lean profile and a one-line prompt prefix, so every quoin
+row is an R0 session. Rerun the pro suite and audit it:
+
+```bash
+QUOIN_BENCH_QUOIN_ROUTE=r0 quoin bench tiered --suite pro-balanced --run-id pro-r0 --judge-emulation
+RUNS=.workflow_artifacts/quoin-benchmarks/runs
+python3 quoin/benchmarks/scripts/multi_run_report.py $RUNS/pro-r0 --json pro-r0.json
+python3 quoin/benchmarks/scripts/overhead_audit.py $RUNS/pro-r0
+```
+
+Acceptance: in the audit's first table, billed cost quoin / plain ≤ 1.10x, and
+quoin passes at least as many tasks as plain did in the same run (pro-r1 had
+plain 38 of 40).
+
+Expected effect, by hand from the numbers above: the first-call delta drops
+from about 12.7k to about 9.4k tokens. At Opus prices that remaining delta
+still costs about $0.047 for its one cache write plus about $0.024 in
+about 12.5 re-reads (plain's 13.5 turns minus the first), about $0.07 per
+session, or roughly 1.16x plain's $0.45 if the turn counts match. That is the
+fixed prefix alone, not a forecast: in pro-r1 the prefix re-reads were only
+about $0.05 of quoin's $0.71 excess per session, and most of the gap was extra
+turns, output and the review subagent, which the `r0` route removes along with
+framing. The rerun decides. If the prefix keeps it above 1.10x, the next levers,
+in order of size:
+
+- the skill listing (about 1.3k tokens): ship the session-only skills
+  (`start_of_day`, `weekly_review`, `cost_snapshot` and the like) as an opt-in
+  set, since hiding them with `disable-model-invocation` would also block
+  skill-to-skill hand-offs such as `/run` → `/run_hard`;
+- the rest of SKILL.md (about 2.7k tokens): an R0-only entry that loads just
+  Size, the Direct route and Steps 5, 6 and 8, once scope triage decides the
+  route before the skill text is loaded;
+- turns: the Direct route still takes setup, marker and commit calls that a
+  plain session does not; a single scripted setup and record call would remove
+  most of them.

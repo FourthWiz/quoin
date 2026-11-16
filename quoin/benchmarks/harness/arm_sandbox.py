@@ -21,7 +21,7 @@ from typing import List, Optional, Tuple
 
 from .cells.simple_claude import BENCH_MODELS
 from .config import (
-    DISCOVERY_REFRESH_DISABLE_ENV, RUN_PROFILE_ENV, quoin_route_or_default, run_profile_for_route,
+    DISCOVERY_REFRESH_DISABLE_ENV, DISCOVERY_SKIPPING_ROUTES, RUN_PROFILE_ENV, quoin_route_or_default, run_profile_for_route,
 )
 from .repo_prep import BENCH_GIT_IDENTITY
 
@@ -223,14 +223,15 @@ def build_session_env(sandbox_or_none: Optional[Sandbox], cell: str, run_id: str
         env["QUOIN_GATE_AUTO_APPROVE"] = "1"
         env["QUOIN_AUTO_RESUME"] = "0"
         env["QUOIN_BENCHMARK_RUN"] = run_id
-        # The lean and memory routes reach /run only through a benchmark-only
-        # profile. Only lean skips discovery, so only lean silences the hook's
-        # refresh banner. An unknown route is refused by the run's preflight.
+        # The lean, memory and r0 routes reach /run only through a
+        # benchmark-only profile. Only lean and r0 skip discovery, so only they
+        # silence the hook's refresh banner. An unknown route is refused by the
+        # run's preflight.
         route = quoin_route_or_default(environ)
         profile = run_profile_for_route(route)
         if profile:
             env[RUN_PROFILE_ENV] = profile
-        if route == "lean":
+        if route in DISCOVERY_SKIPPING_ROUTES:
             env[DISCOVERY_REFRESH_DISABLE_ENV] = "1"
     return env
 
