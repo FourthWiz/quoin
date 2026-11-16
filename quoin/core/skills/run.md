@@ -32,6 +32,19 @@ task); markers change no behaviour and are never committed.
    the project root. A resume returns to the same worktree; the run
    releases its claim at the end and leaves the worktree and branch for
    workspace teardown. Without the helper the run works in place.
+2a. Prompt triage. The run writes the request verbatim into `brief.md`,
+   then one small-model helper, reading a rubric file shipped with the
+   skill, puts it in exactly one class and updates the brief: C1 Clear (a
+   concrete target and checkable expected behaviour) only gains its class
+   line; C2 Complete but unstructured is restated as goal, acceptance
+   criteria and constraints, adding nothing; C3 Underspecified is restated
+   the same way with each open question at a default answer, listing the
+   defaults as assumptions and at most three questions. The run asks those
+   questions once (interactive) or keeps the defaults (autonomous). Resume,
+   per-stage runs and tasks handed back by the heavy pipeline skip it; if
+   the helper fails, the run classifies inline. This replaces enrichment
+   and the clarifying part of specification; no later step asks about the
+   request again.
 2b. Size, inline (no helper, no extra model call): take the direct route
    only for a concrete defect or change with clear expected behaviour
    that should touch one module plus its tests and involves no public
@@ -41,7 +54,7 @@ task); markers change no behaviour and are never committed.
    The decision and a one-line reason go into `brief.md` (`route:`,
    `reason:`). The direct route implements on the strong model, verifies
    and commits, skipping discovery (3), the context pack (5) and the
-   review (8). Its minimal brief (goal, route, reason) is written with the
+   review (8). Its route and reason are appended to the triaged brief with the
    skipped markers in one call, and the verification result and commit are
    appended at the end. The skill text a
    direct-route session loads is kept to a short core; tags, resume,
@@ -58,9 +71,7 @@ task); markers change no behaviour and are never committed.
    every other step runs unchanged. The memory profile
    (`QUOIN_RUN_PROFILE=bench-memory`, for sequence suites whose workflow
    memory carries between tasks) skips only the isolation claim and release.
-4. Frame, inline: write `brief.md` (goal, acceptance criteria,
-   non-goals, assumptions, shape). Ask the user when the request is
-   unclear in a way that changes the work; never ask in autonomous mode.
+4. Frame, inline: append the shape and size to the triaged `brief.md`.
    Shape is `single` by default and `staged` when the change spans
    several repositories, has parts that must land in order, or will not
    fit one coherent diff.

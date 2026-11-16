@@ -27,7 +27,9 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 # Lowered when SKILL.md became a short core for the Direct route and the rarely
 # needed text moved to reference.md: measured 10,760 bytes, with a small margin
 # only, since every turn of every /run session re-reads this file.
-CEILING_BYTES = 11000
+# Raised for the prompt-triage step that runs before Size on every route:
+# measured 12,233 bytes, with a small margin.
+CEILING_BYTES = 12500
 LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Same ratchet for the reference file: 15,347 bytes at the split, times 1.10.
 # Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.

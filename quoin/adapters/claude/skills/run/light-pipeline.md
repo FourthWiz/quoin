@@ -71,20 +71,12 @@ if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow
 
 ## Step 3 — Frame (inline)
 
-Marker: `frame`. Write `.workflow_artifacts/<task>/brief.md`, at most about 40 lines:
+Marker: `frame`. Step 1a already wrote the opening of
+`.workflow_artifacts/<task>/brief.md` (`## Triage`, then the request verbatim
+for C1, or goal, acceptance criteria and constraints for C2 and C3, with
+assumptions and open questions for C3). Append, with a heredoc:
 
 ```markdown
-# <task name>
-## Goal
-<one or two sentences: the outcome, in the user's terms>
-## Acceptance criteria
-- <observable, checkable behaviours; include the failing case if this is a bug>
-## Non-goals
-- <what not to touch>
-## Assumptions
-- <each one you made because the request did not say>
-## Open questions
-- <none, or the questions asked and their answers>
 ## Shape
 <single | staged> — <one-line reason>
 ## Size
@@ -92,10 +84,9 @@ route: light
 reason: <the one-line reason from Step 1b>
 ```
 
-This replaces `/enrich` and `/specify` on the light path. A `[from-hard]` task
-restates the switch note's `evidence:` file; its Size reason is `handed off from
-run_hard`. Restate the request
-precisely; do not invent requirements.
+Do not restate the request or ask about it again; record any further
+assumption you make under `## Assumptions`. A `[from-hard]` task's Size
+reason is `handed off from run_hard`.
 
 **Shape.** Decide whether the task is one change or several. Choose **staged**
 when any of these hold:
@@ -108,13 +99,6 @@ when any of these hold:
 
 Otherwise, and whenever you are unsure, choose **single**. A single task goes
 straight on to Step 4; a staged one goes through Step 4 and then Step 4b.
-
-**Clarification.** If the request is unclear in a way that changes what you would
-build — two plausible readings, a missing target, conflicting constraints — ask
-the user (one `AskUserQuestion` call, at most a few focused questions) before
-going further. If it is only unclear in ways that do not change the work, pick the
-reasonable reading and list it under Assumptions. Under `AUTONOMOUS`, never ask:
-record the assumption and continue.
 
 ## Step 4 — Context pack (subagent)
 
@@ -307,7 +291,7 @@ not committed yet, so first mark new files with `git add -N <new files>` and pas
 Do not pass your reasoning or the context pack, so its read is not anchored on
 yours. Ask it for at most about 10 findings, each with `path:line`, severity
 (blocker / should-fix / nit) and a concrete fix. Ask it to check correctness
-against the acceptance criteria, missed call sites, security issues, and whether
+against the acceptance criteria (for a C1 brief, the request), missed call sites, security issues, and whether
 the tests are proportionate (flag both missing and excessive tests).
 
 Then log `review-fixes` and, inline on Opus (or through the Opus implementer when the guard

@@ -101,7 +101,7 @@ def test_escalation_reads_the_reference_file_before_writing_the_light_brief():
     assert 'reference.md "Direct route escalation"' in " ".join(_section(SKILL, "## Direct route").split())
     direct = " ".join(_section(REF, "## Direct route escalation").split())
     read = direct.index("Read the light pipeline file first")
-    assert read < direct.index("write the brief in one write as the full Step 3 brief")
+    assert read < direct.index("write the brief in one Edit as the full Step 3 brief")
 
 
 # SKILL.md sections a direct-route session follows (it never reads the reference file).
@@ -226,3 +226,17 @@ def test_drift_check_covers_the_reference_file(tmp_path):
     (dest / "skills" / "run" / "light-pipeline.md").write_text("edited\n", encoding="utf-8")
     drift = installer.compute_drift(source, dest, categories=("skills",))
     assert any(e.deployed_path.endswith("light-pipeline.md") and e.reason == "stale" for e in drift)
+
+
+def test_prompt_triage_runs_before_size_and_owns_clarification():
+    order = [SKILL.index(h) for h in ("## Step 1 — Setup", "## Step 1a — Prompt triage", "## Step 1b — Size")]
+    assert order == sorted(order)
+    triage = _section(SKILL, "## Step 1a — Prompt triage")
+    assert 'model: "haiku"' in triage
+    assert "__QUOIN_HOME__/skills/run/prompt-triage.md" in triage
+    assert "site=run-triage-questions" in triage
+    rubric = (RUN_DIR / "prompt-triage.md").read_text(encoding="utf-8")
+    for cls in ("C1", "C2", "C3"):
+        assert f"class: {cls}" in rubric
+    assert "prompt-triage.md" in installer.SKILL_COMPANION_FILES
+    assert "AskUserQuestion" not in _section(LIGHT, "## Step 3 — Frame")

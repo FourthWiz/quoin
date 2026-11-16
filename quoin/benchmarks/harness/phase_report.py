@@ -35,7 +35,7 @@ from typing import Optional
 from .cost import estimate_cost, load_pricing
 
 PHASES = (
-    "setup", "discover", "frame", "context", "decompose",
+    "setup", "triage", "discover", "frame", "context", "decompose",
     "implement", "verify", "review", "review-fixes", "commit",
 )
 OTHER = "other"
@@ -47,13 +47,14 @@ _LINE_RE = re.compile(r"^(\S+)\s+(?:(\d+):)?([a-z][a-z-]*)(\s+skipped)?\s*$")
 
 # Agent descriptions seen in light /run transcripts, checked in this order.
 _INFER_RULES = (
+    ("triage", re.compile(r"triage", re.I)),
     ("review", re.compile(r"review", re.I)),
     ("discover", re.compile(r"discover|project memory|scan (the )?repo", re.I)),
     ("context", re.compile(r"context|explore|pack|locate|find ", re.I)),
     ("implement", re.compile(r"implement|fix|apply|opus implementer", re.I)),
 )
 # The orchestrator's own work after a subagent of each kind returns.
-_FOLLOWS = {"discover": "frame", "context": "implement", "implement": "verify",
+_FOLLOWS = {"triage": OTHER, "discover": "frame", "context": "implement", "implement": "verify",
             "review": "review-fixes", OTHER: OTHER}
 
 
