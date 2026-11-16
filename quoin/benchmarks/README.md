@@ -791,7 +791,7 @@ With nine tasks, treat differences as directional.
 Light `/run` appends one line per step to
 `.workflow_artifacts/<task>/phases.log` (`<UTC time> <phase> [skipped]`, with
 an `N:` stage prefix inside a staged task) through `run_phase.py`. The phases are
-setup, discover, frame, context, decompose, implement, verify, review,
+setup, triage, discover, frame, context, decompose, implement, verify, review,
 review-fixes and commit. The quoin cell copies that file with the rest of the
 workflow evidence, and `harness/phase_report.py` joins it with the row's
 `transcript.jsonl`:

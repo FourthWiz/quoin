@@ -28,9 +28,10 @@ except the Escalation switch, which passes its own input.
    returns the task's worktree if it has one), read `.workflow_artifacts/<task>/brief.md`,
    check `git status`/`git log` on the task branch in `WT`, and continue from the first
    step whose output is missing. A brief whose `## Size` section says
-   `route: direct` resumes on the Direct route instead; a task with no brief
-   restarts at Step 1b, keeping any diff on its task branch; one with no `## Size`
-   section is a light run, and a light or staged run (also
+   `route: direct` resumes on the Direct route instead; a task with no brief,
+   or a brief with `## Request` but no `## Triage`, restarts at Step 1a, and
+   one with `## Triage` but no `## Size` at Step 1b, keeping any diff on its
+   task branch; an older brief with none of these is a light run, and a light or staged run (also
    **`stage N of <task>`**) first reads the light pipeline file, whose
    resume section covers staged tasks.
 3. **`--autonomous`** (or an `[autonomous]` sentinel from a parent session) →
@@ -66,8 +67,8 @@ except the Escalation switch, which passes its own input.
 10. **`[from-hard]`** → `run_hard` handed this task over (its
    `pipeline-switch.md` says `to: light`). Strip it and keep the given task
    name. Step 1 keeps the task branch `run_hard` created (no new branch); the
-   note's `evidence:` file is the request that Step 1b and the brief (light
-   pipeline file) work from; Step 1b takes the light route. The task never
+   note's `evidence:` file is the request: Step 1a skips the triage and points
+   the brief's `## Request` at it, and Step 1b works from it; Step 1b takes the light route. The task never
    switches again.
 
 ## Isolation modes
@@ -202,8 +203,10 @@ route). Two failed verifications here mean this escalation, not the
 switch to `run_hard` under Escalation, which applies only to failures on
 the light pipeline. Keep the working tree as it is: no reset, no stash. Read
 the light pipeline file first (it holds the Step 3 brief template), then
-write the brief in one write as the full Step 3 brief, its Size section saying
-`route: light` plus `escalated: from direct — <trigger>`. Then continue at
+write the brief in one Edit as the full Step 3 brief: Read it and replace its
+`## Size` section with `## Shape` plus a Size section saying `route: light`,
+`reason:` and `escalated: from direct — <trigger>`, keeping the Step 1a
+sections. Then continue at
 Step 2. Steps 5–7 build on the existing
 diff (through the same Opus implementer, via SendMessage, when the guard
 dispatched) and the review covers all of it. The Direct route never switches

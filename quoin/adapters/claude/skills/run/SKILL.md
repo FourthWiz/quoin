@@ -1,6 +1,6 @@
 ---
 name: run
-description: "Default pipeline: size, then a direct fix or brief, context pack, Opus implement, one review; local commit. Use for: /run, 'do this task'. Tags: hard:, direct:/light: (force route), --autonomous."
+description: "Default pipeline: triage, size, then a direct fix or context pack, Opus implement, one review; local commit. Use for: /run, 'do this task'. Tags: hard:, direct:/light: (force route), --autonomous."
 model: opus
 ---
 
@@ -18,7 +18,7 @@ once, with one Read, only where this file points to it.
 
 **Phase markers.** At the start of each step, append a marker:
 `python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" <phase>`, with phase one of
-`setup`, `discover`, `frame`, `context`, `decompose`, `implement`, `verify`,
+`setup`, `triage`, `discover`, `frame`, `context`, `decompose`, `implement`, `verify`,
 `review`, `review-fixes`, `commit`. Add `--skipped` when the step is skipped, and
 `--stage N` inside stage N. Chain it onto a Bash call the step already makes,
 with `;` after it (never `&&`). It only appends to
@@ -67,6 +67,34 @@ In as few Bash calls as possible:
 4. Unless `LEAN`, read `.workflow_artifacts/memory/lessons-learned.md` if
    present, keeping only entries relevant to this task.
 
+## Step 1a — Prompt triage (subagent)
+
+In one Bash call, log the `triage` marker and write
+`.workflow_artifacts/<task>/brief.md` with a heredoc: `# <task>`, then
+`## Request` and the request verbatim (fetch a referenced issue's title and
+body first). Skip the step (marker `--skipped`) for `stage N of <task>`, for
+`--resume` once the brief has `## Triage`, and for `[from-hard]`, whose brief
+gets `## Triage`, `class: C1` and `## Request`, `see <the switch note's
+evidence: file>` instead.
+
+Spawn one general-purpose Agent with `model: "haiku"`, giving only the
+absolute brief path and: "Read `__QUOIN_HOME__/skills/run/prompt-triage.md`
+and follow it for this brief." It replies with the class:
+
+- `class: C1` or `class: C2` → go on; the brief states the task.
+<!-- decision-gate: best-effort site=run-triage-questions tokens=0 -->
+- `class: C3` → interactive: ask its open questions in one AskUserQuestion
+  call (each default first, recommended). If an answer differs from its
+  default, Read the brief and in one Edit fix the goal or criteria it
+  affects, turn that `default:` into `answer:` and delete its
+  `(default for Q<n>)` assumption. Under `AUTONOMOUS`, never ask: the
+  defaults stand. A resumed interactive run first asks any question still
+  marked `default:`.
+
+If the spawn errors or the brief has no `## Triage`, read prompt-triage.md and
+do it inline. This replaces `/enrich` and the clarifying part of `/specify`:
+no later step asks about the request again.
+
 ## Step 1b — Size (inline)
 
 Decide the route yourself, from the request and at most a quick targeted look
@@ -96,10 +124,9 @@ Direct → the Direct route below.
 
 Implement and verify; nothing else. No discovery, context pack or review
 subagent; the implementer tier guard still applies. In one Bash call, log
-`discover`, `context`, `review` as `--skipped` and `frame`, and write
-`.workflow_artifacts/<task>/brief.md` with a heredoc: `# <task>`, `## Goal`
-(one or two sentences), the `## Size` section, and `## Assumptions` under
-`AUTONOMOUS` if you made any. `implement`, `verify` and `commit` are logged at
+`discover`, `context`, `review` as `--skipped` and `frame`, and append to
+`.workflow_artifacts/<task>/brief.md` with a heredoc the `## Size` section,
+and `## Assumptions` under `AUTONOMOUS` if you made any. `implement`, `verify` and `commit` are logged at
 their steps.
 
 1. **Implement.** Find the code, the tests covering it and the command that
@@ -202,8 +229,8 @@ stages alone are not a reason: Step 4b (light-pipeline.md) handles them.
 
 ## Important behaviours
 
-- One session. Subagents only for the light route's discovery, context pack and
-  review, plus the Opus implementer on other tiers.
+- One session. Subagents only for the prompt triage, the light route's
+  discovery, context pack and review, plus the Opus implementer on other tiers.
 - No cost-ledger rows, run-state records, checkpoints or progress sentinels.
   Task state lives only under `.workflow_artifacts/<task>/`.
 - Never write quoin's own files (for example `quoin/dev/tests/...`) into
