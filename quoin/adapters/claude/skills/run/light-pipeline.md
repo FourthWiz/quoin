@@ -76,8 +76,8 @@ if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow
 ## Step 3 — Frame (inline)
 
 Marker: `frame`, unless a plain run already logged it before reclassifying to r2.
-Steps 1a and 1b already wrote `.workflow_artifacts/<task>/brief.md`: the
-triaged request and `## Scope` with the r2 signal. Do not restate the request
+Step 1b already wrote `.workflow_artifacts/<task>/brief.md`: the request
+and `## Scope` with the r2 signal. Do not restate the request
 or ask about it again; record any further assumption you make under
 `## Assumptions`. Go on to Step 4 and then Step 4b.
 

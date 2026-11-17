@@ -155,7 +155,7 @@ def detect_phase(task_dir: Path, probe_git: bool = False) -> PhaseResult:
 
 # Light /run phase markers (run_phase.py PHASES) -> detect_phase output.
 _LIGHT_MARKER_PHASE = {
-    "setup": "planning", "triage": "planning", "discover": "planning", "frame": "planning",
+    "setup": "planning", "discover": "planning", "frame": "planning",
     "context": "planning", "decompose": "planning",
     "implement": "implement", "verify": "implement",
     "review": "review", "review-fixes": "review",

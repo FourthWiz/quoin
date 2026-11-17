@@ -256,7 +256,6 @@ const hasPrefix = (names: string[], prefixes: string[]) =>
 // Light /run phase markers (run_phase.py PHASES) -> detect_phase output.
 const LIGHT_MARKER_PHASE: Record<string, Phase> = {
   setup: 'planning',
-  triage: 'planning',
   discover: 'planning',
   frame: 'planning',
   context: 'planning',

@@ -136,7 +136,7 @@ def test_r3_starts_the_heavy_pipeline_only_on_opt_in():
 
 
 def _scope_block():
-    block = re.search(r"```markdown\n(## Scope\n.+?)```", _raw_section(SCOPE), re.S)
+    block = re.search(r"```markdown\n[^`]*?(## Scope\n.+?)```", _raw_section(SCOPE), re.S)
     assert block, "Step 1b has no Scope block"
     return block.group(1)
 
@@ -184,8 +184,8 @@ def test_run_hard_handoff_drops_class_tags():
     assert "removing `hard:`, `r0:`, `r1:`, `r2:` and `isolate:`" in _section("## Step 0 — Route")
 
 
-def test_scope_triage_sits_between_prompt_triage_and_the_routes():
-    order = [SKILL.index(h) for h in ("## Step 0 — Route", "## Step 1a — Prompt triage", SCOPE,
+def test_scope_triage_sits_between_setup_and_the_routes():
+    order = [SKILL.index(h) for h in ("## Step 0 — Route", "## Step 1 — Setup", SCOPE,
                                       "## Plain route (r0, r1)", "## Staged route (r2")]
     assert order == sorted(order)
     assert "## Step 1b — Size" not in SKILL and "## Direct route" not in SKILL

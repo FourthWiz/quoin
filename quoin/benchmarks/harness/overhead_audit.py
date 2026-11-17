@@ -217,7 +217,6 @@ def static_sources(quoin_root) -> list:
         # Companion files are listed when present, so older checkouts still audit.
         ("run reference.md", "on demand", run_dir / "reference.md"),
         ("run light-pipeline.md", "r2 only", run_dir / "light-pipeline.md"),
-        ("run prompt-triage.md", "triage subagent", run_dir / "prompt-triage.md"),
     ]
     rows = []
     for name, when, path in sources:

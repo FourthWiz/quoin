@@ -31,21 +31,9 @@ task); markers change no behaviour and are never committed.
    the project root. A resume returns to the same worktree; the run
    releases its claim at the end and leaves the worktree and branch for
    workspace teardown. Without the helper the run works in place.
-2a. Prompt triage. The run writes the request verbatim into `brief.md`,
-   then one small-model helper, reading a rubric file shipped with the
-   skill, puts it in exactly one class and updates the brief: C1 Clear (a
-   concrete target and checkable expected behaviour) only gains its class
-   line; C2 Complete but unstructured is restated as goal, acceptance
-   criteria and constraints, adding nothing; C3 Underspecified is restated
-   the same way with each open question at a default answer, listing the
-   defaults as assumptions and at most three questions. The run asks those
-   questions once (interactive) or keeps the defaults (autonomous). Resume,
-   per-stage runs and tasks handed back by the heavy pipeline skip it; if
-   the helper fails, the run classifies inline. This replaces enrichment
-   and the clarifying part of specification; no later step asks about the
-   request again.
-2b. Scope triage, inline (no helper, no extra model call): from the
-   triaged request plus at most one quick look at the code, put the task
+2a. Scope triage, inline (no helper, no extra model call): from the
+   request (a referenced issue's title and body fetched first) plus at
+   most one quick look at the code, put the task
    in exactly one class, checked from the top. A class above R0 needs a
    signal the session can name; without one, also when unsure, it is R0.
    - R3 Needs design: a novel architecture, a data-migration strategy, or
@@ -63,9 +51,9 @@ task); markers change no behaviour and are never committed.
    heavy pipeline, on explicit opt-in only (interactive runs are asked
    once; autonomous runs never switch, run as R2 or R1 and recommend the
    heavy pipeline in the report). The `r0:`, `r1:` and `r2:` tags force a
-   class, also in autonomous mode; `hard:` is the opt-in for R3. The class
-   and the signal that fired go into `brief.md` (`route:`, `signal:`) with
-   the skipped markers in one call; the verification result and commit
+   class, also in autonomous mode; `hard:` is the opt-in for R3. The
+   request, verbatim, and the class with the signal that fired go into
+   `brief.md` (`route:`, `signal:`) with the skipped markers in one call; the verification result and commit
    are appended at the end. A plain run reclassifies upward, never down,
    when the work shows a missed signal: to R1 by adding the review, to R2
    by moving to the staged steps while keeping the diff. The skill text a
@@ -81,7 +69,7 @@ task); markers change no behaviour and are never committed.
    every other step runs unchanged. The memory profile
    (`QUOIN_RUN_PROFILE=bench-memory`, for sequence suites whose workflow
    memory carries between tasks) skips only the isolation claim and release.
-4. R2 only. Frame, inline: the triaged `brief.md` already holds the
+4. R2 only. Frame, inline: `brief.md` already holds the request and the
    scope; record further assumptions only.
 5. R2 only. Context pack, delegated to a read-only helper that starts from the
    cached repo map when present: likely files and symbols, covering tests and how to run them, conventions, relevant
