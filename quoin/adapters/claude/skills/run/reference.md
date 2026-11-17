@@ -197,13 +197,13 @@ entries. Any other exit, or a missing script, means append: pipe the temp
 file into
 `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
 
-For the discovery-dirty marker (Step 8 item 4), the full detail: check the commit with
-`git show --name-status --format= HEAD`, or `git diff --name-status <base>..HEAD`
-when the task or stage made more than one commit. Dependency manifests are
-`pyproject.toml`, `setup.py`, `requirements*.txt`, `package.json`, `go.mod`,
-`Cargo.toml`, `pom.xml`, `build.gradle*`, `Gemfile` and the like. The next
-r2 run's Step 2 (light pipeline file) refreshes discovery and `/discover`
-removes the marker. Internal edits, tests and docs alone do not count.
+For the discovery-dirty marker (Step 8 item 4), `discovery_dirty.py` holds
+the rules: a top-level directory (not a dot-directory) or a package added,
+removed or renamed, any dependency manifest (not lockfiles), and interface
+definition files (protobuf, GraphQL, OpenAPI, `.d.ts`, migrations). Other
+tests and docs never count. It prints `discovery-dirty: yes (<reasons>)` or
+`no`, and never fails the step. The next r2 run's Step 2 (light pipeline file)
+refreshes discovery and `/discover` removes the marker.
 
 ## Reclassify to r2
 
