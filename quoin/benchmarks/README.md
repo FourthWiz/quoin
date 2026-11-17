@@ -258,6 +258,10 @@ statistically significant result. Provenance and the task list are in
 instance. Select it with `--suite tiered-balanced`. Provenance, the task list
 and the budget derivation are in `suite-tiered-balanced-provenance.md`.
 
+`suite-verified-vague.json` and `suite-verified-vague-ceiling.json` hold 20 of
+those tasks with vague and original prompts, to test `/run`'s prompt triage;
+see "Vague-prompt suite" below.
+
 The earlier tiered-small run showed that a quoin session can skip the pipeline
 and fix the issue directly. The harness now starts the quoin arm with the slash
 command `/run --autonomous` and a line saying the task must go through `/run`
@@ -721,6 +725,100 @@ arm inherited and how many lessons it wrote. Rows still awaiting judging are
 left out, not counted as failures, and the report says how many per arm. It
 reads no model and costs nothing. `multi_run_report.py` still compares repeats
 of one route.
+
+### Vague-prompt suite: does prompt triage help?
+
+Every other suite gives the agent a fully specified issue, so `/run`'s prompt
+triage (which classes a request C1 clear, C2 unstructured or C3
+underspecified, and under `--autonomous` records default assumptions instead
+of asking) has nothing to fix. `suite-verified-vague.json` holds 20 of the
+tiered-balanced tasks (6 easy, 7 medium, 7 large). Each prompt is a short
+rewrite that keeps only the symptom: no reproduction, no expected output, no
+fix. `suite-verified-vague-ceiling.json` holds the same tasks with the original
+issue text.
+
+The rewrites were written once by a model under fixed instructions, reviewed,
+and vendored in `data/swebench-verified-vague-rewrites.json`. Each rewrite
+carries the hash of the statement it was written from. Both suites regenerate
+byte for byte from vendored files, and judging is the usual hidden Verified
+tests. The selection, the rewrite procedure, every prompt and the budget
+derivation are in `suite-verified-vague-provenance.md`.
+
+The arms:
+
+| Cell | Run | Arm | Prompt |
+|---|---|---|---|
+| plain-vague | vague run | plain Claude Code | vague rewrite |
+| quoin-vague | vague run | `/run --autonomous` (prompt triage, then scope triage) | vague rewrite |
+| plain-original | ceiling run | plain Claude Code | original issue |
+| quoin-original | ceiling run | `/run --autonomous` | original issue |
+
+plain-original is the ceiling. quoin-original comes free with the paired runner,
+and it gives the edge `/run` has on fully specified prompts; subtracting it
+leaves the part of the quoin edge that appears only when the prompt is vague. Run
+both suites with the default quoin route, the same models and the same
+checkout:
+
+```bash
+quoin bench tiered --suite verified-vague --run-id vague-r1
+quoin bench tiered --suite verified-vague-ceiling --run-id vague-ceiling-r1
+RUNS=.workflow_artifacts/quoin-benchmarks/runs
+python3 quoin/benchmarks/scripts/vague_report.py $RUNS/vague-r1 \
+  --ceiling-run $RUNS/vague-ceiling-r1 --json vague-r1.json
+```
+
+`--ceiling-run` is optional. The report refuses runs whose models or quoin
+route differ, whose suites are not the vague and original variants of the
+same tasks, or whose recorded suite sha no longer matches the suite file (a
+regenerated suite needs new runs); `--allow-mixed` overrides this.
+
+Cost: each run's worst case is $1,400 (20 tasks x 2 arms x $35, ceiling $1,590;
+pilot $420). Expected spend is about $120 per run and $240 for both, scaled
+from the tiered-balanced estimate. Quoin sessions on the default r0 route have
+cost less since then, so expect about $35 per run at the low end. The report
+reads no model and costs nothing.
+
+The report gives:
+
+- per cell, overall and per tier: pass rate with a 95% Wilson interval, mean
+  cost and mean time;
+- the headline, quoin-vague minus plain-vague, paired per task with a sign
+  test, plus its cost and time difference;
+- with a ceiling run: the pass rate plain loses to vagueness, the share of that
+  loss the quoin arm recovers, and the difference in differences (quoin's edge
+  on vague prompts minus its edge on the original prompts);
+- how prompt triage classed each counted quoin-vague session, read from the
+  brief it wrote: the share classed C2 or C3, and pass rates per class.
+
+Rows awaiting judging are left out, not counted as failures.
+
+Decision rule, fixed before any run. The three criteria:
+
+1. **It notices.** At least half of the counted quoin-vague sessions are
+   classed C2 or C3, as the report's triage line shows. A vague prompt the
+   rubric calls C1 (clear) is a miss. C2 counts, because the rubric sends a
+   request with an obvious reasonable reading to C2 rather than C3; the C3
+   share is shown for diagnosis only.
+2. **It helps where it should.** The difference in differences is at least
+   +10 points (two tasks), and the sign test on quoin-vague minus plain-vague
+   has more tasks only quoin passed than only plain passed.
+3. **It pays for itself.** The `triage` phase costs less than 10% of the mean
+   quoin-vague session cost, per the phase report.
+
+After the first vague and ceiling runs, prompt triage stays if all three hold.
+Otherwise repeat both runs with `--repeat 2` and apply the rule to the pooled
+rows of all three runs of each suite. Prompt triage then stays if all three
+hold and is removed if not. Twenty pairs only detect a large effect, so one
+run is enough to keep triage on a clear result but never to drop it. The
+report takes several runs of each suite and pairs the arms within each run.
+With repeats the sign test counts each run's pair separately, so read its
+p-value as optimistic; the rule uses only the direction.
+
+```bash
+python3 quoin/benchmarks/scripts/vague_report.py $RUNS/vague-r1 $RUNS/vague-r2-r1 $RUNS/vague-r2-r2 \
+  --ceiling-run $RUNS/vague-ceiling-r1 --ceiling-run $RUNS/vague-ceiling-r2-r1 \
+  --ceiling-run $RUNS/vague-ceiling-r2-r2 --json vague-pooled.json
+```
 
 ### SWE-bench Pro suite: larger tasks
 

@@ -1,5 +1,7 @@
 quoin/benchmarks/data/*.json -text
 quoin/benchmarks/suite-tiered-small.json -text
 quoin/benchmarks/suite-tiered-balanced.json -text
+quoin/benchmarks/suite-verified-vague.json -text
+quoin/benchmarks/suite-verified-vague-ceiling.json -text
 quoin/benchmarks/suite-cl-sequences.json -text
 quoin/benchmarks/suite-pro-balanced.json -text

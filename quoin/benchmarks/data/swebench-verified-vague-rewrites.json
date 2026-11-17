@@ -1,0 +1,92 @@
+{
+  "dataset": "princeton-nlp/SWE-bench_Verified",
+  "revision": "c104f840cc67f8b6eec6f759ebc8b2693d585d4a",
+  "pool_problems_file": "quoin/benchmarks/data/swebench-verified-problems-tiered-balanced.json",
+  "rewriter_model": "claude-opus-5-5",
+  "generated_on": "2026-11-17",
+  "instructions": "Rewrite the GitHub issue below as the short request a busy user would type into a coding agent. Keep only the observable symptom, in one to three plain sentences and at most 300 characters. Leave out reproduction steps, code snippets, tracebacks, expected output, the root cause and any proposed fix. Do not name the function, class or file at fault unless the symptom cannot be stated without it; a user-facing name (a command, a public API call, a setting) may stay. Do not invent details the issue does not give.",
+  "instructions_sha256": "c6b20db8084c3d49a0d56f3ae57e2bb88d6ac63d5da084703745ac0de5cd23ad",
+  "note": "Each prompt was written once from the problem statement whose sha256 it records, then reviewed by a maintainer. Edit a prompt by hand only with the same instructions; pick_subset.py refuses a prompt whose statement changed.",
+  "rewrites": {
+    "django__django-10999": {
+      "original_sha256": "efbac10cda6c1ef780205a8d9fc176b5489d1da8f76d9cbd366ef303052fd8d3",
+      "prompt": "Parsing some negative durations with Django's parse_duration doesn't work."
+    },
+    "django__django-11119": {
+      "original_sha256": "264fad964e8d5a49cd04509eb503175aed31535e29c9262cb9eee4b251192728",
+      "prompt": "Rendering a template through an Engine created with autoescape turned off still escapes the output."
+    },
+    "django__django-11400": {
+      "original_sha256": "3add264d5b3fc0e287b7bfe3c5b1179263d4a811de6caeb2a739b918bb049a21",
+      "prompt": "The admin's related-field list filters show their choices in the wrong order."
+    },
+    "django__django-11951": {
+      "original_sha256": "7c7ff1d81171a59af83ad9d0934053aa7c4e9bf6698ae2b3acde3e4d6353c169",
+      "prompt": "bulk_create with an explicit batch_size can build batches bigger than the database backend supports."
+    },
+    "django__django-12325": {
+      "original_sha256": "8f920ccb5f6169fecd052cc74e6c0149701d063e78802c8f33d585a69bb18c02",
+      "prompt": "A child model in multi-table inheritance fails with ImproperlyConfigured when it also has a second one-to-one field pointing at its parent."
+    },
+    "django__django-15252": {
+      "original_sha256": "ac94dfb5dfb9903b30502daafec445b4d52b5549b1ab13215baf510048fc3e7d",
+      "prompt": "In a multi-database setup, migrate creates the migrations table on databases my router says not to migrate."
+    },
+    "django__django-15916": {
+      "original_sha256": "561a7dff2336249703a63a8fbfcf8e868324859d74b3da2ade1a4fee5ed23d61",
+      "prompt": "modelform_factory ignores the formfield_callback defined on the form class I pass in."
+    },
+    "django__django-15957": {
+      "original_sha256": "676a7fa58acee1293e62f431bfea0ddd001785e0efd2051bb50d7314027e9213",
+      "prompt": "Prefetching related objects with a sliced queryset raises an error."
+    },
+    "matplotlib__matplotlib-25960": {
+      "original_sha256": "97c83d815bdd983310f81c7c5141e2ec1e2347a25140e90dab10dcb54f87e630",
+      "prompt": "Changing the spacing between subfigures has no effect."
+    },
+    "pydata__xarray-3151": {
+      "original_sha256": "abcd2e1b10d6d979b0510ec1a37372c9909c15bc786d4b7bb9027facb727d597",
+      "prompt": "combine_by_coords raises a ValueError when the datasets share a coordinate whose values are not sorted."
+    },
+    "pydata__xarray-7229": {
+      "original_sha256": "1755ba7fe03d6f5917886ea3d5f0e5116a78593b08596ad9d394c5ccbb7f26aa",
+      "prompt": "xr.where with keep_attrs=True messes up the attributes of the coordinates."
+    },
+    "pylint-dev__pylint-4970": {
+      "original_sha256": "194295749557b085970e22cc0886d8d0d772e77521bf3b3af55f43f90a3d65ee",
+      "prompt": "Setting min-similarity-lines to 0 makes pylint flag every line as duplicate code."
+    },
+    "pylint-dev__pylint-8898": {
+      "original_sha256": "fe9420583d351e0e81a7cbc876fef18b386ba1d375bcfb031830f3885d4f4347",
+      "prompt": "Pylint crashes when a regular expression in bad-name-rgxs contains a comma."
+    },
+    "pytest-dev__pytest-6197": {
+      "original_sha256": "ca576fd3db872eac6366a70f11be67886795dbb95d5719f2f9e8ff617c698371",
+      "prompt": "Since pytest 5.2.3, a plain pytest run imports __init__.py files it never used to, and the run fails."
+    },
+    "sphinx-doc__sphinx-7889": {
+      "original_sha256": "79c6d3aae9150c5f5b35229397fdc5a31cd577f78fa37ddb0638a24d7b30d2b2",
+      "prompt": "Autodoc crashes with a TypeError when it documents a generic class whose dependencies are mocked."
+    },
+    "sphinx-doc__sphinx-8548": {
+      "original_sha256": "f0c8a912cffb03b9d6346146e11cf044329280bfe2a193fd9e46980b193cffb0",
+      "prompt": "autodoc's inherited-members option doesn't pick up the docstrings of inherited attributes."
+    },
+    "sphinx-doc__sphinx-9461": {
+      "original_sha256": "cc2eb5d4afca2da5e00ca423f2dce2bf467613a98b9686da7dc19a08e1f4de0f",
+      "prompt": "Sphinx doesn't document methods decorated with both classmethod and property."
+    },
+    "sphinx-doc__sphinx-9711": {
+      "original_sha256": "774dbded97246fc337cc3a9f01569a66641396f3952440385d51e6f7e095234a",
+      "prompt": "needs_extensions rejects sphinx-gallery 0.10 as too old."
+    },
+    "sympy__sympy-13551": {
+      "original_sha256": "9ab38d31087d297db60978aeca658666788926a0235df297346836b93872311f",
+      "prompt": "Product(n + 1/2**k, (k, 0, n - 1)) evaluates to the wrong result."
+    },
+    "sympy__sympy-15599": {
+      "original_sha256": "cf4081c50e2bce78ef90503152dbf7f94f2f8cf0323ee9cd68cf0e3a60835d6e",
+      "prompt": "Mod(3*i, 2) for an integer symbol i isn't simplified."
+    }
+  }
+}
