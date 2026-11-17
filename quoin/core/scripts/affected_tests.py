@@ -637,6 +637,12 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/adapters/claude/skills/run/reference.md",
         "quoin/dev/tests/test_run_skill_footprint_ceiling.py",
     ),
+    # run keeps the brief, the r1 review and r3 handling in routes.md, read
+    # only above r0.
+    ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_run_light_pipeline_split.py"),
+    ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_run_scope_triage.py"),
+    ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_run_skill_footprint_ceiling.py"),
+    ("quoin/adapters/claude/skills/run/routes.md", "quoin/dev/tests/test_discovery_refresh_policy_docs.py"),
     # run keeps its light-route steps in light-pipeline.md, read on demand;
     # these tests pin the split and the text that moved there.
     (

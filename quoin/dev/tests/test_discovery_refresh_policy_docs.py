@@ -110,10 +110,12 @@ def test_discovery_dirty_marker_contract() -> None:
 
 def test_plain_route_runs_no_session_ceremony() -> None:
     """r0/r1 write no session state, checkpoints, cost rows or run-state records."""
-    run = (_SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
-    plain = run.split("## Plain route (r0, r1)", 1)[1].split("## Staged route", 1)[0]
+    run_dir = _SOURCE_ROOT / "adapters" / "claude" / "skills" / "run"
+    run = (run_dir / "SKILL.md").read_text(encoding="utf-8")
+    plain = run.split("## Plain route (r0)", 1)[1].split("## Implementer tier guard", 1)[0]
     record = run.split("## Step 5 — Implement", 1)[1].split("## Escalation", 1)[0]
-    for text in (plain, record):
+    r1 = (run_dir / "routes.md").read_text(encoding="utf-8").split("## r1 —", 1)[1]
+    for text in (plain, record, r1):
         for token in ("cost-ledger", "run_state.py", "run-state-", "checkpoint",
                       "memory/sessions/", "session_age_guard"):
             assert token not in text, token

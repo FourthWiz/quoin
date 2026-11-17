@@ -27,19 +27,21 @@ except the Escalation switch, which passes its own input.
    stop. Otherwise resume the light run: run Step 1's claim (item 2; it
    returns the task's worktree if it has one), read `.workflow_artifacts/<task>/brief.md`,
    check `git status`/`git log` on the task branch in `WT`, and continue from the first
-   step whose output is missing. The brief's `## Scope` decides the route:
+   step whose output is missing. The brief's `## Scope` decides the route
+   (above r0, read the routes file first):
    `route: r0` or `r1` (or `runs-as: r1`) resumes on the plain route, `r2`
    (or `runs-as: r2`) on the staged route, and an `r3` with no `runs-as:`
-   line repeats Step 1b's r3 handling. A task with no brief, or a brief with
-   no `## Scope`, restarts at Step 1b, keeping any diff on its task branch;
-   Step 1b then appends `## Scope` to an existing brief instead of rewriting
+   line repeats the routes file's r3 handling. A task with no brief, or a brief with
+   no `## Scope`, restarts at Step 1b, keeping any diff on its task branch
+   (with no request anywhere, ask for it, or stop under `AUTONOMOUS`);
+   the routes file then appends `## Scope` to an existing brief instead of rewriting
    it. An older brief's `## Size` maps `route: direct` to r0 and
    `route: light` to r1, or to r2 when `architecture.md` exists. A staged run
    (also **`stage N of <task>`**) first reads the light pipeline file, whose
    resume section covers staged tasks.
 3. **`--autonomous`** (or an `[autonomous]` sentinel from a parent session) →
    strip it and set `AUTONOMOUS=true`: never ask the user anything; record
-   assumptions in the brief instead.
+   assumptions in the brief instead (r0: in the report).
 4. **`small:` / `medium:` / `large:` / `fast:` / `max_rounds: N`** → strip them. They
    select heavy-pipeline profiles and have no effect here. If the user wrote
    `large:` interactively, mention in one line that `/run hard:` runs the full
@@ -71,8 +73,8 @@ except the Escalation switch, which passes its own input.
 10. **`[from-hard]`** → `run_hard` handed this task over (its
    `pipeline-switch.md` says `to: light`). Strip it and keep the given task
    name. Step 1 keeps the task branch `run_hard` created (no new branch); the
-   note's `evidence:` file is the request: Step 1b points the brief's
-   `## Request` at it and classifies from it as usual,
+   note's `evidence:` file is the request: the brief's `## Request` points
+   at it (written by the routes file, or on r0 by Step 8), Step 1b classifies from it as usual,
    except that r3 runs as r2 or r1 without asking. The task never switches
    again.
 
@@ -125,7 +127,7 @@ fixes made through that implementer show up as `implement`.)
    implementer sees neither file). It tells the agent to do those two steps, not to commit
    and not to spawn subagents, and to return the files changed, the tests
    added, the verification result (command and pass/fail) and any blocker.
-   On the plain route (r0, r1) it gets the brief and the test command, with
+   On the plain route (r0, r1) it gets the request (r0) or the brief (r1) and the test command, with
    no context-pack path. It also says, verbatim: "Run every test command in the FOREGROUND with an
    explicit Bash `timeout: 600000`, and pass `--junitxml` (or `--junit-out`
    for affected_tests.py) a path under `.workflow_artifacts/cache/` containing
@@ -170,7 +172,7 @@ fixes made through that implementer show up as `implement`.)
    error in this order:
    - **Autonomous-class** (`AUTONOMOUS`): never ask. Print
      `[quoin-run-impl-autonomous: opus implementer dispatch failed; implementing inline at current tier]`,
-     record it under Assumptions in the brief, then implement inline.
+     record it under Assumptions in the brief (r0: in the report), then implement inline.
    - **1M-credit-class** (the error contains `Usage credits required for 1M context`)
      and **generic**: AskUserQuestion with two options, "Abort, switch with /model"
      and "Proceed at current tier". Abort → print
@@ -210,8 +212,9 @@ refreshes discovery and `/discover` removes the marker.
 A plain run (r0 or r1, not forced by a tag) moves to r2, one way, when the
 change turns out to span repositories or to need parts that land in order.
 Keep the working tree as it is: no reset, no stash. Read the light pipeline
-file, then in one Edit set the brief's `## Scope` to `route: r2` with a line
-`escalated: <r0 | r1> → r2 — <signal>`, keeping `## Request`, and
+file, then set the brief's `## Scope` to `route: r2` with a line
+`escalated: <r0 | r1> → r2 — <signal>`, keeping `## Request` (an r0 run has
+no brief yet: write it first, per the routes file's "Brief"), and
 continue at its Step 2. The stages build on the existing diff (through the
 same Opus implementer, via SendMessage, when the guard dispatched); the first
 stage's review covers it if that stage is r1.
@@ -228,8 +231,9 @@ The task is bigger than `/run` when:
 A task that spans several repos or needs a few stages is not by itself a reason
 to escalate: r2's Step 4b (light pipeline file) handles it.
 
-When one fires, switch to `run_hard` through the switch procedure in the light
-pipeline file: it asks once (interactive), keeps the brief, context
+When one fires on r0, first write the brief that Step 8 item 2 describes,
+without `## Commit`, so the request survives. Then switch to `run_hard`
+through the switch procedure in the light pipeline file: it asks once (interactive), keeps the brief, context
 pack and working tree, and hands over in this session. Do not switch, and
 instead stop and recommend `/run hard: <task>` (interactive) or end with that
 recommendation in the final report (autonomous), when `NO_SWITCH` is set, when

@@ -262,7 +262,8 @@ def brief_route(dest: Path) -> str:
     older brief's `route: direct` maps to r0, and `route: light` (or a brief
     with no route line) to r1, or to r2 when the task left an
     architecture.md, as /run's resume does. The task-root brief is preferred
-    over a staged task's stage briefs.
+    over a staged task's stage briefs. An r0 run writes its brief only when it
+    commits, so a task with no brief at all is r0 (r2 with an architecture.md).
     """
     briefs = sorted(dest.rglob("brief.md"), key=lambda p: (len(p.parts), str(p)))
     for brief in briefs:
@@ -275,6 +276,8 @@ def brief_route(dest: Path) -> str:
             value = LEGACY_ROUTES.get(value, value)
             if value in BRIEF_ROUTES:
                 return value
+    if not briefs:
+        return "r2" if any(dest.rglob("architecture.md")) else "r0"
     return _light_class(dest)
 
 
@@ -307,7 +310,7 @@ def _pipeline_diagnostics(dest: Path) -> dict:
         match = _ROUTE_LINE.search(_read_text(triage))
         if match and match.group(1).lower() in ("fast", "full"):
             route = match.group(1).lower()
-    if route == "unknown" and not plans and any(dest.rglob("brief.md")):
+    if route == "unknown" and not plans and (any(dest.rglob("brief.md")) or any(dest.rglob("phases.log"))):
         route = brief_route(dest)
     if route == "unknown" and plans:
         plan_text = _read_text(plans[0])
@@ -376,9 +379,10 @@ def _capture_workflow_artifacts(
         return {**empty, "copy_failed": True}
 
     # Validate: look for architecture.md and a plan in any subfolder. Light /run
-    # (every scope class) plans in its brief instead of current-plan.md.
+    # (every scope class) plans in its brief instead of current-plan.md; an r0
+    # run that stopped before committing has only its phases.log.
     has_arch = any(dest.rglob("architecture.md"))
-    has_plan = any(dest.rglob("current-plan.md")) or any(dest.rglob("brief.md"))
+    has_plan = any(any(dest.rglob(n)) for n in ("current-plan.md", "brief.md", "phases.log"))
 
     return {
         "captured": True,

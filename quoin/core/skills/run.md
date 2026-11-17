@@ -51,15 +51,19 @@ task); markers change no behaviour and are never committed.
    heavy pipeline, on explicit opt-in only (interactive runs are asked
    once; autonomous runs never switch, run as R2 or R1 and recommend the
    heavy pipeline in the report). The `r0:`, `r1:` and `r2:` tags force a
-   class, also in autonomous mode; `hard:` is the opt-in for R3. The
-   request, verbatim, and the class with the signal that fired go into
-   `brief.md` (`route:`, `signal:`) with the skipped markers in one call; the verification result and commit
+   class, also in autonomous mode; `hard:` is the opt-in for R3. An R0
+   run logs no skipped markers and writes no brief until it commits; then
+   one call writes a short `brief.md` with the request, `route: r0`, the
+   verification result and the commit. Above R0 the request, verbatim, and the class
+   with the signal that fired go into `brief.md` (`route:`, `signal:`)
+   with the skipped markers in one call; the verification result and commit
    are appended at the end. A plain run reclassifies upward, never down,
    when the work shows a missed signal: to R1 by adding the review, to R2
    by moving to the staged steps while keeping the diff. The skill text a
    plain run loads is kept to a short core; tags, resume, isolation
    modes, the non-strong-model dispatch, lessons and escalation sit in an
-   on-demand reference file, and the R2 steps in another.
+   on-demand reference file, the brief, review and R3 handling in a routes
+   file that an R0 run never reads, and the R2 steps in a third.
 3. R2 only. Discover, delegated, only when discovery memory is missing, older
    than the staleness threshold (7 days by default), or marked out of
    date by an earlier task's `discovery-dirty` marker (step 9). A benchmark-only

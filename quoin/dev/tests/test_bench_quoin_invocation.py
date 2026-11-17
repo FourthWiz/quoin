@@ -246,3 +246,11 @@ def test_failed_evidence_copy_is_not_reported_as_a_missing_plan(tmp_path, monkey
     got = quoin_claude._capture_workflow_artifacts(work, tmp_path / "out", "t1")
     assert got["captured"] is False
     assert got["copy_failed"] is True
+
+
+def test_r0_run_without_a_brief_reads_as_r0_with_a_plan(tmp_path):
+    # An r0 run writes its brief only when it commits; one that stopped
+    # earlier leaves only its phase markers.
+    got = _capture(tmp_path, {"task/phases.log": "2026-11-17T10:00:00.000Z setup\n"})
+    assert got["workflow_route"]["route"] == "r0"
+    assert got["has_current_plan_md"] is True

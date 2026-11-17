@@ -2,15 +2,15 @@
 
 *Reference for `/run`, deployed as
 `__QUOIN_HOME__/skills/run/light-pipeline.md`. `/run` reads this file once,
-with one Read, when the task is r2 (multi-part): Step 1b picks r2 (or r3 runs
+with one Read, when the task is r2 (multi-part): the routes file picks r2 (or r3 runs
 as r2), a plain run reclassifies to r2, or `--resume` (or `stage N of <task>`)
 continues a staged run. It also holds the run_hard switch procedure. Step
 numbers, phase markers, artifacts and the "as written" rules of SKILL.md apply
 unchanged here.*
 
 An r2 task runs, in order: Step 2, Step 3, Step 4 and Step 4b below; then, per
-stage, the implementer tier guard and Steps 5, 6, 7 (r1 stages only) and 8 in
-SKILL.md. "Steps 5–8" means that same sequence.
+stage, the implementer tier guard and Steps 5, 6, 7 (r1 stages only; Step 7
+is in the routes file) and 8 in SKILL.md. "Steps 5–8" means that same sequence.
 
 ## Resuming a staged run
 
@@ -23,7 +23,7 @@ that stage whose output under `stage-N/` is missing.
 ## Switch to run_hard
 
 Used by Escalation in SKILL.md once a trigger fires and switching is allowed,
-and by Step 1b for an interactive r3 task (trigger `design`).
+and by the routes file for an interactive r3 task (trigger `design`).
 
 1. **Ask once** (interactive, one AskUserQuestion): "Switch to run_hard"
    (recommended; keeps the brief, context pack and diff), "Continue as is"
@@ -76,7 +76,7 @@ if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow
 ## Step 3 — Frame (inline)
 
 Marker: `frame`, unless a plain run already logged it before reclassifying to r2.
-Step 1b already wrote `.workflow_artifacts/<task>/brief.md`: the request
+The routes file already wrote `.workflow_artifacts/<task>/brief.md`: the request
 and `## Scope` with the r2 signal. Do not restate the request
 or ask about it again; record any further assumption you make under
 `## Assumptions`. Go on to Step 4 and then Step 4b.

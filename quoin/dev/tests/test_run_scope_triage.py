@@ -21,6 +21,7 @@ RUN_DIR = QUOIN / "adapters" / "claude" / "skills" / "run"
 SKILL = (RUN_DIR / "SKILL.md").read_text(encoding="utf-8")
 LIGHT = (RUN_DIR / "light-pipeline.md").read_text(encoding="utf-8")
 REF = (RUN_DIR / "reference.md").read_text(encoding="utf-8")
+ROUTES = (RUN_DIR / "routes.md").read_text(encoding="utf-8")
 TAGS = "## Step 0 — Tags and resume"
 SCOPE = "## Step 1b — Scope triage (inline)"
 INTENT = (QUOIN / "core" / "skills" / "run.md").read_text(encoding="utf-8")
@@ -97,29 +98,50 @@ def test_classes_are_checked_from_the_top_and_default_to_r0():
 
 def test_each_class_adds_exactly_one_thing():
     scope = _section(SCOPE)
-    assert "Each class adds exactly one thing" in scope
-    assert "**r0** → the plain route below" in scope
-    assert "**r1** → the same plus the Step 7 review" in scope
-    assert "**r2** → a short stage plan" in scope
-    plain = _section("## Plain route (r0, r1)")
-    assert "No discovery and no context pack; r0 also has no review" in plain
-    assert "**Review** (r1 only). Step 7." in plain
-    assert "r1 only" in SKILL[SKILL.index("## Step 7 — Review"):].splitlines()[0]
+    assert "**r0** → the plain route below: no brief" in scope
+    assert "**r1, r2, r3** → read the routes file" in scope
+    brief = _section("## Brief", ROUTES)
+    assert "Each class adds exactly one thing" in brief
+    assert "**r1** → the plain route plus the Step 7 review" in brief
+    assert "**r2** → a short stage plan" in brief
+    plain = _section("## Plain route (r0)")
+    assert "No discovery, context pack, brief or review" in plain
+    assert "r1 only" in ROUTES[ROUTES.index("## Step 7 — Review"):].splitlines()[0]
+    assert "## Step 7" not in SKILL
 
 
-def test_skipped_steps_still_log_markers_per_class():
+def test_r0_reads_no_other_file_and_logs_no_skipped_markers():
     from quoin.core.scripts.run_phase import PHASES
     scope = _section(SCOPE)
-    r0 = scope[scope.index("**r0** →"):scope.index("**r1** →")]
-    r1 = scope[scope.index("**r1** →"):scope.index("**r2** →")]
-    for phase in ("discover", "context", "review", "frame"):
-        assert phase in PHASES and "`%s`" % phase in r0
-    assert "`review`" not in r1 and "`discover`" in r1 and "`context`" in r1
-    assert "In one Bash call" in scope and "with a heredoc" in scope
+    assert "no skipped-step markers, no other file" in scope
+    plain = _section("## Plain route (r0)")
+    assert "routes file" not in plain.split("**Reclassify upward**")[0]
+    brief = _section("## Brief", ROUTES)
+    r1 = brief[brief.index("**r1** →"):brief.index("**r2** →")]
+    for phase in ("discover", "context", "frame"):
+        assert phase in PHASES and "`%s`" % phase in r1
+    assert "`review`" not in r1
+    assert "In one Bash call" in brief and "with a heredoc" in brief
+    assert "An r0 run never reads it" in ROUTES
+
+
+def test_r0_records_its_commit_in_a_brief_written_at_commit_time(tmp_path):
+    commit = _section("## Step 8 — Commit (inline)")
+    assert "on r0 written as a new brief" in commit
+    assert "`## Scope` with `route: r0`" in commit and "`branch:` and `commit:`" in commit
+    assert "still records `## Verification`" in commit and "`## Request`" in commit
+    # An r0 run that escalates keeps its request for run_hard.
+    assert "When one fires on r0, first write the brief" in _section("## Escalation", REF)
+    task = tmp_path / "task"
+    task.mkdir()
+    (task / "brief.md").write_text(
+        "# task\n## Scope\nroute: r0\n## Verification\npytest: pass\n"
+        "## Commit\nbranch: b\ncommit: abc\n", encoding="utf-8")
+    assert brief_route(tmp_path) == "r0"
 
 
 def test_r3_starts_the_heavy_pipeline_only_on_opt_in():
-    scope = _section(SCOPE)
+    scope = _section("## Brief", ROUTES)
     r3 = scope[scope.index("**r3** →"):]
     assert "explicit opt-in only" in r3
     assert "switch procedure" in r3 and "trigger `design`" in r3
@@ -136,22 +158,22 @@ def test_r3_starts_the_heavy_pipeline_only_on_opt_in():
 
 
 def _scope_block():
-    block = re.search(r"```markdown\n[^`]*?(## Scope\n.+?)```", _raw_section(SCOPE), re.S)
-    assert block, "Step 1b has no Scope block"
+    block = re.search(r"```markdown\n[^`]*?(## Scope\n.+?)```", _raw_section("## Brief", ROUTES), re.S)
+    assert block, "the routes file has no Scope block"
     return block.group(1)
 
 
 def test_scope_block_records_class_and_signal():
     lines = _scope_block().splitlines()
-    assert lines[1] == "route: <r0 | r1 | r2 | r3>"
-    assert lines[2].startswith("signal: ") and '"none" for r0' in lines[2]
+    assert lines[1] == "route: <r1 | r2 | r3>"
+    assert lines[2].startswith("signal: ") and '"forced by r1:"' in lines[2]
 
 
 @pytest.mark.parametrize("cls", ["r0", "r1", "r2", "r3"])
 def test_harness_reads_the_class_from_the_brief_format_run_writes(tmp_path, cls):
     task = tmp_path / "task"
     task.mkdir()
-    text = "# task\n## Request\nfix it\n" + _scope_block().replace("<r0 | r1 | r2 | r3>", cls)
+    text = "# task\n## Request\nfix it\n" + _scope_block().replace("<r1 | r2 | r3>", cls)
     (task / "brief.md").write_text(text, encoding="utf-8")
     assert brief_route(tmp_path) == cls
 
@@ -186,26 +208,30 @@ def test_run_hard_handoff_drops_class_tags():
 
 def test_scope_triage_sits_between_setup_and_the_routes():
     order = [SKILL.index(h) for h in ("## Step 0 — Route", "## Step 1 — Setup", SCOPE,
-                                      "## Plain route (r0, r1)", "## Staged route (r2")]
+                                      "## Plain route (r0)", "## Implementer tier guard")]
     assert order == sorted(order)
     assert "## Step 1b — Size" not in SKILL and "## Direct route" not in SKILL
 
 
 def test_plain_route_keeps_tests_brief_and_commit():
-    plain = _section("## Plain route (r0, r1)")
-    assert "implementer tier guard still applies" in plain
+    plain = _section("## Plain route (r0)")
+    assert "implementer tier guard still" in plain
     assert "**Verify.** Step 6" in plain and "**Commit.** Step 8" in plain
-    assert "`## Verification`" in plain and "still appends `## Verification`" in plain
+    r1 = _section("## r1 — plain route plus review", ROUTES)
+    assert "`## Verification` and `## Commit` to this brief" in r1
     assert SKILL.index("## Step 1 — Setup") < SKILL.index("## Plain route")
 
 
 def test_plain_route_reclassifies_upward_only_and_keeps_the_work():
-    plain = _section("## Plain route (r0, r1)")
+    plain = _section("## Plain route (r0)")
     assert "never down; not when a tag forced the class" in plain
-    assert "r0 → r1: the diff touches an r1 signal" in plain
-    assert "run Step 7 before committing" in plain
-    assert 'reference.md "Reclassify to r2"' in plain
+    assert '"Reclassify upward"' in plain
     assert "Two failed verifications are an Escalation trigger" in plain
+    up = _section("## r1 — plain route plus review", ROUTES)
+    assert "never down; not when a tag forced the class" in up
+    assert "r0 → r1: the diff touches an r1 signal" in up
+    assert "run Step 7 before committing" in up
+    assert 'reference.md "Reclassify to r2"' in up
     move = _section("## Reclassify to r2", REF)
     assert "no reset, no stash" in move and "escalated: <r0 | r1> → r2" in move
 
