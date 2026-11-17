@@ -263,12 +263,13 @@ and fix the issue directly. The harness now starts the quoin arm with the slash
 command `/run --autonomous` and a line saying the task must go through `/run`
 (a pilot with the bare slash command still saw a session call an easy issue a
 one-line fix and skip the skill). The line defers to `/run`'s own routing: its
-Size step may send a small, well-localized fix down the direct route
-(implement, verify, commit, with no context pack or review subagent), and that
-route is part of what the arm measures. A direct-route row writes a minimal
-`brief.md` with `route: direct`, so it is a valid pipeline row. `QUOIN_BENCH_QUOIN_ROUTE=hard`
+scope triage sends most tasks down the plain r0 route (implement, verify,
+commit, with no context pack or review subagent), adds a review for r1 and a
+stage plan for r2, and that routing is part of what the arm measures. Every
+row writes a `brief.md` whose `route: r0` to `r3` line the reports group by,
+so it is a valid pipeline row. `QUOIN_BENCH_QUOIN_ROUTE=hard`
 restores the earlier `/run --autonomous hard: small:` prompt, which runs the
-heavy pipeline's single-pass path; `small:` has no effect on the light route.
+heavy pipeline's single-pass path; `small:` has no effect in light `/run`.
 `QUOIN_BENCH_QUOIN_ROUTE=lean` keeps the light prompt and sets
 `QUOIN_RUN_PROFILE=bench-lean` in the quoin arm's session environment only
 (the plain arm never sees it). That benchmark-only profile makes `/run` skip its
@@ -280,8 +281,8 @@ rows pass the same pipeline check through `brief.md`. The lean session also gets
 to run `/discover`. `QUOIN_BENCH_QUOIN_ROUTE=memory` sets
 `QUOIN_RUN_PROFILE=bench-memory` instead, which skips only run isolation and
 keeps discovery and the lessons read and append (see "Sequence suite" below).
-`QUOIN_BENCH_QUOIN_ROUTE=r0` forces `/run`'s Direct route with a one-line
-`/run --autonomous direct:` prompt and the same `bench-lean` profile and
+`QUOIN_BENCH_QUOIN_ROUTE=r0` forces `/run`'s plain r0 route with a one-line
+`/run --autonomous r0:` prompt and the same `bench-lean` profile and
 discovery-banner silencing as lean, so every quoin row is a minimal
 implement, verify and commit session; `overhead-audit.md` describes how to
 check its cost against plain.

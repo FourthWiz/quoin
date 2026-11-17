@@ -10,9 +10,9 @@ markers and artifacts of SKILL.md apply unchanged.*
 
 Scan the input before anything else. The task name is the first token that is
 not a flag or tag (`--resume`, `--autonomous`, `[autonomous]`, `[no-redispatch]`,
-`[from-hard]`, `hard:`, `strict:`, `small:`, `parallel:`, `direct:`, `light:`, `no-switch:`, `isolate:` and the like; a leading `[no-redispatch]` is
+`[from-hard]`, `hard:`, `strict:`, `small:`, `parallel:`, `r0:`, `r1:`, `r2:`, `no-switch:`, `isolate:` and the like; a leading `[no-redispatch]` is
 stripped and remembered for the implementer tier guard); when handing off to `run_hard`, always pass the original
-input unchanged apart from removing `hard:`, `direct:` and `light:` (and `isolate:`),
+input unchanged apart from removing `hard:`, `r0:`, `r1:` and `r2:` (and `isolate:`),
 except the Escalation switch, which passes its own input.
 
 1. **`hard:`** or **`strict:`** anywhere in the input → this task wants the full
@@ -27,12 +27,15 @@ except the Escalation switch, which passes its own input.
    stop. Otherwise resume the light run: run Step 1's claim (item 2; it
    returns the task's worktree if it has one), read `.workflow_artifacts/<task>/brief.md`,
    check `git status`/`git log` on the task branch in `WT`, and continue from the first
-   step whose output is missing. A brief whose `## Size` section says
-   `route: direct` resumes on the Direct route instead; a task with no brief,
-   or a brief with `## Request` but no `## Triage`, restarts at Step 1a, and
-   one with `## Triage` but no `## Size` at Step 1b, keeping any diff on its
-   task branch; an older brief with none of these is a light run, and a light or staged run (also
-   **`stage N of <task>`**) first reads the light pipeline file, whose
+   step whose output is missing. The brief's `## Scope` decides the route:
+   `route: r0` or `r1` (or `runs-as: r1`) resumes on the plain route, `r2`
+   (or `runs-as: r2`) on the staged route, and an `r3` with no `runs-as:`
+   line repeats Step 1b's r3 handling. A task with no brief, or a brief with
+   `## Request` but no `## Triage`, restarts at Step 1a, and one with
+   `## Triage` but no `## Scope` at Step 1b, keeping any diff on its task
+   branch. An older brief's `## Size` maps `route: direct` to r0 and
+   `route: light` to r1, or to r2 when `architecture.md` exists. A staged run
+   (also **`stage N of <task>`**) first reads the light pipeline file, whose
    resume section covers staged tasks.
 3. **`--autonomous`** (or an `[autonomous]` sentinel from a parent session) →
    strip it and set `AUTONOMOUS=true`: never ask the user anything; record
@@ -40,10 +43,10 @@ except the Escalation switch, which passes its own input.
 4. **`small:` / `medium:` / `large:` / `fast:` / `max_rounds: N`** → strip them. They
    select heavy-pipeline profiles and have no effect here. If the user wrote
    `large:` interactively, mention in one line that `/run hard:` runs the full
-   pipeline, then continue on the light path.
-5. **`parallel:`** → strip it and set `PARALLEL=true`. It only changes how a
-   staged task runs its stages (Step 4b, "Parallel waves", in the light
-   pipeline file); a single-shape
+   pipeline, then continue in `/run`.
+5. **`parallel:`** → strip it and set `PARALLEL=true`. It only changes how an
+   r2 task runs its stages (Step 4b, "Parallel waves", in the light
+   pipeline file); an r0 or r1
    task ignores it. It combines with `--autonomous` and `--resume`.
 6. **`QUOIN_RUN_PROFILE`** (benchmark only, never a tag):
    `bench-lean` sets `LEAN`, `bench-memory` sets `MEMORY`. Read it from the
@@ -52,13 +55,14 @@ except the Escalation switch, which passes its own input.
    dirty marker (Step 1 items 2 and 4, Step 8 items 3, 4 and 6), and Step 2
    only logs its marker as skipped; `MEMORY` skips only isolation (Step 1
    item 2, Step 8 item 6). All else as written.
-7. **`direct:`** / **`light:`** → recognised only as whitespace-delimited
+7. **`r0:`** / **`r1:`** / **`r2:`** → recognised only as whitespace-delimited
    tokens among the leading flags and tags, before the task text (so
-   `redirect:` or a tag quoted in an issue body never counts). Strip them and
-   remember the override for Step 1b: `direct:` forces the Direct route,
-   `light:` forces the light pipeline (if both appear, `light:` wins). They
-   apply under `--autonomous` too.
-8. **`isolate:`** → recognised the same way as `direct:`/`light:`. Strip it and
+   `hdr0:` or a tag quoted in an issue body never counts). Strip them and
+   remember the override for Step 1b: each forces its class, with signal
+   `forced by <tag>` (if several appear, the highest wins). They apply under
+   `--autonomous` too. A forced class is never reclassified. There is no
+   `r3:` tag: `hard:` is the opt-in to the heavy pipeline.
+8. **`isolate:`** → recognised the same way as `r0:`/`r1:`/`r2:`. Strip it and
    set `ISOLATE=true`: Step 1 works in a worktree even when no other run holds
    the checkout.
 9. **`no-switch:`** → recognised the same way; strip it and set `NO_SWITCH=true`
@@ -68,8 +72,9 @@ except the Escalation switch, which passes its own input.
    `pipeline-switch.md` says `to: light`). Strip it and keep the given task
    name. Step 1 keeps the task branch `run_hard` created (no new branch); the
    note's `evidence:` file is the request: Step 1a skips the triage and points
-   the brief's `## Request` at it, and Step 1b works from it; Step 1b takes the light route. The task never
-   switches again.
+   the brief's `## Request` at it, and Step 1b classifies from it as usual,
+   except that r3 runs as r2 or r1 without asking. The task never switches
+   again.
 
 ## Isolation modes
 
@@ -102,11 +107,11 @@ safety checks.
 
 SKILL.md's guard sent you here because the session is not on Opus
 (`DISPATCH|<tier>`: haiku, sonnet, fable, mythos or unknown; tiers above Opus
-dispatch too). Steps 5–6 and the light route's Step 7 fix pass (light pipeline
-file) always run on **opus**. Everything else (Steps 0–4, the review spawn,
-Step 8 and every user question) stays in this session, so discovery, the
-context pack and the review keep working: never wrap the whole of `/run` in
-one subagent. On the Direct route the guard runs before Direct step 1.
+dispatch too). Steps 5–6 and the Step 7 fix pass always run on **opus**.
+Everything else (Steps 0–4, the review spawn, Step 8 and every user question)
+stays in this session, so discovery, the context pack and the review keep
+working: never wrap the whole of `/run` in one subagent. On the plain route
+the guard runs before its step 1.
 
 When the implementer tier guard dispatches, you write `implement` before the
 spawn and `review-fixes` before sending it the findings; it writes none. (The
@@ -120,8 +125,8 @@ fixes made through that implementer show up as `implement`.)
    implementer sees neither file). It tells the agent to do those two steps, not to commit
    and not to spawn subagents, and to return the files changed, the tests
    added, the verification result (command and pass/fail) and any blocker.
-   On the Direct route it gets the goal, the Size reason and the test command
-   in place of the brief and the context-pack path. It also says, verbatim: "Run every test command in the FOREGROUND with an
+   On the plain route (r0, r1) it gets the brief and the test command, with
+   no context-pack path. It also says, verbatim: "Run every test command in the FOREGROUND with an
    explicit Bash `timeout: 600000`, and pass `--junitxml` (or `--junit-out`
    for affected_tests.py) a path under `.workflow_artifacts/cache/` containing
    the token `impl-<task>-<stamp>`. Never end your turn while a test run
@@ -155,7 +160,13 @@ fixes made through that implementer show up as `implement`.)
    must not end its turn on a background waiter: run the same loop in the
    FOREGROUND with Bash `timeout: 600000`, with `54` in place of `360`, and
    repeat the call until it prints `WAITER|exited` or an hour has passed.
-3. **Fail-open** (only when the Agent spawn itself errors). Classify the
+3. **Review fixes.** After the Step 7 review, send the blockers and
+   should-fixes to the same implementer with SendMessage (load it through
+   ToolSearch if it is deferred). If SendMessage fails, spawn one more Opus
+   Agent with the brief, the findings and the diff instead; if that spawn
+   errors, apply the fail-open item. The implementer applies the fixes,
+   re-runs Step 6 once and reports back. There is still only one review.
+4. **Fail-open** (only when the Agent spawn itself errors). Classify the
    error in this order:
    - **Autonomous-class** (`AUTONOMOUS`): never ask. Print
      `[quoin-run-impl-autonomous: opus implementer dispatch failed; implementing inline at current tier]`,
@@ -191,30 +202,23 @@ For the discovery-dirty marker (Step 8 item 4), the full detail: check the commi
 when the task or stage made more than one commit. Dependency manifests are
 `pyproject.toml`, `setup.py`, `requirements*.txt`, `package.json`, `go.mod`,
 `Cargo.toml`, `pom.xml`, `build.gradle*`, `Gemfile` and the like. The next
-light run's Step 2 (light pipeline file) refreshes discovery and `/discover`
+r2 run's Step 2 (light pipeline file) refreshes discovery and `/discover`
 removes the marker. Internal edits, tests and docs alone do not count.
 
-## Direct route escalation
+## Reclassify to r2
 
-Escalate to light (one way, never back) when the diff outgrows one module
-plus its tests, verification fails twice, or the change turns out to need an
-excluded category (that last trigger does not apply when `direct:` forced the
-route). Two failed verifications here mean this escalation, not the
-switch to `run_hard` under Escalation, which applies only to failures on
-the light pipeline. Keep the working tree as it is: no reset, no stash. Read
-the light pipeline file first (it holds the Step 3 brief template), then
-write the brief in one Edit as the full Step 3 brief: Read it and replace its
-`## Size` section with `## Shape` plus a Size section saying `route: light`,
-`reason:` and `escalated: from direct — <trigger>`, keeping the Step 1a
-sections. Then continue at
-Step 2. Steps 5–7 build on the existing
-diff (through the same Opus implementer, via SendMessage, when the guard
-dispatched) and the review covers all of it. The Direct route never switches
-to `run_hard` directly.
+A plain run (r0 or r1, not forced by a tag) moves to r2, one way, when the
+change turns out to span repositories or to need parts that land in order.
+Keep the working tree as it is: no reset, no stash. Read the light pipeline
+file, then in one Edit set the brief's `## Scope` to `route: r2` with a line
+`escalated: <r0 | r1> → r2 — <signal>`, keeping the Step 1a sections, and
+continue at its Step 2. The stages build on the existing diff (through the
+same Opus implementer, via SendMessage, when the guard dispatched); the first
+stage's review covers it if that stage is r1.
 
 ## Escalation
 
-The task is bigger than the light pipeline when:
+The task is bigger than `/run` when:
 
 - the review returns a blocker that is a design problem, not a local fix;
 - two implementation attempts fail verification for reasons you do not understand;
@@ -222,7 +226,7 @@ The task is bigger than the light pipeline when:
   (a data migration strategy, a new public API with several consumers).
 
 A task that spans several repos or needs a few stages is not by itself a reason
-to escalate: the staged path in Step 4b (light pipeline file) handles it.
+to escalate: r2's Step 4b (light pipeline file) handles it.
 
 When one fires, switch to `run_hard` through the switch procedure in the light
 pipeline file: it asks once (interactive), keeps the brief, context

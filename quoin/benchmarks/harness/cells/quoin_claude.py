@@ -13,7 +13,7 @@ Key differences from simple_claude.py:
   3. Starts the prompt with the slash command `/run --autonomous` (or
      `/run --autonomous hard: small:` under QUOIN_BENCH_QUOIN_ROUTE=hard) and a
      line saying the task must go through /run and follow its own routing
-     (direct route included), so the CLI expands the run skill itself (a prose
+     (every scope class included), so the CLI expands the run skill itself (a prose
      request to "use /run" left a session free to skip the pipeline, and the
      bare slash command still let a session decide an easy issue was too small
      for it and fix it outside the skill). `/run`'s
@@ -62,6 +62,7 @@ from ..config import (
     quoin_route_or_default, run_profile_for_route,
 )
 from ..sources import REPO_TASK_SOURCES
+from ..tiered_report import LEGACY_ROUTES
 from ..cost import estimate_session_cost, load_pricing
 from .simple_claude import (
     _MAX_RETAINED_EVENTS,
@@ -91,19 +92,19 @@ ENV_BENCHMARK_RUN = "QUOIN_BENCHMARK_RUN"
 
 # The slash command alone still let a session judge an easy issue too small for
 # /run and fix it outside the skill, so the arm also states that /run is the
-# thing under test. /run sizes the task itself and may take its direct route
-# for a small fix; that route is part of the workflow being measured, so the
-# prefix defers to /run's own routing rather than forcing every step. Setting
+# thing under test. /run's scope triage picks the class itself and usually
+# takes the plain r0 route; that routing is part of the workflow being
+# measured, so the prefix defers to it rather than forcing every step. Setting
 # QUOIN_BENCH_QUOIN_ROUTE=hard sends the arm through the heavy pipeline with
 # `small:` (one plan pass, implement, review), as the earlier suites did, and
 # =lean and =memory keep this prompt but set QUOIN_RUN_PROFILE=bench-lean or
-# bench-memory for the session. =r0 forces the Direct route with `direct:` and
+# bench-memory for the session. =r0 forces the plain r0 route with `r0:` and
 # a one-line prefix, so the arm measures /run's minimal path and nothing the
 # prompt itself adds.
 QUOIN_RUN_PREFIX = (
     "/run --autonomous "
     "This session benchmarks the quoin workflow, so the task must go through /run: "
-    "follow /run's own routing, including its Size step and the direct route when "
+    "follow /run's own routing, including its scope triage and the plain route when "
     "it picks that route, and do not fix the issue outside /run.\n\n"
 )
 QUOIN_HARD_RUN_PREFIX = (
@@ -112,7 +113,7 @@ QUOIN_HARD_RUN_PREFIX = (
     "run its phases (plan, implement, review) even if the fix looks trivial, and "
     "do not fix the issue directly outside the pipeline.\n\n"
 )
-QUOIN_R0_RUN_PREFIX = "/run --autonomous direct: Fix this issue through /run.\n\n"
+QUOIN_R0_RUN_PREFIX = "/run --autonomous r0: Fix this issue through /run.\n\n"
 ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
 
 
@@ -243,7 +244,7 @@ PHASE_FILE_PATTERNS = (
     "review-*.md", "cost-ledger.md", "brief.md", "context.md", "review.md",
 )
 _ROUTE_LINE = re.compile(r"^\s*route\s*:\s*(\w+)", re.IGNORECASE | re.MULTILINE)
-BRIEF_ROUTES = ("direct", "light")
+BRIEF_ROUTES = ("r0", "r1", "r2", "r3")
 _PROFILE_LINE = re.compile(r"Task profile:\**\s*\**\s*([A-Za-z]+)", re.IGNORECASE)
 
 
@@ -255,21 +256,30 @@ def _read_text(path: Path) -> str:
 
 
 def brief_route(dest: Path) -> str:
-    """The light-/run route a captured task recorded in its brief.
+    """The scope class a captured light-/run task recorded in its brief.
 
-    /run writes `route: direct` or `route: light` in the brief's Size section;
-    a brief without that line (an older run, or an escalated direct run whose
-    line now says light) is a light run. The task-root brief is preferred over
-    a staged task's stage briefs.
+    /run writes `route: r0` to `route: r3` in the brief's Scope section. An
+    older brief's `route: direct` maps to r0, and `route: light` (or a brief
+    with no route line) to r1, or to r2 when the task left an
+    architecture.md, as /run's resume does. The task-root brief is preferred
+    over a staged task's stage briefs.
     """
     briefs = sorted(dest.rglob("brief.md"), key=lambda p: (len(p.parts), str(p)))
     for brief in briefs:
         # A stray `route:` line elsewhere in the brief (an issue about URL
-        # routing) must not hide the Size section's line.
+        # routing) must not hide the Scope section's line.
         for match in _ROUTE_LINE.finditer(_read_text(brief)):
-            if match.group(1).lower() in BRIEF_ROUTES:
-                return match.group(1).lower()
-    return "light"
+            value = match.group(1).lower()
+            if value == "light":
+                return _light_class(dest)
+            value = LEGACY_ROUTES.get(value, value)
+            if value in BRIEF_ROUTES:
+                return value
+    return _light_class(dest)
+
+
+def _light_class(dest: Path) -> str:
+    return "r2" if any(dest.rglob("architecture.md")) else "r1"
 
 
 def _pipeline_diagnostics(dest: Path) -> dict:
@@ -341,7 +351,7 @@ def _capture_workflow_artifacts(
         "artifacts_path": str | None,
         "phase_files": [str],
         "pipeline_started": bool,
-        "workflow_route": {"route": "direct" | "light" | "fast" | "full" | "unknown",
+        "workflow_route": {"route": "r0".."r3" | "fast" | "full" | "unknown",
                            "profile": str | None},
       }
     """
@@ -366,7 +376,7 @@ def _capture_workflow_artifacts(
         return {**empty, "copy_failed": True}
 
     # Validate: look for architecture.md and a plan in any subfolder. Light /run
-    # (direct route included) plans in its brief instead of current-plan.md.
+    # (every scope class) plans in its brief instead of current-plan.md.
     has_arch = any(dest.rglob("architecture.md"))
     has_plan = any(dest.rglob("current-plan.md")) or any(dest.rglob("brief.md"))
 

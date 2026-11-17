@@ -40,7 +40,7 @@ def test_quoin_prompt_is_the_run_slash_command_plus_the_base_prompt(tmp_path):
     assert argv[-1] == quoin_claude.QUOIN_RUN_PREFIX + base
     assert argv[-1].startswith("/run --autonomous This session")
     assert "follow /run's own routing" in argv[-1]
-    assert "direct route" in argv[-1]
+    assert "scope triage" in argv[-1] and "plain route" in argv[-1]
     assert "do not fix the issue outside /run" in argv[-1]
     assert "even if the fix looks trivial" not in argv[-1]
     assert argv[-1].endswith(base)
@@ -63,10 +63,10 @@ def test_route_env_selects_heavy_pipeline_prefix(monkeypatch):
     assert quoin_claude._run_prefix().startswith("/run --autonomous hard: small: ")
 
 
-def test_r0_route_forces_the_direct_route_with_a_short_prompt(monkeypatch):
+def test_r0_route_forces_the_plain_r0_route_with_a_short_prompt(monkeypatch):
     monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, "r0")
     assert quoin_claude._run_prefix() == quoin_claude.QUOIN_R0_RUN_PREFIX
-    assert quoin_claude._run_prefix().startswith("/run --autonomous direct: ")
+    assert quoin_claude._run_prefix().startswith("/run --autonomous r0: ")
     assert len(quoin_claude.QUOIN_R0_RUN_PREFIX) < len(quoin_claude.QUOIN_RUN_PREFIX) / 3
     # Outside the paired sandbox the cell sets the same profile and banner switch.
     assert quoin_claude._route_session_env() == {
@@ -88,13 +88,13 @@ def test_lean_route_keeps_light_prompt_and_rejects_unknown_routes(monkeypatch):
         quoin_route({quoin_claude.ENV_BENCH_ROUTE: "fast"})
 
 
-def test_light_route_detected_from_brief(tmp_path):
+def test_light_run_detected_from_brief(tmp_path):
     task = tmp_path / "fix-thing"
     task.mkdir()
     (task / "brief.md").write_text("# fix-thing\n", encoding="utf-8")
     got = quoin_claude._pipeline_diagnostics(tmp_path)
     assert got["pipeline_started"] is True
-    assert got["workflow_route"]["route"] == "light"
+    assert got["workflow_route"]["route"] == "r1"
 
 
 def test_plain_prompt_is_unchanged(tmp_path):
@@ -153,42 +153,53 @@ def test_orchestrator_ledger_row_alone_marks_the_pipeline_started(tmp_path):
     assert got["workflow_route"]["route"] == "unknown"
 
 
-def test_light_brief_counts_as_the_plan(tmp_path):
+def test_brief_without_a_route_line_counts_as_the_plan(tmp_path):
     got = _capture(tmp_path, {"task/brief.md": "# task\n## Goal\nfix it\n"})
     assert got["has_current_plan_md"] is True
     assert got["pipeline_started"] is True
-    assert got["workflow_route"]["route"] == "light"
+    assert got["workflow_route"]["route"] == "r1"
 
 
-def test_direct_route_brief_is_the_direct_route_and_a_valid_plan(tmp_path):
+def test_r0_brief_is_the_r0_route_and_a_valid_plan(tmp_path):
     got = _capture(tmp_path, {"task/brief.md": (
-        "# task\n## Goal\nfix it\n## Size\nroute: direct\nreason: one-line fix in one module\n"
+        "# task\n## Request\nfix it\n## Scope\nroute: r0\nsignal: none\n"
         "## Verification\npytest tests/test_x.py — pass\n"
     )})
     assert got["has_current_plan_md"] is True
-    assert got["workflow_route"] == {"route": "direct", "profile": None}
+    assert got["workflow_route"] == {"route": "r0", "profile": None}
 
 
-def test_stray_route_line_before_the_size_section_is_ignored(tmp_path):
+def test_stray_route_line_before_the_scope_section_is_ignored(tmp_path):
     got = _capture(tmp_path, {"task/brief.md": (
-        "# task\n## Goal\nfix the resolver\nroute: api_view\n## Size\nroute: direct\nreason: x\n"
+        "# task\n## Request\nfix the resolver\nroute: api_view\n## Scope\nroute: r1\nsignal: public API\n"
     )})
-    assert got["workflow_route"]["route"] == "direct"
+    assert got["workflow_route"]["route"] == "r1"
 
 
-def test_escalated_direct_brief_reads_as_light(tmp_path):
+def test_reclassified_brief_reads_as_its_final_class(tmp_path):
     got = _capture(tmp_path, {"task/brief.md": (
-        "# task\n## Size\nroute: light\nescalated: from direct — diff outgrew one module\n"
+        "# task\n## Scope\nroute: r1\nsignal: none\nescalated: r0 → r1 — touches auth\n"
     )})
-    assert got["workflow_route"]["route"] == "light"
+    assert got["workflow_route"]["route"] == "r1"
+
+
+def test_legacy_size_routes_map_to_their_class(tmp_path):
+    direct = _capture(tmp_path / "d", {"task/brief.md": "# task\n## Size\nroute: direct\nreason: x\n"})
+    light = _capture(tmp_path / "l", {"task/brief.md": "# task\n## Size\nroute: light\nreason: x\n"})
+    assert direct["workflow_route"]["route"] == "r0"
+    assert light["workflow_route"]["route"] == "r1"
+    staged = _capture(tmp_path / "s", {"task/brief.md": "# task\n## Size\nroute: light\nreason: x\n",
+                                       "task/architecture.md": "# task — stages\n",
+                                       "task/stage-1/brief.md": "# stage\nroute: r0\n"})
+    assert staged["workflow_route"]["route"] == "r2"
 
 
 def test_task_root_brief_route_wins_over_stage_briefs(tmp_path):
     got = _capture(tmp_path, {
-        "task/brief.md": "# task\n## Size\nroute: light\n",
-        "task/stage-1/brief.md": "# stage\nroute: direct\n",
+        "task/brief.md": "# task\n## Scope\nroute: r2\n",
+        "task/stage-1/brief.md": "# stage\nroute: r0\n",
     })
-    assert got["workflow_route"]["route"] == "light"
+    assert got["workflow_route"]["route"] == "r2"
 
 
 def test_fast_stub_plan_is_the_fast_route(tmp_path):

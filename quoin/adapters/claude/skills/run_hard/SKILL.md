@@ -35,7 +35,7 @@ to you. A `no-switch:` tag (strip it), or `QUOIN_RUN_AUTO_SWITCH=0` (read it wit
 sets `NO_SWITCH=true`. Under `FROM_LIGHT`:
 - Keep the light task name and folder; do not derive a new name. Keep an existing
   `cost-ledger.md` and append to it rather than recreating it.
-- Classify the profile from the light `brief.md` (its triaged request, Shape) plus the
+- Classify the profile from the light `brief.md` (its triaged request, Scope) plus the
   note's `reason:`, never as Small (the task already outgrew the light path): a Small result
   becomes Medium. No light hand-off check runs in Phase 1.6 (a task switches at most once).
 - Check git state: skip items 2–4. The partial diff stays in the working tree and the branch

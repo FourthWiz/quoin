@@ -233,8 +233,7 @@ After installing the Claude adapter:
 
 ```text
 /init_workflow   one-time project bootstrap
-/run <task>      triage, size, brief, context pack, implement, one review, local commit
-                 (small fixes: implement, verify, commit)
+/run <task>      prompt and scope triage, implement, verify, local commit (+review or stages when needed)
 /pr              push the branch and open a pull request
 ```
 
@@ -286,7 +285,7 @@ workflow intent through natural-language phase requests and repo-local docs.
 
 | Command | Model | What it does |
 |---------|-------|-------------|
-| `/run` | Opus | Default light pipeline: prompt triage, size, brief, context pack, implement on Opus, one review, local commit; small localized fixes take a direct route (implement, verify, commit) |
+| `/run` | Opus | Default pipeline: prompt triage, then scope triage picks one class: r0 plain (implement on Opus, verify, local commit), r1 risky (+ one review), r2 multi-part (+ a short stage plan), r3 needs design (heavy pipeline, opt-in only) |
 | `/run_hard` | Opus | Full heavy pipeline orchestrator (`/run hard:`); pauses at gates |
 | `/cost_snapshot` | Haiku | Live Claude cost: today, lifetime, and per-task breakdown |
 | `/triage` | Haiku | Routes the request to the right workflow phase |

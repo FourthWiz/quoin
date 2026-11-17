@@ -347,7 +347,7 @@ def test_memory_route_is_accepted():
 def test_run_skill_defines_the_memory_profile():
     # The full tag list lives in reference.md, read on demand next to SKILL.md.
     text = RUN_SKILL.read_text(encoding="utf-8") + RUN_SKILL.with_name("reference.md").read_text(encoding="utf-8")
-    item = text[text.index("6. **`QUOIN_RUN_PROFILE`**"):text.index("7. **`direct:`**")]
+    item = text[text.index("6. **`QUOIN_RUN_PROFILE`**"):text.index("7. **`r0:`**")]
     assert "`bench-lean` sets `LEAN`" in item and "`bench-memory` sets `MEMORY`" in item
     flat = " ".join(item.split())
     assert "`MEMORY` skips only isolation (Step 1 item 2, Step 8 item 6)" in flat

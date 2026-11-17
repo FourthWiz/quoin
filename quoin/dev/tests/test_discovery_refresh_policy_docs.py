@@ -97,7 +97,7 @@ def test_discovery_dirty_marker_contract() -> None:
     step8 = run.split("## Step 8 — Commit", 1)[1].split("## Escalation", 1)[0]
     # Step 8 points at reference.md for the lessons procedure.
     ref = (run_dir / "reference.md").read_text(encoding="utf-8")
-    lessons = ref.split("## Lessons", 1)[1].split("## Direct route escalation", 1)[0]
+    lessons = ref.split("## Lessons", 1)[1].split("## Reclassify to r2", 1)[0]
     assert "discovery-dirty" in step2
     assert "discovery-dirty" in step8
     assert '"Lessons"' in step8

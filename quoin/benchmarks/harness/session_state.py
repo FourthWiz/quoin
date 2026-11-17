@@ -160,8 +160,8 @@ def pipeline_validity(cell: str, metrics: dict) -> "tuple[bool, Optional[str]]":
     """Whether a quoin row is evidence about the pipeline.
 
     A quoin session that ran but left no plan on disk (a heavy-route
-    current-plan.md, or a brief.md from light /run on either its light or
-    direct route) did not run the pipeline, so it must not count as a quoin
+    current-plan.md, or a brief.md from light /run in any scope class) did
+    not run the pipeline, so it must not count as a quoin
     result. Rows that never ran a session or
     already ended in an error keep their own reason.
     """

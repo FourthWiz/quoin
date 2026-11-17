@@ -2,17 +2,17 @@
 
 *Reference for `/run`, deployed as
 `__QUOIN_HOME__/skills/run/light-pipeline.md`. `/run` reads this file once,
-with one Read, when the task takes the light route: Step 1b picks light, the
-Direct route escalates, or `--resume` (or `stage N of <task>`) continues a
-light or staged run. Step numbers, phase markers, artifacts and the "as
-written" rules of SKILL.md apply unchanged here.*
+with one Read, when the task is r2 (multi-part): Step 1b picks r2 (or r3 runs
+as r2), a plain run reclassifies to r2, or `--resume` (or `stage N of <task>`)
+continues a staged run. It also holds the run_hard switch procedure. Step
+numbers, phase markers, artifacts and the "as written" rules of SKILL.md apply
+unchanged here.*
 
-The light route runs, in order: Step 2, Step 3, Step 4 and (staged tasks)
-Step 4b below; then the implementer tier guard and Steps 5 and 6 in SKILL.md;
-then Step 7 below; then Step 8 in SKILL.md. "Steps 5–8" means that same
-sequence.
+An r2 task runs, in order: Step 2, Step 3, Step 4 and Step 4b below; then, per
+stage, the implementer tier guard and Steps 5, 6, 7 (r1 stages only) and 8 in
+SKILL.md. "Steps 5–8" means that same sequence.
 
-## Resuming a light or staged run
+## Resuming a staged run
 
 Resume reads the brief (Step 0) and continues from the first step whose output
 is missing. If `.workflow_artifacts/<task>/architecture.md` exists, the task is
@@ -22,21 +22,25 @@ that stage whose output under `stage-N/` is missing.
 
 ## Switch to run_hard
 
-Used by Escalation in SKILL.md once a trigger fires and switching is allowed.
+Used by Escalation in SKILL.md once a trigger fires and switching is allowed,
+and by Step 1b for an interactive r3 task (trigger `design`).
 
 1. **Ask once** (interactive, one AskUserQuestion): "Switch to run_hard"
    (recommended; keeps the brief, context pack and diff), "Continue as is"
-   (stay on the light pipeline and record the choice under Assumptions; failing
+   (stay in `/run` and record the choice under Assumptions; failing
    code is still never committed, so a verification trigger ends with a report
-   instead) or "Stop" (the Escalation stop). Under `AUTONOMOUS`, switch without
-   asking and add the trigger and reason under Assumptions in the brief.
+   instead; for `design`, add `runs-as: r2` or `runs-as: r1` to `## Scope` and
+   go on as that class) or "Stop" (the
+   Escalation stop). Under `AUTONOMOUS`, switch without asking and add the
+   trigger and reason under Assumptions in the brief; trigger `design` never
+   reaches this procedure under `AUTONOMOUS`, since r3 is opt-in only.
 2. **Write `.workflow_artifacts/<task>/pipeline-switch.md`**: lines
    `from: light`, `to: hard`, `trigger: <review-blocker | verification |
-   stages>`, `reason: <one line>`, `mode: <interactive | autonomous>`,
+   stages | design>`, `reason: <one line>`, `mode: <interactive | autonomous>`,
    `worktree: <WT, or none>`, `branch: <task branch>`, and `reuse:` listing
    whichever of `brief.md`, `context.md`, `review.md` exist, and `claim:
    <repo>`. Add
-   `switched: to hard — <trigger>` to the brief's `## Size` section.
+   `switched: to hard — <trigger>` to the brief's `## Scope` section.
 3. **Keep the work.** No reset, stash or commit of the partial diff; stages
    already committed stay. A staged task renames, with
    `python3 __QUOIN_HOME__/scripts/fsops.py mv`, `architecture.md` to
@@ -71,34 +75,11 @@ if [ ! -f .workflow_artifacts/memory/discovery-dirty ] && [ -n "$(find .workflow
 
 ## Step 3 — Frame (inline)
 
-Marker: `frame`. Step 1a already wrote the opening of
-`.workflow_artifacts/<task>/brief.md` (`## Triage`, then the request verbatim
-for C1, or goal, acceptance criteria and constraints for C2 and C3, with
-assumptions and open questions for C3). Append, with a heredoc:
-
-```markdown
-## Shape
-<single | staged> — <one-line reason>
-## Size
-route: light
-reason: <the one-line reason from Step 1b>
-```
-
-Do not restate the request or ask about it again; record any further
-assumption you make under `## Assumptions`. A `[from-hard]` task's Size
-reason is `handed off from run_hard`.
-
-**Shape.** Decide whether the task is one change or several. Choose **staged**
-when any of these hold:
-
-- the change lands in more than one repository;
-- parts must land in order and each deserves its own review (a schema or API
-  change before its consumers, a shared library before its callers);
-- it clearly will not fit one coherent diff (roughly more than three subsystems
-  or fifteen files).
-
-Otherwise, and whenever you are unsure, choose **single**. A single task goes
-straight on to Step 4; a staged one goes through Step 4 and then Step 4b.
+Marker: `frame`, unless a plain run already logged it before reclassifying to r2.
+Steps 1a and 1b already wrote `.workflow_artifacts/<task>/brief.md`: the
+triaged request and `## Scope` with the r2 signal. Do not restate the request
+or ask about it again; record any further assumption you make under
+`## Assumptions`. Go on to Step 4 and then Step 4b.
 
 ## Step 4 — Context pack (subagent)
 
@@ -120,11 +101,9 @@ symbol tools when available, to read excerpts rather than whole files, and to
 report conclusions, not file dumps. You keep only
 its summary in context.
 
-A single task then goes on to the implementer tier guard and Steps 5 and 6 in
-SKILL.md, then comes back here for Step 7; a staged one goes through Step 4b
-first.
+Then Step 4b.
 
-## Step 4b — Decompose (staged tasks only, inline)
+## Step 4b — Decompose (inline)
 
 Marker: `decompose`. Using the brief and the context pack, write `.workflow_artifacts/<task>/architecture.md`
 (at most about 60 lines). Keep the stage rows in exactly this form, which the
@@ -138,6 +117,7 @@ stage resolver parses:
 1. ⏳ S-01: <short stage name>
    - Repo: <repo path; one repo per stage>
    - Scope: <what this stage changes>
+   - Class: <r0 | r1>
    - Depends on: <none | S-0N>
    - Acceptance: <observable checks for this stage>
 2. ⏳ S-02: <short stage name>
@@ -146,13 +126,15 @@ stage resolver parses:
 - <each contract a later stage relies on: function signature, API shape, schema>
 ```
 
-Two to five stages. Each stage must leave every repo it touches building and
+A stage's class is r1 when its scope hits an r1 signal (SKILL.md Step 1b),
+otherwise r0; only r1 stages get the Step 7 review. Two to five stages. Each stage must leave every repo it touches building and
 passing its tests on its own. If the task needs more than five stages, or a
 stage needs its own design work (a data migration strategy, a new public API
 with several consumers), stop and escalate instead (see Escalation).
 
 **Confirm.** Interactive: show the stage list and ask once (`AskUserQuestion`):
-proceed with these stages, run it as a single change instead, or switch to
+proceed with these stages, run it as a single change instead (the plain
+route, as r1 when an r1 signal holds, else r0; set `## Scope` to match), or switch to
 `run_hard` (the switch procedure above, with no second question). When
 Escalation does not allow switching (`NO_SWITCH`, or `pipeline-switch.md`
 exists), the third option is stop and recommend `/run hard:` instead. Apply edits the user asks for. Under `AUTONOMOUS`, proceed and
@@ -177,7 +159,8 @@ one Opus implementer per stage, even when this session is on Opus.
 3. If the stage's repo or area is not covered by the task's context pack, run
    Step 4 for the stage brief and save it to `stage-N/context.md`.
 4. Steps 5–8 as written (Step 8 item 6, the release, waits for the last
-   stage), with the stage brief in place of the task brief: the
+   stage), with the stage brief in place of the task brief. Step 7 runs only
+   for an r1 stage (an r0 stage logs `review --skipped --stage N`): its
    review gets the stage brief, the `## Interfaces between stages` section and
    the stage's diff only (base = the commit the stage started from), and its
    notes go to `stage-N/review.md`. One commit per stage.
@@ -222,8 +205,8 @@ worktrees then branch from that tree.
      - use the junit token `impl-<task>-S-0N-<stamp>`;
      - commit on the stage branch with a conventional message;
      - return the commit SHA.
-   - Review each stage (Step 7) on `git diff <base>...<stage branch>`, send
-     fixes to that stage's implementer, and write `stage-N/review.md`.
+   - Review each r1 stage (Step 7) on `git diff <base>...<stage branch>`,
+     send fixes to that stage's implementer, and write `stage-N/review.md`.
 4. **Cost rows.** When `QUOIN_INLINE_COST_CAPTURE` is not `0`, append one
    on-behalf row per stage implementer and per stage reviewer to
    `.workflow_artifacts/<task>/cost-ledger.md`. Follow the recipe in
@@ -280,31 +263,3 @@ contexts); only an escalation condition ends the run early. Interactive only:
 if this session's context is getting heavy after a few stages, stop after a
 completed stage and tell the user to continue with `/run --resume <task>` in a
 fresh session; resume starts at the first ⏳ stage.
-
-## Step 7 — Review (subagent, one pass)
-
-Marker: `review` (chain it onto the `git add -N` call below). Spawn one general-purpose review subagent on **opus**. Give it only the brief, the
-full diff of the task against its base, and the verification result. The work is
-not committed yet, so first mark new files with `git add -N <new files>` and pass
-`git diff <base>` (base = the commit the task branch started from); a plain
-`git diff` leaves out new files.
-Do not pass your reasoning or the context pack, so its read is not anchored on
-yours. Ask it for at most about 10 findings, each with `path:line`, severity
-(blocker / should-fix / nit) and a concrete fix. Ask it to check correctness
-against the acceptance criteria (for a C1 brief, the request), missed call sites, security issues, and whether
-the tests are proportionate (flag both missing and excessive tests).
-
-Then log `review-fixes` and, inline on Opus (or through the Opus implementer when the guard
-dispatched), apply blockers and should-fixes, skip nits unless trivial, and
-re-run Step 6 once if code changed. Do not spawn a second review. Write a short
-`.workflow_artifacts/<task>/review.md` listing each finding and what you did with it.
-
-**Review fixes through the implementer.** When the implementer tier guard
-dispatched: after the Step 7 review, send the blockers and
-should-fixes to the same implementer with SendMessage (load it through
-ToolSearch if it is deferred). If SendMessage fails, spawn one more Opus
-Agent with the brief, the findings and the diff instead; if that spawn
-errors, apply the guard's fail-open item. The implementer applies the fixes,
-re-runs Step 6 once and reports back. There is still only one review.
-
-Then Step 8 in SKILL.md.

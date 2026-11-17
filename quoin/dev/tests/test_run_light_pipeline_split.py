@@ -1,11 +1,11 @@
-"""/run keeps the light-pipeline steps in a reference file read only on the light route.
+"""/run keeps the r2 (staged) steps in a reference file read only for r2.
 
 SKILL.md is expanded whole into the first turn of every /run session, so the
-steps only the light route uses (2, 3, 4, 4b with its parallel waves, and 7)
-live in light-pipeline.md next to it. These tests pin the split: where the
-Read is triggered, that the direct route never depends on text that only the
-reference file holds, and that the installer ships, substitutes and prunes
-the file like SKILL.md.
+steps only an r2 task uses (2, 3, 4, 4b with its parallel waves) live in
+light-pipeline.md next to it, while the review (Step 7) that r1 needs stays in
+SKILL.md. These tests pin the split: where the Read is triggered, that the
+plain route (r0, r1) never depends on text that only the reference file holds,
+and that the installer ships, substitutes and prunes the file like SKILL.md.
 """
 from __future__ import annotations
 
@@ -27,9 +27,8 @@ MOVED_HEADINGS = (
     "## Step 3 — Frame",
     "## Step 4 — Context pack",
     "## Step 4b — Decompose",
-    "## Step 7 — Review",
 )
-LIGHT_ONLY_STEPS = {"2", "3", "4", "4b", "7"}
+LIGHT_ONLY_STEPS = {"2", "3", "4", "4b"}
 
 
 def _headings(text):
@@ -79,15 +78,19 @@ def test_moved_steps_live_only_in_the_reference_file():
         assert sum(h.startswith(heading) for h in light_headings) == 1, heading
     assert "**Parallel waves (`PARALLEL` only).**" in LIGHT
     assert "**Parallel waves" not in SKILL
+    # r1 needs the review without reading the r2 file.
+    assert any(h.startswith("## Step 7 — Review") for h in skill_headings)
+    assert not any(h.startswith("## Step 7") for h in light_headings)
 
 
-def test_light_route_triggers_name_the_reference_file():
-    pointer = _section(SKILL, "## Light pipeline")
+def test_r2_triggers_name_the_reference_file():
+    pointer = " ".join(_section(SKILL, "## Staged route").split())
     assert REF_PATH in pointer and "one Read" in pointer
-    for trigger in ("Step 1b picks light", "Direct route\nescalates", "`--resume`", "`stage N of <task>`"):
+    for trigger in ("Step 1b picks r2", "r3 runs as r2", "reclassifies to r2", "`--resume`",
+                    "`stage N of <task>`"):
         assert trigger in pointer, trigger
-    size = _section(SKILL, "## Step 1b — Size")
-    assert re.search(r"Light → read the light pipeline file", size)
+    scope = " ".join(_section(SKILL, "## Step 1b — Scope triage").split())
+    assert "**r2** → a short stage plan: the staged route below" in scope
     # Step 0 sends --resume and the rarer tags to reference.md, whose resume
     # item names the light pipeline file.
     step0 = _section(SKILL, "## Step 0 — Route")
@@ -97,18 +100,19 @@ def test_light_route_triggers_name_the_reference_file():
     assert FILE_NAME.search(resume)
 
 
-def test_escalation_reads_the_reference_file_before_writing_the_light_brief():
-    assert 'reference.md "Direct route escalation"' in " ".join(_section(SKILL, "## Direct route").split())
-    direct = " ".join(_section(REF, "## Direct route escalation").split())
-    read = direct.index("Read the light pipeline file first")
-    assert read < direct.index("write the brief in one Edit as the full Step 3 brief")
+def test_reclassify_to_r2_reads_the_reference_file_before_editing_the_brief():
+    assert 'reference.md "Reclassify to r2"' in " ".join(_section(SKILL, "## Plain route").split())
+    move = " ".join(_section(REF, "## Reclassify to r2").split())
+    assert move.index("Read the light pipeline file") < move.index("in one Edit set the brief's `## Scope`")
+    assert "no reset, no stash" in move and "`route: r2`" in move
 
 
-# SKILL.md sections a direct-route session follows (it never reads the reference file).
+# SKILL.md sections a plain-route (r0, r1) session follows; it never reads the reference file.
 DIRECT_PATH_SECTIONS = (
-    "## Step 0 — Route", "## Step 1 — Setup", "## Step 1b — Size", "## Direct route",
+    "## Step 0 — Route", "## Step 1 — Setup", "## Step 1a — Prompt triage",
+    "## Step 1b — Scope triage", "## Plain route",
     "## Implementer tier guard", "## Step 5 — Implement", "## Step 6 — Verify",
-    "## Step 8 — Commit", "## Escalation", "## Important behaviours",
+    "## Step 7 — Review", "## Step 8 — Commit", "## Escalation", "## Important behaviours",
 )
 # Clauses that only tell the session to skip a light step; they need none of its text.
 SKIP_CLAUSES = re.compile(
@@ -120,39 +124,38 @@ def _light_steps_needed(unit):
     return _steps_cited(SKIP_CLAUSES.sub("", unit)) & LIGHT_ONLY_STEPS
 
 
-def test_direct_route_instructions_never_depend_on_reference_only_content():
-    """A direct-route instruction citing Step 2, 3, 4, 4b or 7 only skips it or defers to the file.
+def test_plain_route_instructions_never_depend_on_reference_only_content():
+    """A plain-route instruction citing Step 2, 3, 4 or 4b only skips it or defers to the file.
 
-    The direct route reads SKILL.md alone, so a unit it follows that cites a
-    light-only step must either just skip it, or be a light-route branch that
-    names the reference file. Inside the Direct route section only the
-    escalation paragraph, which is the hand-over to the light route, may rely on
-    naming the file.
+    The plain route reads SKILL.md alone, so a unit it follows that cites an
+    r2-only step must either just skip it, or be an r2 branch that names the
+    reference file. Inside the Plain route section only the reclassify
+    paragraph, which is the hand-over to r2, may rely on naming the file.
     """
     offenders = []
     for heading in DIRECT_PATH_SECTIONS:
-        in_direct = heading == "## Direct route"
+        in_direct = heading == "## Plain route"
         for unit in _units(_section(SKILL, heading)):
             if not _light_steps_needed(unit):
                 continue
             names_file = bool(FILE_NAME.search(unit))
-            if names_file and (not in_direct or unit.startswith("**Escalate to light**")):
+            if names_file and (not in_direct or unit.startswith("**Reclassify upward**")):
                 continue
             offenders.append(f"{heading}: " + " ".join(unit.split())[:120])
     assert not offenders, offenders
 
 
 def test_dependency_check_is_not_vacuous():
-    direct = _section(SKILL, "## Direct route")
-    # A Direct-route step that runs a light-only step must be caught, with or
+    plain = _section(SKILL, "## Plain route")
+    # A plain-route step that runs an r2-only step must be caught, with or
     # without the file named, and a skip clause must not hide it.
-    for bad in ("4. **Commit.** Run Step 7, then Step 8 as written.",
-                "4. **Commit.** Run Step 7 (light pipeline file), then Step 8.",
-                "Log `review` as `--skipped`; then run Step 7."):
-        unit = next(u for u in _units(direct + "\n\n" + bad) if u == bad)
+    for bad in ("4. **Commit.** Run Step 4, then Step 8 as written.",
+                "4. **Commit.** Run Step 4b (light pipeline file), then Step 8.",
+                "Log `context` as `--skipped`; then run Step 4."):
+        unit = next(u for u in _units(plain + "\n\n" + bad) if u == bad)
         assert _light_steps_needed(unit), bad
-        assert not unit.startswith("**Escalate to light**")
-    assert not _light_steps_needed("skip Steps 2, 3, 4, 4b and 7; run the guard")
+        assert not unit.startswith("**Reclassify upward**")
+    assert not _light_steps_needed("skip Steps 2, 3, 4 and 4b; run the guard")
 
 
 def test_direct_route_sections_cite_no_reference_only_heading_text():
@@ -167,16 +170,17 @@ def test_direct_route_sections_cite_no_reference_only_heading_text():
 def test_reference_file_hands_back_to_skill_md_in_order():
     order = [LIGHT.index(h) for h in MOVED_HEADINGS]
     assert order == sorted(order)
-    handback = LIGHT.index("implementer tier guard and Steps 5 and 6 in\nSKILL.md")
-    assert LIGHT.index("## Step 4 — Context pack") < handback < LIGHT.index("## Step 4b — Decompose")
-    # SKILL.md sends the light route from Step 6 back to Step 7.
+    intro = " ".join(LIGHT[:LIGHT.index("## Resuming")].split())
+    assert "the implementer tier guard and Steps 5, 6, 7 (r1 stages only) and 8 in SKILL.md" in intro
+    # SKILL.md sends r1 tasks and r1 stages from Step 6 on to Step 7.
     step6 = _section(SKILL, "## Step 6 — Verify")
-    assert "Light route: Step 7" in step6 and FILE_NAME.search(step6)
-    assert LIGHT.rstrip().endswith("Then Step 8 in SKILL.md.")
-    # The light route's phase markers moved with their steps, unchanged.
+    assert "Then Step 7 for r1 (and each r1 stage); Step 8 otherwise." in step6
+    # The r2 phase markers live with their steps; the review's stay in SKILL.md.
     for marker in ('"<task>" discover --skipped', 'Marker: `frame`', 'Marker: `context`',
-                   'Marker: `decompose`', 'Marker: `review`', 'log `review-fixes`'):
+                   'Marker: `decompose`'):
         assert marker in LIGHT, marker
+    for marker in ('Marker: `review`', 'log `review-fixes`'):
+        assert marker in SKILL, marker
 
 
 def test_reference_file_uses_the_home_placeholder_for_deployed_paths():
@@ -228,8 +232,8 @@ def test_drift_check_covers_the_reference_file(tmp_path):
     assert any(e.deployed_path.endswith("light-pipeline.md") and e.reason == "stale" for e in drift)
 
 
-def test_prompt_triage_runs_before_size_and_owns_clarification():
-    order = [SKILL.index(h) for h in ("## Step 1 — Setup", "## Step 1a — Prompt triage", "## Step 1b — Size")]
+def test_prompt_triage_runs_before_scope_triage_and_owns_clarification():
+    order = [SKILL.index(h) for h in ("## Step 1 — Setup", "## Step 1a — Prompt triage", "## Step 1b — Scope triage")]
     assert order == sorted(order)
     triage = _section(SKILL, "## Step 1a — Prompt triage")
     assert 'model: "haiku"' in triage

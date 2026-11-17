@@ -592,7 +592,7 @@ def deploy_quickstart(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None
 
 # Optional files deployed next to a skill's SKILL.md when its source folder has
 # them: preamble.md for subagent spawn targets, and reference files a skill
-# reads on demand (run's light-pipeline steps, loaded only on the light route,
+# reads on demand (run's light-pipeline steps, loaded only for r2 and the run_hard switch,
 # run's reference.md, loaded only for rare tags, non-Opus sessions and
 # escalation, and run's prompt-triage.md, read by its triage subagent).
 SKILL_COMPANION_FILES = (

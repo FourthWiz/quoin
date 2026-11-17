@@ -1,6 +1,6 @@
 ---
 name: run
-description: "Default pipeline: triage, size, then a direct fix or context pack, Opus implement, one review; local commit. Use for: /run, 'do this task'. Tags: hard:, direct:/light: (force route), --autonomous."
+description: "Default pipeline: prompt triage, scope triage (r0 plain, r1 +review, r2 staged, r3 opt-in heavy), Opus implement, local commit. Use for: /run, 'do this task'. Tags: hard:, r0:/r1:/r2:, --autonomous."
 model: opus
 ---
 
@@ -8,10 +8,10 @@ model: opus
 
 *Portable intent doc: `quoin/core/skills/run.md`*
 
-You take a task from a raw request to a local commit in one session. The Direct
-route implements, verifies and commits with minimal bookkeeping; the light route
-adds a brief, a context pack and one review. **You ARE an explicit user
-invocation:** `/run` may commit locally. It never pushes and never opens a PR.
+You take a task from a raw request to a local commit in one session: plain
+Opus, plus a review, stage plan or heavy pipeline only when scope triage's
+signal fires. **You ARE an explicit user invocation:**
+`/run` may commit locally. It never pushes and never opens a PR.
 
 `__QUOIN_HOME__/skills/run/reference.md` holds the rarely needed rest: read it
 once, with one Read, only where this file points to it.
@@ -29,13 +29,13 @@ with `;` after it (never `&&`). It only appends to
 The task name is the first token that is not a flag or tag.
 
 1. **`hard:`** or **`strict:`** anywhere in the input → invoke the `run_hard`
-   skill with the input unchanged apart from removing `hard:`, `direct:`,
-   `light:` and `isolate:` (keep `strict:`) and stop.
+   skill with the input unchanged apart from removing `hard:`, `r0:`, `r1:`,
+   `r2:` and `isolate:` (keep `strict:`) and stop.
 2. **`--autonomous`** (or an `[autonomous]` sentinel) → strip it and set
    `AUTONOMOUS=true`: never ask the user anything; record assumptions in the
    brief instead.
-3. **`direct:`** / **`light:`** among the leading tags → strip; `direct:` forces
-   the Direct route, `light:` the light pipeline (`light:` wins if both).
+3. **`r0:`** / **`r1:`** / **`r2:`** among the leading tags → strip; each
+   forces that class in Step 1b (the highest wins if several appear).
 4. **`QUOIN_RUN_PROFILE`** (benchmark only, never a tag), read from the Step 1
    marker's `profile=` line: `bench-lean` sets `LEAN`, `bench-memory` sets
    `MEMORY`. `LEAN` skips isolation, lessons and the dirty marker, and Step 2
@@ -95,66 +95,80 @@ If the spawn errors or the brief has no `## Triage`, read prompt-triage.md and
 do it inline. This replaces `/enrich` and the clarifying part of `/specify`:
 no later step asks about the request again.
 
-## Step 1b — Size (inline)
+## Step 1b — Scope triage (inline)
 
-Decide the route yourself, from the request and at most a quick targeted look
-at the code (a Grep or one file read). No subagent, no extra model call. Take
-the **direct** route only when all of these hold:
+Put the task in exactly one class, from the brief plus at most one quick look
+at the code (a Grep or one file read). No subagent, no extra model call.
+Check from the top. A class above r0 needs a signal you can name from the
+brief or that look; with none, the task is **r0**, also when unsure:
 
-- a concrete defect or change with clear expected behaviour (a failing case, an
-  error message, a named function and what it should do);
-- the fix should touch one module plus its tests;
-- no public API change, schema or migration, security-sensitive code (auth,
-  permissions, crypto, input sanitising), dependency change or cross-repo change.
+- **r3 Needs design:** a novel architecture (a new subsystem with no
+  precedent in the codebase), a data-migration strategy (existing stored data
+  must be moved or transformed), or an interface several consumers must agree on.
+- **r2 Multi-part:** more than one repository, or parts that must land in
+  order (a schema or API change before its consumers, a library before its callers).
+- **r1 Risky:** touches auth, permissions, crypto, input sanitising, a schema
+  or migration, or a public API (an exported interface, CLI or endpoint that
+  other code consumes).
+- **r0 Plain:** everything else, one coherent low-risk change.
 
-Otherwise, and whenever you are unsure, take the **light** route. A `direct:` or
-`light:` tag from Step 0 decides instead of the criteria. Under `AUTONOMOUS` the
-same rule applies; never ask. The brief records the decision as:
+Size, file count, a dependency bump or a long request are not signals. An
+`r0:`/`r1:`/`r2:` tag decides instead. Under `AUTONOMOUS` the same rule
+applies; never ask. In one Bash call, log the markers below and append to the
+brief with a heredoc (plus `## Assumptions` if you made any):
 
 ```markdown
-## Size
-route: <direct | light>
-reason: <one line; "forced by direct:" or "forced by light:" when a tag decided>
+## Scope
+route: <r0 | r1 | r2 | r3>
+signal: <the signal that fired; "none" for r0; "forced by r1:" when a tag decided>
 ```
 
-Light → read the light pipeline file and continue at its Step 2.
-Direct → the Direct route below.
+Each class adds exactly one thing. **r0** → the plain route below (markers:
+`discover`, `context`, `review` `--skipped`, then `frame`). **r1** → the same
+plus the Step 7 review (markers: `discover`, `context` `--skipped`, `frame`).
+**r2** → a short stage plan: the staged route below.
 
-## Direct route (inline)
+**r3** → the heavy pipeline, on explicit opt-in only. Interactive, when
+Escalation allows switching: the light pipeline file's switch procedure,
+trigger `design`; "Continue as is" adds `runs-as:` as below. Otherwise (`AUTONOMOUS`,
+`NO_SWITCH`, `[from-hard]`, an existing `pipeline-switch.md`) never switch:
+add `runs-as: r2` (an r2 signal also holds) or `runs-as: r1` to `## Scope`,
+go on as that class, and end the report recommending `/run hard: <task>`.
 
-Implement and verify; nothing else. No discovery, context pack or review
-subagent; the implementer tier guard still applies. In one Bash call, log
-`discover`, `context`, `review` as `--skipped` and `frame`, and append to
-`.workflow_artifacts/<task>/brief.md` with a heredoc the `## Size` section,
-and `## Assumptions` under `AUTONOMOUS` if you made any. `implement`, `verify` and `commit` are logged at
-their steps.
+## Plain route (r0, r1)
+
+No discovery and no context pack; r0 also has no review. The implementer tier
+guard still applies. `implement`, `verify`, `review` (r1) and `commit` are
+logged at their steps.
 
 1. **Implement.** Find the code, the tests covering it and the command that
    runs them with targeted Grep/Read; that command is Step 6's test command.
    Then Step 5: minimal diff, about one focused regression test.
 2. **Verify.** Step 6.
-3. **Commit.** Step 8 items 1–2, appending `## Verification` (the command and
+3. **Review** (r1 only). Step 7.
+4. **Commit.** Step 8 items 1–2, appending `## Verification` (the command and
    `pass`, `fail` or `not run: <why>`) and `## Commit` to the brief in one call;
    then items 3–6. A run that ends without a commit still appends
    `## Verification`.
 
-**Escalate to light** (one way, never back) when the diff outgrows one module
-plus its tests, verification fails twice, or the change needs an excluded
-category (not when `direct:` forced the route): reference.md "Direct route
-escalation".
+**Reclassify upward** (never down; not when a tag forced the class) when the
+work shows a signal Step 1b missed. r0 → r1: the diff touches an r1 signal;
+in one Edit set `## Scope` to `route: r1` with a line `escalated: r0 → r1 —
+<signal>`, and run Step 7 before committing. r0 or r1 → r2: the change must span repos or land in parts:
+reference.md "Reclassify to r2". Two failed verifications are an Escalation
+trigger.
 
-## Light pipeline (Steps 2–4b and 7)
+## Staged route (r2: Steps 2–4b)
 
-The light route's steps live in `__QUOIN_HOME__/skills/run/light-pipeline.md`.
-Read it once, with one Read, before the first light-route step you run: when
-Step 1b picks light, when the Direct route
-escalates, and when `--resume` or `stage N of <task>` continues a light or
-staged run.
+r2's steps live in `__QUOIN_HOME__/skills/run/light-pipeline.md`. Read it
+once, with one Read, before the first r2 step: when Step 1b picks r2 (or r3
+runs as r2), when a plain run reclassifies to r2, when `--resume` or
+`stage N of <task>` continues a staged run, and when an interactive r3 needs
+its switch procedure.
 
 ## Implementer tier guard (before Step 5)
 
-Steps 5–6 (and the light route's Step 7 fixes, light pipeline file) always run
-on **opus**. Read
+Steps 5–6 (and the Step 7 fixes) always run on **opus**. Read
 your model from system context ("powered by the model named X") and run
 `python3 __QUOIN_HOME__/scripts/model_tier.py "<X>"`. `INLINE|opus` or
 `INLINE|optout`, or an input that started with `[no-redispatch]` → implement
@@ -165,8 +179,8 @@ of `/run` in one subagent.
 
 ## Step 5 — Implement (inline)
 
-Marker: `implement`. Implement the brief (or, on the light route, using the
-context pack). Plan in your own reasoning; do not write a plan file. Keep the
+Marker: `implement`. Implement the brief (on r2, using the context pack).
+Plan in your own reasoning; do not write a plan file. Keep the
 diff minimal: no drive-by refactors, no speculative abstractions.
 
 **Tests, proportionate.** Prefer extending an existing test file over creating a
@@ -190,7 +204,24 @@ Fix real failures and re-run. If the test environment cannot be built, say so
 in one line, record it under Assumptions, and continue; do not retry setup,
 create virtualenvs outside the project or install packages globally.
 
-Light route: Step 7 (review, light-pipeline.md) comes next. Direct: Step 8.
+Then Step 7 for r1 (and each r1 stage); Step 8 otherwise.
+
+## Step 7 — Review (subagent, one pass; r1 only)
+
+Marker: `review`, chained onto `git add -N <new files>`. Spawn one
+general-purpose subagent on **opus** with only the brief, `git diff <base>`
+(base = where the task or stage started) and the verification result; not
+your reasoning or the context pack, so its read is not anchored on yours. Ask
+for at most about 10 findings, each with `path:line`, severity (blocker /
+should-fix / nit) and a concrete fix, on correctness against the acceptance
+criteria (for a C1 brief, the request), missed call sites, security, and
+proportionate tests (missing or excessive).
+
+Then log `review-fixes`, apply blockers and should-fixes (through the
+implementer when the guard dispatched: reference.md "Implementer tier guard
+(dispatch)"), skip nits unless trivial, and re-run Step 6 once if code
+changed. No second review. List each finding and what you did in
+`.workflow_artifacts/<task>/review.md` (`stage-N/review.md` on r2).
 
 ## Step 8 — Commit (inline)
 
@@ -221,16 +252,16 @@ Marker: `commit` (chain it onto the `git add` call).
 
 ## Escalation
 
-The task is bigger than the light pipeline when the review returns a design
-blocker, two implementation attempts fail verification for reasons you do not
-understand, or the task needs more than five stages or a stage needs its own
-design work. Then follow reference.md "Escalation". Several repos or a few
-stages alone are not a reason: Step 4b (light-pipeline.md) handles them.
+The task is bigger than `/run` when the review returns a design blocker, two
+implementation attempts fail verification for reasons you do not understand,
+or the task needs more than five stages or a stage needs its own design work.
+Then follow reference.md "Escalation". Several repos or a few stages alone are
+not a reason: r2 handles them.
 
 ## Important behaviours
 
-- One session. Subagents only for the prompt triage, the light route's
-  discovery, context pack and review, plus the Opus implementer on other tiers.
+- One session. Subagents only for the prompt triage, r2's discovery and
+  context pack, the r1 review, plus the Opus implementer on other tiers.
 - No cost-ledger rows, run-state records, checkpoints or progress sentinels.
   Task state lives only under `.workflow_artifacts/<task>/`.
 - Never write quoin's own files (for example `quoin/dev/tests/...`) into

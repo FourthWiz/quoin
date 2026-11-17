@@ -5,14 +5,13 @@ implements this skill should match the contract described here.
 
 ## Purpose
 
-The default way to take a task from a raw request to a reviewed local
-commit. It adds four things over a plain session: a precise task brief,
-a context pack gathered before coding, proportionate tests, and one
-independent review. It does not run multi-round planning, critique
-loops, architecture rounds or a separate gate; those live in `run_hard`.
-Small, well-localized tasks skip the context pack and review through a
-direct route, because on easy fixes they add cost and latency without a
-measurable gain in resolution.
+The default way to take a task from a raw request to a local commit.
+By default it is plain strong-model implementation with proportionate
+tests; a scope triage adds a review, a stage plan or the heavy pipeline
+only when the task carries that class's signal, because on ordinary
+changes they add cost and latency without a measurable gain in
+resolution. It does not run multi-round planning, critique loops,
+architecture rounds or a separate gate; those live in `run_hard`.
 
 ## Sequence
 
@@ -45,24 +44,35 @@ task); markers change no behaviour and are never committed.
    the helper fails, the run classifies inline. This replaces enrichment
    and the clarifying part of specification; no later step asks about the
    request again.
-2b. Size, inline (no helper, no extra model call): take the direct route
-   only for a concrete defect or change with clear expected behaviour
-   that should touch one module plus its tests and involves no public
-   API, schema or migration, security-sensitive, dependency or
-   cross-repo change; otherwise, or when unsure, the light route. The
-   `direct:` and `light:` tags force a route, also in autonomous mode.
-   The decision and a one-line reason go into `brief.md` (`route:`,
-   `reason:`). The direct route implements on the strong model, verifies
-   and commits, skipping discovery (3), the context pack (5) and the
-   review (8). Its route and reason are appended to the triaged brief with the
-   skipped markers in one call, and the verification result and commit are
-   appended at the end. The skill text a
-   direct-route session loads is kept to a short core; tags, resume,
-   isolation modes, the non-strong-model dispatch, lessons and
-   escalation sit in an on-demand reference file. It escalates one way to the light route, keeping the work
-   done, when the diff outgrows one module, verification fails twice, or
-   the change falls into an excluded category.
-3. Discover, delegated, only when discovery memory is missing, older
+2b. Scope triage, inline (no helper, no extra model call): from the
+   triaged request plus at most one quick look at the code, put the task
+   in exactly one class, checked from the top. A class above R0 needs a
+   signal the session can name; without one, also when unsure, it is R0.
+   - R3 Needs design: a novel architecture, a data-migration strategy, or
+     an interface several consumers must agree on.
+   - R2 Multi-part: more than one repository, or parts that must land in
+     order.
+   - R1 Risky: auth, permissions, crypto, input sanitising, a schema or
+     migration, or a public API.
+   - R0 Plain: everything else, one coherent low-risk change.
+   Size, file count, a dependency bump or a long request are not signals.
+   Each class adds exactly one thing: R0 Plain implements on the strong
+   model, verifies and commits, skipping discovery (3), the context pack
+   (5) and the review (8), with framing (4) a marker only; R1 adds the review; R2 adds a
+   short stage plan (3–5b), each stage running as R0 or R1; R3 adds the
+   heavy pipeline, on explicit opt-in only (interactive runs are asked
+   once; autonomous runs never switch, run as R2 or R1 and recommend the
+   heavy pipeline in the report). The `r0:`, `r1:` and `r2:` tags force a
+   class, also in autonomous mode; `hard:` is the opt-in for R3. The class
+   and the signal that fired go into `brief.md` (`route:`, `signal:`) with
+   the skipped markers in one call; the verification result and commit
+   are appended at the end. A plain run reclassifies upward, never down,
+   when the work shows a missed signal: to R1 by adding the review, to R2
+   by moving to the staged steps while keeping the diff. The skill text a
+   plain run loads is kept to a short core; tags, resume, isolation
+   modes, the non-strong-model dispatch, lessons and escalation sit in an
+   on-demand reference file, and the R2 steps in another.
+3. R2 only. Discover, delegated, only when discovery memory is missing, older
    than the staleness threshold (7 days by default), or marked out of
    date by an earlier task's `discovery-dirty` marker (step 9). A benchmark-only
    lean profile (`QUOIN_RUN_PROFILE=bench-lean`, set by the benchmark
@@ -71,18 +81,17 @@ task); markers change no behaviour and are never committed.
    every other step runs unchanged. The memory profile
    (`QUOIN_RUN_PROFILE=bench-memory`, for sequence suites whose workflow
    memory carries between tasks) skips only the isolation claim and release.
-4. Frame, inline: append the shape and size to the triaged `brief.md`.
-   Shape is `single` by default and `staged` when the change spans
-   several repositories, has parts that must land in order, or will not
-   fit one coherent diff.
-5. Context pack, delegated to a read-only helper that starts from the
+4. R2 only. Frame, inline: the triaged `brief.md` already holds the
+   scope; record further assumptions only.
+5. R2 only. Context pack, delegated to a read-only helper that starts from the
    cached repo map when present: likely files and symbols, covering tests and how to run them, conventions, relevant
    lessons. Written to `context.md`.
-5b. Staged tasks only: write a short `architecture.md` whose
+5b. R2 only: write a short `architecture.md` whose
    `## Stage decomposition` section lists two to five stages (one repo
-   each, with scope, dependencies and acceptance), confirm it with the
-   user unless autonomous, then run steps 6–9 once per stage with a
-   stage brief under `stage-N/`, one review and one commit per stage,
+   each, with scope, class R0 or R1, dependencies and acceptance), confirm
+   it with the user unless autonomous, then run steps 6–9 once per stage
+   with a stage brief under `stage-N/`, a review for each R1 stage and one
+   commit per stage,
    marking each stage done in `architecture.md`. Autonomous runs go
    through every stage in one session, stopping early only on an
    escalation condition. `--resume` continues at the first unfinished
@@ -115,7 +124,7 @@ task); markers change no behaviour and are never committed.
    that specific test process (keyed on a unique token in its report path,
    never on any test process) so it is re-invoked when the run exits, then
    prompts the implementer to read the result. No user prompt is needed.
-8. Review, delegated, one pass, strong model, given only the brief, the
+8. R1, and each R1 stage of R2, only. Review, delegated, one pass, strong model, given only the brief, the
    diff and the test result. Fixes are applied where step 6 ran (the
    same implementer when delegated); no second review.
 9. Commit locally, then record the branch and commit in the brief (so
@@ -128,7 +137,7 @@ task); markers change no behaviour and are never committed.
 
 ## Escalation
 
-The task outgrows the light pipeline when the review finds a design-level
+The task outgrows this skill when the review finds a design-level
 problem, two implementation attempts fail for unclear reasons, or the task
 needs more than five stages or a stage needs its own design work. Spanning
 several repositories alone is handled by the staged path. On a trigger the
@@ -144,7 +153,7 @@ at most once; a resume follows the switch note's direction.
 ## Artifacts
 
 `.workflow_artifacts/<task-name>/brief.md`, `context.md`, `review.md`,
-`phases.log` (a direct-route task writes only `brief.md` and `phases.log`).
+`phases.log` (an R0 task writes only `brief.md` and `phases.log`).
 Staged tasks add `architecture.md` at the task root and `brief.md`,
 `review.md` (and `context.md` when needed) under each `stage-N/`. No
 run-state record, checkpoints or progress sentinels. No cost ledger,
