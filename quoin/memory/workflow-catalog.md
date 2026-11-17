@@ -94,7 +94,7 @@ Skills resolve the artifact path via `quoin/scripts/path_resolve.py`. Resolution
 
 ## Workflow sequence
 
-**Default: light `/run`.** Most tasks use `/run`: one session that triages the request (asking only when unclear) and its scope. r0 (default) implements on Opus with proportionate tests and commits locally; r1 (auth, crypto, schema, public API and the like) adds one Opus review; r2 (several repos, or ordered parts) adds discovery when stale, a context pack and two to five stages in a short `architecture.md` (`## Stage decomposition` layout), each run as r0 or r1; r3 (needs design) offers the heavy pipeline, opt-in only. The heavy pipeline below runs via `/run hard:` (`/run_hard`) or a light `/run` escalation; it can hand small tasks back (once).
+**Default: light `/run`.** Most tasks use `/run`: one session that triages the task's scope. r0 (default) implements on Opus with proportionate tests and commits locally; r1 (auth, crypto, schema, public API and the like) adds one Opus review; r2 (several repos, or ordered parts) adds discovery when stale, a context pack and two to five stages in a short `architecture.md` (`## Stage decomposition` layout), each run as r0 or r1; r3 (needs design) offers the heavy pipeline, opt-in only. The heavy pipeline below runs via `/run hard:` (`/run_hard`) or a light `/run` escalation; it can hand small tasks back (once).
 
 ### Canonical flow
 

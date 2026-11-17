@@ -664,10 +664,6 @@ _DOCS_TO_TESTS: tuple[tuple[str, str], ...] = (
         "quoin/dev/tests/test_run_light_pipeline_split.py",
     ),
     (
-        "quoin/adapters/claude/skills/run/prompt-triage.md",
-        "quoin/dev/tests/test_run_light_pipeline_split.py",
-    ),
-    (
         "src/quoin/installer.py",
         "quoin/dev/tests/test_run_light_pipeline_split.py",
     ),

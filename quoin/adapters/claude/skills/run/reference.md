@@ -31,9 +31,9 @@ except the Escalation switch, which passes its own input.
    `route: r0` or `r1` (or `runs-as: r1`) resumes on the plain route, `r2`
    (or `runs-as: r2`) on the staged route, and an `r3` with no `runs-as:`
    line repeats Step 1b's r3 handling. A task with no brief, or a brief with
-   `## Request` but no `## Triage`, restarts at Step 1a, and one with
-   `## Triage` but no `## Scope` at Step 1b, keeping any diff on its task
-   branch. An older brief's `## Size` maps `route: direct` to r0 and
+   no `## Scope`, restarts at Step 1b, keeping any diff on its task branch;
+   Step 1b then appends `## Scope` to an existing brief instead of rewriting
+   it. An older brief's `## Size` maps `route: direct` to r0 and
    `route: light` to r1, or to r2 when `architecture.md` exists. A staged run
    (also **`stage N of <task>`**) first reads the light pipeline file, whose
    resume section covers staged tasks.
@@ -71,8 +71,8 @@ except the Escalation switch, which passes its own input.
 10. **`[from-hard]`** → `run_hard` handed this task over (its
    `pipeline-switch.md` says `to: light`). Strip it and keep the given task
    name. Step 1 keeps the task branch `run_hard` created (no new branch); the
-   note's `evidence:` file is the request: Step 1a skips the triage and points
-   the brief's `## Request` at it, and Step 1b classifies from it as usual,
+   note's `evidence:` file is the request: Step 1b points the brief's
+   `## Request` at it and classifies from it as usual,
    except that r3 runs as r2 or r1 without asking. The task never switches
    again.
 
@@ -211,7 +211,7 @@ A plain run (r0 or r1, not forced by a tag) moves to r2, one way, when the
 change turns out to span repositories or to need parts that land in order.
 Keep the working tree as it is: no reset, no stash. Read the light pipeline
 file, then in one Edit set the brief's `## Scope` to `route: r2` with a line
-`escalated: <r0 | r1> → r2 — <signal>`, keeping the Step 1a sections, and
+`escalated: <r0 | r1> → r2 — <signal>`, keeping `## Request`, and
 continue at its Step 2. The stages build on the existing diff (through the
 same Opus implementer, via SendMessage, when the guard dispatched); the first
 stage's review covers it if that stage is r1.

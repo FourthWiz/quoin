@@ -594,9 +594,9 @@ def deploy_quickstart(source_dir: pathlib.Path, dest_root: pathlib.Path) -> None
 # them: preamble.md for subagent spawn targets, and reference files a skill
 # reads on demand (run's light-pipeline steps, loaded only for r2 and the run_hard switch,
 # run's reference.md, loaded only for rare tags, non-Opus sessions and
-# escalation, and run's prompt-triage.md, read by its triage subagent).
+# escalation).
 SKILL_COMPANION_FILES = (
-    "preamble.md", "light-pipeline.md", "reference.md", "prompt-triage.md",
+    "preamble.md", "light-pipeline.md", "reference.md",
 )
 
 

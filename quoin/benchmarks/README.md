@@ -259,8 +259,8 @@ instance. Select it with `--suite tiered-balanced`. Provenance, the task list
 and the budget derivation are in `suite-tiered-balanced-provenance.md`.
 
 `suite-verified-vague.json` and `suite-verified-vague-ceiling.json` hold 20 of
-those tasks with vague and original prompts, to test `/run`'s prompt triage;
-see "Vague-prompt suite" below.
+those tasks with vague and original prompts, to test how `/run` handles vague
+requests; see "Vague-prompt suite" below.
 
 The earlier tiered-small run showed that a quoin session can skip the pipeline
 and fix the issue directly. The harness now starts the quoin arm with the slash
@@ -728,6 +728,20 @@ of one route.
 
 ### Vague-prompt suite: does prompt triage help?
 
+Outcome: prompt triage was removed from `/run` in v0.92.0 after the first
+vague and ceiling runs, without the repeat runs the decision rule below asks
+for. That overrides the rule, which never drops triage on a single run. The
+reasons: triage classed 18 of 20 vague requests C1 (the rule needs at least
+half classed C2 or C3); the difference in differences was -10 points (on vague
+prompts quoin passed 80% and plain 85%); the vague prompts did not hurt plain
+Opus (85% on them against 75% on the original issues), so a repeat of the same
+suite could not show triage helping; and triage cost about $0.06 a task,
+roughly 9% of an r0 session. The suites and `vague_report.py` stay for any
+later change to how `/run` handles prompts; on runs made after the removal
+briefs carry no class, so the report lists every session as unknown and its
+C2-or-C3 share as 0%. The
+rest of this section describes the suite and the rule as they were run.
+
 Every other suite gives the agent a fully specified issue, so `/run`'s prompt
 triage (which classes a request C1 clear, C2 unstructured or C3
 underspecified, and under `--autonomous` records default assumptions instead
@@ -749,7 +763,7 @@ The arms:
 | Cell | Run | Arm | Prompt |
 |---|---|---|---|
 | plain-vague | vague run | plain Claude Code | vague rewrite |
-| quoin-vague | vague run | `/run --autonomous` (prompt triage, then scope triage) | vague rewrite |
+| quoin-vague | vague run | `/run --autonomous` (prompt triage, then scope triage, before v0.92.0) | vague rewrite |
 | plain-original | ceiling run | plain Claude Code | original issue |
 | quoin-original | ceiling run | `/run --autonomous` | original issue |
 
@@ -890,8 +904,9 @@ With nine tasks, treat differences as directional.
 Light `/run` appends one line per step to
 `.workflow_artifacts/<task>/phases.log` (`<UTC time> <phase> [skipped]`, with
 an `N:` stage prefix inside a staged task) through `run_phase.py`. The phases are
-setup, triage, discover, frame, context, decompose, implement, verify, review,
-review-fixes and commit. The quoin cell copies that file with the rest of the
+setup, discover, frame, context, decompose, implement, verify, review,
+review-fixes and commit. Logs written before v0.92.0 may also hold a `triage`
+line; the report ignores it, so that time counts under `setup`. The quoin cell copies that file with the rest of the
 workflow evidence, and `harness/phase_report.py` joins it with the row's
 `transcript.jsonl`:
 

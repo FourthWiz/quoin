@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 
 PHASES = (
-    "setup", "triage", "discover", "frame", "context", "decompose",
+    "setup", "discover", "frame", "context", "decompose",
     "implement", "verify", "review", "review-fixes", "commit",
 )
 PROFILE_ENV = "QUOIN_RUN_PROFILE"

@@ -13,6 +13,7 @@ import re
 from pathlib import Path
 
 from quoin import installer
+from quoin.core.scripts import run_phase
 
 QUOIN = Path(__file__).resolve().parents[2]
 RUN_DIR = QUOIN / "adapters" / "claude" / "skills" / "run"
@@ -109,8 +110,7 @@ def test_reclassify_to_r2_reads_the_reference_file_before_editing_the_brief():
 
 # SKILL.md sections a plain-route (r0, r1) session follows; it never reads the reference file.
 DIRECT_PATH_SECTIONS = (
-    "## Step 0 — Route", "## Step 1 — Setup", "## Step 1a — Prompt triage",
-    "## Step 1b — Scope triage", "## Plain route",
+    "## Step 0 — Route", "## Step 1 — Setup", "## Step 1b — Scope triage", "## Plain route",
     "## Implementer tier guard", "## Step 5 — Implement", "## Step 6 — Verify",
     "## Step 7 — Review", "## Step 8 — Commit", "## Escalation", "## Important behaviours",
 )
@@ -232,15 +232,18 @@ def test_drift_check_covers_the_reference_file(tmp_path):
     assert any(e.deployed_path.endswith("light-pipeline.md") and e.reason == "stale" for e in drift)
 
 
-def test_prompt_triage_runs_before_scope_triage_and_owns_clarification():
-    order = [SKILL.index(h) for h in ("## Step 1 — Setup", "## Step 1a — Prompt triage", "## Step 1b — Scope triage")]
-    assert order == sorted(order)
-    triage = _section(SKILL, "## Step 1a — Prompt triage")
-    assert 'model: "haiku"' in triage
-    assert "__QUOIN_HOME__/skills/run/prompt-triage.md" in triage
-    assert "site=run-triage-questions" in triage
-    rubric = (RUN_DIR / "prompt-triage.md").read_text(encoding="utf-8")
-    for cls in ("C1", "C2", "C3"):
-        assert f"class: {cls}" in rubric
-    assert "prompt-triage.md" in installer.SKILL_COMPANION_FILES
+def test_scope_triage_writes_the_brief_with_no_prompt_triage_step():
+    scope = _section(SKILL, "## Step 1b — Scope triage")
+    assert scope.index("## Request") < scope.index("## Scope")
+    assert "## Triage" not in SKILL and "triage" not in run_phase.PHASES
+
+
+def test_light_phase_lists_stay_in_sync():
+    from quoin.benchmarks.harness import phase_report
+    from quoin.core.scripts import status_graph
+    ts = (QUOIN / "plugins" / "workflow-tasks" / "hooks" / "tasks.ts").read_text(encoding="utf-8")
+    block = ts[ts.index("const LIGHT_MARKER_PHASE"):]
+    ts_keys = set(re.findall(r"^\s+'?([a-z-]+)'?:", block[:block.index("}")], re.M))
+    phases = set(run_phase.PHASES)
+    assert phases == set(phase_report.PHASES) == set(status_graph._LIGHT_MARKER_PHASE) == ts_keys
     assert "AskUserQuestion" not in _section(LIGHT, "## Step 3 — Frame")

@@ -32,7 +32,9 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 # Raised when scope triage replaced Size and the review step moved here from
 # light-pipeline.md, so an r1 run never reads that file (the two files
 # together shrank): measured 14,040 bytes, with a small margin.
-CEILING_BYTES = 14300
+# Lowered when the prompt-triage step was removed: measured 12,958 bytes,
+# with a small margin.
+CEILING_BYTES = 13200
 LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Same ratchet for the reference file: 15,347 bytes at the split, times 1.10.
 # Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.

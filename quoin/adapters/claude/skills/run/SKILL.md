@@ -1,6 +1,6 @@
 ---
 name: run
-description: "Default pipeline: prompt triage, scope triage (r0 plain, r1 +review, r2 staged, r3 opt-in heavy), Opus implement, local commit. Use for: /run, 'do this task'. Tags: hard:, r0:/r1:/r2:, --autonomous."
+description: "Default pipeline: scope triage (r0 plain, r1 +review, r2 staged, r3 opt-in heavy), Opus implement, local commit. Use for: /run, 'do this task'. Tags: hard:, r0:/r1:/r2:, --autonomous."
 model: opus
 ---
 
@@ -18,7 +18,7 @@ once, with one Read, only where this file points to it.
 
 **Phase markers.** At the start of each step, append a marker:
 `python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" <phase>`, with phase one of
-`setup`, `triage`, `discover`, `frame`, `context`, `decompose`, `implement`, `verify`,
+`setup`, `discover`, `frame`, `context`, `decompose`, `implement`, `verify`,
 `review`, `review-fixes`, `commit`. Add `--skipped` when the step is skipped, and
 `--stage N` inside stage N. Chain it onto a Bash call the step already makes,
 with `;` after it (never `&&`). It only appends to
@@ -67,40 +67,13 @@ In as few Bash calls as possible:
 4. Unless `LEAN`, read `.workflow_artifacts/memory/lessons-learned.md` if
    present, keeping only entries relevant to this task.
 
-## Step 1a — Prompt triage (subagent)
-
-In one Bash call, log the `triage` marker and write
-`.workflow_artifacts/<task>/brief.md` with a heredoc: `# <task>`, then
-`## Request` and the request verbatim (fetch a referenced issue's title and
-body first). Skip the step (marker `--skipped`) for `stage N of <task>`, for
-`--resume` once the brief has `## Triage`, and for `[from-hard]`, whose brief
-gets `## Triage`, `class: C1` and `## Request`, `see <the switch note's
-evidence: file>` instead.
-
-Spawn one general-purpose Agent with `model: "haiku"`, giving only the
-absolute brief path and: "Read `__QUOIN_HOME__/skills/run/prompt-triage.md`
-and follow it for this brief." It replies with the class:
-
-- `class: C1` or `class: C2` → go on; the brief states the task.
-<!-- decision-gate: best-effort site=run-triage-questions tokens=0 -->
-- `class: C3` → interactive: ask its open questions in one AskUserQuestion
-  call (each default first, recommended). If an answer differs from its
-  default, Read the brief and in one Edit fix the goal or criteria it
-  affects, turn that `default:` into `answer:` and delete its
-  `(default for Q<n>)` assumption. Under `AUTONOMOUS`, never ask: the
-  defaults stand. A resumed interactive run first asks any question still
-  marked `default:`.
-
-If the spawn errors or the brief has no `## Triage`, read prompt-triage.md and
-do it inline. This replaces `/enrich` and the clarifying part of `/specify`:
-no later step asks about the request again.
-
 ## Step 1b — Scope triage (inline)
 
-Put the task in exactly one class, from the brief plus at most one quick look
-at the code (a Grep or one file read). No subagent, no extra model call.
+Put the task in exactly one class, from the request (fetch a referenced
+issue's title and body first) plus at most one quick look at the code (a Grep
+or one file read). No subagent, no extra model call.
 Check from the top. A class above r0 needs a signal you can name from the
-brief or that look; with none, the task is **r0**, also when unsure:
+request or that look; with none, the task is **r0**, also when unsure:
 
 - **r3 Needs design:** a novel architecture (a new subsystem with no
   precedent in the codebase), a data-migration strategy (existing stored data
@@ -114,10 +87,16 @@ brief or that look; with none, the task is **r0**, also when unsure:
 
 Size, file count, a dependency bump or a long request are not signals. An
 `r0:`/`r1:`/`r2:` tag decides instead. Under `AUTONOMOUS` the same rule
-applies; never ask. In one Bash call, log the markers below and append to the
-brief with a heredoc (plus `## Assumptions` if you made any):
+applies; never ask. In one Bash call, log the markers below and write
+`.workflow_artifacts/<task>/brief.md` with a heredoc (plus `## Assumptions` if
+you made any). A `[from-hard]` task's `## Request` is `see <the switch note's evidence: file>`.
+A `--resume` or `stage N of <task>` run keeps the brief it has (resume
+appends `## Scope` if it is missing).
 
 ```markdown
+# <task>
+## Request
+<the request verbatim>
 ## Scope
 route: <r0 | r1 | r2 | r3>
 signal: <the signal that fired; "none" for r0; "forced by r1:" when a tag decided>
@@ -214,7 +193,7 @@ general-purpose subagent on **opus** with only the brief, `git diff <base>`
 your reasoning or the context pack, so its read is not anchored on yours. Ask
 for at most about 10 findings, each with `path:line`, severity (blocker /
 should-fix / nit) and a concrete fix, on correctness against the acceptance
-criteria (for a C1 brief, the request), missed call sites, security, and
+criteria (the brief's request), missed call sites, security, and
 proportionate tests (missing or excessive).
 
 Then log `review-fixes`, apply blockers and should-fixes (through the
@@ -260,8 +239,8 @@ not a reason: r2 handles them.
 
 ## Important behaviours
 
-- One session. Subagents only for the prompt triage, r2's discovery and
-  context pack, the r1 review, plus the Opus implementer on other tiers.
+- One session. Subagents only for r2's discovery and context pack, the r1
+  review, plus the Opus implementer on other tiers.
 - No cost-ledger rows, run-state records, checkpoints or progress sentinels.
   Task state lives only under `.workflow_artifacts/<task>/`.
 - Never write quoin's own files (for example `quoin/dev/tests/...`) into
