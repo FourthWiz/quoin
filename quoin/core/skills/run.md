@@ -118,10 +118,12 @@ task); markers change no behaviour and are never committed.
 9. Commit locally, then record the branch and commit in the brief (so
    `/cleanup` can find the PR). Never push or open a PR. A reusable lesson is
    checked against `lessons-learned.md` with the duplicate guard before it
-   is appended. When the commit changed the project's structure (top-level
-   directories or packages, dependency manifests, public interfaces), a
-   line goes into `.workflow_artifacts/memory/discovery-dirty` so the next
-   run refreshes discovery; discovery deletes the marker.
+   is appended. A script, not the model, reads the commit's name-status
+   list: when it changed the project's structure (top-level directories or
+   packages), a dependency manifest or an interface definition file, it
+   appends a line to `.workflow_artifacts/memory/discovery-dirty` so the
+   next run refreshes discovery; discovery deletes the marker. This step
+   writes no session state, checkpoints, cost rows or run-state records.
 
 ## Escalation
 

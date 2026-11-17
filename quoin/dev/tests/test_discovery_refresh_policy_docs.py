@@ -100,7 +100,20 @@ def test_discovery_dirty_marker_contract() -> None:
     lessons = ref.split("## Lessons", 1)[1].split("## Reclassify to r2", 1)[0]
     assert "discovery-dirty" in step2
     assert "discovery-dirty" in step8
+    # The decision is scripted, not left to the model.
+    assert "scripts/discovery_dirty.py" in step8
     assert '"Lessons"' in step8
     assert "lessons_guard.py" in lessons and "--no-strict-attrib" in lessons
     discover = _ADAPTER_DISCOVER.read_text(encoding="utf-8")
     assert "fsops.py rm" in discover and "discovery-dirty" in discover
+
+
+def test_plain_route_runs_no_session_ceremony() -> None:
+    """r0/r1 write no session state, checkpoints, cost rows or run-state records."""
+    run = (_SOURCE_ROOT / "adapters" / "claude" / "skills" / "run" / "SKILL.md").read_text(encoding="utf-8")
+    plain = run.split("## Plain route (r0, r1)", 1)[1].split("## Staged route", 1)[0]
+    record = run.split("## Step 5 — Implement", 1)[1].split("## Escalation", 1)[0]
+    for text in (plain, record):
+        for token in ("cost-ledger", "run_state.py", "run-state-", "checkpoint",
+                      "memory/sessions/", "session_age_guard"):
+            assert token not in text, token

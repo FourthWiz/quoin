@@ -228,7 +228,7 @@ worktrees then branch from that tree.
      and mark that stage ✅ at once. If cleanup reports `partial`, note the
      leftover worktree in the report and carry on. The stage implementer
      committed on its own branch, so run Step 8 items 3 and 4 here for that
-     stage, on `git diff --name-status <base>..HEAD` (base from `PS worktree`).
+     stage, item 4 with the base from `PS worktree`.
    - **Integration gate:** after the wave's last merge, run Step 6 once on the
      task branch. Fix any failure in a separate commit.
    - **Exit 3 (`dirty-tree` or `wrong-branch`):** nothing was merged.

@@ -215,13 +215,11 @@ Marker: `commit` (chain it onto the `git add` call).
    by it).
 3. Unless `LEAN`, only if the task surfaced a reusable gotcha: record one
    lesson per reference.md "Lessons".
-4. Unless `LEAN`, if the commit changed the project's structure (added, removed
-   or renamed a top-level directory or package; changed a dependency manifest,
-   not lockfiles alone; or changed a public interface other code consumes: an
-   exported API, CLI, schema or endpoint; check with
-   `git show --name-status --format= HEAD`; tests and docs alone do not count),
-   append `<date> <task>: <reason>` to `.workflow_artifacts/memory/discovery-dirty`.
-   Never stage the marker.
+4. Unless `LEAN`, chain onto the commit call with `&&`, so a rejected commit skips it:
+   `python3 "__QUOIN_HOME__/scripts/discovery_dirty.py" --repo "<WT>" --task "<task>" --base <base> --project-root "$(pwd)"`
+   (base as in Step 7: where the task or stage started). It decides from the commit's name-status list, with no judgement from you,
+   and appends to `.workflow_artifacts/memory/discovery-dirty` when the commit
+   changed structure, a dependency manifest or an interface file. Never stage the marker.
 5. Report in two or three sentences: what changed, test status, and the next
    step (`/pr` pushes the branch and opens a PR). A staged task reports once
    after the last stage, one line per stage, naming every repo needing a PR.
