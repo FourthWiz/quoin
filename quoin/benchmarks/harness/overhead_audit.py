@@ -216,6 +216,7 @@ def static_sources(quoin_root) -> list:
         ("run SKILL.md", "every /run session", run_dir / "SKILL.md"),
         # Companion files are listed when present, so older checkouts still audit.
         ("run reference.md", "on demand", run_dir / "reference.md"),
+        ("run routes.md", "r1 to r3", run_dir / "routes.md"),
         ("run light-pipeline.md", "r2 only", run_dir / "light-pipeline.md"),
     ]
     rows = []

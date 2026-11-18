@@ -34,7 +34,9 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 # together shrank): measured 14,040 bytes, with a small margin.
 # Lowered when the prompt-triage step was removed: measured 12,958 bytes,
 # with a small margin.
-CEILING_BYTES = 13200
+# Lowered when the brief, the r1 review and the r3 handling moved to routes.md,
+# so an r0 session reads only this file: measured 10,682 bytes, small margin.
+CEILING_BYTES = 10900
 LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Same ratchet for the reference file: 15,347 bytes at the split, times 1.10.
 # Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.
@@ -44,7 +46,13 @@ LIGHT_CEILING_BYTES = 15400
 REFERENCE = RUN_SKILL.with_name("reference.md")
 # reference.md is read only for rare tags, non-Opus sessions, lessons and
 # escalation: measured 14,666 bytes at the split, times 1.05.
-REFERENCE_CEILING_BYTES = 15400
+# Raised when r0 stopped writing a brief up front and escalation, resume and
+# [from-hard] gained the r0 cases: measured 15,513 bytes, plus margin.
+REFERENCE_CEILING_BYTES = 15700
+ROUTES = RUN_SKILL.with_name("routes.md")
+# routes.md is read by every r1, r2 and r3 session: measured 3,226 bytes at the
+# split, with a small margin.
+ROUTES_CEILING_BYTES = 3400
 
 
 def test_run_skill_md_byte_ceiling():
@@ -68,5 +76,13 @@ def test_reference_byte_ceiling():
     size = REFERENCE.stat().st_size
     assert size <= REFERENCE_CEILING_BYTES, (
         f"run/reference.md is {size} bytes, over its {REFERENCE_CEILING_BYTES}-byte "
+        "ceiling -- trim it or raise the ceiling alongside the change that grew it."
+    )
+
+
+def test_routes_byte_ceiling():
+    size = ROUTES.stat().st_size
+    assert size <= ROUTES_CEILING_BYTES, (
+        f"run/routes.md is {size} bytes, over its {ROUTES_CEILING_BYTES}-byte "
         "ceiling -- trim it or raise the ceiling alongside the change that grew it."
     )

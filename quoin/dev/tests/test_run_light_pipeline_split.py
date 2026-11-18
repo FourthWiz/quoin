@@ -2,9 +2,10 @@
 
 SKILL.md is expanded whole into the first turn of every /run session, so the
 steps only an r2 task uses (2, 3, 4, 4b with its parallel waves) live in
-light-pipeline.md next to it, while the review (Step 7) that r1 needs stays in
-SKILL.md. These tests pin the split: where the Read is triggered, that the
-plain route (r0, r1) never depends on text that only the reference file holds,
+light-pipeline.md next to it, while the brief and the review (Step 7) that r1
+needs live in routes.md, which r0 never reads. These tests pin the split: where
+the Read is triggered, that the plain route never depends on text that only
+the light pipeline file holds,
 and that the installer ships, substitutes and prunes the file like SKILL.md.
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ RUN_DIR = QUOIN / "adapters" / "claude" / "skills" / "run"
 SKILL = (RUN_DIR / "SKILL.md").read_text(encoding="utf-8")
 LIGHT = (RUN_DIR / "light-pipeline.md").read_text(encoding="utf-8")
 REF = (RUN_DIR / "reference.md").read_text(encoding="utf-8")
+ROUTES = (RUN_DIR / "routes.md").read_text(encoding="utf-8")
 REF_PATH = "__QUOIN_HOME__/skills/run/light-pipeline.md"
 FILE_NAME = re.compile(r"light-pipeline\.md|light\s+pipeline\s+file")
 
@@ -79,19 +81,21 @@ def test_moved_steps_live_only_in_the_reference_file():
         assert sum(h.startswith(heading) for h in light_headings) == 1, heading
     assert "**Parallel waves (`PARALLEL` only).**" in LIGHT
     assert "**Parallel waves" not in SKILL
-    # r1 needs the review without reading the r2 file.
-    assert any(h.startswith("## Step 7 — Review") for h in skill_headings)
-    assert not any(h.startswith("## Step 7") for h in light_headings)
+    # r1 needs the review without reading the r2 file, and r0 reads neither.
+    assert any(h.startswith("## Step 7 — Review") for h in _headings(ROUTES))
+    assert not any(h.startswith("## Step 7") for h in light_headings + skill_headings)
 
 
 def test_r2_triggers_name_the_reference_file():
-    pointer = " ".join(_section(SKILL, "## Staged route").split())
+    pointer = " ".join(_section(ROUTES, "## Brief").split())
     assert REF_PATH in pointer and "one Read" in pointer
-    for trigger in ("Step 1b picks r2", "r3 runs as r2", "reclassifies to r2", "`--resume`",
-                    "`stage N of <task>`"):
-        assert trigger in pointer, trigger
+    assert "**r2** → a short stage plan: read the light pipeline file" in pointer
     scope = " ".join(_section(SKILL, "## Step 1b — Scope triage").split())
-    assert "**r2** → a short stage plan: the staged route below" in scope
+    assert "**r1, r2, r3** → read the routes file" in scope
+    intro = " ".join(LIGHT[:LIGHT.index("## Resuming")].split())
+    for trigger in ("the routes file picks r2", "r3 runs as r2", "reclassifies to r2",
+                    "`--resume`", "`stage N of <task>`"):
+        assert trigger in intro, trigger
     # Step 0 sends --resume and the rarer tags to reference.md, whose resume
     # item names the light pipeline file.
     step0 = _section(SKILL, "## Step 0 — Route")
@@ -102,17 +106,19 @@ def test_r2_triggers_name_the_reference_file():
 
 
 def test_reclassify_to_r2_reads_the_reference_file_before_editing_the_brief():
-    assert 'reference.md "Reclassify to r2"' in " ".join(_section(SKILL, "## Plain route").split())
+    assert '"Reclassify upward"' in " ".join(_section(SKILL, "## Plain route").split())
+    up = " ".join(_section(ROUTES, "## r1 — plain route plus review").split())
+    assert 'reference.md "Reclassify to r2"' in up
     move = " ".join(_section(REF, "## Reclassify to r2").split())
-    assert move.index("Read the light pipeline file") < move.index("in one Edit set the brief's `## Scope`")
+    assert move.index("Read the light pipeline file") < move.index("set the brief's `## Scope`")
     assert "no reset, no stash" in move and "`route: r2`" in move
 
 
-# SKILL.md sections a plain-route (r0, r1) session follows; it never reads the reference file.
+# SKILL.md sections a plain-route session follows; it never reads the light pipeline file.
 DIRECT_PATH_SECTIONS = (
     "## Step 0 — Route", "## Step 1 — Setup", "## Step 1b — Scope triage", "## Plain route",
     "## Implementer tier guard", "## Step 5 — Implement", "## Step 6 — Verify",
-    "## Step 7 — Review", "## Step 8 — Commit", "## Escalation", "## Important behaviours",
+    "## Step 8 — Commit", "## Escalation", "## Important behaviours",
 )
 # Clauses that only tell the session to skip a light step; they need none of its text.
 SKIP_CLAUSES = re.compile(
@@ -171,16 +177,18 @@ def test_reference_file_hands_back_to_skill_md_in_order():
     order = [LIGHT.index(h) for h in MOVED_HEADINGS]
     assert order == sorted(order)
     intro = " ".join(LIGHT[:LIGHT.index("## Resuming")].split())
-    assert "the implementer tier guard and Steps 5, 6, 7 (r1 stages only) and 8 in SKILL.md" in intro
+    assert ("the implementer tier guard and Steps 5, 6, 7 (r1 stages only; Step 7 is in the "
+            "routes file) and 8 in SKILL.md") in intro
     # SKILL.md sends r1 tasks and r1 stages from Step 6 on to Step 7.
-    step6 = _section(SKILL, "## Step 6 — Verify")
-    assert "Then Step 7 for r1 (and each r1 stage); Step 8 otherwise." in step6
+    step6 = " ".join(_section(SKILL, "## Step 6 — Verify").split())
+    assert "Then Step 7 (the routes file) for r1 and each r1 stage; Step 8 otherwise." in step6
     # The r2 phase markers live with their steps; the review's stay in SKILL.md.
     for marker in ('"<task>" discover --skipped', 'Marker: `frame`', 'Marker: `context`',
                    'Marker: `decompose`'):
         assert marker in LIGHT, marker
     for marker in ('Marker: `review`', 'log `review-fixes`'):
-        assert marker in SKILL, marker
+        assert marker in ROUTES, marker
+    assert ROUTES.rstrip().endswith("Then Step 8 in SKILL.md.")
 
 
 def test_reference_file_uses_the_home_placeholder_for_deployed_paths():
@@ -233,9 +241,9 @@ def test_drift_check_covers_the_reference_file(tmp_path):
 
 
 def test_scope_triage_writes_the_brief_with_no_prompt_triage_step():
-    scope = _section(SKILL, "## Step 1b — Scope triage")
-    assert scope.index("## Request") < scope.index("## Scope")
-    assert "## Triage" not in SKILL and "triage" not in run_phase.PHASES
+    brief = _section(ROUTES, "## Brief")
+    assert brief.index("## Request") < brief.index("## Scope")
+    assert "## Triage" not in SKILL + ROUTES and "triage" not in run_phase.PHASES
 
 
 def test_light_phase_lists_stay_in_sync():
@@ -247,3 +255,8 @@ def test_light_phase_lists_stay_in_sync():
     phases = set(run_phase.PHASES)
     assert phases == set(phase_report.PHASES) == set(status_graph._LIGHT_MARKER_PHASE) == ts_keys
     assert "AskUserQuestion" not in _section(LIGHT, "## Step 3 — Frame")
+
+
+def test_installer_ships_the_routes_file():
+    assert "routes.md" in installer.SKILL_COMPANION_FILES
+    assert "__QUOIN_HOME__/skills/run/routes.md" in SKILL
