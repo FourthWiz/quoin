@@ -59,7 +59,7 @@ from ..arm_identity import InitIdentityCheck
 from .. import sequence_memory
 from ..config import (
     DISCOVERY_REFRESH_DISABLE_ENV, DISCOVERY_SKIPPING_ROUTES, RUN_PROFILE_ENV, BudgetSpec,
-    quoin_route_or_default, run_profile_for_route,
+    quoin_forced_class_or_none, quoin_route_or_default, run_profile_for_route,
 )
 from ..sources import REPO_TASK_SOURCES
 from ..tiered_report import LEGACY_ROUTES
@@ -114,6 +114,13 @@ QUOIN_HARD_RUN_PREFIX = (
     "do not fix the issue directly outside the pipeline.\n\n"
 )
 QUOIN_R0_RUN_PREFIX = "/run --autonomous r0: Fix this issue through /run.\n\n"
+# QUOIN_BENCH_QUOIN_CLASS=r1|r2 replaces the light prefix with one that forces
+# that scope class, so the arm takes the route triage would otherwise skip.
+QUOIN_CLASS_RUN_PREFIX = (
+    "/run --autonomous {cls}: "
+    "This session benchmarks the quoin workflow, so the task must go through /run: "
+    "follow its forced route, and do not fix the issue outside /run.\n\n"
+)
 ENV_BENCH_ROUTE = "QUOIN_BENCH_QUOIN_ROUTE"
 
 
@@ -133,7 +140,10 @@ def _run_prefix() -> str:
     route = quoin_route_or_default()
     if route == "hard":
         return QUOIN_HARD_RUN_PREFIX
-    return QUOIN_R0_RUN_PREFIX if route == "r0" else QUOIN_RUN_PREFIX
+    if route == "r0":
+        return QUOIN_R0_RUN_PREFIX
+    forced = quoin_forced_class_or_none()
+    return QUOIN_CLASS_RUN_PREFIX.format(cls=forced) if forced else QUOIN_RUN_PREFIX
 
 
 _INSTALL_TIMEOUT_SECONDS = 300  # a cold install is not a 60-second operation (T-02)

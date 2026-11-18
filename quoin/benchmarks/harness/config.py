@@ -156,6 +156,40 @@ def quoin_route_or_default(environ=None) -> str:
         return "default"
 
 
+# Benchmark-only switch that forces /run's scope class on the quoin arm. Unset,
+# triage picks the class (usually r0, which skips discovery and the context
+# pack); r2 makes both run, so a sequence suite exercises carried memory.
+# Only the light routes take it: hard and r0 already fix the route.
+QUOIN_CLASS_ENV = "QUOIN_BENCH_QUOIN_CLASS"
+QUOIN_FORCED_CLASSES = ("r1", "r2")
+CLASS_FORCING_ROUTES = ("default", "lean", "memory")
+
+
+def quoin_forced_class(environ=None) -> Optional[str]:
+    """The forced /run scope class, or None; ValueError for an unknown value
+    or a route that cannot take one."""
+    environ = os.environ if environ is None else environ
+    value = (environ.get(QUOIN_CLASS_ENV) or "").strip().lower()
+    if not value:
+        return None
+    if value not in QUOIN_FORCED_CLASSES:
+        raise ValueError(
+            f"{QUOIN_CLASS_ENV}={value!r} is not one of {', '.join(QUOIN_FORCED_CLASSES)}"
+        )
+    route = quoin_route(environ)
+    if route not in CLASS_FORCING_ROUTES:
+        raise ValueError(f"{QUOIN_CLASS_ENV} does not apply to the {route} route")
+    return value
+
+
+def quoin_forced_class_or_none(environ=None) -> Optional[str]:
+    """`quoin_forced_class`, with an invalid setting read as unset."""
+    try:
+        return quoin_forced_class(environ)
+    except ValueError:
+        return None
+
+
 def run_profile_for_route(route: str):
     """The QUOIN_RUN_PROFILE value a quoin-arm route sets, or None."""
     return ROUTE_RUN_PROFILES.get(route)

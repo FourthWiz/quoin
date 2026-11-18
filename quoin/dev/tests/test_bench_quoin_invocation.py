@@ -88,6 +88,25 @@ def test_lean_route_keeps_light_prompt_and_rejects_unknown_routes(monkeypatch):
         quoin_route({quoin_claude.ENV_BENCH_ROUTE: "fast"})
 
 
+def test_forced_class_tags_the_light_prefix_and_rejects_fixed_routes(monkeypatch):
+    from quoin.benchmarks.harness.config import QUOIN_CLASS_ENV, quoin_forced_class
+
+    monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, "memory")
+    monkeypatch.setenv(QUOIN_CLASS_ENV, "R2")
+    assert quoin_claude._run_prefix().startswith("/run --autonomous r2: ")
+    assert "triage" not in quoin_claude._run_prefix()
+    # The class changes only the prompt, not the session profile.
+    assert quoin_claude._route_session_env() == {"QUOIN_RUN_PROFILE": "bench-memory"}
+    assert quoin_forced_class({quoin_claude.ENV_BENCH_ROUTE: "lean", QUOIN_CLASS_ENV: "r1"}) == "r1"
+    assert quoin_forced_class({quoin_claude.ENV_BENCH_ROUTE: "lean"}) is None
+    for bad in ({QUOIN_CLASS_ENV: "r3"}, {quoin_claude.ENV_BENCH_ROUTE: "hard", QUOIN_CLASS_ENV: "r2"},
+                {quoin_claude.ENV_BENCH_ROUTE: "r0", QUOIN_CLASS_ENV: "r2"}):
+        with pytest.raises(ValueError):
+            quoin_forced_class(bad)
+    monkeypatch.setenv(quoin_claude.ENV_BENCH_ROUTE, "r0")
+    assert quoin_claude._run_prefix() == quoin_claude.QUOIN_R0_RUN_PREFIX
+
+
 def test_light_run_detected_from_brief(tmp_path):
     task = tmp_path / "fix-thing"
     task.mkdir()

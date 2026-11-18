@@ -521,10 +521,19 @@ def test_quiet_skip_judge_run_prints_no_deferred_line(monkeypatch, capsys, tmp_p
     ("lean", "lean", False),
     ("lean", "default", True),
     ("hard", "lean", True),
+    (("memory", "r2"), ("memory", "r2"), False),
+    ("memory", ("memory", "r2"), True),
+    (("memory", "r2"), "memory", True),
 ])
 def test_resume_refuses_a_different_quoin_route(tmp_path, monkeypatch, stored, requested, refused):
-    _manifest_args(tmp_path, monkeypatch, extra={} if stored is None else {"quoin_route": stored})
-    why = run_benchmark._check_resume_route(tmp_path / "runs", "R", requested)
+    stored_route, stored_class = stored if isinstance(stored, tuple) else (stored, None)
+    route, forced_class = requested if isinstance(requested, tuple) else (requested, None)
+    extra = {} if stored_route is None else {"quoin_route": stored_route}
+    if stored_class:
+        extra["quoin_forced_class"] = stored_class
+    _manifest_args(tmp_path, monkeypatch, extra=extra)
+    why = run_benchmark._check_resume_route(tmp_path / "runs", "R", route, forced_class)
+    requested = forced_class or ("none" if stored_class else route)
     assert (why is not None) == refused
     if refused:
         assert requested in why and "--run-id" in why
