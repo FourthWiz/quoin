@@ -48,8 +48,11 @@ For the `quoin-claude` cell, "Quoin" means:
    `QUOIN_BENCH_QUOIN_ROUTE=memory` sets `QUOIN_RUN_PROFILE=bench-memory`,
    which skips only run isolation; it is for sequence suites, where the
    arm's workflow memory carries from one task to the next.
-   The route is recorded in the manifest and a resume with another route is
-   refused, so one run id never mixes routes.
+   `QUOIN_BENCH_QUOIN_CLASS=r1|r2` (default, lean or memory route only)
+   forces that `/run` scope class with an `r1:` or `r2:` prompt tag, so
+   discovery and the context pack run where triage would pick r0.
+   The route and forced class are recorded in the manifest and a resume with
+   another route or class is refused, so one run id never mixes routes.
    The plain arm's prompt is unchanged. The session also gets `QUOIN_AUTO_RESUME=0`, so no earlier pipeline
    state is picked up. `--autonomous` is needed because a `--print` session
    cannot answer the run skill's checkpoints.

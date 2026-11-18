@@ -290,7 +290,13 @@ keeps discovery and the lessons read and append (see "Sequence suite" below).
 discovery-banner silencing as lean, so every quoin row is a minimal
 implement, verify and commit session; `overhead-audit.md` describes how to
 check its cost against plain.
-A paired run refuses any other route value before it starts. The
+`QUOIN_BENCH_QUOIN_CLASS=r1` or `r2`, with the default, lean or memory route,
+replaces the light prompt with `/run --autonomous r1:` or `r2:`, forcing that
+scope class instead of letting triage pick (usually r0, which skips discovery
+and the context pack). r2 makes both run; under lean, discovery is still
+skipped, so memory and lean differ only in the memory they carry.
+A paired run refuses any other route value, or a class with the hard or r0
+route, before it starts. The
 harness records on-disk evidence that the pipeline ran,
 and treats a quoin session that left no plan as an `invalid` row (see "Invalid
 rows" below). The test suite exercises the whole path offline with a fake
@@ -702,6 +708,19 @@ starts empty) as separate run ids over the same suite:
 QUOIN_BENCH_QUOIN_ROUTE=memory quoin bench tiered --suite cl-sequences --run-id cl-memory
 QUOIN_BENCH_QUOIN_ROUTE=lean quoin bench tiered --suite cl-sequences --run-id cl-lean
 ```
+
+Left to triage, every quoin task in these runs took the r0 route, so
+discovery never ran and little memory carried. To exercise the carry, force
+the r2 class on both arms (same suite, same quoin commit, new run ids):
+
+```bash
+QUOIN_BENCH_QUOIN_CLASS=r2 QUOIN_BENCH_QUOIN_ROUTE=memory quoin bench tiered --suite cl-sequences --run-id cl-memory-r2
+QUOIN_BENCH_QUOIN_CLASS=r2 QUOIN_BENCH_QUOIN_ROUTE=lean quoin bench tiered --suite cl-sequences --run-id cl-lean-r2
+```
+
+The class is recorded in the manifest as `quoin_forced_class`, and a resume
+with a different class is refused. Expect r2 sessions to cost more than the
+estimate below, which is for r0 sessions.
 
 Each run's worst case is $2,520 (36 tasks x 2 arms x $35, ceiling $2,780;
 pilot $840). Expected spend from the tiered-balanced easy and medium sessions

@@ -830,17 +830,23 @@ def _check_resume_manifest(run_dir, run_id, suite_path, cap, tier_names) -> Opti
     return None
 
 
-def _check_resume_route(run_dir, run_id, route: str) -> Optional[str]:
-    """Reason a resume would mix quoin-arm routes, or None.
+def _check_resume_route(run_dir, run_id, route: str, forced_class: Optional[str] = None) -> Optional[str]:
+    """Reason a resume would mix quoin-arm routes or forced classes, or None.
 
-    Manifests written before the route was recorded ran the default route.
+    Manifests written before the route or class was recorded ran the default
+    route with no forced class.
     """
     from quoin.benchmarks.harness.tiered_report import read_manifest
 
-    stored = read_manifest(run_dir / run_id).get("quoin_route") or "default"
+    manifest = read_manifest(run_dir / run_id)
+    stored = manifest.get("quoin_route") or "default"
     if stored != route:
         return (f"quoin route {route} differs from the {stored} route this run was started "
                 "with; start a new --run-id")
+    stored_class = manifest.get("quoin_forced_class")
+    if stored_class != forced_class:
+        return (f"quoin forced class {forced_class or 'none'} differs from the "
+                f"{stored_class or 'none'} this run was started with; start a new --run-id")
     return None
 
 
@@ -1023,7 +1029,7 @@ def _judge_prereqs(tasks=None) -> tuple:
 def _paired_preflight(args, suite_path: Path, doc: dict):
     """Run every refusal check of a paired run; returns PairedPreflight or an exit code."""
     from quoin.benchmarks.harness import paired_run, paired_spend, repo_prep, arm_sandbox
-    from quoin.benchmarks.harness.config import quoin_route
+    from quoin.benchmarks.harness.config import quoin_forced_class, quoin_route
     from quoin.benchmarks.scripts import run_three_arm_gate as gate
 
     tasks, tier_names = _scoped_tasks(doc, args.tiers)
@@ -1042,6 +1048,7 @@ def _paired_preflight(args, suite_path: Path, doc: dict):
         return _refuse("cap-set", "--max-budget-usd-per-task is required")
     try:
         route = quoin_route()
+        forced_class = quoin_forced_class()
     except ValueError as exc:
         return _refuse("route", str(exc))
 
@@ -1054,7 +1061,7 @@ def _paired_preflight(args, suite_path: Path, doc: dict):
         return _refuse("run-dir", f"{run_path} already holds rows; use --resume or a new --run-id")
     if args.resume and has_rows:
         why = (_check_resume_manifest(run_dir, run_id, suite_path, cap, tier_names)
-               or _check_resume_route(run_dir, run_id, route))
+               or _check_resume_route(run_dir, run_id, route, forced_class))
         if why:
             return _refuse("resume", why)
 
@@ -1149,7 +1156,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
     )
     from quoin.benchmarks.harness.aggregate import aggregate_run
     from quoin.benchmarks.harness.config import (
-        RUN_PROFILE_ENV, BudgetSpec, HarnessConfig, quoin_route,
+        RUN_PROFILE_ENV, BudgetSpec, HarnessConfig, quoin_forced_class_or_none, quoin_route,
     )
     from quoin.benchmarks.harness.session_state import is_judge_pending
     from quoin.benchmarks.scripts import run_three_arm_gate as gate
@@ -1290,6 +1297,7 @@ def _paired_execute(args, suite_path: Path, doc: dict, pre, *, quiet_deferred_hi
             "model_override": os.environ.get("QUOIN_BENCH_CLAUDE_MODEL") or None,
             "judge_emulation": emulate_x86,
             "quoin_route": quoin_route(),
+            "quoin_forced_class": quoin_forced_class_or_none(),
             "quoin_run_profile": envs["quoin-claude"].get(RUN_PROFILE_ENV),
         }
 
