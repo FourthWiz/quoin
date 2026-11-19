@@ -158,8 +158,9 @@ one Opus implementer per stage, even when this session is on Opus.
    branch (see "Parallel waves").
 3. If the stage's repo or area is not covered by the task's context pack, run
    Step 4 for the stage brief and save it to `stage-N/context.md`.
-4. Steps 5–8 as written (Step 8 item 6, the release, waits for the last
-   stage), with the stage brief in place of the task brief. Step 7 runs only
+4. Steps 5–8 as written (Step 8 item 5, the release, waits for the last
+   stage), with the stage brief in place of the task brief and `--stage N`
+   on the record call. Step 7 runs only
    for an r1 stage (an r0 stage logs `review --skipped --stage N`): its
    review gets the stage brief, the `## Interfaces between stages` section and
    the stage's diff only (base = the commit the stage started from), and its
@@ -227,8 +228,10 @@ worktrees then branch from that tree.
      `PS cleanup --repo "<repo>" --into "<task branch>" --branch "<stage branch>"`
      and mark that stage ✅ at once. If cleanup reports `partial`, note the
      leftover worktree in the report and carry on. The stage implementer
-     committed on its own branch, so run Step 8 items 3 and 4 here for that
-     stage, item 4 with the base from `PS worktree`.
+     committed on its own branch, so run Step 8 item 3 and item 2's record call
+     here for that stage, with `--stage N`, the base from `PS worktree` and
+     the implementer's reported test result as `--verify` (it records the
+     merge commit).
    - **Integration gate:** after the wave's last merge, run Step 6 once on the
      task branch. Fix any failure in a separate commit.
    - **Exit 3 (`dirty-tree` or `wrong-branch`):** nothing was merged.

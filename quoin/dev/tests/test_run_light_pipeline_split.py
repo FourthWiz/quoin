@@ -118,7 +118,7 @@ def test_reclassify_to_r2_reads_the_reference_file_before_editing_the_brief():
 DIRECT_PATH_SECTIONS = (
     "## Step 0 — Route", "## Step 1 — Setup", "## Step 1b — Scope triage", "## Plain route",
     "## Implementer tier guard", "## Step 5 — Implement", "## Step 6 — Verify",
-    "## Step 8 — Commit", "## Escalation", "## Important behaviours",
+    "## Step 8 — Commit", "## Escalation",
 )
 # Clauses that only tell the session to skip a light step; they need none of its text.
 SKIP_CLAUSES = re.compile(

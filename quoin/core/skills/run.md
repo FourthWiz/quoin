@@ -119,8 +119,9 @@ task); markers change no behaviour and are never committed.
 8. R1, and each R1 stage of R2, only. Review, delegated, one pass, strong model, given only the brief, the
    diff and the test result. Fixes are applied where step 6 ran (the
    same implementer when delegated); no second review.
-9. Commit locally, then record the branch and commit in the brief (so
-   `/cleanup` can find the PR). Never push or open a PR. A reusable lesson is
+9. Commit locally, then one scripted call records the verification result,
+   branch and commit in the brief (so `/cleanup` can find the PR) and runs
+   the discovery check below. Never push or open a PR. A reusable lesson is
    checked against `lessons-learned.md` with the duplicate guard before it
    is appended. A script, not the model, reads the commit's name-status
    list: when it changed the project's structure (top-level directories or

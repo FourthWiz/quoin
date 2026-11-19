@@ -36,7 +36,9 @@ RUN_SKILL = HERE.parent.parent / "adapters" / "claude" / "skills" / "run" / "SKI
 # with a small margin.
 # Lowered when the brief, the r1 review and the r3 handling moved to routes.md,
 # so an r0 session reads only this file: measured 10,682 bytes, small margin.
-CEILING_BYTES = 10900
+# Lowered when the commit bookkeeping became one scripted call and the
+# important behaviours moved to reference.md: measured 8,123 bytes, small margin.
+CEILING_BYTES = 8300
 LIGHT_PIPELINE = RUN_SKILL.with_name("light-pipeline.md")
 # Same ratchet for the reference file: 15,347 bytes at the split, times 1.10.
 # Raised for the "Switch to run_hard" procedure: measured 17,794 bytes, plus margin.
@@ -48,7 +50,9 @@ REFERENCE = RUN_SKILL.with_name("reference.md")
 # escalation: measured 14,666 bytes at the split, times 1.05.
 # Raised when r0 stopped writing a brief up front and escalation, resume and
 # [from-hard] gained the r0 cases: measured 15,513 bytes, plus margin.
-REFERENCE_CEILING_BYTES = 15700
+# Raised when the important behaviours moved here from SKILL.md (an r0
+# session no longer reads them): measured 15,963 bytes, plus margin.
+REFERENCE_CEILING_BYTES = 16200
 ROUTES = RUN_SKILL.with_name("routes.md")
 # routes.md is read by every r1, r2 and r3 session: measured 3,226 bytes at the
 # split, with a small margin.

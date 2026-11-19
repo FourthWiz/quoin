@@ -8,74 +8,58 @@ model: opus
 
 *Portable intent doc: `quoin/core/skills/run.md`*
 
-You take a task from a raw request to a local commit in one session: plain
-Opus, plus a review, stage plan or heavy pipeline only when scope triage's
-signal fires. **You ARE an explicit user invocation:**
-`/run` may commit locally. It never pushes and never opens a PR.
+One session from request to local commit: plain Opus, plus a review, stage
+plan or heavy pipeline only when scope triage says so. **You ARE an explicit
+user invocation:** `/run` may commit locally; it never pushes or opens a PR.
+Read `__QUOIN_HOME__/skills/run/routes.md` (the routes file: r1–r3) and
+`__QUOIN_HOME__/skills/run/reference.md` (rare tags, isolation, other tiers,
+lessons, escalation, important behaviours) only where pointed, once, with one Read.
 
-Two files hold the rest; read each once, with one Read, only where this file
-points to it: `__QUOIN_HOME__/skills/run/routes.md` (the routes file: r1, r2
-and r3) and `__QUOIN_HOME__/skills/run/reference.md` (rare tags, isolation,
-other tiers, lessons, escalation).
-
-**Phase markers.** At the start of each step, append a marker:
-`python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" <phase>`, with phase one of
-`setup`, `discover`, `frame`, `context`, `decompose`, `implement`, `verify`,
-`review`, `review-fixes`, `commit`. Add `--skipped` when the step is skipped, and
-`--stage N` inside stage N. Chain it onto a Bash call the step already makes,
-with `;` after it (never `&&`). It only appends to
-`.workflow_artifacts/<task>/phases.log`; never stage it.
+**Phase markers.** At each step's start chain
+`python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" <phase>` onto a Bash
+call the step makes anyway, with `;` (never `&&`): `setup`, `discover`,
+`frame`, `context`, `decompose`, `implement`, `verify`, `review`,
+`review-fixes`, `commit`; `--skipped` for a skipped step, `--stage N` in
+stage N. It appends to `.workflow_artifacts/<task>/phases.log`; never stage it.
 
 ## Step 0 — Route
 
 The task name is the first token that is not a flag or tag.
 
-1. **`hard:`** or **`strict:`** anywhere in the input → invoke the `run_hard`
-   skill with the input unchanged apart from removing `hard:`, `r0:`, `r1:`,
-   `r2:` and `isolate:` (keep `strict:`) and stop.
-2. **`--autonomous`** (or an `[autonomous]` sentinel) → strip it and set
-   `AUTONOMOUS=true`: never ask the user anything; note assumptions in the
-   brief (r0: in the report).
-3. **`r0:`** / **`r1:`** / **`r2:`** among the leading tags → strip; each
-   forces that class in Step 1b (the highest wins if several appear).
-4. **`QUOIN_RUN_PROFILE`** (benchmark only, never a tag), read from the Step 1
-   marker's `profile=` line: `bench-lean` sets `LEAN`, `bench-memory` sets
-   `MEMORY`. `LEAN` skips isolation, lessons and the dirty marker, and Step 2
-   only logs its marker as skipped; `MEMORY` skips only isolation.
-5. Strip a leading `[no-redispatch]` (remember it for the implementer tier
-   guard) and `small:`, `medium:`, `large:`, `fast:`, `max_rounds: N` (heavy
-   pipeline profiles; no effect here).
+1. **`hard:`** or **`strict:`** anywhere → invoke the `run_hard` skill with the
+   input, removing `hard:`, `r0:`, `r1:`, `r2:` and `isolate:` (keep `strict:`); stop.
+2. **`--autonomous`** / `[autonomous]` → strip; `AUTONOMOUS=true`: never ask;
+   note assumptions (brief, or the r0 report).
+3. Leading **`r0:`** / **`r1:`** / **`r2:`** → strip; forces that class in Step 1b (the highest wins).
+4. **`QUOIN_RUN_PROFILE`** (benchmark only; the setup marker prints
+   `profile=`): `bench-lean` sets `LEAN` (no isolation or lessons; the record script
+   drops the discovery check itself), `bench-memory` sets `MEMORY` (no isolation).
+5. Strip a leading `[no-redispatch]` (keep it in mind for the tier guard) and
+   `small:`, `medium:`, `large:`, `fast:`, `max_rounds: N`.
 6. **Any other flag or tag** (`--resume`, `stage N of <task>`, `[from-hard]`,
-   `parallel:`, `isolate:`, `no-switch:`) → read reference.md
-   "Step 0 — Tags and resume" first and follow it.
+   `parallel:`, `isolate:`, `no-switch:`) → reference.md "Step 0 — Tags and resume".
 
 ## Step 1 — Setup (inline)
 
 In as few Bash calls as possible:
 
-1. Derive a kebab-case task name and log the first marker:
-   `mkdir -p ".workflow_artifacts/<task>" && python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" setup`
-2. Isolation (skip under `LEAN`/`MEMORY`; `WT` is then the checkout). Claim the
-   checkout of the repo the change lands in:
-   `python3 "__QUOIN_HOME__/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`
-   and set `WT` to the `worktree` it prints. `mode: main` → go on to item 3.
-   Any other result (`mode: worktree`, exit 3, a failure) → reference.md
-   "Isolation modes". From here on all git, edits, tests and commits happen in
-   `WT`; this session's cwd stays at the project root.
-3. Git: uncommitted changes (ignore untracked `.workflow_artifacts/`) → ask
-   what to do (interactive) or work on top of them (autonomous). Create a fresh
-   task branch, never committing to main/master: from an up-to-date default
-   branch when a remote exists, otherwise from the current HEAD.
+1. `mkdir -p ".workflow_artifacts/<task>" && python3 "__QUOIN_HOME__/scripts/run_phase.py" "<task>" setup` (kebab-case task).
+2. Unless `LEAN`/`MEMORY` (then `WT` is the checkout):
+   `python3 "__QUOIN_HOME__/scripts/run_isolation.py" claim --task "<task>" --branch "<branch>" --repo "<repo>" --project-root "$(pwd)"`;
+   `WT` = its `worktree`. Not `mode: main` → reference.md "Isolation modes".
+   All git, edits, tests and commits happen in `WT`; cwd stays the project root.
+3. Uncommitted changes (ignore untracked `.workflow_artifacts/`) → ask, or
+   work on top of them under `AUTONOMOUS`. Create a fresh task branch, never
+   on main/master: from an up-to-date default branch if a remote exists, else HEAD.
 4. Unless `LEAN`, read `.workflow_artifacts/memory/lessons-learned.md` if
-   present, keeping only entries relevant to this task.
+   present; keep only relevant entries.
 
 ## Step 1b — Scope triage (inline)
 
-Put the task in exactly one class, from the request (fetch a referenced
-issue's title and body first) plus at most one quick look at the code (a Grep
-or one file read). No subagent, no extra model call.
-Check from the top. A class above r0 needs a signal you can name from the
-request or that look; with none, the task is **r0**, also when unsure:
+Put the task in exactly one class, from the request (fetch a referenced issue first) plus at most one
+quick look at the code (a Grep or one file read). No subagent, no extra model call. Check from the
+top. A class above r0 needs a signal you can name; with none, the task is
+**r0**, also when unsure:
 
 - **r3 Needs design:** a novel architecture (a new subsystem with no
   precedent in the codebase), a data-migration strategy (existing stored data
@@ -87,114 +71,74 @@ request or that look; with none, the task is **r0**, also when unsure:
   other code consumes).
 - **r0 Plain:** everything else, one coherent low-risk change.
 
-Size, file count, a dependency bump or a long request are not signals. An
-`r0:`/`r1:`/`r2:` tag decides instead. Under `AUTONOMOUS` the same rule
-applies; never ask.
-
-**r0** → the plain route below: no brief, no skipped-step markers, no other
-file. **r1, r2, r3** → read the routes file and follow it (it writes the
-brief and holds the r1 review, the r2 stage plan and r3's opt-in switch).
+Size, file count, a dependency bump or a long request are not signals; a tag
+decides instead; `AUTONOMOUS` never asks. **r0** → the plain route below: no brief,
+no skipped-step markers, no other file. **r1, r2, r3** → read the routes file
+and follow it.
 
 ## Plain route (r0)
 
-No discovery, context pack, brief or review. The implementer tier guard still
-applies.
-
-1. **Implement.** Find the code, the tests covering it and the command that
-   runs them with targeted Grep/Read; that command is Step 6's test command.
-   Then Step 5: minimal diff, about one focused regression test.
-2. **Verify.** Step 6.
-3. **Commit.** Step 8.
-
-**Reclassify upward** (never down; not when a tag forced the class) when the
-work shows a signal Step 1b missed: the diff touches an r1 signal, or the
-change must span repos or land in parts. Then read the routes file and
-follow its "Reclassify upward". Two failed verifications are an Escalation
-trigger.
+No discovery, context pack, brief or review. The implementer tier guard
+still applies. Find the code, its tests and their
+command with targeted Grep/Read, then Steps 5, 6 and 8. **Reclassify upward** (never down; not when a tag forced the
+class) if the diff touches an r1 signal or must span repos or land in parts:
+the routes file, "Reclassify upward". Two failed verifications are an Escalation trigger.
 
 ## Implementer tier guard (before Step 5)
 
-Steps 5–6 (and the Step 7 fixes) always run on **opus**. Read
-your model from system context ("powered by the model named X") and run
-`python3 __QUOIN_HOME__/scripts/model_tier.py "<X>"`. `INLINE|opus` or
-`INLINE|optout`, or an input that started with `[no-redispatch]` → implement
-inline. `DISPATCH|<tier>` (any non-Opus tier; script missing → any model but
-Opus), and multi-stage `PARALLEL` waves even on Opus → reference.md
-"Implementer tier guard (dispatch)". Never wrap the whole
-of `/run` in one subagent.
+Steps 5–6 (and Step 7 fixes) run on **opus**. Chain
+`python3 __QUOIN_HOME__/scripts/model_tier.py "<X>"` (X: "powered by the model
+named X") onto setup. `INLINE|opus`, `INLINE|optout` or `[no-redispatch]` →
+inline. `DISPATCH|<tier>` (script missing → any model but Opus) or multi-stage
+`PARALLEL` waves → reference.md "Implementer tier guard (dispatch)". Never
+wrap the whole of `/run` in one subagent.
 
 ## Step 5 — Implement (inline)
 
-Marker: `implement`. Implement the request (the brief on r1, plus the context
-pack on r2). Plan in your own reasoning; do not write a plan file. Keep the
-diff minimal: no drive-by refactors, no speculative abstractions.
-
-**Tests, proportionate.** Prefer extending an existing test file over creating a
-new one. Add about one focused regression test per behaviour change (for a bug,
-the test that fails before the fix). Do not add tests for unchanged code, do not
-duplicate coverage across files, and do not build fixtures larger than the change.
+Marker: `implement`. Implement the request (plus the brief on r1, the context
+pack on r2); plan in your reasoning, no plan file. Minimal diff: no drive-by
+refactors or speculative abstractions. **Tests, proportionate:** extend an
+existing test file; about one focused regression test per behaviour change
+(for a bug, one that fails before the fix); none for unchanged code, no
+duplicate coverage, no fixtures larger than the change.
 
 ## Step 6 — Verify (inline)
 
-Marker: `verify` (chain it before the test command). Run the tests that cover
-the change once, in the FOREGROUND with an explicit Bash `timeout: 600000`
-(without it the harness backgrounds calls past ~120 s). For a Python project you
-may instead use the affected-test helper:
-
-```bash
-python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$(pwd)" --repo-root "<WT>" --format text
-```
-
-If it reports `ran_pytest=false`, no tests ran: run the test command instead.
-Fix real failures and re-run. If the test environment cannot be built, say so
-in one line, note it as an assumption, and continue; do not retry setup,
-create virtualenvs outside the project or install packages globally.
-
-Then Step 7 (the routes file) for r1 and each r1 stage; Step 8 otherwise.
+Marker: `verify`, chained before the test command. Run the covering tests
+once in the FOREGROUND with an explicit Bash `timeout: 600000` (else calls past ~120 s go
+to the background). Python may use
+`python3 __QUOIN_HOME__/scripts/affected_tests.py --project-root "$(pwd)" --repo-root "<WT>" --format text`
+(`ran_pytest=false`: nothing ran; run the test command). Fix real failures and
+re-run. If the test environment cannot be built, say so in one line, note it
+as an assumption and go on: no retries, no virtualenvs outside the project,
+no global installs. Then Step 7 (the routes file) for r1 and each r1 stage; Step 8 otherwise.
 
 ## Step 8 — Commit (inline)
 
-Marker: `commit` (chain it onto the `git add` call).
-
-1. Stage the changed files by name, never with `git add -A`. Never stage
-   `.workflow_artifacts/` content into a project that does not track it.
-2. Commit with a conventional message (`type(scope): summary`, body says why),
-   in plain engineering prose per `__QUOIN_HOME__/memory/clean-authored-content.md`:
-   no artifact paths, finding IDs or review narration. Then, in one call,
-   record the run in `.workflow_artifacts/<task>/brief.md` (`/cleanup` finds
-   the PR by it): `## Verification` (the command and `pass`, `fail` or
-   `not run: <why>`) and `## Commit` with `branch:` and `commit:` lines,
-   appended to the brief, or on r0 written as a new brief that holds only
-   `# <task>`, `## Request` (the request verbatim, or the issue id it came
-   from), `## Scope` with `route: r0`, and those two sections. A run that
-   ends without a commit still records `## Verification`.
-3. Unless `LEAN`, only if the task surfaced a reusable gotcha: record one
-   lesson per reference.md "Lessons".
-4. Unless `LEAN`, chain onto the commit call with `&&`, so a rejected commit skips it:
-   `python3 "__QUOIN_HOME__/scripts/discovery_dirty.py" --repo "<WT>" --task "<task>" --base <base> --project-root "$(pwd)"`
-   (base: where the task or stage started). It decides from the commit's name-status list, with no judgement from you,
-   and appends to `.workflow_artifacts/memory/discovery-dirty` when the commit
-   changed structure, a dependency manifest or an interface file. Never stage the marker.
-5. Report in two or three sentences: what changed, test status, and the next
-   step (`/pr` pushes the branch and opens a PR). A staged task reports once
-   after the last stage, one line per stage, naming every repo needing a PR.
-6. Release the claim, if Step 1 made one (also when the run stops early):
-   `python3 "__QUOIN_HOME__/scripts/run_isolation.py" release --task "<task>" --repo "<repo>"`.
-   In worktree mode the report also names `WT` and the branch.
+1. Chain the `commit` marker onto `git add` of the changed files by name
+   (never `git add -A`, never untracked-by-project `.workflow_artifacts/`).
+2. Commit: `type(scope): summary` and a short why-body, plain prose per
+   `__QUOIN_HOME__/memory/clean-authored-content.md` (no artifact paths,
+   finding IDs or review narration). Chain with `&&`:
+   `python3 "__QUOIN_HOME__/scripts/run_record.py" --task "<task>" --repo "<WT>" --base <base> --project-root "$(pwd)" --request '<the request verbatim, or its issue id>' --verify '<test command>: <pass | fail | not run: why>'`
+   (base: where the task or stage started). It writes `## Verification` and
+   `## Commit` to the brief (creating the r0 brief) and marks discovery stale
+   when needed; no judgement from you. Single-quote both values. No commit →
+   run it with `--no-commit`.
+3. Unless `LEAN`, only for a reusable gotcha: one lesson per reference.md "Lessons".
+4. Report in two or three sentences: what changed, test status, next step
+   (`/pr` pushes and opens a PR). A staged task reports once, one line per
+   stage, naming every repo needing a PR.
+5. Release a Step 1 claim (also when stopping early):
+   `python3 "__QUOIN_HOME__/scripts/run_isolation.py" release --task "<task>" --repo "<repo>"`;
+   in worktree mode the report names `WT` and the branch.
 
 ## Escalation
 
-The task is bigger than `/run` when the review returns a design blocker, two
-implementation attempts fail verification for reasons you do not understand,
-or the task needs more than five stages or a stage needs its own design work.
-Then follow reference.md "Escalation". Several repos or a few stages alone are
-not a reason: r2 handles them.
+A design blocker from the review, two failed verifications you do not
+understand, more than five stages or a stage needing its own design →
+reference.md "Escalation". Several repos or a few stages alone are not a reason.
 
-## Important behaviours
-
-- One session. Subagents only for r2's discovery and context pack, the r1
-  review, plus the Opus implementer on other tiers.
-- No cost-ledger rows, run-state records, checkpoints or progress sentinels.
-  Task state lives only under `.workflow_artifacts/<task>/`.
-- Never write quoin's own files (for example `quoin/dev/tests/...`) into
-  another project.
+Always: one session (subagents only as reference.md "Important behaviours"
+lists), no ledgers, run-state or checkpoints, and never quoin's own files in
+another project.
