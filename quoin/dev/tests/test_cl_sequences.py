@@ -350,10 +350,11 @@ def test_run_skill_defines_the_memory_profile():
     item = text[text.index("6. **`QUOIN_RUN_PROFILE`**"):text.index("7. **`r0:`**")]
     assert "`bench-lean` sets `LEAN`" in item and "`bench-memory` sets `MEMORY`" in item
     flat = " ".join(item.split())
-    assert "`MEMORY` skips only isolation (Step 1 item 2, Step 8 item 6)" in flat
+    assert "`MEMORY` skips only isolation (Step 1 item 2, Step 8 item 5)" in flat
     assert "`LEAN`/`MEMORY`: no claim" in text
-    # MEMORY never gates the lessons read/append, discovery or the dirty marker.
-    assert text.count("Unless `LEAN`,") == 3 and "Unless `MEMORY`" not in text
+    # MEMORY never gates the lessons read/append, discovery or the dirty marker
+    # (the record script itself skips the marker only under bench-lean).
+    assert text.count("Unless `LEAN`,") == 2 and "Unless `MEMORY`" not in text
     assert "bench-memory" in CORE_RUN.read_text(encoding="utf-8")
 
 

@@ -39,8 +39,8 @@ go on as that class, and end the report recommending `/run hard: <task>`.
 ## r1 — plain route plus review
 
 SKILL.md's plain route (find the code and test command, Steps 5 and 6), then
-Step 7 below, then Step 8, appending
-`## Verification` and `## Commit` to this brief in one call.
+Step 7 below, then Step 8, whose record call appends
+`## Verification` and `## Commit` to this brief.
 
 **Reclassify upward** (never down; not when a tag forced the class) when the
 work shows a signal Step 1b missed. r0 → r1: the diff touches an r1 signal;

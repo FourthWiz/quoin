@@ -127,9 +127,9 @@ def test_r0_reads_no_other_file_and_logs_no_skipped_markers():
 
 def test_r0_records_its_commit_in_a_brief_written_at_commit_time(tmp_path):
     commit = _section("## Step 8 — Commit (inline)")
-    assert "on r0 written as a new brief" in commit
-    assert "`## Scope` with `route: r0`" in commit and "`branch:` and `commit:`" in commit
-    assert "still records `## Verification`" in commit and "`## Request`" in commit
+    # A script writes the r0 brief at commit time, so the skill only names it.
+    assert "scripts/run_record.py" in commit and "creating the r0 brief" in commit
+    assert "`## Verification`" in commit and "`## Commit`" in commit and "--no-commit" in commit
     # An r0 run that escalates keeps its request for run_hard.
     assert "When one fires on r0, first write the brief" in _section("## Escalation", REF)
     task = tmp_path / "task"
@@ -216,7 +216,7 @@ def test_scope_triage_sits_between_setup_and_the_routes():
 def test_plain_route_keeps_tests_brief_and_commit():
     plain = _section("## Plain route (r0)")
     assert "implementer tier guard still" in plain
-    assert "**Verify.** Step 6" in plain and "**Commit.** Step 8" in plain
+    assert "Steps 5, 6 and 8" in plain
     r1 = _section("## r1 — plain route plus review", ROUTES)
     assert "`## Verification` and `## Commit` to this brief" in r1
     assert SKILL.index("## Step 1 — Setup") < SKILL.index("## Plain route")
@@ -248,7 +248,7 @@ def test_r2_stages_run_as_r0_or_r1_and_only_r1_stages_get_a_review():
 
 def test_r2_keeps_discovery_and_the_context_pack():
     assert "## Step 2 — Discover" in LIGHT and "## Step 4 — Context pack" in LIGHT
-    assert "r2's discovery and context pack" in _section("## Important behaviours")
+    assert "r2's discovery and context pack" in _section("## Important behaviours", REF)
 
 
 def test_resume_follows_the_recorded_class_and_maps_old_briefs():

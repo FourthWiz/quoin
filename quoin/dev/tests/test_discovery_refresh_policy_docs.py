@@ -99,9 +99,10 @@ def test_discovery_dirty_marker_contract() -> None:
     ref = (run_dir / "reference.md").read_text(encoding="utf-8")
     lessons = ref.split("## Lessons", 1)[1].split("## Reclassify to r2", 1)[0]
     assert "discovery-dirty" in step2
-    assert "discovery-dirty" in step8
-    # The decision is scripted, not left to the model.
-    assert "scripts/discovery_dirty.py" in step8
+    # The decision is scripted, not left to the model: Step 8's record call
+    # runs it, and the reference names the marker and the rules script.
+    assert "scripts/run_record.py" in step8 and "marks discovery stale" in step8
+    assert "discovery-dirty" in ref and "discovery_dirty.py" in ref
     assert '"Lessons"' in step8
     assert "lessons_guard.py" in lessons and "--no-strict-attrib" in lessons
     discover = _ADAPTER_DISCOVER.read_text(encoding="utf-8")

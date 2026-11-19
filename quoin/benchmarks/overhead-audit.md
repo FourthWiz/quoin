@@ -151,7 +151,10 @@ in order of size:
 - the skill listing (about 1.3k tokens): ship the session-only skills
   (`start_of_day`, `weekly_review`, `cost_snapshot` and the like) as an opt-in
   set, since hiding them with `disable-model-invocation` would also block
-  skill-to-skill hand-offs such as `/run` → `/run_hard`;
+  skill-to-skill hand-offs such as `/run` → `/run_hard`. It also blocks the
+  cost dispatch of every cheap-tier skill, whose subagent loads the skill by
+  name, so `disable-model-invocation` is out for most of the listing; only a
+  smaller default install set would shrink it;
 - the rest of SKILL.md (about 2.7k tokens): an R0-only entry that loads just
   Size, the Direct route and Steps 5, 6 and 8, once scope triage decides the
   route before the skill text is loaded;

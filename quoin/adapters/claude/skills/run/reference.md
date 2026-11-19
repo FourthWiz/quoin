@@ -54,9 +54,10 @@ except the Escalation switch, which passes its own input.
    `bench-lean` sets `LEAN`, `bench-memory` sets `MEMORY`. Read it from the
    Step 1 marker's `profile=` line (`printenv QUOIN_RUN_PROFILE` on a
    `--resume` that skips Step 1). `LEAN` skips isolation, lessons and the
-   dirty marker (Step 1 items 2 and 4, Step 8 items 3, 4 and 6), and Step 2
+   lessons (Step 1 items 2 and 4, Step 8 items 3 and 5; Step 8's record call
+   drops the discovery check itself), and Step 2
    only logs its marker as skipped; `MEMORY` skips only isolation (Step 1
-   item 2, Step 8 item 6). All else as written.
+   item 2, Step 8 item 5). All else as written.
 7. **`r0:`** / **`r1:`** / **`r2:`** → recognised only as whitespace-delimited
    tokens among the leading flags and tags, before the task text (so
    `hdr0:` or a tag quoted in an issue body never counts). Strip them and
@@ -199,7 +200,7 @@ entries. Any other exit, or a missing script, means append: pipe the temp
 file into
 `python3 __QUOIN_HOME__/scripts/append_artifact.py --blank-line "<path>"` (no prior Read needed).
 
-For the discovery-dirty marker (Step 8 item 4), `discovery_dirty.py` holds
+For the discovery-dirty marker (written by Step 8's `run_record.py` call), `discovery_dirty.py` holds
 the rules: a top-level directory (not a dot-directory) or a package added,
 removed or renamed, any dependency manifest (not lockfiles), and interface
 definition files (protobuf, GraphQL, OpenAPI, `.d.ts`, migrations). Other
@@ -231,13 +232,22 @@ The task is bigger than `/run` when:
 A task that spans several repos or needs a few stages is not by itself a reason
 to escalate: r2's Step 4b (light pipeline file) handles it.
 
-When one fires on r0, first write the brief that Step 8 item 2 describes,
-without `## Commit`, so the request survives. Then switch to `run_hard`
+When one fires on r0, first write the brief with SKILL.md Step 8's record call, adding
+`--no-commit --verify "not run: escalated"`, so the request survives. Then switch to `run_hard`
 through the switch procedure in the light pipeline file: it asks once (interactive), keeps the brief, context
 pack and working tree, and hands over in this session. Do not switch, and
 instead stop and recommend `/run hard: <task>` (interactive) or end with that
 recommendation in the final report (autonomous), when `NO_SWITCH` is set, when
 `.workflow_artifacts/<task>/pipeline-switch.md` already exists (a task switches
 at most once), or when the user picks stop. Before stopping, release the claim
-(Step 8 item 6) and, in worktree mode, name `WT` and the branch: `/run hard:`
+(Step 8 item 5) and, in worktree mode, name `WT` and the branch: `/run hard:`
 does not isolate, so run it from `WT`.
+
+## Important behaviours
+
+- One session. Subagents only for r2's discovery and context pack, the r1
+  review, plus the Opus implementer on other tiers.
+- No cost-ledger rows, run-state records, checkpoints or progress sentinels.
+  Task state lives only under `.workflow_artifacts/<task>/`.
+- Never write quoin's own files (for example `quoin/dev/tests/...`) into
+  another project.
