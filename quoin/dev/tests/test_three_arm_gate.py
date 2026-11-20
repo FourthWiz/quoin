@@ -524,16 +524,14 @@ class TestArmRegisteredStanzas:
             _remove_worktree(main_root)
 
     def test_candidate_arm_worktree_registers_nine_stanzas_with_compact(self, tmp_path):
-        """Pins this branch's own HEAD, which registers the
-        `SessionStart`/`compact` stanza the baseline above does not."""
+        """Pins the `legacy` tag, the last tree the harness installer can
+        install, which registers the `SessionStart`/`compact` stanza the
+        baseline above does not."""
         from quoin.benchmarks.scripts.run_three_arm_gate import arm_registered_stanzas
 
-        head = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT, capture_output=True, text=True, check=True,
-        ).stdout.strip()
         candidate_root = tmp_path / "candidate"
-        if not _worktree_at_commit(head, candidate_root):
-            pytest.skip("HEAD not reachable as a worktree in this checkout")
+        if not _worktree_at_commit("legacy", candidate_root):
+            pytest.skip("legacy tag not reachable in this checkout")
         try:
             stanzas = arm_registered_stanzas(candidate_root)
             assert len(stanzas) == 9

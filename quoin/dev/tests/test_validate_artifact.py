@@ -546,10 +546,10 @@ def test_review_allowed_section_set_matches_sidecar():
 # ── T-03: ## Convergence Summary in current-plan allowed_sections ─────────────
 
 def test_convergence_summary_in_current_plan_allowed_sections():
-    """'## Convergence Summary' must appear in current-plan allowed_sections in deployed sidecar."""
+    """'## Convergence Summary' must appear in current-plan allowed_sections in the shipped sidecar."""
     import json
-    deployed = os.path.join(os.path.expanduser('~'), '.claude', 'memory', 'format-kit.sections.json')
-    with open(deployed) as f:
+    sidecar = os.path.join(os.path.dirname(__file__), '..', '..', 'memory', 'format-kit.sections.json')
+    with open(sidecar) as f:
         d = json.load(f)
     allowed = d['artifact_types']['current-plan']['allowed_sections']
     assert '## Convergence Summary' in allowed, (

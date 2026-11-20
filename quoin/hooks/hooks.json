@@ -1,7 +1,9 @@
 {
+  "modules": ["./capture.ts"],
   "hooks": {
     "UserPromptSubmit": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/userpromptsubmit.sh\"", "timeout": 5}]}
+      {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/userpromptsubmit.sh\"", "timeout": 5}]},
+      {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh\" user-prompt-submit", "timeout": 10}]}
     ],
     "PreCompact": [
       {"matcher": "auto", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/precompact.sh\"", "timeout": 10}]}
@@ -11,7 +13,8 @@
     ],
     "SessionStart": [
       {"matcher": "startup|resume|clear|compact", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/rules.sh\"", "timeout": 5}]},
-      {"matcher": "startup|resume|compact", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.sh\"", "timeout": 5}]}
+      {"matcher": "startup|resume|compact", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart.sh\"", "timeout": 5}]},
+      {"matcher": "startup|resume", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh\" session-start", "timeout": 10}]}
     ],
     "SessionEnd": [
       {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/sessionend.sh\"", "timeout": 5}]}
@@ -20,7 +23,11 @@
       {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/worktreecreate.sh\"", "timeout": 10}]}
     ],
     "Stop": [
-      {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh\"", "timeout": 10}]}
+      {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/stop.sh\"", "timeout": 10}]},
+      {"matcher": "*", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh\" stop", "timeout": 10}]}
+    ],
+    "PostToolUse": [
+      {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/capture.sh\" post-tool-use", "timeout": 10}]}
     ]
   }
 }

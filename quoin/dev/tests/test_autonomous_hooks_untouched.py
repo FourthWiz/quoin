@@ -88,6 +88,7 @@ def test_hooks_dir_has_expected_files() -> None:
             "postcompact.sh",
             "precompact.sh",
             "rules.sh",
+            "capture.sh",
             "sessionend.sh",
             "sessionstart.sh",
             "stop.sh",
