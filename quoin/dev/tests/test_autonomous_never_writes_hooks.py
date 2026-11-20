@@ -106,6 +106,7 @@ def test_hooks_dir_roster_unchanged() -> None:
             "postcompact.sh",
             "precompact.sh",
             "rules.sh",
+            "capture.sh",
             "sessionend.sh",
             "sessionstart.sh",
             "stop.sh",

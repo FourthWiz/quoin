@@ -79,6 +79,10 @@ _BUCKET_3_COUNTS = {
 }
 _PROXIMITY_WINDOW = 250
 
+# Frozen copies of the pre-plugin tree, vendored for the benchmark harness
+# tests; they are never rendered or shipped, so their wording is not checked.
+_FROZEN = {"quoin/dev/tests/fixtures/legacy_arm/quoin/CLAUDE.md"}
+
 # Bucket 4 — CHANGELOG.md, version-aware-guidance rule, scoped to
 # "## [Unreleased]" only. Entries under a released-version header are
 # historical and excluded outright, per AC-39's own exception.
@@ -102,6 +106,7 @@ def test_every_tracked_ccr_code_mention_is_classified() -> None:
         and f not in _BUCKET_2
         and f not in _BUCKET_3_COUNTS
         and f != _BUCKET_4_FILE
+        and f not in _FROZEN
     ]
     assert unclassified == [], f"unclassified `ccr code` mentions: {unclassified}"
 

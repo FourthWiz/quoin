@@ -156,6 +156,28 @@ bash quoin/install.sh --scope project        # project, no prompt
 
 GitHub redirects the old `FourthWiz/claude_dev_workflow` URL to this repository.
 
+### Task record
+
+Every session keeps its own record without a skill being invoked:
+
+- A session that only reads and searches leaves nothing.
+- The first edit on a task branch (any branch but `main`, `master`, `develop`,
+  `trunk` or the remote's default) opens `.workflow_artifacts/<branch>/brief.md`,
+  with the request as typed, the sessions and the repositories touched, and
+  `journal.md` beside it, which gains one line per turn: the files edited and
+  the first line of the answer. The session is titled with the task name, so
+  `claude --resume` lists it by name, and a resumed session is pointed at the brief.
+- An edit on `main` or outside a repository keeps a provisional journal under
+  `.workflow_artifacts/.capture/`, deleted after seven days, and turns into a task
+  when a branch is created.
+- `/quoin-task <name>` records the session as a task now; `/quoin-skip` turns the
+  record off for the session.
+- `python3 ~/.local/share/quoin/plugin/core/scripts/task_record.py status` lists
+  open tasks.
+
+Where mods cannot load, the plugin's settings hooks keep the same brief and
+journal; only the task name (taken from the branch) and the two commands differ.
+
 ## Runtime Support
 
 | Runtime | Setup command | Scope | Implemented behavior |

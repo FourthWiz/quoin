@@ -1,6 +1,6 @@
 {
   "name": "quoin",
-  "version": "0.96.0",
+  "version": "0.97.0",
   "description": "Workspace layer for projects made of several linked repositories: task records, cross-repo coordination and script checks for Claude Code.",
   "author": {
     "name": "IvGor"

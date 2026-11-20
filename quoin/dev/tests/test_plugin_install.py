@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import stat
 import subprocess
 from pathlib import Path
@@ -39,7 +40,7 @@ def test_every_hook_command_names_an_executable_script():
     for stanzas in hooks.values():
         for stanza in stanzas:
             for hook in stanza["hooks"]:
-                command = hook["command"].strip('"')
+                command = shlex.split(hook["command"])[0]
                 assert command.startswith("${CLAUDE_PLUGIN_ROOT}/hooks/"), command
                 scripts.add(command.rsplit("/", 1)[1])
     for name in scripts:

@@ -109,7 +109,7 @@ def test_fixture_passes_v01_v07():
     """The class-field fixture must pass all validate_artifact.py checks (V-01 through V-07)."""
     import subprocess
     result = subprocess.run(
-        ['python3', os.path.expanduser('~/.claude/scripts/validate_artifact.py'), FIXTURE_WITH_CLASS],
+        [sys.executable, os.path.join(os.path.dirname(__file__), '..', '..', 'core', 'scripts', 'validate_artifact.py'), FIXTURE_WITH_CLASS],
         capture_output=True,
         text=True,
     )
